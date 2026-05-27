@@ -151,13 +151,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         agent: selectedAgent,
         title: values.title,
         initialPrompt: values.initialPrompt,
-        // Form value first, user default second. We deliberately do NOT
-        // fall back to a tool default here — that's the daemon's job. The
-        // `applySessionConfigDefaults` before:create hook walks
-        // overrides → user default → tool default via
-        // `resolveModelConfigWithFallback`, so every session-create path
-        // (UI, MCP, gateway, zone-trigger) ends up with the same resolved
-        // `model_config` without each caller re-implementing the chain.
+        // Daemon's applySessionConfigDefaults hook fills the tool default.
         modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
         effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,

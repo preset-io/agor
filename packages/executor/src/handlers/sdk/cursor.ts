@@ -459,11 +459,7 @@ export async function executeCursorTask(params: {
       throw new Error('Cursor sessions require a branch worktree path.');
     }
 
-    // Split invocation model (what we hand the Cursor SDK as `{ id }`) from
-    // configured model (what we record on `Task.model` / assistant
-    // metadata). The SDK requires a model id; the audit trail must reflect
-    // only what the user explicitly selected. See
-    // `sdk-handlers/base/model-recording.ts` for the contract.
+    // configuredModel for recording, `model` (id form) for the SDK.
     const configuredModel = session.model_config?.model;
     const model = toCursorModel(configuredModel);
     const mcpServers = await buildCursorMcpServers({
@@ -577,11 +573,7 @@ export async function executeCursorTask(params: {
       const resultText = typeof runResult.result === 'string' ? runResult.result : '';
       const finalText = resultText.length > assistantText.length ? resultText : assistantText;
       const finalContent = buildCursorAssistantContent({ text: finalText, thinkingText });
-      // Recorded model: prefer SDK echo (`runResult.model`) over the
-      // user's configured selection — both reflect "what actually ran".
-      // Falls back to undefined when neither source has a value (legacy
-      // session with no model_config and SDK didn't echo); the display
-      // layer renders no model pill, which is the correct UX.
+      // SDK echo > configured selection; undefined if neither.
       const recordedModel = runResult.model?.id ?? configuredModel;
       if (finalContent.length > 0) {
         await createAssistantMessage({

@@ -32,10 +32,6 @@ describe('GeminiNormalizer', () => {
       cacheCreationTokens: 0,
     });
     expect(normalized.contextWindowLimit).toBe(getGeminiContextWindowLimit(DEFAULT_GEMINI_MODEL));
-    // The Gemini Finished event does not reliably carry the model name, so
-    // the normalizer leaves primaryModel undefined. base-executor falls back
-    // to result.model (the resolved model from session.model_config) for
-    // Task.model. Regression for the "task header shows wrong model" bug.
     expect(normalized.primaryModel).toBeUndefined();
     expect(normalized.durationMs).toBeUndefined();
   });
@@ -130,9 +126,6 @@ describe('GeminiNormalizer', () => {
     expect(normalized.contextWindowLimit).toBe(contextWindowLimit);
   });
 
-  // Regression: same as Codex — the hint refines contextWindowLimit so
-  // it stays consistent with `Task.model`, but must not leak into
-  // `primaryModel` (the SDK never echoed a model).
   it('uses modelHint for context-window-limit lookup but not for primaryModel', () => {
     const spy = vi.spyOn(modelsModule, 'getGeminiContextWindowLimit');
 

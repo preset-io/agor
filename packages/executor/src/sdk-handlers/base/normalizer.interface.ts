@@ -52,16 +52,8 @@ export interface NormalizedSdkData {
   costUsd?: number;
 
   /**
-   * Primary model used (e.g., "claude-sonnet-4-5-20250929").
-   *
-   * Only populate when the raw SDK response actually carries the model
-   * (Claude system event, Copilot response). Leave undefined when the
-   * event doesn't echo a model (Codex turn.completed, Gemini Finished)
-   * — base-executor prefers the tool's `result.model` (the user-selected
-   * model from `session.model_config.model`) and uses `primaryModel`
-   * only as a fallback. See `sdk-handlers/base/model-recording.ts` for
-   * the full precedence and the no-substitution contract that applies
-   * here, to `BaseTool` result `model`, and to `Message.metadata.model`.
+   * Primary model — only when the raw SDK response actually echoes one.
+   * Never substitute a tool default. See `sdk-handlers/base/model-recording.ts`.
    */
   primaryModel?: string;
 

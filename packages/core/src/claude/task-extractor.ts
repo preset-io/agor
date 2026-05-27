@@ -83,12 +83,8 @@ export function extractTasksFromMessages(
     const endMessage = messages[endIndex];
     const endTimestamp = endMessage?.timestamp;
 
-    // Find the model from the most informative message in this range.
-    // Assistant/system messages are more likely to carry SDK-echoed model
-    // metadata than the user message at the head of the task. Leave
-    // undefined when no message records one — we will NOT substitute a
-    // tool default here (see `sdk-handlers/base/model-recording.ts` for
-    // the no-substitution contract).
+    // First message in range that recorded a model — assistant/system
+    // messages are more reliable than user.
     const model = messagesInRange.find((msg) => msg.metadata?.model)?.metadata?.model;
 
     // Create task

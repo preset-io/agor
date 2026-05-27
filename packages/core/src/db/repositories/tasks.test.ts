@@ -151,11 +151,6 @@ describe('TaskRepository.create', () => {
   });
 
   dbTest('should leave Task.model undefined when not provided', async ({ db }) => {
-    // Regression: the repo previously stamped `'claude-sonnet-4-6'` as the
-    // default at insert time, which silently lied about what ran on every
-    // Codex/Gemini/Copilot task until the executor patched the real model
-    // in after the turn. We now persist `model` honestly — absent until a
-    // tool fills it in. See `sdk-handlers/base/model-recording.ts`.
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
     const data = createTaskData({ session_id: sessionId });

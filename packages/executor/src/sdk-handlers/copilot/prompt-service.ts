@@ -299,10 +299,7 @@ export class CopilotPromptService {
       const mcpServers = await this.buildMcpServers(sessionId, session.mcp_token);
       const systemMessage = await this.buildSystemMessage(sessionId);
 
-      // Split invocation model (what we bind to the SDK session) from
-      // configured model (what we record on stream events / rawSdkResponse).
-      // The SDK requires a string; the audit trail must stay undefined when
-      // the user never picked a model. See `sdk-handlers/base/model-recording.ts`.
+      // configuredModel for recording, invocationModel for the SDK.
       const configuredModel = session.model_config?.model;
       const invocationModel = configuredModel || DEFAULT_COPILOT_MODEL;
       console.log(`🎯 [Copilot] Using model: ${invocationModel}`);
@@ -494,9 +491,6 @@ export class CopilotPromptService {
         content.push({ type: 'text', text: fullText });
       }
 
-      // Build raw SDK response for normalization. We record the configured
-      // model (user's selection) — not the invocation fallback. The Copilot
-      // SDK doesn't echo a model field today; if it ever does, prefer that.
       const rawSdkResponse: CopilotRawResponse = {
         usage: usageData
           ? {

@@ -256,8 +256,6 @@ export async function createSystemMessage(
     content: content as Message['content'],
     task_id: taskId,
     metadata: {
-      // Omit `model` key entirely when unknown rather than writing
-      // undefined (matches `buildAssistantMessageMetadata` semantics).
       ...(resolvedModel ? { model: resolvedModel } : {}),
       is_meta: true, // Mark as synthetic system message
     },

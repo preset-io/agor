@@ -96,16 +96,8 @@ export function resolveModelConfigPrecedence(
 }
 
 /**
- * Default model identifier for an agentic tool. Single source of truth used
- * by the UI form, the daemon's session-create hook, and any session-creation
- * helper that needs a final fallback when the user has expressed no
- * preference. Mirrors what the `ModelSelector` displays as its visual
- * default (the first entry per tool).
- *
- * Returns `undefined` for tools whose default depends on async data
- * (`cursor` — fetched live from the daemon's `cursor-models` service) or
- * structural choices the picker doesn't take statically (`opencode` — needs
- * a provider as well as a model).
+ * Static default model for a tool. Undefined for cursor / opencode whose
+ * defaults are sourced elsewhere (async daemon fetch / provider+model pair).
  */
 export function getDefaultModelForTool(tool: AgenticToolName): string | undefined {
   switch (tool) {
@@ -119,29 +111,13 @@ export function getDefaultModelForTool(tool: AgenticToolName): string | undefine
     case 'copilot':
       return DEFAULT_COPILOT_MODEL;
     default:
-      // cursor / opencode handled by their own selectors.
       return undefined;
   }
 }
 
 /**
- * Walk a precedence list AND fall back to the tool's static default when
- * nothing in the list matched. Returns `undefined` only for tools that have
- * no static default (cursor / opencode); the caller is expected to either
- * accept that or fetch the default through a tool-specific channel.
- *
- * This is the helper to reach for at the *session-create boundary* — the
- * single point that decides what gets persisted on `session.model_config`.
- * Downstream code (executor, normalizers, UI display) reads what was
- * persisted; it must not re-implement defaulting.
- *
- * Example:
- * ```ts
- * const modelConfig = resolveModelConfigWithFallback(tool, [
- *   args.modelConfig,
- *   userToolDefaults?.modelConfig,
- * ]);
- * ```
+ * `resolveModelConfigPrecedence` plus a final fallback to the tool's static
+ * default. Use this at the session-create boundary.
  */
 export function resolveModelConfigWithFallback(
   tool: AgenticToolName,

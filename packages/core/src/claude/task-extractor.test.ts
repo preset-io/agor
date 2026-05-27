@@ -34,11 +34,6 @@ function makeAssistantMessage(index: number, model?: string): Message {
 }
 
 describe('extractTasksFromMessages', () => {
-  // Regression: previously the extractor stamped `'claude-sonnet-4-6'` on
-  // every task when no message in range carried a model. That lied about
-  // what ran on imported transcripts from any other model. The extractor
-  // now follows the same "honest record" contract as the executor:
-  // sdk-handlers/base/model-recording.ts — leave undefined when unknown.
   it('omits Task.model when no message in range carries a model', () => {
     const tasks = extractTasksFromMessages(
       [makeUserMessage(0), makeAssistantMessage(1)],
@@ -48,9 +43,6 @@ describe('extractTasksFromMessages', () => {
     expect(tasks[0]).not.toHaveProperty('model');
   });
 
-  // Assistant/system messages are more likely to carry SDK-echoed model
-  // metadata than the user message at the head of the task. Confirms the
-  // extractor looks across the whole range, not just the user message.
   it('picks the model from an assistant message in range', () => {
     const tasks = extractTasksFromMessages(
       [makeUserMessage(0), makeAssistantMessage(1, 'claude-sonnet-4-6')],

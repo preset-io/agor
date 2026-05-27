@@ -151,12 +151,6 @@ describe('resolveSessionDefaults', () => {
   });
 
   describe('model_config', () => {
-    // Regression: previously the resolver returned undefined when neither
-    // overrides nor user defaults specified a model. The daemon then either
-    // left `session.model_config` unset or each caller re-implemented its
-    // own tool-default fallback. The resolver now falls through to the
-    // static tool default so every session-create path lands on a single
-    // resolved value. See `resolveModelConfigWithFallback`.
     it('falls back to the tool default when no model is configured anywhere', () => {
       const r = resolveSessionDefaults({ agenticTool: 'claude-code', now });
       expect(r.model_config).toEqual({
@@ -167,8 +161,6 @@ describe('resolveSessionDefaults', () => {
     });
 
     it('still returns undefined for tools without a static default (cursor)', () => {
-      // Cursor's default is fetched async from `cursor-models`. Resolver
-      // stays honest: it returns undefined rather than guessing.
       const r = resolveSessionDefaults({ agenticTool: 'cursor', now });
       expect(r.model_config).toBeUndefined();
     });

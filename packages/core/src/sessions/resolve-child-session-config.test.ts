@@ -46,15 +46,10 @@ describe('resolveChildSessionConfig', () => {
     });
 
     it('does NOT inherit parent claude model; falls through to codex tool default', () => {
-      // The cross-tool gate is the regression we're protecting: Claude's
-      // model identifier cannot run on Codex. After the resolver upgrade
-      // (`resolveModelConfigWithFallback`), instead of returning undefined
-      // and pushing the fallback onto downstream code, the resolver
-      // substitutes Codex's static default — same single point of decision.
       const r = resolveChildSessionConfig({
         parent,
         effectiveTool: 'codex',
-        user: makeUser({}), // no codex defaults, no claude defaults — empty
+        user: makeUser({}),
         now,
       });
       expect(r.model_config).toEqual({
@@ -62,7 +57,6 @@ describe('resolveChildSessionConfig', () => {
         model: 'gpt-5.4',
         updated_at: now.toISOString(),
       });
-      // Critically: NOT the parent's claude model.
       expect(r.model_config?.model).not.toBe('claude-opus-4-7');
     });
 
@@ -167,11 +161,6 @@ describe('resolveChildSessionConfig', () => {
   // --------------------------------------------------------------
   describe('cross-tool spawn with no user default', () => {
     it('falls back to the effective tool default when parent (gated off) and user default are absent', () => {
-      // Regression: previously returned undefined and let downstream
-      // (executor/UI) re-implement the fallback. Now `resolveModelConfigWithFallback`
-      // is the single point that decides — the Claude parent's model is
-      // (correctly) gated off because gemini can't run Claude models, and
-      // the resolver substitutes Gemini's static default.
       const parent = makeParent({
         agentic_tool: 'claude-code',
         model_config: {

@@ -85,15 +85,7 @@ export type GeminiStreamEvent =
       result: unknown;
     };
 
-/**
- * Resolve the model id we hand to the Gemini SDK at client-construction
- * time. The SDK requires a string, so this layer is allowed to fall back
- * to `DEFAULT_GEMINI_MODEL` — but the resulting value must NEVER be
- * propagated into recording paths (stream events, `Task.model`, message
- * metadata). See `sdk-handlers/base/model-recording.ts` for the full
- * contract. Exported so the cache-invalidation check uses the same
- * computation as the create path.
- */
+/** SDK invocation model — falls back to DEFAULT_GEMINI_MODEL. Never used for recording. */
 export function resolveGeminiInvocationModel(session: {
   model_config?: { model?: string };
 }): GeminiModel {
@@ -102,14 +94,7 @@ export function resolveGeminiInvocationModel(session: {
 
 export class GeminiPromptService {
   private sessionClients = new Map<SessionID, InstanceType<typeof Gemini.GeminiClient>>();
-  /**
-   * Invocation model bound on each cached client. The Gemini SDK binds the
-   * model at client-creation time (no per-turn override like Codex's
-   * ThreadOptions); reusing a cached client after the user picks a new
-   * model would silently run the old model while the audit trail
-   * recorded the new one. We invalidate the cached client when this
-   * value disagrees with the current session's invocation model.
-   */
+  /** Invocation model bound on each cached client — triggers recreate when it changes. */
   private sessionClientInvocationModels = new Map<SessionID, string>();
   private activeControllers = new Map<SessionID, AbortController>();
   private apiKey?: string; // Resolved API key from base-executor
@@ -158,11 +143,8 @@ export class GeminiPromptService {
     // Get or create Gemini client for this session
     const client = await this.getOrCreateClient(sessionId, permissionMode, contextUserId);
 
-    // Recorded model only — must reflect the user's explicit selection,
-    // not a tool-wide default. SDK invocation uses the model bound on the
-    // client at creation time (see getOrCreateClient below); we never
-    // re-pass model through `sendMessageStream`. See
-    // `sdk-handlers/base/model-recording.ts` for the contract.
+    // For recording on stream events. SDK invocation uses the model bound
+    // on the cached client (see getOrCreateClient).
     const configuredModel = session.model_config?.model;
 
     // Prepare initial prompt (just text for now - can enhance with file paths later)
@@ -592,21 +574,13 @@ export class GeminiPromptService {
     // Map Agor permission mode to Gemini ApprovalMode
     const approvalMode = mapPermissionMode(permissionMode || 'ask');
 
-    // Compute the invocation model for THIS turn. The Gemini SDK binds the
-    // model at client construction (no per-turn override), so if the
-    // session's configured model has changed since the client was cached,
-    // we MUST recreate the client — otherwise the SDK would silently keep
-    // running the old model while `Task.model` (correctly) records the
-    // new one, reintroducing the audit-vs-runtime split. The variable is
-    // intentionally named the same as the one in the create-path below so
-    // the bound model and the tracked model stay in sync.
+    // Recreate the cached client if the session's model changed —
+    // Gemini binds the model at construction.
     const invocationModel = resolveGeminiInvocationModel(session);
     const cachedInvocationModel = this.sessionClientInvocationModels.get(sessionId);
     const cachedClient = this.sessionClients.get(sessionId);
 
     if (cachedClient && cachedInvocationModel === invocationModel) {
-      // Cache hit on same model — reuse the client. Update approval mode
-      // and refresh auth so live config changes still take effect.
       const config = (cachedClient as unknown as GeminiClientWithConfig).config;
 
       if (config && typeof config.setApprovalMode === 'function') {
@@ -632,13 +606,10 @@ export class GeminiPromptService {
     }
 
     if (cachedClient) {
-      // Model changed mid-session. Drop the cache so the next block
-      // recreates the client bound to the new model. Conversation history
-      // is preserved via the SDK's per-session chat-recording file
-      // (loaded by the resume path below), so we lose binding state but
-      // not conversation continuity.
+      // Model changed — recreate. Conversation history is preserved via
+      // the SDK's per-session chat-recording file.
       console.log(
-        `🔄 [Gemini] Configured model changed (${cachedInvocationModel} → ${invocationModel}); recreating client to bind the new model`
+        `🔄 [Gemini] Model changed (${cachedInvocationModel} → ${invocationModel}); recreating client`
       );
       this.sessionClients.delete(sessionId);
       this.sessionClientInvocationModels.delete(sessionId);
@@ -672,9 +643,6 @@ export class GeminiPromptService {
       );
     }
 
-    // Use the invocationModel computed above. Same string is tracked in
-    // `sessionClientInvocationModels` so the next call can detect a model
-    // change and recreate. See the cache-check block above for why.
     const model = invocationModel;
 
     // approvalMode already mapped at top of function

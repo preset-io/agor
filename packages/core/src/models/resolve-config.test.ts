@@ -101,10 +101,7 @@ describe('getDefaultModelForTool', () => {
     expect(getDefaultModelForTool('copilot')).toBe('claude-sonnet-4.6');
   });
 
-  it('returns undefined for tools whose default is supplied elsewhere', () => {
-    // Cursor's default arrives from `cursor-models` (async daemon fetch);
-    // OpenCode needs both provider and model. Static defaulting would be a
-    // lie — the caller must source these from the right channel.
+  it('returns undefined for cursor / opencode', () => {
     expect(getDefaultModelForTool('cursor')).toBeUndefined();
     expect(getDefaultModelForTool('opencode')).toBeUndefined();
   });
@@ -123,9 +120,6 @@ describe('resolveModelConfigWithFallback', () => {
   });
 
   it('falls back to the tool default when no source has a model', () => {
-    // This is the load-bearing case: daemon's `apply-session-config-defaults`
-    // hook walks sources → user defaults → tool default via this helper, so
-    // every session-create path ends up with the same resolved value.
     const result = resolveModelConfigWithFallback('codex', [undefined, null], { now });
     expect(result).toEqual({
       mode: 'alias',
@@ -134,13 +128,12 @@ describe('resolveModelConfigWithFallback', () => {
     });
   });
 
-  it('returns undefined for tools without a static default when sources are empty', () => {
+  it('returns undefined for cursor / opencode when sources are empty', () => {
     expect(resolveModelConfigWithFallback('cursor', [undefined], { now })).toBeUndefined();
     expect(resolveModelConfigWithFallback('opencode', [undefined], { now })).toBeUndefined();
   });
 
   it('still uses an explicit source for tools without a static default', () => {
-    // Even though cursor has no static default, an explicit modelConfig wins.
     const result = resolveModelConfigWithFallback('cursor', [{ model: 'composer-experimental' }], {
       now,
     });

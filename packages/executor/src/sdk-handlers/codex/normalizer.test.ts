@@ -43,10 +43,6 @@ describe('CodexNormalizer', () => {
     expect(result.contextWindowLimit).toBe(
       models.getCodexContextWindowLimit(models.DEFAULT_CODEX_MODEL)
     );
-    // The Codex turn.completed event does not carry the model name. The
-    // normalizer must leave primaryModel undefined so base-executor can fall
-    // back to result.model (the resolved model from session.model_config)
-    // instead of silently overwriting Task.model with DEFAULT_CODEX_MODEL.
     expect(result.primaryModel).toBeUndefined();
     expect(result.durationMs).toBeUndefined();
   });
@@ -70,8 +66,6 @@ describe('CodexNormalizer', () => {
       cacheReadTokens: 300,
       cacheCreationTokens: 0,
     });
-    // Regression: see the empty-usage test above — primaryModel must stay
-    // undefined so the user's selected model is preserved on the task.
     expect(result.primaryModel).toBeUndefined();
   });
 
@@ -135,11 +129,6 @@ describe('CodexNormalizer', () => {
     expect(result.tokenUsage.totalTokens).toBe(30);
   });
 
-  // Regression: without the modelHint plumbing, Task.model could say
-  // "gpt-5.5" while normalized_sdk_response.contextWindowLimit reflected
-  // DEFAULT_CODEX_MODEL's limit — the ContextWindow popover would then
-  // disagree with the model pill. The hint resolves this without ever
-  // leaking into `primaryModel`.
   it('uses modelHint for context-window-limit lookup but not for primaryModel', () => {
     const lookupSpy = vi.spyOn(models, 'getCodexContextWindowLimit');
     const normalizer = new CodexNormalizer();

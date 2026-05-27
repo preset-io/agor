@@ -23,20 +23,7 @@ const codexNormalizer = new CodexNormalizer();
 const copilotNormalizer = new CopilotNormalizer();
 const geminiNormalizer = new GeminiNormalizer();
 
-/**
- * Optional context that callers can pass to refine derived fields without
- * mutating the raw SDK response.
- *
- * Currently:
- * - `modelHint`: the configured / resolved model from `session.model_config.model`.
- *   Codex and Gemini raw events do not echo the model, so without a hint
- *   their normalizers default `contextWindowLimit` to the tool-wide default,
- *   which can disagree with the model recorded on `Task.model`. The hint
- *   lets the normalizer look up the right limit. **It is NEVER used to
- *   populate `primaryModel`** — that field stays bound to "did the SDK
- *   event actually echo a model?" so we don't reintroduce the lie this
- *   PR was opened to fix.
- */
+/** `modelHint` refines `contextWindowLimit` lookup; never used as `primaryModel`. */
 export interface NormalizeOptions {
   modelHint?: string;
 }
@@ -61,8 +48,6 @@ export function normalizeRawSdkResponse(
   try {
     switch (agenticTool) {
       case 'claude-code':
-        // Claude's modelUsage carries per-model token + context window data
-        // directly; no hint needed.
         return claudeNormalizer.normalize(
           rawSdkResponse as Parameters<typeof claudeNormalizer.normalize>[0]
         );
@@ -80,8 +65,6 @@ export function normalizeRawSdkResponse(
         );
 
       case 'copilot':
-        // Copilot's raw response already includes the model field, so no
-        // hint is needed for limit lookup.
         return copilotNormalizer.normalize(
           rawSdkResponse as Parameters<typeof copilotNormalizer.normalize>[0]
         );
