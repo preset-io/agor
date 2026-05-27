@@ -104,7 +104,7 @@ export const Facepile: React.FC<FacepileProps> = ({
           }
         >
           <span>
-            <AgorAvatar fontSize="11px" style={{ fontWeight: 'bold' }}>
+            <AgorAvatar fontSize="12px" style={{ fontWeight: 'bold' }}>
               +{overflowCount}
             </AgorAvatar>
           </span>
