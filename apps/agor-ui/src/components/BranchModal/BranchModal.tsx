@@ -9,15 +9,18 @@ import type {
   User,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
-import { Badge, Modal, Tabs, theme } from 'antd';
+import { Badge, Button, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useThemedMessage } from '../../utils/message';
 import { AssistantTab } from './tabs/AssistantTab';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { type BranchUpdate, GeneralTab } from './tabs/GeneralTab';
+import { PermissionsTab } from './tabs/PermissionsTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
+import { useBranchModalForm } from './useBranchModalForm';
 
 export type BranchModalTab =
   | 'general'
@@ -25,6 +28,7 @@ export type BranchModalTab =
   | 'sessions'
   | 'environment'
   | 'files'
+  | 'permissions'
   | 'schedule';
 
 export interface BranchModalProps {
@@ -73,7 +77,16 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   defaultTab,
 }) => {
   const { token } = theme.useToken();
-  const [activeTab, setActiveTab] = useState('general');
+  const { showSuccess, showError } = useThemedMessage();
+  const [activeTab, setActiveTab] = useState<BranchModalTab>('general');
+
+  const form = useBranchModalForm({
+    branch,
+    client,
+    currentUser,
+    open,
+    onUpdateBranch,
+  });
 
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
   useEffect(() => {
@@ -93,6 +106,16 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     ? `Assistant: ${assistantConfig?.displayName ?? branch.name}`
     : `Branch: ${branch.name}`;
 
+  const handleSave = async () => {
+    const result = await form.save();
+    if (result.ok) {
+      showSuccess(isAnAssistant ? 'Assistant updated' : 'Branch updated');
+      onClose();
+    } else {
+      showError(result.error.message || 'Failed to save changes');
+    }
+  };
+
   const tabItems = [
     // Assistant tab — only for assistants, shown first
     ...(isAnAssistant
@@ -103,9 +126,9 @@ export const BranchModal: React.FC<BranchModalProps> = ({
             children: (
               <AssistantTab
                 branch={branch}
-                onUpdate={onUpdateBranch}
-                onClose={onClose}
-                client={client}
+                canEdit={form.canEditGeneral}
+                state={form.assistant}
+                setField={form.setAssistant}
               />
             ),
           },
@@ -121,11 +144,10 @@ export const BranchModal: React.FC<BranchModalProps> = ({
           sessions={sessions}
           boards={mapToArray(boardById)}
           mcpServers={mapToArray(mcpServerById)}
-          client={client}
-          currentUser={currentUser}
-          onUpdate={onUpdateBranch}
+          canEdit={form.canEditGeneral}
+          state={form.general}
+          setField={form.setGeneral}
           onArchiveOrDelete={onArchiveOrDelete}
-          onClose={onClose}
         />
       ),
     },
@@ -172,6 +194,26 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       label: 'Files',
       children: <FilesTab branch={branch} client={client} />,
     },
+    // Permissions tab — only when RBAC is enabled on this instance
+    ...(form.rbacEnabled
+      ? [
+          {
+            key: 'permissions',
+            label: 'Permissions',
+            children: (
+              <PermissionsTab
+                rbacEnabled={form.rbacEnabled}
+                loadingOwners={form.loadingOwners}
+                canEdit={form.canEditPermissions}
+                allUsers={form.allUsers}
+                currentUser={currentUser}
+                state={form.permissions}
+                setField={form.setPermissions}
+              />
+            ),
+          },
+        ]
+      : []),
     {
       key: 'schedule',
       label: 'Schedules',
@@ -189,19 +231,51 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     },
   ];
 
+  // Modal-level footer: one Save action for all form-contributing tabs
+  // (General, Assistant, Permissions). Tabs like Environment / Sessions /
+  // Files / Schedules have their own actions outside the form.
+  const canSave =
+    (form.canEditGeneral || form.canEditPermissions) && form.hasChanges && !form.saving;
+
+  const footer = (
+    <Space>
+      {form.hasChanges && (
+        <Button onClick={form.reset} disabled={form.saving} aria-label="Reset changes">
+          Reset
+        </Button>
+      )}
+      <Button onClick={onClose} disabled={form.saving}>
+        Close
+      </Button>
+      <Button
+        type="primary"
+        onClick={handleSave}
+        loading={form.saving}
+        disabled={!canSave}
+        aria-label="Save changes"
+      >
+        Save Changes
+      </Button>
+    </Space>
+  );
+
   return (
     <Modal
       title={title}
       open={open}
       onCancel={onClose}
-      footer={null}
+      footer={footer}
       width={900}
       mask={{ closable: false }}
       styles={{
         body: { padding: 0, maxHeight: '80vh', overflowY: 'auto' },
       }}
     >
-      <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
+      <Tabs
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as BranchModalTab)}
+        items={tabItems}
+      />
     </Modal>
   );
 };

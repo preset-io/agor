@@ -1,82 +1,21 @@
-import type { AgorClient, AssistantConfig, Branch } from '@agor-live/client';
+import type { Branch } from '@agor-live/client';
 import { getAssistantConfig } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
-import { Button, Descriptions, Form, Input, Space, Typography } from 'antd';
-import { useEffect, useState } from 'react';
-import { useThemedMessage } from '../../../utils/message';
+import { Descriptions, Form, Input, Space, Typography } from 'antd';
 import { EmojiPickerInput } from '../../EmojiPickerInput/EmojiPickerInput';
 import { Tag } from '../../Tag';
-import type { BranchUpdate } from './GeneralTab';
+import type { AssistantFormState } from '../useBranchModalForm';
 
 interface AssistantTabProps {
   branch: Branch;
-  onUpdate?: (branchId: string, updates: BranchUpdate) => void;
-  onClose?: () => void;
-  client?: AgorClient | null;
+  canEdit: boolean;
+  state: AssistantFormState;
+  setField: <K extends keyof AssistantFormState>(key: K, value: AssistantFormState[K]) => void;
 }
 
-export const AssistantTab: React.FC<AssistantTabProps> = ({
-  branch,
-  onUpdate,
-  onClose,
-  client,
-}) => {
+export const AssistantTab: React.FC<AssistantTabProps> = ({ branch, canEdit, state, setField }) => {
   const config = getAssistantConfig(branch);
-  const { showSuccess } = useThemedMessage();
-
-  const [displayName, setDisplayName] = useState(config?.displayName || '');
-  const [emoji, setEmoji] = useState(config?.emoji || '');
-  const [description, setDescription] = useState(branch.notes || '');
-  const [isInitialized, setIsInitialized] = useState(false);
-
-  useEffect(() => {
-    if (!isInitialized) {
-      setDisplayName(config?.displayName || '');
-      setEmoji(config?.emoji || '');
-      setDescription(branch.notes || '');
-      setIsInitialized(true);
-    }
-  }, [isInitialized, config?.displayName, config?.emoji, branch.notes]);
-
   if (!config) return null;
-
-  const hasChanges =
-    displayName.trim() !== config.displayName ||
-    emoji !== (config.emoji || '') ||
-    description.trim() !== (branch.notes || '');
-
-  const handleSave = async () => {
-    const updatedConfig: AssistantConfig = {
-      ...config,
-      kind: 'assistant',
-      displayName: displayName.trim(),
-      emoji: emoji || undefined,
-    };
-    onUpdate?.(branch.branch_id, {
-      custom_context: { assistant: updatedConfig },
-      notes: description.trim() || null,
-    });
-
-    // Also update the associated board icon if emoji changed
-    if (emoji !== (config.emoji || '') && client && branch.board_id) {
-      try {
-        await client.service('boards').patch(branch.board_id, {
-          icon: emoji || '🤖',
-        });
-      } catch (err) {
-        console.error('Failed to update board icon:', err);
-      }
-    }
-
-    showSuccess('Assistant updated');
-    onClose?.();
-  };
-
-  const handleCancel = () => {
-    setDisplayName(config.displayName);
-    setEmoji(config.emoji || '');
-    setDescription(branch.notes || '');
-  };
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
@@ -96,13 +35,18 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
         <Form layout="horizontal" colon={false}>
           <Form.Item label="Display Name" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
             <Input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
+              value={state.displayName}
+              onChange={(e) => setField('displayName', e.target.value)}
               placeholder="Assistant display name"
+              disabled={!canEdit}
             />
           </Form.Item>
           <Form.Item label="Icon" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
-            <EmojiPickerInput value={emoji} onChange={(val) => setEmoji(val)} defaultEmoji="🤖" />
+            <EmojiPickerInput
+              value={state.emoji}
+              onChange={(val) => setField('emoji', val)}
+              defaultEmoji="🤖"
+            />
           </Form.Item>
           <Form.Item
             label="Description"
@@ -111,10 +55,11 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
             tooltip="What does this assistant do? Visible to other agents via MCP."
           >
             <Input.TextArea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              value={state.description}
+              onChange={(e) => setField('description', e.target.value)}
               placeholder="What does this assistant do?"
               rows={2}
+              disabled={!canEdit}
             />
           </Form.Item>
         </Form>
@@ -139,16 +84,6 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
             )}
           </Descriptions.Item>
         </Descriptions>
-
-        {/* Actions */}
-        <Space>
-          <Button type="primary" onClick={handleSave} disabled={!hasChanges}>
-            Save Changes
-          </Button>
-          <Button onClick={handleCancel} disabled={!hasChanges}>
-            Cancel
-          </Button>
-        </Space>
       </Space>
     </div>
   );
