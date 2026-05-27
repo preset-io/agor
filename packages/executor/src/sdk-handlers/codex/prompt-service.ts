@@ -47,7 +47,6 @@ import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
-import { DEFAULT_CODEX_MODEL } from './models.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 /**
@@ -1195,7 +1194,7 @@ export class CodexPromptService {
                   type: 'complete',
                   content: textContent,
                   threadId: thread.id || '',
-                  resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
+                  resolvedModel,
                   // No usage data for intermediate messages - only final turn.completed has it
                 };
               }
@@ -1208,7 +1207,7 @@ export class CodexPromptService {
                   type: 'complete',
                   content: thinkingContent,
                   threadId: thread.id || '',
-                  resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
+                  resolvedModel,
                 };
               }
 
@@ -1222,7 +1221,7 @@ export class CodexPromptService {
                   type: 'complete',
                   content: errorContent,
                   threadId: thread.id || '',
-                  resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
+                  resolvedModel,
                 };
               }
             }
@@ -1239,7 +1238,7 @@ export class CodexPromptService {
               content: currentMessage,
               toolUses: allToolUses.length > 0 ? allToolUses : undefined,
               threadId,
-              resolvedModel: resolvedModel || DEFAULT_CODEX_MODEL,
+              resolvedModel,
               usage: mappedUsage,
               rawSdkEvent: event, // Pass through the actual SDK event (UNMUTATED)
               rawContextUsage: latestContextUsage,

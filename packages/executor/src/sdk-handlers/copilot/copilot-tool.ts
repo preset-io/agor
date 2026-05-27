@@ -43,7 +43,6 @@ import type {
   ToolCapabilities,
 } from '../base/index.js';
 import { createUserMessage } from '../claude/message-builder.js';
-import { DEFAULT_COPILOT_MODEL } from './models.js';
 import { CopilotPromptService } from './prompt-service.js';
 
 interface CopilotExecutionResult {
@@ -325,7 +324,7 @@ export class CopilotTool implements ITool {
       tokenUsage,
       contextWindow: undefined,
       contextWindowLimit: undefined,
-      model: resolvedModel || DEFAULT_COPILOT_MODEL,
+      model: resolvedModel,
       rawSdkResponse,
       wasStopped,
     };
@@ -389,7 +388,10 @@ export class CopilotTool implements ITool {
       tool_uses: toolUses,
       task_id: taskId,
       metadata: {
-        model: resolvedModel || DEFAULT_COPILOT_MODEL,
+        // Honest record: leave undefined when the model is genuinely unknown
+        // rather than stamping the tool default. See base-executor /
+        // codex-tool for the same fix and rationale.
+        model: resolvedModel,
         tokens: {
           input: tokenUsage?.input_tokens ?? 0,
           output: tokenUsage?.output_tokens ?? 0,

@@ -41,7 +41,6 @@ import type {
   ToolCapabilities,
 } from '../base/index.js';
 import { createUserMessage } from '../claude/message-builder.js';
-import { DEFAULT_GEMINI_MODEL } from './models.js';
 import { GeminiPromptService } from './prompt-service.js';
 
 interface GeminiExecutionResult {
@@ -304,7 +303,11 @@ export class GeminiTool implements ITool {
       tool_uses: toolUses,
       task_id: taskId,
       metadata: {
-        model: resolvedModel || DEFAULT_GEMINI_MODEL,
+        // Honest record: leave undefined when the model is genuinely unknown
+        // rather than stamping the tool default. See the same-pattern fix in
+        // the Codex/Gemini normalizers — silently substituting a default on
+        // the recorded message has caused user-facing model-tag drift.
+        model: resolvedModel,
         tokens: {
           input: tokenUsage?.input_tokens || 0,
           output: tokenUsage?.output_tokens || 0,

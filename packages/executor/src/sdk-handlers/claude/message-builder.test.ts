@@ -838,7 +838,10 @@ describe('createAssistantMessage', () => {
     expect(result.content_preview).toBe('');
   });
 
-  it('should use default model when resolvedModel is undefined', async () => {
+  it('leaves metadata.model undefined when resolvedModel is undefined', async () => {
+    // Regression: previously we silently substituted DEFAULT_CLAUDE_MODEL,
+    // which lied about what actually ran on legacy sessions / when the SDK
+    // didn't echo the model. Honest record = leave it unset.
     const messagesService = createMockMessagesService();
     const sessionId = generateId() as SessionID;
     const messageId = generateId() as MessageID;
@@ -855,7 +858,7 @@ describe('createAssistantMessage', () => {
       messagesService
     );
 
-    expect(result.metadata?.model).toBe('claude-sonnet-4-6'); // DEFAULT_CLAUDE_MODEL
+    expect(result.metadata?.model).toBeUndefined();
   });
 
   it('should update task with resolved model', async () => {

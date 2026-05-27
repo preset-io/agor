@@ -71,6 +71,14 @@ export interface BaseTool {
      * as the authoritative value for `Task.model` so the task header and
      * `Task.model` always match what the user selected, instead of falling
      * back to a tool-wide default in the normalizer.
+     *
+     * Tool authors: leave this `undefined` when you genuinely don't know
+     * (no model_config, SDK didn't echo). Do NOT substitute
+     * `DEFAULT_<TOOL>_MODEL` here — historically that pattern silently
+     * lied about what ran (e.g. user picked GPT 5.5, audit said GPT 5.4).
+     * The same rule applies to `Message.metadata.model` and to a
+     * normalizer's `primaryModel`. The display layer is responsible for
+     * rendering "unknown" if needed; it already handles undefined.
      */
     model?: string;
   }>;

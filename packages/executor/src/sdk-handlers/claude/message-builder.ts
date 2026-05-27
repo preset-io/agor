@@ -10,7 +10,6 @@ import type { Message, MessageID, MessageSource, SessionID, TaskID } from '@agor
 import { MessageRole } from '@agor/core/types';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { MessagesService, TasksService } from '../base/index.js';
-import { DEFAULT_CLAUDE_MODEL } from './models.js';
 
 /**
  * Safely extract and validate token usage from SDK response
@@ -196,7 +195,12 @@ export async function createAssistantMessage(
     task_id: taskId,
     parent_tool_use_id: parentToolUseId || undefined,
     metadata: {
-      model: resolvedModel || DEFAULT_CLAUDE_MODEL,
+      // Honest record: when resolvedModel is undefined (e.g. legacy session
+      // with no model_config and SDK didn't echo), leave the field unset
+      // rather than stamping the tool default. Substituting a default here
+      // historically caused user-facing model-tag drift; see the same fix in
+      // the Codex/Gemini normalizers and in base-executor.
+      model: resolvedModel,
       tokens: {
         input: tokenUsage?.input_tokens ?? 0,
         output: tokenUsage?.output_tokens ?? 0,
@@ -266,7 +270,9 @@ export async function createSystemMessage(
     content: content as Message['content'],
     task_id: taskId,
     metadata: {
-      model: resolvedModel || DEFAULT_CLAUDE_MODEL,
+      // See createAssistantMessage for the rationale on leaving model
+      // undefined when resolvedModel is unknown.
+      model: resolvedModel,
       is_meta: true, // Mark as synthetic system message
     },
   };

@@ -39,6 +39,12 @@ export class CopilotNormalizer implements INormalizer<CopilotSdkResponse> {
   normalize(response: CopilotSdkResponse): NormalizedSdkData {
     const usage = response.usage;
 
+    // The context-window lookup needs *some* key — fall back to the tool
+    // default only for that table lookup (so the popover shows a sensible
+    // limit even on legacy rows). We deliberately do NOT propagate that
+    // fallback into `primaryModel` — see the file note below.
+    const lookupModel = response.model || DEFAULT_COPILOT_MODEL;
+
     // Handle missing usage gracefully
     if (!usage) {
       return {
@@ -49,15 +55,18 @@ export class CopilotNormalizer implements INormalizer<CopilotSdkResponse> {
           cacheReadTokens: 0,
           cacheCreationTokens: 0,
         },
-        contextWindowLimit: getCopilotContextWindowLimit(response.model || DEFAULT_COPILOT_MODEL),
-        primaryModel: response.model || DEFAULT_COPILOT_MODEL,
+        contextWindowLimit: getCopilotContextWindowLimit(lookupModel),
+        // Honest: only report a primaryModel when the SDK actually echoed
+        // one. Substituting the tool default here used to record the wrong
+        // model on every legacy task — same root cause as the Codex/Gemini
+        // bug fixed in this PR.
+        primaryModel: response.model,
         durationMs: undefined,
       };
     }
 
     const inputTokens = usage.input_tokens || 0;
     const outputTokens = usage.output_tokens || 0;
-    const model = response.model || DEFAULT_COPILOT_MODEL;
 
     return {
       tokenUsage: {
@@ -67,8 +76,9 @@ export class CopilotNormalizer implements INormalizer<CopilotSdkResponse> {
         cacheReadTokens: 0, // Copilot SDK doesn't expose cache metrics
         cacheCreationTokens: 0,
       },
-      contextWindowLimit: getCopilotContextWindowLimit(model),
-      primaryModel: model,
+      contextWindowLimit: getCopilotContextWindowLimit(lookupModel),
+      // Same rationale as the no-usage branch above.
+      primaryModel: response.model,
       durationMs: undefined, // Not available in raw SDK response
     };
   }

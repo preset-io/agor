@@ -44,7 +44,6 @@ import type {
   ToolCapabilities,
 } from '../base/index.js';
 import { createUserMessage } from '../claude/message-builder.js';
-import { DEFAULT_CODEX_MODEL } from './models.js';
 import { CodexPromptService } from './prompt-service.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexContextWindowUsage } from './usage.js';
 
@@ -543,7 +542,7 @@ export class CodexTool implements ITool {
       // Codex SDK doesn't provide contextWindow/contextWindowLimit
       contextWindow: undefined,
       contextWindowLimit: undefined,
-      model: resolvedModel || DEFAULT_CODEX_MODEL,
+      model: resolvedModel,
       rawSdkResponse,
       rawContextUsage,
       wasStopped,
@@ -619,7 +618,7 @@ export class CodexTool implements ITool {
       tool_uses: toolUses,
       task_id: taskId,
       metadata: {
-        model: resolvedModel || DEFAULT_CODEX_MODEL,
+        model: resolvedModel,
         tokens: {
           input: tokenUsage?.input_tokens ?? 0,
           output: tokenUsage?.output_tokens ?? 0,
@@ -765,7 +764,7 @@ export class CodexTool implements ITool {
       // Codex SDK doesn't provide contextWindow/contextWindowLimit
       contextWindow: undefined,
       contextWindowLimit: undefined,
-      model: resolvedModel || DEFAULT_CODEX_MODEL,
+      model: resolvedModel,
       rawSdkResponse,
       rawContextUsage,
       wasStopped,

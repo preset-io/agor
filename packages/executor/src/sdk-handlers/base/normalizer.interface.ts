@@ -52,7 +52,18 @@ export interface NormalizedSdkData {
   costUsd?: number;
 
   /**
-   * Primary model used (e.g., "claude-sonnet-4-5-20250929")
+   * Primary model used (e.g., "claude-sonnet-4-5-20250929").
+   *
+   * Only populate when the raw SDK response actually carries the model
+   * (Claude system event, Copilot response). Leave undefined when the
+   * event doesn't echo a model (Codex turn.completed, Gemini Finished)
+   * — base-executor falls back to the tool's `result.model` (which is
+   * the user-selected model from `session.model_config.model`).
+   *
+   * Do NOT substitute `DEFAULT_<TOOL>_MODEL` here. Historically that
+   * pattern caused user-facing model-tag drift, because base-executor
+   * patches `Task.model = normalized.primaryModel` after streaming and
+   * overwrote the correct resolved model with a stale default.
    */
   primaryModel?: string;
 
