@@ -812,7 +812,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   : ''
               }
               readOnly={!isEditingRepo}
-              rows={14}
+              rows={10}
+              maxHeight="480px"
             />
             {repoYamlError && (
               <Alert type="error" showIcon title={`Invalid repo environment: ${repoYamlError}`} />
@@ -926,6 +927,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               language="yaml"
               readOnly={!isEditingSnapshot}
               rows={10}
+              maxHeight="480px"
             />
             {snapshotYamlError && (
               <Alert type="error" showIcon title={`Invalid snapshot: ${snapshotYamlError}`} />
