@@ -86,6 +86,8 @@ export interface BranchModalFormApi {
   allUsers: User[];
   rbacEnabled: boolean;
   loadingOwners: boolean;
+  /** Non-fatal owners-load failure (network / server error, not 404). */
+  ownersLoadError: Error | null;
 
   // Permissions used for gating UI
   canEditGeneral: boolean;
@@ -144,6 +146,7 @@ export function useBranchModalForm({
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [rbacEnabled, setRbacEnabled] = useState<boolean>(true);
   const [loadingOwners, setLoadingOwners] = useState<boolean>(true);
+  const [ownersLoadError, setOwnersLoadError] = useState<Error | null>(null);
 
   const [saving, setSaving] = useState(false);
 
@@ -236,6 +239,7 @@ export function useBranchModalForm({
     const load = async () => {
       try {
         setLoadingOwners(true);
+        setOwnersLoadError(null);
         const ownersResponse = await client
           .service('branches/:id/owners')
           .find({ route: { id: branchId } });
@@ -262,7 +266,12 @@ export function useBranchModalForm({
           setRbacEnabled(false);
           setOwners([]);
         } else {
-          console.error('Failed to load branch owners:', error);
+          // Surface the failure to the modal. Without this, a non-admin owner
+          // sees a silently-locked-down modal (owners=[] makes isOwner false →
+          // canEdit* false) with no way to know what happened.
+          const err = error instanceof Error ? error : new Error(String(error));
+          console.error('Failed to load branch owners:', err);
+          setOwnersLoadError(err);
         }
       } finally {
         if (!cancelled) setLoadingOwners(false);
@@ -300,18 +309,30 @@ export function useBranchModalForm({
     );
   }, [branch, assistant, isAssistantBranch]);
 
-  const permissionsChanged = useMemo(() => {
+  // Owner add/remove diffs vs. permission-field edits are tracked separately:
+  // owner changes route to the nested owners service while field changes go
+  // into the branch PATCH. They commit at different points in the save flow
+  // (owner-removes happen LAST so the caller doesn't lose authorization
+  // mid-save), so we want to know which kind of change we have.
+  const ownersChanged = useMemo(() => {
     if (!branch || !rbacEnabled) return false;
     const currentOwnerIds = owners.map((o) => o.user_id as string);
-    const ownersChanged =
+    return (
       permissions.selectedOwnerIds.length !== currentOwnerIds.length ||
-      permissions.selectedOwnerIds.some((id) => !currentOwnerIds.includes(id));
-    const fieldsChanged =
+      permissions.selectedOwnerIds.some((id) => !currentOwnerIds.includes(id))
+    );
+  }, [branch, rbacEnabled, owners, permissions.selectedOwnerIds]);
+
+  const permissionFieldsChanged = useMemo(() => {
+    if (!branch || !rbacEnabled) return false;
+    return (
       permissions.othersCan !== (branch.others_can || 'session') ||
       permissions.othersFsAccess !== (branch.others_fs_access || 'read') ||
-      permissions.allowSessionSharing !== Boolean(branch.dangerously_allow_session_sharing);
-    return ownersChanged || fieldsChanged;
-  }, [branch, rbacEnabled, owners, permissions]);
+      permissions.allowSessionSharing !== Boolean(branch.dangerously_allow_session_sharing)
+    );
+  }, [branch, rbacEnabled, permissions]);
+
+  const permissionsChanged = ownersChanged || permissionFieldsChanged;
 
   const hasChanges = generalChanged || assistantChanged || permissionsChanged;
 
@@ -340,32 +361,36 @@ export function useBranchModalForm({
 
     setSaving(true);
     try {
-      // 1. Permissions: owner add/remove diffs (skip if user can't edit perms)
-      if (rbacEnabled && permissionsChanged && canEditPermissions) {
-        const currentOwnerIds = owners.map((o) => o.user_id as string);
-        const added = permissions.selectedOwnerIds.filter((id) => !currentOwnerIds.includes(id));
-        const removed = currentOwnerIds.filter((id) => !permissions.selectedOwnerIds.includes(id));
+      const currentOwnerIds = owners.map((o) => o.user_id as string);
+      const ownersToAdd = permissions.selectedOwnerIds.filter(
+        (id) => !currentOwnerIds.includes(id)
+      );
+      const ownersToRemove = currentOwnerIds.filter(
+        (id) => !permissions.selectedOwnerIds.includes(id)
+      );
 
-        // Defensive guard — never let the form end up with zero owners. The
-        // UI already prevents this but a paranoid check here protects against
-        // race conditions where owners reloaded mid-edit.
-        if (permissions.selectedOwnerIds.length === 0) {
-          throw new Error('At least one owner is required');
-        }
+      // Pre-flight defensive guard — never let the form end up with zero
+      // owners. The UI already prevents this but a paranoid check here
+      // protects against owners reloaded mid-edit.
+      if (rbacEnabled && ownersChanged && permissions.selectedOwnerIds.length === 0) {
+        throw new Error('At least one owner is required');
+      }
 
-        for (const userId of added) {
+      // 1. Add new owners FIRST so a transfer like "remove me, add Bob"
+      // doesn't briefly leave an empty owner set, and so Bob can pick up
+      // ownership before we apply other changes.
+      if (rbacEnabled && ownersChanged && canEditPermissions) {
+        for (const userId of ownersToAdd) {
           await client
             .service('branches/:id/owners')
             .create({ user_id: userId }, { route: { id: branch.branch_id } });
         }
-        for (const userId of removed) {
-          await client
-            .service('branches/:id/owners')
-            .remove(userId, { route: { id: branch.branch_id } });
-        }
       }
 
-      // 2. Build a single patch payload for the branch row
+      // 2. Build a single patch payload for the branch row. ONLY include
+      // permission fields if they actually changed — including them on an
+      // owner-only transfer would force a redundant authorization check
+      // that the about-to-be-removed owner may not pass.
       const updates: BranchUpdate = {};
 
       if (generalChanged && canEditGeneral) {
@@ -394,7 +419,7 @@ export function useBranchModalForm({
         }
       }
 
-      if (rbacEnabled && permissionsChanged && canEditPermissions) {
+      if (rbacEnabled && permissionFieldsChanged && canEditPermissions) {
         updates.others_can = permissions.othersCan;
         updates.others_fs_access = permissions.othersFsAccess;
         updates.dangerously_allow_session_sharing = permissions.allowSessionSharing;
@@ -402,11 +427,24 @@ export function useBranchModalForm({
 
       if (Object.keys(updates).length > 0) {
         // Call the service directly — going through a parent helper would let
-        // it swallow the error and we'd report a false success.
+        // it swallow the error and we'd report a false success. Runs BEFORE
+        // the owner-remove pass so the current user (who may be losing
+        // ownership) is still authorized to PATCH at this point.
         await client.service('branches').patch(branch.branch_id, updates as Partial<Branch>);
       }
 
-      // 3. Assistant emoji → board icon side effect. Cosmetic only — log on
+      // 3. Remove old owners LAST — after every authorization-requiring call
+      // has fired. A typical owner transfer (Alice removes self + adds Bob)
+      // would otherwise reach the PATCH step de-authorized.
+      if (rbacEnabled && ownersChanged && canEditPermissions) {
+        for (const userId of ownersToRemove) {
+          await client
+            .service('branches/:id/owners')
+            .remove(userId, { route: { id: branch.branch_id } });
+        }
+      }
+
+      // 4. Assistant emoji → board icon side effect. Cosmetic only — log on
       // failure, don't fail the save.
       if (assistantChanged && isAssistantBranch && canEditGeneral && branch.board_id) {
         const config = getAssistantConfig(branch);
@@ -457,6 +495,8 @@ export function useBranchModalForm({
     branch,
     client,
     rbacEnabled,
+    ownersChanged,
+    permissionFieldsChanged,
     permissionsChanged,
     canEditPermissions,
     owners,
@@ -483,6 +523,7 @@ export function useBranchModalForm({
     allUsers,
     rbacEnabled,
     loadingOwners,
+    ownersLoadError,
     canEditGeneral,
     canEditPermissions,
     hasChanges,

@@ -41,6 +41,8 @@ interface StubOptions {
   users?: User[];
   rbac404?: boolean;
   failBranchPatch?: boolean;
+  /** Throw a 500-style error on the initial owners.find load. */
+  failOwnersFind?: boolean;
 }
 
 function makeStubClient(opts: StubOptions = {}): { client: AgorClient; calls: ServiceCall[] } {
@@ -57,6 +59,11 @@ function makeStubClient(opts: StubOptions = {}): { client: AgorClient; calls: Se
             if (opts.rbac404) {
               const err = new Error('not found') as Error & { code?: number };
               err.code = 404;
+              throw err;
+            }
+            if (opts.failOwnersFind) {
+              const err = new Error('database is down') as Error & { code?: number };
+              err.code = 500;
               throw err;
             }
             return owners;
@@ -378,6 +385,105 @@ describe('useBranchModalForm — unified save', () => {
     expect(boardPatches).toHaveLength(1);
     const [, body] = boardPatches[0].args as [string, Record<string, unknown>];
     expect(body).toMatchObject({ icon: '🎯' });
+  });
+
+  it('does NOT call branches.patch for an owner-only transfer (no permission-field churn)', async () => {
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
+    const bob = makeUser({ user_id: 'user-2', email: 'bob@example.com', role: 'member' });
+    const branch = makeBranch();
+    const { client, calls } = makeStubClient({ owners: [alice], users: [alice, bob] });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.loadingOwners).toBe(false));
+
+    // Pure owner transfer: Alice → Bob. No permission-field change.
+    act(() => {
+      result.current.setPermissions('selectedOwnerIds', ['user-2']);
+    });
+    expect(result.current.permissionsChanged).toBe(true);
+
+    await act(async () => {
+      await result.current.save();
+    });
+
+    // Owners service ran the add + remove
+    const ownerCreates = calls.filter(
+      (c) => c.service === 'branches/:id/owners' && c.method === 'create'
+    );
+    const ownerRemoves = calls.filter(
+      (c) => c.service === 'branches/:id/owners' && c.method === 'remove'
+    );
+    expect(ownerCreates).toHaveLength(1);
+    expect(ownerRemoves).toHaveLength(1);
+
+    // The branch row should NOT have been touched — sending unchanged
+    // permission fields would force a redundant auth check that the
+    // about-to-be-removed owner might fail.
+    const branchPatches = calls.filter((c) => c.service === 'branches' && c.method === 'patch');
+    expect(branchPatches).toHaveLength(0);
+  });
+
+  it('orders owner-transfer + permission change as: add → branches.patch → remove', async () => {
+    // Pinpoints the must-fix from the second review pass: the about-to-be-
+    // removed owner has to still be authorized when branches.patch fires.
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
+    const bob = makeUser({ user_id: 'user-2', email: 'bob@example.com', role: 'member' });
+    const branch = makeBranch();
+    const { client, calls } = makeStubClient({ owners: [alice], users: [alice, bob] });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.loadingOwners).toBe(false));
+
+    act(() => {
+      result.current.setPermissions('selectedOwnerIds', ['user-2']);
+      result.current.setPermissions('othersCan', 'all');
+    });
+
+    await act(async () => {
+      await result.current.save();
+    });
+
+    // Filter to just the mutating operations on permissions + branches
+    const mutations = calls.filter(
+      (c) =>
+        (c.service === 'branches/:id/owners' && (c.method === 'create' || c.method === 'remove')) ||
+        (c.service === 'branches' && c.method === 'patch')
+    );
+
+    expect(mutations.map((c) => `${c.service}.${c.method}`)).toEqual([
+      'branches/:id/owners.create', // Bob added first
+      'branches.patch', // PATCH while Alice is still an owner
+      'branches/:id/owners.remove', // Alice removed last
+    ]);
+  });
+
+  it('surfaces non-404 owners-load failures via ownersLoadError instead of going silent', async () => {
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
+    const branch = makeBranch();
+    const { client } = makeStubClient({ failOwnersFind: true });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(result.current.loadingOwners).toBe(false);
+      expect(result.current.ownersLoadError).not.toBeNull();
+    });
+
+    expect(result.current.ownersLoadError?.message).toBe('database is down');
+    // RBAC stays "enabled" so the modal doesn't silently flip into the
+    // open-access mode based on an unrelated network blip.
+    expect(result.current.rbacEnabled).toBe(true);
   });
 
   it('detects no permission changes when RBAC is disabled (404 from owners service)', async () => {

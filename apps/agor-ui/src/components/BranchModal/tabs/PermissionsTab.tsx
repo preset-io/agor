@@ -27,6 +27,8 @@ interface PermissionsTabProps {
   currentUser?: User | null;
   state: PermissionsFormState;
   setField: <K extends keyof PermissionsFormState>(key: K, value: PermissionsFormState[K]) => void;
+  /** Non-fatal owners-load failure (network / server error, not 404). */
+  ownersLoadError?: Error | null;
 }
 
 const permissionLevelDescriptions: Record<BranchPermissionLevel, string> = {
@@ -50,6 +52,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   currentUser,
   state,
   setField,
+  ownersLoadError,
 }) => {
   const { showError } = useThemedMessage();
   // Local key to force the Select to remount when we need to reject a removal
@@ -74,6 +77,16 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
       <Typography.Text strong style={{ fontSize: 14, display: 'block', marginBottom: 16 }}>
         Owners & Permissions
       </Typography.Text>
+
+      {ownersLoadError && (
+        <Alert
+          type="error"
+          showIcon
+          message="Could not load branch permissions"
+          description={`${ownersLoadError.message}. Editing is disabled until this resolves — try closing and reopening the modal.`}
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       <Form layout="horizontal" colon={false}>
         {/* Owners Multi-Select */}

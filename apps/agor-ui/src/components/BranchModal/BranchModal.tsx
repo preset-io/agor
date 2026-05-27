@@ -97,6 +97,15 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     }
   }, [open, defaultTab]);
 
+  // Surface owners-load failures to the user. Without this, a non-admin owner
+  // hitting a network/server error would see canEdit silently flip false with
+  // no visible reason. Toasted once per error transition.
+  useEffect(() => {
+    if (form.ownersLoadError) {
+      showError(`Failed to load branch permissions: ${form.ownersLoadError.message}`);
+    }
+  }, [form.ownersLoadError, showError]);
+
   const isAnAssistant = branch ? isAssistant(branch) : false;
   const assistantConfig = useMemo(() => (branch ? getAssistantConfig(branch) : null), [branch]);
 
@@ -210,6 +219,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
                 currentUser={currentUser}
                 state={form.permissions}
                 setField={form.setPermissions}
+                ownersLoadError={form.ownersLoadError}
               />
             ),
           },
