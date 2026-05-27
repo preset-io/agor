@@ -43,12 +43,10 @@ import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
   ContextWindowPill,
   GitStatePill,
-  MessageCountPill,
   ModelPill,
   ScheduledRunPill,
   TimerPill,
   TokenCountPill,
-  ToolCountPill,
 } from '../Pill';
 import { RateLimitBlock } from '../RateLimitBlock';
 import { StickyTodoRenderer } from '../StickyTodoRenderer';
@@ -423,17 +421,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       return -1;
     }, [blocks]);
 
-    // Calculate message count from task message_range
-    const messageCount = task.message_range.end_index - task.message_range.start_index + 1;
-
-    // Calculate tool count (hybrid approach)
-    // - For completed tasks: use stored count (no messages needed)
-    // - For running tasks: calculate from loaded messages (live count)
-    const toolCount =
-      task.status === TaskStatus.COMPLETED
-        ? task.tool_use_count
-        : messages.reduce((sum, msg) => sum + (msg.tool_uses?.length || 0), 0);
-
     // Get normalized SDK response (computed by executor, stored in DB)
     const normalized = task.normalized_sdk_response || null;
 
@@ -514,8 +501,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 prefix="By"
               />
             )}
-            <MessageCountPill count={messageCount} />
-            <ToolCountPill count={toolCount} />
             {normalized && (
               <TokenCountPill
                 count={normalized.tokenUsage.totalTokens}
