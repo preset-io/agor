@@ -220,43 +220,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // IMPORTANT: Call hooks unconditionally before any early returns (React rules of hooks)
   const [mode, setMode] = useState<'alias' | 'exact'>(initialMode);
 
-  // Surface the displayed default to the parent form when no value is set.
-  //
-  // Without this, the dropdown shows `modelList[0]` (or the tool-specific
-  // default) visually but the parent Ant Design Form keeps `modelConfig`
-  // undefined — because Ant Form's `value` only updates via our `onChange`.
-  // Result: user creates a session, the picker shows GPT 5.5, the form
-  // submits `modelConfig: undefined`, the daemon's `apply-session-config-
-  // defaults` hook then has no user-default to fall back to and creates
-  // the session with no `model_config`. Subsequent prompts run with no
-  // configured model — exactly the symptom we just debugged in the wild.
-  //
-  // We deliberately do NOT fire for OpenCode (handled by its own selector
-  // returning a provider/model pair) or until the dynamic model list has
-  // loaded for Copilot/Cursor (otherwise we'd lock in the static fallback
-  // before the dynamic default arrives).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: emit only when value is unset; firing on every modelList change would clobber user picks
-  useEffect(() => {
-    if (effectiveTool === 'opencode') return;
-    if (!onChange) return;
-    if (value?.model) return;
-    if (effectiveTool === 'copilot' && !copilotServerOptions) return;
-    if (effectiveTool === 'cursor' && !cursorServerOptions) return;
-    const defaultModel = effectiveTool === 'cursor' ? cursorDefaultModel : modelList[0]?.id;
-    if (!defaultModel) return;
-    onChange({ mode: initialMode, model: defaultModel });
-    // We intentionally depend only on `value?.model` and the keys that
-    // influence the default — not on `onChange`/`modelList` identity, which
-    // re-create on every render and would loop.
-  }, [
-    value?.model,
-    effectiveTool,
-    initialMode,
-    cursorDefaultModel,
-    copilotServerOptions,
-    cursorServerOptions,
-  ]);
-
   // OpenCode uses a different UI (2 dropdowns: provider + model)
   if (effectiveTool === 'opencode') {
     return (
