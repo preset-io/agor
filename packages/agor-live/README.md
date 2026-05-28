@@ -10,6 +10,13 @@ Agor is a real-time collaborative platform for managing Claude Code, Codex, and 
 npm install -g agor-live
 ```
 
+Or with Homebrew:
+
+```bash
+brew tap preset-io/agor https://github.com/preset-io/agor
+brew install agor-live
+```
+
 ## Quick Start
 
 ```bash
@@ -20,7 +27,7 @@ agor init
 agor daemon start
 
 # 3. Open UI in browser
-agor ui open
+agor open
 ```
 
 ## Features
