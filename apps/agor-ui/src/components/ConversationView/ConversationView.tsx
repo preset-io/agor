@@ -162,22 +162,38 @@ export const ConversationView = React.memo<ConversationViewProps>(
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
 
-    // Check if user is scrolled near the bottom (within 100px)
+    // true when the user has intentionally scrolled away from the bottom;
+    // auto-scroll is suppressed while this is set.
+    const userScrolledUpRef = useRef(false);
+
+    // Within 20px of the end counts as "at the bottom". Tight enough that a
+    // mid-swipe scroll won't accidentally keep auto-scroll on, but loose enough
+    // to handle sub-pixel rounding.
     const isNearBottom = useCallback(() => {
       if (!containerRef.current) return true;
       const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-      return scrollHeight - scrollTop - clientHeight < 100;
+      return scrollHeight - scrollTop - clientHeight < 20;
     }, []);
 
-    // Scroll to bottom function (wrapped in useCallback to avoid re-renders)
-    const scrollToBottom = useCallback(() => {
+    // Internal scroll used by auto-scroll effects. Does NOT reset user intent.
+    const doAutoScroll = useCallback(() => {
       if (containerRef.current) {
         containerRef.current.scrollTop = containerRef.current.scrollHeight;
       }
     }, []);
 
-    // Scroll to top function
+    // Public scroll-to-bottom exposed via onScrollRef (button clicks). Resets
+    // user intent so auto-scroll resumes after an explicit "go to bottom".
+    const scrollToBottom = useCallback(() => {
+      userScrolledUpRef.current = false;
+      if (containerRef.current) {
+        containerRef.current.scrollTop = containerRef.current.scrollHeight;
+      }
+    }, []);
+
+    // Scroll to top: mark user as reading so auto-scroll doesn't yank them back.
     const scrollToTop = useCallback(() => {
+      userScrolledUpRef.current = true;
       if (containerRef.current) {
         containerRef.current.scrollTop = 0;
       }
@@ -281,12 +297,14 @@ export const ConversationView = React.memo<ConversationViewProps>(
       if (!lastTaskId) return;
       setExpandedTaskIds((prev) => {
         if (prev.has(lastTaskId)) return prev;
-        requestAnimationFrame(() => {
-          scrollToBottom();
-        });
+        if (!userScrolledUpRef.current) {
+          requestAnimationFrame(() => {
+            doAutoScroll();
+          });
+        }
         return new Set([lastTaskId]);
       });
-    }, [lastTaskId, scrollToBottom]);
+    }, [lastTaskId, doAutoScroll]);
 
     // Handle task expand/collapse. Single stable callback shared by every
     // TaskBlock — the callback takes `taskId` so we don't need to mint a
@@ -324,13 +342,39 @@ export const ConversationView = React.memo<ConversationViewProps>(
       [reactiveSession]
     );
 
-    // Auto-scroll to bottom when streaming messages arrive (only if user is already at bottom)
+    // Track user scroll intent via scroll events.
+    //
+    // Key design notes:
+    //   1. The scroll event fires for both user scrolls AND programmatic scrollTop
+    //      changes (doAutoScroll). That's fine: when auto-scroll fires it brings
+    //      us to the bottom, so isNearBottom() returns true and the flag stays
+    //      false. When the user scrolls up, isNearBottom() returns false and the
+    //      flag becomes true, pausing auto-scroll.
+    //
+    //   2. This effect MUST be defined after `tasks` so we can include
+    //      `tasks.length > 0` in the dependency array. The container div is only
+    //      rendered when tasks are present, so containerRef.current is null on the
+    //      very first render (loading state). Without this dep, the effect would
+    //      attach no listener on initial mount and never re-run.
+    const hasConversation = tasks.length > 0;
+    // biome-ignore lint/correctness/useExhaustiveDependencies: hasConversation re-triggers when the container mounts
+    useEffect(() => {
+      const container = containerRef.current;
+      if (!container) return;
+      const handleScroll = () => {
+        userScrolledUpRef.current = !isNearBottom();
+      };
+      container.addEventListener('scroll', handleScroll, { passive: true });
+      return () => container.removeEventListener('scroll', handleScroll);
+    }, [isNearBottom, hasConversation]);
+
+    // Auto-scroll during streaming — only if the user has not scrolled away.
     // biome-ignore lint/correctness/useExhaustiveDependencies: We want to scroll on streaming change
     useEffect(() => {
-      if (isNearBottom()) {
-        scrollToBottom();
+      if (!userScrolledUpRef.current) {
+        doAutoScroll();
       }
-    }, [allStreamingMessages, tasks]);
+    }, [allStreamingMessages]);
 
     if (error) {
       // Deterministic escape hatch when auto-recovery (socket-reconnect resync,
