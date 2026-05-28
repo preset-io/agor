@@ -222,6 +222,12 @@ export interface AgorExternalLaunchSettings {
 
   /** Allow launch assertions to assign admin/superadmin roles (default: false). */
   allow_admin_roles?: boolean;
+
+  /**
+   * Allow verified assertion emails to link to an existing same-email local user
+   * that has no external identity yet (default: false).
+   */
+  trust_verified_email_for_linking?: boolean;
 }
 
 /**

@@ -28,6 +28,7 @@ interface ResolvedLaunchSettings {
   devSharedSecret?: string;
   serviceCredential?: string;
   allowAdminRoles: boolean;
+  trustVerifiedEmailForLinking: boolean;
   requestTimeoutMs: number;
   algorithms?: string[];
 }
@@ -46,6 +47,7 @@ interface LaunchClaims extends JwtPayload {
   picture?: string;
   avatar?: string;
   role?: string;
+  email_verified?: boolean;
   provider?: string;
   instance_id?: string;
   runtime_instance_id?: string;
@@ -99,6 +101,7 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
     devSharedSecret: process.env[sharedSecretEnv] || raw?.dev_shared_secret,
     serviceCredential: process.env[serviceTokenEnv] || raw?.service_credential,
     allowAdminRoles: raw?.allow_admin_roles === true,
+    trustVerifiedEmailForLinking: raw?.trust_verified_email_for_linking === true,
     requestTimeoutMs: raw?.request_timeout_ms ?? DEFAULT_TIMEOUT_MS,
     algorithms: raw?.algorithms,
   };
@@ -222,6 +225,76 @@ async function findUserByExternalIdentity(
   return null;
 }
 
+function shouldTrustVerifiedEmailForLinking(
+  settings: ResolvedLaunchSettings,
+  claims: LaunchClaims,
+  email: string | undefined
+): email is string {
+  return (
+    settings.trustVerifiedEmailForLinking &&
+    claims.email_verified === true &&
+    typeof email === 'string'
+  );
+}
+
+async function findTrustedEmailLinkCandidate(
+  db: Database,
+  settings: ResolvedLaunchSettings,
+  claims: LaunchClaims,
+  email: string | undefined
+): Promise<typeof users.$inferSelect | null> {
+  if (!shouldTrustVerifiedEmailForLinking(settings, claims, email)) return null;
+
+  const existing = await select(db).from(users).where(eq(users.email, email)).one();
+  if (!existing) return null;
+
+  const identities = getExternalIdentities(existing.data as UserDataWithExternalIdentities);
+  return identities.length === 0 ? existing : null;
+}
+
+async function updateLaunchUser(
+  options: LaunchAuthServiceOptions,
+  existing: typeof users.$inferSelect,
+  identity: StoredExternalIdentity,
+  settings: ResolvedLaunchSettings,
+  claims: LaunchClaims,
+  now: Date,
+  avatar: string | undefined,
+  name: string | undefined
+): Promise<User> {
+  const { db, config, usersService } = options;
+  const role = mapRole(
+    claims.role,
+    settings,
+    config.execution?.allow_superadmin,
+    normalizeRole(existing.role ?? undefined)
+  );
+  const data = (existing.data ?? {}) as UserDataWithExternalIdentities;
+  const identities = getExternalIdentities(data);
+  const nextIdentities = identities.map((existingIdentity) =>
+    existingIdentity.key === identity.key ? { ...existingIdentity, ...identity } : existingIdentity
+  );
+  if (!nextIdentities.some((existingIdentity) => existingIdentity.key === identity.key)) {
+    nextIdentities.push(identity);
+  }
+
+  await update(db, users)
+    .set({
+      name: name ?? existing.name,
+      role,
+      updated_at: now,
+      data: {
+        ...data,
+        avatar: avatar ?? data.avatar,
+        external_identities: nextIdentities,
+      },
+    })
+    .where(eq(users.user_id, existing.user_id))
+    .run();
+
+  return usersService.get(existing.user_id as UserID, { provider: undefined });
+}
+
 async function upsertLaunchUser(
   options: LaunchAuthServiceOptions,
   claims: LaunchClaims
@@ -249,36 +322,26 @@ async function upsertLaunchUser(
 
   const existing = await findUserByExternalIdentity(db, key);
   if (existing) {
-    const role = mapRole(
-      claims.role,
+    return updateLaunchUser(options, existing, identity, settings, claims, now, avatar, name);
+  }
+
+  const trustedEmailLinkCandidate = await findTrustedEmailLinkCandidate(
+    db,
+    settings,
+    claims,
+    email
+  );
+  if (trustedEmailLinkCandidate) {
+    return updateLaunchUser(
+      options,
+      trustedEmailLinkCandidate,
+      identity,
       settings,
-      config.execution?.allow_superadmin,
-      normalizeRole(existing.role ?? undefined)
+      claims,
+      now,
+      avatar,
+      name
     );
-    const data = (existing.data ?? {}) as UserDataWithExternalIdentities;
-    const identities = getExternalIdentities(data);
-    const nextIdentities = identities.map((existingIdentity) =>
-      existingIdentity.key === key ? { ...existingIdentity, ...identity } : existingIdentity
-    );
-    if (!nextIdentities.some((existingIdentity) => existingIdentity.key === key)) {
-      nextIdentities.push(identity);
-    }
-
-    await update(db, users)
-      .set({
-        name: name ?? existing.name,
-        role,
-        updated_at: now,
-        data: {
-          ...data,
-          avatar: avatar ?? data.avatar,
-          external_identities: nextIdentities,
-        },
-      })
-      .where(eq(users.user_id, existing.user_id))
-      .run();
-
-    return usersService.get(existing.user_id as UserID, { provider: undefined });
   }
 
   const role = mapRole(claims.role, settings, config.execution?.allow_superadmin);

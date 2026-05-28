@@ -3,7 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import { createDatabase, eq, initializeDatabase, select, users } from '@agor/core/db';
+import {
+  createDatabase,
+  eq,
+  generateId,
+  hash,
+  initializeDatabase,
+  insert,
+  select,
+  users,
+} from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
@@ -82,6 +91,38 @@ function makeUsersService(db: Database) {
       };
     },
   };
+}
+
+async function seedLocalUser(
+  db: Database,
+  overrides: Partial<{
+    email: string;
+    name: string;
+    role: User['role'];
+  }> = {}
+): Promise<UserID> {
+  const userId = generateId() as UserID;
+  const now = new Date();
+
+  await insert(db, users)
+    .values({
+      user_id: userId,
+      email: overrides.email ?? 'person@example.test',
+      password: await hash('password', 10),
+      name: overrides.name ?? 'Existing Local User',
+      emoji: '👤',
+      role: overrides.role ?? 'member',
+      created_at: now,
+      updated_at: now,
+      onboarding_completed: false,
+      must_change_password: false,
+      data: {
+        preferences: {},
+      },
+    })
+    .run();
+
+  return userId;
 }
 
 describe('one-time launch auth service', () => {
@@ -247,5 +288,53 @@ describe('one-time launch auth service', () => {
     expect(second.user.user_id).not.toBe(first.user.user_id);
     expect(second.user.email).not.toBe('same@example.test');
     expect(second.user.email).toContain('+launch-');
+  });
+
+  it('does not link by email when trusted linking is disabled by default', async () => {
+    const existingUserId = await seedLocalUser(db, { email: 'person@example.test' });
+
+    mockExchange(signClaims({ email_verified: true }));
+    const result = await service().create({ launchCode: 'first' });
+
+    expect(result.user.user_id).not.toBe(existingUserId);
+    expect(result.user.email).toContain('+launch-');
+  });
+
+  it('links an existing local user by email when enabled and email is verified', async () => {
+    const existingUserId = await seedLocalUser(db, { email: 'person@example.test' });
+
+    mockExchange(signClaims({ email_verified: true, name: 'Verified Launch User' }));
+    const result = await service({
+      external_launch: {
+        ...baseConfig().external_launch,
+        trust_verified_email_for_linking: true,
+      },
+    }).create({ launchCode: 'first' });
+
+    expect(result.user.user_id).toBe(existingUserId);
+    expect(result.user.email).toBe('person@example.test');
+
+    const row = await select(db).from(users).where(eq(users.user_id, existingUserId)).one();
+    expect(row).toBeTruthy();
+    const externalIdentities = (row?.data as { external_identities?: Array<{ email?: string }> })
+      .external_identities;
+    expect(externalIdentities).toEqual(
+      expect.arrayContaining([expect.objectContaining({ email: 'person@example.test' })])
+    );
+  });
+
+  it('does not link an existing local user by email when email is unverified', async () => {
+    const existingUserId = await seedLocalUser(db, { email: 'person@example.test' });
+
+    mockExchange(signClaims({ email_verified: false }));
+    const result = await service({
+      external_launch: {
+        ...baseConfig().external_launch,
+        trust_verified_email_for_linking: true,
+      },
+    }).create({ launchCode: 'first' });
+
+    expect(result.user.user_id).not.toBe(existingUserId);
+    expect(result.user.email).toContain('+launch-');
   });
 });
