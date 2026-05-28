@@ -3,6 +3,7 @@
  */
 
 export {
+  buildMCPTemplateContext,
   buildMCPTemplateContextFromEnv,
   type MCPTemplateContext,
   type MCPTemplateResolutionResult,

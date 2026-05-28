@@ -17,11 +17,12 @@
  * truly global and available to all sessions regardless of who created them.
  */
 
-import { buildMCPTemplateContextFromEnv, resolveMcpServerTemplates } from '@agor/core/mcp';
+import { buildMCPTemplateContext, resolveMcpServerTemplates } from '@agor/core/mcp';
 import type { MCPServer, SessionID } from '@agor/core/types';
 import type {
   MCPServerRepository,
   SessionMCPServerRepository,
+  SessionRepository,
 } from '../../db/feathers-repositories.js';
 
 /**
@@ -38,6 +39,14 @@ export interface MCPServerWithSource {
 export interface MCPResolutionDeps {
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
+  /**
+   * Sessions repository — used to fetch the session row at resolution
+   * time so its ``custom_context`` blob can populate the
+   * ``session.custom_context.*`` template namespace. When absent (e.g.
+   * call sites that don't care about session-scoped templates), only
+   * ``user.env.*`` substitutions are available.
+   */
+  sessionRepo?: SessionRepository;
   /**
    * User ID to use for fetching per-user OAuth tokens.
    * When provided, MCP servers with per-user OAuth will have tokens injected.
@@ -142,9 +151,45 @@ export async function getMcpServersForSession(
     }
 
     // STEP 3: Resolve templates in config fields (url, env.*, auth.*)
-    // process.env contains user's decrypted env vars (set by createUserProcessEnvironment)
-    // SECURITY: Only user-defined vars are exposed (via AGOR_USER_ENV_KEYS)
-    const templateContext = buildMCPTemplateContextFromEnv(process.env);
+    //
+    // Two channels of caller-supplied values are exposed to templates:
+    //
+    // - ``user.env.*`` — drawn from process.env, filtered through
+    //   AGOR_USER_ENV_KEYS so only user-defined vars are visible. The
+    //   daemon's own secrets stay invisible. See
+    //   ``createUserProcessEnvironment`` for how the env is populated.
+    //
+    // - ``session.custom_context.*`` — drawn from this session's row,
+    //   stamped by the session creator at ``POST /sessions`` time. The
+    //   agent has no MCP tool to write to its own session's
+    //   ``custom_context``, so this is a one-way channel from creator
+    //   to MCP config. Used by the Preset chatbot to pipe a
+    //   short-lived, user-scoped JWT into ``auth.token`` without the
+    //   daemon ever holding a workspace credential.
+    let sessionCustomContext: Record<string, unknown> | null | undefined;
+    if (deps.sessionRepo) {
+      try {
+        const sessionRow = await deps.sessionRepo.findById(sessionId);
+        sessionCustomContext = (sessionRow?.custom_context ?? null) as Record<
+          string,
+          unknown
+        > | null;
+      } catch (error) {
+        // Failure to load the session row is non-fatal — templates that
+        // referenced ``session.custom_context.*`` simply resolve empty
+        // and surface as "unresolved required template" errors on the
+        // affected MCP server. Logged so operators can find it.
+        console.warn(
+          `   ⚠️  Failed to load session ${sessionId} for custom_context templates:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
+
+    const templateContext = buildMCPTemplateContext({
+      env: process.env,
+      sessionCustomContext,
+    });
     let templatesResolved = 0;
     let serversSkipped = 0;
 

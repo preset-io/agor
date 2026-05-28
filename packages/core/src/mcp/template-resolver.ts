@@ -51,11 +51,60 @@ import type { MCPAuth, MCPServer } from '../types';
 
 /**
  * Template context available for MCP configuration resolution.
- * Intentionally minimal - only user environment variables are exposed.
+ *
+ * Intentionally minimal — two channels surface caller-supplied values:
+ *
+ * - ``user.env.*`` — env vars the user has stored in their profile,
+ *   filtered through the ``AGOR_USER_ENV_KEYS`` allowlist so system
+ *   secrets (``AGOR_MASTER_SECRET``, database URLs, etc.) never leak.
+ *   Populated by {@link buildMCPTemplateContextFromEnv}.
+ * - ``session.custom_context.*`` — free-form session metadata stamped by
+ *   the session creator at ``POST /sessions`` time (or by internal
+ *   daemon paths such as the scheduler/gateway). Populated by
+ *   {@link buildMCPTemplateContext}.
+ *
+ * SECURITY — write surfaces:
+ *
+ * 1. ``user.env.*`` is written via the users service (`env_vars` field).
+ *    The allowlist on the env-var name ensures only intentionally-tagged
+ *    values reach the template. Daemon-process env vars are not exposed.
+ * 2. ``session.custom_context.*`` is written ONLY by the session
+ *    creator's ``POST /sessions`` payload and a handful of internal
+ *    daemon code paths (scheduler, gateway). There is intentionally NO
+ *    MCP tool that mutates ``session.custom_context`` — see
+ *    ``apps/agor-daemon/src/mcp/tools/sessions.ts`` (no update tool
+ *    exposed). That means the agent running INSIDE the session cannot
+ *    exfiltrate its own auth material by patching its own session row.
+ *    Operators who want to use ``custom_context`` to bind a per-session
+ *    secret (e.g. a user-scoped JWT for a downstream MCP server) get
+ *    the property that a session-side compromise reveals only the live
+ *    JWT, not the credential that minted it.
+ *
+ * SECURITY — read surfaces:
+ *
+ * 3. Operators with write access to ``mcp_servers`` rows can craft a
+ *    global-scoped server that interpolates ``user.env.GITHUB_TOKEN`` or
+ *    ``session.custom_context.preset_jwt`` into ``auth.token`` and
+ *    points ``url`` at an attacker. This is the same risk for both
+ *    channels: trust who can write MCP records. Deployments that need
+ *    per-session secrets to be tight should attach the relevant MCP
+ *    servers with ``scope: 'session'`` (specific branch only), not
+ *    ``scope: 'global'``.
  */
 export interface MCPTemplateContext {
   user: {
     env: Record<string, string>;
+  };
+  /**
+   * Session-scoped context, set by the daemon at session-create time
+   * (e.g. ``POST /sessions`` ``custom_context`` payload). Templates may
+   * reference any path under ``session.custom_context.*``. Absent when
+   * the session row's ``custom_context`` is null/missing — templates
+   * that reference it will resolve to empty (treated as "unresolved
+   * required template" for critical fields).
+   */
+  session?: {
+    custom_context: Record<string, unknown>;
   };
 }
 
@@ -113,6 +162,38 @@ export function buildMCPTemplateContextFromEnv(
       env: userEnv,
     },
   };
+}
+
+/**
+ * Build template context combining ``user.env.*`` with optional
+ * ``session.custom_context.*``.
+ *
+ * Use this at executor session-start when you want MCP server templates
+ * to interpolate fields from the session row's ``custom_context`` blob
+ * (e.g. a per-user, short-lived JWT minted by the session creator and
+ * passed in the ``POST /sessions`` body).
+ *
+ * @param opts.env - Environment object (typically ``process.env``); same
+ *   semantics as {@link buildMCPTemplateContextFromEnv} (filtered through
+ *   ``AGOR_USER_ENV_KEYS``).
+ * @param opts.sessionCustomContext - Raw ``session.custom_context`` blob,
+ *   or ``null``/``undefined`` when the session has none. When provided,
+ *   exposed verbatim under ``session.custom_context.*``.
+ * @returns Template context for MCP config resolution.
+ */
+export function buildMCPTemplateContext(opts: {
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>;
+  sessionCustomContext?: Record<string, unknown> | null;
+}): MCPTemplateContext {
+  const base = buildMCPTemplateContextFromEnv(opts.env);
+  const cc = opts.sessionCustomContext;
+  if (cc && typeof cc === 'object' && !Array.isArray(cc)) {
+    return {
+      ...base,
+      session: { custom_context: cc },
+    };
+  }
+  return base;
 }
 
 /**
