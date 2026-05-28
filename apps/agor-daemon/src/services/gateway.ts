@@ -19,6 +19,7 @@ import type { Application } from '@agor/core/feathers';
 import type { GatewayConnector, GatewayContext, InboundMessage } from '@agor/core/gateway';
 import {
   formatGatewayContext,
+  formatGatewaySystemMessage,
   getConnector,
   hasConnector,
   normalizeOutbound,
@@ -278,7 +279,10 @@ export class GatewayService {
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
       connector
-        .sendMessage({ threadId, text: `_[system] ${text}_` })
+        .sendMessage({
+          threadId,
+          text: formatGatewaySystemMessage(channel.channel_type as ChannelType, text),
+        })
         .catch((err) => console.warn('[gateway] Debug message failed:', err));
     } catch {
       // Ignore — debug messages are best-effort

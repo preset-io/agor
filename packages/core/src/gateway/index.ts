@@ -12,3 +12,4 @@ export { GitHubConnector, parseThreadId as parseGitHubThreadId } from './connect
 export { SlackConnector } from './connectors/slack';
 export type { GatewayContext } from './context';
 export { formatGatewayContext } from './context';
+export { formatGatewaySystemMessage } from './system-message';
