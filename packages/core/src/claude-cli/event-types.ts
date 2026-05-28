@@ -30,7 +30,7 @@ export interface JsonlLineCommon {
   timestamp?: string;
   /** The CLI session UUID — same value across every line in the file. */
   sessionId?: string;
-  /** `claude` binary version (e.g. "2.1.132"). */
+  /** `claude` binary version (e.g. "2.1.154"). */
   version?: string;
   /** Working dir the session was launched from. */
   cwd?: string;

@@ -43,14 +43,14 @@ Combined with **per-user analytics** (Settings → Analytics), this gives you a 
 
 **Switch models and reasoning depth mid-session.** A model selector and effort dropdown sit in the session panel footer.
 
-| Effort | When |
-|---|---|
-| `low` | Quick lookups, simple edits |
-| `medium` | Balanced speed/quality |
-| `high` | Default — complex coding, reviews |
-| `max` | Critical decisions, architecture (Opus only) |
+| Effort   | When                                         |
+| -------- | -------------------------------------------- |
+| `low`    | Quick lookups, simple edits                  |
+| `medium` | Balanced speed/quality                       |
+| `high`   | Default — complex coding, reviews            |
+| `max`    | Critical decisions, architecture (Opus only) |
 
-Models with the `[1m]` suffix (e.g., `claude-opus-4-6[1m]`) enable Anthropic's 1M-token extended context window. They appear as separate dropdown entries.
+Models with the `[1m]` suffix (e.g., `claude-sonnet-4-6[1m]`) enable Anthropic's 1M-token extended context window. They appear as separate dropdown entries.
 
 You don't have to start a new session to dial things up or down — flip the selector, the next prompt uses the new config.
 
@@ -176,7 +176,7 @@ You don't have to wait for a long-running prompt to finish before you start writ
   </div>
 </div>
 
-White dot (lower-left) means *something is running*. Green dot (lower-right) means *something is ready for input*. Both can show at once. Updates in real time over WebSocket.
+White dot (lower-left) means _something is running_. Green dot (lower-right) means _something is ready for input_. Both can show at once. Updates in real time over WebSocket.
 
 ---
 
@@ -240,12 +240,12 @@ The agent can return a Mermaid diagram of your service architecture, and you'll 
   style={{ maxWidth: '400px' }}
 />
 
-| Setting | Where |
-|---|---|
-| Audio | Settings → Audio |
-| API keys | Settings → Agentic Tools |
-| Env variables | Settings → Environment Variables |
-| Agent defaults | Create Session → Advanced |
+| Setting        | Where                            |
+| -------------- | -------------------------------- |
+| Audio          | Settings → Audio                 |
+| API keys       | Settings → Agentic Tools         |
+| Env variables  | Settings → Environment Variables |
+| Agent defaults | Create Session → Advanced        |
 
 See **[Security](/security)** for the trust boundary on per-user secrets.
 

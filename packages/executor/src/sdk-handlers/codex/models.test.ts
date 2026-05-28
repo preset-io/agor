@@ -6,15 +6,18 @@ describe('getCodexContextWindowLimit', () => {
 
   it('returns expected limits for known Codex-compatible models', () => {
     const cases: Array<{ model: string; expected: number }> = [
-      { model: 'gpt-5.5', expected: 400_000 },
+      { model: 'gpt-5.5', expected: 1_050_000 },
+      { model: 'gpt-5.5-pro', expected: 1_050_000 },
       { model: 'gpt-5.4', expected: 1_050_000 },
+      { model: 'gpt-5.4-pro', expected: 1_050_000 },
       { model: 'gpt-5.4-mini', expected: 400_000 },
+      { model: 'gpt-5.4-nano', expected: 400_000 },
       { model: 'gpt-5.3-codex', expected: 400_000 },
       { model: 'gpt-5.3-codex-spark', expected: 128_000 },
       { model: 'gpt-5.1-codex', expected: defaultLimit },
       { model: 'gpt-5.1-codex-mini', expected: defaultLimit },
       { model: 'gpt-5.1', expected: defaultLimit },
-      { model: 'gpt-5-codex', expected: defaultLimit },
+      { model: 'gpt-5-codex', expected: 400_000 },
       { model: 'gpt-5-codex-mini', expected: defaultLimit },
       { model: 'gpt-5', expected: defaultLimit },
       { model: 'gpt-4o', expected: 128_000 },
@@ -40,7 +43,7 @@ describe('getCodexContextWindowLimit', () => {
 
   it('handles model identifiers case-insensitively', () => {
     expect(getCodexContextWindowLimit('GPT-4O')).toBe(128_000);
-    expect(getCodexContextWindowLimit('GpT-5-CoDeX')).toBe(defaultLimit);
+    expect(getCodexContextWindowLimit('GpT-5-CoDeX')).toBe(400_000);
   });
 
   it('returns default limit when model is undefined or null', () => {

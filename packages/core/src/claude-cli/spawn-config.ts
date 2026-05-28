@@ -1,7 +1,7 @@
 /**
  * Build the argv for spawning the `claude` shell binary in a Zellij pane.
  *
- * Verified against `claude` v2.1.132. We use the **interactive** subset of
+ * Verified against `claude` v2.1.154. We use the **interactive** subset of
  * flags (NO `-p`/`--print`) — see the analysis doc's "Policy & ToS landscape"
  * section for why the print-mode path is deliberately avoided.
  *
@@ -10,7 +10,7 @@
  *   --session-id <uuid>            REQUIRED. Maps agor.session_id ↔ claude session.
  *   --resume <id>                  Resume an existing session by id.
  *   --fork-session                 With --resume, mint a new session-id.
- *   --model <alias>                e.g. claude-opus-4-7. Stripped of [1m] suffix.
+ *   --model <alias>                e.g. claude-opus-4-8. Stripped of [1m] suffix.
  *   --betas <flag>                 e.g. context-1m-2025-08-07 (only with [1m] models).
  *   --effort <level>               low | medium | high | xhigh | max
  *   --permission-mode <mode>       default|acceptEdits|bypassPermissions|plan|dontAsk|auto.
@@ -84,7 +84,7 @@ export interface ClaudeCliSpawnConfig {
   displayName?: string;
 
   /**
-   * Model alias — `claude-opus-4-7`, `claude-sonnet-4-6`, etc. A trailing
+   * Model alias — `claude-opus-4-8`, `claude-sonnet-4-6`, etc. A trailing
    * `[1m]` suffix enables the 1M context window via the `context-1m-2025-08-07`
    * beta flag.
    */

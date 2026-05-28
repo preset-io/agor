@@ -45,7 +45,7 @@ A **Channel** is a portal into a branch. It defines:
 
 You can create multiple channels for the same or different branches. For example:
 
-- **"Optimus Prime"** — Claude Code (Opus 4.6) on your main assistant branch, with Slack + GitHub MCP servers
+- **"Optimus Prime"** — Claude Code (Opus 4.8) on your main assistant branch, with Slack + GitHub MCP servers
 - **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review branch, trust mode, no MCP servers
 - **"Codex Runner"** — Codex on a `superset-frontend` branch for quick JS tasks
 
@@ -124,6 +124,7 @@ Open Slack, find your bot under Apps, and send it a message. You should see syst
 When someone mentions `@agor` (or your app's name) in a PR or issue comment, Agor picks it up via API polling and creates a session. The session runs on the target branch, and the agent's final response is posted back as a PR/issue comment under the app's bot identity (e.g., `agor[bot]`).
 
 Key differences from Slack:
+
 - **Polling, not WebSocket** — Agor polls the GitHub API every 15 seconds (configurable). No public endpoint needed.
 - **Per-PR/issue sessions** — Each PR or issue gets its own session. All `@agor` mentions within the same PR route to the same session.
 - **Last-message-only responses** — Unlike Slack (which streams every message), only the agent's final response is posted to GitHub. Intermediate progress is visible in the Agor UI.
@@ -134,6 +135,7 @@ Key differences from Slack:
 You can create the app through Agor's setup wizard or manually:
 
 **Via Agor UI (recommended):**
+
 1. Open **Settings** → **Gateway** tab → **Add Channel**.
 2. Select `github` as the channel type.
 3. Click **"Create GitHub App"** — this opens GitHub's App Manifest flow.
@@ -141,6 +143,7 @@ You can create the app through Agor's setup wizard or manually:
 5. Agor captures the credentials automatically.
 
 **Manually:**
+
 1. Go to your GitHub org's **Settings** → **Developer settings** → **GitHub Apps** → **New GitHub App**.
 2. Set permissions: `Contents: Read`, `Issues: Read & Write`, `Pull requests: Read & Write`, `Metadata: Read`.
 3. Subscribe to events: `issue_comment`, `issues`, `pull_request`, `pull_request_review`, `pull_request_review_comment`.
@@ -172,6 +175,7 @@ You can create the app through Agor's setup wizard or manually:
 ### 4. Mention @agor on a PR
 
 Comment `@agor review this PR` on any PR in a watched repo. Within 15 seconds:
+
 1. The comment gets a 👀 reaction (instant feedback).
 2. A "Processing..." comment appears with a link to the Agor session.
 3. The agent reviews the PR.
@@ -181,7 +185,7 @@ Follow-up `@agor` mentions on the same PR continue the same session — the agen
 
 ### Setting Up the Assistant
 
-The gateway routes messages to a session on the target branch. What the agent *does* with those messages is up to you — configured via the assistant's instructions on the target branch.
+The gateway routes messages to a session on the target branch. What the agent _does_ with those messages is up to you — configured via the assistant's instructions on the target branch.
 
 A minimal assistant prompt might be:
 
@@ -236,11 +240,7 @@ interface OutboundPayload {
 
 interface GatewayConnector {
   readonly channelType: ChannelType;
-  sendMessage(req: {
-    threadId: string;
-    text: string;
-    blocks?: unknown[];
-  }): Promise<string>;
+  sendMessage(req: { threadId: string; text: string; blocks?: unknown[] }): Promise<string>;
   startListening?(callback: (msg: InboundMessage) => void): Promise<void>;
   stopListening?(): Promise<void>;
   formatMessage?(markdown: string): string | OutboundPayload;
