@@ -1,6 +1,6 @@
 ---
 title: 'Agor Cloud - Opening a Private Beta'
-description: 'Fully managed Agor: bring your own API keys, run on a tuned Kubernetes fleet with same-day security patching, Unix-level user isolation, private network access to your VPC, and an audit trail your security team will accept. Built and operated by the team behind Preset Cloud.'
+description: 'Fully managed Agor: bring your own API keys, pen-tested and hardened for public-internet use (mobile included), same-day security patching, Unix-level user isolation, private network access to your VPC, and an audit trail your security team will accept. Built and operated by the team behind Preset Cloud.'
 date: 2025-11-23
 image: '/images/blog/agor-cloud.png'
 ---
@@ -71,6 +71,19 @@ Inside every Agor instance, sessions, worktrees, and dev environments run as dis
 
 This is how multi-user systems were designed to work, and it's the security floor we build everything else on top of.
 
+### Hardened for the Public Internet
+
+Agor is powerful software, and some of its capabilities — broad filesystem access, freeform shell, multi-user shared dev environments — are great inside a trusted network and risky on the open internet. If you self-host, you should think carefully about where you put it (and probably run it behind a VPN).
+
+Agor Cloud is built the other way: hardened from day one to sit safely on the public internet.
+
+- **Pen-tested** by an independent security firm. Daemon, executor, and exposed APIs all under scrutiny.
+- **SOC 2 Type II** audit cycle in flight.
+- **Locked-down feature surface.** The OSS feature flags and configs that expand attack surface — shared dev boxes, certain bypass modes, broad sudo paths — are off in Cloud. We know exactly which knobs should be in which position for a reliable, secure, public-facing instance, because that's what we run for ourselves.
+- **Safer alternatives where it matters.** Where a feature is too risky to expose publicly but still valuable, we ship a safer shape of it. Environment integration on Cloud, for example, goes through a webhook surface rather than in-instance shared dev envs — same outcome, much smaller blast radius.
+
+The payoff is the obvious one: **use Agor from anywhere, mobile included, with no VPN gymnastics.** Same posture you'd want from any modern SaaS your team relies on.
+
 ### Managed Private Cloud
 
 The default public Agor Cloud is a managed single-tenant instance per team, hosted on our infrastructure. For organizations whose code, data, or networking story rules that out, **Managed Private Cloud (MPC)** is a different deployment model:
@@ -123,7 +136,6 @@ API authentication, user isolation, secret management, network access controls �
 
 A few things customers ask about that we're committed to but haven't shipped yet. We surface them here so nothing's a surprise:
 
-- **SOC 2 Type II** — in progress.
 - **Self-serve point-in-time restore** — backups exist today and we recover from them; the tested restore UX and customer-visible drill cadence are not MVP.
 - **Prompt-injection guardrails** — exploring tooling that catches obvious injection patterns at the agent boundary. Nothing committed yet; flag interest if this is a blocker.
 
@@ -157,8 +169,9 @@ We're not trying to sell you something you don't need. We're looking for teams w
 
 - **Dedicated Agor instance** with your team's repos and worktrees
 - **Bring-your-own-key** for Claude, Codex, Gemini—no proxy, no markup, no cut
-- **Unix-level user isolation** for secure multi-tenant development
-- **Private network access** to your VPC, VPN, or own-cloud account
+- **Pen-tested and public-internet hardened**—use from anywhere, mobile included, no VPN required
+- **Unix-level user isolation** as defense-in-depth
+- **Private network access** to your VPC, VPN, or own-cloud account (Managed Private Cloud)
 - **Audit log + multi-cast metrics** integrated with your existing observability stack
 - **CI-ready agent sessions** that persist and stay visible on your board
 - **Managed infrastructure**—same-day patching, monitoring, capacity, support
