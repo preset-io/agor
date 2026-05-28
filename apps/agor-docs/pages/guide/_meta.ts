@@ -20,7 +20,6 @@ export default {
   cards: 'Cards (Beta)',
   artifacts: 'Artifacts',
   'api-proxies': 'API Proxies (CORS bypass)',
-  'one-time-launch-auth': 'One-Time Launch Auth',
   'message-gateway': 'Message Gateway',
   '--- Reference': {
     type: 'separator',
