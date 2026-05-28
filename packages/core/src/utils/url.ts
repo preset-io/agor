@@ -103,10 +103,18 @@ export function artifactPath(artifactId: ArtifactID): string {
  *  Strips a trailing slash off `baseUrl` defensively so misconfigured
  *  `daemon.base_url` values (e.g. `https://agor.example.com/`) don't
  *  produce double-slashed URLs like `https://agor.example.com//ui/...`.
+ *  Also strips a trailing `/ui` suffix so operators who set
+ *  `daemon.base_url` to the full UI address (e.g. `https://agor.example.com/ui`)
+ *  don't end up with double-prefixed `/ui/ui/...` entity URLs.
  *  `baseUrl` here comes from `getBaseUrl()` in config-manager, which
  *  reads `daemon.base_url` (with an `AGOR_BASE_URL` env override). */
 function fullUrl(path: string, baseUrl: string): string {
-  return `${baseUrl.replace(/\/$/, '')}${UI_MOUNT_PATH}${path}`;
+  // Strip trailing slash first, then any trailing /ui suffix.
+  let base = baseUrl.replace(/\/$/, '');
+  if (base.endsWith(UI_MOUNT_PATH)) {
+    base = base.slice(0, -UI_MOUNT_PATH.length);
+  }
+  return `${base}${UI_MOUNT_PATH}${path}`;
 }
 
 /** Generate a board URL. */
