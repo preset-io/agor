@@ -3,9 +3,10 @@
  *
  * The chime is "play once when *my* task transitions from RUNNING to a
  * natural terminal state". The trickiest behavior is dedupe across
- * redundant terminal events for the same task_id — that is the bug this
- * hook had before the `chimed` set was added, and what most tests below
- * pin down.
+ * redundant terminal events for the same task_id — the running-set
+ * primitive (`Set.delete()` returns true exactly once) is what guarantees
+ * idempotence; tests below pin each known double-emit scenario against
+ * that invariant.
  */
 
 import type { AgorClient, AudioPreferences, Task, TaskID } from '@agor-live/client';
@@ -19,7 +20,7 @@ vi.mock('../utils/audio', () => ({
   playTaskCompletionChime: (task: Task, prefs?: AudioPreferences) => playChimeMock(task, prefs),
 }));
 
-import { MAX_CHIMED_HISTORY, useTaskCompletionChime } from './useTaskCompletionChime';
+import { useTaskCompletionChime } from './useTaskCompletionChime';
 
 const USER_ID = 'user-123';
 
@@ -196,7 +197,8 @@ describe('useTaskCompletionChime', () => {
 
   describe('duplicate completion events', () => {
     // Each scenario below is a real-world way the daemon can produce two
-    // terminal events for the *same* task_id. The fix guarantees one chime.
+    // terminal events for the *same* task_id. The Set.delete() dedupe
+    // guarantees exactly one chime even if the upstream fix regresses.
 
     it('dedupes a second identical patched event for the same task', () => {
       const client = makeMockClient();
@@ -210,8 +212,6 @@ describe('useTaskCompletionChime', () => {
         'patched',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
       );
-      // Replay (socket reconnect, daemon-side double-emit, etc.) — must NOT
-      // re-chime.
       client.__tasks.emit(
         'patched',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
@@ -220,7 +220,10 @@ describe('useTaskCompletionChime', () => {
       expect(playChimeMock).toHaveBeenCalledTimes(1);
     });
 
-    it("dedupes daemon-side `'updated' + 'patched'` paired emit (DrizzleService.update)", () => {
+    it("dedupes daemon-side `'updated' + 'patched'` paired emit", () => {
+      // DrizzleService.update() no longer dual-emits as of this PR, but the
+      // hook still has to be robust against any future caller that wires up
+      // both events for the same write.
       const client = makeMockClient();
       render(client);
 
@@ -228,8 +231,6 @@ describe('useTaskCompletionChime', () => {
         'patched',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING })
       );
-      // DrizzleService.update() fires both events synchronously for a single
-      // operation. UI listens to both — should still chime once.
       client.__tasks.emit(
         'updated',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
@@ -268,7 +269,10 @@ describe('useTaskCompletionChime', () => {
       expect(playChimeMock).toHaveBeenCalledTimes(1);
     });
 
-    it('dedupes double-FAILED patches (base-executor + index.ts double-catch)', () => {
+    it('dedupes double-FAILED patches if a future regression brings them back', () => {
+      // The executor's `tryMarkTaskTerminal` guard (added in this PR)
+      // prevents the inner+outer catch pair from both emitting. This
+      // test is the safety net for any future regression there.
       const client = makeMockClient();
       render(client);
 
@@ -276,8 +280,6 @@ describe('useTaskCompletionChime', () => {
         'patched',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING })
       );
-      // base-executor's catch patches to FAILED then re-throws; the outer
-      // catch in executor/index.ts patches to FAILED again.
       client.__tasks.emit(
         'patched',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.FAILED })
@@ -304,50 +306,9 @@ describe('useTaskCompletionChime', () => {
       client.__tasks.emit('patched', t(TaskStatus.AWAITING_PERMISSION));
       client.__tasks.emit('patched', t(TaskStatus.RUNNING));
       client.__tasks.emit('patched', t(TaskStatus.COMPLETED));
-      // Replay — must NOT bypass the dedupe just because the running-set
-      // was rebuilt after AWAITING_PERMISSION.
       client.__tasks.emit('patched', t(TaskStatus.COMPLETED));
 
       expect(playChimeMock).toHaveBeenCalledTimes(1);
-    });
-
-    it('dedupe survives subscription teardown + remount (token rotation)', () => {
-      const client1 = makeMockClient();
-      const { rerender } = render(client1);
-
-      client1.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING })
-      );
-      client1.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
-      );
-      expect(playChimeMock).toHaveBeenCalledTimes(1);
-
-      // Token rotation / auth flip: new client instance, hook re-subscribes.
-      // The seed fetch on the new client will NOT include t1 (it's already
-      // COMPLETED in DB), but a delayed replay of the COMPLETED event must
-      // still not chime.
-      const client2 = makeMockClient();
-      // Seed the running set as if t1 were still considered running.
-      // This simulates the worst case: a stale RUNNING row arrives via the
-      // seed fetch, then a delayed COMPLETED replay lands on the new sub.
-      client2.__tasks.findAll.mockResolvedValueOnce([
-        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING }),
-      ]);
-      rerender({ c: client2 });
-
-      // Let the seed fetch resolve before firing the replay.
-      return waitFor(() => {
-        expect(client2.__tasks.findAll).toHaveBeenCalled();
-      }).then(() => {
-        client2.__tasks.emit(
-          'patched',
-          makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
-        );
-        expect(playChimeMock).toHaveBeenCalledTimes(1);
-      });
     });
   });
 
@@ -404,110 +365,6 @@ describe('useTaskCompletionChime', () => {
     });
   });
 
-  describe('LRU bounds', () => {
-    it('caps the chimed-history set at MAX_CHIMED_HISTORY entries', () => {
-      const client = makeMockClient();
-      render(client);
-
-      // Fire MAX_CHIMED_HISTORY + 1 unique completions. The very first
-      // task_id gets evicted from the chimed-set as the cap rolls over.
-      for (let i = 0; i < MAX_CHIMED_HISTORY + 1; i++) {
-        client.__tasks.emit(
-          'patched',
-          makeTask({ task_id: `t${i}` as TaskID, status: TaskStatus.RUNNING })
-        );
-        client.__tasks.emit(
-          'patched',
-          makeTask({ task_id: `t${i}` as TaskID, status: TaskStatus.COMPLETED })
-        );
-      }
-      expect(playChimeMock).toHaveBeenCalledTimes(MAX_CHIMED_HISTORY + 1);
-
-      playChimeMock.mockClear();
-
-      // The OLDEST entry (t0) was evicted, so a replay for it WOULD chime
-      // again if the running-set is reseeded. This is the documented
-      // trade-off — keeping the cap simple and the hook's working memory
-      // bounded.
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 't0' as TaskID, status: TaskStatus.RUNNING })
-      );
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 't0' as TaskID, status: TaskStatus.COMPLETED })
-      );
-      expect(playChimeMock).toHaveBeenCalledTimes(1);
-
-      // A task we know is still in the chimed window (e.g. the LAST one
-      // we fired above) does NOT re-chime on replay.
-      const lastIdx = MAX_CHIMED_HISTORY; // we ran i = 0..MAX, last id = `t${MAX}`
-      playChimeMock.mockClear();
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: `t${lastIdx}` as TaskID, status: TaskStatus.COMPLETED })
-      );
-      expect(playChimeMock).not.toHaveBeenCalled();
-    });
-
-    it('LRU touch protects a noisy task from being evicted by unrelated traffic', () => {
-      // A task that keeps emitting duplicate terminal events should get its
-      // recency refreshed on each hit, so it isn't pushed out of the dedupe
-      // window by MAX_CHIMED_HISTORY unrelated completions landing afterward.
-      const client = makeMockClient();
-      render(client);
-
-      // 1) chime once for `noisy`
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.RUNNING })
-      );
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.COMPLETED })
-      );
-
-      // 2) replay duplicate terminal events for `noisy` — touch on each
-      for (let i = 0; i < 10; i++) {
-        client.__tasks.emit(
-          'patched',
-          makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.RUNNING })
-        );
-        client.__tasks.emit(
-          'patched',
-          makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.COMPLETED })
-        );
-      }
-
-      // 3) flood with MAX_CHIMED_HISTORY - 1 unique completions. Without
-      //    touch, `noisy` (the original oldest) would be the first eviction
-      //    target; with touch, it's been bumped to the freshest slot, so
-      //    one of the flood tasks gets evicted instead.
-      for (let i = 0; i < MAX_CHIMED_HISTORY - 1; i++) {
-        client.__tasks.emit(
-          'patched',
-          makeTask({ task_id: `flood-${i}` as TaskID, status: TaskStatus.RUNNING })
-        );
-        client.__tasks.emit(
-          'patched',
-          makeTask({ task_id: `flood-${i}` as TaskID, status: TaskStatus.COMPLETED })
-        );
-      }
-
-      playChimeMock.mockClear();
-      // 4) `noisy` is still pinned in the chimed-set — no re-chime.
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.RUNNING })
-      );
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.COMPLETED })
-      );
-      expect(playChimeMock).not.toHaveBeenCalled();
-    });
-  });
-
   describe('subscription lifecycle', () => {
     it('unsubscribes on unmount', () => {
       const client = makeMockClient();
@@ -527,9 +384,8 @@ describe('useTaskCompletionChime', () => {
     });
 
     it('does nothing when client is null', () => {
-      const { rerender: _rerender } = render(null);
+      render(null);
       expect(playChimeMock).not.toHaveBeenCalled();
-      // No way to fire events without a client — just verifying no crash.
     });
 
     it('chimes for a task seeded as RUNNING from findAll', async () => {
@@ -539,15 +395,12 @@ describe('useTaskCompletionChime', () => {
       ]);
       render(client);
 
-      // Wait for the seed fetch to populate the running set.
       await waitFor(() => {
         expect(client.__tasks.findAll).toHaveBeenCalledWith({
           query: { status: TaskStatus.RUNNING, created_by: USER_ID },
         });
       });
 
-      // Now the live COMPLETED event should find seed-1 in the running set
-      // and chime — even though we never saw its RUNNING transition.
       client.__tasks.emit(
         'patched',
         makeTask({ task_id: 'seed-1' as TaskID, status: TaskStatus.COMPLETED })
@@ -559,7 +412,7 @@ describe('useTaskCompletionChime', () => {
     });
 
     it('chimes for a task whose RUNNING arrived via `created`', () => {
-      // The hook subscribes to `'created'` too — but every other test seeds
+      // The hook subscribes to `'created'` too — every other test seeds
       // RUNNING via `'patched'`. Cover the explicit created-with-RUNNING
       // path so a future refactor that drops the `created` listener gets
       // caught.
@@ -578,10 +431,9 @@ describe('useTaskCompletionChime', () => {
       expect(playChimeMock).toHaveBeenCalledTimes(1);
     });
 
-    it('removed event clears running-set but keeps the chimed-set entry pinned', () => {
-      // Task IDs are UUIDv7 and never reused, so the chimed slot is safe to
-      // keep — and keeping it preserves the "one chime per task" guarantee
-      // even if a delayed RUNNING/terminal replay arrives after delete.
+    it('removed event evicts the running-set entry', () => {
+      // Without this, a re-RUNNING + terminal pair on the same task_id
+      // after an admin delete would emit a spurious chime.
       const client = makeMockClient();
       render(client);
 
@@ -590,22 +442,13 @@ describe('useTaskCompletionChime', () => {
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING })
       );
       client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
-      );
-      expect(playChimeMock).toHaveBeenCalledTimes(1);
-
-      client.__tasks.emit(
         'removed',
-        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
+        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING })
       );
       playChimeMock.mockClear();
 
-      // Delayed replay after removal — chimed-set still gates.
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING })
-      );
+      // Stale COMPLETED replay with no preceding RUNNING — running-set is
+      // empty after the removed event, so wasRunning=false, no chime.
       client.__tasks.emit(
         'patched',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })

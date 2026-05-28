@@ -14,11 +14,26 @@ import type {
   PermissionMode,
   PermissionScope,
   SessionID,
+  Task,
   TaskID,
 } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
+
+/**
+ * Statuses past which any subsequent terminal-write is a no-op. SDK
+ * handlers (base-executor) write rich terminal patches with timing /
+ * `git_state.sha_at_end`; once we've stamped one of those, the
+ * fail-safe catches below should NOT redundantly emit a second
+ * `'patched'` event for the same task.
+ */
+const TERMINAL_STATUSES = new Set<Task['status']>([
+  TaskStatus.COMPLETED,
+  TaskStatus.FAILED,
+  TaskStatus.STOPPED,
+]);
 
 export interface ExecutorConfig {
   sessionToken: string;
@@ -40,6 +55,38 @@ export class AgorExecutor {
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
+  }
+
+  /**
+   * Patch the task to a terminal status, but ONLY if the task is not
+   * already terminal. The SDK handlers in base-executor are authoritative —
+   * they stamp the full payload (timing, `git_state.sha_at_end`, normalized
+   * SDK responses). These fail-safe paths (top-level catch, signal handler,
+   * uncaughtException, unhandledRejection) are pure fallbacks for when
+   * the inner path never ran; if it did, this method skips the patch so
+   * we don't emit a redundant `'patched'` event for the same task.
+   */
+  private async tryMarkTaskTerminal(
+    status: typeof TaskStatus.FAILED | typeof TaskStatus.STOPPED,
+    errorMessage?: string
+  ): Promise<void> {
+    if (!this.client) return;
+    try {
+      const current = (await this.client.service('tasks').get(this.config.taskId)) as Task;
+      if (TERMINAL_STATUSES.has(current.status)) {
+        console.log(
+          `[executor] Task ${shortId(this.config.taskId)} already terminal (${current.status}), skipping ${status} patch`
+        );
+        return;
+      }
+      await this.client.service('tasks').patch(this.config.taskId, {
+        status,
+        completed_at: new Date().toISOString(),
+        ...(errorMessage ? { error_message: errorMessage } : {}),
+      });
+    } catch (patchError) {
+      console.error('[executor] Failed to update task status:', patchError);
+    }
   }
 
   /**
@@ -74,20 +121,10 @@ export class AgorExecutor {
       process.exit(0);
     } catch (error) {
       console.error('[executor] Fatal error:', error);
-
-      // Try to update task status to FAILED
-      if (this.client) {
-        try {
-          await this.client.service('tasks').patch(this.config.taskId, {
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error_message: error instanceof Error ? error.message : String(error),
-          });
-        } catch (patchError) {
-          console.error('[executor] Failed to update task status:', patchError);
-        }
-      }
-
+      await this.tryMarkTaskTerminal(
+        TaskStatus.FAILED,
+        error instanceof Error ? error.message : String(error)
+      );
       process.exit(1);
     }
   }
@@ -177,17 +214,10 @@ export class AgorExecutor {
         this.abortController.abort();
       }
 
-      // Update task status to stopped
-      if (this.client) {
-        try {
-          await this.client.service('tasks').patch(this.config.taskId, {
-            status: 'stopped',
-            completed_at: new Date().toISOString(),
-          });
-        } catch (error) {
-          console.error('[executor] Failed to update task status:', error);
-        }
-      }
+      // The daemon's stop route already patches the task to STOPPED before
+      // sending the signal — this fallback only fires if we received an
+      // out-of-band signal and the task is still active.
+      await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
 
       process.exit(0);
     };
@@ -197,39 +227,19 @@ export class AgorExecutor {
 
     process.on('uncaughtException', async (error) => {
       console.error('[executor] Uncaught exception:', error);
-
-      // Try to update task status
-      if (this.client) {
-        try {
-          await this.client.service('tasks').patch(this.config.taskId, {
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error_message: `uncaughtException: ${error instanceof Error ? error.message : String(error)}`,
-          });
-        } catch (patchError) {
-          console.error('[executor] Failed to update task status:', patchError);
-        }
-      }
-
+      await this.tryMarkTaskTerminal(
+        TaskStatus.FAILED,
+        `uncaughtException: ${error instanceof Error ? error.message : String(error)}`
+      );
       process.exit(1);
     });
 
     process.on('unhandledRejection', async (reason) => {
       console.error('[executor] Unhandled rejection:', reason);
-
-      // Try to update task status
-      if (this.client) {
-        try {
-          await this.client.service('tasks').patch(this.config.taskId, {
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error_message: `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`,
-          });
-        } catch (patchError) {
-          console.error('[executor] Failed to update task status:', patchError);
-        }
-      }
-
+      await this.tryMarkTaskTerminal(
+        TaskStatus.FAILED,
+        `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`
+      );
       process.exit(1);
     });
   }
