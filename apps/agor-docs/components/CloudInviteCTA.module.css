@@ -1,0 +1,47 @@
+.wrapper {
+  margin: 2rem 0;
+  text-align: center;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.9rem 1.85rem;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  color: #0a0a0a;
+  background: linear-gradient(135deg, #2e9a92 0%, #4ec4ba 100%);
+  border-radius: 8px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+  box-shadow: 0 4px 14px rgba(46, 154, 146, 0.4);
+}
+
+.cta:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, #3db4aa 0%, #6dd5cb 100%);
+  box-shadow: 0 6px 20px rgba(46, 154, 146, 0.55);
+}
+
+.cta:focus-visible {
+  outline: 2px solid #a8f5ed;
+  outline-offset: 3px;
+}
+
+/* Override the global `.dark a` color rule from pages/styles.css so the
+ * dark button text stays readable against the bright teal background. */
+:global(.dark) .cta,
+:global(.dark) .cta:hover {
+  color: #0a0a0a;
+}
+
+@media (max-width: 768px) {
+  .cta {
+    padding: 0.75rem 1.4rem;
+    font-size: 1rem;
+  }
+}

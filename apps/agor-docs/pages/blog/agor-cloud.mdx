@@ -1,15 +1,19 @@
 ---
 title: 'Agor Cloud - Opening a Private Beta'
-description: 'Fully managed Agor with Unix-level isolation, analytics dashboards, policy controls, and enterprise observability. Built by the team running it for themselves at Preset.'
+description: 'Fully managed Agor with Unix-level user isolation, automated backups, CI-ready agent sessions, and enterprise observability. Built by the team running it for themselves at Preset.'
 date: 2025-11-23
 image: '/images/blog/agor-cloud.png'
 ---
+
+import { CloudInviteCTA } from '../../components/CloudInviteCTA';
 
 # Agor Cloud - Opening a Private Beta
 
 Agor is BSL-licensed and vastly open source. You're free to run it however you want—you just can't commercialize it. It has all the building blocks for anyone without commercial intent to build next-gen, multi-agent, multiplayer servers that can really change how you build software.
 
 So why Agor Cloud?
+
+<CloudInviteCTA />
 
 ## The Gap Between "Works for Me" and "Works for Production"
 
@@ -58,35 +62,19 @@ Agor Cloud ensures the infrastructure stays healthy. Monitoring, auto-recovery, 
 
 You focus on building. We focus on keeping the lights on.
 
-### Analytics Dashboards
+### Backups & Snapshots
 
-Want to see who's using AI? How much? Who's ramping slowly? Where the token spend is going?
+Agor sits at the center of your team's development workflow—sessions, branches, tasks, message history, configuration. Losing it would be painful.
 
-**Agor Cloud comes with embedded, rich, interactive reporting through Preset Portals.**
+Agor Cloud handles this for you:
 
-Every Agor Cloud instance includes a fully-loaded Preset (managed Apache Superset) workspace. Pre-built dashboards show:
+- **Automated daemon DB snapshots** on a regular cadence
+- **Point-in-time restore** so you can roll back to a known-good state
+- **Coordinated worktree filesystem snapshots** alongside the DB, so branches stay coherent across a restore
+- **Off-host backup replication** for disaster recovery
+- **Tested restore drills**—we don't ship a backup story we haven't verified end-to-end
 
-- Token usage by user, worktree, and repo
-- Cost breakdown by agent type (Claude, Codex, Gemini)
-- Session duration and completion rates
-- Worktree lifecycle metrics
-- Agent performance and error rates
-
-You get full SQL access to your Agor database through Superset, so you can build custom reports for your team's workflow.
-
-All your PDLC (Product Development Life Cycle) and AI development data in one place. Explore it however you want.
-
-### Usage Policies
-
-AI is powerful. It's also expensive. You want to enable usage, but you probably want guardrails:
-
-- **Token quotas** per user or team
-- **Rate limits** to prevent chain reactions
-- **Max concurrent sessions** to manage compute load
-- **Approval workflows** for high-cost operations
-- **Spending caps** to avoid surprise bills
-
-Agor Cloud lets you configure policies that fit your team's needs. Enable the productivity boost, contain the blast radius.
+If something goes sideways, restore is a support ticket, not a postmortem.
 
 ### CI-Ready: Agents That Don't Disappear
 
@@ -143,7 +131,7 @@ Agor becomes the heart of your development process. You need visibility into it 
 - **Teams that want shared dev environments** without the ops burden
 - **Engineering orgs exploring AI-assisted development** at scale
 - **Companies with security and compliance requirements** that rule out running open source locally
-- **Teams that need analytics and cost controls** around AI usage
+- **Teams that can't afford to lose their dev environment state** and want managed backup/restore
 - **Anyone who wants Agor's capabilities** without managing infrastructure
 
 ## Signing Up for the Private Beta
@@ -160,19 +148,17 @@ Here's how it works:
 4. **Trial period** - Use Agor Cloud, see if it delivers value for your workflow
 5. **Decide** - If it's solving real problems, stay on. If not, no hard feelings.
 
-We're not trying to sell you something you don't need. We're looking for teams where Agor Cloud makes a measurable difference—faster onboarding, better collaboration, cleaner development workflows, controlled AI spend.
-
-**[Join the Private Beta →](https://docs.google.com/forms/d/e/1FAIpQLSdXtZwQBHaLFa1LYHvOHXq9IUF_Qm3T12Hr6UZcMdEvjpm2PQ/viewform?usp=dialog)**
+We're not trying to sell you something you don't need. We're looking for teams where Agor Cloud makes a measurable difference—faster onboarding, better collaboration, cleaner development workflows.
 
 ## What You Get
 
 - **Dedicated Agor instance** with your team's repos and worktrees
 - **Unix-level user isolation** for secure multi-tenant development
-- **Preset Cloud workspace** with pre-built analytics dashboards
-- **Policy controls** for token quotas, rate limits, and spending caps
+- **Automated backups** with tested point-in-time restore
+- **CI-ready agent sessions** that persist and stay visible on your board
 - **Full observability** integrated with your existing monitoring stack
-- **Managed infrastructure** - backups, updates, monitoring, support
-- **Direct access to the team** building Agor - fast feedback loop, feature requests welcome
+- **Managed infrastructure**—updates, monitoring, capacity, support
+- **Direct access to the team** building Agor—fast feedback loop, feature requests welcome
 
 ## Pricing
 
@@ -209,7 +195,7 @@ Agor Cloud bridges that gap. Fully managed, secure, observable, built by the tea
 
 If that sounds like what your team needs, we'd love to talk.
 
-**[Join the Private Beta →](https://docs.google.com/forms/d/e/1FAIpQLSdXtZwQBHaLFa1LYHvOHXq9IUF_Qm3T12Hr6UZcMdEvjpm2PQ/viewform?usp=dialog)**
+<CloudInviteCTA />
 
 ---
 

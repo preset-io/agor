@@ -1,56 +1,42 @@
-.cta {
+.link {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.85rem;
-  margin-right: 0.25rem;
-  font-size: 0.8125rem;
+  padding: 0.35rem 0.7rem;
+  margin-right: 0.5rem;
+  font-size: 0.875rem;
   font-weight: 600;
-  line-height: 1.2;
-  color: #0a0a0a;
-  background: linear-gradient(135deg, rgba(46, 154, 146, 0.85) 0%, rgba(61, 180, 170, 0.85) 100%);
-  border-radius: 6px;
+  color: #7fe8df;
   text-decoration: none;
+  border-radius: 6px;
   white-space: nowrap;
   transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease,
+    color 0.15s ease,
     background 0.15s ease;
-  box-shadow: 0 2px 8px rgba(46, 154, 146, 0.25);
 }
 
-.cta:hover {
-  transform: translateY(-1px);
-  color: #0a0a0a;
-  background: linear-gradient(135deg, rgba(61, 180, 170, 0.95) 0%, rgba(78, 196, 186, 0.95) 100%);
-  box-shadow: 0 4px 12px rgba(46, 154, 146, 0.35);
+.link:hover {
+  color: #a8f5ed;
+  background: rgba(46, 154, 146, 0.15);
 }
 
-.cta:focus-visible {
+.link:focus-visible {
   outline: 2px solid #7fe8df;
   outline-offset: 2px;
 }
 
-.full {
-  display: inline;
+/* Override the global `.dark a` color rule from pages/styles.css. */
+:global(.dark) .link {
+  color: #7fe8df;
 }
 
-.short {
-  display: none;
+:global(.dark) .link:hover {
+  color: #a8f5ed;
 }
 
-/* Tighten on small navbar widths so we don't crowd the search box. */
 @media (max-width: 768px) {
-  .cta {
-    padding: 0.35rem 0.65rem;
-    font-size: 0.75rem;
-  }
-
-  .full {
-    display: none;
-  }
-
-  .short {
-    display: inline;
+  .link {
+    font-size: 0.8125rem;
+    padding: 0.3rem 0.55rem;
+    margin-right: 0.25rem;
   }
 }

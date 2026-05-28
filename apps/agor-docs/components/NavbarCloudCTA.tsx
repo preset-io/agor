@@ -1,17 +1,10 @@
-import { AGOR_CLOUD_INVITE_URL } from '../lib/links';
+import Link from 'next/link';
 import styles from './NavbarCloudCTA.module.css';
 
 export function NavbarCloudCTA() {
   return (
-    <a
-      href={AGOR_CLOUD_INVITE_URL}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={styles.cta}
-      aria-label="Request Agor Cloud access"
-    >
-      <span className={styles.full}>Request Cloud access</span>
-      <span className={styles.short}>Cloud access</span>
-    </a>
+    <Link href="/blog/agor-cloud" className={styles.link}>
+      Agor Cloud
+    </Link>
   );
 }
