@@ -509,6 +509,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // Deliberately depend on session_id (not the full session object) so streaming
   // updates — which mint a new session reference on every chunk — don't keep
   // calling scrollToBottom() and fighting the user's scroll position.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: session_id is the stable identity; full session object changes on every streaming chunk
   React.useEffect(() => {
     if (open && scrollToBottom && session) {
       const timeoutId = setTimeout(() => {
@@ -516,7 +517,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       }, 300);
       return () => clearTimeout(timeoutId);
     }
-    // biome-ignore lint/correctness/useExhaustiveDependencies: session_id is the stable identity; full session object changes on every streaming chunk
   }, [open, scrollToBottom, session?.session_id]);
 
   // When there's no session, render nothing (panel is collapsed to zero).
