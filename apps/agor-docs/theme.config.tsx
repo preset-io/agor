@@ -1,6 +1,7 @@
 import { useRouter } from 'next/router';
 import type { DocsThemeConfig } from 'nextra-theme-docs';
 import { useConfig } from 'nextra-theme-docs';
+import { NavbarCloudCTA } from './components/NavbarCloudCTA';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from './lib/links';
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
@@ -36,6 +37,9 @@ const config: DocsThemeConfig = {
   },
   chat: {
     link: DISCORD_INVITE_URL,
+  },
+  navbar: {
+    extraContent: NavbarCloudCTA,
   },
   docsRepositoryBase: 'https://github.com/preset-io/agor/tree/main/apps/agor-docs',
 

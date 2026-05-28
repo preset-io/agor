@@ -10,3 +10,8 @@ export const DISCORD_INVITE_URL = 'https://discord.gg/Qh4TrFQZpd';
 export const GITHUB_REPO_URL = 'https://github.com/preset-io/agor';
 export const GITHUB_DISCUSSIONS_URL = 'https://github.com/preset-io/agor/discussions';
 export const GITHUB_ISSUES_URL = 'https://github.com/preset-io/agor/issues';
+
+// Agor Cloud private beta interest form. Same URL used inline in the
+// agor-cloud / agor-openclaw blog posts — update those in tandem.
+export const AGOR_CLOUD_INVITE_URL =
+  'https://docs.google.com/forms/d/e/1FAIpQLSdXtZwQBHaLFa1LYHvOHXq9IUF_Qm3T12Hr6UZcMdEvjpm2PQ/viewform?usp=dialog';
