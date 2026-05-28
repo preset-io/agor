@@ -3,9 +3,10 @@ import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import type { AgorConfig } from '@agor/core/config';
 import { type Database, eq, generateId, hash, insert, select, update, users } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import type { Params, User, UserID, UserRole } from '@agor/core/types';
+import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
+import { issueRuntimeTokenPair } from './runtime-tokens.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_SERVICE_TOKEN_ENV = 'AGOR_EXTERNAL_LAUNCH_SERVICE_TOKEN';
@@ -26,6 +27,7 @@ interface ResolvedLaunchSettings {
   publicKey?: string;
   devSharedSecret?: string;
   serviceCredential?: string;
+  allowAdminRoles: boolean;
   requestTimeoutMs: number;
   algorithms?: string[];
 }
@@ -51,15 +53,7 @@ interface LaunchClaims extends JwtPayload {
   nonce?: string;
 }
 
-interface StoredExternalIdentity {
-  key: string;
-  provider: string;
-  issuer: string;
-  subject: string;
-  email?: string;
-  name?: string;
-  last_login_at: string;
-}
+type StoredExternalIdentity = UserExternalIdentity;
 
 type UserDataWithExternalIdentities = NonNullable<(typeof users.$inferSelect)['data']> & {
   external_identities?: StoredExternalIdentity[];
@@ -104,25 +98,37 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
     publicKey: raw?.public_key,
     devSharedSecret: process.env[sharedSecretEnv] || raw?.dev_shared_secret,
     serviceCredential: process.env[serviceTokenEnv] || raw?.service_credential,
+    allowAdminRoles: raw?.allow_admin_roles === true,
     requestTimeoutMs: raw?.request_timeout_ms ?? DEFAULT_TIMEOUT_MS,
     algorithms: raw?.algorithms,
   };
 }
 
 function assertConfigured(settings: ResolvedLaunchSettings): void {
+  const rejectConfig = (reason: string): never => {
+    console.warn(`[auth/launch] ${reason}`);
+    throw new NotAuthenticated('One-time launch authentication is unavailable');
+  };
+
   if (!settings.enabled) {
-    throw new NotAuthenticated('One-time launch authentication is not enabled');
+    rejectConfig('disabled');
   }
   if (!settings.exchangeUrl) {
-    throw new NotAuthenticated('One-time launch authentication is not configured');
+    rejectConfig('missing exchange_url');
   }
   if (!settings.issuer || !settings.audience) {
-    throw new NotAuthenticated('One-time launch authentication is missing validation settings');
+    rejectConfig('missing issuer or audience');
   }
-  if (!settings.jwksUrl && !settings.publicKey && !settings.devSharedSecret) {
-    throw new NotAuthenticated(
-      'One-time launch authentication is missing assertion verification keys'
-    );
+  const configuredKeyCount = [
+    settings.jwksUrl,
+    settings.publicKey,
+    settings.devSharedSecret,
+  ].filter(Boolean).length;
+  if (configuredKeyCount === 0) {
+    rejectConfig('missing assertion verification key');
+  }
+  if (configuredKeyCount > 1) {
+    rejectConfig('multiple assertion verification methods configured');
   }
 }
 
@@ -174,15 +180,34 @@ async function chooseLocalEmail(
   return `launch-${key}-${randomBytes(4).toString('hex')}@external-launch.local`;
 }
 
-function getExternalIdentities(data: UserDataWithExternalIdentities): StoredExternalIdentity[] {
-  return Array.isArray(data.external_identities) ? data.external_identities : [];
+function getExternalIdentities(
+  data: UserDataWithExternalIdentities | null | undefined
+): StoredExternalIdentity[] {
+  return Array.isArray(data?.external_identities) ? data.external_identities : [];
 }
 
-function mapRole(claimedRole: string | undefined, allowSuperadmin: boolean | undefined): UserRole {
+function normalizeLaunchEmail(value: string | undefined): string | undefined {
+  const email = value?.trim().toLowerCase();
+  if (!email) return undefined;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined;
+}
+
+function mapRole(
+  claimedRole: string | undefined,
+  settings: ResolvedLaunchSettings,
+  allowSuperadmin: boolean | undefined,
+  existingRole?: UserRole
+): UserRole {
   const role = normalizeRole(claimedRole);
-  if (role === ROLES.SUPERADMIN && !allowSuperadmin) return ROLES.ADMIN;
-  if ([ROLES.VIEWER, ROLES.MEMBER, ROLES.ADMIN, ROLES.SUPERADMIN].includes(role)) return role;
-  return ROLES.MEMBER;
+  const allowedRoles: UserRole[] = settings.allowAdminRoles
+    ? [ROLES.VIEWER, ROLES.MEMBER, ROLES.ADMIN, ROLES.SUPERADMIN]
+    : [ROLES.VIEWER, ROLES.MEMBER];
+  const mapped = allowedRoles.includes(role) ? role : ROLES.MEMBER;
+  const capped = mapped === ROLES.SUPERADMIN && !allowSuperadmin ? ROLES.ADMIN : mapped;
+  // Existing local roles are preserved unless admin role mapping is explicitly
+  // enabled above; a default launch provider cannot silently escalate or
+  // downgrade a previously mapped user.
+  return existingRole && !settings.allowAdminRoles ? existingRole : capped;
 }
 
 async function findUserByExternalIdentity(
@@ -204,12 +229,12 @@ async function upsertLaunchUser(
   const { db, config, usersService } = options;
   const issuer = claims.iss;
   const subject = claims.sub;
-  const provider = claims.provider || resolveLaunchSettings(config).providerId || issuer;
+  const settings = resolveLaunchSettings(config);
+  const provider = claims.provider || settings.providerId || issuer;
   const key = identityKey(provider, issuer, subject);
   const now = new Date();
   const nowIso = now.toISOString();
-  const role = mapRole(claims.role, config.execution?.allow_superadmin);
-  const email = claims.email?.trim().toLowerCase();
+  const email = normalizeLaunchEmail(claims.email);
   const name = claims.name?.trim() || undefined;
   const avatar = claims.avatar || claims.picture;
   const identity: StoredExternalIdentity = {
@@ -224,7 +249,13 @@ async function upsertLaunchUser(
 
   const existing = await findUserByExternalIdentity(db, key);
   if (existing) {
-    const data = existing.data as UserDataWithExternalIdentities;
+    const role = mapRole(
+      claims.role,
+      settings,
+      config.execution?.allow_superadmin,
+      normalizeRole(existing.role ?? undefined)
+    );
+    const data = (existing.data ?? {}) as UserDataWithExternalIdentities;
     const identities = getExternalIdentities(data);
     const nextIdentities = identities.map((existingIdentity) =>
       existingIdentity.key === key ? { ...existingIdentity, ...identity } : existingIdentity
@@ -250,6 +281,7 @@ async function upsertLaunchUser(
     return usersService.get(existing.user_id as UserID, { provider: undefined });
   }
 
+  const role = mapRole(claims.role, settings, config.execution?.allow_superadmin);
   const localEmail = await chooseLocalEmail(db, email, key, provider, issuer, subject);
   const userId = generateId() as UserID;
   const password = await hash(randomBytes(32).toString('hex'), 10);
@@ -327,10 +359,19 @@ async function resolveVerificationKey(
   if (settings.publicKey) return settings.publicKey;
   if (!settings.jwksUrl) throw new NotAuthenticated('Launch assertion verification failed');
 
+  if (!header.kid) {
+    throw new NotAuthenticated('Launch assertion verification failed');
+  }
+
   const jwks = await fetchJson(settings.jwksUrl, { method: 'GET' }, settings.requestTimeoutMs);
   const keys = (jwks as { keys?: JsonWebKey[] })?.keys;
-  const jwk = header.kid ? keys?.find((candidate) => candidate.kid === header.kid) : keys?.[0];
+  const jwk = keys?.find((candidate) => candidate.kid === header.kid);
   if (!jwk) throw new NotAuthenticated('Launch assertion verification failed');
+  if (jwk.use && jwk.use !== 'sig')
+    throw new NotAuthenticated('Launch assertion verification failed');
+  if (header.alg && jwk.alg && jwk.alg !== header.alg) {
+    throw new NotAuthenticated('Launch assertion verification failed');
+  }
   return createPublicKey({ key: jwk, format: 'jwk' });
 }
 
@@ -364,7 +405,7 @@ function validateLaunchClaims(claims: LaunchClaims, settings: ResolvedLaunchSett
   }
   if (settings.instanceId) {
     const claimInstance = claims.instance_id || claims.runtime_instance_id;
-    if (claimInstance && claimInstance !== settings.instanceId) {
+    if (typeof claimInstance !== 'string' || claimInstance !== settings.instanceId) {
       throw new NotAuthenticated('Invalid one-time launch assertion instance');
     }
   }
@@ -382,20 +423,10 @@ function issueRuntimeTokens(
   accessTokenTtl: SignOptions['expiresIn'],
   refreshTokenTtl: SignOptions['expiresIn']
 ): LaunchAuthResult {
-  const accessToken = jwt.sign({ sub: user.user_id, type: 'access' }, jwtSecret, {
-    expiresIn: accessTokenTtl,
-    issuer: 'agor',
-    audience: 'https://agor.dev',
-  });
-  const refreshToken = jwt.sign({ sub: user.user_id, type: 'refresh' }, jwtSecret, {
-    expiresIn: refreshTokenTtl,
-    issuer: 'agor',
-    audience: 'https://agor.dev',
-  });
+  const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl);
 
   return {
-    accessToken,
-    refreshToken,
+    ...tokens,
     authentication: { strategy: 'launch' },
     user,
   };

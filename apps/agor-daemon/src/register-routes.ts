@@ -66,6 +66,12 @@ import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { createLaunchAuthService } from './auth/launch-auth.js';
+import {
+  issueRuntimeToken,
+  issueRuntimeTokenPair,
+  RUNTIME_JWT_AUDIENCE,
+  RUNTIME_JWT_ISSUER,
+} from './auth/runtime-tokens.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
@@ -253,8 +259,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     authStrategies: authStrategiesArray,
     jwtOptions: {
       header: { typ: 'access' },
-      audience: 'https://agor.dev',
-      issuer: 'agor',
+      audience: RUNTIME_JWT_AUDIENCE,
+      issuer: RUNTIME_JWT_ISSUER,
       algorithm: 'HS256',
       expiresIn: ACCESS_TOKEN_TTL,
     },
@@ -355,20 +361,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           });
 
           if (context.result?.user) {
-            const refreshToken = jwt.sign(
-              {
-                sub: context.result.user.user_id,
-                type: 'refresh',
-              },
+            context.result.refreshToken = issueRuntimeToken(
+              { sub: context.result.user.user_id, type: 'refresh' },
               jwtSecret,
-              {
-                expiresIn: REFRESH_TOKEN_TTL,
-                issuer: 'agor',
-                audience: 'https://agor.dev',
-              }
+              REFRESH_TOKEN_TTL
             );
-
-            context.result.refreshToken = refreshToken;
           }
           return context;
         },
@@ -411,8 +408,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // /authentication mount point (path-prefix match catches /refresh).
       try {
         const decoded = jwt.verify(data.refreshToken, jwtSecret, {
-          issuer: 'agor',
-          audience: 'https://agor.dev',
+          issuer: RUNTIME_JWT_ISSUER,
+          audience: RUNTIME_JWT_AUDIENCE,
         }) as { sub: string; type: string };
 
         if (decoded.type !== 'refresh') {
@@ -424,17 +421,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Use the SAME ACCESS_TOKEN_TTL as the auth-service config above —
         // otherwise this endpoint silently downgrades the access-token
         // hardening. Refresh tokens get the standard 30-day TTL.
-        const accessToken = jwt.sign({ sub: user.user_id, type: 'access' }, jwtSecret, {
-          expiresIn: ACCESS_TOKEN_TTL,
-          issuer: 'agor',
-          audience: 'https://agor.dev',
-        });
-
-        const newRefreshToken = jwt.sign({ sub: user.user_id, type: 'refresh' }, jwtSecret, {
-          expiresIn: REFRESH_TOKEN_TTL,
-          issuer: 'agor',
-          audience: 'https://agor.dev',
-        });
+        const tokens = issueRuntimeTokenPair(user, jwtSecret, ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL);
 
         // Return the full user object — matches what POST /authentication
         // returns via the FeathersJS auth service. Stripping fields here
@@ -446,8 +433,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // omits secrets (password hash, raw API keys, raw env var values)
         // via rowToUser — see services/users.ts.
         return {
-          accessToken,
-          refreshToken: newRefreshToken,
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
           user,
         };
       } catch (_error) {
@@ -530,7 +517,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const jti = generateId();
       const expiresAt = new Date(Date.now() + expiryMs);
 
-      const accessToken = jwt.sign(
+      const accessToken = issueRuntimeToken(
         {
           sub: targetUser.user_id,
           type: 'access',
@@ -539,11 +526,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           jti,
         },
         jwtSecret,
-        {
-          expiresIn: Math.ceil(expiryMs / 1000),
-          issuer: 'agor',
-          audience: 'https://agor.dev',
-        }
+        Math.ceil(expiryMs / 1000)
       );
 
       // 10. Audit log

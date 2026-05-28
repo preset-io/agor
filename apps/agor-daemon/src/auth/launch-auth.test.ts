@@ -154,6 +154,26 @@ describe('one-time launch auth service', () => {
     await expect(service().create({ launchCode: 'code' })).rejects.toBeInstanceOf(NotAuthenticated);
   });
 
+  it('requires a matching instance claim when instance_id is configured', async () => {
+    mockExchange(signClaims({ instance_id: undefined, runtime_instance_id: undefined }));
+    await expect(service().create({ launchCode: 'code' })).rejects.toBeInstanceOf(NotAuthenticated);
+
+    mockExchange(signClaims({ instance_id: 'other-instance' }));
+    await expect(service().create({ launchCode: 'code' })).rejects.toBeInstanceOf(NotAuthenticated);
+  });
+
+  it('rejects ambiguous assertion verification configuration', async () => {
+    mockExchange(signClaims());
+    await expect(
+      service({
+        external_launch: {
+          ...baseConfig().external_launch,
+          public_key: '-----BEGIN PUBLIC KEY-----\ninvalid\n-----END PUBLIC KEY-----',
+        },
+      }).create({ launchCode: 'code' })
+    ).rejects.toBeInstanceOf(NotAuthenticated);
+  });
+
   it('creates a local user and issues normal runtime tokens', async () => {
     const fetchMock = mockExchange(signClaims());
     const result = await service().create({ launchCode: 'one-time-code' });

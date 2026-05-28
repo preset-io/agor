@@ -190,7 +190,7 @@ export interface AgorExternalLaunchSettings {
   /** Expected JWT audience for returned launch assertions; identifies this runtime. */
   audience?: string;
 
-  /** Optional runtime instance identifier checked against assertion instance_id when present. */
+  /** Optional runtime instance identifier required to match assertion instance_id/runtime_instance_id. */
   instance_id?: string;
 
   /** Stable provider label used in local external identity mapping. Defaults to issuer. */
@@ -219,6 +219,9 @@ export interface AgorExternalLaunchSettings {
 
   /** Optional allow-list of JWT algorithms for returned launch assertions. */
   algorithms?: string[];
+
+  /** Allow launch assertions to assign admin/superadmin roles (default: false). */
+  allow_admin_roles?: boolean;
 }
 
 /**

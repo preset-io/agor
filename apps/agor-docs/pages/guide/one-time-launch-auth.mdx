@@ -8,7 +8,7 @@ Agor can accept a generic external launch handoff when another trusted app has a
 2. The UI calls `POST /auth/launch` once with `{ "launchCode": "..." }`.
 3. The daemon posts the code to the configured exchange endpoint with its runtime audience, instance ID, and optional service credential.
 4. The exchange endpoint returns a signed assertion for the authenticated subject.
-5. The daemon verifies issuer, audience, expiration, instance ID when present, and subject; then it maps or creates a local user by `(provider, issuer, subject)`.
+5. The daemon verifies issuer, audience, expiration, subject, and the configured instance ID; then it maps or creates a local user by `(provider, issuer, subject)`.
 6. The daemon returns normal runtime auth tokens. The UI stores those tokens and removes `launch_code` from the URL with `replaceState`.
 
 ## Configuration
@@ -21,7 +21,8 @@ external_launch:
   audience: agor-runtime:my-instance
   instance_id: my-instance
 
-  # Production: verify assertions with a JWKS endpoint or PEM public key.
+  # Production: configure exactly one assertion verification method.
+  # JWKS assertions must include a kid that matches a signing key.
   jwks_url: https://launch.example.com/.well-known/jwks.json
   # public_key: |-
   #   -----BEGIN PUBLIC KEY-----
@@ -30,6 +31,9 @@ external_launch:
 
   # Optional daemon-to-provider bearer credential. Prefer env vars for secrets.
   service_credential_env: AGOR_EXTERNAL_LAUNCH_SERVICE_TOKEN
+
+  # Optional: allow role claims above member. Defaults to false.
+  allow_admin_roles: false
 ```
 
 For local development only, a symmetric assertion secret can be used:
@@ -85,9 +89,12 @@ Required assertion claims:
 Optional claims:
 
 - `email`, `name`, `avatar` or `picture`
-- `role`: `viewer`, `member`, `admin`, or `superadmin` (superadmin is capped unless explicitly enabled)
+- `role`: `viewer` or `member` by default; `admin`/`superadmin` only when `allow_admin_roles` is explicitly enabled, and `superadmin` is still capped unless runtime superadmin support is enabled
 - `provider`: stable provider label used in local identity mapping
-- `instance_id` or `runtime_instance_id`: must match configured `instance_id` when present
+
+Required when `external_launch.instance_id` is configured:
+
+- `instance_id` or `runtime_instance_id`: must match configured `instance_id`
 - `jti` or `nonce`: accepted for audit/correlation; one-time replay prevention remains the exchange endpoint's responsibility
 
 ## Security notes
@@ -95,5 +102,6 @@ Optional claims:
 - Put only an opaque, short-lived, one-time code in the browser URL.
 - Do not put runtime bearer tokens or external provider tokens in URLs.
 - The daemon-to-provider exchange should require HTTPS and an authenticated backchannel in production.
-- Assertions should be audience-bound to the runtime and expire quickly.
+- Assertions should be audience-bound to the runtime, instance-bound when `instance_id` is configured, and expire quickly.
+- Configure exactly one assertion verification method (`jwks_url`, `public_key`, or dev-only `dev_shared_secret`).
 - Local users are mapped by stable external identity `(provider, issuer, subject)`. A matching email alone never merges identities.

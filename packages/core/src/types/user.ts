@@ -385,6 +385,21 @@ export interface UserPreferences {
   [key: string]: unknown;
 }
 
+/** Stable external identity link stored with a local user. */
+export interface UserExternalIdentity {
+  /** SHA-256 of provider + issuer + subject; stable lookup key. */
+  key: string;
+  /** Stable provider label configured for the external launch provider. */
+  provider: string;
+  /** Trusted issuer that produced the launch assertion. */
+  issuer: string;
+  /** Subject from the trusted issuer; not an email address. */
+  subject: string;
+  email?: string;
+  name?: string;
+  last_login_at: string;
+}
+
 /**
  * Base user fields shared across User, CreateUserInput, and UpdateUserInput
  */

@@ -835,6 +835,16 @@ export const users = sqliteTable(
       .$type<{
         avatar?: string;
         preferences?: Record<string, unknown>;
+        // Stable external-auth identity mappings used by generic launch-code auth.
+        external_identities?: Array<{
+          key: string;
+          provider: string;
+          issuer: string;
+          subject: string;
+          email?: string;
+          name?: string;
+          last_login_at: string;
+        }>;
         // Per-tool credentials and auth-adjacent config.
         //
         // Each entry is keyed by AgenticToolName and holds env-var-named fields
