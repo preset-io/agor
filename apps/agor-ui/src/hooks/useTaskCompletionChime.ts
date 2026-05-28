@@ -12,17 +12,11 @@ import type { AgorClient, AudioPreferences, Task } from '@agor-live/client';
 import { isNaturalCompletion, TaskStatus } from '@agor-live/client';
 import { useEffect, useRef } from 'react';
 import { playTaskCompletionChime } from '../utils/audio';
-import type { FeathersEventHandler } from './index';
 
 /**
- * Cap on the number of recently-chimed task IDs we remember.
- * Sized to comfortably cover any realistic burst of completions a single
- * user could trigger before the LRU starts evicting. Once an ID is
- * evicted the chime *could* re-fire for that task, but only if the
- * daemon emits another terminal event for the same `task_id`, which
- * is itself rare.
- *
- * Exported for tests.
+ * Cap on the number of recent task IDs we remember for dedupe. Sized to
+ * comfortably cover any realistic burst of completions a single user could
+ * trigger before the LRU starts evicting. Re-exported only for tests.
  */
 export const MAX_CHIMED_HISTORY = 500;
 
@@ -31,32 +25,14 @@ export function useTaskCompletionChime(
   currentUserId: string | undefined,
   audioPreferences: AudioPreferences | undefined
 ): void {
-  // Track task IDs currently in RUNNING state so we fire on the
-  // RUNNING → terminal transition only for tasks we observed start. Only
-  // RUNNING entries are kept, so the set is bounded by concurrent in-flight
-  // tasks rather than lifetime tasks.
+  // Bounded by concurrent in-flight tasks — entries are evicted on transition.
   const runningTaskIdsRef = useRef<Set<string>>(new Set());
 
-  // Per-task "already chimed" dedupe. Kept in a ref so it survives:
-  //   - the effect tearing down + re-running (token rotation, currentUserId
-  //     flipping between undefined and defined on auth load),
-  //   - WebSocket reconnect replays,
-  //   - the daemon emitting multiple `'patched'` events for the same
-  //     completion (e.g. an executor-side patch to `COMPLETED` followed by
-  //     a post-completion `session_md5` patch in stateless_fs_mode, or the
-  //     base-executor + index.ts double-catch on failure both patching
-  //     to `FAILED`),
-  //   - any other source of duplicate terminal events for the same task_id.
-  //
-  // The previous implementation relied solely on `runningTaskIds.delete()`
-  // returning true exactly once; that breaks if the running-set is cleared
-  // out between two terminal events (effect teardown, status flicker), or
-  // if the task is re-added before the second event arrives. This Set is
-  // the final gate that guarantees "one chime per task completion".
-  //
-  // Insertion-ordered Set + size cap = simple LRU. We evict the oldest
-  // entry rather than reset on a threshold so a long-running session can't
-  // hit a momentary blind spot.
+  // Persistent per-task dedupe. The ref intentionally survives subscription
+  // teardown/reconnect so duplicate terminal events cannot replay the chime.
+  // Bounded by MAX_CHIMED_HISTORY to avoid lifetime growth; LRU touch on a
+  // duplicate hit keeps frequently-referenced tasks from being evicted while
+  // unrelated traffic floods in.
   const chimedTaskIdsRef = useRef<Set<string>>(new Set());
 
   // Keep audio prefs in a ref so the subscription effect doesn't tear down on
@@ -74,17 +50,14 @@ export function useTaskCompletionChime(
     const chimed = chimedTaskIdsRef.current;
     let disposed = false;
 
-    // The chime is a personal notification for the prompting user. In a
-    // multiplayer setup the tasks service streams events for any task the
-    // viewer can see, so we filter by Task.created_by — "chime when my
-    // prompts finish", not "chime when anyone's prompts finish".
+    // Chime is a personal notification — filter to the prompting user's own
+    // tasks. Multiplayer clients receive events for any task they can see.
     const isOwnTask = (task: Task) => task?.created_by === currentUserId;
 
     const markChimed = (taskId: string) => {
       chimed.add(taskId);
       if (chimed.size > MAX_CHIMED_HISTORY) {
-        // Set iteration order is insertion order — `values().next().value`
-        // is the oldest. Evict it so the set stays bounded.
+        // Set iteration order is insertion order — first entry is oldest.
         const oldest = chimed.values().next().value;
         if (oldest !== undefined) chimed.delete(oldest);
       }
@@ -101,35 +74,34 @@ export function useTaskCompletionChime(
       const wasRunning = running.delete(task.task_id);
       if (!wasRunning || !isNaturalCompletion(task.status)) return;
 
-      // Final dedupe: don't re-play if we already chimed for this task,
-      // even if the daemon emits more terminal events for it.
-      if (chimed.has(task.task_id)) return;
+      // LRU touch: re-insert refreshes recency so a noisy task can't get
+      // evicted from the dedupe window while it keeps emitting events.
+      if (chimed.delete(task.task_id)) {
+        chimed.add(task.task_id);
+        return;
+      }
       markChimed(task.task_id);
 
       void playTaskCompletionChime(task, audioPrefsRef.current);
     };
 
     const handleTaskRemoved = (task: Task) => {
-      if (!task?.task_id) return;
-      running.delete(task.task_id);
-      // Drop the chimed entry too — once the task is gone the daemon can't
-      // emit any more events for it, so the dedupe slot is free to reclaim.
-      chimed.delete(task.task_id);
+      // Only clear the running entry. We deliberately do NOT drop the chimed
+      // entry: task_ids are UUIDv7 and never reused, so the slot can't
+      // collide, and keeping it pins the "one chime per task" guarantee
+      // even if a delayed RUNNING/terminal replay arrives after delete.
+      if (task?.task_id) running.delete(task.task_id);
     };
 
-    tasksService.on('created', handleTaskChange as FeathersEventHandler);
-    tasksService.on('patched', handleTaskChange as FeathersEventHandler);
-    tasksService.on('updated', handleTaskChange as FeathersEventHandler);
-    tasksService.on('removed', handleTaskRemoved as FeathersEventHandler);
+    tasksService.on('created', handleTaskChange);
+    tasksService.on('patched', handleTaskChange);
+    tasksService.on('updated', handleTaskChange);
+    tasksService.on('removed', handleTaskRemoved);
 
-    // Seed the set with the current user's tasks that were already RUNNING
-    // when the hook mounted (e.g. after a page reload or reconnect).
-    // Without this, a subsequent transition to COMPLETED/FAILED would find
-    // no prior membership and skip the chime. Subscribe-first-then-fetch
-    // ordering means any transition that lands during the fetch is still
-    // handled by the live handler; at worst we add a stale ID for a task
-    // that has already finished, and the set gets one extra entry that
-    // never triggers a chime.
+    // Seed running tasks already in flight at mount (page reload, reconnect).
+    // Subscribe-first-then-fetch: any transition landing during the fetch is
+    // still handled by the live handler; at worst we add a stale ID for a
+    // task that has already finished, which never triggers a chime.
     tasksService
       .findAll({ query: { status: TaskStatus.RUNNING, created_by: currentUserId } })
       .then((tasks: Task[]) => {
@@ -139,20 +111,18 @@ export function useTaskCompletionChime(
         }
       })
       .catch(() => {
-        // Non-fatal: if the initial fetch fails we just miss chimes for
-        // tasks that were already running. Live events still work.
+        // Non-fatal: live events still work. Worst case we miss chimes for
+        // tasks already running before mount.
       });
 
     return () => {
       disposed = true;
-      tasksService.removeListener('created', handleTaskChange as FeathersEventHandler);
-      tasksService.removeListener('patched', handleTaskChange as FeathersEventHandler);
-      tasksService.removeListener('updated', handleTaskChange as FeathersEventHandler);
-      tasksService.removeListener('removed', handleTaskRemoved as FeathersEventHandler);
+      tasksService.removeListener('created', handleTaskChange);
+      tasksService.removeListener('patched', handleTaskChange);
+      tasksService.removeListener('updated', handleTaskChange);
+      tasksService.removeListener('removed', handleTaskRemoved);
       running.clear();
-      // NOTE: we intentionally do NOT clear `chimed` here. A token-refresh
-      // or auth-flip teardown that wipes it would re-arm the chime for any
-      // post-completion replay event landing on the new subscription.
+      // chimedTaskIds intentionally persists across teardowns — see ref decl.
     };
   }, [client, currentUserId]);
 }

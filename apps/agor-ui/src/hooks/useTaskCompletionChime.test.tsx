@@ -449,6 +449,63 @@ describe('useTaskCompletionChime', () => {
       );
       expect(playChimeMock).not.toHaveBeenCalled();
     });
+
+    it('LRU touch protects a noisy task from being evicted by unrelated traffic', () => {
+      // A task that keeps emitting duplicate terminal events should get its
+      // recency refreshed on each hit, so it isn't pushed out of the dedupe
+      // window by MAX_CHIMED_HISTORY unrelated completions landing afterward.
+      const client = makeMockClient();
+      render(client);
+
+      // 1) chime once for `noisy`
+      client.__tasks.emit(
+        'patched',
+        makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.RUNNING })
+      );
+      client.__tasks.emit(
+        'patched',
+        makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.COMPLETED })
+      );
+
+      // 2) replay duplicate terminal events for `noisy` — touch on each
+      for (let i = 0; i < 10; i++) {
+        client.__tasks.emit(
+          'patched',
+          makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.RUNNING })
+        );
+        client.__tasks.emit(
+          'patched',
+          makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.COMPLETED })
+        );
+      }
+
+      // 3) flood with MAX_CHIMED_HISTORY - 1 unique completions. Without
+      //    touch, `noisy` (the original oldest) would be the first eviction
+      //    target; with touch, it's been bumped to the freshest slot, so
+      //    one of the flood tasks gets evicted instead.
+      for (let i = 0; i < MAX_CHIMED_HISTORY - 1; i++) {
+        client.__tasks.emit(
+          'patched',
+          makeTask({ task_id: `flood-${i}` as TaskID, status: TaskStatus.RUNNING })
+        );
+        client.__tasks.emit(
+          'patched',
+          makeTask({ task_id: `flood-${i}` as TaskID, status: TaskStatus.COMPLETED })
+        );
+      }
+
+      playChimeMock.mockClear();
+      // 4) `noisy` is still pinned in the chimed-set — no re-chime.
+      client.__tasks.emit(
+        'patched',
+        makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.RUNNING })
+      );
+      client.__tasks.emit(
+        'patched',
+        makeTask({ task_id: 'noisy' as TaskID, status: TaskStatus.COMPLETED })
+      );
+      expect(playChimeMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('subscription lifecycle', () => {
@@ -501,7 +558,30 @@ describe('useTaskCompletionChime', () => {
       });
     });
 
-    it('frees chimed-set slot when task is removed', () => {
+    it('chimes for a task whose RUNNING arrived via `created`', () => {
+      // The hook subscribes to `'created'` too — but every other test seeds
+      // RUNNING via `'patched'`. Cover the explicit created-with-RUNNING
+      // path so a future refactor that drops the `created` listener gets
+      // caught.
+      const client = makeMockClient();
+      render(client);
+
+      client.__tasks.emit(
+        'created',
+        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING })
+      );
+      client.__tasks.emit(
+        'patched',
+        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
+      );
+
+      expect(playChimeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('removed event clears running-set but keeps the chimed-set entry pinned', () => {
+      // Task IDs are UUIDv7 and never reused, so the chimed slot is safe to
+      // keep — and keeping it preserves the "one chime per task" guarantee
+      // even if a delayed RUNNING/terminal replay arrives after delete.
       const client = makeMockClient();
       render(client);
 
@@ -515,15 +595,13 @@ describe('useTaskCompletionChime', () => {
       );
       expect(playChimeMock).toHaveBeenCalledTimes(1);
 
-      // Task deleted (e.g. admin removed it). After this the dedupe slot
-      // is freed, so an unrelated future task with the (unlikely) same
-      // task_id would chime — verified by replay below.
       client.__tasks.emit(
         'removed',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
       );
       playChimeMock.mockClear();
 
+      // Delayed replay after removal — chimed-set still gates.
       client.__tasks.emit(
         'patched',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING })
@@ -532,7 +610,7 @@ describe('useTaskCompletionChime', () => {
         'patched',
         makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
       );
-      expect(playChimeMock).toHaveBeenCalledTimes(1);
+      expect(playChimeMock).not.toHaveBeenCalled();
     });
   });
 });
