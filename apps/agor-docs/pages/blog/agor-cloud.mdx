@@ -19,7 +19,7 @@ So why Agor Cloud?
 
 Here's what we learned productionizing Agor at Preset for our own use:
 
-When you're excited about shared dev environments, worktrees, and AI sessions, you quickly realize the scale of what it takes to run this safely in production:
+When you start running Agor for your team—multiple users, worktrees, dev environments per branch, AI sessions touching real code—you quickly realize the scale of what it takes to run this safely in production:
 
 - A stateful database that needs backups, migrations, and a recovery story
 - Per-user API key management for multiple agent providers (Claude, Gemini, Codex)
@@ -67,21 +67,18 @@ This is boring infrastructure work that someone has to do. You can pay people to
 
 ### Unix-Level User Isolation
 
-We're bringing back shared, fat servers—the right way.
+Inside every Agor instance, sessions, worktrees, and dev environments run as distinct Unix users. Filesystem permissions enforce boundaries between users, between branches, between agents. No shared process space, no leaky abstractions, no "well, they're all in the same container."
 
-If you're going to share and collaborate on dev environments, there's no way around this: each user needs real isolation. Not just process separation, not just containers, but **Unix-level user isolation**.
-
-Every developer gets their own Unix user on the Agor server. Worktrees, sessions, and dev environments run as that user. Filesystem permissions enforce boundaries. No accidental cross-contamination, no leaky abstractions.
-
-This is how multi-user systems were designed to work. Agor Cloud makes it seamless.
+This is how multi-user systems were designed to work, and it's the security floor we build everything else on top of.
 
 ### Managed Private Cloud
 
-For teams whose interesting code and data live behind a network boundary, the default public managed offering isn't enough. Agor Cloud meets you where your infrastructure lives:
+The default public Agor Cloud is a managed single-tenant instance per team, hosted on our infrastructure. For organizations whose code, data, or networking story rules that out, **Managed Private Cloud (MPC)** is a different deployment model:
 
-- **Private network peering.** Connect your Agor instance to your VPC so agents can reach internal git servers, private APIs, staging databases, and ticketing systems—without exposing any of it to the public internet.
+- **Bring-your-own-cloud deployments.** We deploy and manage Agor inside your own AWS or GCP account—data and compute stay in your tenancy.
+- **Private network peering.** Reach internal git servers, private APIs, staging databases, and ticketing systems over your VPC—nothing exposed to the public internet.
 - **VPN-fronted access.** Sit Agor behind your existing VPN if your security policy requires it.
-- **Bring-your-own-cloud deployments.** For organizations that need data and compute to stay in their own AWS or GCP tenancy, we can deploy and manage Agor inside your account.
+- **Bring back the shared, fat dev server.** MPC unlocks the "team works on one beefy dev box" model—with the Unix-level isolation above keeping users from stepping on each other. It's how multi-user systems were designed to work, before everyone moved to laptops. Not part of the default Cloud offering; ask about it if it fits your team.
 
 Network topology is a conversation, not a checkbox—tell us what your security team needs and we'll work out the shape.
 
@@ -98,7 +95,7 @@ You stay accountable to your own security and compliance people. We don't ask yo
 
 ### Always Up
 
-Managing a large box running all sorts of dev environments is challenging: containers that need health checks, processes that hang, disks that fill, ports that collide, SSH tunnels that drop. Cloud handles it—monitoring, auto-recovery, capacity management.
+Running the infrastructure underneath a fleet of dev environments is challenging: containers that need health checks, processes that hang, disks that fill, ports that collide, network paths that drop. Cloud handles it—monitoring, auto-recovery, capacity management.
 
 You focus on building. We focus on keeping the lights on.
 
@@ -134,7 +131,7 @@ If any of these are dealbreakers for your team, say so in the interest form—we
 
 ## Who Agor Cloud Is For
 
-- **Teams that want shared, multi-user dev environments** without the ops burden
+- **Teams that want a managed multi-user Agor instance** without the ops burden
 - **Engineering orgs exploring AI-assisted development** at scale who want to bring their own keys
 - **Companies whose security or compliance posture** rules out running open source locally without a vendor on the hook
 - **Teams whose interesting code and data live behind a VPC or VPN** and want agents that can reach it safely
