@@ -403,6 +403,9 @@ function validateLaunchClaims(claims: LaunchClaims, settings: ResolvedLaunchSett
   if (!claims.sub || typeof claims.sub !== 'string') {
     throw new NotAuthenticated('Invalid one-time launch assertion subject');
   }
+  if (typeof claims.exp !== 'number') {
+    throw new NotAuthenticated('Invalid one-time launch assertion expiration');
+  }
   if (settings.instanceId) {
     const claimInstance = claims.instance_id || claims.runtime_instance_id;
     if (typeof claimInstance !== 'string' || claimInstance !== settings.instanceId) {
@@ -435,9 +438,17 @@ function issueRuntimeTokens(
 export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
   return {
     async create(data: { launchCode?: string; launch_code?: string }, _params?: Params) {
-      const launchCode = data?.launchCode || data?.launch_code;
-      if (!launchCode || typeof launchCode !== 'string') {
+      const launchCode =
+        typeof data?.launchCode === 'string'
+          ? data.launchCode.trim()
+          : typeof data?.launch_code === 'string'
+            ? data.launch_code.trim()
+            : '';
+      if (!launchCode) {
         throw new BadRequest('launchCode is required');
+      }
+      if (launchCode.length > 4096) {
+        throw new BadRequest('launchCode is too long');
       }
 
       const settings = resolveLaunchSettings(options.config);

@@ -24,6 +24,7 @@ import type {
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
+import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import type { BuildInfo } from './build-info.js';
 import type { CorsOrigin } from './cors.js';
 
@@ -291,8 +292,8 @@ export function createSocketIOConfig(
 
         // Verify JWT token
         const decoded = jwt.verify(token, jwtSecret, {
-          issuer: 'agor',
-          audience: 'https://agor.dev',
+          issuer: RUNTIME_JWT_ISSUER,
+          audience: RUNTIME_JWT_AUDIENCE,
         }) as { sub: string; type?: string; role?: string };
 
         // Allow user tokens and service tokens (used by executor)

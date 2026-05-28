@@ -154,6 +154,20 @@ describe('one-time launch auth service', () => {
     await expect(service().create({ launchCode: 'code' })).rejects.toBeInstanceOf(NotAuthenticated);
   });
 
+  it('rejects assertions without an expiration', async () => {
+    const noExpiration = jwt.sign(
+      { sub: 'external-user-1', instance_id: 'instance-1' },
+      ASSERTION_SECRET,
+      {
+        algorithm: 'HS256',
+        issuer: 'https://issuer.example.test',
+        audience: 'runtime:test',
+      }
+    );
+    mockExchange(noExpiration, 200);
+    await expect(service().create({ launchCode: 'code' })).rejects.toBeInstanceOf(NotAuthenticated);
+  });
+
   it('requires a matching instance claim when instance_id is configured', async () => {
     mockExchange(signClaims({ instance_id: undefined, runtime_instance_id: undefined }));
     await expect(service().create({ launchCode: 'code' })).rejects.toBeInstanceOf(NotAuthenticated);
@@ -194,6 +208,22 @@ describe('one-time launch auth service', () => {
     }) as { sub: string; type: string };
     expect(decoded.sub).toBe(result.user.user_id);
     expect(decoded.type).toBe('access');
+  });
+
+  it('maps admin roles only when explicitly allowed', async () => {
+    mockExchange(
+      signClaims({ sub: 'role-user-default', email: 'role-default@example.test', role: 'admin' })
+    );
+    const defaultResult = await service().create({ launchCode: 'default-role' });
+    expect(defaultResult.user.role).toBe('member');
+
+    mockExchange(
+      signClaims({ sub: 'role-user-admin', email: 'role-admin@example.test', role: 'admin' })
+    );
+    const allowedResult = await service({
+      external_launch: { ...baseConfig().external_launch, allow_admin_roles: true },
+    }).create({ launchCode: 'admin-role' });
+    expect(allowedResult.user.role).toBe('admin');
   });
 
   it('repeat login maps the same external identity to the same local user', async () => {

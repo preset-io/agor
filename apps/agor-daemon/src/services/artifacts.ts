@@ -59,8 +59,9 @@ import {
   proxyGrantEnvName,
   ROLES,
 } from '@agor/core/types';
-import jwt from 'jsonwebtoken';
+
 import { DrizzleService } from '../adapters/drizzle.js';
+import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import {
   detectLegacyFormat,
@@ -1145,11 +1146,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       console.warn('[artifacts] no auth.secret set — AGOR_TOKEN will render empty');
       return '';
     }
-    return jwt.sign({ sub: userId, type: 'access' }, jwtSecret, {
-      expiresIn: '15m',
-      issuer: 'agor',
-      audience: 'https://agor.dev',
-    });
+    return issueRuntimeToken({ sub: userId, type: 'access' }, jwtSecret, '15m');
   }
 
   private async resolveEnvVarValues(

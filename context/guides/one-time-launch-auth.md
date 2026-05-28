@@ -91,11 +91,11 @@ Optional claims:
 - `email`, `name`, `avatar` or `picture`
 - `role`: `viewer` or `member` by default; `admin`/`superadmin` only when `allow_admin_roles` is explicitly enabled, and `superadmin` is still capped unless runtime superadmin support is enabled
 - `provider`: stable provider label used in local identity mapping
+- `jti` or `nonce`: accepted for audit/correlation; one-time replay prevention remains the exchange endpoint's responsibility
 
 Required when `external_launch.instance_id` is configured:
 
 - `instance_id` or `runtime_instance_id`: must match configured `instance_id`
-- `jti` or `nonce`: accepted for audit/correlation; one-time replay prevention remains the exchange endpoint's responsibility
 
 ## Security notes
 

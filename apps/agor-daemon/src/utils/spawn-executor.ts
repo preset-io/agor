@@ -32,7 +32,8 @@ import {
   isSecretEnvKey,
   prepareImpersonationEnv,
 } from '@agor/core/unix';
-import jwt from 'jsonwebtoken';
+import type { SignOptions } from 'jsonwebtoken';
+import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
 
 let configuredDaemonUrl: string | null = null;
@@ -410,15 +411,11 @@ export function getDaemonUrl(): string {
  * @param expiresIn - Token expiration (default: 5 minutes)
  * @returns JWT access token
  */
-export function createServiceToken(jwtSecret: string, expiresIn?: string): string {
-  // Cast options to satisfy TypeScript - the signature is correct
-  const options = {
-    expiresIn: expiresIn || '5m',
-    issuer: 'agor',
-    audience: 'https://agor.dev',
-  } as jwt.SignOptions;
-
-  return jwt.sign(
+export function createServiceToken(
+  jwtSecret: string,
+  expiresIn?: SignOptions['expiresIn']
+): string {
+  return issueRuntimeToken(
     {
       sub: 'executor-service',
       type: 'service',
@@ -426,7 +423,7 @@ export function createServiceToken(jwtSecret: string, expiresIn?: string): strin
       role: 'service',
     },
     jwtSecret,
-    options
+    expiresIn || '5m'
   );
 }
 

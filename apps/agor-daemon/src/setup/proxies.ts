@@ -32,6 +32,7 @@ import type { UUID } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 
 /**
  * Default per-(user, vendor) rate limit. In-memory bucket; no redis.
@@ -123,8 +124,8 @@ async function authenticateRequest(
   let decoded: { sub?: string; type?: string };
   try {
     decoded = jwt.verify(match[1], jwtSecret, {
-      issuer: 'agor',
-      audience: 'https://agor.dev',
+      issuer: RUNTIME_JWT_ISSUER,
+      audience: RUNTIME_JWT_AUDIENCE,
     }) as { sub?: string; type?: string };
   } catch {
     return null;
