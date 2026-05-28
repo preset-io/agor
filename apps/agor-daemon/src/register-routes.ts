@@ -65,6 +65,7 @@ import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import { createLaunchAuthService } from './auth/launch-auth.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
@@ -374,6 +375,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ],
     },
   });
+
+  // ============================================================================
+  // One-time launch-code authentication endpoint
+  // ============================================================================
+
+  // biome-ignore lint/suspicious/noExplicitAny: Feathers Application vs Express middleware overload
+  app.use('/auth/launch', authRateLimiter as any);
+  app.use(
+    '/auth/launch',
+    createLaunchAuthService({
+      db,
+      config,
+      jwtSecret,
+      accessTokenTtl: ACCESS_TOKEN_TTL,
+      refreshTokenTtl: REFRESH_TOKEN_TTL,
+      usersService,
+    })
+  );
+
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  const launchAuthService = app.service('auth/launch') as any;
+  launchAuthService.docs = {
+    description: 'One-time launch-code authentication endpoint for trusted external launch issuers',
+    security: [],
+  };
 
   // ============================================================================
   // Refresh token endpoint

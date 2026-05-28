@@ -170,6 +170,58 @@ export interface AgorUISettings {
 }
 
 /**
+ * Generic one-time launch-code authentication handoff.
+ *
+ * A trusted external launch issuer opens the runtime UI with an opaque,
+ * short-lived code. The daemon exchanges that code over a server-to-server
+ * backchannel, verifies the returned assertion, maps a local user, and issues
+ * normal runtime auth tokens.
+ */
+export interface AgorExternalLaunchSettings {
+  /** Enable POST /auth/launch (default: false). */
+  enabled?: boolean;
+
+  /** Server-to-server exchange endpoint that consumes one-time launch codes. */
+  exchange_url?: string;
+
+  /** Expected JWT issuer for returned launch assertions. */
+  issuer?: string;
+
+  /** Expected JWT audience for returned launch assertions; identifies this runtime. */
+  audience?: string;
+
+  /** Optional runtime instance identifier checked against assertion instance_id when present. */
+  instance_id?: string;
+
+  /** Stable provider label used in local external identity mapping. Defaults to issuer. */
+  provider_id?: string;
+
+  /** JWKS endpoint used to verify returned launch assertions. */
+  jwks_url?: string;
+
+  /** PEM public key used to verify returned launch assertions. */
+  public_key?: string;
+
+  /** Dev-only symmetric key used to verify HS256 launch assertions. Prefer JWKS/public_key. */
+  dev_shared_secret?: string;
+
+  /** Environment variable that contains the dev-only symmetric key. */
+  dev_shared_secret_env?: string;
+
+  /** Bearer credential sent by the daemon to the exchange endpoint. Prefer service_credential_env. */
+  service_credential?: string;
+
+  /** Environment variable that contains the exchange endpoint bearer credential. */
+  service_credential_env?: string;
+
+  /** Backchannel request timeout in milliseconds (default: 10000). */
+  request_timeout_ms?: number;
+
+  /** Optional allow-list of JWT algorithms for returned launch assertions. */
+  algorithms?: string[];
+}
+
+/**
  * OpenCode.ai integration settings
  */
 export interface AgorOpenCodeSettings {
@@ -840,6 +892,9 @@ export interface AgorConfig {
   /** OpenCode.ai integration settings */
   opencode?: AgorOpenCodeSettings;
 
+  /** Generic external one-time launch-code authentication. */
+  external_launch?: AgorExternalLaunchSettings;
+
   /** Execution isolation settings */
   execution?: AgorExecutionSettings;
 
@@ -901,6 +956,7 @@ export type ConfigKey =
   | `ui.${keyof AgorUISettings}`
   | `database.${keyof AgorDatabaseSettings}`
   | `opencode.${keyof AgorOpenCodeSettings}`
+  | `external_launch.${keyof AgorExternalLaunchSettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
   | `branches.${keyof AgorBranchesSettings}`

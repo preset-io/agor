@@ -12,6 +12,11 @@ import { getDaemonUrl } from '../config/daemon';
 import { isTransientConnectionError } from '../utils/authErrors';
 import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
 import {
+  exchangeLaunchCode,
+  getLaunchCodeFromSearch,
+  removeLaunchCodeFromCurrentUrl,
+} from '../utils/launchAuth';
+import {
   RefreshUnrecoverableError,
   refreshTokensSingleFlight,
   resetRefreshFailureState,
@@ -56,11 +61,38 @@ export function useAuth(): UseAuthReturn {
    * Re-authenticate using stored token (with automatic refresh)
    * Retries up to 3 times to handle daemon restarts gracefully
    */
-  const reAuthenticate = useCallback(async (retryCount = 0) => {
+  const reAuthenticate = useCallback(async (retryCount = 0, pendingLaunchCode?: string) => {
     const MAX_RETRIES = 5;
     setState((prev) => ({ ...prev, loading: true, error: null }));
+    let attemptedLaunch = false;
+    let activeLaunchCode: string | null = null;
 
     try {
+      activeLaunchCode =
+        pendingLaunchCode ||
+        (typeof window !== 'undefined' ? getLaunchCodeFromSearch(window.location.search) : null);
+
+      if (activeLaunchCode) {
+        attemptedLaunch = true;
+        // Remove the opaque one-time code before the network round-trip so a
+        // refresh, copy/paste, or dev-mode double effect does not replay it.
+        removeLaunchCodeFromCurrentUrl();
+
+        const client = await createRestClient(getDaemonUrl());
+        const result = await exchangeLaunchCode(client, activeLaunchCode);
+        resetRefreshFailureState();
+
+        setState({
+          user: result.user,
+          accessToken: result.accessToken,
+          authenticated: true,
+          loading: false,
+          error: null,
+        });
+
+        return;
+      }
+
       const storedAccessToken = getStoredAccessToken();
       const storedRefreshToken = getStoredRefreshToken();
 
@@ -134,7 +166,10 @@ export function useAuth(): UseAuthReturn {
       if (isConnectionError && retryCount < MAX_RETRIES) {
         const delay = Math.min(2000 * 1.5 ** retryCount, 10000); // Exponential backoff: 2s, 3s, 4.5s, 6.75s, 10s (capped)
         await new Promise((resolve) => setTimeout(resolve, delay));
-        return reAuthenticate(retryCount + 1);
+        return reAuthenticate(
+          retryCount + 1,
+          attemptedLaunch ? activeLaunchCode || undefined : undefined
+        );
       }
 
       // IMPORTANT: Don't clear tokens if this is a connection error
@@ -149,7 +184,11 @@ export function useAuth(): UseAuthReturn {
         accessToken: null,
         authenticated: false,
         loading: false,
-        error: isConnectionError ? 'Connection lost - waiting for daemon...' : null,
+        error: isConnectionError
+          ? 'Connection lost - waiting for daemon...'
+          : attemptedLaunch
+            ? 'Launch sign-in failed. The one-time launch code may have expired or already been used.'
+            : null,
       });
     }
   }, []);
