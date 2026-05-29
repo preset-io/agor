@@ -26,6 +26,11 @@ const geminiNormalizer = new GeminiNormalizer();
 /** `modelHint` refines `contextWindowLimit` lookup; never used as `primaryModel`. */
 export interface NormalizeOptions {
   modelHint?: string;
+  /**
+   * Optional pricing mode hint for tools that only expose token counts.
+   * Currently used by Codex so we only emit USD estimates in API-priced modes.
+   */
+  pricingMode?: 'api';
 }
 
 /**

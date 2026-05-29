@@ -11,4 +11,4 @@ export {
   type CodexModel,
   DEFAULT_CODEX_MODEL,
   getCodexContextWindowLimit,
-} from '@agor/core/models';
+} from '@agor/core/models/codex';

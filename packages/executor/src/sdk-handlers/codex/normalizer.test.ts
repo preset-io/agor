@@ -149,4 +149,57 @@ describe('CodexNormalizer', () => {
 
     expect(lookupSpy).toHaveBeenCalledWith(models.DEFAULT_CODEX_MODEL);
   });
+
+  it('computes estimated USD cost in API pricing mode', () => {
+    const normalizer = new CodexNormalizer();
+    const event = buildTurnCompletedEvent({
+      usage: buildUsage({
+        input_tokens: 10_000,
+        cached_input_tokens: 2_000,
+        output_tokens: 500,
+      }),
+    });
+
+    const result = normalizer.normalize(event, {
+      modelHint: 'gpt-5-codex',
+      pricingMode: 'api',
+    });
+
+    expect(result.costUsd).toBeCloseTo(0.01525, 10);
+  });
+
+  it('omits estimated USD cost outside API pricing mode', () => {
+    const normalizer = new CodexNormalizer();
+    const event = buildTurnCompletedEvent({
+      usage: buildUsage({
+        input_tokens: 10_000,
+        cached_input_tokens: 2_000,
+        output_tokens: 500,
+      }),
+    });
+
+    const result = normalizer.normalize(event, {
+      modelHint: 'gpt-5-codex',
+    });
+
+    expect(result.costUsd).toBeUndefined();
+  });
+
+  it('omits estimated USD cost when model pricing is unknown', () => {
+    const normalizer = new CodexNormalizer();
+    const event = buildTurnCompletedEvent({
+      usage: buildUsage({
+        input_tokens: 10_000,
+        cached_input_tokens: 2_000,
+        output_tokens: 500,
+      }),
+    });
+
+    const result = normalizer.normalize(event, {
+      modelHint: 'gpt-5.3-codex-spark',
+      pricingMode: 'api',
+    });
+
+    expect(result.costUsd).toBeUndefined();
+  });
 });

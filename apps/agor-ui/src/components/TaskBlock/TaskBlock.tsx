@@ -504,6 +504,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             {normalized && (
               <TokenCountPill
                 count={normalized.tokenUsage.totalTokens}
+                estimatedCost={normalized.costUsd}
                 inputTokens={normalized.tokenUsage.inputTokens}
                 outputTokens={normalized.tokenUsage.outputTokens}
                 cacheReadTokens={normalized.tokenUsage.cacheReadTokens}

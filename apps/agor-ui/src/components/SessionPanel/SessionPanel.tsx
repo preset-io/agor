@@ -406,7 +406,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // Token breakdown calculation
   const tokenBreakdown = React.useMemo(() => {
     if (!session?.agentic_tool) {
-      return { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 };
+      return {
+        total: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheCreation: 0,
+        cost: undefined as number | undefined,
+        hasCost: false,
+      };
     }
 
     return tasks.reduce(
@@ -414,6 +422,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         if (!task.normalized_sdk_response) return acc;
 
         const { tokenUsage, costUsd } = task.normalized_sdk_response;
+        const nextHasCost = acc.hasCost || costUsd !== undefined;
 
         return {
           total: acc.total + tokenUsage.totalTokens,
@@ -421,10 +430,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           output: acc.output + tokenUsage.outputTokens,
           cacheRead: acc.cacheRead + (tokenUsage.cacheReadTokens || 0),
           cacheCreation: acc.cacheCreation + (tokenUsage.cacheCreationTokens || 0),
-          cost: acc.cost + (costUsd || 0),
+          cost:
+            nextHasCost
+              ? (acc.cost || 0) + (costUsd || 0)
+              : (undefined as number | undefined),
+          hasCost: nextHasCost,
         };
       },
-      { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 }
+      {
+        total: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheCreation: 0,
+        cost: undefined as number | undefined,
+        hasCost: false,
+      }
     );
   }, [tasks, session?.agentic_tool]);
 

@@ -10,6 +10,7 @@ export * from './claude.js';
 
 // Codex models
 export * from './codex.js';
+export * from './pricing.js';
 
 // Copilot models
 export * from './copilot.js';

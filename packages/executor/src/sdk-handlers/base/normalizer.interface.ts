@@ -46,8 +46,11 @@ export interface NormalizedSdkData {
   contextUsageSnapshot?: ContextUsageSnapshot;
 
   /**
-   * Cost in USD (if available from SDK)
-   * This is the actual cost reported by the SDK, not an estimate.
+   * Cost in USD when available.
+   *
+   * Depending on the tool, this may be:
+   * - the actual cost reported by the SDK/protocol, or
+   * - a local estimate derived from token usage plus a pricing table.
    */
   costUsd?: number;
 

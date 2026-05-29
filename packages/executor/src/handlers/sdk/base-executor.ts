@@ -490,6 +490,7 @@ export async function executeToolTask(params: {
       // event omits the model; never used as primaryModel.
       const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse, {
         modelHint: result.model,
+        pricingMode: toolName === 'codex' && resolution.apiKey ? 'api' : undefined,
       });
       if (normalized) {
         patchData.normalized_sdk_response = normalized;
