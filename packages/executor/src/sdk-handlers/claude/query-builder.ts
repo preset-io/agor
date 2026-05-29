@@ -529,6 +529,13 @@ export async function setupQuery(
       const serversWithSource = await getMcpServersForSession(sessionId, {
         sessionMCPRepo: deps.sessionMCPRepo,
         mcpServerRepo: deps.mcpServerRepo,
+        // Pass the sessions repo through so the MCP template resolver can
+        // fetch this session's ``custom_context`` and substitute
+        // ``{{session.custom_context.*}}`` into MCP server templates. Without
+        // this the substitution silently no-ops and the server config falls
+        // through to the daemon log as "unresolved optional template" —
+        // PR #1287 wired the resolver but not the handler-side plumbing.
+        sessionRepo: deps.sessionsRepo,
         forUserId: contextUserId,
       });
 

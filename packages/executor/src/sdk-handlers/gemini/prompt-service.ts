@@ -712,6 +712,7 @@ export class GeminiPromptService {
         const serversWithSource = await getMcpServersForSession(sessionId, {
           sessionMCPRepo: this.sessionMCPRepo,
           mcpServerRepo: this.mcpServerRepo,
+          sessionRepo: this.sessionsRepo,
         });
 
         // Convert to Gemini SDK format

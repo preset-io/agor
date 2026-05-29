@@ -152,6 +152,7 @@ export class CopilotPromptService {
     const serversWithSource = await getMcpServersForSession(sessionId, {
       sessionMCPRepo: this.sessionMCPServerRepo,
       mcpServerRepo: this.mcpServerRepo,
+      sessionRepo: this.sessionsRepo,
     });
 
     const mcpServers = serversWithSource.map((s) => s.server);

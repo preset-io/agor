@@ -23,6 +23,7 @@ import { getDaemonUrl } from '../../config.js';
 import type {
   MCPServerRepository,
   SessionMCPServerRepository,
+  SessionRepository,
 } from '../../db/feathers-repositories.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
@@ -72,6 +73,7 @@ export class OpenCodeTool implements ITool {
   /** MCP repository dependencies for resolving user-defined MCP servers */
   private sessionMCPRepo?: SessionMCPServerRepository;
   private mcpServerRepo?: MCPServerRepository;
+  private sessionsRepo?: SessionRepository;
 
   /**
    * Extract user-facing response text from OpenCode parts.
@@ -99,12 +101,14 @@ export class OpenCodeTool implements ITool {
     config: OpenCodeConfig,
     messagesService?: MessagesService,
     sessionMCPRepo?: SessionMCPServerRepository,
-    mcpServerRepo?: MCPServerRepository
+    mcpServerRepo?: MCPServerRepository,
+    sessionsRepo?: SessionRepository
   ) {
     this.config = config;
     this.messagesService = messagesService;
     this.sessionMCPRepo = sessionMCPRepo;
     this.mcpServerRepo = mcpServerRepo;
+    this.sessionsRepo = sessionsRepo;
   }
 
   /**
@@ -237,6 +241,7 @@ export class OpenCodeTool implements ITool {
         const servers = await getMcpServersForSession(sessionId as SessionID, {
           sessionMCPRepo: this.sessionMCPRepo,
           mcpServerRepo: this.mcpServerRepo,
+          sessionRepo: this.sessionsRepo,
         });
 
         for (const { server } of servers) {

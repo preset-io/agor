@@ -503,6 +503,7 @@ export class CodexPromptService {
     const serversWithSource = await getMcpServersForSession(sessionId, {
       sessionMCPRepo: this.sessionMCPServerRepo,
       mcpServerRepo: this.mcpServerRepo,
+      sessionRepo: this.sessionsRepo,
       forUserId,
     });
 
