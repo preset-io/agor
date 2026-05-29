@@ -110,13 +110,28 @@ export class ConfigService {
   }> {
     const { taskId, keyName, tool } = data;
 
-    // Fetch task to get creator user ID
+    // Fetch task to get creator user ID + the parent session's custom_context.
+    // The latter feeds the session-level credential channel — same shape as
+    // PR #1287's MCP-template wiring, applied here to per-task API key
+    // resolution so a session opener's stamped `ANTHROPIC_API_KEY` actually
+    // takes effect when the executor's SDK handler asks "what key do I use?".
     let userId: UserID | undefined;
+    let sessionCustomContext: Record<string, unknown> | undefined;
     try {
       const tasksService = this.app?.service('tasks');
       if (tasksService) {
         const task = await tasksService.get(taskId, { provider: undefined });
         userId = task?.created_by;
+        const sessionId = task?.session_id;
+        if (sessionId && this.app) {
+          try {
+            const sessionsService = this.app.service('sessions');
+            const session = await sessionsService.get(sessionId, { provider: undefined });
+            sessionCustomContext = session?.custom_context as Record<string, unknown> | undefined;
+          } catch (err) {
+            console.warn(`[Config.resolveApiKey] Failed to fetch session ${sessionId}:`, err);
+          }
+        }
       }
     } catch (err) {
       console.warn(`[Config.resolveApiKey] Failed to fetch task ${taskId}:`, err);
@@ -127,6 +142,7 @@ export class ConfigService {
       userId,
       db: this.db,
       tool,
+      sessionCustomContext,
     });
 
     // Map KeyResolutionResult to service response type

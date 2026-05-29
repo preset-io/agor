@@ -24,6 +24,17 @@ export interface KeyResolutionContext {
    * key stored under `agentic_tools['claude-code']`, and vice versa.
    */
   tool?: AgenticToolName;
+  /**
+   * The session row's `custom_context` blob, if any. Checked FIRST (above
+   * per-user storage) when present. This is the sibling channel to the
+   * MCP-template wiring in PR #1287: an embedding host can pin a per-session
+   * model credential without writing to any persistent user record.
+   *
+   * Only the keys in `SESSION_CONTEXT_CREDENTIAL_KEYS` (env-resolver.ts) are
+   * honoured — the allowlist is enforced here to keep parity with the
+   * executor-env channel.
+   */
+  sessionCustomContext?: Record<string, unknown>;
 }
 
 /**
@@ -42,10 +53,16 @@ export interface KeyResolutionResult {
 
 /**
  * Resolve API key with precedence:
- * 1. Per-user key (if user authenticated and key set in database) - HIGHEST
- * 2. Global config.yaml - MEDIUM
- * 3. Environment variables - LOW
+ * 0. session.custom_context (if set) - HIGHEST
+ * 1. Per-user key (if user authenticated and key set in database)
+ * 2. Global config.yaml
+ * 3. Environment variables
  * 4. SDK native auth (OAuth, CLI login) - FALLBACK (useNativeAuth=true)
+ *
+ * The session-custom-context channel is the sibling of PR #1287's MCP-template
+ * wiring. The allowlist of keys permitted at this level lives in
+ * `env-resolver.ts:SESSION_CONTEXT_CREDENTIAL_KEYS` and is imported lazily to
+ * avoid an env-resolver → key-resolver cycle.
  *
  * @param keyName - Name of the API key to resolve
  * @param context - Resolution context (user ID and database)
@@ -58,6 +75,19 @@ export async function resolveApiKey(
   console.log(
     `🔍 [API Key Resolution] Resolving ${keyName} for user ${context.userId ? shortId(context.userId) : 'none'}`
   );
+
+  // 0. Check session.custom_context (highest precedence). Allowlist mirrors
+  //    the executor-env channel — same security envelope as PR #1287.
+  if (context.sessionCustomContext) {
+    const { SESSION_CONTEXT_CREDENTIAL_KEYS } = await import('./env-resolver');
+    if (SESSION_CONTEXT_CREDENTIAL_KEYS.has(keyName)) {
+      const raw = context.sessionCustomContext[keyName];
+      if (typeof raw === 'string' && raw.trim() !== '') {
+        console.log(`   ✓ Found per-session API key for ${keyName} (from session.custom_context)`);
+        return { apiKey: raw, source: 'user', useNativeAuth: false };
+      }
+    }
+  }
 
   // 1. Check per-user key (highest precedence). Storage lives at
   //    `data.agentic_tools[toolName][envVarName]`. When `context.tool` is

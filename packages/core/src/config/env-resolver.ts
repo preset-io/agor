@@ -299,6 +299,42 @@ export function resolveSystemEnvironment(): Record<string, string> {
 export const AGOR_USER_ENV_KEYS_VAR = 'AGOR_USER_ENV_KEYS';
 
 /**
+ * Allowlist of credential keys permitted to flow from `session.custom_context.*`
+ * into the spawned executor's environment.
+ *
+ * Mirrors `ConfigCredentialKey` (config-manager.ts) — the same keys that are
+ * acceptable as a global daemon-level fallback. Plus `OPENAI_BASE_URL` so a
+ * Codex-on-OpenRouter session can pin the upstream URL per-session without
+ * adding it to the global config surface.
+ *
+ * Why an allowlist (and not just "any string a session opener attaches"):
+ * `custom_context` is a free-form JSON blob — useful for MCP templates where
+ * the rendering surface controls the blast radius — but env vars affect every
+ * subprocess the executor spawns, and a typo (or hostile session creator with
+ * a stolen impersonation key) could otherwise inject e.g. `PATH`, `LD_PRELOAD`,
+ * or arbitrary AGOR_* internals into the agent process. Constraining to known
+ * model-credential keys preserves the security envelope from PR #1287.
+ */
+export const SESSION_CONTEXT_CREDENTIAL_KEYS = new Set<string>([
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  // Claude Code keeps three hard-coded tier defaults baked into its binary
+  // (Sonnet/Haiku/Opus) and ignores the `model` field on the SDK config for
+  // those tier calls. When ANTHROPIC_BASE_URL points at a proxy with a
+  // different naming convention (OpenRouter prefixes provider/, OR uses dots,
+  // ...) the only way to override those defaults is via these env vars.
+  // See https://help.apiyi.com/en/claude-code-third-party-api-base-url-setup-guide-en.html
+  // and anthropics/claude-code#44752.
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'GEMINI_API_KEY',
+]);
+
+/**
  * Check if an environment variable name is allowed to be passed to child processes.
  */
 function isAllowedEnvVar(key: string): boolean {
@@ -334,8 +370,10 @@ function buildAllowlistedEnv(): Record<string, string> {
  * 1. Starts with a minimal allowlisted subset of process.env
  * 2. Optionally strips user-identity vars (HOME/USER/LOGNAME/SHELL) for impersonation
  * 3. Resolves and merges user-specific encrypted environment variables from database
- * 4. Optionally merges additional environment variables
- * 5. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
+ * 4. Merges session-level credential overrides from `session.custom_context.*`
+ *    (allowlist-restricted; sibling to the MCP-template wiring in PR #1287)
+ * 5. Optionally merges additional environment variables
+ * 6. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
  *
  * @param userId - User ID to resolve environment for (optional)
  * @param db - Database instance (required if userId provided)
@@ -388,7 +426,20 @@ export async function createUserProcessEnvironment(
    * credentials are NEVER merged. Omit for non-SDK contexts (branch
    * terminals, generic background jobs).
    */
-  tool?: AgenticToolName
+  tool?: AgenticToolName,
+  /**
+   * The session row's `custom_context` JSON blob, if any. Keys matching
+   * `SESSION_CONTEXT_CREDENTIAL_KEYS` are merged into the env *above*
+   * per-user credentials and gateway fallback, but *below* gateway
+   * force-override and `additionalEnv`.
+   *
+   * This is the executor-env counterpart of the MCP-template channel wired
+   * in PR #1287: the session opener can stamp short-lived, opener-owned
+   * model credentials onto a single session without writing to any
+   * persistent user record. See `SESSION_CONTEXT_CREDENTIAL_KEYS` for the
+   * full security rationale.
+   */
+  sessionCustomContext?: Record<string, unknown>
 ): Promise<Record<string, string>> {
   // SECURITY: Start with allowlisted env vars only — never inherit full process.env
   const env = buildAllowlistedEnv();
@@ -428,6 +479,23 @@ export async function createUserProcessEnvironment(
         if (!userEnvKeys.includes(key)) {
           userEnvKeys.push(key);
         }
+      }
+    }
+  }
+
+  // 2b. Merge session.custom_context credential overrides (sibling channel to
+  // PR #1287's MCP-template wiring). Allowlist-restricted to model-credential
+  // keys, so a session opener cannot smuggle arbitrary env vars into the
+  // executor process. Wins over per-user credentials — the whole point is to
+  // let an embedding host pin a short-lived key per session without writing
+  // to any persistent user record.
+  if (sessionCustomContext) {
+    for (const [key, raw] of Object.entries(sessionCustomContext)) {
+      if (!SESSION_CONTEXT_CREDENTIAL_KEYS.has(key)) continue;
+      if (typeof raw !== 'string' || raw.trim() === '') continue;
+      env[key] = raw;
+      if (!userEnvKeys.includes(key)) {
+        userEnvKeys.push(key);
       }
     }
   }

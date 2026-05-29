@@ -665,6 +665,13 @@ function createExecuteHandler(
 
     // SDK spawn: scope per-tool credentials to the session's agentic_tool, so
     // an Anthropic key on the user never leaks into a Codex/Gemini executor.
+    // Session-opener can additionally pin per-session model credentials via
+    // `session.custom_context.*` (allowlist enforced in env-resolver) — same
+    // channel PR #1287 wired into the MCP template resolver, now also feeding
+    // the executor's own env.
+    const sessionCustomContextForEnv = session.custom_context as
+      | Record<string, unknown>
+      | undefined;
     const executorEnv = await createUserProcessEnvironment(
       userId,
       db,
@@ -672,7 +679,8 @@ function createExecuteHandler(
       !!executorUnixUser,
       gatewayEnv,
       sessionId as SessionID,
-      session.agentic_tool
+      session.agentic_tool,
+      sessionCustomContextForEnv
     );
 
     // Validate required user environment variables

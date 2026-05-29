@@ -23,7 +23,12 @@ import { UsersRepository } from '../db/repositories/users';
 import { users } from '../db/schema';
 import { dbTest } from '../db/test-helpers';
 import { generateId } from '../lib/ids';
-import { createUserProcessEnvironment, resolveUserEnvironment } from './env-resolver';
+import {
+  AGOR_USER_ENV_KEYS_VAR,
+  createUserProcessEnvironment,
+  resolveUserEnvironment,
+  SESSION_CONTEXT_CREDENTIAL_KEYS,
+} from './env-resolver';
 import type { StoredEnvVar } from './env-vars';
 
 // Force real AES encryption so URL-shaped tool config (e.g. ANTHROPIC_BASE_URL)
@@ -453,5 +458,188 @@ describe('createUserProcessEnvironment — git identity mirroring', () => {
     expect(env.GIT_COMMITTER_NAME).toBe('Carol Dev'); // mirrored from author
     expect(env.GIT_COMMITTER_EMAIL).toBe('carol@example.com');
     expect(env.GIT_AUTHOR_EMAIL).toBe('carol@example.com'); // mirrored from committer
+  });
+});
+
+// ============================================================================
+// session.custom_context → executor env (sibling channel to PR #1287)
+//
+// PR #1287 wired `session.custom_context.*` into the MCP template resolver so
+// a session opener could pin per-session credentials onto MCP server configs
+// without writing to any persistent user record. This block verifies the
+// matching wiring for the executor's own env: same channel, same security
+// envelope, allowlist-restricted to known model-credential keys.
+// ============================================================================
+
+describe('createUserProcessEnvironment — session.custom_context credential overrides', () => {
+  dbTest('allowlisted keys flow from custom_context into the executor env', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {});
+    const env = await createUserProcessEnvironment(
+      userId,
+      db,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      'claude-code',
+      {
+        ANTHROPIC_API_KEY: 'sk-or-from-session',
+        ANTHROPIC_BASE_URL: 'https://openrouter.ai/api/v1',
+      }
+    );
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-or-from-session');
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://openrouter.ai/api/v1');
+  });
+
+  dbTest('non-allowlisted keys are silently dropped (no env smuggling)', async ({ db }) => {
+    // A session opener with stolen impersonation credentials must not be
+    // able to inject PATH, LD_PRELOAD, AGOR_MASTER_SECRET, or arbitrary
+    // internals via the custom_context channel. The allowlist is enforced
+    // in env-resolver, not at the HTTP boundary, so a leaked impersonation
+    // key never escalates into arbitrary env control.
+    const userId = await createUserWithEnv(db, {});
+    const env = await createUserProcessEnvironment(
+      userId,
+      db,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      'claude-code',
+      {
+        ANTHROPIC_API_KEY: 'allowed',
+        PATH: '/evil/bin:/usr/bin',
+        LD_PRELOAD: '/tmp/evil.so',
+        AGOR_MASTER_SECRET: 'oops',
+        SOME_RANDOM_KEY: 'nope',
+      }
+    );
+    expect(env.ANTHROPIC_API_KEY).toBe('allowed');
+    // PATH may exist via the process.env allowlist, but must not be the
+    // attacker-supplied value.
+    expect(env.PATH).not.toBe('/evil/bin:/usr/bin');
+    expect(env.LD_PRELOAD).toBeUndefined();
+    expect(env.AGOR_MASTER_SECRET).toBeUndefined();
+    expect(env.SOME_RANDOM_KEY).toBeUndefined();
+  });
+
+  dbTest('omitting custom_context is a no-op', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {});
+    const env = await createUserProcessEnvironment(userId, db);
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  dbTest(
+    'custom_context wins over per-user credential (opener-pinned beats persisted)',
+    async ({ db }) => {
+      // The whole point of the channel: per-session ephemeral credentials
+      // override per-user persistent ones. A chatbot embedding host can use
+      // this to forward a workspace's OpenRouter key onto a single session
+      // without touching the auto-provisioned user's record.
+      const usersRepo = new UsersRepository(db);
+      const user = await usersRepo.create({
+        email: `cc-override-${Date.now()}-${Math.random()}@example.com`,
+        name: 'CC Override',
+      });
+      const userId = user.user_id as UserID;
+      await usersRepo.setToolConfigField(
+        userId,
+        'claude-code',
+        'ANTHROPIC_API_KEY',
+        'persistent-user-key'
+      );
+
+      const env = await createUserProcessEnvironment(
+        userId,
+        db,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        'claude-code',
+        { ANTHROPIC_API_KEY: 'per-session-key' }
+      );
+      expect(env.ANTHROPIC_API_KEY).toBe('per-session-key');
+    }
+  );
+
+  dbTest('additionalEnv still beats custom_context', async ({ db }) => {
+    // additionalEnv is the explicit caller-controlled top of the stack
+    // (typically reserved for gateway force-overrides or daemon-internal
+    // policy). It must remain above the session-opener channel.
+    const userId = await createUserWithEnv(db, {});
+    const env = await createUserProcessEnvironment(
+      userId,
+      db,
+      { ANTHROPIC_API_KEY: 'top-of-stack' },
+      false,
+      undefined,
+      undefined,
+      'claude-code',
+      { ANTHROPIC_API_KEY: 'from-session' }
+    );
+    expect(env.ANTHROPIC_API_KEY).toBe('top-of-stack');
+  });
+
+  dbTest('empty-string and non-string values are ignored', async ({ db }) => {
+    const userId = await createUserWithEnv(db, {});
+    const env = await createUserProcessEnvironment(
+      userId,
+      db,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      'claude-code',
+      {
+        ANTHROPIC_API_KEY: '',
+        // biome-ignore lint/suspicious/noExplicitAny: type-erased opener payload
+        ANTHROPIC_BASE_URL: 12345 as any,
+        // biome-ignore lint/suspicious/noExplicitAny: type-erased opener payload
+        OPENAI_API_KEY: null as any,
+      }
+    );
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  dbTest('keys from custom_context are tracked in AGOR_USER_ENV_KEYS', async ({ db }) => {
+    // MCP template resolver reads AGOR_USER_ENV_KEYS to know which vars are
+    // user-scoped vs daemon-internal. Custom-context-supplied credentials are
+    // opener-scoped, which counts as user-scoped for the template's purposes.
+    const userId = await createUserWithEnv(db, {});
+    const env = await createUserProcessEnvironment(
+      userId,
+      db,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      'claude-code',
+      {
+        ANTHROPIC_API_KEY: 'a',
+        ANTHROPIC_BASE_URL: 'https://b',
+      }
+    );
+    const keys = new Set(env[AGOR_USER_ENV_KEYS_VAR]?.split(',') ?? []);
+    expect(keys.has('ANTHROPIC_API_KEY')).toBe(true);
+    expect(keys.has('ANTHROPIC_BASE_URL')).toBe(true);
+  });
+
+  dbTest('allowlist contract — must cover all ConfigCredentialKey + OPENAI_BASE_URL', async () => {
+    // Lock the allowlist contents into the test surface so a future edit
+    // that drops a key here trips a test, not a silent prod regression.
+    expect(SESSION_CONTEXT_CREDENTIAL_KEYS).toEqual(
+      new Set([
+        'ANTHROPIC_API_KEY',
+        'ANTHROPIC_AUTH_TOKEN',
+        'ANTHROPIC_BASE_URL',
+        'OPENAI_API_KEY',
+        'OPENAI_BASE_URL',
+        'GEMINI_API_KEY',
+      ])
+    );
   });
 });
