@@ -4,9 +4,9 @@
 # dependencies, so the image only needs this directory. Avoids dragging the
 # whole repo into Docker context.
 
-FROM node:20-alpine
+FROM node:22-alpine
 
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@9.15.1 --activate
 
 WORKDIR /app
 

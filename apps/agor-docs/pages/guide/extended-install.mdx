@@ -3,9 +3,11 @@ title: Extended Installation
 description: Alternative ways to install and run Agor — optional companions, authentication options, and custom config locations.
 ---
 
+import InstallTabs from '../../components/InstallTabs.mdx';
+
 # Extended Installation
 
-The [Getting Started](/guide/getting-started) guide covers the recommended user paths: `npm install -g agor-live` or `brew install agor-live` from the Agor tap. This page covers everything else for **users and teams** running Agor — optional companions, deployment alternatives, authentication options, and edge-case configurations.
+The [Getting Started](/guide/getting-started) guide covers the recommended user path: `npm install -g agor-live`. This page covers everything else for **users and teams** running Agor — Homebrew, optional companions, deployment alternatives, authentication options, and edge-case configurations.
 
 > Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development) — it covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
 
@@ -13,24 +15,15 @@ The [Getting Started](/guide/getting-started) guide covers the recommended user 
 
 - **Node.js ≥ 22.12** — see [nodejs.org](https://nodejs.org) for installation.
 
-That's the only hard requirement for npm installs. The Homebrew formula depends on Homebrew's `node` package, so it installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
+That's the only hard requirement for npm installs. The Homebrew formula installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
 
-## Homebrew
+## Install paths
 
-On macOS or Linuxbrew:
+Use whichever install method fits your setup:
 
-```bash
-brew tap preset-io/agor https://github.com/preset-io/agor
-brew install agor-live
-```
+<InstallTabs />
 
-Then run the same first-time setup:
-
-```bash
-agor init
-agor daemon start
-agor open
-```
+Homebrew is a convenience path for macOS/Linux users; npm remains the canonical cross-platform install path used throughout the docs.
 
 ---
 

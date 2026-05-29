@@ -56,20 +56,13 @@ Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and lon
 
 ## Quick Start
 
-Install with npm:
+Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)).
 
 ```bash
 npm install -g agor-live
 ```
 
-Or install with Homebrew:
-
-```bash
-brew tap preset-io/agor https://github.com/preset-io/agor
-brew install agor-live
-```
-
-The npm path requires **Node.js ≥ 22.12** ([install](https://nodejs.org)); the Homebrew formula installs a compatible Node runtime.
+Prefer Homebrew on macOS or Linux? See the [Getting Started guide](https://agor.live/guide/getting-started) for the brew install path.
 
 ```bash
 agor init           # creates ~/.agor/ and database

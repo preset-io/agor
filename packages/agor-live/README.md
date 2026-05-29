@@ -6,16 +6,13 @@ Agor is a real-time collaborative platform for managing Claude Code, Codex, and 
 
 ## Installation
 
+Requires Node.js ≥ 22.12.
+
 ```bash
 npm install -g agor-live
 ```
 
-Or with Homebrew:
-
-```bash
-brew tap preset-io/agor https://github.com/preset-io/agor
-brew install agor-live
-```
+Prefer Homebrew on macOS or Linux? See the main docs for the brew install path.
 
 ## Quick Start
 

@@ -3,34 +3,16 @@ title: Getting Started
 description: Install Agor and follow the onboarding wizard. Your first assistant takes it from there.
 ---
 
+import InstallTabs from '../../components/InstallTabs.mdx';
+
 # Getting Started
 
 Install Agor, open the UI, and follow the onboarding wizard. Your **first assistant** will help you get your bearings and get everything else set up.
 
 ## Install
 
-Install with npm:
+<InstallTabs />
 
-```bash
-npm install -g agor-live
-```
-
-Or install with Homebrew:
-
-```bash
-brew tap preset-io/agor https://github.com/preset-io/agor
-brew install agor-live
-```
-
-The npm path requires **Node.js ≥ 22.12** ([install](https://nodejs.org)); the Homebrew formula installs a compatible Node runtime.
-
-## Run
-
-```bash
-agor init           # creates ~/.agor/ and database
-agor daemon start   # runs in the background
-agor open           # opens the UI in your browser
-```
 
 ## Follow the onboarding wizard
 
