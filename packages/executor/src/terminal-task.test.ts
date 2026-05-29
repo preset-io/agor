@@ -15,8 +15,8 @@
  */
 import { TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TERMINAL_STATUSES, tryMarkTaskTerminal } from './index.js';
 import type { AgorClient } from './services/feathers-client.js';
+import { TERMINAL_STATUSES, tryMarkTaskTerminal } from './terminal-task.js';
 
 type TaskShape = { task_id: string; status: TaskStatus };
 
@@ -85,27 +85,18 @@ describe('tryMarkTaskTerminal', () => {
     });
   });
 
-  it('skips the patch when the task is already COMPLETED (inner catch ran first)', async () => {
-    const { client, tasks } = makeClient(TaskStatus.COMPLETED);
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    await tryMarkTaskTerminal(client, 't1', TaskStatus.FAILED, 'boom');
-
-    expect(tasks.get).toHaveBeenCalledWith('t1');
-    expect(tasks.patch).not.toHaveBeenCalled();
-  });
-
   it.each([
     TaskStatus.COMPLETED,
     TaskStatus.FAILED,
     TaskStatus.STOPPED,
     TaskStatus.TIMED_OUT,
-  ])('skips the patch when the task is already %s', async (current) => {
+  ])('skips the patch when the task is already %s (e.g. inner SDK catch already wrote it)', async (current) => {
     const { client, tasks } = makeClient(current);
     vi.spyOn(console, 'log').mockImplementation(() => {});
 
     await tryMarkTaskTerminal(client, 't1', TaskStatus.FAILED, 'boom');
 
+    expect(tasks.get).toHaveBeenCalledWith('t1');
     expect(tasks.patch).not.toHaveBeenCalled();
   });
 

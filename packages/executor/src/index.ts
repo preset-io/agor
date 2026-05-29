@@ -14,67 +14,13 @@ import type {
   PermissionMode,
   PermissionScope,
   SessionID,
-  Task,
   TaskID,
 } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
-
-/**
- * Statuses past which any subsequent terminal-write is a no-op. SDK
- * handlers (base-executor) write rich terminal patches with timing /
- * `git_state.sha_at_end`; once we've stamped one of those, the
- * fail-safe catches below should NOT redundantly emit a second
- * `'patched'` event for the same task. Includes `TIMED_OUT` so a
- * subsequent uncaught-rejection/SIGTERM doesn't overwrite a
- * permission/input timeout with `FAILED` or `STOPPED`.
- */
-export const TERMINAL_STATUSES: ReadonlySet<Task['status']> = new Set<Task['status']>([
-  TaskStatus.COMPLETED,
-  TaskStatus.FAILED,
-  TaskStatus.STOPPED,
-  TaskStatus.TIMED_OUT,
-]);
-
-/**
- * Patch a task to a terminal status, but ONLY if the task is not already
- * terminal. The SDK handlers in base-executor are authoritative — they
- * stamp the full payload (timing, `git_state.sha_at_end`, normalized SDK
- * responses). The fail-safe paths in `AgorExecutor` (top-level catch,
- * signal handler, uncaughtException, unhandledRejection) are pure
- * fallbacks for when the inner path never ran; if it did, this helper
- * skips the patch so we don't emit a redundant `'patched'` event for
- * the same task.
- *
- * Exported standalone (rather than left as a private method) so the
- * idempotence behavior can be unit-tested directly without spinning up
- * an `AgorExecutor` instance.
- */
-export async function tryMarkTaskTerminal(
-  client: AgorClient,
-  taskId: string,
-  status: typeof TaskStatus.FAILED | typeof TaskStatus.STOPPED,
-  errorMessage?: string
-): Promise<void> {
-  try {
-    const current = (await client.service('tasks').get(taskId)) as Task;
-    if (TERMINAL_STATUSES.has(current.status)) {
-      console.log(
-        `[executor] Task ${shortId(taskId)} already terminal (${current.status}), skipping ${status} patch`
-      );
-      return;
-    }
-    await client.service('tasks').patch(taskId, {
-      status,
-      completed_at: new Date().toISOString(),
-      ...(errorMessage ? { error_message: errorMessage } : {}),
-    });
-  } catch (patchError) {
-    console.error('[executor] Failed to update task status:', patchError);
-  }
-}
+import { tryMarkTaskTerminal } from './terminal-task.js';
 
 export interface ExecutorConfig {
   sessionToken: string;

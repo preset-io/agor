@@ -10,12 +10,18 @@
  * Dedupe model: a Set of currently-RUNNING task IDs. Each terminal event
  * tries to `delete()` the entry; the first one returns true and fires the
  * chime, every subsequent terminal event for the same task returns false
- * (entry already gone) and is a no-op. This is sufficient to handle every
- * known duplicate-event source — the daemon's executor-double-catch path,
- * the stateless_fs_mode post-completion `session_md5` patch, and any other
- * tail emit — without a separate "already chimed" history. The upstream
- * fix in `packages/executor/src/index.ts` further removes the
- * double-FAILED emit at the source.
+ * (entry already gone) and is a no-op. This handles the normal-path
+ * duplicate emits — the daemon's executor-double-catch path (also fixed
+ * at the source in `packages/executor/src/terminal-task.ts`), the
+ * stateless_fs_mode post-completion `session_md5` patch, and similar
+ * tail emits.
+ *
+ * Known edge case we explicitly accept: if the seed `findAll` resolves
+ * after a live terminal event for the same task, the seed re-adds the
+ * task to the running set, and a subsequent tail emit could re-arm the
+ * chime. This requires a specific inter-event/RPC ordering that's
+ * vanishingly rare in practice; the chime is a low-stakes notification
+ * and we'd rather keep the hook small than guard against it.
  */
 
 import type { AgorClient, AudioPreferences, Task } from '@agor-live/client';
@@ -73,9 +79,9 @@ export function useTaskCompletionChime(
     tasksService.on('removed', handleTaskRemoved);
 
     // Seed running tasks already in flight at mount (page reload, reconnect).
-    // Subscribe-first-then-fetch: any transition landing during the fetch is
-    // still handled by the live handler; at worst we add a stale ID for a
-    // task that has already finished, which never triggers a chime.
+    // Subscribe-first-then-fetch: live events during the fetch are still
+    // handled by the live handler. See the file header for the accepted
+    // seed-vs-live ordering edge case.
     tasksService
       .findAll({ query: { status: TaskStatus.RUNNING, created_by: currentUserId } })
       .then((tasks: Task[]) => {
