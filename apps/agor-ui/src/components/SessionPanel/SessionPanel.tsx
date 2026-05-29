@@ -430,10 +430,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           output: acc.output + tokenUsage.outputTokens,
           cacheRead: acc.cacheRead + (tokenUsage.cacheReadTokens || 0),
           cacheCreation: acc.cacheCreation + (tokenUsage.cacheCreationTokens || 0),
-          cost:
-            nextHasCost
-              ? (acc.cost || 0) + (costUsd || 0)
-              : (undefined as number | undefined),
+          cost: nextHasCost ? (acc.cost || 0) + (costUsd || 0) : (undefined as number | undefined),
           hasCost: nextHasCost,
         };
       },

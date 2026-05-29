@@ -36,6 +36,7 @@ export default defineConfig({
     'callbacks/child-completion-template': 'src/callbacks/child-completion-template.ts', // Parent session callback templates
     'client/index': 'src/client/index.ts', // Client-safe core entrypoint for browser/SDK consumers
     'models/browser': 'src/models/browser.ts', // Browser-safe model metadata only
+    'models/codex': 'src/models/codex.ts', // Codex model metadata/constants
     'models/gemini-shared': 'src/models/gemini-shared.ts', // Shared Gemini metadata/constants
     'models/index': 'src/models/index.ts', // Model metadata (browser-safe)
     'sessions/index': 'src/sessions/index.ts', // Session config defaults resolution
