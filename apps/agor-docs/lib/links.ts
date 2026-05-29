@@ -11,10 +11,12 @@ export const GITHUB_REPO_URL = 'https://github.com/preset-io/agor';
 export const GITHUB_DISCUSSIONS_URL = 'https://github.com/preset-io/agor/discussions';
 export const GITHUB_ISSUES_URL = 'https://github.com/preset-io/agor/issues';
 
-// Agor Cloud private beta interest form. Same URL used inline in the
-// agor-cloud / agor-openclaw blog posts — update those in tandem.
+// Agor Cloud private beta sign-up link (HubSpot meetings).
+// Consumed by CloudInviteCTA, which is used in the agor-cloud blog post.
+// Note: agor-openclaw.mdx still has an inline link to the legacy Google
+// Forms URL and is intentionally not kept in tandem here.
 export const AGOR_CLOUD_INVITE_URL =
-  'https://docs.google.com/forms/d/e/1FAIpQLSdXtZwQBHaLFa1LYHvOHXq9IUF_Qm3T12Hr6UZcMdEvjpm2PQ/viewform?usp=dialog';
+  'https://meetings.hubspot.com/zane-aitken/agor-cloud-sign-up-link-?uuid=a1e65b59-dd57-4f53-ab21-9e07be1daf92';
 
 // Agor Cloud demo / contact form (hosted on the Preset marketing site).
 export const AGOR_CLOUD_DEMO_URL = 'https://preset.io/contact-us-about-agor/';
