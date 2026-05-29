@@ -1,20 +1,27 @@
-import { AGOR_CLOUD_INVITE_URL } from '../lib/links';
+import { AGOR_CLOUD_DEMO_URL, AGOR_CLOUD_INVITE_URL } from '../lib/links';
 import styles from './CloudInviteCTA.module.css';
 
 interface CloudInviteCTAProps {
-  label?: string;
+  primaryLabel?: string;
+  demoLabel?: string;
 }
 
-export function CloudInviteCTA({ label = 'Join the Private Beta' }: CloudInviteCTAProps) {
+export function CloudInviteCTA({
+  primaryLabel = 'Join the Private Beta',
+  demoLabel = 'Book a Demo',
+}: CloudInviteCTAProps) {
   return (
     <div className={styles.wrapper}>
       <a
         href={AGOR_CLOUD_INVITE_URL}
         target="_blank"
         rel="noopener noreferrer"
-        className={styles.cta}
+        className={styles.primary}
       >
-        {label} →
+        {primaryLabel} →
+      </a>
+      <a href={AGOR_CLOUD_DEMO_URL} className={styles.secondary}>
+        {demoLabel} →
       </a>
     </div>
   );
