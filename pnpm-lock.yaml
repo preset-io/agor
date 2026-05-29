@@ -94,8 +94,8 @@ importers:
         specifier: workspace:*
         version: link:../agor-daemon
       '@oclif/core':
-        specifier: ^4.11.3
-        version: 4.11.3
+        specifier: ^4.11.4
+        version: 4.11.4
       '@oclif/plugin-help':
         specifier: ^6.2.49
         version: 6.2.49
@@ -137,8 +137,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       '@cursor/sdk':
-        specifier: ^1.0.13
-        version: 1.0.13
+        specifier: ^1.0.15
+        version: 1.0.15
       '@github/copilot-sdk':
         specifier: ^0.2.2
         version: 0.2.2
@@ -292,8 +292,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       '@ant-design/icons':
-        specifier: ^6.2.3
-        version: 6.2.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        specifier: ^6.2.5
+        version: 6.2.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@ant-design/x':
         specifier: ^2.7.0
         version: 2.7.0(antd@6.4.3(luxon@3.7.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -373,8 +373,8 @@ importers:
         specifier: ^3.0.6
         version: 3.0.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react-router-dom:
-        specifier: ^7.15.1
-        version: 7.15.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        specifier: ^7.16.0
+        version: 7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react-syntax-highlighter:
         specifier: ^16.1.1
         version: 16.1.1(react@18.3.1)
@@ -455,8 +455,8 @@ importers:
         specifier: ^0.100.0
         version: 0.100.0(zod@4.4.3)
       '@cursor/sdk':
-        specifier: ^1.0.13
-        version: 1.0.13
+        specifier: ^1.0.15
+        version: 1.0.15
       '@feathersjs/authentication':
         specifier: ^5.0.44
         version: 5.0.44(typescript@5.9.3)
@@ -506,8 +506,8 @@ importers:
         specifier: '>=1.27.1 <2'
         version: 1.27.1(zod@4.4.3)
       '@oclif/core':
-        specifier: ^4.11.3
-        version: 4.11.3
+        specifier: ^4.11.4
+        version: 4.11.4
       '@oclif/plugin-help':
         specifier: ^6.2.49
         version: 6.2.49
@@ -808,8 +808,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@cursor/sdk':
-        specifier: ^1.0.13
-        version: 1.0.13
+        specifier: ^1.0.15
+        version: 1.0.15
       '@github/copilot-sdk':
         specifier: ^0.2.2
         version: 0.2.2
@@ -884,8 +884,8 @@ packages:
   '@ant-design/icons-svg@4.4.2':
     resolution: {integrity: sha512-vHbT+zJEVzllwP+CM+ul7reTEfBR0vgxFe7+lREAsAA7YGsYpboiq2sQNeQeRvh09GfQgs/GyFEvZpJ9cLXpXA==}
 
-  '@ant-design/icons@6.2.3':
-    resolution: {integrity: sha512-Pl3aoAtxQeKryYnt6VvDJtOxMOtA8wrRSACe/pTjOAIG3fdHrWm6Ivb4ku9tsFjYroSXBKirvuxG4QkwBXD9gg==}
+  '@ant-design/icons@6.2.5':
+    resolution: {integrity: sha512-0hKtoKqTjGFOndUyJLJmC9Cg6k4rEO7rLo6xmgbNJH+/ZX1C57RVals2v1j1knHl9n7Q+sBOveTvn931wLOCKw==}
     engines: {node: '>=8'}
     peerDependencies:
       react: '>=16.0.0'
@@ -1374,33 +1374,38 @@ packages:
     resolution: {integrity: sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw==}
     engines: {node: '>=18'}
 
-  '@cursor/sdk-darwin-arm64@1.0.13':
-    resolution: {integrity: sha512-zHRTNtVRHw4KSAEFmtO0Av7jv9D60DrB+pygVNWGyKtRR44fcwtRHuLAJmO4HThxQw7MMvUJuAaNmCQxzHtPDQ==}
+  '@cursor/sdk-darwin-arm64@1.0.15':
+    resolution: {integrity: sha512-4xr9nE8komOcUmYX8XYT0tgP5tX9Psy6WOVncST4B+W6rRAjpqRhJMCe0ArTXARsC+OFojPhUjbe+BHzC6MNTQ==}
     cpu: [arm64]
     os: [darwin]
+    hasBin: true
 
-  '@cursor/sdk-darwin-x64@1.0.13':
-    resolution: {integrity: sha512-7XsIkMKp6h/4W9zBx02Py1euJLAJVxlkwmm9GSoUjc+3hfFvHY/R/WTbX2TFgF4g1vOAq/HM7GmXBXq+e4M4+w==}
+  '@cursor/sdk-darwin-x64@1.0.15':
+    resolution: {integrity: sha512-/JKlPTj6JweK2K0EKJAHhpOTbE7IPU5Hw2MCbYtYgyfEI1u/X/8lkAV3KYT/VdnYH0nX8cLuQe8SDJ3MXMSiPg==}
     cpu: [x64]
     os: [darwin]
+    hasBin: true
 
-  '@cursor/sdk-linux-arm64@1.0.13':
-    resolution: {integrity: sha512-bDgfPPgc84gUn3k+Iiq5OLZozzM0UYZdKbQ821pbZy1OPWTFaSkjXsoAB6xqf9wALWyW1eQxOC4RprPBLoy+yA==}
+  '@cursor/sdk-linux-arm64@1.0.15':
+    resolution: {integrity: sha512-0jA3/Y5SpU65wITttFenM3wfk+ab2/xhTVevbo439WOOA+blK0iU+2Dv2wjRJB6TI6R5kfLuEJuk6w1VJV4PQA==}
     cpu: [arm64]
     os: [linux]
+    hasBin: true
 
-  '@cursor/sdk-linux-x64@1.0.13':
-    resolution: {integrity: sha512-BTccnB5hVqK8Y0778oql6gbk7kIIlzQrBqt5QNLJpwBidjjde/mlvAajVB9hB3a29jelOwm0gJjMsLfqTkEPdw==}
+  '@cursor/sdk-linux-x64@1.0.15':
+    resolution: {integrity: sha512-WoYAq3zKKhBT/PlTkU4c3vDHQOU/UlBD6iErHLXEwNWmLjdTSS7EDD0tMrtdVBlEiT/naRt+yMvwqX7TvO3oDA==}
     cpu: [x64]
     os: [linux]
+    hasBin: true
 
-  '@cursor/sdk-win32-x64@1.0.13':
-    resolution: {integrity: sha512-GxWlwj4G513EfGmvPVBa4y+vNn9B5Cj+npu8fVcJ0P+U9sruhgo4pvqGbWxkn5EIKbpGoraLq9QB4nFeoT1uRQ==}
+  '@cursor/sdk-win32-x64@1.0.15':
+    resolution: {integrity: sha512-eqUVz+mfUmCqS1iUcqbRUbml9wsFzYAwxwLNg9s4d6xTbj9VIJaOdVejxhYN6U4dvqmGwTHhgmB0z5b7oKw0jA==}
     cpu: [x64]
     os: [win32]
+    hasBin: true
 
-  '@cursor/sdk@1.0.13':
-    resolution: {integrity: sha512-w6MWkgOTL6yb6GV/4Odx7QcamQgqhzX/CzcMBkqiiOPTPuEWItWrgA0qdivchm5YJXTt+LZkFSEQ/Ti44hVbfg==}
+  '@cursor/sdk@1.0.15':
+    resolution: {integrity: sha512-O8ItVzKZX4L0veS/PH0vwA/0/sxV5doTprrDiBo6llBcTqRMZCj83e227lSoWg45f8wLDc8pVYaWktfE/B2rEw==}
     engines: {node: '>=18'}
 
   '@drizzle-team/brocli@0.10.2':
@@ -2686,8 +2691,8 @@ packages:
     engines: {node: '>=10'}
     deprecated: This functionality has been moved to @npmcli/fs
 
-  '@oclif/core@4.11.3':
-    resolution: {integrity: sha512-gQCSYAtUhJilGKaSaZhqejH9X1dDu+jWQjLmtGOgN/XcKaAEPPSeT2mu1UvlvtPox1/NNRdlBcUa8KRKo2HnJQ==}
+  '@oclif/core@4.11.4':
+    resolution: {integrity: sha512-URwiQ5ALx/sJ2iH4vzXEd+H4K6NAI7LRs6Jag3hrgKEpGmaE6alfRC8qjO4GIgb6A3ACaJumqP9twi/M9ywdHQ==}
     engines: {node: '>=18.0.0'}
 
   '@oclif/plugin-help@6.2.49':
@@ -4948,8 +4953,8 @@ packages:
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
 
-  brace-expansion@2.1.0:
-    resolution: {integrity: sha512-TN1kCZAgdgweJhWWpgKYrQaMNHcDULHkWwQIspdtjV4Y5aurRdZpjAqn6yX3FPqTA9ngHCc4hJxMAMgGfve85w==}
+  brace-expansion@2.1.1:
+    resolution: {integrity: sha512-WR1cURNjuvBLMZBMbqM0UoE+WAfdUcEV1ccD8PVBVOI+Z3ND4+SZbN8RsfT2bMuG1qwz5RFvPukSZm5fF2D5eA==}
 
   brace-expansion@5.0.5:
     resolution: {integrity: sha512-VZznLgtwhn+Mact9tfiwx64fA9erHH/MCXEUfB/0bX/6Fz6ny5EGTXYltMocqg4xFAQZtnO3DHWWXi8RiuN7cQ==}
@@ -7660,8 +7665,8 @@ packages:
   no-case@3.0.4:
     resolution: {integrity: sha512-fgAN3jGAh+RoxUGZHTSOLJIqUc2wmoBwGR4tbpNAKmmovFoWq0OdRkb0VkldReO2a2iBT/OEulG9XSUc10r3zg==}
 
-  node-abi@3.85.0:
-    resolution: {integrity: sha512-zsFhmbkAzwhTft6nd3VxcG0cvJsT70rL+BIGHWVq5fi6MwGrHwzqKaxXE+Hl2GmnGItnDKPPkO5/LQqjVkIdFg==}
+  node-abi@3.92.0:
+    resolution: {integrity: sha512-KdHvFWZjEKDf0cakgFjebl371GPsISX2oZHcuyKqM7DtogIsHrqKeLTo8wBHxaXRAQlY2PsPlZmfo+9ZCxEREQ==}
     engines: {node: '>=10'}
 
   node-addon-api@4.3.0:
@@ -8078,6 +8083,9 @@ packages:
   pump@3.0.3:
     resolution: {integrity: sha512-todwxLMY7/heScKmntwQG8CXVkWUOdYxIvY2s0VWAAMh/nd8SoYiRaKjlr7+iCs984f2P8zvrfWcDDYVb73NfA==}
 
+  pump@3.0.4:
+    resolution: {integrity: sha512-VS7sjc6KR7e1ukRFhQSY5LM2uBWAUPiOPa/A3mkKmiMwSmRFUITt0xuj+/lesgnCv+dPIEYlkzrcyXgquIHMcA==}
+
   pumpify@2.0.1:
     resolution: {integrity: sha512-m7KOje7jZxrmutanlkS1daj1dS6z6BgslzOXmcSEpIlCxM3VJH7lG5QLeck/6hgF6F4crFf01UtQmNsJfweTAw==}
 
@@ -8163,15 +8171,15 @@ packages:
       react: ^16.14.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc
       react-dom: ^16.14.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc
 
-  react-router-dom@7.15.1:
-    resolution: {integrity: sha512-AzF62gjY6U9rkMq4RfP/r2EVtQ7DMfNMjyOp/flLTCrtRylLiK4wT4pSq6O8rOXZ2eXdZYJPEYe+ifomiv+Igg==}
+  react-router-dom@7.16.0:
+    resolution: {integrity: sha512-kMUAbimWB5FVbF4Bce4bJsiKJWLIUHq/mEG8+CFDnCSgltptBiG5nguducmsJeGKytlCvQud9Qhzpn49iduTlA==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       react: '>=18'
       react-dom: '>=18'
 
-  react-router@7.15.1:
-    resolution: {integrity: sha512-R8rl9HhgikFYoPJymnUtPXWbnDb3oget6lQnfIoupbt61aT9aOhRkDsY2XRhZRyX1Z/8a5sL74fXmFNm3NRK5A==}
+  react-router@7.16.0:
+    resolution: {integrity: sha512-wArC8lVyJb3+jM9OpDyW6hLCizACWkvQR/sSGqSs+o5uEXEtGlqdZ4v8hENR3Jad6i+LRkK93q/+bQAcvl6V1A==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       react: '>=18'
@@ -9113,6 +9121,10 @@ packages:
     resolution: {integrity: sha512-xXnp4kTyor2Zq+J1FfPI6Eq3ew5h6Vl0F/8d9XU5zZQf1tX9s2Su1/3PiMmUANFULpmksxkClamIZcaUqryHsQ==}
     engines: {node: '>=20.18.1'}
 
+  undici@7.26.0:
+    resolution: {integrity: sha512-3O9Tf67pGhgOv9jM35AbhkXAKi13f3oy3aE4CSgr+TckGeY+/iu97ZXN+J7DpHPzLbVApFd1IFhcnBjREYXYcg==}
+    engines: {node: '>=20.18.1'}
+
   unicorn-magic@0.1.0:
     resolution: {integrity: sha512-lRfVq8fE8gz6QMBuDM6a+LO3IAzTi05H6gCVaUpir2E1Rwpo4ZUog45KpNXKC/Mn3Yb9UDuHumeFTo9iV/D9FQ==}
     engines: {node: '>=18'}
@@ -9639,7 +9651,7 @@ snapshots:
 
   '@ant-design/icons-svg@4.4.2': {}
 
-  '@ant-design/icons@6.2.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+  '@ant-design/icons@6.2.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@ant-design/colors': 8.0.1
       '@ant-design/icons-svg': 4.4.2
@@ -9663,7 +9675,7 @@ snapshots:
       '@ant-design/cssinjs': 2.1.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@ant-design/cssinjs-utils': 2.1.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@ant-design/fast-color': 3.0.1
-      '@ant-design/icons': 6.2.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@ant-design/icons': 6.2.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@babel/runtime': 7.29.2
       '@rc-component/motion': 1.3.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@rc-component/resize-observer': 1.1.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -10354,7 +10366,7 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 1.10.0
       '@connectrpc/connect': 1.7.0(@bufbuild/protobuf@1.10.0)
-      undici: 7.25.0
+      undici: 7.26.0
 
   '@connectrpc/connect@1.7.0(@bufbuild/protobuf@1.10.0)':
     dependencies:
@@ -10384,22 +10396,22 @@ snapshots:
 
   '@csstools/css-tokenizer@3.0.4': {}
 
-  '@cursor/sdk-darwin-arm64@1.0.13':
+  '@cursor/sdk-darwin-arm64@1.0.15':
     optional: true
 
-  '@cursor/sdk-darwin-x64@1.0.13':
+  '@cursor/sdk-darwin-x64@1.0.15':
     optional: true
 
-  '@cursor/sdk-linux-arm64@1.0.13':
+  '@cursor/sdk-linux-arm64@1.0.15':
     optional: true
 
-  '@cursor/sdk-linux-x64@1.0.13':
+  '@cursor/sdk-linux-x64@1.0.15':
     optional: true
 
-  '@cursor/sdk-win32-x64@1.0.13':
+  '@cursor/sdk-win32-x64@1.0.15':
     optional: true
 
-  '@cursor/sdk@1.0.13':
+  '@cursor/sdk@1.0.15':
     dependencies:
       '@bufbuild/protobuf': 1.10.0
       '@connectrpc/connect': 1.7.0(@bufbuild/protobuf@1.10.0)
@@ -10408,11 +10420,11 @@ snapshots:
       sqlite3: 5.1.7
       zod: 4.4.3
     optionalDependencies:
-      '@cursor/sdk-darwin-arm64': 1.0.13
-      '@cursor/sdk-darwin-x64': 1.0.13
-      '@cursor/sdk-linux-arm64': 1.0.13
-      '@cursor/sdk-linux-x64': 1.0.13
-      '@cursor/sdk-win32-x64': 1.0.13
+      '@cursor/sdk-darwin-arm64': 1.0.15
+      '@cursor/sdk-darwin-x64': 1.0.15
+      '@cursor/sdk-linux-arm64': 1.0.15
+      '@cursor/sdk-linux-x64': 1.0.15
+      '@cursor/sdk-win32-x64': 1.0.15
     transitivePeerDependencies:
       - bluebird
       - supports-color
@@ -11878,7 +11890,7 @@ snapshots:
       rimraf: 3.0.2
     optional: true
 
-  '@oclif/core@4.11.3':
+  '@oclif/core@4.11.4':
     dependencies:
       ansi-escapes: 4.3.2
       ansis: 3.17.0
@@ -11901,12 +11913,12 @@ snapshots:
 
   '@oclif/plugin-help@6.2.49':
     dependencies:
-      '@oclif/core': 4.11.3
+      '@oclif/core': 4.11.4
 
   '@oclif/plugin-not-found@3.2.86(@types/node@24.10.0)':
     dependencies:
       '@inquirer/prompts': 7.10.1(@types/node@24.10.0)
-      '@oclif/core': 4.11.3
+      '@oclif/core': 4.11.4
       ansis: 3.17.0
       fast-levenshtein: 3.0.0
     transitivePeerDependencies:
@@ -11914,7 +11926,7 @@ snapshots:
 
   '@oclif/plugin-warn-if-update-available@3.1.65':
     dependencies:
-      '@oclif/core': 4.11.3
+      '@oclif/core': 4.11.4
       ansis: 3.17.0
       debug: 4.4.3(supports-color@8.1.1)
       http-call: 5.3.0
@@ -14280,7 +14292,7 @@ snapshots:
       '@ant-design/cssinjs': 2.1.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@ant-design/cssinjs-utils': 2.1.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@ant-design/fast-color': 3.0.1
-      '@ant-design/icons': 6.2.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@ant-design/icons': 6.2.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@ant-design/react-slick': 2.0.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@babel/runtime': 7.29.2
       '@rc-component/cascader': 1.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -14473,7 +14485,7 @@ snapshots:
 
   bowser@2.14.1: {}
 
-  brace-expansion@2.1.0:
+  brace-expansion@2.1.1:
     dependencies:
       balanced-match: 1.0.2
 
@@ -15967,7 +15979,7 @@ snapshots:
 
   get-stream@5.2.0:
     dependencies:
-      pump: 3.0.3
+      pump: 3.0.4
 
   get-stream@6.0.1: {}
 
@@ -17650,7 +17662,7 @@ snapshots:
 
   minimatch@5.1.9:
     dependencies:
-      brace-expansion: 2.1.0
+      brace-expansion: 2.1.1
 
   minimist@1.2.8: {}
 
@@ -17862,7 +17874,7 @@ snapshots:
       lower-case: 2.0.2
       tslib: 2.8.1
 
-  node-abi@3.85.0:
+  node-abi@3.92.0:
     dependencies:
       semver: 7.8.1
 
@@ -17961,7 +17973,7 @@ snapshots:
       '@inquirer/confirm': 3.2.0
       '@inquirer/input': 2.3.0
       '@inquirer/select': 2.5.0
-      '@oclif/core': 4.11.3
+      '@oclif/core': 4.11.4
       '@oclif/plugin-help': 6.2.49
       '@oclif/plugin-not-found': 3.2.86(@types/node@24.10.0)
       '@oclif/plugin-warn-if-update-available': 3.1.65
@@ -18249,8 +18261,8 @@ snapshots:
       minimist: 1.2.8
       mkdirp-classic: 0.5.3
       napi-build-utils: 2.0.0
-      node-abi: 3.85.0
-      pump: 3.0.3
+      node-abi: 3.92.0
+      pump: 3.0.4
       rc: 1.2.8
       simple-get: 4.0.1
       tar-fs: 2.1.4
@@ -18348,6 +18360,11 @@ snapshots:
   proxy-from-env@2.1.0: {}
 
   pump@3.0.3:
+    dependencies:
+      end-of-stream: 1.4.5
+      once: 1.4.0
+
+  pump@3.0.4:
     dependencies:
       end-of-stream: 1.4.5
       once: 1.4.0
@@ -18460,13 +18477,13 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  react-router-dom@7.15.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  react-router-dom@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
-      react-router: 7.15.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react-router: 7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
 
-  react-router@7.15.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
       cookie: 1.1.1
       react: 18.3.1
@@ -19513,7 +19530,7 @@ snapshots:
     dependencies:
       chownr: 1.1.4
       mkdirp-classic: 0.5.3
-      pump: 3.0.3
+      pump: 3.0.4
       tar-stream: 2.2.0
 
   tar-stream@2.2.0:
@@ -19738,6 +19755,8 @@ snapshots:
   undici-types@7.24.6: {}
 
   undici@7.25.0: {}
+
+  undici@7.26.0: {}
 
   unicorn-magic@0.1.0: {}
 
