@@ -20,7 +20,12 @@ export function CloudInviteCTA({
       >
         {primaryLabel} →
       </a>
-      <a href={AGOR_CLOUD_DEMO_URL} className={styles.secondary}>
+      <a
+        href={AGOR_CLOUD_DEMO_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={styles.secondary}
+      >
         {demoLabel} →
       </a>
     </div>

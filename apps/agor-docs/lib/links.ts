@@ -16,8 +16,5 @@ export const GITHUB_ISSUES_URL = 'https://github.com/preset-io/agor/issues';
 export const AGOR_CLOUD_INVITE_URL =
   'https://docs.google.com/forms/d/e/1FAIpQLSdXtZwQBHaLFa1LYHvOHXq9IUF_Qm3T12Hr6UZcMdEvjpm2PQ/viewform?usp=dialog';
 
-// Agor Cloud demo booking. TODO: replace with the actual Calendly /
-// HubSpot Meetings link when set up. Mailto is the safe default so the
-// button is never broken in the meantime.
-export const AGOR_CLOUD_DEMO_URL =
-  'mailto:hello@agor.live?subject=Agor%20Cloud%20demo%20request&body=Hi%20—%20I%27d%20like%20to%20see%20Agor%20Cloud%20in%20action.%20A%20bit%20about%20my%20team%3A';
+// Agor Cloud demo / contact form (hosted on the Preset marketing site).
+export const AGOR_CLOUD_DEMO_URL = 'https://preset.io/contact-us-about-agor/';
