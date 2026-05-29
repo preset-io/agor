@@ -3,34 +3,49 @@ title: Getting Started
 description: Install Agor and follow the onboarding wizard. Your first assistant takes it from there.
 ---
 
+import { Tabs } from 'nextra/components';
+
 # Getting Started
 
 Install Agor, open the UI, and follow the onboarding wizard. Your **first assistant** will help you get your bearings and get everything else set up.
 
 ## Install
 
-Install with npm:
+<Tabs items={['npm (Recommended)', 'Homebrew']} defaultIndex={0}>
+  <Tabs.Tab>
+    Most users should start here. It's the most universal path, and it's the one the rest of the docs assume.
 
-```bash
-npm install -g agor-live
-```
+    Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)).
 
-Or install with Homebrew:
+    ```bash
+    # Install Agor
+    npm install -g agor-live
 
-```bash
-brew tap preset-io/agor https://github.com/preset-io/agor
-brew install agor-live
-```
+    # First run
+    agor init
+    agor daemon start
+    agor open
+    ```
+  </Tabs.Tab>
 
-The npm path requires **Node.js ≥ 22.12** ([install](https://nodejs.org)); the Homebrew formula installs a compatible Node runtime.
+  <Tabs.Tab>
+    If you already use Homebrew, this is a convenient alternative on macOS or Linux.
 
-## Run
+    The Homebrew formula installs a compatible Node runtime for you.
 
-```bash
-agor init           # creates ~/.agor/ and database
-agor daemon start   # runs in the background
-agor open           # opens the UI in your browser
-```
+    ```bash
+    # Install Agor
+    brew tap preset-io/agor https://github.com/preset-io/agor
+    brew install agor-live
+
+    # First run
+    agor init
+    agor daemon start
+    agor open
+    ```
+  </Tabs.Tab>
+</Tabs>
+
 
 ## Follow the onboarding wizard
 
