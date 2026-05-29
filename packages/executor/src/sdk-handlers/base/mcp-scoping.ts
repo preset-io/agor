@@ -163,9 +163,9 @@ export async function getMcpServersForSession(
     //   stamped by the session creator at ``POST /sessions`` time. The
     //   agent has no MCP tool to write to its own session's
     //   ``custom_context``, so this is a one-way channel from creator
-    //   to MCP config. Used by the Preset chatbot to pipe a
-    //   short-lived, user-scoped JWT into ``auth.token`` without the
-    //   daemon ever holding a workspace credential.
+    //   to MCP config — useful for an embedding host that wants to
+    //   forward a short-lived, per-session credential into
+    //   ``auth.token`` without persisting it on the user record.
     let sessionCustomContext: Record<string, unknown> | null | undefined;
     if (deps.sessionRepo) {
       try {

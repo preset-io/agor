@@ -84,7 +84,7 @@ import type { MCPAuth, MCPServer } from '../types';
  *
  * 3. Operators with write access to ``mcp_servers`` rows can craft a
  *    global-scoped server that interpolates ``user.env.GITHUB_TOKEN`` or
- *    ``session.custom_context.preset_jwt`` into ``auth.token`` and
+ *    ``session.custom_context.upstream_jwt`` into ``auth.token`` and
  *    points ``url`` at an attacker. This is the same risk for both
  *    channels: trust who can write MCP records. Deployments that need
  *    per-session secrets to be tight should attach the relevant MCP

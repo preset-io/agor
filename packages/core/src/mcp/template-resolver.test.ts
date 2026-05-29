@@ -247,13 +247,13 @@ describe('buildMCPTemplateContext (with session.custom_context)', () => {
     const ctx = buildMCPTemplateContext({
       env,
       sessionCustomContext: {
-        preset_jwt: 'eyJhbGciOi.payload.sig',
+        upstream_jwt: 'eyJhbGciOi.payload.sig',
         workspace_id: 'ws-42',
       },
     });
 
     expect(ctx.user.env.GITHUB_TOKEN).toBe('gh_secret123');
-    expect(ctx.session?.custom_context.preset_jwt).toBe('eyJhbGciOi.payload.sig');
+    expect(ctx.session?.custom_context.upstream_jwt).toBe('eyJhbGciOi.payload.sig');
     expect(ctx.session?.custom_context.workspace_id).toBe('ws-42');
   });
 
@@ -283,7 +283,7 @@ describe('buildMCPTemplateContext (with session.custom_context)', () => {
         GITHUB_TOKEN: 'gh_secret123',
         AGOR_MASTER_SECRET: 'should_not_be_exposed',
       },
-      sessionCustomContext: { preset_jwt: 'jwt' },
+      sessionCustomContext: { upstream_jwt: 'jwt' },
     });
     expect(ctx.user.env.AGOR_MASTER_SECRET).toBeUndefined();
     expect(ctx.user.env.GITHUB_TOKEN).toBe('gh_secret123');
@@ -295,7 +295,7 @@ describe('resolveMcpServerTemplates with session.custom_context', () => {
     user: { env: { GITHUB_TOKEN: 'gh_secret123' } },
     session: {
       custom_context: {
-        preset_jwt: 'eyJhbGciOi.payload.sig',
+        upstream_jwt: 'eyJhbGciOi.payload.sig',
         nested: { inner: 'deep_value' },
       },
     },
@@ -303,12 +303,12 @@ describe('resolveMcpServerTemplates with session.custom_context', () => {
 
   it('resolves {{session.custom_context.<key>}} into auth.token', () => {
     const server = createTestServer({
-      name: 'preset-mcp',
+      name: 'external-mcp',
       transport: 'http',
-      url: 'https://preset.example.com/mcp',
+      url: 'https://api.example.com/mcp',
       auth: {
         type: 'bearer',
-        token: '{{ session.custom_context.preset_jwt }}',
+        token: '{{ session.custom_context.upstream_jwt }}',
       },
     });
 
@@ -321,9 +321,9 @@ describe('resolveMcpServerTemplates with session.custom_context', () => {
 
   it('treats a missing session-context key as an unresolved template, same as user.env.*', () => {
     const server = createTestServer({
-      name: 'preset-mcp',
+      name: 'external-mcp',
       transport: 'http',
-      url: 'https://preset.example.com/mcp',
+      url: 'https://api.example.com/mcp',
       auth: {
         type: 'bearer',
         token: '{{ session.custom_context.refresh_token }}',
@@ -341,12 +341,12 @@ describe('resolveMcpServerTemplates with session.custom_context', () => {
     const server = createTestServer({
       name: 'mixed-server',
       transport: 'http',
-      url: 'https://preset.example.com/mcp',
+      url: 'https://api.example.com/mcp',
       auth: {
         type: 'jwt',
-        api_url: 'https://manager.example.com/api/v1/auth/',
+        api_url: 'https://auth.example.com/api/v1/auth/',
         api_token: '{{ user.env.GITHUB_TOKEN }}', // contrived but representative
-        api_secret: '{{ session.custom_context.preset_jwt }}',
+        api_secret: '{{ session.custom_context.upstream_jwt }}',
       },
     });
 
@@ -361,7 +361,7 @@ describe('resolveMcpServerTemplates with session.custom_context', () => {
     const server = createTestServer({
       name: 'nested-server',
       transport: 'http',
-      url: 'https://preset.example.com/mcp',
+      url: 'https://api.example.com/mcp',
       auth: {
         type: 'bearer',
         token: '{{ session.custom_context.nested.inner }}',
