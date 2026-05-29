@@ -534,9 +534,10 @@ describe('createUserProcessEnvironment — session.custom_context credential ove
     'custom_context wins over per-user credential (opener-pinned beats persisted)',
     async ({ db }) => {
       // The whole point of the channel: per-session ephemeral credentials
-      // override per-user persistent ones. A chatbot embedding host can use
-      // this to forward a workspace's OpenRouter key onto a single session
-      // without touching the auto-provisioned user's record.
+      // override per-user persistent ones. An embedding host can use this
+      // to forward a per-session model key (e.g. one minted for the
+      // current end-user, scoped to a single session's lifetime) without
+      // touching the per-user record.
       const usersRepo = new UsersRepository(db);
       const user = await usersRepo.create({
         email: `cc-override-${Date.now()}-${Math.random()}@example.com`,
