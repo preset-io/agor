@@ -8,7 +8,6 @@
 import type { CodexSdkResponse } from '../../types/sdk-response.js';
 import type { INormalizer, NormalizedSdkData } from '../base/normalizer.interface.js';
 import type { NormalizeOptions } from '../normalizer-factory.js';
-import { computeOpenAITextCost } from '@agor/core/models/pricing';
 import { DEFAULT_CODEX_MODEL, getCodexContextWindowLimit } from './models.js';
 
 export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
@@ -34,14 +33,6 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
 
     const inputTokens = usage.input_tokens || 0;
     const outputTokens = usage.output_tokens || 0;
-    const costUsd =
-      options?.pricingMode === 'api'
-        ? computeOpenAITextCost(options?.modelHint, {
-            inputTokens,
-            cachedInputTokens: usage.cached_input_tokens || 0,
-            outputTokens,
-          })
-        : undefined;
     return {
       tokenUsage: {
         inputTokens,
@@ -51,7 +42,6 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
         cacheCreationTokens: 0,
       },
       contextWindowLimit,
-      costUsd,
       durationMs: undefined,
     };
   }

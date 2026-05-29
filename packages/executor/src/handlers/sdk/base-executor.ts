@@ -13,7 +13,9 @@ import type {
   ContextUsageSnapshot,
   MessageID,
   MessageSource,
+  Paginated,
   PermissionMode,
+  Session,
   SessionID,
   StreamingEventType,
   Task,
@@ -22,6 +24,7 @@ import type {
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
+import { estimateCodexTaskCostUsd } from '../../sdk-handlers/codex/ccusage.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
@@ -102,6 +105,10 @@ export interface ExecutionContext {
   client: AgorClient;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
   callbacks: StreamingCallbacks;
+}
+
+function unpaginate<T>(result: T[] | Paginated<T>): T[] {
+  return Array.isArray(result) ? result : result.data;
 }
 
 /**
@@ -490,13 +497,9 @@ export async function executeToolTask(params: {
       // event omits the model; never used as primaryModel.
       const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse, {
         modelHint: result.model,
-        pricingMode: toolName === 'codex' && resolution.apiKey ? 'api' : undefined,
       });
       if (normalized) {
         patchData.normalized_sdk_response = normalized;
-        console.log(
-          `[${toolName}] Normalized SDK response: ${normalized.tokenUsage.totalTokens} tokens, $${normalized.costUsd?.toFixed(4) ?? 'N/A'}`
-        );
       }
     }
 
@@ -505,6 +508,42 @@ export async function executeToolTask(params: {
     if (resolvedTaskModel) {
       patchData.model = resolvedTaskModel;
       console.log(`[${toolName}] Task model set to: ${resolvedTaskModel}`);
+    }
+
+    if (toolName === 'codex' && resolution.apiKey && patchData.normalized_sdk_response) {
+      try {
+        const [sessionResult, taskResult] = await Promise.all([
+          client.service('sessions').get(sessionId),
+          client.service('tasks').find({
+            query: {
+              session_id: sessionId,
+              $limit: 10_000,
+            },
+          }),
+        ]);
+
+        const session = sessionResult as Session;
+        const sessionTasks = unpaginate(taskResult as Task[] | Paginated<Task>).filter(
+          (task: Task) => task.task_id !== taskId
+        );
+
+        const estimatedCostUsd = await estimateCodexTaskCostUsd({
+          sdkSessionId: session.sdk_session_id,
+          previousTasks: sessionTasks,
+        });
+
+        if (estimatedCostUsd !== undefined) {
+          patchData.normalized_sdk_response.costUsd = estimatedCostUsd;
+        }
+      } catch (error) {
+        console.warn(`[codex] Failed to derive ccusage-backed task cost: ${String(error)}`);
+      }
+    }
+
+    if (patchData.normalized_sdk_response) {
+      console.log(
+        `[${toolName}] Normalized SDK response: ${patchData.normalized_sdk_response.tokenUsage.totalTokens} tokens, $${patchData.normalized_sdk_response.costUsd?.toFixed(4) ?? 'N/A'}`
+      );
     }
 
     // Prefer the authoritative context-window snapshot when the tool surfaced

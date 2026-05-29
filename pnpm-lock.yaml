@@ -816,6 +816,9 @@ importers:
       '@opencode-ai/sdk':
         specifier: ^1.2.20
         version: 1.14.33
+      ccusage:
+        specifier: 20.0.5
+        version: 20.0.5
       diff:
         specifier: '>=8.0.3 <9'
         version: 8.0.3
@@ -1239,6 +1242,36 @@ packages:
 
   '@bufbuild/protobuf@1.10.0':
     resolution: {integrity: sha512-QDdVFLoN93Zjg36NoQPZfsVH9tZew7wKDKyV5qRdj8ntT4wQCOradQjRaTdwMhWUYsgKsvCINKKm87FdEk96Ag==}
+
+  '@ccusage/ccusage-darwin-arm64@20.0.5':
+    resolution: {integrity: sha512-SQ6Yae2KENixdY9d8RtnsFcETCvHUn2u3+HswK+4WqAE7JLj2hXmngjOWCNeJisLKCHFQSEwg54+B2GePue9FA==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@ccusage/ccusage-darwin-x64@20.0.5':
+    resolution: {integrity: sha512-Qu0y2bkwRVeZ8OOom80ekRzsTmOiwUjLuiSEuZBgNzKLdMxaNSPakVhpQoQua+6v8tcnGbMRaEOivK4RxxVJNg==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@ccusage/ccusage-linux-arm64@20.0.5':
+    resolution: {integrity: sha512-gpTnF+v2a2TfeEMXDwG7YnuBwFyv8OixMcZExK19gNF+KCpgIkmVR5Qej7nV82YWG1RbdAPg6ZZPD7a43LpH3Q==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@ccusage/ccusage-linux-x64@20.0.5':
+    resolution: {integrity: sha512-5FcK4Wy7cCmWf1ibDKJAWKGWrG+pHduSJWSxRtGGAV4Li1RPBJ67Ql2Abzqug7HBprEx9wEB9s/o/7ggxzJY/w==}
+    cpu: [x64]
+    os: [linux]
+
+  '@ccusage/ccusage-win32-arm64@20.0.5':
+    resolution: {integrity: sha512-bGtrNVQ1oIfGeN1FdmNmu58hpehzPgTqsi8nivcLGnZgZrflfoDIUg1bC0tDQqBUIcIcKTAnvrJuTyn2pTARfg==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@ccusage/ccusage-win32-x64@20.0.5':
+    resolution: {integrity: sha512-ZZG19JAXaAd087QGZNK6XD/etnULbhK29KVZ01kh8Pr8rHJl2s1BHjSxg36YiPbcYXpSqeo3x1TfqybOheYSTQ==}
+    cpu: [x64]
+    os: [win32]
 
   '@chevrotain/cst-dts-gen@11.0.3':
     resolution: {integrity: sha512-BvIKpRLeS/8UbfxXxgC33xOumsacaeCKAjAeLyOn7Pcp95HiRbrpl14S+9vaZLolnbssPIUuiUd8IvgkRyt6NQ==}
@@ -5040,6 +5073,10 @@ packages:
   ccount@2.0.1:
     resolution: {integrity: sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg==}
 
+  ccusage@20.0.5:
+    resolution: {integrity: sha512-d95NMuk4MmmMcnOFvtLUGQx7bJvMOhE3Chdpfvv48+4v1URL7tVCWcn0F/FlaUXx5zv+Uw5/rNe40pSDihauKQ==}
+    hasBin: true
+
   chai@5.3.3:
     resolution: {integrity: sha512-4zNhdJD/iOjSH0A05ea+Ke6MU5mmpQcbQsSOkgdaUMJ9zTlDTD/GYlwohmIE2u0gaxHYiVHEn1Fw9mZ/ktJWgw==}
     engines: {node: '>=18'}
@@ -6958,6 +6995,7 @@ packages:
 
   libsql@0.5.29:
     resolution: {integrity: sha512-8lMP8iMgiBzzoNbAPQ59qdVcj6UaE/Vnm+fiwX4doX4Narook0a4GPKWBEv+CR8a1OwbfkgL18uBfBjWdF0Fzg==}
+    cpu: [x64, arm64, wasm32, arm]
     os: [darwin, linux, win32]
 
   lightningcss-android-arm64@1.32.0:
@@ -10165,6 +10203,24 @@ snapshots:
   '@braintree/sanitize-url@7.1.2': {}
 
   '@bufbuild/protobuf@1.10.0': {}
+
+  '@ccusage/ccusage-darwin-arm64@20.0.5':
+    optional: true
+
+  '@ccusage/ccusage-darwin-x64@20.0.5':
+    optional: true
+
+  '@ccusage/ccusage-linux-arm64@20.0.5':
+    optional: true
+
+  '@ccusage/ccusage-linux-x64@20.0.5':
+    optional: true
+
+  '@ccusage/ccusage-win32-arm64@20.0.5':
+    optional: true
+
+  '@ccusage/ccusage-win32-x64@20.0.5':
+    optional: true
 
   '@chevrotain/cst-dts-gen@11.0.3':
     dependencies:
@@ -14590,6 +14646,15 @@ snapshots:
       upper-case-first: 2.0.2
 
   ccount@2.0.1: {}
+
+  ccusage@20.0.5:
+    optionalDependencies:
+      '@ccusage/ccusage-darwin-arm64': 20.0.5
+      '@ccusage/ccusage-darwin-x64': 20.0.5
+      '@ccusage/ccusage-linux-arm64': 20.0.5
+      '@ccusage/ccusage-linux-x64': 20.0.5
+      '@ccusage/ccusage-win32-arm64': 20.0.5
+      '@ccusage/ccusage-win32-x64': 20.0.5
 
   chai@5.3.3:
     dependencies:

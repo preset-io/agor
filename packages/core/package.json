@@ -220,12 +220,6 @@
       "import": "./dist/models/index.js",
       "require": "./dist/models/index.cjs"
     },
-    "./models/pricing": {
-      "source": "./src/models/pricing.ts",
-      "types": "./dist/models/pricing.d.ts",
-      "import": "./dist/models/pricing.js",
-      "require": "./dist/models/pricing.cjs"
-    },
     "./sessions": {
       "source": "./src/sessions/index.ts",
       "types": "./dist/sessions/index.d.ts",
