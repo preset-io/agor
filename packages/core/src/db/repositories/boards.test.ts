@@ -59,6 +59,7 @@ async function createBranchForBoard(
   overrides: {
     name?: string;
     assistant?: boolean;
+    archived?: boolean;
     custom_context?: Record<string, unknown>;
   } = {}
 ) {
@@ -75,6 +76,7 @@ async function createBranchForBoard(
     branch_unique_id: branchUniqueId++,
     path: `/tmp/${name}`,
     board_id: boardId,
+    archived: overrides.archived,
     created_by: generateId(),
     custom_context:
       overrides.custom_context ??
@@ -640,6 +642,26 @@ describe('BoardRepository primary assistant', () => {
     });
   });
 
+  dbTest(
+    'should accept short branch IDs when setting and clearing primary assistant',
+    async ({ db }) => {
+      const boardRepo = new BoardRepository(db);
+      const board = await boardRepo.create(createBoardData());
+      const assistant = await createBranchForBoard(db, board.board_id, { assistant: true });
+      const assistantShortId = toShortId(assistant.branch_id, 8);
+
+      const updated = await boardRepo.setPrimaryAssistant(board.board_id, assistantShortId);
+
+      expect(updated.primary_assistant_id).toBe(assistant.branch_id);
+
+      const cleared = await boardRepo.clearPrimaryAssistantIfMatches(
+        board.board_id,
+        assistantShortId
+      );
+      expect(cleared?.primary_assistant_id).toBeUndefined();
+    }
+  );
+
   dbTest('should reject non-assistant primary branches', async ({ db }) => {
     const boardRepo = new BoardRepository(db);
     const board = await boardRepo.create(createBoardData());
@@ -648,6 +670,19 @@ describe('BoardRepository primary assistant', () => {
     await expect(boardRepo.setPrimaryAssistant(board.board_id, branch.branch_id)).rejects.toThrow(
       /assistant branch/
     );
+  });
+
+  dbTest('should reject archived assistant primary branches', async ({ db }) => {
+    const boardRepo = new BoardRepository(db);
+    const board = await boardRepo.create(createBoardData());
+    const assistant = await createBranchForBoard(db, board.board_id, {
+      assistant: true,
+      archived: true,
+    });
+
+    await expect(
+      boardRepo.setPrimaryAssistant(board.board_id, assistant.branch_id)
+    ).rejects.toThrow(/active/);
   });
 
   dbTest('should reject assistant branches from another board', async ({ db }) => {

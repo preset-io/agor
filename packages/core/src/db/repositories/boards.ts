@@ -452,22 +452,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       const board = await this.findById(fullBoardId);
       if (!board) throw new EntityNotFoundError('Board', boardId);
 
-      const branchRow = await select(this.db)
-        .from(branches)
-        .where(eq(branches.branch_id, branchId))
-        .one();
-
-      if (!branchRow) throw new EntityNotFoundError('Branch', branchId);
-      if (branchRow.board_id !== fullBoardId) {
-        throw new RepositoryError('Primary assistant branch must belong to the board');
-      }
-      if (!this.branchRowIsAssistant(branchRow)) {
-        throw new RepositoryError('Primary assistant branch must be an assistant branch');
-      }
+      const branch = await this.getValidatedPrimaryAssistantBranch(fullBoardId, branchId);
 
       await update(this.db, boards)
         .set({
-          primary_assistant_id: branchRow.branch_id,
+          primary_assistant_id: branch.branch_id,
           updated_at: new Date(),
         })
         .where(eq(boards.board_id, fullBoardId))
@@ -498,22 +487,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async setPrimaryAssistantIfUnset(boardId: string, branchId: string): Promise<Board | null> {
     try {
       const fullBoardId = await this.resolveId(boardId);
-      const branchRow = await select(this.db)
-        .from(branches)
-        .where(eq(branches.branch_id, branchId))
-        .one();
-
-      if (!branchRow) throw new EntityNotFoundError('Branch', branchId);
-      if (branchRow.board_id !== fullBoardId) {
-        throw new RepositoryError('Primary assistant branch must belong to the board');
-      }
-      if (!this.branchRowIsAssistant(branchRow)) {
-        throw new RepositoryError('Primary assistant branch must be an assistant branch');
-      }
+      const branch = await this.getValidatedPrimaryAssistantBranch(fullBoardId, branchId);
 
       const result = await update(this.db, boards)
         .set({
-          primary_assistant_id: branchRow.branch_id,
+          primary_assistant_id: branch.branch_id,
           updated_at: new Date(),
         })
         .where(and(eq(boards.board_id, fullBoardId), isNull(boards.primary_assistant_id)))
@@ -544,9 +522,14 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async clearPrimaryAssistantIfMatches(boardId: string, branchId: string): Promise<Board | null> {
     try {
       const fullBoardId = await this.resolveId(boardId);
+      const branch = await new BranchRepository(this.db).findById(branchId);
+      if (!branch) throw new EntityNotFoundError('Branch', branchId);
+
       const result = await update(this.db, boards)
         .set({ primary_assistant_id: null, updated_at: new Date() })
-        .where(and(eq(boards.board_id, fullBoardId), eq(boards.primary_assistant_id, branchId)))
+        .where(
+          and(eq(boards.board_id, fullBoardId), eq(boards.primary_assistant_id, branch.branch_id))
+        )
         .run();
 
       if (result.rowsAffected === 0) return null;
@@ -590,9 +573,25 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     }
   }
 
-  private branchRowIsAssistant(row: { data: unknown }): boolean {
-    const data = row.data as { custom_context?: Record<string, unknown> } | null;
-    return isAssistant({ custom_context: data?.custom_context });
+  private async getValidatedPrimaryAssistantBranch(
+    fullBoardId: string,
+    branchId: string
+  ): Promise<Branch> {
+    const branchRepo = new BranchRepository(this.db);
+    const branch = await branchRepo.findById(branchId);
+    if (!branch) throw new EntityNotFoundError('Branch', branchId);
+
+    if (branch.board_id !== fullBoardId) {
+      throw new RepositoryError('Primary assistant branch must belong to the board');
+    }
+    if (!isAssistant(branch)) {
+      throw new RepositoryError('Primary assistant branch must be an assistant branch');
+    }
+    if (branch.archived) {
+      throw new RepositoryError('Primary assistant branch must be active');
+    }
+
+    return branch;
   }
 
   /**
