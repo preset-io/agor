@@ -6,7 +6,7 @@
 
 import type { Board, BoardExportBlob, BoardObject, Branch, UUID } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, isAssistant } from '@agor/core/types';
-import { and, eq, exists, inArray, isNotNull, like, ne, or, sql } from 'drizzle-orm';
+import { and, eq, exists, inArray, isNotNull, isNull, like, ne, or, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -23,6 +23,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
+import { BranchRepository } from './branches';
 
 /**
  * Board repository implementation
@@ -100,6 +101,14 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     };
   }
 
+  private rejectGenericPrimaryAssistantWrite(data: Partial<Board>, operation: string): void {
+    if (Object.hasOwn(data, 'primary_assistant_id')) {
+      throw new RepositoryError(
+        `Cannot ${operation} primary_assistant_id via generic board writes; use setPrimaryAssistant() or clearPrimaryAssistant()`
+      );
+    }
+  }
+
   /**
    * Resolve short ID to full ID via the centralized helper.
    */
@@ -161,6 +170,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async create(data: Partial<Board>): Promise<Board> {
     try {
+      this.rejectGenericPrimaryAssistantWrite(data, 'set');
       const boardId = data.board_id ?? generateId();
       const baseUrl = await getBaseUrl();
       let finalSlug: string | undefined;
@@ -327,6 +337,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async update(id: string, updates: Partial<Board>): Promise<Board> {
     try {
+      this.rejectGenericPrimaryAssistantWrite(updates, 'set');
       const fullId = await this.resolveId(id);
 
       // Get current board to merge updates
@@ -419,13 +430,8 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       const board = await this.findById(boardId);
       if (!board?.primary_assistant_id) return null;
 
-      const row = await select(this.db)
-        .from(branches)
-        .where(eq(branches.branch_id, board.primary_assistant_id))
-        .one();
-
-      if (!row) return null;
-      return this.branchRowToMinimalBranch(row);
+      const branchRepo = new BranchRepository(this.db);
+      return branchRepo.findById(board.primary_assistant_id);
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       if (error instanceof AmbiguousIdError) throw error;
@@ -482,6 +488,84 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   }
 
   /**
+   * Set a board's primary assistant only when it is currently unset.
+   *
+   * Returns the updated board when this call wins the race, or null when the
+   * board already had a primary assistant by the time the conditional update
+   * ran. The same branch/board/assistant invariants as setPrimaryAssistant()
+   * are validated before attempting the conditional write.
+   */
+  async setPrimaryAssistantIfUnset(boardId: string, branchId: string): Promise<Board | null> {
+    try {
+      const fullBoardId = await this.resolveId(boardId);
+      const branchRow = await select(this.db)
+        .from(branches)
+        .where(eq(branches.branch_id, branchId))
+        .one();
+
+      if (!branchRow) throw new EntityNotFoundError('Branch', branchId);
+      if (branchRow.board_id !== fullBoardId) {
+        throw new RepositoryError('Primary assistant branch must belong to the board');
+      }
+      if (!this.branchRowIsAssistant(branchRow)) {
+        throw new RepositoryError('Primary assistant branch must be an assistant branch');
+      }
+
+      const result = await update(this.db, boards)
+        .set({
+          primary_assistant_id: branchRow.branch_id,
+          updated_at: new Date(),
+        })
+        .where(and(eq(boards.board_id, fullBoardId), isNull(boards.primary_assistant_id)))
+        .run();
+
+      if (result.rowsAffected === 0) return null;
+
+      const updated = await this.findById(fullBoardId);
+      if (!updated) throw new RepositoryError('Failed to retrieve updated board');
+      return updated;
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      if (error instanceof EntityNotFoundError) throw error;
+      if (error instanceof AmbiguousIdError) throw error;
+      throw new RepositoryError(
+        `Failed to set primary assistant if unset: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Clear a board's primary assistant only if it still points at branchId.
+   *
+   * This keeps board metadata consistent when an assistant branch is moved off
+   * a board without clearing a newer primary assistant assignment by mistake.
+   */
+  async clearPrimaryAssistantIfMatches(boardId: string, branchId: string): Promise<Board | null> {
+    try {
+      const fullBoardId = await this.resolveId(boardId);
+      const result = await update(this.db, boards)
+        .set({ primary_assistant_id: null, updated_at: new Date() })
+        .where(and(eq(boards.board_id, fullBoardId), eq(boards.primary_assistant_id, branchId)))
+        .run();
+
+      if (result.rowsAffected === 0) return null;
+
+      const updated = await this.findById(fullBoardId);
+      if (!updated) throw new EntityNotFoundError('Board', boardId);
+      return updated;
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      if (error instanceof EntityNotFoundError) throw error;
+      if (error instanceof AmbiguousIdError) throw error;
+      throw new RepositoryError(
+        `Failed to clear primary assistant if matched: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Clear a board's primary assistant pointer without deleting either entity.
    */
   async clearPrimaryAssistant(boardId: string): Promise<Board> {
@@ -509,50 +593,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   private branchRowIsAssistant(row: { data: unknown }): boolean {
     const data = row.data as { custom_context?: Record<string, unknown> } | null;
     return isAssistant({ custom_context: data?.custom_context });
-  }
-
-  private branchRowToMinimalBranch(row: typeof branches.$inferSelect): Branch {
-    const data = row.data as {
-      path: string;
-      new_branch: boolean;
-      last_used?: string;
-      custom_context?: Record<string, unknown>;
-      notes?: string;
-      issue_url?: string;
-      pull_request_url?: string;
-    };
-
-    return {
-      branch_id: row.branch_id as Branch['branch_id'],
-      repo_id: row.repo_id as Branch['repo_id'],
-      branch_unique_id: row.branch_unique_id,
-      created_at: new Date(row.created_at).toISOString(),
-      updated_at: row.updated_at
-        ? new Date(row.updated_at).toISOString()
-        : new Date(row.created_at).toISOString(),
-      created_by: row.created_by as Branch['created_by'],
-      name: row.name as Branch['name'],
-      ref: row.ref,
-      ref_type: row.ref_type ?? undefined,
-      path: data.path ?? '',
-      board_id: (row.board_id as Branch['board_id']) ?? undefined,
-      notes: data.notes,
-      issue_url: data.issue_url,
-      pull_request_url: data.pull_request_url,
-      new_branch: Boolean(data.new_branch),
-      needs_attention: Boolean(row.needs_attention),
-      archived: Boolean(row.archived),
-      archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
-      archived_by: (row.archived_by as Branch['archived_by']) ?? undefined,
-      filesystem_status: row.filesystem_status ?? undefined,
-      custom_context: data.custom_context,
-      last_used: data.last_used ?? new Date(row.updated_at ?? row.created_at).toISOString(),
-      storage_mode: row.storage_mode as Branch['storage_mode'],
-      clone_depth: row.clone_depth ?? undefined,
-      others_can: row.others_can ?? undefined,
-      unix_group: row.unix_group ?? undefined,
-      others_fs_access: row.others_fs_access ?? undefined,
-    };
   }
 
   /**

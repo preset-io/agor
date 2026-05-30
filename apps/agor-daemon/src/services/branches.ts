@@ -287,14 +287,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!branch.board_id || !isAssistant(branch)) return;
 
     try {
-      const board = await this.boardRepo.findById(branch.board_id);
-      if (!board || board.primary_assistant_id) return;
-
-      const updatedBoard = await this.boardRepo.setPrimaryAssistant(
+      const updatedBoard = await this.boardRepo.setPrimaryAssistantIfUnset(
         branch.board_id,
         branch.branch_id
       );
-      this.app.service('boards').emit('patched', updatedBoard);
+      if (updatedBoard) {
+        this.app.service('boards').emit('patched', updatedBoard);
+      }
     } catch (error) {
       console.warn(
         `⚠️ Failed to set primary assistant for board ${branch.board_id}:`,
@@ -341,6 +340,35 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     if (oldBoardId !== newBoardId) {
       const boardObjectsService = this.getBoardObjectsService();
+
+      if (isAssistant(currentBranch)) {
+        try {
+          if (oldBoardId) {
+            const updatedOldBoard = await this.boardRepo.clearPrimaryAssistantIfMatches(
+              oldBoardId,
+              currentBranch.branch_id
+            );
+            if (updatedOldBoard) {
+              this.app.service('boards').emit('patched', updatedOldBoard);
+            }
+          }
+
+          if (newBoardId && isAssistant(updatedBranch)) {
+            const updatedNewBoard = await this.boardRepo.setPrimaryAssistantIfUnset(
+              newBoardId,
+              updatedBranch.branch_id
+            );
+            if (updatedNewBoard) {
+              this.app.service('boards').emit('patched', updatedNewBoard);
+            }
+          }
+        } catch (error) {
+          console.warn(
+            `⚠️ Failed to maintain primary assistant pointer for branch ${id}:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      }
 
       try {
         // First, check if a board_object already exists

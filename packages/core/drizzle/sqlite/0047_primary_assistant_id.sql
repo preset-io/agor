@@ -7,8 +7,8 @@ WITH assistant_counts AS (
   FROM branches
   WHERE board_id IS NOT NULL
     AND (
-      json_extract(data, '$.custom_context.assistant.kind') = 'assistant'
-      OR json_extract(data, '$.custom_context.agent.kind') = 'assistant'
+      json_extract(data, '$.custom_context.assistant.kind') IN ('assistant', 'persisted-agent')
+      OR json_extract(data, '$.custom_context.agent.kind') IN ('assistant', 'persisted-agent')
     )
   GROUP BY board_id
 )

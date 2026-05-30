@@ -18,7 +18,7 @@
  * own slot, and the footer reads `validByTab[activeTab]`.
  */
 
-import type { Board, Repo } from '@agor-live/client';
+import type { Repo } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CreateDialog } from './CreateDialog';
@@ -54,14 +54,12 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
     [frameworkRepo.repo_id, frameworkRepo],
     [userRepo.repo_id, userRepo],
   ]);
-  const boardById = new Map<string, Board>();
 
   return render(
     <CreateDialog
       open
       onClose={vi.fn()}
       repoById={repoById}
-      boardById={boardById}
       availableAgents={[
         { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: 'Claude' },
       ]}

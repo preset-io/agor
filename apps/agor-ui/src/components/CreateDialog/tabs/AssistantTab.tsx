@@ -1,7 +1,6 @@
 import type {
   AgenticToolName,
   AgorClient,
-  Board,
   CodexApprovalPolicy,
   CodexSandboxMode,
   CreateRepoRequest,
@@ -15,21 +14,19 @@ import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live
 import { DownOutlined } from '@ant-design/icons';
 import { Collapse, Form, Typography } from 'antd';
 import { useEffect, useState } from 'react';
-import { mapToArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
 import { useAssistantForm } from '../../../hooks/useAssistantForm';
 import { useEnsureFrameworkRepo } from '../../../hooks/useEnsureFrameworkRepo';
 import type { AgenticToolOption } from '../../../types';
 import { AgenticToolConfigForm, getFormValuesFromConfig } from '../../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
-import { AssistantFormFields, CREATE_NEW_BOARD } from '../../forms/AssistantFormFields';
+import { AssistantFormFields } from '../../forms/AssistantFormFields';
 import type { ModelConfig } from '../../ModelSelector';
 
 export interface AssistantTabResult {
   displayName: string;
   description?: string;
   emoji?: string;
-  boardChoice?: string;
   repoId?: string;
   branchName?: string;
   sourceBranch?: string;
@@ -45,7 +42,6 @@ export interface AssistantTabResult {
 
 export interface AssistantTabProps {
   repoById: Map<string, Repo>;
-  boardById: Map<string, Board>;
   onValidityChange: (valid: boolean) => void;
   formRef: React.MutableRefObject<(() => Promise<AssistantTabResult | null>) | null>;
   onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
@@ -57,7 +53,6 @@ export interface AssistantTabProps {
 
 export const AssistantTab: React.FC<AssistantTabProps> = ({
   repoById,
-  boardById,
   onValidityChange,
   formRef,
   onCreateRepo,
@@ -66,8 +61,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
   currentUser,
   client,
 }) => {
-  const repos = mapToArray(repoById);
-  const boards = mapToArray(boardById);
+  const repos = Array.from(repoById.values());
   const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo);
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
 
@@ -116,7 +110,6 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
         displayName: values.displayName.trim(),
         description: values.description || undefined,
         emoji: values.emoji || undefined,
-        boardChoice: values.boardChoice,
         repoId: values.repoId || frameworkRepo?.repo_id,
         branchName: values.name || `private-${slugify(values.displayName)}`,
         sourceBranch: values.sourceBranch || 'main',
@@ -154,12 +147,11 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
       form={form}
       layout="vertical"
       onFieldsChange={validateForm}
-      initialValues={{ boardChoice: CREATE_NEW_BOARD, sourceBranch: 'main' }}
+      initialValues={{ sourceBranch: 'main' }}
     >
       <AssistantFormFields
         form={form}
         repos={repos}
-        boards={boards}
         frameworkRepo={frameworkRepo}
         isCloning={isCloning}
         onDisplayNameChange={handleDisplayNameChange}

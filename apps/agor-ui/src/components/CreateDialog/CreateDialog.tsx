@@ -68,7 +68,6 @@ export interface CreateDialogProps {
   open: boolean;
   onClose: () => void;
   repoById: Map<string, Repo>;
-  boardById: Map<string, Board>;
   currentBoardId?: string;
   defaultPosition?: { x: number; y: number };
   availableAgents: AgenticToolOption[];
@@ -99,7 +98,6 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   open,
   onClose,
   repoById,
-  boardById,
   currentBoardId,
   defaultPosition,
   availableAgents,
@@ -237,7 +235,6 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           />
           <AssistantTab
             repoById={repoById}
-            boardById={boardById}
             onValidityChange={handleAssistantValid}
             formRef={assistantFormRef}
             onCreateRepo={onCreateRepo}

@@ -6,7 +6,6 @@ export interface AssistantCreationInput {
   displayName: string;
   description?: string;
   emoji?: string;
-  boardChoice?: string;
   repoId: string;
   branchName?: string;
   sourceBranch?: string;

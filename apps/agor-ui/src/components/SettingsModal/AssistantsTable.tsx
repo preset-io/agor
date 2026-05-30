@@ -36,7 +36,7 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
-import { AssistantFormFields, CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
+import { AssistantFormFields } from '../forms/AssistantFormFields';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
 
@@ -88,7 +88,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   onClose,
 }) => {
   const repos = mapToArray(repoById);
-  const boards = mapToArray(boardById);
 
   // Assistants ARE branches (just branches flagged via
   // `custom_context.assistant`), so navigation reuses the `/w/<short>/`
@@ -156,7 +155,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           displayName: values.displayName.trim(),
           description: values.description || undefined,
           emoji: values.emoji || undefined,
-          boardChoice: values.boardChoice,
           repoId,
           branchName: values.name || undefined,
           sourceBranch: values.sourceBranch || undefined,
@@ -428,12 +426,11 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           form={form}
           layout="vertical"
           onFieldsChange={validateForm}
-          initialValues={{ boardChoice: CREATE_NEW_BOARD, sourceBranch: 'main' }}
+          initialValues={{ sourceBranch: 'main' }}
         >
           <AssistantFormFields
             form={form}
             repos={repos}
-            boards={boards}
             frameworkRepo={frameworkRepo}
             isCloning={isCloning}
             onDisplayNameChange={handleDisplayNameChange}

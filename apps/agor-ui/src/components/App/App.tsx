@@ -594,7 +594,6 @@ export const App: React.FC<AppProps> = ({
         displayName: result.displayName,
         description: result.description,
         emoji: result.emoji,
-        boardChoice: result.boardChoice,
         repoId,
         branchName: result.branchName,
         sourceBranch: result.sourceBranch,
@@ -1026,10 +1025,6 @@ export const App: React.FC<AppProps> = ({
                       onViewLogs={setLogsModalBranchId}
                       onNukeEnvironment={onNukeEnvironment}
                       onExecuteScheduleNow={onExecuteScheduleNow}
-                      onCreateAssistant={() => {
-                        setCreateDialogDefaultTab('assistant');
-                        setCreateDialogOpen(true);
-                      }}
                       comments={mapToArray(commentById).filter(
                         (c: BoardComment) => c.board_id === currentBoardId
                       )}
@@ -1336,7 +1331,6 @@ export const App: React.FC<AppProps> = ({
               }}
               defaultTab={createDialogDefaultTab}
               repoById={repoById}
-              boardById={boardById}
               currentBoardId={currentBoardId}
               defaultPosition={newBranchDefaultPosition || undefined}
               onCreateBranch={handleCreateBranch}

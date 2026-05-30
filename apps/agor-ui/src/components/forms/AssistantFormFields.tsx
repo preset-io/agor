@@ -1,16 +1,12 @@
-import type { Board, Repo } from '@agor-live/client';
+import type { Repo } from '@agor-live/client';
 import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
-import { CREATE_NEW_BOARD } from '@/utils/assistantConstants';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
-
-export { CREATE_NEW_BOARD };
 
 export interface AssistantFormFieldsProps {
   form: FormInstance;
   repos: Repo[];
-  boards: Board[];
   frameworkRepo: Repo | undefined;
   isCloning?: boolean;
   onDisplayNameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -24,7 +20,7 @@ export interface AssistantFormFieldsProps {
  * Shared assistant form fields used in both the CreateDialog AssistantTab
  * and the SettingsModal AssistantsTable create modal.
  *
- * Renders: Name + icon, Board, board advice Alert, Advanced collapse
+ * Renders: Name + icon, assistant board advice Alert, Advanced collapse
  * (Framework Repository, Branch Name, Source Branch).
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */

@@ -68,7 +68,6 @@ interface BoardAssistantPanelProps {
   onViewLogs?: (branchId: string) => void;
   onNukeEnvironment?: (branchId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
-  onCreateAssistant?: () => void;
   comments?: BoardComment[];
   boardObjects?: Record<string, BoardObject>;
   onSendComment?: (content: string) => void;
