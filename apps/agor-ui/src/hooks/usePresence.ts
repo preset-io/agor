@@ -18,6 +18,12 @@ interface UsePresenceOptions {
   users: User[]; // All users (for looking up user details by ID)
   enabled?: boolean;
   globalPresence?: boolean; // If true, track users across all boards (for navbar facepile)
+  /**
+   * Optional coalescing window for presenceMap updates. When set, repeated
+   * cursor-moved events for the same user on the same board within this window
+   * are treated as no-ops for facepile state.
+   */
+  presenceMinUpdateIntervalMs?: number;
 }
 
 interface UsePresenceResult {
@@ -32,7 +38,14 @@ interface UsePresenceResult {
  * @returns Active users for facepile and remote cursors for rendering
  */
 export function usePresence(options: UsePresenceOptions): UsePresenceResult {
-  const { client, boardId, users, enabled = true, globalPresence = false } = options;
+  const {
+    client,
+    boardId,
+    users,
+    enabled = true,
+    globalPresence = false,
+    presenceMinUpdateIntervalMs = 0,
+  } = options;
 
   // Use ref for users to avoid triggering useMemo recalculation
   const usersRef = useRef(users);
@@ -75,6 +88,16 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
             return prev; // Reject stale update
           }
 
+          // Duplicate payload (same coordinates + timestamp) is a no-op.
+          if (
+            existing &&
+            existing.x === updateData.x &&
+            existing.y === updateData.y &&
+            existing.timestamp === updateData.timestamp
+          ) {
+            return prev;
+          }
+
           // Only create new Map after confirming we need to update
           const next = new Map(prev);
           next.set(event.userId, updateData);
@@ -98,6 +121,29 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
           // Only update if this event is newer than the existing one
           if (existing && event.timestamp < existing.timestamp) {
             return prev; // Reject stale update
+          }
+
+          // Facepile doesn't need every 100ms cursor sample when the user is
+          // still on the same board; keep the existing reference stable unless
+          // enough time has passed or the board actually changed.
+          if (
+            existing &&
+            existing.boardId === presenceData.boardId &&
+            presenceMinUpdateIntervalMs > 0 &&
+            event.timestamp - existing.timestamp < presenceMinUpdateIntervalMs
+          ) {
+            return prev;
+          }
+
+          // Duplicate payload (same board/position/timestamp) is a no-op.
+          if (
+            existing &&
+            existing.boardId === presenceData.boardId &&
+            existing.x === presenceData.x &&
+            existing.y === presenceData.y &&
+            existing.timestamp === presenceData.timestamp
+          ) {
+            return prev;
           }
 
           // Only create new Map after confirming we need to update
@@ -218,7 +264,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       clearInterval(cursorCleanupInterval);
       clearInterval(presenceCleanupInterval);
     };
-  }, [client, boardId, enabled, globalPresence]);
+  }, [client, boardId, enabled, globalPresence, presenceMinUpdateIntervalMs]);
 
   // Derive active users and remote cursors from separate maps
   // - activeUsers from presenceMap (5 minute timeout for facepile)

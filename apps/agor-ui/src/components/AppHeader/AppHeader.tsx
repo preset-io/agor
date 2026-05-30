@@ -1,5 +1,5 @@
 import type {
-  ActiveUser,
+  AgorClient,
   Artifact,
   Board,
   BoardID,
@@ -36,16 +36,17 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
-import { Facepile } from '../Facepile';
 import { GlobalSearch } from '../GlobalSearch';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ThemeSwitcher } from '../ThemeSwitcher';
+import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
 
 const { Header } = Layout;
 
 export interface AppHeaderProps {
   user?: User | null;
-  activeUsers?: ActiveUser[];
+  presenceClient?: AgorClient | null;
+  presenceUsers?: User[];
   currentUserId?: string;
   connected?: boolean;
   connecting?: boolean;
@@ -126,7 +127,8 @@ const RecentBoardPills: React.FC<{
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
   user,
-  activeUsers = [],
+  presenceClient = null,
+  presenceUsers = [],
   currentUserId,
   connected = false,
   connecting = false,
@@ -318,21 +320,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           connecting={connecting}
           onRetry={onRetryConnection}
         />
-        {activeUsers.length > 0 && (
-          <>
-            <Facepile
-              activeUsers={activeUsers}
-              currentUserId={currentUserId}
-              maxVisible={5}
-              boardById={boardById}
-              onUserClick={onUserClick}
-              style={{
-                marginRight: 8,
-              }}
-            />
-            <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
-          </>
-        )}
+        <GlobalPresenceFacepile
+          client={presenceClient}
+          currentBoardId={(currentBoardId as BoardID | undefined) ?? null}
+          users={presenceUsers}
+          currentUser={user}
+          boardById={boardById}
+          onUserClick={onUserClick}
+        />
         <GlobalSearch
           currentUserId={currentUserId}
           sessionById={sessionById}

@@ -62,7 +62,6 @@ import {
 } from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
-import { usePresence } from '../../hooks/usePresence';
 import type { AgenticToolOption } from '../../types';
 import { sanitizeBoardCss } from '../../utils/sanitizeCss';
 import { isDarkTheme } from '../../utils/theme';
@@ -76,8 +75,8 @@ import SessionCard from '../SessionCard';
 import { AppNode } from './canvas/AppNode';
 import { ArtifactNode } from './canvas/ArtifactNode';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
-import { CursorNode } from './canvas/CursorNode';
 import { MarkdownNode } from './canvas/MarkdownNode';
+import { RemoteCursorLayer } from './canvas/RemoteCursorLayer';
 import { useBoardObjects } from './canvas/useBoardObjects';
 import { findIntersectingObjects, findZoneAtPosition } from './canvas/utils/collisionDetection';
 import { getBranchParentInfo, getZoneParentInfo } from './canvas/utils/commentUtils';
@@ -325,7 +324,6 @@ const nodeTypes = {
   branchNode: BranchNode,
   cardNode: CardNodeWrapper,
   zone: ZoneNode,
-  cursor: CursorNode,
   comment: CommentNode,
   markdown: MarkdownNode,
   appNode: AppNode,
@@ -919,41 +917,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       enabled: !!board && !!client,
     });
 
-    // Presence tracking hook (get remote cursors)
-    const { remoteCursors } = usePresence({
-      client,
-      boardId: board?.board_id as BoardID | null,
-      users: mapToArray(userById),
-      enabled: !!board && !!client,
-    });
-
-    // Create cursor nodes from remote cursors (for minimap visibility)
-    // Large dimensions ensure good visibility in minimap (visual size controlled by inverse scaling)
-    const cursorNodes: Node[] = useMemo(() => {
-      const nodes: Node[] = [];
-
-      for (const [userId, { x, y, user }] of remoteCursors.entries()) {
-        nodes.push({
-          id: `cursor-${userId}`,
-          type: 'cursor',
-          position: { x, y },
-          draggable: false,
-          selectable: false,
-          focusable: false,
-          zIndex: 2000, // Cursors always on top (live presence)
-          data: { user },
-          width: 150,
-          height: 150,
-          style: {
-            pointerEvents: 'none',
-            transition: 'transform 0.1s ease-out',
-          },
-        });
-      }
-
-      return nodes;
-    }, [remoteCursors]);
-
     // Create comment nodes from spatial comments
     const commentNodes: Node[] = useMemo(() => {
       const nodes: Node[] = [];
@@ -1265,20 +1228,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       applyLocalPositions,
       partitionNodesByType,
     ]);
-
-    // Sync CURSOR nodes separately - optimized to avoid re-partitioning all nodes
-    useEffect(() => {
-      if (isDraggingRef.current) return;
-
-      setNodes((currentNodes) => {
-        // Remove old cursor nodes and append new ones (cursors are always last for z-order)
-        const nonCursorNodes = currentNodes.filter((n) => n.type !== 'cursor');
-        if (cursorNodes.length === 0 && nonCursorNodes.length === currentNodes.length) {
-          return currentNodes; // No change needed - avoid creating new array
-        }
-        return [...nonCursorNodes, ...cursorNodes];
-      });
-    }, [cursorNodes, setNodes]);
 
     // Sync COMMENT nodes separately
     useEffect(() => {
@@ -2538,6 +2487,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               maskColor="rgba(0, 0, 0, 0.5)"
               maskStrokeColor={token.colorPrimary}
               maskStrokeWidth={2}
+            />
+            <RemoteCursorLayer
+              client={client}
+              boardId={(board?.board_id as BoardID | null) ?? null}
+              users={mapToArray(userById)}
+              enabled={!!board && !!client}
             />
           </ReactFlow>
         </div>

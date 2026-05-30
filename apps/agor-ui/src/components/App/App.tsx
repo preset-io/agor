@@ -39,7 +39,6 @@ import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { usePresence } from '../../hooks/usePresence';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
@@ -766,29 +765,6 @@ export const App: React.FC<AppProps> = ({
     [boardObjectById, currentBoard?.board_id, branchById]
   );
 
-  // Track global presence for navbar facepile (across all boards)
-  const { activeUsers: globalActiveUsers } = usePresence({
-    client,
-    boardId: currentBoard?.board_id as BoardID | null,
-    users: mapToArray(userById),
-    enabled: !!client,
-    globalPresence: true,
-  });
-
-  // Include current user in the global facepile (always first)
-  // Filter out current user from globalActiveUsers to avoid duplication
-  const allActiveUsers = user
-    ? [
-        {
-          user,
-          lastSeen: Date.now(),
-          boardId: currentBoard?.board_id,
-          cursor: undefined, // Current user doesn't have a remote cursor
-        },
-        ...globalActiveUsers.filter((activeUser) => activeUser.user.user_id !== user.user_id),
-      ]
-    : globalActiveUsers;
-
   // Check if current user is mentioned in active comments
   const activeComments = mapToArray(commentById).filter(
     (c: BoardComment) => c.board_id === currentBoardId && !c.resolved
@@ -885,7 +861,8 @@ export const App: React.FC<AppProps> = ({
           <Layout style={{ height: '100vh' }}>
             <AppHeader
               user={user}
-              activeUsers={allActiveUsers}
+              presenceClient={client}
+              presenceUsers={mapToArray(userById)}
               currentUserId={user?.user_id}
               connected={connected}
               connecting={connecting}

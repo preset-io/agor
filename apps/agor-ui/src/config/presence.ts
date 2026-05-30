@@ -7,6 +7,13 @@ export const PRESENCE_CONFIG = {
   /** Throttle cursor position updates to max 10 per second */
   CURSOR_EMIT_THROTTLE_MS: 100,
 
+  /**
+   * Coalesce global facepile updates to at most once every 10 seconds per user
+   * while they stay on the same board. Facepile only needs liveness + board,
+   * not every cursor coordinate sample.
+   */
+  FACEPILE_REFRESH_MS: 10_000,
+
   /** Hide cursor after 5 seconds of no movement */
   CURSOR_HIDE_AFTER_MS: 5000,
 

@@ -26,6 +26,7 @@ vi.mock('reactflow', () => ({
     reactFlowProps = props;
     return <div data-testid="react-flow">{props.children}</div>;
   },
+  useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
   useEdgesState: (initialEdges: unknown[]) => [initialEdges, vi.fn(), vi.fn()],
   useNodesState: (initialNodes: unknown[]) => [initialNodes, vi.fn(), vi.fn()],
 }));
