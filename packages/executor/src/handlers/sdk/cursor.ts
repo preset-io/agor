@@ -208,6 +208,7 @@ async function buildCursorMcpServers(args: {
   const serversWithSource = await getMcpServersForSession(args.sessionId, {
     sessionMCPRepo: args.repos.sessionMCP,
     mcpServerRepo: args.repos.mcpServers,
+    sessionRepo: args.repos.sessions,
     forUserId: args.forUserId,
   });
 
