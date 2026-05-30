@@ -1978,7 +1978,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 // Load branch to check others_fs_access
                 try {
                   const branch = await branchRepository.findById(session.branch_id);
-                  if (!branch || !branch.others_fs_access || branch.others_fs_access === 'none') {
+                  if (!branch?.others_fs_access || branch.others_fs_access === 'none') {
                     return context;
                   }
 
@@ -2323,6 +2323,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       fromBlob: [requireMinimumRole(ROLES.MEMBER, 'import boards')],
       fromYaml: [requireMinimumRole(ROLES.MEMBER, 'import boards')],
       clone: [requireMinimumRole(ROLES.MEMBER, 'clone boards')],
+      setPrimaryAssistant: [requireMinimumRole(ROLES.MEMBER, 'set primary assistant')],
+      clearPrimaryAssistant: [requireMinimumRole(ROLES.MEMBER, 'clear primary assistant')],
     },
     after: {
       // Strip private artifact objects from board.objects for non-owners
@@ -2415,6 +2417,22 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         async (context: HookContext<Board>) => {
           if (context.result) {
             app.service('boards').emit('created', context.result);
+          }
+          return context;
+        },
+      ],
+      setPrimaryAssistant: [
+        async (context: HookContext<Board>) => {
+          if (context.result) {
+            app.service('boards').emit('patched', context.result);
+          }
+          return context;
+        },
+      ],
+      clearPrimaryAssistant: [
+        async (context: HookContext<Board>) => {
+          if (context.result) {
+            app.service('boards').emit('patched', context.result);
           }
           return context;
         },

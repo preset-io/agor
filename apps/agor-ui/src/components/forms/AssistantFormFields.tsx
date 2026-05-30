@@ -31,7 +31,6 @@ export interface AssistantFormFieldsProps {
 export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
   form,
   repos,
-  boards,
   frameworkRepo,
   isCloning,
   onDisplayNameChange,
@@ -39,19 +38,6 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
   onCustomRepoChange,
   extraBeforeAdvanced,
 }) => {
-  const boardOptions = [
-    {
-      value: CREATE_NEW_BOARD,
-      label: '+ Create a new board for this assistant (Recommended)',
-    },
-    ...[...boards]
-      .sort((a: Board, b: Board) => a.name.localeCompare(b.name))
-      .map((board: Board) => ({
-        value: board.board_id,
-        label: `${board.icon || '\u{1F4CB}'} ${board.name}`,
-      })),
-  ];
-
   const repoPlaceholder = frameworkRepo
     ? `${frameworkRepo.name || frameworkRepo.slug} (default)`
     : isCloning
@@ -89,26 +75,13 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
         />
       </Form.Item>
 
-      <Form.Item name="boardChoice" label="Board">
-        <Select
-          showSearch
-          filterOption={(input, option) =>
-            String(option?.label ?? '')
-              .toLowerCase()
-              .includes(input.toLowerCase())
-          }
-          options={boardOptions}
-        />
-      </Form.Item>
-
       <Alert
         type="info"
         showIcon={false}
         style={{ marginBottom: 16 }}
         title={
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            While assistants can act across boards, we recommend giving each assistant its own
-            board.
+            Each assistant gets a fresh board and becomes that board&apos;s primary assistant.
           </Typography.Text>
         }
       />

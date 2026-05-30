@@ -1,138 +1,28 @@
-import type {
-  AgorClient,
-  Branch,
-  Repo,
-  Session,
-  SessionID,
-  SpawnConfig,
-  User,
-} from '@agor-live/client';
-import {
-  getAssistantConfig,
-  getGatewaySource as getGatewaySourceCore,
-  isAssistant,
-  isGatewaySession as isGatewaySessionCore,
-} from '@agor-live/client';
+import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
+import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   BranchesOutlined,
-  ClockCircleOutlined,
   CodeOutlined,
   DeleteOutlined,
   DragOutlined,
   EditOutlined,
-  ForkOutlined,
-  InboxOutlined,
-  MessageOutlined,
-  PlusOutlined,
   PushpinFilled,
   RobotOutlined,
-  SettingOutlined,
-  SubnodeOutlined,
 } from '@ant-design/icons';
-import type { MenuProps } from 'antd';
-import {
-  App,
-  Badge,
-  Button,
-  Card,
-  Collapse,
-  ConfigProvider,
-  Space,
-  Spin,
-  Tooltip,
-  Tree,
-  Typography,
-  theme,
-} from 'antd';
+import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
-import { useServiceEnabled } from '../../hooks/useServicesConfig';
-import { useSessionActions } from '../../hooks/useSessionActions';
-import { useThemedMessage } from '../../utils/message';
-import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { EnvironmentPill } from '../EnvironmentPill';
-import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
-import { ChannelPill, IssuePill, PullRequestPill } from '../Pill';
-import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
-import { ToolIcon } from '../ToolIcon';
-import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
+import { IssuePill, PullRequestPill } from '../Pill';
+import { BranchSessionSections } from './BranchSessionSections';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
-
-/** Wrapper that adds hover action buttons (settings + archive) overlay to session items */
-const SessionItemWithActions: React.FC<{
-  sessionId: string;
-  isArchiving: boolean;
-  onArchive: (sessionId: string, e: React.MouseEvent) => void;
-  onSettings?: (sessionId: string, e: React.MouseEvent) => void;
-  children: React.ReactNode;
-}> = ({ sessionId, isArchiving, onArchive, onSettings, children }) => {
-  const [hovered, setHovered] = useState(false);
-  const { token } = theme.useToken();
-
-  const buttonStyle: React.CSSProperties = {
-    background: `${token.colorBgContainer}cc`,
-    borderRadius: 4,
-    width: 24,
-    height: 24,
-    minWidth: 24,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  };
-
-  return (
-    <div
-      style={{ position: 'relative', minWidth: 120 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      {children}
-      <div
-        style={{
-          position: 'absolute',
-          right: 4,
-          top: '50%',
-          transform: 'translateY(-50%)',
-          opacity: hovered ? 1 : 0,
-          transition: 'opacity 0.15s ease-in-out',
-          pointerEvents: hovered ? 'auto' : 'none',
-          display: 'flex',
-          gap: 2,
-          width: 'fit-content',
-        }}
-      >
-        {onSettings && (
-          <Tooltip title="Session settings">
-            <Button
-              type="text"
-              size="small"
-              icon={<SettingOutlined />}
-              onClick={(e) => onSettings(sessionId, e)}
-              style={buttonStyle}
-            />
-          </Tooltip>
-        )}
-        <Tooltip title="Archive session">
-          <Button
-            type="text"
-            size="small"
-            icon={<InboxOutlined />}
-            loading={isArchiving}
-            onClick={(e) => onArchive(sessionId, e)}
-            style={buttonStyle}
-          />
-        </Tooltip>
-      </div>
-    </div>
-  );
-};
 
 interface BranchCardProps {
   branch: Branch;
@@ -167,6 +57,7 @@ interface BranchCardProps {
   zoneColor?: string;
   defaultExpanded?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
+  panelMode?: boolean; // Render inside side panel instead of as a draggable canvas card
   /** True when this branch is the deep-link target of the current URL
    *  (`/w/<branchShort>/`). Folded together with `isFocused` (a session
    *  is open in the drawer) into a unified "selected" state — rendered
@@ -183,7 +74,6 @@ const BranchCardComponent = ({
   userById,
   currentUserId,
   selectedSessionId,
-  onTaskClick,
   onSessionClick,
   onCreateSession,
   onForkSession,
@@ -196,141 +86,32 @@ const BranchCardComponent = ({
   onStopEnvironment,
   onViewLogs,
   onNukeEnvironment,
-  onExecuteScheduleNow,
   onUnpin,
   isPinned = false,
   zoneName,
   zoneColor,
   defaultExpanded = true,
   inPopover = false,
+  panelMode = false,
   isActiveUrlTarget = false,
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
-  const { modal } = App.useApp();
-  const { showSuccess, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
-  const schedulerEnabled = useServiceEnabled('scheduler');
-  const gatewayEnabled = useServiceEnabled('gateway');
-
-  // Fork/Spawn modal state
-  const [forkSpawnModal, setForkSpawnModal] = useState<{
-    open: boolean;
-    action: ForkSpawnAction;
-    session: Session | null;
-  }>({
-    open: false,
-    action: 'fork',
-    session: null,
-  });
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
 
-  // Tree expansion state - track which nodes are expanded
-  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
-
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
 
-  // Handle fork/spawn modal confirm
-  const handleForkSpawnConfirm = async (config: string | Partial<SpawnConfig>) => {
-    if (!forkSpawnModal.session) return;
-
-    if (forkSpawnModal.action === 'fork') {
-      // Fork only takes a string prompt
-      const prompt = typeof config === 'string' ? config : config.prompt || '';
-      await onForkSession?.(forkSpawnModal.session.session_id, prompt);
-    } else {
-      // Spawn accepts full SpawnConfig
-      await onSpawnSession?.(forkSpawnModal.session.session_id, config);
-    }
-  };
-
-  // Session archive via shared hook
-  const { archiveSession } = useSessionActions(client);
-  const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
-
-  const handleArchiveSession = useCallback(
-    (sessionId: string, e: React.MouseEvent) => {
-      e.stopPropagation();
-
-      modal.confirm({
-        title: 'Archive Session',
-        content: 'Are you sure you want to archive this session?',
-        okText: 'Archive',
-        cancelText: 'Cancel',
-        onOk: async () => {
-          setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
-          try {
-            const result = await archiveSession(sessionId as SessionID);
-            if (result) {
-              showSuccess('Session archived');
-            } else {
-              showError('Failed to archive session');
-            }
-          } finally {
-            setArchivingSessionIds((prev) => {
-              const next = new Set(prev);
-              next.delete(sessionId);
-              return next;
-            });
-          }
-        },
-      });
-    },
-    [archiveSession, modal, showSuccess, showError]
-  );
-
-  // Gateway session helpers (delegating to @agor-live/client)
-  const getGatewaySource = useCallback(
-    (session: Session) => getGatewaySourceCore(session) ?? undefined,
-    []
-  );
-
-  const isGatewaySession = useCallback((session: Session): boolean => {
-    return isGatewaySessionCore(session);
-  }, []);
-
   // Filter out archived sessions from board card display
   const activeSessions = useMemo(() => sessions.filter((s) => !s.archived), [sessions]);
-
-  // Separate sessions by type: manual, scheduled, and gateway
-  const manualSessions = useMemo(
-    () => activeSessions.filter((s) => !s.scheduled_from_branch && !isGatewaySession(s)),
-    [activeSessions, isGatewaySession]
-  );
-  const scheduledSessions = useMemo(
-    () =>
-      activeSessions
-        .filter((s) => s.scheduled_from_branch)
-        .sort((a, b) => (b.scheduled_run_at || 0) - (a.scheduled_run_at || 0)), // Most recent first
-    [activeSessions]
-  );
-  const gatewaySessions = useMemo(
-    () => activeSessions.filter((s) => isGatewaySession(s)),
-    [activeSessions, isGatewaySession]
-  );
-
-  // Build genealogy tree structure (only for manual sessions)
-  const sessionTreeData = useMemo(() => buildSessionTree(manualSessions), [manualSessions]);
 
   // Check if any active (non-archived) session is running or stopping
   const hasRunningSession = useMemo(
     () => activeSessions.some((s) => s.status === 'running' || s.status === 'stopping'),
     [activeSessions]
-  );
-
-  // Check if any scheduled session is running (for collapse header spinner)
-  const hasRunningScheduledSession = useMemo(
-    () => scheduledSessions.some((s) => s.status === 'running' || s.status === 'stopping'),
-    [scheduledSessions]
-  );
-
-  // Check if any gateway session is running (for collapse header spinner)
-  const hasRunningGatewaySession = useMemo(
-    () => gatewaySessions.some((s) => s.status === 'running' || s.status === 'stopping'),
-    [gatewaySessions]
   );
 
   // Check if branch is still being created on filesystem
@@ -359,356 +140,6 @@ const BranchCardComponent = ({
 
     return shouldHighlight;
   }, [activeSessions, branch.needs_attention, isFocused]);
-
-  // Auto-expand all nodes on mount and when new nodes with children are added
-  useEffect(() => {
-    // Collect all node keys that have children
-    const collectKeysWithChildren = (nodes: SessionTreeNode[]): React.Key[] => {
-      const keys: React.Key[] = [];
-      for (const node of nodes) {
-        if (node.children && node.children.length > 0) {
-          keys.push(node.key);
-          keys.push(...collectKeysWithChildren(node.children));
-        }
-      }
-      return keys;
-    };
-
-    const allKeysWithChildren = collectKeysWithChildren(sessionTreeData);
-    setExpandedKeys(allKeysWithChildren);
-  }, [sessionTreeData]);
-
-  // Render function for tree nodes (our rich session cards)
-  const renderSessionNode = (node: SessionTreeNode) => {
-    const session = node.session;
-
-    // Dropdown menu items for session actions
-    const _sessionMenuItems: MenuProps['items'] = [
-      {
-        key: 'fork',
-        icon: <ForkOutlined />,
-        label: 'Fork Session',
-        disabled: connectionDisabled,
-        onClick: () => {
-          setForkSpawnModal({
-            open: true,
-            action: 'fork',
-            session,
-          });
-        },
-      },
-      {
-        key: 'spawn',
-        icon: <SubnodeOutlined />,
-        label: 'Spawn Subsession',
-        disabled: connectionDisabled,
-        onClick: () => {
-          setForkSpawnModal({
-            open: true,
-            action: 'spawn',
-            session,
-          });
-        },
-      },
-    ];
-
-    const isActive = session.status === 'running' || session.status === 'stopping';
-    // Mirrors the branch-card "selected" channel: when the URL points at
-    // a session, the session opens in the drawer (`selectedSessionId` is
-    // set) — give the matching row the same dashed selection outline so
-    // it's obvious which session inside the card the user landed on.
-    const isSessionSelected = session.session_id === selectedSessionId;
-
-    return (
-      <SessionItemWithActions
-        sessionId={session.session_id}
-        isArchiving={archivingSessionIds.has(session.session_id)}
-        onArchive={handleArchiveSession}
-        onSettings={
-          onOpenSessionSettings
-            ? (id, e) => {
-                e.stopPropagation();
-                onOpenSessionSettings(id);
-              }
-            : undefined
-        }
-      >
-        <div
-          style={{
-            border: session.ready_for_prompt
-              ? `2px solid ${token.colorPrimary}`
-              : `1px solid rgba(255, 255, 255, 0.1)`,
-            borderRadius: 4,
-            padding: 8,
-            background: 'transparent',
-            display: 'flex',
-            alignItems: 'center',
-            cursor: 'pointer',
-            marginBottom: 4,
-            boxShadow: session.ready_for_prompt ? `0 0 12px ${token.colorPrimary}30` : undefined,
-            ...(isSessionSelected
-              ? { outline: `2px dashed ${token.colorTextBase}`, outlineOffset: -2 }
-              : {}),
-          }}
-          onClick={() => onSessionClick?.(session.session_id)}
-          onContextMenu={(e) => {
-            // Show fork/spawn menu on right-click if handlers exist
-            if (onForkSession || onSpawnSession) {
-              e.preventDefault();
-            }
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
-            {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
-            <SessionRelationshipIcon session={session} size={10} />
-            <Typography.Text
-              strong
-              style={{
-                fontSize: 12,
-                flex: 1,
-                minWidth: 0,
-                ...getSessionTitleStyles(2),
-              }}
-            >
-              {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-            </Typography.Text>
-          </div>
-        </div>
-      </SessionItemWithActions>
-    );
-  };
-
-  // Session list content (collapsible) - only used when sessions exist
-  const sessionListContent = (
-    <ConfigProvider theme={{ components: { Tree: { colorBgContainer: 'transparent' } } }}>
-      <Tree
-        treeData={sessionTreeData}
-        expandedKeys={expandedKeys}
-        onExpand={(keys) => setExpandedKeys(keys as React.Key[])}
-        showLine
-        showIcon={false}
-        selectable={false}
-        titleRender={renderSessionNode}
-      />
-    </ConfigProvider>
-  );
-
-  // Session list collapse header
-  const sessionListHeader = (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        width: '100%',
-      }}
-    >
-      <Space size={4} align="center">
-        <Typography.Text strong>Sessions</Typography.Text>
-        <Badge
-          count={manualSessions.length}
-          showZero
-          style={{ backgroundColor: token.colorPrimaryBgHover }}
-        />
-      </Space>
-      {onCreateSession && (
-        <div className="nodrag">
-          <Button
-            type="default"
-            size="small"
-            icon={<PlusOutlined />}
-            disabled={connectionDisabled || isCreating}
-            onClick={(e) => {
-              e.stopPropagation();
-              onCreateSession(branch.branch_id);
-            }}
-            title={isCreating ? 'Branch is being created...' : undefined}
-          >
-            New Session
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-
-  // Scheduled runs header
-  const scheduledRunsHeader = (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        width: '100%',
-      }}
-    >
-      <Space size={4} align="center">
-        <ClockCircleOutlined style={{ color: token.colorInfo }} />
-        <Typography.Text strong>Scheduled Runs</Typography.Text>
-        <Badge
-          count={scheduledSessions.length}
-          showZero
-          style={{ backgroundColor: token.colorInfoBgHover }}
-        />
-        {hasRunningScheduledSession && <Spin size="small" />}
-      </Space>
-    </div>
-  );
-
-  // Scheduled runs content (flat list, no genealogy tree needed)
-  const scheduledRunsContent = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {scheduledSessions.map((session) => {
-        const isActive = session.status === 'running' || session.status === 'stopping';
-        return (
-          <SessionItemWithActions
-            key={session.session_id}
-            sessionId={session.session_id}
-            isArchiving={archivingSessionIds.has(session.session_id)}
-            onArchive={handleArchiveSession}
-            onSettings={
-              onOpenSessionSettings
-                ? (id, e) => {
-                    e.stopPropagation();
-                    onOpenSessionSettings(id);
-                  }
-                : undefined
-            }
-          >
-            <div
-              style={{
-                border: `1px solid rgba(255, 255, 255, 0.1)`,
-                borderRadius: 4,
-                padding: 8,
-                background: 'transparent',
-                display: 'flex',
-                alignItems: 'center',
-                cursor: 'pointer',
-              }}
-              onClick={() => onSessionClick?.(session.session_id)}
-            >
-              <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
-                {isActive ? (
-                  <Spin size="small" />
-                ) : (
-                  <ToolIcon tool={session.agentic_tool} size={20} />
-                )}
-                <Typography.Text
-                  style={{
-                    fontSize: 12,
-                    flex: 1,
-                    color: token.colorTextSecondary,
-                    ...getSessionTitleStyles(2),
-                  }}
-                >
-                  {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                </Typography.Text>
-              </Space>
-            </div>
-          </SessionItemWithActions>
-        );
-      })}
-    </div>
-  );
-
-  // Gateway sessions header
-  const gatewaySessionsHeader = (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        width: '100%',
-      }}
-    >
-      <Space size={4} align="center">
-        <MessageOutlined style={{ color: token.colorSuccess }} />
-        <Typography.Text strong>Gateway Sessions</Typography.Text>
-        <Badge
-          count={gatewaySessions.length}
-          showZero
-          style={{ backgroundColor: token.colorSuccessBgHover }}
-        />
-        {hasRunningGatewaySession && <Spin size="small" />}
-      </Space>
-    </div>
-  );
-
-  // Gateway sessions content (flat list with channel info)
-  const gatewaySessionsContent = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {gatewaySessions.map((session) => {
-        // Extract denormalized gateway metadata (stamped at session creation)
-        const gatewaySource = getGatewaySource(session);
-
-        const isActive = session.status === 'running' || session.status === 'stopping';
-
-        return (
-          <SessionItemWithActions
-            key={session.session_id}
-            sessionId={session.session_id}
-            isArchiving={archivingSessionIds.has(session.session_id)}
-            onArchive={handleArchiveSession}
-            onSettings={
-              onOpenSessionSettings
-                ? (id, e) => {
-                    e.stopPropagation();
-                    onOpenSessionSettings(id);
-                  }
-                : undefined
-            }
-          >
-            <div
-              style={{
-                border: `1px solid rgba(255, 255, 255, 0.1)`,
-                borderRadius: 4,
-                padding: 8,
-                background: 'transparent',
-                display: 'flex',
-                alignItems: 'center',
-                cursor: 'pointer',
-              }}
-              onClick={() => onSessionClick?.(session.session_id)}
-            >
-              <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
-                {isActive ? (
-                  <Spin size="small" />
-                ) : (
-                  <ToolIcon tool={session.agentic_tool} size={20} />
-                )}
-                <div
-                  style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}
-                >
-                  <Typography.Text
-                    style={{
-                      fontSize: 12,
-                      ...getSessionTitleStyles(2),
-                    }}
-                  >
-                    {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                  </Typography.Text>
-                  <div style={{ alignSelf: 'flex-start' }}>
-                    {gatewaySource ? (
-                      <ChannelPill
-                        channelType={gatewaySource.channel_type}
-                        channelName={gatewaySource.channel_name}
-                      />
-                    ) : (
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: 11, fontStyle: 'italic' }}
-                      >
-                        (Gateway - metadata unavailable)
-                      </Typography.Text>
-                    )}
-                  </div>
-                </div>
-              </Space>
-            </div>
-          </SessionItemWithActions>
-        );
-      })}
-    </div>
-  );
 
   const isDarkMode = isDarkTheme(token);
 
@@ -801,7 +232,7 @@ const BranchCardComponent = ({
   return (
     <Card
       style={{
-        width: 500,
+        width: panelMode ? '100%' : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
           'box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
@@ -845,7 +276,7 @@ const BranchCardComponent = ({
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                cursor: 'grab',
+                cursor: panelMode ? 'default' : 'grab',
                 width: 32,
                 height: 32,
                 justifyContent: 'center',
@@ -905,7 +336,7 @@ const BranchCardComponent = ({
         </div>
 
         <Space size={4} style={{ flexShrink: 0 }}>
-          {!inPopover && isPinned && (
+          {!inPopover && !panelMode && isPinned && (
             <Tooltip
               title={
                 zoneName
@@ -925,7 +356,7 @@ const BranchCardComponent = ({
               />
             </Tooltip>
           )}
-          {!inPopover && (
+          {!inPopover && !panelMode && (
             <Button
               type="text"
               size="small"
@@ -968,7 +399,7 @@ const BranchCardComponent = ({
                 title="Edit branch"
               />
             )}
-            {!inPopover && onArchiveOrDelete && (
+            {!inPopover && !panelMode && onArchiveOrDelete && (
               <Button
                 type="text"
                 size="small"
@@ -1051,138 +482,24 @@ const BranchCardComponent = ({
         </div>
       )}
 
-      {/* Sessions & Scheduled Runs - collapsible sections */}
+      {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
       <div className="nodrag">
-        {activeSessions.length === 0 ? (
-          // No active sessions: show create button without collapse wrapper
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-              alignItems: 'center',
-              padding: '16px 0',
-              marginTop: 8,
-            }}
-          >
-            {isCreating ? (
-              <Typography.Text type="secondary">Creating branch on filesystem...</Typography.Text>
-            ) : isFailed ? (
-              <div
-                style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center' }}
-              >
-                <Typography.Text type="danger" strong>
-                  Branch creation failed
-                </Typography.Text>
-                {branch.error_message && (
-                  <Tooltip title={branch.error_message} placement="bottom">
-                    <Typography.Text
-                      type="secondary"
-                      style={{
-                        fontSize: 12,
-                        maxWidth: 220,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        cursor: 'help',
-                      }}
-                    >
-                      {branch.error_message}
-                    </Typography.Text>
-                  </Tooltip>
-                )}
-              </div>
-            ) : onCreateSession ? (
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                disabled={connectionDisabled}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCreateSession(branch.branch_id);
-                }}
-                size="middle"
-              >
-                Create Session
-              </Button>
-            ) : null}
-          </div>
-        ) : (
-          // Has sessions: show collapsible sections
-          <>
-            {/* Manual Sessions */}
-            {manualSessions.length > 0 && (
-              <Collapse
-                defaultActiveKey={defaultExpanded ? ['sessions'] : []}
-                items={[
-                  {
-                    key: 'sessions',
-                    label: sessionListHeader,
-                    children: sessionListContent,
-                    styles: { body: { background: 'transparent' } },
-                  },
-                ]}
-                ghost
-                style={{ marginTop: 8 }}
-              />
-            )}
-
-            {/* Scheduled Runs */}
-            {schedulerEnabled && scheduledSessions.length > 0 && (
-              <Collapse
-                defaultActiveKey={[]}
-                items={[
-                  {
-                    key: 'scheduled-runs',
-                    label: scheduledRunsHeader,
-                    children: scheduledRunsContent,
-                    styles: { body: { background: 'transparent' } },
-                  },
-                ]}
-                ghost
-                style={{ marginTop: manualSessions.length > 0 ? 0 : 8 }}
-              />
-            )}
-
-            {/* Gateway Sessions */}
-            {gatewayEnabled && gatewaySessions.length > 0 && (
-              <Collapse
-                defaultActiveKey={[]}
-                items={[
-                  {
-                    key: 'gateway-sessions',
-                    label: gatewaySessionsHeader,
-                    children: gatewaySessionsContent,
-                    styles: { body: { background: 'transparent' } },
-                  },
-                ]}
-                ghost
-                style={{
-                  marginTop: manualSessions.length > 0 || scheduledSessions.length > 0 ? 0 : 8,
-                }}
-              />
-            )}
-          </>
-        )}
+        <BranchSessionSections
+          branch={branch}
+          sessions={sessions}
+          userById={userById}
+          currentUserId={currentUserId}
+          selectedSessionId={selectedSessionId}
+          onSessionClick={onSessionClick}
+          onCreateSession={onCreateSession}
+          onForkSession={onForkSession}
+          onSpawnSession={onSpawnSession}
+          onOpenSessionSettings={onOpenSessionSettings}
+          defaultExpanded={defaultExpanded}
+          mode="card"
+          client={client}
+        />
       </div>
-
-      {/* Fork/Spawn Modal */}
-      <ForkSpawnModal
-        open={forkSpawnModal.open}
-        action={forkSpawnModal.action}
-        session={forkSpawnModal.session}
-        currentUser={currentUserId ? userById.get(currentUserId) : undefined}
-        onConfirm={handleForkSpawnConfirm}
-        onCancel={() =>
-          setForkSpawnModal({
-            open: false,
-            action: 'fork',
-            session: null,
-          })
-        }
-        client={client}
-        userById={userById}
-      />
 
       {/* Archive/Delete Modal */}
       <ArchiveDeleteBranchModal

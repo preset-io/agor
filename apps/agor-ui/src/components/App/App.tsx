@@ -51,10 +51,10 @@ import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { AppHeader } from '../AppHeader';
-import { BranchListDrawer } from '../BranchListDrawer';
+import type { BoardAssistantPanelTab } from '../BoardAssistantPanel';
+import { BoardAssistantPanel } from '../BoardAssistantPanel';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
-import { CommentsPanel } from '../CommentsPanel';
 import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
 import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
@@ -267,11 +267,15 @@ export const App: React.FC<AppProps> = ({
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<
+    'branch' | 'assistant' | 'board' | 'repository'
+  >('branch');
   const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
     x: number;
     y: number;
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const autoOpenedAssistantBoardRef = useRef<string | null>(null);
   // Active URL deep-link target (branch or artifact). Folds into the
   // unified dashed "selected" outline alongside `selectedSessionId` —
   // both answer "what am I looking at right now?" so they share one
@@ -297,7 +301,7 @@ export const App: React.FC<AppProps> = ({
     [selectedSessionId, sessionById]
   );
 
-  const [listDrawerOpen, setListDrawerOpen] = useState(false);
+  const [leftPanelTab, setLeftPanelTab] = useState<BoardAssistantPanelTab>('assistant');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
 
   // Settings modal state via URL routing
@@ -321,7 +325,7 @@ export const App: React.FC<AppProps> = ({
   // Initialize comments panel state from localStorage (collapsed by default)
   const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useLocalStorage<boolean>(
     'agor:commentsPanelCollapsed',
-    true
+    false
   );
 
   // Comments panel size persistence (percentage of available width)
@@ -491,6 +495,7 @@ export const App: React.FC<AppProps> = ({
   // render — that propagated into the canvas's `initialNodes` useMemo deps
   // and triggered a full node-list recompute on every socket event.
   const handleOpenCommentsPanel = useCallback(() => {
+    setLeftPanelTab('comments');
     setCommentsPanelCollapsed(false);
   }, [setCommentsPanelCollapsed]);
 
@@ -740,6 +745,32 @@ export const App: React.FC<AppProps> = ({
 
   const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
   const currentBoard = boardById.get(currentBoardId);
+  const primaryAssistantId = currentBoard?.primary_assistant_id ?? null;
+  const primaryAssistantBranch = primaryAssistantId
+    ? branchById.get(primaryAssistantId)
+    : undefined;
+  const primaryAssistantRepo = primaryAssistantBranch
+    ? repoById.get(primaryAssistantBranch.repo_id)
+    : undefined;
+  const primaryAssistantInaccessible = Boolean(primaryAssistantId && !primaryAssistantBranch);
+
+  useEffect(() => {
+    if (!currentBoard || !primaryAssistantBranch || effectiveSelectedSessionId) return;
+    if (autoOpenedAssistantBoardRef.current === currentBoard.board_id) return;
+    const latestSession = (sessionsByBranch.get(primaryAssistantBranch.branch_id) || [])
+      .filter((session) => !session.archived)
+      .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime())[0];
+    if (latestSession) {
+      autoOpenedAssistantBoardRef.current = currentBoard.board_id;
+      navigation.goToSession(latestSession.session_id);
+    }
+  }, [
+    currentBoard,
+    primaryAssistantBranch,
+    sessionsByBranch,
+    effectiveSelectedSessionId,
+    navigation,
+  ]);
 
   // Update browser tab title based on current board
   useBoardTitle(currentBoard);
@@ -889,8 +920,11 @@ export const App: React.FC<AppProps> = ({
               currentUserId={user?.user_id}
               connected={connected}
               connecting={connecting}
-              onMenuClick={() => setListDrawerOpen(true)}
-              onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+              onMenuClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+              onCommentsClick={() => {
+                setLeftPanelTab('comments');
+                setCommentsPanelCollapsed(false);
+              }}
               onEventStreamClick={() => {
                 // If session is open, close it and show event stream
                 if (effectiveSelectedSessionId) {
@@ -952,7 +986,7 @@ export const App: React.FC<AppProps> = ({
                 }}
               >
                 <Panel
-                  id="comments-panel"
+                  id="assistant-panel"
                   order={1}
                   ref={commentsPanelRef}
                   collapsible
@@ -962,18 +996,44 @@ export const App: React.FC<AppProps> = ({
                   maxSize={40}
                 >
                   {!commentsPanelCollapsed && (
-                    <CommentsPanel
+                    <BoardAssistantPanel
                       client={client}
-                      boardId={currentBoardId || ''}
+                      board={currentBoard || null}
+                      activeTab={leftPanelTab}
+                      onTabChange={setLeftPanelTab}
+                      primaryAssistantBranch={primaryAssistantBranch}
+                      primaryAssistantRepo={primaryAssistantRepo}
+                      primaryAssistantInaccessible={primaryAssistantInaccessible}
+                      sessionsByBranch={sessionsByBranch}
+                      branchById={branchById}
+                      repoById={repoById}
+                      userById={userById}
+                      currentUserId={user?.user_id}
+                      selectedSessionId={effectiveSelectedSessionId}
+                      onSessionClick={handleSessionClick}
+                      onCreateSession={setNewSessionBranchId}
+                      onForkSession={onForkSession}
+                      onSpawnSession={onSpawnSession}
+                      onArchiveOrDelete={onArchiveOrDeleteBranch}
+                      onOpenSettings={(branchId, tab) => {
+                        setBranchModalBranchId(branchId);
+                        setBranchModalTab(tab);
+                      }}
+                      onOpenSessionSettings={setSessionSettingsId}
+                      onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
+                      onStartEnvironment={onStartEnvironment}
+                      onStopEnvironment={onStopEnvironment}
+                      onViewLogs={setLogsModalBranchId}
+                      onNukeEnvironment={onNukeEnvironment}
+                      onExecuteScheduleNow={onExecuteScheduleNow}
+                      onCreateAssistant={() => {
+                        setCreateDialogDefaultTab('assistant');
+                        setCreateDialogOpen(true);
+                      }}
                       comments={mapToArray(commentById).filter(
                         (c: BoardComment) => c.board_id === currentBoardId
                       )}
-                      userById={userById}
-                      currentUserId={user?.user_id || 'unknown'}
                       boardObjects={currentBoard?.objects}
-                      branchById={branchById}
-                      collapsed={commentsPanelCollapsed}
-                      onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
                       onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
                       onReplyComment={onReplyComment}
                       onResolveComment={onResolveComment}
@@ -1038,6 +1098,7 @@ export const App: React.FC<AppProps> = ({
                           userById={userById}
                           repoById={repoById}
                           branches={boardBranches}
+                          primaryAssistantId={primaryAssistantId}
                           branchById={branchById}
                           boardObjectById={boardObjectById}
                           commentById={commentById}
@@ -1072,6 +1133,7 @@ export const App: React.FC<AppProps> = ({
                           onClick={() => {
                             const center = sessionCanvasRef.current?.getViewportCenter();
                             setNewBranchDefaultPosition(center || null);
+                            setCreateDialogDefaultTab('branch');
                             setCreateDialogOpen(true);
                           }}
                         />
@@ -1257,17 +1319,6 @@ export const App: React.FC<AppProps> = ({
               onSessionClick={handleSessionClick}
               onExecuteScheduleNow={onExecuteScheduleNow}
             />
-            <BranchListDrawer
-              open={listDrawerOpen}
-              onClose={() => setListDrawerOpen(false)}
-              boards={mapToArray(boardById)}
-              currentBoardId={currentBoardId}
-              onBoardChange={navigation.goToBoard}
-              sessionsByBranch={sessionsByBranch}
-              branchById={branchById}
-              repoById={repoById}
-              onSessionClick={handleSessionClick}
-            />
             <TerminalModal
               open={terminalOpen}
               onClose={handleCloseTerminal}
@@ -1280,8 +1331,10 @@ export const App: React.FC<AppProps> = ({
               open={createDialogOpen}
               onClose={() => {
                 setCreateDialogOpen(false);
+                setCreateDialogDefaultTab('branch');
                 setNewBranchDefaultPosition(null);
               }}
+              defaultTab={createDialogDefaultTab}
               repoById={repoById}
               boardById={boardById}
               currentBoardId={currentBoardId}

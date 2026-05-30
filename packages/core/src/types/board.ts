@@ -153,6 +153,15 @@ export interface AppBoardObject {
   title: string;
   /** Optional description */
   description?: string;
+
+  /**
+   * Board-level assistant-in-charge.
+   *
+   * Nullable by design: human-managed boards and boards with no accessible
+   * primary assistant are valid states. The branch itself still belongs to
+   * the board through Branch.board_id.
+   */
+  primary_assistant_id?: BranchID;
   /** Sandpack template (default: 'react') */
   template: SandpackTemplate;
   /** File map: path -> code content */
@@ -212,6 +221,7 @@ export interface Board {
   slug?: string;
 
   description?: string;
+  primary_assistant_id?: BranchID;
 
   /**
    * DEPRECATED: Sessions and layout are now tracked in board_objects table

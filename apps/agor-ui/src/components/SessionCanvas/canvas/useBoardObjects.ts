@@ -289,6 +289,7 @@ export const useBoardObjects = ({
               width: objectData.width,
               onUpdate: handleUpdateObject,
               onEdit: onEditMarkdown,
+              onDelete: deleteObject,
             },
           };
         }

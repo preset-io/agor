@@ -316,6 +316,13 @@
       "when": 1780300000000,
       "tag": "0046_schedules_table",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1780400000000,
+      "tag": "0047_primary_assistant_id",
+      "breakpoints": true
     }
   ]
 }

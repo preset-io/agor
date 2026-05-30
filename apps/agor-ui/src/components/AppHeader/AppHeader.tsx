@@ -164,6 +164,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const userEmoji = user?.emoji || '👤';
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
+  const headerIconButtonStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  } as const;
   // Check if audio notifications are enabled
   const audioEnabled = user?.preferences?.audio?.enabled ?? false;
 
@@ -267,6 +272,17 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             See docs/disconnected-state-design.md. */}
         {currentBoardId && boards.length > 0 && (
           <>
+            {currentBoardName && (
+              <Tooltip title="Toggle board panel" placement="bottom">
+                <Button
+                  type="text"
+                  icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
+                  style={headerIconButtonStyle}
+                  onClick={onMenuClick}
+                  disabled={mutationDisabled}
+                />
+              </Tooltip>
+            )}
             <div style={{ minWidth: 200 }}>
               <BoardSwitcher
                 boards={boards}
@@ -283,27 +299,19 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           </>
         )}
         {currentBoardName && (
-          <Tooltip title="Toggle session drawer" placement="bottom">
-            <Button
-              type="text"
-              icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
-              onClick={onMenuClick}
-              disabled={mutationDisabled}
-            />
-          </Tooltip>
-        )}
-        {currentBoardName && (
           <Badge
             count={unreadCommentsCount}
             offset={[-2, 2]}
             style={{
               backgroundColor: hasUserMentions ? token.colorError : token.colorPrimaryBgHover,
             }}
+            className="app-header-icon-badge"
           >
-            <Tooltip title="Toggle comments panel" placement="bottom">
+            <Tooltip title="Show comments tab" placement="bottom">
               <Button
                 type="text"
                 icon={<CommentOutlined style={{ fontSize: token.fontSizeLG }} />}
+                style={headerIconButtonStyle}
                 onClick={onCommentsClick}
                 disabled={mutationDisabled}
               />
@@ -348,6 +356,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <Button
               type="text"
               icon={<ApiOutlined style={{ fontSize: token.fontSizeLG }} />}
+              style={headerIconButtonStyle}
               onClick={onEventStreamClick}
               disabled={mutationDisabled}
             />
@@ -357,6 +366,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <Button
             type="text"
             icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+            style={headerIconButtonStyle}
             href="https://agor.live/guide/getting-started"
             target="_blank"
             rel="noopener noreferrer"
@@ -367,6 +377,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <Button
             type="text"
             icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
+            style={headerIconButtonStyle}
             onClick={onSettingsClick}
             disabled={mutationDisabled}
           />
@@ -383,6 +394,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <Button
               type="text"
               icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />}
+              style={headerIconButtonStyle}
               disabled={mutationDisabled}
             />
           </Tooltip>

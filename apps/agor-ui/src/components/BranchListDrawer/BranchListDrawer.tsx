@@ -22,6 +22,16 @@ interface BranchListDrawerProps {
   onSessionClick: (sessionId: string) => void;
 }
 
+export interface BoardSessionListProps {
+  board?: Board;
+  currentBoardId: string;
+  branchById: Map<string, Branch>;
+  repoById: Map<string, Repo>;
+  sessionsByBranch: Map<string, Session[]>;
+  onSessionClick: (sessionId: string) => void;
+  onAfterSessionClick?: () => void;
+}
+
 /**
  * Drawer suppresses badges for the "boring" tones (`success`/`default`) so
  * idle and completed rows show a clean avatar with no decoration. The absence
@@ -40,17 +50,48 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
   onClose,
   boards,
   currentBoardId,
-  onBoardChange,
   branchById,
   repoById,
   sessionsByBranch,
   onSessionClick,
 }) => {
+  const currentBoard = boards.find((b) => b.board_id === currentBoardId);
+
+  return (
+    <Drawer
+      title={null}
+      placement="left"
+      size={480}
+      open={open}
+      onClose={onClose}
+      styles={{
+        body: { padding: 0 },
+      }}
+    >
+      <BoardSessionList
+        board={currentBoard}
+        currentBoardId={currentBoardId}
+        branchById={branchById}
+        repoById={repoById}
+        sessionsByBranch={sessionsByBranch}
+        onSessionClick={onSessionClick}
+        onAfterSessionClick={onClose}
+      />
+    </Drawer>
+  );
+};
+
+export const BoardSessionList: React.FC<BoardSessionListProps> = ({
+  board,
+  currentBoardId,
+  branchById,
+  repoById,
+  sessionsByBranch,
+  onSessionClick,
+  onAfterSessionClick,
+}) => {
   const { token } = theme.useToken();
   const [searchQuery, setSearchQuery] = useState('');
-
-  // Get current board
-  const currentBoard = boards.find((b) => b.board_id === currentBoardId);
 
   // Filter sessions by current board (branch-centric model)
   const boardSessions = useMemo(() => {
@@ -77,16 +118,7 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
   );
 
   return (
-    <Drawer
-      title={null}
-      placement="left"
-      size={480}
-      open={open}
-      onClose={onClose}
-      styles={{
-        body: { padding: 0 },
-      }}
-    >
+    <div style={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
       {/* Search Bar */}
       <div
         style={{
@@ -132,7 +164,7 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
                 }}
                 onClick={() => {
                   onSessionClick(session.session_id);
-                  onClose();
+                  onAfterSessionClick?.();
                 }}
               >
                 {/* Line 1: tool icon (with corner status badge) · title · genealogy */}
@@ -214,7 +246,7 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
       </div>
 
       {/* Board Info Footer */}
-      {currentBoard && (
+      {board && (
         <div
           style={{
             position: 'absolute',
@@ -228,11 +260,11 @@ export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
         >
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {filteredSessions.length} of {boardSessions.length} sessions
-            {currentBoard.description && ` • ${currentBoard.description}`}
+            {board.description && ` • ${board.description}`}
           </Typography.Text>
         </div>
       )}
-    </Drawer>
+    </div>
   );
 };
 

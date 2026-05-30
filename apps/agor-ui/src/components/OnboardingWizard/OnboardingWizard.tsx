@@ -60,6 +60,7 @@ import {
   findFrameworkRepo,
 } from '../../hooks/useFrameworkRepo';
 import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
+import { ensureAssistantWelcomeNote } from '../../utils/assistantWelcomeNote';
 import { extractSlugFromPath, slugify } from '../../utils/repoSlug';
 import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
@@ -914,6 +915,14 @@ export function OnboardingWizard({
         setCreatedBoardId(board.board_id);
         // Persist board ID immediately so restarts don't re-create it
         saveOnboardingProgress({ boardId: board.board_id });
+        if (path === 'assistant') {
+          await ensureAssistantWelcomeNote({
+            client,
+            boardId: board.board_id,
+            assistantName: assistantDisplayName.trim() || 'My Assistant',
+            assistantEmoji,
+          });
+        }
         setLoading(false);
         setCurrentStep('branch');
       }
@@ -1038,6 +1047,12 @@ export function OnboardingWizard({
         // Persist branch ID so restarts don't re-create it
         saveOnboardingProgress({ branchId: branch.branch_id });
 
+        if (path === 'assistant') {
+          await client
+            ?.service('boards')
+            .setPrimaryAssistant({ boardId: createdBoardId, branchId: branch.branch_id });
+        }
+
         await launchSessionForBranch(branch.branch_id, createdBoardId);
       } else {
         setLoading(false);
@@ -1056,6 +1071,7 @@ export function OnboardingWizard({
     assistantEmoji,
     repoById,
     onCreateBranch,
+    client,
     saveOnboardingProgress,
     launchSessionForBranch,
   ]);

@@ -263,6 +263,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         'toYaml',
         'fromYaml',
         'clone',
+        'setPrimaryAssistant',
+        'clearPrimaryAssistant',
       ],
     });
     app.use('/board-objects', createBoardObjectsService(db));

@@ -102,6 +102,28 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   }
 
   /**
+   * Custom method: Set the board's primary assistant branch.
+   */
+  async setPrimaryAssistant(
+    data: { boardId?: string; id?: string; branchId?: string } | string,
+    branchIdOrParams?: string | BoardParams,
+    _maybeParams?: BoardParams
+  ): Promise<Board> {
+    const boardId = typeof data === 'string' ? data : (data.boardId ?? data.id);
+    const branchId = typeof data === 'string' ? branchIdOrParams : data.branchId;
+    if (!boardId) throw new Error('Board ID required');
+    if (!branchId || typeof branchId !== 'string') throw new Error('Branch ID required');
+    return this.boardRepo.setPrimaryAssistant(boardId, branchId);
+  }
+
+  /**
+   * Custom method: Clear the board's primary assistant branch.
+   */
+  async clearPrimaryAssistant(boardId: string, _params?: BoardParams): Promise<Board> {
+    return this.boardRepo.clearPrimaryAssistant(boardId);
+  }
+
+  /**
    * Custom method: Batch upsert board objects
    */
   async batchUpsertBoardObjects(

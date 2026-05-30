@@ -11,7 +11,12 @@ import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ENVIRONMENT, isBranchRbacEnabled, loadConfig, PAGINATION } from '@agor/core/config';
-import { BranchRepository, type BranchWithZoneAndSessions, type Database } from '@agor/core/db';
+import {
+  BoardRepository,
+  BranchRepository,
+  type BranchWithZoneAndSessions,
+  type Database,
+} from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
@@ -24,7 +29,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { ROLES } from '@agor/core/types';
+import { isAssistant, ROLES } from '@agor/core/types';
 import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
@@ -68,6 +73,7 @@ interface ManagedProcess {
  */
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
   private branchRepo: BranchRepository;
+  private boardRepo: BoardRepository;
   private db: Database;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
@@ -91,6 +97,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     });
 
     this.branchRepo = branchRepo;
+    this.boardRepo = new BoardRepository(db);
     this.db = db;
     this.app = app;
   }
@@ -266,10 +273,34 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const withDefaults = await Promise.all(
         data.map((item) => this.applyBranchCreateDefaults(item))
       );
-      return super.create(withDefaults, params) as Promise<Branch[]>;
+      const created = (await super.create(withDefaults, params)) as Branch[];
+      await Promise.all(created.map((branch) => this.maybeSetBoardPrimaryAssistant(branch)));
+      return created;
     }
     const withDefaults = await this.applyBranchCreateDefaults(data);
-    return super.create(withDefaults, params) as Promise<Branch>;
+    const created = (await super.create(withDefaults, params)) as Branch;
+    await this.maybeSetBoardPrimaryAssistant(created);
+    return created;
+  }
+
+  private async maybeSetBoardPrimaryAssistant(branch: Branch): Promise<void> {
+    if (!branch.board_id || !isAssistant(branch)) return;
+
+    try {
+      const board = await this.boardRepo.findById(branch.board_id);
+      if (!board || board.primary_assistant_id) return;
+
+      const updatedBoard = await this.boardRepo.setPrimaryAssistant(
+        branch.board_id,
+        branch.branch_id
+      );
+      this.app.service('boards').emit('patched', updatedBoard);
+    } catch (error) {
+      console.warn(
+        `⚠️ Failed to set primary assistant for board ${branch.board_id}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   }
 
   /**

@@ -32,6 +32,8 @@ interface BranchHeaderPillProps {
   onNukeEnvironment?: (branchId: string) => void;
   onViewLogs?: (branchId: string) => void;
   connectionDisabled?: boolean;
+  /** Show environment status/controls and environment shortcut. Defaults to true. */
+  showEnvButtons?: boolean;
 }
 
 const PILL_HEIGHT = 22;
@@ -53,6 +55,7 @@ export function BranchHeaderPill({
   onNukeEnvironment,
   onViewLogs,
   connectionDisabled = false,
+  showEnvButtons = true,
 }: BranchHeaderPillProps) {
   const { token } = theme.useToken();
   const confirmNuke = useConfirmNukeEnvironment();
@@ -189,169 +192,171 @@ export function BranchHeaderPill({
       </Tooltip>
 
       {/* Section 2: Environment status + controls */}
-      <div
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 2,
-          padding: '0 4px',
-          height: PILL_HEIGHT,
-          borderLeft: `1px solid ${token.colorBorderSecondary}`,
-        }}
-      >
-        {hasConfig ? (
-          <>
-            {/* Env label — clickable to env URL when running, otherwise opens env tab */}
-            {isRunning && environmentUrl ? (
-              <Tooltip title={`Open ${environmentUrl}`}>
-                <a
-                  href={environmentUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 3,
-                    color: 'inherit',
-                    textDecoration: 'none',
-                    padding: '0 2px',
-                  }}
-                >
-                  {getStatusIcon()}
-                  <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
-                </a>
-              </Tooltip>
-            ) : (
-              <Tooltip title={getEnvTooltip()}>
-                <button
-                  type="button"
-                  onClick={openTab('environment')}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 3,
-                    cursor: 'pointer',
-                    padding: '0 2px',
-                    background: 'none',
-                    border: 'none',
-                    color: 'inherit',
-                    font: 'inherit',
-                  }}
-                >
-                  {getStatusIcon()}
-                  <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
-                </button>
-              </Tooltip>
-            )}
+      {showEnvButtons && (
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 2,
+            padding: '0 4px',
+            height: PILL_HEIGHT,
+            borderLeft: `1px solid ${token.colorBorderSecondary}`,
+          }}
+        >
+          {hasConfig ? (
+            <>
+              {/* Env label — clickable to env URL when running, otherwise opens env tab */}
+              {isRunning && environmentUrl ? (
+                <Tooltip title={`Open ${environmentUrl}`}>
+                  <a
+                    href={environmentUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      color: 'inherit',
+                      textDecoration: 'none',
+                      padding: '0 2px',
+                    }}
+                  >
+                    {getStatusIcon()}
+                    <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
+                  </a>
+                </Tooltip>
+              ) : (
+                <Tooltip title={getEnvTooltip()}>
+                  <button
+                    type="button"
+                    onClick={openTab('environment')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      cursor: 'pointer',
+                      padding: '0 2px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'inherit',
+                      font: 'inherit',
+                    }}
+                  >
+                    {getStatusIcon()}
+                    <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
+                  </button>
+                </Tooltip>
+              )}
 
-            {/* Play button */}
-            {onStartEnvironment && (
-              <Tooltip title={isRunning ? 'Environment running' : 'Start environment'}>
-                <Button
-                  type="text"
-                  size="small"
-                  aria-label="Start environment"
-                  icon={<PlayCircleOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!startDisabled) onStartEnvironment(branch.branch_id);
-                  }}
-                  disabled={startDisabled}
-                  style={iconButtonStyle}
-                />
-              </Tooltip>
-            )}
+              {/* Play button */}
+              {onStartEnvironment && (
+                <Tooltip title={isRunning ? 'Environment running' : 'Start environment'}>
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Start environment"
+                    icon={<PlayCircleOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!startDisabled) onStartEnvironment(branch.branch_id);
+                    }}
+                    disabled={startDisabled}
+                    style={iconButtonStyle}
+                  />
+                </Tooltip>
+              )}
 
-            {/* Stop button */}
-            {onStopEnvironment && (
-              <Tooltip
-                title={
-                  isRunning
-                    ? 'Stop environment'
-                    : isStarting
-                      ? 'Cancel startup'
-                      : isStopping
-                        ? 'Stopping...'
-                        : 'Not running'
-                }
+              {/* Stop button */}
+              {onStopEnvironment && (
+                <Tooltip
+                  title={
+                    isRunning
+                      ? 'Stop environment'
+                      : isStarting
+                        ? 'Cancel startup'
+                        : isStopping
+                          ? 'Stopping...'
+                          : 'Not running'
+                  }
+                >
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Stop environment"
+                    icon={<StopOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!stopDisabled) onStopEnvironment(branch.branch_id);
+                    }}
+                    disabled={stopDisabled}
+                    style={iconButtonStyle}
+                  />
+                </Tooltip>
+              )}
+
+              {/* Logs button */}
+              {onViewLogs && effectiveEnv.logs && (
+                <Tooltip title="View logs">
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="View environment logs"
+                    icon={<FileTextOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onViewLogs(branch.branch_id);
+                    }}
+                    style={iconButtonStyle}
+                  />
+                </Tooltip>
+              )}
+
+              {/* Nuke button */}
+              {onNukeEnvironment && branch.nuke_command && (
+                <Tooltip title="Nuke environment (destructive)">
+                  <Button
+                    type="text"
+                    size="small"
+                    danger
+                    aria-label="Nuke environment"
+                    icon={<FireOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      confirmNuke(() => onNukeEnvironment(branch.branch_id));
+                    }}
+                    disabled={connectionDisabled}
+                    style={iconButtonStyle}
+                  />
+                </Tooltip>
+              )}
+            </>
+          ) : (
+            /* No env config — show dim env label with edit icon */
+            <Tooltip title="Configure environment">
+              <button
+                type="button"
+                onClick={openTab('environment')}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  cursor: 'pointer',
+                  opacity: 0.5,
+                  padding: '0 2px',
+                  background: 'none',
+                  border: 'none',
+                  color: 'inherit',
+                  font: 'inherit',
+                }}
               >
-                <Button
-                  type="text"
-                  size="small"
-                  aria-label="Stop environment"
-                  icon={<StopOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!stopDisabled) onStopEnvironment(branch.branch_id);
-                  }}
-                  disabled={stopDisabled}
-                  style={iconButtonStyle}
-                />
-              </Tooltip>
-            )}
-
-            {/* Logs button */}
-            {onViewLogs && effectiveEnv.logs && (
-              <Tooltip title="View logs">
-                <Button
-                  type="text"
-                  size="small"
-                  aria-label="View environment logs"
-                  icon={<FileTextOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onViewLogs(branch.branch_id);
-                  }}
-                  style={iconButtonStyle}
-                />
-              </Tooltip>
-            )}
-
-            {/* Nuke button */}
-            {onNukeEnvironment && branch.nuke_command && (
-              <Tooltip title="Nuke environment (destructive)">
-                <Button
-                  type="text"
-                  size="small"
-                  danger
-                  aria-label="Nuke environment"
-                  icon={<FireOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    confirmNuke(() => onNukeEnvironment(branch.branch_id));
-                  }}
-                  disabled={connectionDisabled}
-                  style={iconButtonStyle}
-                />
-              </Tooltip>
-            )}
-          </>
-        ) : (
-          /* No env config — show dim env label with edit icon */
-          <Tooltip title="Configure environment">
-            <button
-              type="button"
-              onClick={openTab('environment')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 3,
-                cursor: 'pointer',
-                opacity: 0.5,
-                padding: '0 2px',
-                background: 'none',
-                border: 'none',
-                color: 'inherit',
-                font: 'inherit',
-              }}
-            >
-              <GlobalOutlined style={{ fontSize: 11 }} />
-              <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
-            </button>
-          </Tooltip>
-        )}
-      </div>
+                <GlobalOutlined style={{ fontSize: 11 }} />
+                <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
+              </button>
+            </Tooltip>
+          )}
+        </div>
+      )}
 
       {/* Section 3: Tab shortcut icons */}
       <div
@@ -394,13 +399,16 @@ export function BranchHeaderPill({
             style={iconButtonStyle}
           />
         </Tooltip>
-        <Tooltip title="Edit environment">
+        <Tooltip title="Edit branch">
           <Button
             type="text"
             size="small"
-            aria-label="Edit environment"
+            aria-label="Edit branch"
             icon={<EditOutlined />}
-            onClick={openTab('environment')}
+            onClick={(e) => {
+              e.stopPropagation();
+              openModal();
+            }}
             style={iconButtonStyle}
           />
         </Tooltip>

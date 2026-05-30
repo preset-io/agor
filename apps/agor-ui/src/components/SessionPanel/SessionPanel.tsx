@@ -199,6 +199,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         onFilesDrop={onFilesDrop}
         slashCommands={slashCommands}
         skills={skills}
+        highlightWhenEmpty
       />
     );
   }

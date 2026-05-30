@@ -21,6 +21,7 @@ import type {
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   customType,
@@ -438,6 +439,12 @@ export const boards = pgTable(
     // Materialized for lookups
     name: text('name').notNull(),
     slug: text('slug').unique(),
+    primary_assistant_id: varchar('primary_assistant_id', { length: 36 }).references(
+      (): AnyPgColumn => branches.branch_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
 
     // JSON blob for the rest
     data: t
@@ -588,7 +595,7 @@ export const branches = pgTable(
     environment_variant: text('environment_variant'),
 
     // Board relationship (nullable - branches can exist without boards)
-    board_id: varchar('board_id', { length: 36 }).references(() => boards.board_id, {
+    board_id: varchar('board_id', { length: 36 }).references((): AnyPgColumn => boards.board_id, {
       onDelete: 'set null', // If board is deleted, branch remains but loses board association
     }),
 

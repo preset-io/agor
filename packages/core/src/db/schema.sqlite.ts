@@ -21,6 +21,7 @@ import type {
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
 import {
+  type AnySQLiteColumn,
   blob,
   index,
   integer,
@@ -449,6 +450,12 @@ export const boards = sqliteTable(
     // Materialized for lookups
     name: text('name').notNull(),
     slug: text('slug').unique(),
+    primary_assistant_id: text('primary_assistant_id', { length: 36 }).references(
+      (): AnySQLiteColumn => branches.branch_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
 
     // JSON blob for the rest
     data: t
@@ -599,7 +606,7 @@ export const branches = sqliteTable(
     environment_variant: text('environment_variant'),
 
     // Board relationship (nullable - branches can exist without boards)
-    board_id: text('board_id', { length: 36 }).references(() => boards.board_id, {
+    board_id: text('board_id', { length: 36 }).references((): AnySQLiteColumn => boards.board_id, {
       onDelete: 'set null', // If board is deleted, branch remains but loses board association
     }),
 

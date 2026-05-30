@@ -386,6 +386,15 @@ export interface BoardsService extends AgorService<Board> {
     newName?: string,
     params?: Params
   ): Promise<Board>;
+
+  /**
+   * Set or clear the board's primary assistant branch.
+   */
+  setPrimaryAssistant(
+    data: { id?: string; boardId?: string; branchId: string },
+    params?: Params
+  ): Promise<Board>;
+  clearPrimaryAssistant(boardId: string, params?: Params): Promise<Board>;
 }
 
 /**
@@ -552,7 +561,16 @@ function extendBoardsService(client: AgorClient): void {
     ).methods;
 
     if (typeof methodsFn === 'function') {
-      methodsFn.call(service, 'toBlob', 'fromBlob', 'toYaml', 'fromYaml', 'clone');
+      methodsFn.call(
+        service,
+        'toBlob',
+        'fromBlob',
+        'toYaml',
+        'fromYaml',
+        'clone',
+        'setPrimaryAssistant',
+        'clearPrimaryAssistant'
+      );
     }
   };
 

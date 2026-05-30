@@ -1,6 +1,7 @@
 import type { BoardObject } from '@agor-live/client';
-import { EditOutlined } from '@ant-design/icons';
-import { Button, Card, Typography, theme } from 'antd';
+import { DeleteOutlined, EditOutlined } from '@ant-design/icons';
+import { App, Button, Card, Space, Typography, theme } from 'antd';
+import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { MarkdownRenderer } from '../../MarkdownRenderer/MarkdownRenderer';
 
 interface MarkdownNodeData {
@@ -9,16 +10,34 @@ interface MarkdownNodeData {
   width: number;
   onUpdate: (id: string, data: BoardObject) => void;
   onEdit?: (objectId: string, content: string, width: number) => void;
+  onDelete?: (objectId: string) => void;
 }
 
 export const MarkdownNode = ({ data }: { data: MarkdownNodeData }) => {
   const { token } = theme.useToken();
+  const { modal } = App.useApp();
+  const mutationGate = useMutationGate();
+  const mutationDisabled = !mutationGate.canMutate;
 
   const handleEdit = () => {
+    if (mutationDisabled) return;
     // Trigger edit by calling the onEdit callback if provided
     if (data.onEdit) {
       data.onEdit(data.objectId, data.content, data.width);
     }
+  };
+
+  const handleDelete = () => {
+    if (mutationDisabled || !data.onDelete) return;
+
+    modal.confirm({
+      title: 'Delete note?',
+      content: 'This note will be removed from the board.',
+      okText: 'Delete',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () => data.onDelete?.(data.objectId),
+    });
   };
 
   return (
@@ -44,16 +63,33 @@ export const MarkdownNode = ({ data }: { data: MarkdownNodeData }) => {
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             Markdown Note
           </Typography.Text>
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleEdit();
-            }}
-            title="Edit note"
-          />
+          <Space size={2}>
+            <Button
+              className="nodrag nopan"
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleEdit();
+              }}
+              disabled={mutationDisabled}
+              title="Edit note"
+            />
+            <Button
+              className="nodrag nopan"
+              type="text"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDelete();
+              }}
+              disabled={mutationDisabled}
+              title="Delete note"
+            />
+          </Space>
         </div>
       }
       styles={{ body: { padding: token.sizeUnit * 8 } }}
