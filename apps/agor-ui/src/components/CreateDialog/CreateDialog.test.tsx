@@ -85,6 +85,16 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
 const ASYNC = { timeout: 10_000 };
 
 describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () => {
+  it('defaults to Assistant as the primary create path', async () => {
+    renderDialog();
+
+    expect(await screen.findByRole('tab', { name: /Assistant/i }, ASYNC)).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    expect(screen.getByRole('button', { name: /Create Assistant/i })).toBeDisabled();
+  });
+
   it('enables Create Assistant once Name is typed', async () => {
     renderDialog({ defaultTab: 'assistant' });
 

@@ -269,7 +269,7 @@ export const App: React.FC<AppProps> = ({
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<
     'branch' | 'assistant' | 'board' | 'repository'
-  >('branch');
+  >('assistant');
   const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
     x: number;
     y: number;
@@ -1133,7 +1133,7 @@ export const App: React.FC<AppProps> = ({
                           onClick={() => {
                             const center = sessionCanvasRef.current?.getViewportCenter();
                             setNewBranchDefaultPosition(center || null);
-                            setCreateDialogDefaultTab('branch');
+                            setCreateDialogDefaultTab('assistant');
                             setCreateDialogOpen(true);
                           }}
                         />
@@ -1331,7 +1331,7 @@ export const App: React.FC<AppProps> = ({
               open={createDialogOpen}
               onClose={() => {
                 setCreateDialogOpen(false);
-                setCreateDialogDefaultTab('branch');
+                setCreateDialogDefaultTab('assistant');
                 setNewBranchDefaultPosition(null);
               }}
               defaultTab={createDialogDefaultTab}

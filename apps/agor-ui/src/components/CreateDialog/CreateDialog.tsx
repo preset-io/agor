@@ -106,7 +106,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   mcpServerById,
   currentUser,
   client,
-  defaultTab = 'branch',
+  defaultTab = 'assistant',
   onCreateBranch,
   onCreateBoard,
   onCreateRepo,
@@ -220,32 +220,6 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
 
   const tabItems = [
     {
-      key: 'branch',
-      label: (
-        <span>
-          <BranchesOutlined style={{ marginRight: 8 }} />
-          Branch
-        </span>
-      ),
-      children: (
-        <div>
-          <Alert
-            type="info"
-            showIcon
-            description={PURPOSE_TEXT.branch}
-            style={{ marginBottom: 16 }}
-          />
-          <BranchTab
-            repoById={repoById}
-            currentBoardId={currentBoardId}
-            defaultPosition={defaultPosition}
-            onValidityChange={handleBranchValid}
-            formRef={branchFormRef}
-          />
-        </div>
-      ),
-    },
-    {
       key: 'assistant',
       label: (
         <span>
@@ -271,6 +245,32 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             mcpServerById={mcpServerById}
             currentUser={currentUser}
             client={client}
+          />
+        </div>
+      ),
+    },
+    {
+      key: 'branch',
+      label: (
+        <span>
+          <BranchesOutlined style={{ marginRight: 8 }} />
+          Branch
+        </span>
+      ),
+      children: (
+        <div>
+          <Alert
+            type="info"
+            showIcon
+            description={PURPOSE_TEXT.branch}
+            style={{ marginBottom: 16 }}
+          />
+          <BranchTab
+            repoById={repoById}
+            currentBoardId={currentBoardId}
+            defaultPosition={defaultPosition}
+            onValidityChange={handleBranchValid}
+            formRef={branchFormRef}
           />
         </div>
       ),
