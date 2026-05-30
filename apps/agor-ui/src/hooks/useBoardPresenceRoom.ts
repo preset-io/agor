@@ -24,9 +24,11 @@ export function useBoardPresenceRoom(options: UseBoardPresenceRoomOptions) {
 
     joinRoom();
     client.io.on('connect', joinRoom);
+    client.on('authenticated', joinRoom);
 
     return () => {
       client.io.off('connect', joinRoom);
+      client.off('authenticated', joinRoom);
       client.io.emit('presence:unwatch-board', boardId);
     };
   }, [boardId, client, enabled]);
