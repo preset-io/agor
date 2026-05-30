@@ -24,6 +24,7 @@
 import type { Application } from '@agor/core/feathers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  boardPresenceRoomName,
   createSocketIOConfig,
   createTokenBucket,
   getSocketAuthState,
@@ -47,7 +48,10 @@ interface FakeSocket {
   on(event: string, fn: (...args: any[]) => void): void;
   join(channel: string): void;
   leave(channel: string): void;
-  broadcast: { emit: (...args: any[]) => void };
+  broadcast: {
+    emit: (event: string, data: unknown) => void;
+    to: (channel: string) => { emit: (event: string, data: unknown) => void };
+  };
 }
 
 interface FakeIO {
@@ -60,7 +64,7 @@ interface FakeIO {
   to(channel: string): { emit: (event: string, data: unknown) => void };
 }
 
-function makeSocket(id = 'sock1'): FakeSocket {
+function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
   const handlers = new Map<string, (...args: any[]) => void>();
   return {
     id,
@@ -79,7 +83,16 @@ function makeSocket(id = 'sock1'): FakeSocket {
     leave(channel) {
       this.left.add(channel);
     },
-    broadcast: { emit: () => {} },
+    broadcast: {
+      emit: (event: string, data: unknown) => {
+        io?.emitted.push({ channel: '*', event, data });
+      },
+      to: (channel: string) => ({
+        emit: (event: string, data: unknown) => {
+          io?.emitted.push({ channel, event, data });
+        },
+      }),
+    },
   };
 }
 
@@ -503,6 +516,87 @@ describe('terminal:* handler authorization', () => {
       connect(io, s);
       s.handlers.get('leave')?.('board:abc');
       expect(s.left.has('board:abc')).toBe(true);
+    });
+  });
+
+  describe('cursor presence routing', () => {
+    it('joins and leaves board presence rooms explicitly', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('alice-sock', io);
+      asUser(s, ALICE);
+      connect(io, s);
+
+      s.handlers.get('presence:watch-board')?.('board-1');
+      expect(s.joined.has(boardPresenceRoomName('board-1'))).toBe(true);
+
+      s.handlers.get('presence:unwatch-board')?.('board-1');
+      expect(s.left.has(boardPresenceRoomName('board-1'))).toBe(true);
+    });
+
+    it('routes cursor-moved only to the active board room and emits a lightweight global presence update', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('alice-sock', io);
+      asUser(s, ALICE);
+      connect(io, s);
+
+      s.handlers.get('cursor-move')?.({
+        boardId: 'board-1',
+        x: 10,
+        y: 20,
+        timestamp: 1_000,
+      });
+
+      expect(io.emitted).toContainEqual({
+        channel: boardPresenceRoomName('board-1'),
+        event: 'cursor-moved',
+        data: {
+          userId: ALICE,
+          boardId: 'board-1',
+          x: 10,
+          y: 20,
+          timestamp: 1_000,
+        },
+      });
+
+      expect(io.emitted).toContainEqual({
+        channel: '*',
+        event: 'presence-updated',
+        data: {
+          userId: ALICE,
+          boardId: 'board-1',
+          timestamp: 1_000,
+        },
+      });
+    });
+
+    it('coalesces global presence updates but still streams per-board cursor movement', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('alice-sock', io);
+      asUser(s, ALICE);
+      connect(io, s);
+
+      s.handlers.get('cursor-move')?.({
+        boardId: 'board-1',
+        x: 10,
+        y: 20,
+        timestamp: 1_000,
+      });
+      s.handlers.get('cursor-move')?.({
+        boardId: 'board-1',
+        x: 30,
+        y: 40,
+        timestamp: 5_000,
+      });
+
+      expect(
+        io.emitted.filter((entry) => entry.event === 'presence-updated' && entry.channel === '*')
+      ).toHaveLength(1);
+      expect(
+        io.emitted.filter(
+          (entry) =>
+            entry.event === 'cursor-moved' && entry.channel === boardPresenceRoomName('board-1')
+        )
+      ).toHaveLength(2);
     });
   });
 });

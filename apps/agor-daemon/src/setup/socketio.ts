@@ -21,6 +21,7 @@ import type {
   CursorLeaveEvent,
   CursorMovedEvent,
   CursorMoveEvent,
+  PresenceUpdatedEvent,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
@@ -57,6 +58,8 @@ interface FeathersSocket extends Socket {
   };
   data: {
     isService?: boolean;
+    currentBoardId?: string;
+    lastPresenceEmitAt?: number;
   };
 }
 
@@ -195,6 +198,16 @@ export function userRoomName(userId: string): string {
 }
 
 /**
+ * Per-board room name for high-frequency collaborative cursor traffic.
+ *
+ * Only tabs actively viewing a board should join this room so cursor motion
+ * doesn't fan out to the entire app.
+ */
+export function boardPresenceRoomName(boardId: string): string {
+  return `board:${boardId}:presence`;
+}
+
+/**
  * Validate a terminal channel name and extract its target user_id.
  *
  * Channel format: `user/<uuid>/terminal`. Returns null on bad shape.
@@ -214,6 +227,13 @@ export interface SocketIOResult {
   /** Socket.io server instance (for graceful shutdown) */
   socketServer: Server | null;
 }
+
+/**
+ * Global presence consumers (e.g. navbar facepile) don't need every cursor
+ * sample. Emit a lightweight presence heartbeat at most this often while a
+ * user stays on the same board.
+ */
+const GLOBAL_PRESENCE_EMIT_INTERVAL_MS = 10_000;
 
 /**
  * Create Socket.io configuration callback for FeathersJS
@@ -392,11 +412,31 @@ export function createSocketIOConfig(
         return user?.user_id || 'unknown';
       };
 
+      socket.on('presence:watch-board', (boardId: string) => {
+        const auth = getSocketAuthState(socket);
+        if (!isAuthenticated(auth) || typeof boardId !== 'string' || !boardId.trim()) return;
+        socket.join(boardPresenceRoomName(boardId));
+      });
+
+      socket.on('presence:unwatch-board', (boardId: string) => {
+        if (typeof boardId !== 'string' || !boardId.trim()) return;
+        socket.leave(boardPresenceRoomName(boardId));
+      });
+
       // Handle cursor movement events
       socket.on('cursor-move', (data: CursorMoveEvent) => {
         const userId = getUserId();
+        const fs = socket as FeathersSocket;
+        const previousBoardId = fs.data.currentBoardId;
 
-        // Broadcast cursor position to all users on the same board except sender
+        if (previousBoardId && previousBoardId !== data.boardId) {
+          socket.broadcast.to(boardPresenceRoomName(previousBoardId)).emit('cursor-left', {
+            userId,
+            boardId: previousBoardId,
+            timestamp: Date.now(),
+          });
+        }
+
         const broadcastData: CursorMovedEvent = {
           userId,
           boardId: data.boardId,
@@ -405,18 +445,43 @@ export function createSocketIOConfig(
           timestamp: data.timestamp,
         };
 
-        socket.broadcast.emit('cursor-moved', broadcastData);
+        // Broadcast cursor position only to tabs actively watching this board.
+        socket.broadcast
+          .to(boardPresenceRoomName(data.boardId))
+          .emit('cursor-moved', broadcastData);
+
+        fs.data.currentBoardId = data.boardId;
+
+        const shouldEmitPresenceUpdate =
+          previousBoardId !== data.boardId ||
+          !fs.data.lastPresenceEmitAt ||
+          data.timestamp - fs.data.lastPresenceEmitAt >= GLOBAL_PRESENCE_EMIT_INTERVAL_MS;
+
+        if (shouldEmitPresenceUpdate) {
+          const presenceData: PresenceUpdatedEvent = {
+            userId,
+            boardId: data.boardId,
+            timestamp: data.timestamp,
+          };
+          socket.broadcast.emit('presence-updated', presenceData);
+          fs.data.lastPresenceEmitAt = data.timestamp;
+        }
       });
 
       // Handle cursor leave events (user navigates away from board)
       socket.on('cursor-leave', (data: CursorLeaveEvent) => {
         const userId = getUserId();
+        const fs = socket as FeathersSocket;
 
-        socket.broadcast.emit('cursor-left', {
+        socket.broadcast.to(boardPresenceRoomName(data.boardId)).emit('cursor-left', {
           userId,
           boardId: data.boardId,
           timestamp: Date.now(),
         });
+
+        if (fs.data.currentBoardId === data.boardId) {
+          delete fs.data.currentBoardId;
+        }
       });
 
       // =========================================================================

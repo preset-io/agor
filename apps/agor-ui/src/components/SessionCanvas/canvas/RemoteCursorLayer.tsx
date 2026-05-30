@@ -2,6 +2,7 @@ import type { AgorClient, BoardID, User } from '@agor-live/client';
 import { theme } from 'antd';
 import { useMemo } from 'react';
 import { useViewport } from 'reactflow';
+import { useBoardPresenceRoom } from '../../../hooks/useBoardPresenceRoom';
 import { usePresence } from '../../../hooks/usePresence';
 
 interface RemoteCursorLayerProps {
@@ -19,6 +20,13 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
 }) => {
   const { token } = theme.useToken();
   const viewport = useViewport();
+
+  useBoardPresenceRoom({
+    client,
+    boardId,
+    enabled,
+  });
+
   const { remoteCursors } = usePresence({
     client,
     boardId,

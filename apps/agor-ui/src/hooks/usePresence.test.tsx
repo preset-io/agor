@@ -1,4 +1,4 @@
-import type { CursorMovedEvent, User } from '@agor-live/client';
+import type { CursorMovedEvent, PresenceUpdatedEvent, User } from '@agor-live/client';
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { usePresence } from './usePresence';
@@ -91,48 +91,42 @@ describe('usePresence', () => {
     });
 
     act(() => {
-      emit('cursor-moved', {
+      emit('presence-updated', {
         userId: 'user-1',
         boardId: 'board-b',
-        x: 10,
-        y: 20,
         timestamp: 1_000,
-      } satisfies CursorMovedEvent);
+      } satisfies PresenceUpdatedEvent);
     });
 
     const firstActiveUsers = result.current.activeUsers;
 
     act(() => {
-      emit('cursor-moved', {
+      emit('presence-updated', {
         userId: 'user-1',
         boardId: 'board-b',
-        x: 40,
-        y: 50,
         timestamp: 5_000,
-      } satisfies CursorMovedEvent);
+      } satisfies PresenceUpdatedEvent);
     });
 
     expect(result.current.activeUsers).toBe(firstActiveUsers);
     expect(result.current.activeUsers[0]).toMatchObject({
       boardId: 'board-b',
       lastSeen: 1_000,
-      cursor: { x: 10, y: 20 },
     });
+    expect(result.current.activeUsers[0]?.cursor).toBeUndefined();
 
     act(() => {
-      emit('cursor-moved', {
+      emit('presence-updated', {
         userId: 'user-1',
         boardId: 'board-b',
-        x: 60,
-        y: 70,
         timestamp: 12_000,
-      } satisfies CursorMovedEvent);
+      } satisfies PresenceUpdatedEvent);
     });
 
     expect(result.current.activeUsers[0]).toMatchObject({
       boardId: 'board-b',
       lastSeen: 12_000,
-      cursor: { x: 60, y: 70 },
     });
+    expect(result.current.activeUsers[0]?.cursor).toBeUndefined();
   });
 });
