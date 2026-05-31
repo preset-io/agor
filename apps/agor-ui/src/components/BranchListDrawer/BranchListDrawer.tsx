@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
-import { BranchPill } from '../Pill/Pill';
+import { BranchPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
 

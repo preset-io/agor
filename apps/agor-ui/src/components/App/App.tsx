@@ -383,6 +383,8 @@ export const App: React.FC<AppProps> = ({
 
   const effectiveSessionPanelSize = clampPercent(sessionPanelSize, 15, 75);
   const sessionPanelRef = useRef<ImperativePanelHandle>(null);
+  const leftPanelResizeDraggingRef = useRef(false);
+  const rightPanelResizeDraggingRef = useRef(false);
 
   // Comment highlight state (hover and sticky selection)
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
@@ -1004,10 +1006,17 @@ export const App: React.FC<AppProps> = ({
                 direction="horizontal"
                 style={{ flex: 1 }}
                 onLayout={(sizes) => {
-                  // Save left panel size when user resizes (only when panel is open)
-                  if (!leftPanelCollapsed && sizes.length >= 2) {
+                  // Persist only user drag updates. Programmatic resizing enforces
+                  // the responsive minimum without clobbering the user's desired size.
+                  if (
+                    !leftPanelCollapsed &&
+                    leftPanelResizeDraggingRef.current &&
+                    sizes.length >= 2
+                  ) {
                     // Comments panel is the first panel (index 0)
-                    setCommentsPanelSize(Math.max(sizes[0], leftPanelMinSize));
+                    setCommentsPanelSize(
+                      clampPercent(sizes[0], leftPanelMinSize, LEFT_PANEL_MAX_SIZE_PERCENT)
+                    );
                   }
                 }}
               >
@@ -1075,6 +1084,9 @@ export const App: React.FC<AppProps> = ({
                     transition: 'background 0.2s',
                     pointerEvents: leftPanelCollapsed ? 'none' : 'auto',
                   }}
+                  onDragging={(isDragging) => {
+                    leftPanelResizeDraggingRef.current = isDragging;
+                  }}
                   onMouseEnter={(e) => {
                     if (!leftPanelCollapsed) {
                       (e.currentTarget as unknown as HTMLDivElement).style.background =
@@ -1099,8 +1111,13 @@ export const App: React.FC<AppProps> = ({
                     direction="horizontal"
                     style={{ flex: 1 }}
                     onLayout={(sizes) => {
-                      // Save right panel size when user resizes (only when panel is open)
-                      if (effectiveSelectedSessionId && sizes.length === 2) {
+                      // Persist only user drag updates so panel open/close and
+                      // programmatic restores do not overwrite the user's preference.
+                      if (
+                        effectiveSelectedSessionId &&
+                        rightPanelResizeDraggingRef.current &&
+                        sizes.length === 2
+                      ) {
                         setSessionPanelSize(clampPercent(sizes[1], 15, 75));
                       }
                     }}
@@ -1172,6 +1189,9 @@ export const App: React.FC<AppProps> = ({
                             background: 'var(--ant-color-border-secondary)',
                             cursor: 'col-resize',
                             transition: 'background 0.2s',
+                          }}
+                          onDragging={(isDragging) => {
+                            rightPanelResizeDraggingRef.current = isDragging;
                           }}
                           onMouseEnter={(e) => {
                             (e.currentTarget as unknown as HTMLDivElement).style.background =

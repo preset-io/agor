@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { readLocalStorageJson, writeLocalStorageJson } from './localStorageJson';
 
 /**
  * LocalStorage hook for preferences that should be isolated per authenticated
@@ -13,19 +14,10 @@ export function useUserLocalStorage<T>(
 ): [T, (value: T | ((val: T) => T)) => void] {
   const storageKey = useMemo(() => (userId ? `agor:user:${userId}:${key}` : null), [key, userId]);
 
-  const readStoredValue = useCallback((): T => {
-    if (typeof window === 'undefined' || !storageKey) {
-      return initialValue;
-    }
-
-    try {
-      const item = window.localStorage.getItem(storageKey);
-      return item ? JSON.parse(item) : initialValue;
-    } catch (error) {
-      console.error(`Error reading localStorage key "${storageKey}":`, error);
-      return initialValue;
-    }
-  }, [initialValue, storageKey]);
+  const readStoredValue = useCallback(
+    (): T => (storageKey ? readLocalStorageJson(storageKey, initialValue) : initialValue),
+    [initialValue, storageKey]
+  );
 
   const [storedValue, setStoredValue] = useState<T>(readStoredValue);
   const storageKeyRef = useRef(storageKey);
@@ -40,8 +32,8 @@ export function useUserLocalStorage<T>(
       setStoredValue((prev) => {
         const valueToStore = value instanceof Function ? value(prev) : value;
         const currentKey = storageKeyRef.current;
-        if (typeof window !== 'undefined' && currentKey) {
-          window.localStorage.setItem(currentKey, JSON.stringify(valueToStore));
+        if (currentKey) {
+          writeLocalStorageJson(currentKey, valueToStore);
         }
         return valueToStore;
       });
