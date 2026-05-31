@@ -34,6 +34,8 @@ interface BranchHeaderPillProps {
   connectionDisabled?: boolean;
   /** Show environment status/controls and environment shortcut. Defaults to true. */
   showEnvButtons?: boolean;
+  /** Compact identity section for constrained side panels. Hides the repo slug but keeps it in the tooltip. */
+  compact?: boolean;
 }
 
 const PILL_HEIGHT = 22;
@@ -56,6 +58,7 @@ export function BranchHeaderPill({
   onViewLogs,
   connectionDisabled = false,
   showEnvButtons = true,
+  compact = false,
 }: BranchHeaderPillProps) {
   const { token } = theme.useToken();
   const confirmNuke = useConfirmNukeEnvironment();
@@ -138,6 +141,10 @@ export function BranchHeaderPill({
     }
   };
 
+  const identityTooltip = compact
+    ? `${repo.slug} / ${branch.name} · Open branch settings`
+    : 'Open branch settings';
+
   // --- Render ---
 
   return (
@@ -154,7 +161,7 @@ export function BranchHeaderPill({
       }}
     >
       {/* Section 1: Repo + Branch — click opens modal (General tab) */}
-      <Tooltip title="Open branch settings">
+      <Tooltip title={identityTooltip}>
         <button
           type="button"
           onClick={openModal}
@@ -162,7 +169,7 @@ export function BranchHeaderPill({
             display: 'inline-flex',
             alignItems: 'center',
             gap: 4,
-            padding: '0 8px',
+            padding: compact ? '0 6px' : '0 8px',
             cursor: 'pointer',
             height: PILL_HEIGHT,
             background: 'none',
@@ -172,15 +179,19 @@ export function BranchHeaderPill({
           }}
         >
           <BranchesOutlined style={{ fontSize: 12 }} />
-          <span style={{ fontFamily: token.fontFamilyCode, fontSize: token.fontSizeSM }}>
-            {repo.slug}
-          </span>
-          <ApartmentOutlined style={{ fontSize: 10, opacity: 0.6 }} />
+          {!compact && (
+            <>
+              <span style={{ fontFamily: token.fontFamilyCode, fontSize: token.fontSizeSM }}>
+                {repo.slug}
+              </span>
+              <ApartmentOutlined style={{ fontSize: 10, opacity: 0.6 }} />
+            </>
+          )}
           <span
             style={{
               fontFamily: token.fontFamilyCode,
               fontSize: token.fontSizeSM,
-              maxWidth: 180,
+              maxWidth: compact ? 220 : 180,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',

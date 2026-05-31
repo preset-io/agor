@@ -332,8 +332,8 @@ export const App: React.FC<AppProps> = ({
 
   // Comments panel size persistence (percentage of available width)
   const [commentsPanelSize, setCommentsPanelSize] = useLocalStorage<number>(
-    'agor:commentsPanelSize',
-    25
+    'agor:leftPanelSize',
+    32
   );
 
   const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel;
@@ -996,7 +996,7 @@ export const App: React.FC<AppProps> = ({
                   defaultSize={leftPanelCollapsed ? 0 : commentsPanelSize}
                   collapsedSize={0}
                   minSize={leftPanelCollapsed ? 0 : 15}
-                  maxSize={40}
+                  maxSize={45}
                 >
                   {!leftPanelCollapsed && (
                     <BoardAssistantPanel

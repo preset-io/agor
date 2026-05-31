@@ -258,6 +258,7 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
                 sessionCount={assistantSessions.length}
                 onOpenBranch={onOpenSettings}
                 showEnvButtons={false}
+                compact
               />
               {primaryAssistantBranch.created_by && (
                 <CreatedByTag
