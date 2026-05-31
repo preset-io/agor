@@ -43,6 +43,7 @@ import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
 import { type ActiveUrlTarget, useUrlState } from '../../hooks/useUrlState';
+import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import type { AgenticToolOption } from '../../types';
 import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
 import { createAssistantBranch } from '../../utils/assistantCreation';
@@ -188,6 +189,17 @@ export interface AppProps {
 // Frozen at runtime; the consuming components only read it.
 const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
 
+// 320px keeps the three left-panel tabs (Assistant / All sessions / Comments)
+// on one readable line with Ant's tab padding at the 768px desktop breakpoint.
+const LEFT_PANEL_MIN_WIDTH_PX = 320;
+const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
+
+const getLeftPanelMinSizePercent = (viewportWidth: number) =>
+  Math.min(LEFT_PANEL_MAX_SIZE_PERCENT, (LEFT_PANEL_MIN_WIDTH_PX / viewportWidth) * 100);
+
+const clampPercent = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
 export const App: React.FC<AppProps> = ({
   client,
   user,
@@ -304,6 +316,22 @@ export const App: React.FC<AppProps> = ({
 
   const [leftPanelTab, setLeftPanelTab] = useState<BoardAssistantPanelTab>('assistant');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === 'undefined' ? 1440 : window.innerWidth
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const leftPanelMinSize = useMemo(
+    () => getLeftPanelMinSizePercent(viewportWidth),
+    [viewportWidth]
+  );
 
   // Settings modal state via URL routing
   const {
@@ -329,9 +357,10 @@ export const App: React.FC<AppProps> = ({
     false
   );
 
-  // Comments panel size persistence (percentage of available width)
-  const [commentsPanelSize, setCommentsPanelSize] = useLocalStorage<number>(
-    'agor:leftPanelSize',
+  // Left panel size persistence (percentage of available width), scoped per user.
+  const [commentsPanelSize, setCommentsPanelSize] = useUserLocalStorage<number>(
+    user?.user_id,
+    'panel:left:size',
     24
   );
 
@@ -339,11 +368,21 @@ export const App: React.FC<AppProps> = ({
 
   // Ref for programmatically controlling the comments panel
   const commentsPanelRef = useRef<ImperativePanelHandle>(null);
-  // Session panel size persistence (percentage of available width)
-  const [sessionPanelSize, setSessionPanelSize] = useLocalStorage<number>(
-    'agor:sessionPanelSize',
+  const effectiveCommentsPanelSize = clampPercent(
+    commentsPanelSize,
+    leftPanelMinSize,
+    LEFT_PANEL_MAX_SIZE_PERCENT
+  );
+
+  // Session panel size persistence (percentage of available width), scoped per user.
+  const [sessionPanelSize, setSessionPanelSize] = useUserLocalStorage<number>(
+    user?.user_id,
+    'panel:right:size',
     50
   );
+
+  const effectiveSessionPanelSize = clampPercent(sessionPanelSize, 15, 75);
+  const sessionPanelRef = useRef<ImperativePanelHandle>(null);
 
   // Comment highlight state (hover and sticky selection)
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
@@ -401,9 +440,16 @@ export const App: React.FC<AppProps> = ({
         commentsPanelRef.current.collapse();
       } else {
         commentsPanelRef.current.expand();
+        commentsPanelRef.current.resize(effectiveCommentsPanelSize);
       }
     }
-  }, [leftPanelCollapsed]);
+  }, [effectiveCommentsPanelSize, leftPanelCollapsed]);
+
+  useEffect(() => {
+    if (sessionPanelRef.current && (effectiveSelectedSessionId || !eventStreamPanelCollapsed)) {
+      sessionPanelRef.current.resize(effectiveSessionPanelSize);
+    }
+  }, [effectiveSelectedSessionId, effectiveSessionPanelSize, eventStreamPanelCollapsed]);
 
   // URL state synchronization - bidirectional sync between URL and state
   useUrlState({
@@ -961,7 +1007,7 @@ export const App: React.FC<AppProps> = ({
                   // Save left panel size when user resizes (only when panel is open)
                   if (!leftPanelCollapsed && sizes.length >= 2) {
                     // Comments panel is the first panel (index 0)
-                    setCommentsPanelSize(sizes[0]);
+                    setCommentsPanelSize(Math.max(sizes[0], leftPanelMinSize));
                   }
                 }}
               >
@@ -970,10 +1016,11 @@ export const App: React.FC<AppProps> = ({
                   order={1}
                   ref={commentsPanelRef}
                   collapsible
-                  defaultSize={leftPanelCollapsed ? 0 : commentsPanelSize}
+                  defaultSize={leftPanelCollapsed ? 0 : effectiveCommentsPanelSize}
                   collapsedSize={0}
-                  minSize={leftPanelCollapsed ? 0 : 15}
-                  maxSize={45}
+                  minSize={leftPanelCollapsed ? 0 : leftPanelMinSize}
+                  maxSize={LEFT_PANEL_MAX_SIZE_PERCENT}
+                  style={{ minWidth: leftPanelCollapsed ? 0 : LEFT_PANEL_MIN_WIDTH_PX }}
                 >
                   {!leftPanelCollapsed && (
                     <BoardAssistantPanel
@@ -1044,7 +1091,7 @@ export const App: React.FC<AppProps> = ({
                 <Panel
                   id="content-panel"
                   order={2}
-                  defaultSize={leftPanelCollapsed ? 100 : 100 - commentsPanelSize}
+                  defaultSize={leftPanelCollapsed ? 100 : 100 - effectiveCommentsPanelSize}
                   minSize={40}
                 >
                   <PanelGroup
@@ -1054,14 +1101,16 @@ export const App: React.FC<AppProps> = ({
                     onLayout={(sizes) => {
                       // Save right panel size when user resizes (only when panel is open)
                       if (effectiveSelectedSessionId && sizes.length === 2) {
-                        setSessionPanelSize(sizes[1]);
+                        setSessionPanelSize(clampPercent(sizes[1], 15, 75));
                       }
                     }}
                   >
                     <Panel
                       id="canvas-panel"
                       order={1}
-                      defaultSize={effectiveSelectedSessionId ? 100 - sessionPanelSize : 100}
+                      defaultSize={
+                        effectiveSelectedSessionId ? 100 - effectiveSessionPanelSize : 100
+                      }
                       minSize={20}
                     >
                       <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
@@ -1136,7 +1185,8 @@ export const App: React.FC<AppProps> = ({
                         <Panel
                           id="session-panel"
                           order={2}
-                          defaultSize={sessionPanelSize}
+                          ref={sessionPanelRef}
+                          defaultSize={effectiveSessionPanelSize}
                           minSize={15}
                           maxSize={75}
                         >

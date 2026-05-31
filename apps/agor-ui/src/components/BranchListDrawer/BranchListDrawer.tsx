@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
-import { RepoPill } from '../Pill';
+import { BranchPill } from '../Pill/Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
 
@@ -205,7 +205,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
                   <SessionRelationshipIcon session={session} />
                 </div>
 
-                {/* Line 2: repo+branch pill · relative timestamp */}
+                {/* Line 2: compact, non-interactive branch pill · relative timestamp */}
                 <div
                   style={{
                     display: 'flex',
@@ -218,12 +218,12 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
                   }}
                 >
                   <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                    {repo && branch ? (
-                      <RepoPill repoName={repo.slug} branchName={branch.name} color="default" />
-                    ) : branch ? (
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        🌳 {branch.name}
-                      </Typography.Text>
+                    {branch ? (
+                      <BranchPill
+                        branch={branch.name}
+                        compact
+                        title={repo ? `${repo.slug} / ${branch.name}` : branch.name}
+                      />
                     ) : (
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                         No branch

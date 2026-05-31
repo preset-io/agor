@@ -835,14 +835,43 @@ export const DirtyStatePill: React.FC<DirtyStatePillProps> = ({ style }) => {
 
 interface BranchPillProps extends BasePillProps {
   branch: string;
+  compact?: boolean;
+  title?: string;
 }
 
-export const BranchPill: React.FC<BranchPillProps> = ({ branch, style }) => {
+export const BranchPill: React.FC<BranchPillProps> = ({
+  branch,
+  compact = false,
+  title,
+  style,
+}) => {
   const { token } = theme.useToken();
 
   return (
-    <Tag icon={<BranchesOutlined />} color={PILL_COLORS.git} style={style}>
-      <span style={{ fontFamily: token.fontFamilyCode }}>{branch}</span>
+    <Tag
+      icon={<BranchesOutlined />}
+      color={PILL_COLORS.git}
+      title={title}
+      style={{
+        maxWidth: compact ? '100%' : undefined,
+        marginInlineEnd: compact ? 0 : undefined,
+        cursor: 'default',
+        ...style,
+      }}
+    >
+      <span
+        style={{
+          display: compact ? 'inline-block' : undefined,
+          maxWidth: compact ? 220 : undefined,
+          overflow: compact ? 'hidden' : undefined,
+          textOverflow: compact ? 'ellipsis' : undefined,
+          whiteSpace: compact ? 'nowrap' : undefined,
+          verticalAlign: compact ? 'bottom' : undefined,
+          fontFamily: token.fontFamilyCode,
+        }}
+      >
+        {branch}
+      </span>
     </Tag>
   );
 };

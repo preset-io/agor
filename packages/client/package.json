@@ -7,21 +7,25 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
     "./config": {
+      "source": "./src/config.ts",
       "types": "./dist/config.d.ts",
       "import": "./dist/config.js",
       "require": "./dist/config.cjs"
     },
     "./yaml": {
+      "source": "./src/yaml.ts",
       "types": "./dist/yaml.d.ts",
       "import": "./dist/yaml.js",
       "require": "./dist/yaml.cjs"
     },
     "./jwt": {
+      "source": "./src/jwt.ts",
       "types": "./dist/jwt.d.ts",
       "import": "./dist/jwt.js",
       "require": "./dist/jwt.cjs"
