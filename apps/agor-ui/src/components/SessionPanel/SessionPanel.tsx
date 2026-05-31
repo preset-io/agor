@@ -506,20 +506,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     setEffortLevel(session?.model_config?.effort || 'high');
   }, [session?.model_config?.effort]);
 
-  // Scroll to bottom when panel opens or the user switches to a different session.
-  // Deliberately depend on session_id (not the full session object) so streaming
-  // updates — which mint a new session reference on every chunk — don't keep
-  // calling scrollToBottom() and fighting the user's scroll position.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: session_id is the stable identity; full session object changes on every streaming chunk
-  React.useEffect(() => {
-    if (open && scrollToBottom && session) {
-      const timeoutId = setTimeout(() => {
-        scrollToBottom();
-      }, 300);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [open, scrollToBottom, session?.session_id]);
-
   // When there's no session, render nothing (panel is collapsed to zero).
   // When open=false, we still render the component tree (hidden) so that
   // antd's CSS-in-JS doesn't garbage-collect component styles.
