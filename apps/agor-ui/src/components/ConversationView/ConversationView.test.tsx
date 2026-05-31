@@ -51,6 +51,29 @@ let rafCallbacks: RafEntry[] = [];
 let rafId = 0;
 const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
 const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+const originalResizeObserver = globalThis.ResizeObserver;
+
+const resizeObserverInstances: MockResizeObserver[] = [];
+
+class MockResizeObserver implements ResizeObserver {
+  callback: ResizeObserverCallback;
+  disconnected = false;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    resizeObserverInstances.push(this);
+  }
+
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn(() => {
+    this.disconnected = true;
+  });
+
+  trigger() {
+    this.callback([] as unknown as ResizeObserverEntry[], this);
+  }
+}
 
 function flushRaf() {
   const callbacks = rafCallbacks;
@@ -60,6 +83,12 @@ function flushRaf() {
       callback(performance.now());
     }
   });
+}
+
+function flushAllRaf(maxFrames = 20) {
+  for (let i = 0; i < maxFrames && rafCallbacks.length > 0; i += 1) {
+    flushRaf();
+  }
 }
 
 function setScrollMetrics(element: HTMLElement, scrollHeight: number, clientHeight: number) {
@@ -124,6 +153,7 @@ describe('ConversationView initial auto-scroll', () => {
   beforeEach(() => {
     rafCallbacks = [];
     rafId = 0;
+    resizeObserverInstances.length = 0;
     globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
       rafId += 1;
       rafCallbacks.push({ id: rafId, callback });
@@ -132,12 +162,14 @@ describe('ConversationView initial auto-scroll', () => {
     globalThis.cancelAnimationFrame = vi.fn((id: number) => {
       rafCallbacks = rafCallbacks.filter((entry) => entry.id !== id);
     });
+    globalThis.ResizeObserver = MockResizeObserver;
   });
 
   afterEach(() => {
     mockUseSharedReactiveSession.mockReset();
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
     globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+    globalThis.ResizeObserver = originalResizeObserver;
   });
 
   it('scrolls to the bottom after the initial task list finishes loading', () => {
@@ -196,6 +228,123 @@ describe('ConversationView initial auto-scroll', () => {
     expect(scroller.scrollTop).toBe(1600);
   });
 
+  it('does not treat task-list layout growth as a manual scroll-away before messages load', () => {
+    const tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'latest task')];
+    let state = makeState({ loading: false, tasks });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="tasks-loaded" />
+    );
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(scroller, 900, 300);
+    flushRaf();
+    expect(scroller.scrollTop).toBe(900);
+
+    // Simulate late task-list layout growth before the latest task messages
+    // finish loading. This may fire a scroll event, but without an explicit user
+    // scroll input it must not suppress the phase-2 latest-message scroll.
+    setScrollMetrics(scroller, 1600, 300);
+    fireEvent.scroll(scroller);
+
+    state = makeState({
+      loading: false,
+      tasks,
+      loadedTaskIds: new Set(['task-2']),
+      messagesByTask: new Map([['task-2', [makeMessage('task-2')]]]),
+    });
+    rerender(
+      <ConversationView
+        client={null}
+        sessionId={'session-1' as any}
+        sessionModel="messages-loaded"
+      />
+    );
+    setScrollMetrics(scroller, 2400, 300);
+    flushRaf();
+
+    expect(scroller.scrollTop).toBe(2400);
+  });
+
+  it('keeps initial message-load auto-scroll active until large content layout stabilizes', () => {
+    const tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'latest task')];
+    let state = makeState({ loading: false, tasks });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="tasks-loaded" />
+    );
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(scroller, 900, 300);
+    flushAllRaf();
+    expect(scroller.scrollTop).toBe(900);
+
+    state = makeState({
+      loading: false,
+      tasks,
+      loadedTaskIds: new Set(['task-2']),
+      messagesByTask: new Map([['task-2', [makeMessage('task-2')]]]),
+    });
+    rerender(
+      <ConversationView
+        client={null}
+        sessionId={'session-1' as any}
+        sessionModel="messages-loaded"
+      />
+    );
+
+    setScrollMetrics(scroller, 1600, 300);
+    flushRaf();
+    expect(scroller.scrollTop).toBe(1600);
+
+    setScrollMetrics(scroller, 3200, 300);
+    resizeObserverInstances.at(-1)?.trigger();
+    flushRaf();
+
+    expect(scroller.scrollTop).toBe(3200);
+  });
+
+  it('stops layout-stabilizing initial auto-scroll when the user scrolls away', () => {
+    const tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'latest task')];
+    let state = makeState({ loading: false, tasks });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="tasks-loaded" />
+    );
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(scroller, 900, 300);
+    flushAllRaf();
+    expect(scroller.scrollTop).toBe(900);
+
+    state = makeState({
+      loading: false,
+      tasks,
+      loadedTaskIds: new Set(['task-2']),
+      messagesByTask: new Map([['task-2', [makeMessage('task-2')]]]),
+    });
+    rerender(
+      <ConversationView
+        client={null}
+        sessionId={'session-1' as any}
+        sessionModel="messages-loaded"
+      />
+    );
+
+    setScrollMetrics(scroller, 1600, 300);
+    flushRaf();
+    expect(scroller.scrollTop).toBe(1600);
+
+    fireEvent.wheel(scroller);
+    scroller.scrollTop = 1000;
+    fireEvent.scroll(scroller);
+    setScrollMetrics(scroller, 3200, 300);
+    resizeObserverInstances.at(-1)?.trigger();
+    flushRaf();
+
+    expect(scroller.scrollTop).toBe(1000);
+  });
+
   it('lets a manual scroll before the new-task RAF win', () => {
     let tasks = [makeTask('task-1', 'first task')];
     let state = makeState({ loading: false, tasks });
@@ -216,11 +365,39 @@ describe('ConversationView initial auto-scroll', () => {
     );
     setScrollMetrics(scroller, 1400, 300);
 
+    fireEvent.wheel(scroller);
     scroller.scrollTop = 100;
     fireEvent.scroll(scroller);
     flushRaf();
 
     expect(scroller.scrollTop).toBe(100);
+  });
+
+  it('keeps streaming locked to the bottom while the user is still at bottom', () => {
+    const tasks = [makeTask('task-1', 'latest task')];
+    let state = makeState({ loading: false, tasks, loadedTaskIds: new Set(['task-1']) });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="loaded" />
+    );
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(scroller, 1000, 300);
+    flushAllRaf();
+    expect(scroller.scrollTop).toBe(1000);
+
+    state = makeState({
+      loading: false,
+      tasks,
+      loadedTaskIds: new Set(['task-1']),
+      streamingMessages: new Map([['stream-1', makeMessage('task-1')]]),
+    });
+    setScrollMetrics(scroller, 1400, 300);
+    rerender(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="streaming" />
+    );
+
+    expect(scroller.scrollTop).toBe(1400);
   });
 
   it('does not scroll when latest task messages load after the latest task was collapsed', () => {
@@ -295,6 +472,7 @@ describe('ConversationView initial auto-scroll', () => {
     setScrollMetrics(scroller, 900, 300);
     flushRaf();
 
+    fireEvent.wheel(scroller);
     scroller.scrollTop = 100;
     fireEvent.scroll(scroller);
 
