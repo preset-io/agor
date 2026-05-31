@@ -48,6 +48,25 @@ describe('buildResolvedConfigSlice', () => {
     });
   });
 
+  it('surfaces executor heartbeat enabled and interval fields', async () => {
+    await writeConfigYaml(
+      [
+        'execution:',
+        '  executor_heartbeat:',
+        '    enabled: false',
+        '    interval_ms: 2500',
+        '    stale_after_ms: 9000',
+        '    callback:',
+        '      command_template: echo should-not-ship',
+        '',
+      ].join('\n')
+    );
+    const slice = buildResolvedConfigSlice();
+    expect(slice.execution?.executor_heartbeat).toEqual({ enabled: false, interval_ms: 2500 });
+    expect(slice.execution?.executor_heartbeat).not.toHaveProperty('stale_after_ms');
+    expect(slice.execution?.executor_heartbeat).not.toHaveProperty('callback');
+  });
+
   it('surfaces opencode.serverUrl', async () => {
     await writeConfigYaml('opencode:\n  serverUrl: http://opencode.internal:4096\n');
     const slice = buildResolvedConfigSlice();
@@ -64,12 +83,11 @@ describe('buildResolvedConfigSlice', () => {
     });
   });
 
-  it('returns an empty slice when no relevant fields are configured', () => {
-    // No config file → no fields surface. Sections are omitted entirely
-    // rather than set to objects with undefined values, so the in-memory
-    // shape matches what survives JSON serialization to the executor.
+  it('returns only heartbeat defaults when no optional fields are configured', () => {
     const slice = buildResolvedConfigSlice();
-    expect(slice).toEqual({});
+    expect(slice).toEqual({
+      execution: { executor_heartbeat: { enabled: true, interval_ms: 10_000 } },
+    });
   });
 
   it('returns the same shape before and after JSON round-trip (wire fidelity)', async () => {
@@ -113,6 +131,7 @@ describe('buildResolvedConfigSlice', () => {
     const slice = buildResolvedConfigSlice() as Record<string, Record<string, unknown>>;
     // Allowed fields surface.
     expect(slice.execution?.permission_timeout_ms).toBe(60_000);
+    expect(slice.execution?.executor_heartbeat).toEqual({ enabled: true, interval_ms: 10_000 });
     expect(slice.daemon?.host_ip_address).toBe('10.0.0.5');
     // Non-allowed top-level sections are absent — slice is a strict subset.
     expect(slice).not.toHaveProperty('credentials');

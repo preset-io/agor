@@ -105,6 +105,7 @@ describe('TaskRepository.create', () => {
     expect(created.status).toBe(data.status);
     expect(created.created_at).toBeDefined();
     expect(created.completed_at).toBeUndefined();
+    expect(created.last_executor_heartbeat_at).toBeUndefined();
   });
 
   dbTest('should generate task_id if not provided', async ({ db }) => {
@@ -693,6 +694,23 @@ describe('TaskRepository.update', () => {
     // Unchanged fields
     expect(updated.full_prompt).toBe(created.full_prompt);
     expect(updated.session_id).toBe(created.session_id);
+  });
+
+  dbTest('should round-trip last_executor_heartbeat_at on update', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    const heartbeatAt = '2026-01-01T00:00:00.000Z';
+
+    const updated = await taskRepo.update(created.task_id, {
+      last_executor_heartbeat_at: heartbeatAt,
+    });
+    const found = await taskRepo.findById(created.task_id);
+
+    expect(updated.last_executor_heartbeat_at).toBe(heartbeatAt);
+    expect(found?.last_executor_heartbeat_at).toBe(heartbeatAt);
   });
 
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {

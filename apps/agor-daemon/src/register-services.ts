@@ -800,7 +800,14 @@ function createExecuteHandler(
                 currentTask.status === 'timed_out';
 
               if (isTaskStillActive) {
-                await app.service('tasks').patch(taskId, { status: TaskStatus.FAILED }, params);
+                await app.service('tasks').patch(
+                  taskId,
+                  {
+                    status: TaskStatus.FAILED,
+                    error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+                  },
+                  params
+                );
                 console.log(
                   `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
                 );

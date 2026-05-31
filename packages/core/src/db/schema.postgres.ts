@@ -250,6 +250,7 @@ export const tasks = pgTable(
     created_at: t.timestamp('created_at').notNull(),
     started_at: t.timestamp('started_at'),
     completed_at: t.timestamp('completed_at'),
+    last_executor_heartbeat_at: t.timestamp('last_executor_heartbeat_at'),
     status: text('status', {
       enum: [
         'queued',

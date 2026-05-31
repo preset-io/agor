@@ -811,6 +811,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at
                 }
                 durationMs={footerTimerTask.duration_ms}
+                lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
               />
             )}
             <SessionIdsButton session={session} />

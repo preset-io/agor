@@ -10,7 +10,11 @@
  * can stay focused on subprocess / template / sudo / env-routing concerns.
  */
 
-import { loadConfigSync, type ResolvedConfigSlice } from '@agor/core/config';
+import {
+  loadConfigSync,
+  resolveExecutorHeartbeatConfig,
+  type ResolvedConfigSlice,
+} from '@agor/core/config';
 
 /**
  * Inject a daemon-resolved config slice into an executor payload if the
@@ -46,9 +50,18 @@ export function buildResolvedConfigSlice(): ResolvedConfigSlice {
     // @agor/core/config). Adding a new field to ResolvedConfigSlice
     // without sourcing it here is a compile error.
     const slice: ResolvedConfigSlice = {};
+    const executionSlice: NonNullable<ResolvedConfigSlice['execution']> = {};
     const permissionTimeoutMs = config.execution?.permission_timeout_ms;
     if (permissionTimeoutMs !== undefined) {
-      slice.execution = { permission_timeout_ms: permissionTimeoutMs };
+      executionSlice.permission_timeout_ms = permissionTimeoutMs;
+    }
+    const heartbeat = resolveExecutorHeartbeatConfig(config.execution);
+    executionSlice.executor_heartbeat = {
+      enabled: heartbeat.enabled,
+      interval_ms: heartbeat.interval_ms,
+    };
+    if (Object.keys(executionSlice).length > 0) {
+      slice.execution = executionSlice;
     }
     const opencodeServerUrl = config.opencode?.serverUrl;
     if (opencodeServerUrl !== undefined) {

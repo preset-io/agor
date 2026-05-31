@@ -8,12 +8,13 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
-import { getAgorHome } from '@agor/core/config';
+import { getAgorHome, resolveExecutorHeartbeatConfig } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import { MessagesRepository, SessionRepository, shortId } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
+import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
 import type { GatewayService } from './services/gateway.js';
 import { createHealthMonitor } from './services/health-monitor.js';
 import { SchedulerService } from './services/scheduler.js';
@@ -424,7 +425,19 @@ export async function startup(ctx: StartupContext): Promise<void> {
     }
   }
 
-  // 5. Start scheduler service (background worker)
+  // 5. Start executor heartbeat stale supervisor
+  const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);
+  const heartbeatSupervisor = new ExecutorHeartbeatSupervisor({ app, config: heartbeatConfig });
+  heartbeatSupervisor.start();
+  if (heartbeatConfig.enabled) {
+    console.log(
+      `💓 Executor heartbeat supervisor started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms)`
+    );
+  } else {
+    console.log('💓 Executor heartbeat disabled');
+  }
+
+  // 6. Start scheduler service (background worker)
   let schedulerService: SchedulerService | null = null;
   if (svcEnabled('scheduler')) {
     schedulerService = new SchedulerService(db, app, {
@@ -440,7 +453,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     console.log(`🔄 Scheduler started (tick interval: 30s)`);
   }
 
-  // 6. Initialize gateway: refresh channel state cache, then start Socket Mode listeners
+  // 7. Initialize gateway: refresh channel state cache, then start Socket Mode listeners
   const gatewayService = safeService('gateway') as unknown as GatewayService | undefined;
   if (gatewayService) {
     gatewayService
@@ -453,7 +466,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       });
   }
 
-  // 7. Graceful shutdown handler
+  // 8. Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
 
@@ -465,6 +478,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
     try {
       // Clean up health monitor
       healthMonitor.cleanup();
+
+      // Stop heartbeat supervisor
+      heartbeatSupervisor.stop();
 
       // Clean up terminal sessions
       if (terminalsService) {

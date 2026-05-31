@@ -17,6 +17,7 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
+import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
@@ -39,6 +40,7 @@ export class AgorExecutor {
   private client: AgorClient | null = null;
   private abortController: AbortController;
   private isRunning = false;
+  private heartbeat: ExecutorHeartbeatHandle | null = null;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -147,27 +149,39 @@ export class AgorExecutor {
 
     this.isRunning = true;
 
-    console.log(`[executor] Executing task with ${this.config.tool}...`);
-
-    // Import and initialize tool registry
-    const { ToolRegistry, initializeToolRegistry } = await import(
-      './handlers/sdk/tool-registry.js'
-    );
-    await initializeToolRegistry();
-
-    // Execute using registry
-    await ToolRegistry.execute(this.config.tool, {
+    const heartbeatConfig = this.config.resolvedConfig?.execution?.executor_heartbeat;
+    this.heartbeat = startExecutorHeartbeat({
       client: this.client,
-      sessionId: this.config.sessionId as SessionID,
-      taskId: this.config.taskId as TaskID,
-      prompt: this.config.prompt,
-      permissionMode: this.config.permissionMode,
-      abortController: this.abortController,
-      messageSource: this.config.messageSource,
-      resolvedConfig: this.config.resolvedConfig,
+      taskId: this.config.taskId,
+      enabled: heartbeatConfig?.enabled ?? true,
+      intervalMs: heartbeatConfig?.interval_ms,
     });
 
-    this.isRunning = false;
+    console.log(`[executor] Executing task with ${this.config.tool}...`);
+
+    try {
+      // Import and initialize tool registry
+      const { ToolRegistry, initializeToolRegistry } = await import(
+        './handlers/sdk/tool-registry.js'
+      );
+      await initializeToolRegistry();
+
+      // Execute using registry
+      await ToolRegistry.execute(this.config.tool, {
+        client: this.client,
+        sessionId: this.config.sessionId as SessionID,
+        taskId: this.config.taskId as TaskID,
+        prompt: this.config.prompt,
+        permissionMode: this.config.permissionMode,
+        abortController: this.abortController,
+        messageSource: this.config.messageSource,
+        resolvedConfig: this.config.resolvedConfig,
+      });
+    } finally {
+      this.heartbeat?.stop();
+      this.heartbeat = null;
+      this.isRunning = false;
+    }
   }
 
   /**
@@ -181,6 +195,8 @@ export class AgorExecutor {
       if (this.isRunning) {
         this.abortController.abort();
       }
+      this.heartbeat?.stop();
+      this.heartbeat = null;
 
       // The daemon's stop route already patches the task to STOPPED before
       // sending the signal — this fallback only fires if we received an

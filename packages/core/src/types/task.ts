@@ -215,5 +215,7 @@ export interface Task {
 
   created_at: string;
   started_at?: string; // When task status changed to RUNNING (UTC ISO string)
+  /** Latest heartbeat emitted by the executor while this task is active. */
+  last_executor_heartbeat_at?: string; // UTC ISO string
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }

@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { DAEMON, MCP_TOKEN } from './constants';
+import { resolveExecutorHeartbeatConfig } from './executor-heartbeat';
 import type { AgorConfig, UnknownJson } from './types';
 
 // ---------------------------------------------------------------------------
@@ -293,6 +294,7 @@ export function getDefaultConfig(): AgorConfig {
       session_token_max_uses: 1, // Single-use tokens
       mcp_token_expiration_ms: MCP_TOKEN.DEFAULT_EXPIRATION_MS,
       sync_unix_passwords: true, // Default: sync passwords to Unix
+      executor_heartbeat: resolveExecutorHeartbeatConfig(),
     },
   };
 }

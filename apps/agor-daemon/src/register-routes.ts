@@ -843,6 +843,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    */
   const sessionTurnLocks: SessionTurnLocks = new Map();
 
+  function sessionCanStartTask(status: SessionStatus, readyForPrompt?: boolean): boolean {
+    return (
+      status === SessionStatus.IDLE || (status === SessionStatus.FAILED && readyForPrompt === true)
+    );
+  }
+
   /**
    * Helper: Safely patch an entity, returning false if it was deleted mid-execution
    */
@@ -1297,7 +1303,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             throw new Error('Cannot send prompt: session is currently stopping');
           }
           const queuedTasks = await taskRepo.findQueued(id as SessionID);
-          const shouldQueue = lockedSession.status !== SessionStatus.IDLE || queuedTasks.length > 0;
+          const shouldQueue =
+            !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
+            queuedTasks.length > 0;
 
           if (shouldQueue) {
             const queuedTask = await taskRepo.createPending({
@@ -1319,7 +1327,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
             app.service('tasks').emit('queued', queuedTask);
 
-            if (lockedSession.status === SessionStatus.IDLE) {
+            if (sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)) {
               setImmediate(async () => {
                 try {
                   await sessionsService.triggerQueueProcessing(id as SessionID, params);
@@ -1497,7 +1505,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (session.status === SessionStatus.STOPPING) {
             throw new BadRequest('Cannot run task: session is currently stopping');
           }
-          if (session.status !== SessionStatus.IDLE) {
+          if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
             throw new Conflict(
               `Cannot run task ${shortId(taskId)}: session is '${session.status}'. ` +
                 `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
@@ -2144,7 +2152,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
     const session = await sessionsService.get(sessionId, taskParams);
 
-    if (session.status !== SessionStatus.IDLE) {
+    if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
       console.log(
         `⏸️  [Queue] Session ${shortId(sessionId)} is ${session.status}, task ${shortId(nextTask.task_id)} waiting in queue ` +
           `(will be processed when session becomes IDLE via patch hook)`

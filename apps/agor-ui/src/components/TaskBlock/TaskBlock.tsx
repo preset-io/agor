@@ -489,6 +489,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   : undefined)
               }
               durationMs={task.duration_ms}
+              lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
             />
             {scheduledFromBranch && scheduledRunAt && (
               <ScheduledRunPill scheduledRunAt={scheduledRunAt} />

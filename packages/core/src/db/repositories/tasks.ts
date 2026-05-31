@@ -38,6 +38,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       queue_position: row.queue_position ?? undefined,
       created_at: new Date(row.created_at).toISOString(),
       completed_at: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
+      last_executor_heartbeat_at: row.last_executor_heartbeat_at
+        ? new Date(row.last_executor_heartbeat_at).toISOString()
+        : undefined,
       created_by: row.created_by,
       session_md5: row.session_md5 ?? undefined,
       ...row.data,
@@ -69,6 +72,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       session_id: task.session_id,
       created_at: new Date(now), // Always use server timestamp, ignore client-provided value
       completed_at: task.completed_at ? new Date(task.completed_at) : undefined,
+      last_executor_heartbeat_at: task.last_executor_heartbeat_at
+        ? new Date(task.last_executor_heartbeat_at)
+        : undefined,
       status: task.status ?? TaskStatus.CREATED,
       queue_position: task.queue_position ?? null,
       created_by: task.created_by,
@@ -274,6 +280,31 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
+   * Find active tasks that have emitted at least one executor heartbeat.
+   *
+   * Tasks with a null heartbeat are intentionally skipped so enabling the
+   * supervisor does not fail legacy/pre-migration rows or tasks still inside
+   * startup grace before the executor sends its first heartbeat.
+   */
+  async findActiveWithExecutorHeartbeat(): Promise<Task[]> {
+    try {
+      const rows = await select(this.db)
+        .from(tasks)
+        .where(
+          sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission', 'awaiting_input') AND ${tasks.last_executor_heartbeat_at} IS NOT NULL`
+        )
+        .all();
+
+      return rows.map((row: TaskRow) => this.rowToTask(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find active tasks with executor heartbeat: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find tasks by status
    */
   async findByStatus(status: Task['status']): Promise<Task[]> {
@@ -332,6 +363,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             status: insertData.status,
             queue_position: insertData.queue_position,
             completed_at: insertData.completed_at,
+            last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
             session_md5: insertData.session_md5,
             data: insertData.data,
           })

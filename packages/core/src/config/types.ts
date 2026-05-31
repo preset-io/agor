@@ -298,10 +298,42 @@ export interface AgorDatabaseSettings {
  */
 export type UnixUserMode = 'simple' | 'insulated' | 'strict';
 
+
+export interface AgorExecutorHeartbeatSettings {
+  /** Enable executor task heartbeats (default: true). */
+  enabled?: boolean;
+
+  /** Heartbeat interval in milliseconds (default: 10000). */
+  interval_ms?: number;
+
+  /** Stale threshold in milliseconds. Default: max(3 * interval_ms, 30000). */
+  stale_after_ms?: number | null;
+
+  /** Optional external command callback invoked on each heartbeat. */
+  callback?: {
+    /** Shell command to run. Receives heartbeat JSON on stdin. Disabled when null/undefined. */
+    command_template?: string | null;
+    /** Callback timeout in milliseconds (default: 3000). */
+    timeout_ms?: number;
+  };
+}
+
 /**
  * Execution settings
  */
 export interface AgorExecutionSettings {
+
+  /**
+   * Lightweight heartbeat settings for long-running executor tasks.
+   *
+   * The executor patches `tasks.last_executor_heartbeat_at` immediately and
+   * then every `interval_ms` while a task is active. The daemon may mark stale
+   * active tasks failed after `stale_after_ms` without retrying automatically.
+   * Optional callbacks are shell commands that receive a small JSON payload on
+   * stdin; keep secrets out of the command argv.
+   */
+  executor_heartbeat?: AgorExecutorHeartbeatSettings;
+
   /** Unix user to run executors as (default: undefined = run as daemon user). When set, uses sudo impersonation. */
   executor_unix_user?: string;
 

@@ -9,7 +9,7 @@ import {
   type ChildCompletionContext,
   renderChildCompletionCallback,
 } from '@agor/core/callbacks/child-completion-template';
-import { PAGINATION } from '@agor/core/config';
+import { PAGINATION, resolveExecutorHeartbeatConfig } from '@agor/core/config';
 import { type Database, shortId, TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -23,6 +23,10 @@ import type {
 import { TaskStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { appendSystemMessage } from '../utils/append-system-message.js';
+import {
+  type ExecutorHeartbeatCallbackPayload,
+  ExecutorHeartbeatCallbackRunner,
+} from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import type { SessionsService } from './sessions';
 
@@ -41,6 +45,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   private taskRepo: TaskRepository;
   private app: Application;
   private db: Database;
+  private heartbeatCallbackRunner: ExecutorHeartbeatCallbackRunner;
 
   constructor(db: Database, app: Application) {
     const taskRepo = new TaskRepository(db);
@@ -57,6 +62,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.taskRepo = taskRepo;
     this.app = app;
     this.db = db;
+    const heartbeatConfig = resolveExecutorHeartbeatConfig(app.get?.('config')?.execution);
+    this.heartbeatCallbackRunner = new ExecutorHeartbeatCallbackRunner(heartbeatConfig.callback);
   }
 
   /**
@@ -148,6 +155,33 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return result;
   }
 
+  async getActiveWithExecutorHeartbeat(): Promise<Task[]> {
+    return this.taskRepo.findActiveWithExecutorHeartbeat();
+  }
+
+  private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
+    const payload: ExecutorHeartbeatCallbackPayload = {
+      event: 'executor_heartbeat',
+      task_id: task.task_id,
+      session_id: task.session_id,
+      last_executor_heartbeat_at: heartbeatAt,
+    };
+
+    try {
+      const session = await this.app.service('sessions').get(task.session_id);
+      if (session?.branch_id) {
+        payload.branch_id = session.branch_id;
+      }
+    } catch (error) {
+      console.warn(
+        `⚠️  [TasksService] Could not resolve branch_id for heartbeat task ${shortId(task.task_id)}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
+    this.heartbeatCallbackRunner.run(payload);
+  }
+
   /**
    * Override patch to detect task completion and:
    * 1. Atomically update session status to IDLE when task reaches terminal state
@@ -213,6 +247,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     const result = await super.patch(id, data, params);
+
+    if (data.last_executor_heartbeat_at && !Array.isArray(result)) {
+      this.handleExecutorHeartbeat(result as Task, data.last_executor_heartbeat_at).catch(
+        (error) => {
+          console.warn(
+            `⚠️  [TasksService] Executor heartbeat callback failed for task ${shortId((result as Task).task_id)}:`,
+            error
+          );
+        }
+      );
+    }
 
     // If task is being marked as completed, failed, or stopped (terminal status)
     if (

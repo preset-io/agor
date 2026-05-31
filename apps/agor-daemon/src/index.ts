@@ -574,6 +574,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // contexts) can resolve it via `getDb(app)`. Existing services that
   // already receive `db` via constructor injection are unaffected.
   app.set('database', db);
+  app.set('config', config);
 
   // --------------------------------------------------------------------------
   // Phase 1: Register services

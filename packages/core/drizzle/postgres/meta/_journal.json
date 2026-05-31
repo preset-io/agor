@@ -267,6 +267,13 @@
       "when": 1780400000000,
       "tag": "0038_primary_assistant_id",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1780500000000,
+      "tag": "0039_executor_heartbeat",
+      "breakpoints": true
     }
   ]
 }
