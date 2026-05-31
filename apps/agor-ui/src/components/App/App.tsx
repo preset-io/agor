@@ -333,7 +333,7 @@ export const App: React.FC<AppProps> = ({
   // Comments panel size persistence (percentage of available width)
   const [commentsPanelSize, setCommentsPanelSize] = useLocalStorage<number>(
     'agor:leftPanelSize',
-    32
+    24
   );
 
   const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel;
