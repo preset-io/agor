@@ -51,6 +51,7 @@ let rafCallbacks: RafEntry[] = [];
 let rafId = 0;
 const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
 const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+const originalResizeObserver = globalThis.ResizeObserver;
 
 function flushRaf() {
   const callbacks = rafCallbacks;
@@ -60,6 +61,12 @@ function flushRaf() {
       callback(performance.now());
     }
   });
+}
+
+function flushAllRaf(maxFrames = 20) {
+  for (let frame = 0; frame < maxFrames && rafCallbacks.length > 0; frame += 1) {
+    flushRaf();
+  }
 }
 
 function setScrollMetrics(element: HTMLElement, scrollHeight: number, clientHeight: number) {
@@ -132,12 +139,20 @@ describe('ConversationView initial auto-scroll', () => {
     globalThis.cancelAnimationFrame = vi.fn((id: number) => {
       rafCallbacks = rafCallbacks.filter((entry) => entry.id !== id);
     });
+    globalThis.ResizeObserver = vi.fn(
+      class {
+        observe = vi.fn();
+        unobserve = vi.fn();
+        disconnect = vi.fn();
+      }
+    ) as any;
   });
 
   afterEach(() => {
     mockUseSharedReactiveSession.mockReset();
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
     globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+    globalThis.ResizeObserver = originalResizeObserver;
   });
 
   it('scrolls to the bottom after the initial task list finishes loading', () => {
@@ -158,9 +173,30 @@ describe('ConversationView initial auto-scroll', () => {
     setScrollMetrics(scroller, 1200, 300);
     expect(scroller.scrollTop).toBe(0);
 
-    flushRaf();
+    flushAllRaf();
 
     expect(scroller.scrollTop).toBe(1200);
+  });
+
+  it('keeps initial task-load auto-scroll pinned while large layout grows after the first RAF', () => {
+    const tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'latest task')];
+    const state = makeState({ loading: false, tasks });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="tasks-loaded" />
+    );
+
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(scroller, 900, 300);
+
+    flushRaf();
+    expect(scroller.scrollTop).toBe(900);
+
+    setScrollMetrics(scroller, 1800, 300);
+    flushRaf();
+
+    expect(scroller.scrollTop).toBe(1800);
   });
 
   it('scrolls again when the latest task messages finish loading', () => {
@@ -173,7 +209,7 @@ describe('ConversationView initial auto-scroll', () => {
     );
     const scroller = screen.getByTestId('conversation-scroll-container');
     setScrollMetrics(scroller, 900, 300);
-    flushRaf();
+    flushAllRaf();
     expect(scroller.scrollTop).toBe(900);
 
     state = makeState({
@@ -191,9 +227,43 @@ describe('ConversationView initial auto-scroll', () => {
     );
     setScrollMetrics(scroller, 1600, 300);
 
-    flushRaf();
+    flushAllRaf();
 
     expect(scroller.scrollTop).toBe(1600);
+  });
+
+  it('ignores stale reactive session state during a session switch', () => {
+    const sessionOneTasks = [makeTask('task-1', 'session one task')];
+    const sessionTwoTasks = [makeTask('task-2', 'session two latest')];
+    let state = makeState({ sessionId: 'session-1', loading: false, tasks: sessionOneTasks });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="session-1" />
+    );
+    const firstScroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(firstScroller, 900, 300);
+    flushAllRaf();
+    expect(firstScroller.scrollTop).toBe(900);
+
+    // The shared-session hook can return the previous session state for one
+    // render after sessionId changes. That stale render must not mark the new
+    // session's initial task-list scroll phase as complete.
+    rerender(
+      <ConversationView client={null} sessionId={'session-2' as any} sessionModel="stale-state" />
+    );
+    expect(screen.queryByTestId('conversation-scroll-container')).not.toBeInTheDocument();
+
+    state = makeState({ sessionId: 'session-2', loading: false, tasks: sessionTwoTasks });
+    rerender(
+      <ConversationView client={null} sessionId={'session-2' as any} sessionModel="session-2" />
+    );
+
+    const secondScroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(secondScroller, 1400, 300);
+    flushAllRaf();
+
+    expect(secondScroller.scrollTop).toBe(1400);
   });
 
   it('lets a manual scroll before the new-task RAF win', () => {
@@ -206,7 +276,7 @@ describe('ConversationView initial auto-scroll', () => {
     );
     const scroller = screen.getByTestId('conversation-scroll-container');
     setScrollMetrics(scroller, 900, 300);
-    flushRaf();
+    flushAllRaf();
     expect(scroller.scrollTop).toBe(900);
 
     tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'new task')];
@@ -217,10 +287,43 @@ describe('ConversationView initial auto-scroll', () => {
     setScrollMetrics(scroller, 1400, 300);
 
     scroller.scrollTop = 100;
+    fireEvent.wheel(scroller);
     fireEvent.scroll(scroller);
-    flushRaf();
+    flushAllRaf();
 
     expect(scroller.scrollTop).toBe(100);
+  });
+
+  it('treats explicit task expand/collapse as reading intent before a new task arrives', () => {
+    let tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'latest task')];
+    let state = makeState({ loading: false, tasks });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="two-tasks" />
+    );
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(scroller, 900, 300);
+    flushAllRaf();
+
+    fireEvent.click(screen.getByRole('button', { name: 'toggle task-1' }));
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
+
+    tasks = [
+      makeTask('task-1', 'first task'),
+      makeTask('task-2', 'previous latest task'),
+      makeTask('task-3', 'new latest task'),
+    ];
+    state = makeState({ loading: false, tasks });
+    rerender(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="three-tasks" />
+    );
+    setScrollMetrics(scroller, 1500, 300);
+    flushAllRaf();
+
+    expect(scroller.scrollTop).toBe(900);
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
+    expect(screen.getByTestId('task-task-3')).toHaveAttribute('data-expanded', 'true');
   });
 
   it('does not scroll when latest task messages load after the latest task was collapsed', () => {
@@ -233,7 +336,7 @@ describe('ConversationView initial auto-scroll', () => {
     );
     const scroller = screen.getByTestId('conversation-scroll-container');
     setScrollMetrics(scroller, 900, 300);
-    flushRaf();
+    flushAllRaf();
     expect(scroller.scrollTop).toBe(900);
 
     fireEvent.click(screen.getByRole('button', { name: 'toggle task-2' }));
@@ -253,7 +356,7 @@ describe('ConversationView initial auto-scroll', () => {
       />
     );
     setScrollMetrics(scroller, 1600, 300);
-    flushRaf();
+    flushAllRaf();
 
     expect(scroller.scrollTop).toBe(900);
   });
@@ -277,7 +380,7 @@ describe('ConversationView initial auto-scroll', () => {
         isActive={false}
       />
     );
-    flushRaf();
+    flushAllRaf();
 
     expect(scroller.scrollTop).toBe(0);
     expect(globalThis.cancelAnimationFrame).toHaveBeenCalled();
@@ -293,9 +396,10 @@ describe('ConversationView initial auto-scroll', () => {
     );
     const scroller = screen.getByTestId('conversation-scroll-container');
     setScrollMetrics(scroller, 900, 300);
-    flushRaf();
+    flushAllRaf();
 
     scroller.scrollTop = 100;
+    fireEvent.wheel(scroller);
     fireEvent.scroll(scroller);
 
     state = makeState({
@@ -312,8 +416,34 @@ describe('ConversationView initial auto-scroll', () => {
       />
     );
     setScrollMetrics(scroller, 1600, 300);
-    flushRaf();
+    flushAllRaf();
 
     expect(scroller.scrollTop).toBe(100);
+  });
+
+  it('keeps streaming locked to the bottom while the user is still at bottom', () => {
+    const tasks = [makeTask('task-1', 'latest task')];
+    let streamingMessages = new Map();
+    let state = makeState({ loading: false, tasks, streamingMessages });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="initial" />
+    );
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(scroller, 900, 300);
+    flushAllRaf();
+    expect(scroller.scrollTop).toBe(900);
+
+    streamingMessages = new Map([['streaming-1', { task_id: 'task-1', content: 'chunk' }]]);
+    state = makeState({ loading: false, tasks, streamingMessages });
+    rerender(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="streaming" />
+    );
+
+    setScrollMetrics(scroller, 1300, 300);
+    flushAllRaf();
+
+    expect(scroller.scrollTop).toBe(1300);
   });
 });
