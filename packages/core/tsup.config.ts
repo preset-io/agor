@@ -4,6 +4,7 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: {
     index: 'src/index.ts',
+    'analytics/index': 'src/analytics/index.ts', // Backend analytics logger and plugin resolution
     'types/index': 'src/types/index.ts',
     'db/index': 'src/db/index.ts',
     'db/session-guard': 'src/db/session-guard.ts', // Defensive programming for deleted sessions
