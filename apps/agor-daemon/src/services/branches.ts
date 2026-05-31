@@ -35,6 +35,7 @@ import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
+import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { ensureCanTriggerManagedEnv, ensureMinimumRole } from '../utils/authorization.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
@@ -289,18 +290,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   private trackBranchCreated(branch: Branch): void {
-    analyticsLogger.track(
-      'branch.created',
-      {
-        branch_id: branch.branch_id,
-        repo_id: branch.repo_id,
-        board_id: branch.board_id ?? null,
-        ref_type: branch.ref_type ?? 'branch',
-        new_branch: branch.new_branch,
-        is_assistant: isAssistant(branch),
-      },
-      { userId: branch.created_by }
-    );
+    analyticsLogger.track('branch.created', buildBranchCreatedAnalyticsProperties(branch), {
+      userId: branch.created_by,
+    });
   }
 
   private async maybeSetBoardPrimaryAssistant(branch: Branch): Promise<void> {

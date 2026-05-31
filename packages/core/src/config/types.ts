@@ -840,7 +840,7 @@ export interface AgorAnalyticsModulePluginSettings {
   type: 'module';
   enabled?: boolean;
   options?: {
-    /** Package name or local module path to dynamically import. */
+    /** Package name or absolute local module path to dynamically import. */
     module_path?: string | null;
     /** Factory export to call. Defaults to createAnalyticsPlugin. */
     export_name?: string;

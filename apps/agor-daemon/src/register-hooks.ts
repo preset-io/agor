@@ -54,6 +54,7 @@ import type {
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
+import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import { applySessionConfigDefaults } from './utils/apply-session-config-defaults.js';
 import {
   ensureMinimumRole,
@@ -1890,19 +1891,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           const session = context.result as Session;
           analyticsLogger.track(
             'session.created',
-            {
-              session_id: session.session_id,
-              branch_id: session.branch_id,
-              agentic_tool: session.agentic_tool,
-              agentic_tool_version: session.agentic_tool_version ?? null,
-              model: session.model_config?.model ?? null,
-              model_mode: session.model_config?.mode ?? null,
-              provider: session.model_config?.provider ?? null,
-              permission_mode: session.permission_config?.mode ?? null,
-              has_parent_session: Boolean(session.genealogy?.parent_session_id),
-              has_fork_source: Boolean(session.genealogy?.forked_from_session_id),
-              fork_origin: session.fork_origin ?? null,
-            },
+            buildSessionCreatedAnalyticsProperties(session),
             { userId: session.created_by }
           );
           return context;

@@ -172,10 +172,15 @@ export function createHttpBatchAnalyticsPlugin(
   };
 }
 
-function importTargetForModulePath(modulePath: string): string {
-  if (modulePath.startsWith('.') || modulePath.startsWith('/')) {
-    return pathToFileURL(modulePath.startsWith('.') ? `${process.cwd()}/${modulePath}` : modulePath)
-      .href;
+function importTargetForModulePath(modulePath: string): string | null {
+  if (modulePath.startsWith('.')) {
+    warnAnalytics(
+      'module plugin options.module_path must be a package specifier or absolute path; skipping relative path'
+    );
+    return null;
+  }
+  if (modulePath.startsWith('/')) {
+    return pathToFileURL(modulePath).href;
   }
   return modulePath;
 }
@@ -191,7 +196,10 @@ export async function createModuleAnalyticsPlugins(
   }
 
   try {
-    const imported = await import(importTargetForModulePath(options.module_path));
+    const importTarget = importTargetForModulePath(options.module_path);
+    if (!importTarget) return [];
+
+    const imported = await import(importTarget);
     const exportName = options.export_name ?? 'createAnalyticsPlugin';
     const factory = imported[exportName];
     if (typeof factory !== 'function') {

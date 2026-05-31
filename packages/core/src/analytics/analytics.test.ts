@@ -214,4 +214,24 @@ describe('analytics plugins', () => {
       expect.objectContaining({ event: 'second' }),
     ]);
   });
+
+  it('skips relative module plugin paths to avoid cwd-dependent imports', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const plugins = await resolveAnalyticsPlugins({
+      ...enabledBase,
+      plugins: [
+        {
+          type: 'module',
+          enabled: true,
+          options: { module_path: './analytics-plugin.js' },
+        },
+      ],
+    });
+
+    expect(plugins).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      '[analytics] module plugin options.module_path must be a package specifier or absolute path; skipping relative path'
+    );
+  });
 });
