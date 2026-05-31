@@ -74,6 +74,7 @@
     "@slack/socket-mode": "^2.0.7",
     "@slack/types": "^2.21.1",
     "@slack/web-api": "^7.16.0",
+    "analytics": "^0.8.19",
     "bcryptjs": "^2.4.3",
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",

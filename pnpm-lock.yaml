@@ -532,6 +532,9 @@ importers:
       '@slack/web-api':
         specifier: ^7.16.0
         version: 7.16.0
+      analytics:
+        specifier: ^0.8.19
+        version: 0.8.19(@types/dlv@1.1.5)
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
