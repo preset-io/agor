@@ -127,7 +127,7 @@ describe('TasksService analytics lifecycle events', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
       duration_ms: 5000,
     });
-    const { service } = makeService({
+    const { service, sessionsService } = makeService({
       findById: vi.fn().mockResolvedValueOnce(runningTask).mockResolvedValueOnce(runningTask),
       update: vi.fn().mockResolvedValue(timedOutTask),
     });
@@ -143,6 +143,7 @@ describe('TasksService analytics lifecycle events', () => {
       }),
       { userId: runningTask.created_by }
     );
+    expect(sessionsService.patch).not.toHaveBeenCalled();
 
     track.mockClear();
     service.repository.findById = vi

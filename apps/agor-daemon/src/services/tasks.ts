@@ -34,15 +34,25 @@ import type { SessionsService } from './sessions';
 /**
  * Task service params
  */
-const TERMINAL_TASK_STATUSES = new Set<Task['status']>([
+const ANALYTICS_TERMINAL_TASK_STATUSES = new Set<Task['status']>([
   TaskStatus.COMPLETED,
   TaskStatus.FAILED,
   TaskStatus.STOPPED,
   TaskStatus.TIMED_OUT,
 ]);
 
-function isTerminalTaskStatus(status: Task['status'] | undefined): boolean {
-  return status !== undefined && TERMINAL_TASK_STATUSES.has(status);
+const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
+  TaskStatus.COMPLETED,
+  TaskStatus.FAILED,
+  TaskStatus.STOPPED,
+]);
+
+function isAnalyticsTerminalTaskStatus(status: Task['status'] | undefined): boolean {
+  return status !== undefined && ANALYTICS_TERMINAL_TASK_STATUSES.has(status);
+}
+
+function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): boolean {
+  return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
 }
 
 export type TaskParams = QueryParams<{
@@ -294,17 +304,21 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const nextStatus = data.status;
     const mayTransitionStatus =
-      nextStatus === TaskStatus.RUNNING || isTerminalTaskStatus(nextStatus);
+      nextStatus === TaskStatus.RUNNING || isAnalyticsTerminalTaskStatus(nextStatus);
     const currentTask = mayTransitionStatus ? await this.get(id, params) : undefined;
-    const isTerminalTransition =
-      isTerminalTaskStatus(nextStatus) && !isTerminalTaskStatus(currentTask?.status);
+    const isAnalyticsTerminalTransition =
+      isAnalyticsTerminalTaskStatus(nextStatus) &&
+      !isAnalyticsTerminalTaskStatus(currentTask?.status);
+    const isCompletionSideEffectTransition =
+      isCompletionSideEffectTaskStatus(nextStatus) &&
+      !isCompletionSideEffectTaskStatus(currentTask?.status);
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
     // When transitioning to a terminal status, auto-compute duration, completed_at,
     // and end_timestamp. This ensures ALL code paths (complete, fail, stop handler)
     // get correct timing data without duplicating logic.
-    if (isTerminalTransition && currentTask) {
+    if (isAnalyticsTerminalTransition && currentTask) {
       const completedAt = data.completed_at || new Date().toISOString();
 
       // Ensure completed_at is always set
@@ -366,11 +380,19 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
     }
 
-    // If task is transitioning to a terminal status
-    if (isTerminalTransition) {
-      // Since tasks are patched one at a time, result is always a single Task (not an array)
+    // Emit analytics for terminal task transitions, including timeouts that do not
+    // run the broader task-completion side effects below.
+    if (isAnalyticsTerminalTransition) {
       const task = result as Task;
       this.trackTaskCompleted(task);
+    }
+
+    // Run completion side effects only for statuses that historically completed
+    // executor turns. Timeout paths patch session state separately and should not
+    // enqueue callbacks, mark sessions idle, archive forks, or drain queues here.
+    if (isCompletionSideEffectTransition) {
+      // Since tasks are patched one at a time, result is always a single Task (not an array)
+      const task = result as Task;
 
       if (task.session_id && this.app) {
         try {

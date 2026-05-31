@@ -69,12 +69,19 @@ export class AnalyticsPackageLogger implements AnalyticsLogger {
     if (options.userId) trackOptions.userId = options.userId;
     if (options.anonymousId) trackOptions.anonymousId = options.anonymousId;
 
-    void this.client.track(event, properties, trackOptions).catch((error: unknown) => {
+    try {
+      void this.client.track(event, properties, trackOptions).catch((error: unknown) => {
+        console.warn(
+          `[analytics] track failed for "${event}":`,
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    } catch (error) {
       console.warn(
         `[analytics] track failed for "${event}":`,
         error instanceof Error ? error.message : String(error)
       );
-    });
+    }
   }
 }
 

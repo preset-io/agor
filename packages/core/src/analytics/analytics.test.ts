@@ -3,7 +3,11 @@ import { getDefaultAnalyticsConfig } from '../config/analytics-defaults.js';
 import { getDefaultConfig } from '../config/config-manager.js';
 import type { AgorAnalyticsSettings } from '../config/types.js';
 import { isAnalyticsEventExcluded } from './filters.js';
-import { configureAnalyticsLogger, createAnalyticsLogger } from './logger.js';
+import {
+  AnalyticsPackageLogger,
+  configureAnalyticsLogger,
+  createAnalyticsLogger,
+} from './logger.js';
 import {
   createHttpBatchAnalyticsPlugin,
   createStdoutAnalyticsPlugin,
@@ -83,6 +87,18 @@ describe('analytics logger', () => {
       '[analytics] failed to configure analytics; continuing with analytics disabled:',
       'bad client config'
     );
+  });
+
+  it('isolates synchronous analytics client track failures', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const logger = new AnalyticsPackageLogger({
+      track: () => {
+        throw new Error('sync boom');
+      },
+    } as never);
+
+    expect(() => logger.track('task.created', { task_id: 'task-1' })).not.toThrow();
+    expect(warn).toHaveBeenCalledWith('[analytics] track failed for "task.created":', 'sync boom');
   });
 });
 
