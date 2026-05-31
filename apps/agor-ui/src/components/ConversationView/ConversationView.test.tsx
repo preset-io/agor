@@ -18,7 +18,7 @@ vi.mock('@agor-live/client', () => ({
   MessageRole: {
     ASSISTANT: 'assistant',
   },
-  shortId: (id: string) => id.slice(0, 8),
+  shortId: () => 'short-id',
 }));
 
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
