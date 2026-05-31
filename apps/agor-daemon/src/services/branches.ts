@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { analyticsLogger } from '@agor/core/analytics';
 import { ENVIRONMENT, isBranchRbacEnabled, loadConfig, PAGINATION } from '@agor/core/config';
 import {
   BoardRepository,
@@ -275,12 +276,33 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
       const created = (await super.create(withDefaults, params)) as Branch[];
       await Promise.all(created.map((branch) => this.maybeSetBoardPrimaryAssistant(branch)));
+      for (const branch of created) {
+        this.trackBranchCreated(branch);
+      }
       return created;
     }
     const withDefaults = await this.applyBranchCreateDefaults(data);
     const created = (await super.create(withDefaults, params)) as Branch;
     await this.maybeSetBoardPrimaryAssistant(created);
+    this.trackBranchCreated(created);
     return created;
+  }
+
+  private trackBranchCreated(branch: Branch): void {
+    analyticsLogger.track(
+      'branch.created',
+      {
+        branch_id: branch.branch_id,
+        repo_id: branch.repo_id,
+        board_id: branch.board_id ?? null,
+        name: branch.name,
+        ref: branch.ref,
+        ref_type: branch.ref_type ?? 'branch',
+        new_branch: branch.new_branch,
+        is_assistant: isAssistant(branch),
+      },
+      { userId: branch.created_by }
+    );
   }
 
   private async maybeSetBoardPrimaryAssistant(branch: Branch): Promise<void> {

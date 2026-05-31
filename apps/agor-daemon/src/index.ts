@@ -16,6 +16,7 @@
 import 'dotenv/config';
 
 // Patch console methods to respect LOG_LEVEL env var
+import { configureAnalyticsLogger } from '@agor/core/analytics';
 import { patchConsole } from '@agor/core/utils/logger';
 import { UI_MOUNT_PATH } from '@agor/core/utils/url';
 
@@ -147,6 +148,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     : options?.configPath
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
+
+  await configureAnalyticsLogger(config);
 
   // Set GIT_CONFIG_PARAMETERS before any child-process spawn so every git
   // invocation under Agor's control inherits it. See @agor/core/config

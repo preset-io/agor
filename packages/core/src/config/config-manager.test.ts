@@ -96,6 +96,7 @@ describe('getDefaultConfig', () => {
     expect(defaults.daemon?.host).toBe('localhost');
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
+    expect(defaults.analytics?.enabled).toBe(false);
   });
 });
 

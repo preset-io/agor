@@ -781,6 +781,75 @@ export interface AgorPathSettings {
 }
 
 /**
+ * Backend analytics settings.
+ *
+ * Disabled by default. When enabled, daemon/server code sends curated
+ * lifecycle events through a central analytics client. Plugin configuration is
+ * resolved by type at daemon startup.
+ */
+export interface AgorAnalyticsSettings {
+  /** Master kill-switch. Defaults to false. */
+  enabled?: boolean;
+
+  /** Static client options passed to the underlying analytics package. */
+  client?: {
+    app?: string;
+    version?: string | number;
+    debug?: boolean;
+  };
+
+  /** Simple event-name filters. */
+  filters?: {
+    /** Exact names or simple `*` globs to exclude before delivery. */
+    exclude_events?: string[];
+  };
+
+  /** Analytics delivery plugins. */
+  plugins?: AgorAnalyticsPluginSettings[];
+}
+
+export type AgorAnalyticsPluginSettings =
+  | AgorAnalyticsStdoutPluginSettings
+  | AgorAnalyticsHttpBatchPluginSettings
+  | AgorAnalyticsModulePluginSettings;
+
+export interface AgorAnalyticsStdoutPluginSettings {
+  type: 'stdout';
+  enabled?: boolean;
+  options?: {
+    /** Pretty-print JSON instead of emitting JSON lines. Defaults to false. */
+    pretty?: boolean;
+  };
+}
+
+export interface AgorAnalyticsHttpBatchPluginSettings {
+  type: 'http_batch';
+  enabled?: boolean;
+  options?: {
+    /** Destination URL. Required when this plugin is enabled. */
+    url?: string | null;
+    flush_interval_ms?: number;
+    max_batch_size?: number;
+    timeout_ms?: number;
+    /** Static headers only. */
+    headers?: Record<string, string>;
+  };
+}
+
+export interface AgorAnalyticsModulePluginSettings {
+  type: 'module';
+  enabled?: boolean;
+  options?: {
+    /** Package name or local module path to dynamically import. */
+    module_path?: string | null;
+    /** Factory export to call. Defaults to createAnalyticsPlugin. */
+    export_name?: string;
+    /** Passed as the first argument to the module factory. */
+    plugin_options?: Record<string, unknown>;
+  };
+}
+
+/**
  * Supported credential keys (enum for type safety)
  */
 export enum CredentialKey {
@@ -940,6 +1009,9 @@ export interface AgorConfig {
   /** Path configuration (data_home for repos/branches separation) */
   paths?: AgorPathSettings;
 
+  /** Backend analytics settings. Disabled by default. */
+  analytics?: AgorAnalyticsSettings;
+
   /** Tool credentials (API keys, tokens) */
   credentials?: AgorCredentials;
 
@@ -994,6 +1066,7 @@ export type ConfigKey =
   | `security.${keyof AgorSecuritySettings}`
   | `branches.${keyof AgorBranchesSettings}`
   | `paths.${keyof AgorPathSettings}`
+  | `analytics.${keyof AgorAnalyticsSettings}`
   | `credentials.${keyof AgorCredentials}`
   | `onboarding.${keyof AgorOnboardingSettings}`
   | `services.${keyof import('../types/config-services').DaemonServicesConfig}`;

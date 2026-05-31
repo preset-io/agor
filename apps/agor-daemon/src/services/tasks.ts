@@ -5,6 +5,7 @@
  * Uses DrizzleService adapter with TaskRepository.
  */
 
+import { analyticsLogger } from '@agor/core/analytics';
 import {
   type ChildCompletionContext,
   renderChildCompletionCallback,
@@ -163,7 +164,64 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     }
 
+    if (!Array.isArray(result)) {
+      this.trackTaskCreated(result);
+      if (result.status === TaskStatus.RUNNING) {
+        this.trackTaskStarted(result);
+      }
+    }
+
     return result;
+  }
+
+  private baseTaskAnalyticsProperties(task: Task): Record<string, unknown> {
+    return {
+      task_id: task.task_id,
+      session_id: task.session_id,
+      status: task.status,
+      model: task.model ?? task.normalized_sdk_response?.primaryModel ?? null,
+      queue_position: task.queue_position ?? null,
+      tool_use_count: task.tool_use_count ?? 0,
+      is_callback: task.metadata?.is_agor_callback === true,
+      source: task.metadata?.source ?? null,
+    };
+  }
+
+  private trackTaskCreated(task: Task): void {
+    analyticsLogger.track('task.created', this.baseTaskAnalyticsProperties(task), {
+      userId: task.created_by,
+    });
+  }
+
+  private trackTaskStarted(task: Task): void {
+    analyticsLogger.track(
+      'task.started',
+      {
+        ...this.baseTaskAnalyticsProperties(task),
+        started_at: task.started_at ?? null,
+      },
+      { userId: task.created_by }
+    );
+  }
+
+  private trackTaskCompleted(task: Task): void {
+    const normalized = task.normalized_sdk_response;
+    analyticsLogger.track(
+      'task.completed',
+      {
+        ...this.baseTaskAnalyticsProperties(task),
+        completed_at: task.completed_at ?? null,
+        duration_ms: task.duration_ms ?? normalized?.durationMs ?? null,
+        input_tokens: normalized?.tokenUsage?.inputTokens ?? null,
+        output_tokens: normalized?.tokenUsage?.outputTokens ?? null,
+        total_tokens: normalized?.tokenUsage?.totalTokens ?? null,
+        cost_usd: normalized?.costUsd ?? null,
+        context_window_limit: normalized?.contextWindowLimit ?? null,
+        context_window_percentage: normalized?.contextUsageSnapshot?.percentage ?? null,
+        has_error: Boolean(task.error_message),
+      },
+      { userId: task.created_by }
+    );
   }
 
   async getActiveWithExecutorHeartbeat(): Promise<Task[]> {
@@ -280,7 +338,21 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     const result = await super.patch(id, data, params);
 
+    if (data.status === TaskStatus.RUNNING && !Array.isArray(result)) {
+      this.trackTaskStarted(result as Task);
+    }
+
     if (data.last_executor_heartbeat_at && !Array.isArray(result)) {
+      analyticsLogger.track(
+        'executor.heartbeat',
+        {
+          task_id: (result as Task).task_id,
+          session_id: (result as Task).session_id,
+          status: (result as Task).status,
+          last_executor_heartbeat_at: data.last_executor_heartbeat_at,
+        },
+        { userId: (result as Task).created_by }
+      );
       this.handleExecutorHeartbeat(result as Task, data.last_executor_heartbeat_at).catch(
         (error) => {
           console.warn(
@@ -299,6 +371,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) {
       // Since tasks are patched one at a time, result is always a single Task (not an array)
       const task = result as Task;
+      this.trackTaskCompleted(task);
 
       if (task.session_id && this.app) {
         try {

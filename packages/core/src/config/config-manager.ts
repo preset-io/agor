@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { getDefaultAnalyticsConfig } from '../analytics/logger.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { resolveExecutorHeartbeatConfig } from './executor-heartbeat';
 import type { AgorConfig, UnknownJson } from './types';
@@ -296,6 +297,7 @@ export function getDefaultConfig(): AgorConfig {
       sync_unix_passwords: true, // Default: sync passwords to Unix
       executor_heartbeat: resolveExecutorHeartbeatConfig(),
     },
+    analytics: getDefaultAnalyticsConfig(),
   };
 }
 
@@ -349,6 +351,7 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     ui: { ...defaults.ui, ...config.ui },
     execution: { ...defaults.execution, ...config.execution },
     paths: { ...defaults.paths, ...config.paths },
+    analytics: { ...defaults.analytics, ...config.analytics },
   };
 
   const parts = key.split('.');
