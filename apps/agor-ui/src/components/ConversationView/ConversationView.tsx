@@ -313,6 +313,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
         reactiveOptions: { taskHydration: 'lazy' },
       }
     );
+    const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
 
     useLayoutEffect(() => {
       const lifecycleKey = isActive && sessionId ? `${sessionId}:active` : null;
@@ -338,13 +339,14 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // every streaming chunk produced a fresh array → every downstream useMemo
     // depending on `tasks` would invalidate and rebuild.
     const tasks = useMemo(
-      () => (reactiveState?.tasks || []).filter((t) => t.status !== TaskStatus.QUEUED),
-      [reactiveState?.tasks]
+      () => (currentReactiveState?.tasks || []).filter((t) => t.status !== TaskStatus.QUEUED),
+      [currentReactiveState?.tasks]
     );
-    const allStreamingMessages = reactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
-    const loading = reactiveState ? reactiveState.loading : !!sessionId;
-    const error = reactiveState?.error || null;
-    const isTerminalError = !!reactiveState?.terminal;
+    const allStreamingMessages =
+      currentReactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
+    const loading = currentReactiveState ? currentReactiveState.loading : !!sessionId;
+    const error = currentReactiveState?.error || null;
+    const isTerminalError = !!currentReactiveState?.terminal;
     const [isReloading, setIsReloading] = useState(false);
 
     // Store previous task maps to maintain stable references
@@ -542,7 +544,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
     const latestTaskExpanded = !!lastTaskId && expandedTaskIds.has(lastTaskId);
     const latestTaskMessagesLoaded =
-      !!lastTaskId && latestTaskExpanded && !!reactiveState?.loadedTaskIds.has(lastTaskId);
+      !!lastTaskId && latestTaskExpanded && !!currentReactiveState?.loadedTaskIds.has(lastTaskId);
 
     // Initial-open scroll phase 2: when the latest expanded task's lazy message
     // load finishes, scroll again so the newest message is visible. The
@@ -569,7 +571,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
           description={error}
           showIcon
           action={
-            reactiveSession && !isTerminalError ? (
+            reactiveSession && currentReactiveState && !isTerminalError ? (
               <Button
                 size="small"
                 loading={isReloading}
@@ -725,8 +727,10 @@ export const ConversationView = React.memo<ConversationViewProps>(
               scheduledFromBranch={scheduledFromBranch}
               scheduledRunAt={scheduledRunAt}
               streamingMessages={streamingMessagesByTask.get(task.task_id)}
-              taskMessages={reactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES}
-              taskMessagesLoaded={!!reactiveState?.loadedTaskIds.has(task.task_id)}
+              taskMessages={
+                currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
+              }
+              taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
               onLoadTaskMessages={handleLoadTaskMessages}
               onUnloadTaskMessages={handleUnloadTaskMessages}
               assistantEmoji={assistantEmoji}

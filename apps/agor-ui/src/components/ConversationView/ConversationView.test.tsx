@@ -228,6 +228,40 @@ describe('ConversationView initial auto-scroll', () => {
     expect(scroller.scrollTop).toBe(1600);
   });
 
+  it('ignores stale reactive session state during a session switch', () => {
+    const sessionOneTasks = [makeTask('task-1', 'session one task')];
+    const sessionTwoTasks = [makeTask('task-2', 'session two latest')];
+    let state = makeState({ sessionId: 'session-1', loading: false, tasks: sessionOneTasks });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="session-1" />
+    );
+    const firstScroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(firstScroller, 900, 300);
+    flushAllRaf();
+    expect(firstScroller.scrollTop).toBe(900);
+
+    // useSharedReactiveSession can return the previous session's state for one
+    // render after sessionId changes. That stale render must not complete the
+    // new session's initial task-list scroll phase.
+    rerender(
+      <ConversationView client={null} sessionId={'session-2' as any} sessionModel="stale-state" />
+    );
+    expect(screen.queryByTestId('conversation-scroll-container')).not.toBeInTheDocument();
+
+    state = makeState({ sessionId: 'session-2', loading: false, tasks: sessionTwoTasks });
+    rerender(
+      <ConversationView client={null} sessionId={'session-2' as any} sessionModel="session-2" />
+    );
+
+    const secondScroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(secondScroller, 1400, 300);
+    flushAllRaf();
+
+    expect(secondScroller.scrollTop).toBe(1400);
+  });
+
   it('does not treat task-list layout growth as a manual scroll-away before messages load', () => {
     const tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'latest task')];
     let state = makeState({ loading: false, tasks });
@@ -371,6 +405,38 @@ describe('ConversationView initial auto-scroll', () => {
     flushRaf();
 
     expect(scroller.scrollTop).toBe(100);
+  });
+
+  it('treats explicit task expand/collapse as reading intent before a new task arrives', () => {
+    let tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'latest task')];
+    let state = makeState({ loading: false, tasks });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="two-tasks" />
+    );
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    setScrollMetrics(scroller, 900, 300);
+    flushAllRaf();
+
+    fireEvent.click(screen.getByRole('button', { name: 'toggle task-1' }));
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
+
+    tasks = [
+      makeTask('task-1', 'first task'),
+      makeTask('task-2', 'previous latest task'),
+      makeTask('task-3', 'new latest task'),
+    ];
+    state = makeState({ loading: false, tasks });
+    rerender(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="three-tasks" />
+    );
+    setScrollMetrics(scroller, 1500, 300);
+    flushAllRaf();
+
+    expect(scroller.scrollTop).toBe(900);
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
+    expect(screen.getByTestId('task-task-3')).toHaveAttribute('data-expanded', 'true');
   });
 
   it('keeps streaming locked to the bottom while the user is still at bottom', () => {
