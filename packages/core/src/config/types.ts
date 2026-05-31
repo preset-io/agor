@@ -298,7 +298,6 @@ export interface AgorDatabaseSettings {
  */
 export type UnixUserMode = 'simple' | 'insulated' | 'strict';
 
-
 export interface AgorExecutorHeartbeatSettings {
   /** Enable executor task heartbeats (default: true). */
   enabled?: boolean;
@@ -322,7 +321,6 @@ export interface AgorExecutorHeartbeatSettings {
  * Execution settings
  */
 export interface AgorExecutionSettings {
-
   /**
    * Lightweight heartbeat settings for long-running executor tasks.
    *

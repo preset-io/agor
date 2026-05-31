@@ -12,8 +12,8 @@
 
 import {
   loadConfigSync,
-  resolveExecutorHeartbeatConfig,
   type ResolvedConfigSlice,
+  resolveExecutorHeartbeatConfig,
 } from '@agor/core/config';
 
 /**
