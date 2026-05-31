@@ -34,6 +34,17 @@ import type { SessionsService } from './sessions';
 /**
  * Task service params
  */
+const TERMINAL_TASK_STATUSES = new Set<Task['status']>([
+  TaskStatus.COMPLETED,
+  TaskStatus.FAILED,
+  TaskStatus.STOPPED,
+  TaskStatus.TIMED_OUT,
+]);
+
+function isTerminalTaskStatus(status: Task['status'] | undefined): boolean {
+  return status !== undefined && TERMINAL_TASK_STATUSES.has(status);
+}
+
 export type TaskParams = QueryParams<{
   session_id?: string;
   status?: Task['status'];
@@ -281,64 +292,56 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * NOTE: Tasks are only ever patched one at a time (never in bulk), so we don't need to loop.
    */
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
+    const nextStatus = data.status;
+    const mayTransitionStatus =
+      nextStatus === TaskStatus.RUNNING || isTerminalTaskStatus(nextStatus);
+    const currentTask = mayTransitionStatus ? await this.get(id, params) : undefined;
+    const isTerminalTransition =
+      isTerminalTaskStatus(nextStatus) && !isTerminalTaskStatus(currentTask?.status);
+    const isRunningTransition =
+      nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
+
     // When transitioning to a terminal status, auto-compute duration, completed_at,
     // and end_timestamp. This ensures ALL code paths (complete, fail, stop handler)
     // get correct timing data without duplicating logic.
-    const isTerminalTransition =
-      data.status === TaskStatus.COMPLETED ||
-      data.status === TaskStatus.FAILED ||
-      data.status === TaskStatus.STOPPED;
+    if (isTerminalTransition && currentTask) {
+      const completedAt = data.completed_at || new Date().toISOString();
 
-    if (isTerminalTransition) {
-      // Only fetch the current task if we actually need to compute something
-      const currentTask = await this.get(id, params);
+      // Ensure completed_at is always set
+      if (!data.completed_at) {
+        data.completed_at = completedAt;
+      }
 
-      // Guard: skip if task is already in a terminal state (e.g. adding a report
-      // after completion). We only compute timing on the actual transition.
-      const wasAlreadyTerminal =
-        currentTask?.status === TaskStatus.COMPLETED ||
-        currentTask?.status === TaskStatus.FAILED ||
-        currentTask?.status === TaskStatus.STOPPED;
-
-      if (!wasAlreadyTerminal) {
-        const completedAt = data.completed_at || new Date().toISOString();
-
-        // Ensure completed_at is always set
-        if (!data.completed_at) {
-          data.completed_at = completedAt;
+      // Compute duration_ms if not explicitly provided (null check, not falsy,
+      // so an explicit 0 is preserved)
+      if (data.duration_ms == null) {
+        const startTime =
+          currentTask.started_at ||
+          currentTask.message_range?.start_timestamp ||
+          currentTask.created_at;
+        if (startTime) {
+          data.duration_ms = Math.max(
+            0,
+            new Date(completedAt).getTime() - new Date(startTime).getTime()
+          );
         }
+      }
 
-        // Compute duration_ms if not explicitly provided (null check, not falsy,
-        // so an explicit 0 is preserved)
-        if (data.duration_ms == null) {
-          const startTime =
-            currentTask?.started_at ||
-            currentTask?.message_range?.start_timestamp ||
-            currentTask?.created_at;
-          if (startTime) {
-            data.duration_ms = Math.max(
-              0,
-              new Date(completedAt).getTime() - new Date(startTime).getTime()
-            );
-          }
-        }
-
-        // Set end_timestamp if not already meaningfully set
-        const endTs = currentTask?.message_range?.end_timestamp;
-        const startTs = currentTask?.message_range?.start_timestamp;
-        if (currentTask?.message_range && (!endTs || endTs === startTs)) {
-          data.message_range = {
-            ...currentTask.message_range,
-            ...data.message_range,
-            end_timestamp: completedAt,
-          };
-        }
+      // Set end_timestamp if not already meaningfully set
+      const endTs = currentTask.message_range?.end_timestamp;
+      const startTs = currentTask.message_range?.start_timestamp;
+      if (currentTask.message_range && (!endTs || endTs === startTs)) {
+        data.message_range = {
+          ...currentTask.message_range,
+          ...data.message_range,
+          end_timestamp: completedAt,
+        };
       }
     }
 
     const result = await super.patch(id, data, params);
 
-    if (data.status === TaskStatus.RUNNING && !Array.isArray(result)) {
+    if (isRunningTransition && !Array.isArray(result)) {
       this.trackTaskStarted(result as Task);
     }
 
@@ -363,12 +366,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
     }
 
-    // If task is being marked as completed, failed, or stopped (terminal status)
-    if (
-      data.status === TaskStatus.COMPLETED ||
-      data.status === TaskStatus.FAILED ||
-      data.status === TaskStatus.STOPPED
-    ) {
+    // If task is transitioning to a terminal status
+    if (isTerminalTransition) {
       // Since tasks are patched one at a time, result is always a single Task (not an array)
       const task = result as Task;
       this.trackTaskCompleted(task);
@@ -416,7 +415,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           // For STOPPED tasks: The stop endpoint directly patches session → IDLE with
           // ready_for_prompt=false. Skip the session update here to avoid racing with it.
           //
-          // For COMPLETED/FAILED tasks: Normal completion - set ready_for_prompt=true
+          // For other terminal tasks: Normal completion - set ready_for_prompt=true
           // to allow auto-queue-processing of any pending messages.
           const isUserInitiatedStop = data.status === TaskStatus.STOPPED;
 

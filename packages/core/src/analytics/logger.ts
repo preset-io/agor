@@ -1,52 +1,10 @@
 import type { AnalyticsInstance } from 'analytics';
 import { Analytics } from 'analytics';
+import { getDefaultAnalyticsConfig } from '../config/analytics-defaults.js';
 import type { AgorAnalyticsSettings, AgorConfig } from '../config/types.js';
 import { isAnalyticsEventExcluded } from './filters.js';
 import { resolveAnalyticsPlugins } from './plugins.js';
 import type { AnalyticsLogger, AnalyticsProperties, AnalyticsTrackOptions } from './types.js';
-
-export function getDefaultAnalyticsConfig(): AgorAnalyticsSettings {
-  return {
-    enabled: false,
-    client: {
-      app: 'agor-daemon',
-      version: 'dev',
-      debug: false,
-    },
-    filters: {
-      exclude_events: [],
-    },
-    plugins: [
-      {
-        type: 'stdout',
-        enabled: false,
-        options: {
-          pretty: false,
-        },
-      },
-      {
-        type: 'http_batch',
-        enabled: false,
-        options: {
-          url: null,
-          flush_interval_ms: 1000,
-          max_batch_size: 50,
-          timeout_ms: 3000,
-          headers: {},
-        },
-      },
-      {
-        type: 'module',
-        enabled: false,
-        options: {
-          module_path: null,
-          export_name: 'createAnalyticsPlugin',
-          plugin_options: {},
-        },
-      },
-    ],
-  };
-}
 
 function mergeAnalyticsConfig(config?: AgorAnalyticsSettings): AgorAnalyticsSettings {
   const defaults = getDefaultAnalyticsConfig();
@@ -140,7 +98,15 @@ let globalAnalyticsLogger: AnalyticsLogger = new NoopAnalyticsLogger();
 export async function configureAnalyticsLogger(
   config: AgorConfig | AgorAnalyticsSettings
 ): Promise<AnalyticsLogger> {
-  globalAnalyticsLogger = await createAnalyticsLogger(config);
+  try {
+    globalAnalyticsLogger = await createAnalyticsLogger(config);
+  } catch (error) {
+    console.warn(
+      '[analytics] failed to configure analytics; continuing with analytics disabled:',
+      error instanceof Error ? error.message : String(error)
+    );
+    globalAnalyticsLogger = new NoopAnalyticsLogger();
+  }
   return globalAnalyticsLogger;
 }
 

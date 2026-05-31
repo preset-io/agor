@@ -149,8 +149,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
 
-  await configureAnalyticsLogger(config);
-
   // Set GIT_CONFIG_PARAMETERS before any child-process spawn so every git
   // invocation under Agor's control inherits it. See @agor/core/config
   // (security-resolver) for the defaults + resolver semantics.
@@ -167,6 +165,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       '🔒 Agor git hardening disabled (override: []); inherited GIT_CONFIG_PARAMETERS preserved'
     );
   }
+
+  // Configure analytics after process-wide git hardening is installed. Module
+  // plugins are optional dynamic imports and must never prevent daemon startup.
+  await configureAnalyticsLogger(config);
 
   // Surface a clear migration note if the config still carries leftover
   // anonymous-mode keys. Operators upgrading from a release that had

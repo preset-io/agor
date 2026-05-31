@@ -295,8 +295,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         branch_id: branch.branch_id,
         repo_id: branch.repo_id,
         board_id: branch.board_id ?? null,
-        name: branch.name,
-        ref: branch.ref,
         ref_type: branch.ref_type ?? 'branch',
         new_branch: branch.new_branch,
         is_assistant: isAssistant(branch),

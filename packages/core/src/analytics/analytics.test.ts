@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getDefaultAnalyticsConfig } from '../config/analytics-defaults.js';
 import { getDefaultConfig } from '../config/config-manager.js';
 import type { AgorAnalyticsSettings } from '../config/types.js';
 import { isAnalyticsEventExcluded } from './filters.js';
-import { createAnalyticsLogger, getDefaultAnalyticsConfig } from './logger.js';
+import { configureAnalyticsLogger, createAnalyticsLogger } from './logger.js';
 import {
   createHttpBatchAnalyticsPlugin,
   createStdoutAnalyticsPlugin,
@@ -64,6 +65,24 @@ describe('analytics logger', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(log).not.toHaveBeenCalled();
+  });
+
+  it('falls back to no-op when analytics configuration throws', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const logger = await configureAnalyticsLogger({
+      ...enabledBase,
+      client: {
+        get app(): string {
+          throw new Error('bad client config');
+        },
+      },
+    });
+
+    expect(logger.isEnabled()).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      '[analytics] failed to configure analytics; continuing with analytics disabled:',
+      'bad client config'
+    );
   });
 });
 
@@ -143,5 +162,40 @@ describe('analytics plugins', () => {
         },
       ],
     });
+  });
+
+  it('http_batch flushes events queued during an in-flight delivery', async () => {
+    let resolveFirst: (response: Response) => void = () => undefined;
+    const firstResponse = new Promise<Response>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(firstResponse)
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const plugin = createHttpBatchAnalyticsPlugin({
+      type: 'http_batch',
+      enabled: true,
+      options: {
+        url: 'https://example.test/collect',
+        max_batch_size: 1,
+        flush_interval_ms: 1000,
+        timeout_ms: 1000,
+      },
+    });
+
+    plugin?.track?.({ payload: { event: 'first' } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    plugin?.track?.({ payload: { event: 'second' } });
+    resolveFirst(new Response(null, { status: 200 }));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const [, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(secondInit.body as string).batch).toEqual([
+      expect.objectContaining({ event: 'second' }),
+    ]);
   });
 });

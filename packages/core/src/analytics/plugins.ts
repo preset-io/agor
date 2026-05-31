@@ -136,6 +136,9 @@ export function createHttpBatchAnalyticsPlugin(
       } finally {
         clearTimeout(timeout);
         flushing = undefined;
+        if (batch.length > 0) {
+          void flush();
+        }
       }
     })();
 
