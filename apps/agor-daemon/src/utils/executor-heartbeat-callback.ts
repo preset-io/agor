@@ -13,10 +13,12 @@ export interface ExecutorHeartbeatCallbackPayload {
 export class ExecutorHeartbeatCallbackRunner {
   private runningByTask = new Set<string>();
 
-  constructor(private config: ResolvedExecutorHeartbeatConfig['callback']) {}
+  constructor(private config: Pick<ResolvedExecutorHeartbeatConfig, 'enabled' | 'callback'>) {}
 
   run(payload: ExecutorHeartbeatCallbackPayload): void {
-    const command = this.config.command_template;
+    if (!this.config.enabled) return;
+
+    const command = this.config.callback.command_template;
     if (!command) return;
 
     if (this.runningByTask.has(payload.task_id)) {
@@ -27,18 +29,21 @@ export class ExecutorHeartbeatCallbackRunner {
     }
 
     this.runningByTask.add(payload.task_id);
-    const timeoutMs = this.config.timeout_ms;
+    const timeoutMs = this.config.callback.timeout_ms;
     const child = spawn('sh', ['-c', command], {
       stdio: ['pipe', 'ignore', 'ignore'],
     });
 
     let settled = false;
+    let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
 
     const finish = (reason?: string) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       this.runningByTask.delete(payload.task_id);
       if (reason) {
         console.warn(`[executor-heartbeat] Callback ${reason}`);
@@ -46,20 +51,42 @@ export class ExecutorHeartbeatCallbackRunner {
     };
 
     timer = setTimeout(() => {
+      if (settled) return;
+      timedOut = true;
+      console.warn(`[executor-heartbeat] Callback timed out after ${timeoutMs}ms`);
       child.kill('SIGTERM');
-      finish(`timed out after ${timeoutMs}ms`);
+      killTimer = setTimeout(
+        () => {
+          if (!settled) {
+            child.kill('SIGKILL');
+          }
+        },
+        Math.min(timeoutMs, 1_000)
+      );
+      killTimer.unref?.();
     }, timeoutMs);
     timer.unref?.();
 
     child.on('error', (error) => finish(`spawn failed: ${error.message}`));
     child.on('exit', (code, signal) => {
-      if (code === 0) {
+      if (code === 0 || timedOut) {
         finish();
       } else {
         finish(`exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
       }
     });
 
-    child.stdin?.end(`${JSON.stringify(payload)}\n`);
+    child.stdin?.on('error', (error: Error) => {
+      console.warn(`[executor-heartbeat] Callback stdin failed: ${error.message}`);
+    });
+
+    try {
+      child.stdin?.end(`${JSON.stringify(payload)}\n`);
+    } catch (error) {
+      console.warn(
+        `[executor-heartbeat] Callback stdin failed:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   }
 }

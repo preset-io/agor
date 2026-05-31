@@ -12,7 +12,7 @@ describe('ExecutorHeartbeatSupervisor', () => {
       status: 'running',
       last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
     };
-    const tasksPatch = vi.fn().mockResolvedValue({});
+    const failForLostHeartbeat = vi.fn().mockResolvedValue({});
     const sessionsPatch = vi.fn().mockResolvedValue({});
     const app = {
       service: (name: string) => {
@@ -20,7 +20,7 @@ describe('ExecutorHeartbeatSupervisor', () => {
           return {
             getActiveWithExecutorHeartbeat: vi.fn().mockResolvedValue([staleTask]),
             get: vi.fn().mockResolvedValue(staleTask),
-            patch: tasksPatch,
+            failForLostHeartbeat,
           };
         }
         if (name === 'sessions') {
@@ -43,8 +43,7 @@ describe('ExecutorHeartbeatSupervisor', () => {
 
     await supervisor.checkOnce();
 
-    expect(tasksPatch).toHaveBeenCalledWith(staleTask.task_id, {
-      status: 'failed',
+    expect(failForLostHeartbeat).toHaveBeenCalledWith(staleTask.task_id, {
       completed_at: '2026-01-01T00:00:05.000Z',
       error_message: EXECUTOR_HEARTBEAT_LOST_MESSAGE,
     });

@@ -36,7 +36,18 @@ import type { SessionsService } from './sessions';
 export type TaskParams = QueryParams<{
   session_id?: string;
   status?: Task['status'];
-}>;
+}> & {
+  /**
+   * Internal-only: terminal task patches normally transition the owning session
+   * back to idle. Heartbeat-loss handling marks the session failed instead.
+   */
+  suppressTerminalSessionIdle?: boolean;
+  /**
+   * Internal-only: terminal task patches normally drain queued work for the
+   * owning session. Heartbeat-loss handling must not auto-start queued prompts.
+   */
+  suppressTerminalQueueProcessing?: boolean;
+};
 
 /**
  * Extended tasks service with custom methods
@@ -63,7 +74,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.app = app;
     this.db = db;
     const heartbeatConfig = resolveExecutorHeartbeatConfig(app.get?.('config')?.execution);
-    this.heartbeatCallbackRunner = new ExecutorHeartbeatCallbackRunner(heartbeatConfig.callback);
+    this.heartbeatCallbackRunner = new ExecutorHeartbeatCallbackRunner(heartbeatConfig);
   }
 
   /**
@@ -157,6 +168,27 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   async getActiveWithExecutorHeartbeat(): Promise<Task[]> {
     return this.taskRepo.findActiveWithExecutorHeartbeat();
+  }
+
+  async failForLostHeartbeat(
+    id: string,
+    data: { completed_at?: string; error_message: string },
+    params?: TaskParams
+  ): Promise<Task> {
+    const result = await this.patch(
+      id,
+      {
+        status: TaskStatus.FAILED,
+        completed_at: data.completed_at,
+        error_message: data.error_message,
+      },
+      {
+        ...params,
+        suppressTerminalSessionIdle: true,
+        suppressTerminalQueueProcessing: true,
+      }
+    );
+    return result as Task;
   }
 
   private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
@@ -319,6 +351,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             console.log(
               `⏭️ [TasksService] Skipping session IDLE update for STOPPED task ${shortId(task.task_id)} — stop endpoint handles session state`
             );
+          } else if (params?.suppressTerminalSessionIdle) {
+            console.log(
+              `⏭️ [TasksService] Skipping session IDLE update for task ${shortId(task.task_id)} (${data.status}) due to internal patch params`
+            );
           } else {
             await this.app.service('sessions').patch(
               task.session_id,
@@ -420,7 +456,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           // IMPORTANT: Now that session is idle, process any queued tasks (including callbacks)
           // This handles the case where callbacks were queued while this session was running
           const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-          if (sessionsService.triggerQueueProcessing) {
+          if (!params?.suppressTerminalQueueProcessing && sessionsService.triggerQueueProcessing) {
             await sessionsService.triggerQueueProcessing(task.session_id);
           }
         } catch (error) {

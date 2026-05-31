@@ -56,8 +56,7 @@ export class ExecutorHeartbeatSupervisor {
           if (!Number.isFinite(currentHeartbeatMs)) continue;
           if (nowMs - currentHeartbeatMs <= this.options.config.stale_after_ms) continue;
 
-          await this.options.app.service('tasks').patch(task.task_id, {
-            status: 'failed',
+          await tasksService.failForLostHeartbeat(task.task_id, {
             completed_at: this.now().toISOString(),
             error_message: EXECUTOR_HEARTBEAT_LOST_MESSAGE,
           });
