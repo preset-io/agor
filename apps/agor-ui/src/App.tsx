@@ -1354,6 +1354,7 @@ function AppContent() {
       onUserSettingsClose={handleUserSettingsClose}
       openNewBranchModal={openNewBranch}
       onNewBranchModalClose={handleNewBranchModalClose}
+      suppressLeftPanel={onboardingWizardOpen}
       onCreateSession={handleCreateSession}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}

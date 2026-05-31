@@ -106,6 +106,7 @@ export interface AppProps {
   onUserSettingsClose?: () => void; // Called when user settings modal closes
   openNewBranchModal?: boolean; // Open new branch modal
   onNewBranchModalClose?: () => void; // Called when new branch modal closes
+  suppressLeftPanel?: boolean; // Temporarily hide the assistant/comments panel behind modal-first flows
   onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
@@ -214,6 +215,7 @@ export const App: React.FC<AppProps> = ({
   onUserSettingsClose,
   openNewBranchModal,
   onNewBranchModalClose,
+  suppressLeftPanel = false,
   onCreateSession,
   onForkSession,
   onBtwForkSession,
@@ -334,6 +336,8 @@ export const App: React.FC<AppProps> = ({
     25
   );
 
+  const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel;
+
   // Ref for programmatically controlling the comments panel
   const commentsPanelRef = useRef<ImperativePanelHandle>(null);
   // Session panel size persistence (percentage of available width)
@@ -391,16 +395,16 @@ export const App: React.FC<AppProps> = ({
   // Subscribed globally so it fires regardless of which session panel is open.
   useTaskCompletionChime(client, user?.user_id, user?.preferences?.audio);
 
-  // Programmatically collapse/expand the comments panel when toggle state changes
+  // Programmatically collapse/expand the left panel when toggle/suppression state changes
   useEffect(() => {
     if (commentsPanelRef.current) {
-      if (commentsPanelCollapsed) {
+      if (leftPanelCollapsed) {
         commentsPanelRef.current.collapse();
       } else {
         commentsPanelRef.current.expand();
       }
     }
-  }, [commentsPanelCollapsed]);
+  }, [leftPanelCollapsed]);
 
   // URL state synchronization - bidirectional sync between URL and state
   useUrlState({
@@ -978,7 +982,7 @@ export const App: React.FC<AppProps> = ({
                 style={{ flex: 1 }}
                 onLayout={(sizes) => {
                   // Save left panel size when user resizes (only when panel is open)
-                  if (!commentsPanelCollapsed && sizes.length >= 2) {
+                  if (!leftPanelCollapsed && sizes.length >= 2) {
                     // Comments panel is the first panel (index 0)
                     setCommentsPanelSize(sizes[0]);
                   }
@@ -989,12 +993,12 @@ export const App: React.FC<AppProps> = ({
                   order={1}
                   ref={commentsPanelRef}
                   collapsible
-                  defaultSize={commentsPanelCollapsed ? 0 : commentsPanelSize}
+                  defaultSize={leftPanelCollapsed ? 0 : commentsPanelSize}
                   collapsedSize={0}
-                  minSize={commentsPanelCollapsed ? 0 : 15}
+                  minSize={leftPanelCollapsed ? 0 : 15}
                   maxSize={40}
                 >
-                  {!commentsPanelCollapsed && (
+                  {!leftPanelCollapsed && (
                     <BoardAssistantPanel
                       client={client}
                       board={currentBoard || null}
@@ -1041,20 +1045,20 @@ export const App: React.FC<AppProps> = ({
                 </Panel>
                 <PanelResizeHandle
                   style={{
-                    width: commentsPanelCollapsed ? '0px' : '4px',
+                    width: leftPanelCollapsed ? '0px' : '4px',
                     background: 'var(--ant-color-border-secondary)',
-                    cursor: commentsPanelCollapsed ? 'default' : 'col-resize',
+                    cursor: leftPanelCollapsed ? 'default' : 'col-resize',
                     transition: 'background 0.2s',
-                    pointerEvents: commentsPanelCollapsed ? 'none' : 'auto',
+                    pointerEvents: leftPanelCollapsed ? 'none' : 'auto',
                   }}
                   onMouseEnter={(e) => {
-                    if (!commentsPanelCollapsed) {
+                    if (!leftPanelCollapsed) {
                       (e.currentTarget as unknown as HTMLDivElement).style.background =
                         'var(--ant-color-primary)';
                     }
                   }}
                   onMouseLeave={(e) => {
-                    if (!commentsPanelCollapsed) {
+                    if (!leftPanelCollapsed) {
                       (e.currentTarget as unknown as HTMLDivElement).style.background =
                         'var(--ant-color-border-secondary)';
                     }
@@ -1063,7 +1067,7 @@ export const App: React.FC<AppProps> = ({
                 <Panel
                   id="content-panel"
                   order={2}
-                  defaultSize={commentsPanelCollapsed ? 100 : 100 - commentsPanelSize}
+                  defaultSize={leftPanelCollapsed ? 100 : 100 - commentsPanelSize}
                   minSize={40}
                 >
                   <PanelGroup
