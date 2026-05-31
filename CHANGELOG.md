@@ -37,7 +37,7 @@ _No user-visible changes yet._
 
 ### Breaking
 
-- **Rename `Worktree` → `Branch` across the codebase** — TypeScript types, REST routes, Feathers services, MCP tools, DB columns and tables, and identifier names are all renamed. No backwards-compat shims; the minor bump is the signal. ([#TBD](https://github.com/preset-io/agor/pull/TBD))
+- **Rename `Worktree` → `Branch` across the codebase** — TypeScript types, REST routes, Feathers services, MCP tools, DB columns and tables, and identifier names are all renamed. No backwards-compat shims; the minor bump is the signal. ([#1247](https://github.com/preset-io/agor/pull/1247), [#1250](https://github.com/preset-io/agor/pull/1250))
   - **REST routes**: `/worktrees/...` → `/branches/...` (e.g. `/worktrees/:id/start` → `/branches/:id/start`). Any external script hitting the daemon's REST surface needs to update its URLs.
   - **MCP tools**: the legacy `agor_worktrees_*` alias surface is removed — use `agor_branches_*`. Agents referencing the old names will see "tool not found" until they update.
   - **TypeScript / `@agor-live/client`**: `Worktree`, `WorktreeID`, `WorktreesService`, `Worktree*` types and their interfaces are renamed to `Branch`, `BranchID`, `BranchesService`, etc.
@@ -45,6 +45,58 @@ _No user-visible changes yet._
   - **Database schema**: `worktrees` table → `branches`, `worktree_owners` → `branch_owners`, every `worktree_id` / `worktree_unique_id` / `target_worktree_id` column → `branch_id` / `branch_unique_id` / `target_branch_id`. Single drizzle migration (`0045_rename_worktree_to_branch` / `0036_rename_worktree_to_branch`) runs O(1) ALTER RENAME statements; daemons restart cleanly. Enum-literal `archived_reason='worktree_archived'` flips to `'branch_archived'`.
   - **Env-template variables**: canonical name is `{{branch.*}}` (e.g. `{{branch.unique_id}}`, `{{branch.name}}`). The legacy `{{worktree.*}}` shape stays exposed as a backwards-compat alias on the Handlebars context object, so existing `.agor.yml` configs continue to render without edits.
 - **Surviving `worktree` references**: the term is preserved only where it refers to the actual git-worktree primitive (the `storage_mode: 'worktree' | 'clone'` enum literal, `git worktree add/list/remove` shell invocations, the `~/.agor/worktrees/<repo>/<name>` on-disk path, and prose explaining "a branch can be backed by either a native git worktree or an isolated clone"). The on-disk worktree directory keeps its name to avoid a filesystem migration on existing installs.
+
+### Features
+
+- **Schedules as first-class CRUD** — promote branch schedules to a Feathers service with full create/read/update/delete plus a `/schedules` REST surface, replacing the inline branch-config pathway ([#1253](https://github.com/preset-io/agor/pull/1253))
+- **Personal API keys for MCP + sessionless MCP access** — users can issue personal API keys that authenticate the MCP surface without an active session, letting external agents drive Agor MCP tools directly ([#1259](https://github.com/preset-io/agor/pull/1259))
+- **One-time launch-code authentication** — log in via a short-lived, single-use code instead of an interactive password, useful for CLI / browser handoffs ([#1280](https://github.com/preset-io/agor/pull/1280))
+- **Executor heartbeat** — executors emit a periodic heartbeat back to the daemon so stuck/dead executors are detectable without polling tool calls ([#1302](https://github.com/preset-io/agor/pull/1302))
+- **Backend analytics client** — server-side telemetry pipeline (opt-in) for usage analytics ([#1307](https://github.com/preset-io/agor/pull/1307))
+- **Assistant bootstrap session flow** — fresh assistants now run a guided bootstrap session on first launch ([#1272](https://github.com/preset-io/agor/pull/1272))
+- **Boards become assistant-centric** — boards default to organizing branches around assistants rather than ad-hoc layout ([#1300](https://github.com/preset-io/agor/pull/1300))
+- **Self-standing clones at branch create-time** — `storage_mode: 'clone'` available from the new-branch flow, alongside the existing native git-worktree mode ([#1248](https://github.com/preset-io/agor/pull/1248))
+- **Cursor SDK scaffolding (beta)** — analysis + initial scaffolding for a Cursor agentic tool, following the same pattern as Claude Code / Codex / OpenCode / Copilot / Gemini ([#1262](https://github.com/preset-io/agor/pull/1262))
+- **Global search (beta)** — design doc + V1 scaffolding for cross-entity search, plus iter-1 polish: count tags, sectioned recents, close button, highlighting, registry DRY ([#1246](https://github.com/preset-io/agor/pull/1246), [#1254](https://github.com/preset-io/agor/pull/1254))
+- **Homebrew install method** — `brew install agor-live` documented as a first-class install path ([#1279](https://github.com/preset-io/agor/pull/1279))
+- **Active URL-target highlighting on the board** — the active entity referenced by the URL is visually highlighted on the canvas ([#1260](https://github.com/preset-io/agor/pull/1260))
+- **Active-branch highlight on canvas + recenter action** — find your current branch on a busy board, then re-center on it ([#1245](https://github.com/preset-io/agor/pull/1245))
+- **Clearer navbar connection state + user actions** — explicit indicator for daemon connection status, with user/account actions grouped ([#1251](https://github.com/preset-io/agor/pull/1251))
+- **Compact expandable info alert for zone prompt help** — collapsed-by-default help for new zone authors, no longer a tall always-on banner ([#1265](https://github.com/preset-io/agor/pull/1265))
+- **Route daemon-managed git ops through the executor** — daemon stops shelling out directly for git operations; routes via the executor so isolation/RBAC apply uniformly ([#1258](https://github.com/preset-io/agor/pull/1258))
+
+### Fixes
+
+- **Conversation initial auto-scroll on load** — large transcripts now scroll to the bottom on first paint instead of stranding users mid-history ([#1303](https://github.com/preset-io/agor/pull/1303), [#1305](https://github.com/preset-io/agor/pull/1305))
+- **Stop session panel from jumping scroll position during streaming** — anchor the scroll so live token streams don't yank the view ([#1284](https://github.com/preset-io/agor/pull/1284))
+- **Panel width management** — improved sizing/resize behavior for the side panels ([#1301](https://github.com/preset-io/agor/pull/1301))
+- **Dedupe task completion chime** — root-cause two double-emit sources so the chime fires exactly once ([#1281](https://github.com/preset-io/agor/pull/1281))
+- **Canonicalize Slack session links in gateway** — Slack messages no longer link to the local-dev host ([#1283](https://github.com/preset-io/agor/pull/1283))
+- **Strip `/ui` suffix from `baseUrl` in `fullUrl`** — prevents the double-prefix bug in generated URLs ([#1282](https://github.com/preset-io/agor/pull/1282))
+- **Restore non-owner prompt attribution prefix** — collaborator-authored prompts get the right "[user]: …" prefix again ([#1277](https://github.com/preset-io/agor/pull/1277))
+- **Preserve user-selected model on `Task.model` for Codex/Gemini** — executor was overwriting the explicit user choice with the SDK default ([#1275](https://github.com/preset-io/agor/pull/1275))
+- **Correct Codex context-window accounting** — use `last_token_usage`; bumps `@openai/codex-sdk` to 0.133.0 ([#1264](https://github.com/preset-io/agor/pull/1264))
+- **Migration 0036 constraint renames are now idempotent** — every constraint rename in the Worktree → Branch migration re-runs as a no-op cleanly ([#1256](https://github.com/preset-io/agor/pull/1256))
+- **Navigate to newly created branch / assistant / board** — creation flows now route to the new entity instead of leaving the user on the picker ([#1263](https://github.com/preset-io/agor/pull/1263), [#1270](https://github.com/preset-io/agor/pull/1270))
+- **Dedupe `@codemirror/view`** — dark-mode gutter now renders correctly in code blocks ([#1266](https://github.com/preset-io/agor/pull/1266))
+- **Optimize collaborative cursor presence rendering** — fewer re-renders when multiple users are active on the same board ([#1299](https://github.com/preset-io/agor/pull/1299))
+- **Bail out `useAgorData` on no-op socket events** — measurable frame-time win on busy boards ([#1271](https://github.com/preset-io/agor/pull/1271))
+- **Facepile overflow bubble** — smaller counter text, rich user-list tooltip ([#1278](https://github.com/preset-io/agor/pull/1278))
+- **Global-search row layout + widen popover** — keeps long titles readable ([#1249](https://github.com/preset-io/agor/pull/1249))
+- **Include superadmin in user role dropdown** — was silently absent ([#1244](https://github.com/preset-io/agor/pull/1244))
+- **Re-validate Create Assistant form when framework repo arrives** — async-loaded options no longer cause submit to reject ([#1242](https://github.com/preset-io/agor/pull/1242))
+
+### Chores
+
+- **Unify Branch/Assistant modal save into one action + Permissions tab** — collapses two save buttons into one, surfaces permissions in their own tab ([#1273](https://github.com/preset-io/agor/pull/1273))
+- **Drop message-count and tool-count pills from task header** — recovered header real estate for the things people actually look at ([#1276](https://github.com/preset-io/agor/pull/1276))
+- **Simplify Assistants table + description popover** — narrower table, long descriptions move into a popover ([#1243](https://github.com/preset-io/agor/pull/1243))
+- **Refresh Claude Code and Codex dependencies** ([#1286](https://github.com/preset-io/agor/pull/1286))
+- **Promote Agor Cloud invite CTA in docs navbar + swap Join Beta / Book Demo URLs** ([#1285](https://github.com/preset-io/agor/pull/1285), [#1298](https://github.com/preset-io/agor/pull/1298))
+
+### Security
+
+- **Bump `next` to 15.5.18 (security backports)** — pulls security backports without taking the next-major (`next@16`) upgrade in this release ([#1291](https://github.com/preset-io/agor/pull/1291))
 
 ## 0.19.1 (2026-05-21)
 
