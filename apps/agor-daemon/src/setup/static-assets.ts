@@ -1,3 +1,4 @@
+import type { ServerResponse } from 'node:http';
 import path from 'node:path';
 import type { Response } from 'express';
 
@@ -10,7 +11,7 @@ function isHashedAsset(filePath: string): boolean {
   return normalized.includes('/assets/') && HASHED_ASSET_RE.test(basename);
 }
 
-export function setBundledUiStaticHeaders(res: Response, filePath: string): void {
+export function setBundledUiStaticHeaders(res: ServerResponse, filePath: string): void {
   if (isHashedAsset(filePath)) {
     res.setHeader('Cache-Control', `public, max-age=${ONE_YEAR_SECONDS}, immutable`);
     return;
