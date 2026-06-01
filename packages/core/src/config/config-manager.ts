@@ -199,19 +199,32 @@ function validateOptionalHttpUrl(
     throw new Error(`Config error: ${configPath} must be an HTTP(S) URL string`);
   }
 
-  const trimmed = raw.trim();
+  container[key] = validateHttpUrlString(raw, configPath);
+}
+
+function validateHttpUrlString(
+  url: string,
+  label: string,
+  options: { stripTrailingSlash?: boolean } = {}
+): string {
+  const trimmed = options.stripTrailingSlash ? url.trim().replace(/\/$/, '') : url.trim();
+
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    throw new Error(`Invalid ${label}: "${url}". Must start with http:// or https://`);
+  }
+
   let parsed: URL;
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error(`Config error: ${configPath} must be a valid HTTP(S) URL`);
+    throw new Error(`Invalid ${label} format: "${url}". Must be a valid HTTP(S) URL.`);
   }
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`Config error: ${configPath} must use http:// or https://`);
+    throw new Error(`Invalid ${label}: "${url}". Must use http:// or https://`);
   }
 
-  container[key] = trimmed;
+  return trimmed;
 }
 
 /**
@@ -288,6 +301,7 @@ export async function loadConfigFromFile(filePath: string): Promise<AgorConfig> 
  * Invalidates the in-memory cache so the next load reflects the fresh value.
  */
 export async function saveConfig(config: AgorConfig): Promise<void> {
+  validateConfig(config);
   await ensureAgorHome();
 
   const configPath = getConfigPath();
@@ -501,21 +515,7 @@ export async function getDaemonUrl(): Promise<string> {
  * @throws Error if URL is invalid or uses unsupported scheme
  */
 function validateBaseUrl(url: string): string {
-  const trimmed = url.trim().replace(/\/$/, ''); // Remove trailing slash and whitespace
-
-  // Basic validation: must start with http:// or https://
-  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
-    throw new Error(`Invalid base URL: "${url}". Must start with http:// or https://`);
-  }
-
-  // Additional validation: ensure it's a valid URL structure
-  try {
-    new URL(trimmed);
-  } catch {
-    throw new Error(`Invalid base URL format: "${url}". Must be a valid HTTP(S) URL.`);
-  }
-
-  return trimmed;
+  return validateHttpUrlString(url, 'base URL', { stripTrailingSlash: true });
 }
 
 /**

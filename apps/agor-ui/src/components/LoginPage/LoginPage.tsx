@@ -30,6 +30,7 @@ export function LoginPage({
   const [showLocalLogin, setShowLocalLogin] = useState(false);
   const useExternalLaunch = !!externalLaunchLoginRedirectUrl;
   const showLoginForm = !useExternalLaunch || showLocalLogin;
+  const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;
 
   const handleSubmit = async (values: { email: string; password: string }) => {
     setSubmitting(true);
@@ -124,11 +125,11 @@ export function LoginPage({
         {error && (
           <Alert
             type="error"
-            title={useExternalLaunch ? 'Launch sign-in failed' : 'Login Failed'}
+            title={isLaunchError ? 'Launch sign-in failed' : 'Login Failed'}
             description={
               <Space orientation="vertical" size="small" style={{ width: '100%' }}>
                 <div>{error}</div>
-                {!useExternalLaunch && (
+                {!isLaunchError && (
                   <div
                     style={{
                       marginTop: 8,

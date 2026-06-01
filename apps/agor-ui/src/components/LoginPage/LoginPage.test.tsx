@@ -58,4 +58,18 @@ describe('LoginPage external launch redirect', () => {
       'https://workspace.example.com/open'
     );
   });
+
+  it('does not label local-login errors as launch failures when external launch is configured', () => {
+    render(
+      <LoginPage
+        onLogin={vi.fn()}
+        error="Invalid email or password"
+        externalLaunchLoginRedirectUrl="https://workspace.example.com/open"
+      />
+    );
+
+    expect(screen.getByText('Login Failed')).toBeInTheDocument();
+    expect(screen.queryByText('Launch sign-in failed')).not.toBeInTheDocument();
+    expect(screen.getByText(/First time setting up/)).toBeInTheDocument();
+  });
 });

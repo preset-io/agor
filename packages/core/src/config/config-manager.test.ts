@@ -489,6 +489,17 @@ describe('saveConfig', () => {
     expect(loaded).toEqual({});
   });
 
+  it('validates external launch login redirect before saving', async () => {
+    await expect(
+      saveConfig({
+        external_launch: {
+          enabled: true,
+          login_redirect_url: 'javascript:alert(1)',
+        },
+      })
+    ).rejects.toThrow(/external_launch\.login_redirect_url.*http/i);
+  });
+
   it('should format YAML with proper indentation', async () => {
     const config = createConfigData();
     await saveConfig(config);

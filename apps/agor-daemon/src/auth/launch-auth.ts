@@ -19,7 +19,6 @@ const DEFAULT_INSTANCE_ID_ENV = 'AGOR_EXTERNAL_LAUNCH_INSTANCE_ID';
 interface ResolvedLaunchSettings {
   enabled: boolean;
   exchangeUrl?: string;
-  loginRedirectUrl?: string;
   audience?: string;
   issuer?: string;
   instanceId?: string;
@@ -31,6 +30,11 @@ interface ResolvedLaunchSettings {
   allowAdminRoles: boolean;
   requestTimeoutMs: number;
   algorithms?: string[];
+}
+
+export interface PublicLaunchAuthSettings {
+  enabled: boolean;
+  loginRedirectUrl?: string;
 }
 
 interface LaunchExchangeResponse {
@@ -91,7 +95,6 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
   return {
     enabled: envFlag(process.env.AGOR_EXTERNAL_LAUNCH_ENABLED) ?? raw?.enabled === true,
     exchangeUrl: process.env[DEFAULT_EXCHANGE_URL_ENV] || raw?.exchange_url,
-    loginRedirectUrl: raw?.login_redirect_url,
     audience: process.env[DEFAULT_AUDIENCE_ENV] || raw?.audience,
     issuer: process.env[DEFAULT_ISSUER_ENV] || raw?.issuer,
     instanceId: process.env[DEFAULT_INSTANCE_ID_ENV] || raw?.instance_id,
@@ -103,6 +106,16 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
     allowAdminRoles: raw?.allow_admin_roles === true,
     requestTimeoutMs: raw?.request_timeout_ms ?? DEFAULT_TIMEOUT_MS,
     algorithms: raw?.algorithms,
+  };
+}
+
+export function resolvePublicLaunchAuthSettings(config: AgorConfig): PublicLaunchAuthSettings {
+  const raw = config.external_launch;
+  const enabled = envFlag(process.env.AGOR_EXTERNAL_LAUNCH_ENABLED) ?? raw?.enabled === true;
+
+  return {
+    enabled,
+    ...(enabled && raw?.login_redirect_url ? { loginRedirectUrl: raw.login_redirect_url } : {}),
   };
 }
 

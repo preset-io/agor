@@ -8,7 +8,7 @@ import { NotAuthenticated } from '@agor/core/feathers';
 import type { User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createLaunchAuthService } from './launch-auth.js';
+import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './launch-auth.js';
 
 const ASSERTION_SECRET = 'test-launch-assertion-secret';
 const RUNTIME_JWT_SECRET = 'test-runtime-jwt-secret';
@@ -247,5 +247,41 @@ describe('one-time launch auth service', () => {
     expect(second.user.user_id).not.toBe(first.user.user_id);
     expect(second.user.email).not.toBe('same@example.test');
     expect(second.user.email).toContain('+launch-');
+  });
+});
+
+describe('public one-time launch auth settings', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns only the public external launch shape', () => {
+    const result = resolvePublicLaunchAuthSettings({
+      external_launch: {
+        ...baseConfig().external_launch,
+        login_redirect_url: 'https://workspace.example.test/open',
+      },
+    });
+
+    expect(result).toEqual({
+      enabled: true,
+      loginRedirectUrl: 'https://workspace.example.test/open',
+    });
+    expect(result).not.toHaveProperty('exchangeUrl');
+    expect(result).not.toHaveProperty('serviceCredential');
+    expect(result).not.toHaveProperty('audience');
+    expect(result).not.toHaveProperty('issuer');
+  });
+
+  it('does not expose an inactive login redirect URL', () => {
+    expect(
+      resolvePublicLaunchAuthSettings({
+        external_launch: {
+          ...baseConfig().external_launch,
+          enabled: false,
+          login_redirect_url: 'https://workspace.example.test/open',
+        },
+      })
+    ).toEqual({ enabled: false });
   });
 });
