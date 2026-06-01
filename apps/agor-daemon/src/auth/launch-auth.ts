@@ -5,6 +5,7 @@ import { type Database, eq, generateId, hash, insert, select, update, users } fr
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
+import { isValidUnixUsername } from '@agor/core/unix';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair } from './runtime-tokens.js';
 
@@ -51,6 +52,7 @@ interface LaunchClaims extends JwtPayload {
   runtime_instance_id?: string;
   jti?: string;
   nonce?: string;
+  unix_username?: string | null;
 }
 
 type StoredExternalIdentity = UserExternalIdentity;
@@ -186,6 +188,16 @@ function getExternalIdentities(
   return Array.isArray(data?.external_identities) ? data.external_identities : [];
 }
 
+function normalizeLaunchUnixUsername(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const username = value.trim();
+  if (!username) return undefined;
+  if (!isValidUnixUsername(username)) {
+    throw new NotAuthenticated('Launch Unix username is invalid');
+  }
+  return username;
+}
+
 function normalizeLaunchEmail(value: string | undefined): string | undefined {
   const email = value?.trim().toLowerCase();
   if (!email) return undefined;
@@ -237,6 +249,7 @@ async function upsertLaunchUser(
   const email = normalizeLaunchEmail(claims.email);
   const name = claims.name?.trim() || undefined;
   const avatar = claims.avatar || claims.picture;
+  const unixUsername = normalizeLaunchUnixUsername(claims.unix_username);
   const identity: StoredExternalIdentity = {
     key,
     provider,
@@ -264,10 +277,15 @@ async function upsertLaunchUser(
       nextIdentities.push(identity);
     }
 
+    if (unixUsername && existing.unix_username && existing.unix_username !== unixUsername) {
+      throw new NotAuthenticated('Launch Unix username does not match existing user');
+    }
+
     await update(db, users)
       .set({
         name: name ?? existing.name,
         role,
+        unix_username: unixUsername ?? existing.unix_username,
         updated_at: now,
         data: {
           ...data,
@@ -294,6 +312,7 @@ async function upsertLaunchUser(
       name,
       emoji: '👤',
       role,
+      unix_username: unixUsername,
       created_at: now,
       updated_at: now,
       onboarding_completed: false,

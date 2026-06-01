@@ -73,6 +73,7 @@ function makeUsersService(db: Database) {
         name: row.name ?? undefined,
         emoji: row.emoji ?? undefined,
         role: row.role as User['role'],
+        unix_username: row.unix_username ?? undefined,
         onboarding_completed: row.onboarding_completed,
         must_change_password: row.must_change_password,
         created_at: row.created_at,
@@ -208,6 +209,40 @@ describe('one-time launch auth service', () => {
     }) as { sub: string; type: string };
     expect(decoded.sub).toBe(result.user.user_id);
     expect(decoded.type).toBe('access');
+  });
+
+  it('sets unix_username from trusted launch claims on new users', async () => {
+    mockExchange(signClaims({ unix_username: 'launchuser' }));
+
+    const result = await service().create({ launchCode: 'with-unix-user' });
+
+    expect(result.user.unix_username).toBe('launchuser');
+
+    const row = await select(db).from(users).where(eq(users.user_id, result.user.user_id)).one();
+    expect(row?.unix_username).toBe('launchuser');
+  });
+
+  it('fills a missing unix_username for an existing external-launch user', async () => {
+    mockExchange(signClaims());
+    const first = await service().create({ launchCode: 'first' });
+    expect(first.user.unix_username).toBeUndefined();
+
+    mockExchange(signClaims({ unix_username: 'lateruser' }));
+    const second = await service().create({ launchCode: 'second' });
+
+    expect(second.user.user_id).toBe(first.user.user_id);
+    expect(second.user.unix_username).toBe('lateruser');
+  });
+
+  it('rejects launch claims that try to change an existing unix_username', async () => {
+    mockExchange(signClaims({ unix_username: 'originaluser' }));
+    const first = await service().create({ launchCode: 'first' });
+    expect(first.user.unix_username).toBe('originaluser');
+
+    mockExchange(signClaims({ unix_username: 'otheruser' }));
+    await expect(service().create({ launchCode: 'second' })).rejects.toBeInstanceOf(
+      NotAuthenticated
+    );
   });
 
   it('maps admin roles only when explicitly allowed', async () => {
