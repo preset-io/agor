@@ -90,6 +90,7 @@ Optional claims:
 
 - `email`, `name`, `avatar` or `picture`
 - `role`: `viewer` or `member` by default; `admin`/`superadmin` only when `allow_admin_roles` is explicitly enabled, and `superadmin` is still capped unless runtime superadmin support is enabled
+- `unix_username`: optional stable Unix account name for strict Unix user mode. It must match the runtime's Unix username validation rules. New launch-created users receive it immediately; existing external-identity users receive it only if their local `unix_username` is currently unset. Existing values are never overwritten by launch assertions.
 - `provider`: stable provider label used in local identity mapping
 - `jti` or `nonce`: accepted for audit/correlation; one-time replay prevention remains the exchange endpoint's responsibility
 

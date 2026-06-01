@@ -62,6 +62,12 @@ async function makeDb(): Promise<{ db: Database; cleanup: () => void }> {
   return { db, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+async function getUserRow(db: Database, userId: UserID) {
+  const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
+  if (!row) throw new Error('missing user row');
+  return row;
+}
+
 function makeUsersService(db: Database) {
   return {
     async get(id: UserID): Promise<User> {
@@ -79,6 +85,7 @@ function makeUsersService(db: Database) {
         updated_at: row.updated_at ?? undefined,
         avatar: (row.data as { avatar?: string }).avatar,
         preferences: (row.data as { preferences?: Record<string, unknown> }).preferences,
+        unix_username: row.unix_username ?? undefined,
       };
     },
   };
@@ -208,6 +215,67 @@ describe('one-time launch auth service', () => {
     }) as { sub: string; type: string };
     expect(decoded.sub).toBe(result.user.user_id);
     expect(decoded.type).toBe('access');
+  });
+
+  it('sets unix_username from a valid launch assertion for a new user', async () => {
+    mockExchange(signClaims({ unix_username: 'launch_user' }));
+    const result = await service().create({ launchCode: 'new-user-unix-username' });
+
+    expect(result.user.unix_username).toBe('launch_user');
+    const row = await getUserRow(db, result.user.user_id);
+    expect(row.unix_username).toBe('launch_user');
+  });
+
+  it('fills unix_username for an existing external-identity user only when currently unset', async () => {
+    mockExchange(signClaims({ sub: 'fill-unix-user', email: 'fill-unix@example.test' }));
+    const first = await service().create({ launchCode: 'first-without-unix-username' });
+    expect(first.user.unix_username).toBeUndefined();
+
+    mockExchange(
+      signClaims({
+        sub: 'fill-unix-user',
+        email: 'fill-unix@example.test',
+        unix_username: 'filled_user',
+      })
+    );
+    const second = await service().create({ launchCode: 'second-with-unix-username' });
+
+    expect(second.user.user_id).toBe(first.user.user_id);
+    expect(second.user.unix_username).toBe('filled_user');
+    const row = await getUserRow(db, second.user.user_id);
+    expect(row.unix_username).toBe('filled_user');
+  });
+
+  it('preserves an existing unix_username for an external-identity user', async () => {
+    mockExchange(
+      signClaims({
+        sub: 'preserve-unix-user',
+        email: 'preserve-unix@example.test',
+        unix_username: 'original_user',
+      })
+    );
+    const first = await service().create({ launchCode: 'first-unix-username' });
+
+    mockExchange(
+      signClaims({
+        sub: 'preserve-unix-user',
+        email: 'preserve-unix@example.test',
+        unix_username: 'new_user',
+      })
+    );
+    const second = await service().create({ launchCode: 'second-unix-username' });
+
+    expect(second.user.user_id).toBe(first.user.user_id);
+    expect(second.user.unix_username).toBe('original_user');
+    const row = await getUserRow(db, second.user.user_id);
+    expect(row.unix_username).toBe('original_user');
+  });
+
+  it('rejects invalid unix_username claims', async () => {
+    mockExchange(signClaims({ unix_username: 'Bad User' }));
+    await expect(service().create({ launchCode: 'invalid-unix-username' })).rejects.toBeInstanceOf(
+      NotAuthenticated
+    );
   });
 
   it('maps admin roles only when explicitly allowed', async () => {

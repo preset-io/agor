@@ -1,11 +1,12 @@
-import type { JsonWebKey, KeyObject } from 'node:crypto';
+import type { JsonWebKey } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import type { AgorConfig } from '@agor/core/config';
 import { type Database, eq, generateId, hash, insert, select, update, users } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
-import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
+import { isValidUnixUsername } from '@agor/core/unix/user-manager';
+import jwt, { type JwtHeader, type JwtPayload, type Secret, type SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair } from './runtime-tokens.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -49,6 +50,7 @@ interface LaunchClaims extends JwtPayload {
   provider?: string;
   instance_id?: string;
   runtime_instance_id?: string;
+  unix_username?: string;
   jti?: string;
   nonce?: string;
 }
@@ -192,6 +194,27 @@ function normalizeLaunchEmail(value: string | undefined): string | undefined {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined;
 }
 
+function normalizeLaunchUnixUsername(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const unixUsername = value.trim();
+  if (!isValidUnixUsername(unixUsername)) {
+    throw new NotAuthenticated('Invalid one-time launch assertion Unix username');
+  }
+  return unixUsername;
+}
+
+async function assertUnixUsernameAvailable(
+  db: Database,
+  unixUsername: string | undefined,
+  currentUserId?: UserID
+): Promise<void> {
+  if (!unixUsername) return;
+  const existing = await select(db).from(users).where(eq(users.unix_username, unixUsername)).one();
+  if (existing && existing.user_id !== currentUserId) {
+    throw new NotAuthenticated('Invalid one-time launch assertion Unix username');
+  }
+}
+
 function mapRole(
   claimedRole: string | undefined,
   settings: ResolvedLaunchSettings,
@@ -235,6 +258,7 @@ async function upsertLaunchUser(
   const now = new Date();
   const nowIso = now.toISOString();
   const email = normalizeLaunchEmail(claims.email);
+  const claimedUnixUsername = normalizeLaunchUnixUsername(claims.unix_username);
   const name = claims.name?.trim() || undefined;
   const avatar = claims.avatar || claims.picture;
   const identity: StoredExternalIdentity = {
@@ -264,11 +288,15 @@ async function upsertLaunchUser(
       nextIdentities.push(identity);
     }
 
+    const unixUsernameUpdate = !existing.unix_username ? claimedUnixUsername : undefined;
+    await assertUnixUsernameAvailable(db, unixUsernameUpdate, existing.user_id as UserID);
+
     await update(db, users)
       .set({
         name: name ?? existing.name,
         role,
         updated_at: now,
+        ...(unixUsernameUpdate ? { unix_username: unixUsernameUpdate } : {}),
         data: {
           ...data,
           avatar: avatar ?? data.avatar,
@@ -283,6 +311,7 @@ async function upsertLaunchUser(
 
   const role = mapRole(claims.role, settings, config.execution?.allow_superadmin);
   const localEmail = await chooseLocalEmail(db, email, key, provider, issuer, subject);
+  await assertUnixUsernameAvailable(db, claimedUnixUsername);
   const userId = generateId() as UserID;
   const password = await hash(randomBytes(32).toString('hex'), 10);
 
@@ -294,6 +323,7 @@ async function upsertLaunchUser(
       name,
       emoji: '👤',
       role,
+      unix_username: claimedUnixUsername,
       created_at: now,
       updated_at: now,
       onboarding_completed: false,
@@ -354,7 +384,7 @@ async function exchangeLaunchCode(
 async function resolveVerificationKey(
   header: JwtHeader,
   settings: ResolvedLaunchSettings
-): Promise<string | KeyObject> {
+): Promise<Secret> {
   if (settings.devSharedSecret) return settings.devSharedSecret;
   if (settings.publicKey) return settings.publicKey;
   if (!settings.jwksUrl) throw new NotAuthenticated('Launch assertion verification failed');
@@ -372,7 +402,7 @@ async function resolveVerificationKey(
   if (header.alg && jwk.alg && jwk.alg !== header.alg) {
     throw new NotAuthenticated('Launch assertion verification failed');
   }
-  return createPublicKey({ key: jwk, format: 'jwk' });
+  return createPublicKey({ key: jwk, format: 'jwk' }) as Secret;
 }
 
 async function verifyLaunchAssertion(
@@ -417,6 +447,9 @@ function validateLaunchClaims(claims: LaunchClaims, settings: ResolvedLaunchSett
   }
   if (claims.nonce !== undefined && typeof claims.nonce !== 'string') {
     throw new NotAuthenticated('Invalid one-time launch assertion nonce');
+  }
+  if (claims.unix_username !== undefined && typeof claims.unix_username !== 'string') {
+    throw new NotAuthenticated('Invalid one-time launch assertion Unix username');
   }
 }
 

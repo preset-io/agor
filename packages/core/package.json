@@ -292,6 +292,12 @@
       "import": "./dist/unix/index.js",
       "require": "./dist/unix/index.cjs"
     },
+    "./unix/user-manager": {
+      "source": "./src/unix/user-manager.ts",
+      "types": "./dist/unix/user-manager.d.ts",
+      "import": "./dist/unix/user-manager.js",
+      "require": "./dist/unix/user-manager.cjs"
+    },
     "./mcp": {
       "source": "./src/mcp/index.ts",
       "types": "./dist/mcp/index.d.ts",

@@ -48,6 +48,7 @@ export default defineConfig({
     'tools/mcp/oauth-refresh': 'src/tools/mcp/oauth-refresh.ts', // MCP OAuth refresh_token persistence + mutex
     'tools/mcp/oauth-token-expiry': 'src/tools/mcp/oauth-token-expiry.ts', // MCP OAuth token expiry resolution cascade
     'unix/index': 'src/unix/index.ts', // Unix group management utilities for branch isolation
+    'unix/user-manager': 'src/unix/user-manager.ts', // Unix username validation helpers
     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
