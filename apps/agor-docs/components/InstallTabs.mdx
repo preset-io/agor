@@ -15,6 +15,7 @@ import { Tabs } from 'nextra/components';
     agor daemon start
     agor open
     ```
+
   </Tabs.Tab>
 
   <Tabs.Tab>
@@ -32,5 +33,22 @@ import { Tabs } from 'nextra/components';
     agor daemon start
     agor open
     ```
+
+    > **Heads up — 24h release cooldown.** The formula installs via npm with
+    > `--min-release-age=1` for supply-chain protection, so a brand-new
+    > `agor-live` release isn't installable via Homebrew until ~24 hours
+    > after it lands on npm. If `brew install` fails with
+    > `notarget No matching version found for @agor-live/client@<version>
+    > with a date before …`, wait until the cooldown lapses and retry.
+    > Re-running succeeds; nothing is broken.
+
+    > **Why a tap, not `brew install agor-live` directly?** Agor is licensed
+    > under [BUSL-1.1](https://spdx.org/licenses/BUSL-1.1.html), which is
+    > source-available rather than OSI-approved open source. Homebrew's
+    > [core repository](https://docs.brew.sh/License-Guidelines) only
+    > accepts DFSG-compatible licenses, so BUSL projects (Agor, HashiCorp's
+    > Terraform/Vault, CockroachDB, Sentry, …) ship via their own taps
+    > instead. The tap install path is the supported, long-term solution.
+
   </Tabs.Tab>
 </Tabs>
