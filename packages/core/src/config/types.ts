@@ -222,6 +222,12 @@ export interface AgorExternalLaunchSettings {
 
   /** Allow launch assertions to assign admin/superadmin roles (default: false). */
   allow_admin_roles?: boolean;
+
+  /**
+   * Optional HTTP(S) URL shown in the unauthenticated UI when external launch
+   * sign-in is unavailable, missing, expired, or invalid.
+   */
+  login_redirect_url?: string;
 }
 
 /**

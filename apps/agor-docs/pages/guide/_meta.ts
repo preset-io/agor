@@ -21,6 +21,7 @@ export default {
   artifacts: 'Artifacts',
   'api-proxies': 'API Proxies (CORS bypass)',
   'message-gateway': 'Message Gateway',
+  'one-time-launch-auth': 'One-Time Launch Auth',
   '--- Reference': {
     type: 'separator',
     title: 'Reference',

@@ -55,4 +55,16 @@ describe('useAuth launch-code fallback', () => {
     expect(window.location.search).toBe('');
     expect(result.current.error).toBeNull();
   });
+
+  it('surfaces a helpful launch failure when no stored session is available', async () => {
+    launchCreate.mockRejectedValue(new Error('launch code consumed'));
+
+    const { result } = renderHook(() => useAuth());
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.authenticated).toBe(false);
+    expect(result.current.error).toContain('Launch sign-in failed');
+    expect(window.location.search).toBe('');
+  });
 });

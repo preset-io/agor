@@ -11,6 +11,10 @@ import { getDaemonUrl } from '../config/daemon';
 
 interface AuthConfig {
   requireAuth: boolean;
+  externalLaunch?: {
+    enabled?: boolean;
+    loginRedirectUrl?: string;
+  };
 }
 
 interface InstanceConfig {

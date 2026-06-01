@@ -11,6 +11,13 @@ Agor can accept a generic external launch handoff when another trusted app has a
 5. The daemon verifies issuer, audience, expiration, subject, and the configured instance ID; then it maps or creates a local user by `(provider, issuer, subject)`.
 6. The daemon returns normal runtime auth tokens. The UI stores those tokens and removes `launch_code` from the URL with `replaceState`.
 
+If the launch code is missing, expired, already used, invalid, or the daemon
+cannot complete a non-transient exchange, the UI shows a clear failure message.
+When `external_launch.login_redirect_url` is configured, the unauthenticated
+screen makes that URL the primary action so users can return to the external
+workspace and open a fresh launch link. If the field is omitted, the normal
+local username/password login screen remains unchanged.
+
 ## Configuration
 
 ```yaml
@@ -34,6 +41,11 @@ external_launch:
 
   # Optional: allow role claims above member. Defaults to false.
   allow_admin_roles: false
+
+  # Optional: where unauthenticated users should return when a launch code is
+  # missing, expired, already used, invalid, or otherwise cannot be exchanged.
+  # Must be http:// or https://.
+  login_redirect_url: https://workspace.example.com/open
 ```
 
 For local development only, a symmetric assertion secret can be used:

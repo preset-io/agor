@@ -179,6 +179,39 @@ function validateConfig(config: AgorConfig): void {
         `To update: agor config set execution.unix_user_mode insulated`
     );
   }
+
+  validateOptionalHttpUrl(
+    config.external_launch as Record<string, unknown> | undefined,
+    'login_redirect_url',
+    'external_launch.login_redirect_url'
+  );
+}
+
+function validateOptionalHttpUrl(
+  container: Record<string, unknown> | undefined,
+  key: string,
+  configPath: string
+): void {
+  if (!container || container[key] === undefined) return;
+
+  const raw = container[key];
+  if (typeof raw !== 'string') {
+    throw new Error(`Config error: ${configPath} must be an HTTP(S) URL string`);
+  }
+
+  const trimmed = raw.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`Config error: ${configPath} must be a valid HTTP(S) URL`);
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Config error: ${configPath} must use http:// or https://`);
+  }
+
+  container[key] = trimmed;
 }
 
 /**

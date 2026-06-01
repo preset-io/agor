@@ -65,7 +65,7 @@ import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
-import { createLaunchAuthService } from './auth/launch-auth.js';
+import { createLaunchAuthService, resolveLaunchSettings } from './auth/launch-auth.js';
 import {
   issueRuntimeToken,
   issueRuntimeTokenPair,
@@ -3304,6 +3304,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   app.use('/health', {
     async find(params?: AuthenticatedParams) {
+      const launchSettings = resolveLaunchSettings(config);
       const publicResponse = {
         status: 'ok',
         timestamp: Date.now(),
@@ -3316,6 +3317,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         builtAt: DAEMON_BUILD_INFO.builtAt,
         auth: {
           requireAuth: true,
+          externalLaunch: {
+            enabled: launchSettings.enabled,
+            loginRedirectUrl: launchSettings.loginRedirectUrl,
+          },
         },
         instance: {
           label: config.daemon?.instanceLabel,

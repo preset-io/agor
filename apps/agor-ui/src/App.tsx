@@ -369,7 +369,17 @@ function AppContent() {
     !!(localStorage.getItem('agor-access-token') || localStorage.getItem('agor-refresh-token'));
 
   if (!authLoading && !authenticated && !hasTokens) {
-    return <LoginPage onLogin={login} error={authError} />;
+    return (
+      <LoginPage
+        onLogin={login}
+        error={authError}
+        externalLaunchLoginRedirectUrl={
+          authConfig?.externalLaunch?.enabled
+            ? authConfig.externalLaunch.loginRedirectUrl
+            : undefined
+        }
+      />
+    );
   }
 
   // Show reconnecting state if we have tokens but lost connection.

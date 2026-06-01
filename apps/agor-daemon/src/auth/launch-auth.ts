@@ -19,6 +19,7 @@ const DEFAULT_INSTANCE_ID_ENV = 'AGOR_EXTERNAL_LAUNCH_INSTANCE_ID';
 interface ResolvedLaunchSettings {
   enabled: boolean;
   exchangeUrl?: string;
+  loginRedirectUrl?: string;
   audience?: string;
   issuer?: string;
   instanceId?: string;
@@ -90,6 +91,7 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
   return {
     enabled: envFlag(process.env.AGOR_EXTERNAL_LAUNCH_ENABLED) ?? raw?.enabled === true,
     exchangeUrl: process.env[DEFAULT_EXCHANGE_URL_ENV] || raw?.exchange_url,
+    loginRedirectUrl: raw?.login_redirect_url,
     audience: process.env[DEFAULT_AUDIENCE_ENV] || raw?.audience,
     issuer: process.env[DEFAULT_ISSUER_ENV] || raw?.issuer,
     instanceId: process.env[DEFAULT_INSTANCE_ID_ENV] || raw?.instance_id,
