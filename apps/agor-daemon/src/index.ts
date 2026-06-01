@@ -43,7 +43,6 @@ import { buildGitConfigParameters } from '@agor/core/git';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
 import type { HookContext, ServiceGroupName, ServiceTier, User } from '@agor/core/types';
 import { getServiceTier, isServiceEnabled } from '@agor/core/types';
-import compression from 'compression';
 import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
@@ -51,6 +50,7 @@ import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
 import { loadBuildInfo } from './setup/build-info.js';
+import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import {
   initializeAnthropicApiKey,
@@ -62,6 +62,7 @@ import { warnDeprecatedAnonymousConfig } from './setup/first-run-admin.js';
 import { securityHeaders } from './setup/security-headers.js';
 import { logServicesConfig, resolveServicesConfig } from './setup/service-tiers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
+import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/static-assets.js';
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { startup } from './startup.js';
@@ -455,12 +456,16 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       app.use(
         UI_MOUNT_PATH,
         expressStaticGzip(uiPath, {
-          enableBrotli: false,
-          orderPreference: ['gz'],
-          serveStatic: { maxAge: '1y' },
+          enableBrotli: true,
+          orderPreference: ['br', 'gz'],
+          serveStatic: {
+            etag: true,
+            setHeaders: setBundledUiStaticHeaders,
+          },
         }) as never
       );
       app.use(`${UI_MOUNT_PATH}/*`, ((_req: unknown, res: express.Response) => {
+        setBundledUiFallbackHeaders(res);
         res.sendFile(path.join(uiPath, 'index.html'));
       }) as never);
       app.use('/', ((req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -507,8 +512,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     }
   }) as never);
 
-  // Compress dynamic API responses (after static file serving)
-  app.use(compression() as never);
+  // Compress dynamic REST/API responses after static file serving. The filter
+  // deliberately skips pass-through proxy and streaming/event-stream routes.
+  app.use(createDynamicCompressionMiddleware() as never);
 
   // --------------------------------------------------------------------------
   // REST, Socket.io, Swagger, Database
