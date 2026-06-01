@@ -8,6 +8,8 @@
 
 import type { AgorClient } from '@agor/core/api';
 import type {
+  Branch,
+  BranchID,
   MCPServer,
   MCPServerFilters,
   MCPServerID,
@@ -18,8 +20,6 @@ import type {
   SessionID,
   SessionMCPServer,
   User,
-  Worktree,
-  WorktreeID,
 } from '@agor/core/types';
 
 /**
@@ -77,15 +77,15 @@ export class FeathersSessionsRepository {
 }
 
 /**
- * Worktrees Repository - proxies to 'worktrees' Feathers service
+ * Branches Repository - proxies to 'branches' Feathers service
  */
-export class FeathersWorktreesRepository {
+export class FeathersBranchesRepository {
   constructor(private client: AgorClient) {}
 
-  async findById(worktreeId: WorktreeID): Promise<Worktree | null> {
+  async findById(branchId: BranchID): Promise<Branch | null> {
     try {
-      const service = this.client.service('worktrees');
-      return await service.get(worktreeId);
+      const service = this.client.service('branches');
+      return await service.get(branchId);
     } catch (_error) {
       return null;
     }
@@ -291,7 +291,7 @@ export class FeathersUsersRepository {
  */
 export type MessagesRepository = FeathersMessagesRepository;
 export type SessionRepository = FeathersSessionsRepository;
-export type WorktreeRepository = FeathersWorktreesRepository;
+export type BranchRepository = FeathersBranchesRepository;
 export type RepoRepository = FeathersReposRepository;
 export type MCPServerRepository = FeathersMCPServersRepository;
 export type SessionMCPServerRepository = FeathersSessionMCPServersRepository;
@@ -305,7 +305,7 @@ export function createFeathersBackedRepositories(client: AgorClient) {
     // Repositories
     messages: new FeathersMessagesRepository(client),
     sessions: new FeathersSessionsRepository(client),
-    worktrees: new FeathersWorktreesRepository(client),
+    branches: new FeathersBranchesRepository(client),
     repos: new FeathersReposRepository(client),
     users: new FeathersUsersRepository(client),
     mcpServers: new FeathersMCPServersRepository(client),

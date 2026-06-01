@@ -1,11 +1,11 @@
 /**
  * File Service
  *
- * Provides read-only REST + WebSocket API for browsing all files in a worktree.
+ * Provides read-only REST + WebSocket API for browsing all files in a branch.
  * Does not use database - reads directly from filesystem.
  *
  * Configuration:
- * - Scans entire worktree path when worktree_id is provided
+ * - Scans entire branch path when branch_id is provided
  * - Recursively finds all files (excluding node_modules, .git, etc.)
  * - Applies 50k file hard limit to prevent browser crashes
  * - Detects text files for preview vs download
@@ -13,7 +13,7 @@
 
 import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { WorktreeRepository } from '@agor/core/db';
+import type { BranchRepository } from '@agor/core/db';
 import type { FileDetail, FileListItem, Id, QueryParams, ServiceMethods } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { ensureMinimumRole } from '../utils/authorization';
@@ -26,7 +26,7 @@ const MAX_TITLE_READ_BYTES = 4096; // Only read first 4KB for markdown title ext
  * File service params (read-only, no create/update/delete)
  */
 export type FileParams = QueryParams<{
-  worktree_id?: string;
+  branch_id?: string;
 }>;
 
 /**
@@ -125,50 +125,50 @@ function getMimeType(filePath: string): string | undefined {
 }
 
 /**
- * File service - read-only filesystem browser for worktree files
+ * File service - read-only filesystem browser for branch files
  */
 export class FileService
   implements Pick<ServiceMethods<FileListItem | FileDetail>, 'find' | 'get' | 'setup' | 'teardown'>
 {
-  private worktreeRepo: WorktreeRepository;
+  private branchRepo: BranchRepository;
 
-  constructor(worktreeRepo: WorktreeRepository) {
-    this.worktreeRepo = worktreeRepo;
+  constructor(branchRepo: BranchRepository) {
+    this.branchRepo = branchRepo;
   }
 
   /**
-   * Find all files in worktree (GET /file?worktree_id=xxx)
+   * Find all files in branch (GET /file?branch_id=xxx)
    * Returns lightweight list items without content
    */
   async find(params?: FileParams): Promise<FileListItem[]> {
     ensureMinimumRole(params, ROLES.MEMBER, 'list files');
 
-    const worktreeId = params?.query?.worktree_id;
+    const branchId = params?.query?.branch_id;
 
-    if (!worktreeId) {
-      throw new Error('worktree_id query parameter is required');
+    if (!branchId) {
+      throw new Error('branch_id query parameter is required');
     }
 
-    // Get worktree to find its path
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree) {
-      throw new Error(`Worktree not found: ${worktreeId}`);
+    // Get branch to find its path
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch) {
+      throw new Error(`Branch not found: ${branchId}`);
     }
 
-    console.log('[File Service] Scanning worktree:', {
-      worktree_id: worktree.worktree_id,
-      name: worktree.name,
-      path: worktree.path,
+    console.log('[File Service] Scanning branch:', {
+      branch_id: branch.branch_id,
+      name: branch.name,
+      path: branch.path,
     });
 
     // Resolve real path to handle symlinks
-    const worktreeRoot = await realpath(worktree.path);
+    const branchRoot = await realpath(branch.path);
 
     const files: FileListItem[] = [];
     const scanState = { truncated: false, totalCount: 0 };
 
-    // Scan entire worktree
-    await this.scanDirectory(worktreeRoot, worktreeRoot, files, scanState);
+    // Scan entire branch
+    await this.scanDirectory(branchRoot, branchRoot, files, scanState);
 
     console.log(
       `[File Service] Found ${scanState.totalCount} files total, returning ${files.length} files`,
@@ -181,41 +181,41 @@ export class FileService
   }
 
   /**
-   * Get specific file (GET /file/:path?worktree_id=xxx)
+   * Get specific file (GET /file/:path?branch_id=xxx)
    * Returns full details with content
    *
-   * @param id - Relative path from worktree root (e.g., "src/index.ts", "README.md")
+   * @param id - Relative path from branch root (e.g., "src/index.ts", "README.md")
    */
   async get(id: Id, params?: FileParams): Promise<FileDetail> {
     ensureMinimumRole(params, ROLES.MEMBER, 'read file');
 
-    const worktreeId = params?.query?.worktree_id;
+    const branchId = params?.query?.branch_id;
 
-    if (!worktreeId) {
-      throw new Error('worktree_id query parameter is required');
+    if (!branchId) {
+      throw new Error('branch_id query parameter is required');
     }
 
-    // Get worktree to find its path
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree) {
-      throw new Error(`Worktree not found: ${worktreeId}`);
+    // Get branch to find its path
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch) {
+      throw new Error(`Branch not found: ${branchId}`);
     }
 
     const relativePathInput = id.toString();
     const normalizedRelativePath = this.normalizeRelativePath(relativePathInput);
 
-    // Resolve real worktree root to handle symlinks
-    const worktreeRoot = await realpath(worktree.path);
-    const fullPath = resolve(worktreeRoot, normalizedRelativePath);
+    // Resolve real branch root to handle symlinks
+    const branchRoot = await realpath(branch.path);
+    const fullPath = resolve(branchRoot, normalizedRelativePath);
 
     try {
-      // Resolve real path and validate it's within worktree (prevents symlink escape)
+      // Resolve real path and validate it's within branch (prevents symlink escape)
       const realFilePath = await realpath(fullPath);
-      const relativeToRoot = relative(worktreeRoot, realFilePath);
+      const relativeToRoot = relative(branchRoot, realFilePath);
 
-      // Validate path is within worktree
+      // Validate path is within branch
       if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
-        throw new Error('Access denied: path escapes worktree');
+        throw new Error('Access denied: path escapes branch');
       }
 
       // Get file stats using lstat (doesn't follow symlinks)
@@ -408,6 +408,6 @@ export class FileService
 /**
  * Service factory function
  */
-export function createFileService(worktreeRepo: WorktreeRepository): FileService {
-  return new FileService(worktreeRepo);
+export function createFileService(branchRepo: BranchRepository): FileService {
+  return new FileService(branchRepo);
 }

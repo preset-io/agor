@@ -5,6 +5,7 @@
  * that are deleted during async operations (race conditions).
  */
 
+import { shortId } from '../lib/ids';
 import type { SessionID } from '../types';
 import type { SessionRepository } from './repositories/sessions';
 
@@ -36,9 +37,7 @@ export async function withSessionGuard<T>(
   // Check session exists before executing operation
   const sessionExists = await sessionsRepo?.findById(sessionId);
   if (!sessionExists) {
-    console.warn(
-      `⚠️  Session ${sessionId.substring(0, 8)} no longer exists, skipping guarded operation`
-    );
+    console.warn(`⚠️  Session ${shortId(sessionId)} no longer exists, skipping guarded operation`);
     return null;
   }
 

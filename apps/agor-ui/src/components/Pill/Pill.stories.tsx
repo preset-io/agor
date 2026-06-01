@@ -7,13 +7,13 @@ import {
   DirtyStatePill,
   ForkPill,
   GitShaPill,
+  GitStatePill,
   MessageCountPill,
   ReportPill,
   SessionIdPill,
   SpawnPill,
   StatusPill,
   ToolCountPill,
-  WorktreePill,
 } from './Pill';
 import { SessionMetadataCard } from './SessionMetadataCard';
 import { TimerPill } from './TimerPill';
@@ -50,6 +50,8 @@ export const AllPills: Story = {
           <GitShaPill sha="abc123def456" />
           <GitShaPill sha="abc123def456-dirty" isDirty={true} />
           <GitShaPill sha="abc123def456-dirty" isDirty={true} showDirtyIndicator={false} />
+          <GitStatePill sha="abc123def456" branch="main" />
+          <GitStatePill sha="abc123def456-dirty" branch="feature/foo" />
           <DirtyStatePill />
         </Space>
       </div>
@@ -99,8 +101,6 @@ export const AllPills: Story = {
           <ReportPill reportId="0199b852-1234-5678-9abc-def012345678" />
           <ConceptPill name="authentication" />
           <ConceptPill name="database-schema" />
-          <WorktreePill managed={true} />
-          <WorktreePill managed={false} />
         </Space>
       </div>
     </Space>
@@ -130,10 +130,18 @@ export const ToolCount: Story = {
 
 export const GitSha: Story = {
   render: () => (
-    <Space>
-      <GitShaPill sha="abc123def456" />
-      <GitShaPill sha="abc123def456-dirty" isDirty={true} />
-      <GitShaPill sha="abc123def456-dirty" isDirty={true} showDirtyIndicator={false} />
+    <Space orientation="vertical">
+      <Space>
+        <GitShaPill sha="abc123def456" />
+        <GitShaPill sha="abc123def456-dirty" isDirty={true} />
+        <GitShaPill sha="abc123def456-dirty" isDirty={true} showDirtyIndicator={false} />
+      </Space>
+      <Space>
+        <GitStatePill sha="abc123def456" branch="main" />
+        <GitStatePill sha="abc123def456-dirty" branch="feature/foo" />
+        <GitStatePill sha="abc123def456" branch="main" branchName="main" />
+        <GitStatePill sha="abc123def456-dirty" branch="main" branchName="main" />
+      </Space>
     </Space>
   ),
 };
@@ -203,7 +211,6 @@ export const Features: Story = {
       <ReportPill />
       <ReportPill reportId="0199b852-1234-5678-9abc-def012345678" />
       <ConceptPill name="authentication" />
-      <WorktreePill managed={true} />
       <DirtyStatePill />
     </Space>
   ),
@@ -226,7 +233,7 @@ export const EventStream: Story = {
             label="auth-fix"
             icon={FolderOutlined}
             color="geekblue"
-            copyLabel="Worktree ID"
+            copyLabel="Branch ID"
           />
         </Space>
       </div>
@@ -251,7 +258,7 @@ export const EventStream: Story = {
                   created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
                   last_updated: new Date().toISOString(),
                   created_by: 'user-123',
-                  worktree_id: 'worktree-456',
+                  branch_id: 'branch-456',
                   git_state: { ref: 'auth-fix', base_sha: 'abc123', current_sha: 'def456' },
                   contextFiles: [],
                   genealogy: {
@@ -261,23 +268,22 @@ export const EventStream: Story = {
                   tasks: [],
 
                   permission_config: { mode: 'auto' },
-                  scheduled_from_worktree: false,
+                  scheduled_from_branch: false,
                   ready_for_prompt: false,
                   archived: false,
                 }}
-                worktree={{
-                  worktree_id: 'worktree-456',
+                branch={{
+                  branch_id: 'branch-456',
                   name: 'auth-fix',
                   repo_id: 'repo-789',
                   path: '/Users/dev/.agor/worktrees/my-app/auth-fix',
                   ref: 'auth-fix',
                   base_ref: 'main',
                   new_branch: true,
-                  worktree_unique_id: 1,
+                  branch_unique_id: 1,
                   created_at: new Date().toISOString(),
                   updated_at: new Date().toISOString(),
                   created_by: 'user-123',
-                  schedule_enabled: false,
                   needs_attention: false,
                   archived: false,
                 }}
@@ -334,7 +340,7 @@ export const SessionMetadata: Story = {
             created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
             last_updated: new Date().toISOString(),
             created_by: 'user-123',
-            worktree_id: 'worktree-456',
+            branch_id: 'branch-456',
             git_state: { ref: 'auth-fix', base_sha: 'abc123', current_sha: 'def456' },
             contextFiles: [],
             genealogy: {
@@ -343,23 +349,22 @@ export const SessionMetadata: Story = {
             },
             tasks: [],
             permission_config: { mode: 'auto' },
-            scheduled_from_worktree: false,
+            scheduled_from_branch: false,
             ready_for_prompt: false,
             archived: false,
           }}
-          worktree={{
-            worktree_id: 'worktree-456',
+          branch={{
+            branch_id: 'branch-456',
             name: 'auth-fix',
             repo_id: 'repo-789',
             path: '/Users/dev/.agor/worktrees/my-app/auth-fix',
             ref: 'auth-fix',
             base_ref: 'main',
             new_branch: true,
-            worktree_unique_id: 1,
+            branch_unique_id: 1,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             created_by: 'user-123',
-            schedule_enabled: false,
             needs_attention: false,
             archived: false,
           }}
@@ -405,7 +410,7 @@ export const SessionMetadata: Story = {
             created_at: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
             last_updated: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
             created_by: 'user-123',
-            worktree_id: 'worktree-456',
+            branch_id: 'branch-456',
             git_state: { ref: 'test-suite', base_sha: 'abc123', current_sha: 'def456' },
             contextFiles: [],
             genealogy: {
@@ -417,7 +422,7 @@ export const SessionMetadata: Story = {
               mode: 'auto',
               codex: { sandboxMode: 'workspace-write', approvalPolicy: 'on-request' },
             },
-            scheduled_from_worktree: false,
+            scheduled_from_branch: false,
             ready_for_prompt: false,
             archived: false,
           }}
@@ -448,13 +453,13 @@ export const SessionMetadata: Story = {
             created_at: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
             last_updated: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
             created_by: 'user-456',
-            worktree_id: 'worktree-789',
+            branch_id: 'branch-789',
             git_state: { ref: 'debug-leak', base_sha: 'abc123', current_sha: 'def456' },
             contextFiles: [],
             genealogy: { children: [] },
             tasks: [],
             permission_config: { mode: 'ask' },
-            scheduled_from_worktree: false,
+            scheduled_from_branch: false,
             ready_for_prompt: false,
             archived: false,
           }}

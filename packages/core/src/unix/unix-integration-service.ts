@@ -2,7 +2,7 @@
  * Unix Integration Service
  *
  * Central controller for all Unix-level operations in Agor:
- * - Unix group management for worktree isolation
+ * - Unix group management for branch isolation
  * - Unix group management for repo-root traversal + .git access
  * - Unix user creation/management
  * - Symlink management in user home directories
@@ -14,25 +14,26 @@
  */
 
 import type { Database } from '../db/index.js';
-import { RepoRepository, UsersRepository, WorktreeRepository } from '../db/repositories/index.js';
-import type { RepoID, UserID, UUID, WorktreeID } from '../types/index.js';
+import { BranchRepository, RepoRepository, UsersRepository } from '../db/repositories/index.js';
+import { shortId } from '../lib/ids';
+import type { BranchID, RepoID, UserID, UUID } from '../types/index.js';
 import type { CommandExecutor } from './command-executor.js';
 import { NoOpExecutor } from './command-executor.js';
 import {
   AGOR_USERS_GROUP,
+  generateBranchGroupName,
   generateRepoGroupName,
-  generateWorktreeGroupName,
-  getWorktreePermissionMode,
+  getBranchPermissionMode,
   REPO_GIT_PERMISSION_MODE,
   UnixGroupCommands,
 } from './group-manager.js';
-import { getWorktreeSymlinkPath, SymlinkCommands } from './symlink-manager.js';
+import { getBranchSymlinkPath, SymlinkCommands } from './symlink-manager.js';
 import {
   AGOR_DEFAULT_SHELL,
   AGOR_HOME_BASE,
   generateUnixUsername,
+  getUserBranchesDir,
   getUserHomeDir,
-  getUserWorktreesDir,
   isValidUnixUsername,
   UnixUserCommands,
 } from './user-manager.js';
@@ -94,7 +95,7 @@ export interface UnixOperationResult {
 export class UnixIntegrationService {
   private config: Required<Omit<UnixIntegrationConfig, 'daemonUser'>> & { daemonUser?: string };
   private executor: CommandExecutor;
-  private worktreeRepo: WorktreeRepository;
+  private branchRepo: BranchRepository;
   private usersRepo: UsersRepository;
   private repoRepo: RepoRepository;
 
@@ -113,7 +114,7 @@ export class UnixIntegrationService {
       daemonUser: config.daemonUser,
     };
     this.executor = config.enabled ? executor : new NoOpExecutor();
-    this.worktreeRepo = new WorktreeRepository(db);
+    this.branchRepo = new BranchRepository(db);
     this.usersRepo = new UsersRepository(db);
     this.repoRepo = new RepoRepository(db);
   }
@@ -201,21 +202,19 @@ export class UnixIntegrationService {
   }
 
   // ============================================================
-  // WORKTREE GROUP MANAGEMENT
+  // BRANCH GROUP MANAGEMENT
   // ============================================================
 
   /**
-   * Create a Unix group for a worktree
+   * Create a Unix group for a branch
    *
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    * @returns Group name created
    */
-  async createWorktreeGroup(worktreeId: WorktreeID): Promise<string> {
-    const groupName = generateWorktreeGroupName(worktreeId);
+  async createBranchGroup(branchId: BranchID): Promise<string> {
+    const groupName = generateBranchGroupName(branchId);
 
-    console.log(
-      `[UnixIntegration] Creating group ${groupName} for worktree ${worktreeId.substring(0, 8)}`
-    );
+    console.log(`[UnixIntegration] Creating group ${groupName} for branch ${shortId(branchId)}`);
 
     // Check if group already exists
     const exists = await this.executor.check(UnixGroupCommands.groupExists(groupName));
@@ -225,85 +224,83 @@ export class UnixIntegrationService {
       await this.executor.exec(UnixGroupCommands.createGroup(groupName));
     }
 
-    // Fetch current worktree to get existing data and path
-    const worktree = await this.worktreeRepo.findById(worktreeId);
+    // Fetch current branch to get existing data and path
+    const branch = await this.branchRepo.findById(branchId);
 
-    // Update worktree record with group name (using repository)
-    await this.worktreeRepo.update(worktreeId, {
+    // Update branch record with group name (using repository)
+    await this.branchRepo.update(branchId, {
       unix_group: groupName,
     });
 
-    // Apply group ownership and permissions to worktree directory
-    if (worktree?.path) {
-      await this.setWorktreePermissions(worktreeId, worktree.path);
+    // Apply group ownership and permissions to branch directory
+    if (branch?.path) {
+      await this.setBranchPermissions(branchId, branch.path);
     }
 
-    // Add the daemon user to the worktree group so it can access the worktree
+    // Add the daemon user to the branch group so it can access the branch
     if (this.config.daemonUser) {
-      await this.addUnixUserToWorktreeGroup(groupName, this.config.daemonUser);
+      await this.addUnixUserToBranchGroup(groupName, this.config.daemonUser);
     }
 
     return groupName;
   }
 
   /**
-   * Add a Unix username directly to a worktree group
+   * Add a Unix username directly to a branch group
    *
    * Used for adding the daemon user or other system users.
    *
    * @param groupName - Unix group name
    * @param unixUsername - Unix username to add
    */
-  async addUnixUserToWorktreeGroup(groupName: string, unixUsername: string): Promise<void> {
-    console.log(
-      `[UnixIntegration] Adding Unix user ${unixUsername} to worktree group ${groupName}`
-    );
+  async addUnixUserToBranchGroup(groupName: string, unixUsername: string): Promise<void> {
+    console.log(`[UnixIntegration] Adding Unix user ${unixUsername} to branch group ${groupName}`);
 
     // Check if already in group
     const inGroup = await this.executor.check(
       UnixGroupCommands.isUserInGroup(unixUsername, groupName)
     );
     if (inGroup) {
-      console.log(`[UnixIntegration] User ${unixUsername} already in worktree group ${groupName}`);
+      console.log(`[UnixIntegration] User ${unixUsername} already in branch group ${groupName}`);
     } else {
       await this.executor.exec(UnixGroupCommands.addUserToGroup(unixUsername, groupName));
     }
   }
 
   /**
-   * Delete a Unix group for a worktree
+   * Delete a Unix group for a branch
    *
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    */
-  async deleteWorktreeGroup(worktreeId: WorktreeID): Promise<void> {
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree?.unix_group) {
-      console.log(`[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}`);
+  async deleteBranchGroup(branchId: BranchID): Promise<void> {
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch?.unix_group) {
+      console.log(`[UnixIntegration] No Unix group for branch ${shortId(branchId)}`);
       return;
     }
 
     console.log(
-      `[UnixIntegration] Deleting group ${worktree.unix_group} for worktree ${worktreeId.substring(0, 8)}`
+      `[UnixIntegration] Deleting group ${branch.unix_group} for branch ${shortId(branchId)}`
     );
 
     // Check if group exists before deleting
-    const exists = await this.executor.check(UnixGroupCommands.groupExists(worktree.unix_group));
+    const exists = await this.executor.check(UnixGroupCommands.groupExists(branch.unix_group));
     if (exists) {
-      await this.executor.exec(UnixGroupCommands.deleteGroup(worktree.unix_group));
+      await this.executor.exec(UnixGroupCommands.deleteGroup(branch.unix_group));
     }
   }
 
   /**
-   * Add a user to a worktree's Unix group
+   * Add a user to a branch's Unix group
    *
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    * @param userId - User ID to add
    */
-  async addUserToWorktreeGroup(worktreeId: WorktreeID, userId: UUID): Promise<void> {
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree?.unix_group) {
+  async addUserToBranchGroup(branchId: BranchID, userId: UUID): Promise<void> {
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}, skipping user add`
+        `[UnixIntegration] No Unix group for branch ${shortId(branchId)}, skipping user add`
       );
       return;
     }
@@ -311,44 +308,44 @@ export class UnixIntegrationService {
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping group add`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping group add`
       );
       return;
     }
 
     console.log(
-      `[UnixIntegration] Adding user ${user.unix_username} to group ${worktree.unix_group}`
+      `[UnixIntegration] Adding user ${user.unix_username} to group ${branch.unix_group}`
     );
 
     // Check if already in group
     const inGroup = await this.executor.check(
-      UnixGroupCommands.isUserInGroup(user.unix_username, worktree.unix_group)
+      UnixGroupCommands.isUserInGroup(user.unix_username, branch.unix_group)
     );
     if (inGroup) {
       console.log(`[UnixIntegration] User ${user.unix_username} already in group`);
     } else {
       await this.executor.exec(
-        UnixGroupCommands.addUserToGroup(user.unix_username, worktree.unix_group)
+        UnixGroupCommands.addUserToGroup(user.unix_username, branch.unix_group)
       );
     }
 
     // Also create symlink if auto-manage is enabled
-    if (this.config.autoManageSymlinks && worktree.path) {
-      await this.createWorktreeSymlink(userId, worktreeId);
+    if (this.config.autoManageSymlinks && branch.path) {
+      await this.createBranchSymlink(userId, branchId);
     }
   }
 
   /**
-   * Remove a user from a worktree's Unix group
+   * Remove a user from a branch's Unix group
    *
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    * @param userId - User ID to remove
    */
-  async removeUserFromWorktreeGroup(worktreeId: WorktreeID, userId: UUID): Promise<void> {
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree?.unix_group) {
+  async removeUserFromBranchGroup(branchId: BranchID, userId: UUID): Promise<void> {
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}, skipping user remove`
+        `[UnixIntegration] No Unix group for branch ${shortId(branchId)}, skipping user remove`
       );
       return;
     }
@@ -356,79 +353,77 @@ export class UnixIntegrationService {
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping group remove`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping group remove`
       );
       return;
     }
 
     console.log(
-      `[UnixIntegration] Removing user ${user.unix_username} from group ${worktree.unix_group}`
+      `[UnixIntegration] Removing user ${user.unix_username} from group ${branch.unix_group}`
     );
 
     // Check if in group before removing
     const inGroup = await this.executor.check(
-      UnixGroupCommands.isUserInGroup(user.unix_username, worktree.unix_group)
+      UnixGroupCommands.isUserInGroup(user.unix_username, branch.unix_group)
     );
     if (inGroup) {
       await this.executor.exec(
-        UnixGroupCommands.removeUserFromGroup(user.unix_username, worktree.unix_group)
+        UnixGroupCommands.removeUserFromGroup(user.unix_username, branch.unix_group)
       );
     }
 
     // Also remove symlink if auto-manage is enabled
     if (this.config.autoManageSymlinks) {
-      await this.removeWorktreeSymlink(userId, worktreeId);
+      await this.removeBranchSymlink(userId, branchId);
     }
   }
 
   /**
-   * Set filesystem permissions for a worktree directory
+   * Set filesystem permissions for a branch directory
    *
-   * @param worktreeId - Worktree ID
-   * @param worktreePath - Absolute path to worktree directory
+   * @param branchId - Branch ID
+   * @param branchPath - Absolute path to branch directory
    */
-  async setWorktreePermissions(worktreeId: WorktreeID, worktreePath: string): Promise<void> {
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree?.unix_group) {
+  async setBranchPermissions(branchId: BranchID, branchPath: string): Promise<void> {
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for worktree ${worktreeId.substring(0, 8)}, skipping permissions`
+        `[UnixIntegration] No Unix group for branch ${shortId(branchId)}, skipping permissions`
       );
       return;
     }
 
-    const permissionMode = getWorktreePermissionMode(worktree.others_fs_access || 'read');
+    const permissionMode = getBranchPermissionMode(branch.others_fs_access || 'read');
 
     console.log(
-      `[UnixIntegration] Setting permissions ${permissionMode} for ${worktreePath} (group: ${worktree.unix_group})`
+      `[UnixIntegration] Setting permissions ${permissionMode} for ${branchPath} (group: ${branch.unix_group})`
     );
 
     await this.executor.execAll(
-      UnixGroupCommands.setDirectoryGroup(worktreePath, worktree.unix_group, permissionMode)
+      UnixGroupCommands.setDirectoryGroup(branchPath, branch.unix_group, permissionMode)
     );
 
-    // Set explicit user ACL for the daemon user so it can access worktree files
+    // Set explicit user ACL for the daemon user so it can access branch files
     // even when its supplementary groups are stale (groups added after process
     // startup are not picked up by the running process)
     if (this.config.daemonUser) {
-      await this.executor.execAll(
-        UnixGroupCommands.setUserAcl(worktreePath, this.config.daemonUser)
-      );
+      await this.executor.execAll(UnixGroupCommands.setUserAcl(branchPath, this.config.daemonUser));
     }
   }
 
   /**
-   * Initialize Unix group for an existing worktree
+   * Initialize Unix group for an existing branch
    *
    * Creates group and adds all current owners.
    *
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    */
-  async initializeWorktreeGroup(worktreeId: WorktreeID): Promise<void> {
-    const groupName = await this.createWorktreeGroup(worktreeId);
+  async initializeBranchGroup(branchId: BranchID): Promise<void> {
+    const groupName = await this.createBranchGroup(branchId);
 
-    const ownerIds = await this.worktreeRepo.getOwners(worktreeId);
+    const ownerIds = await this.branchRepo.getOwners(branchId);
     for (const ownerId of ownerIds) {
-      await this.addUserToWorktreeGroup(worktreeId, ownerId);
+      await this.addUserToBranchGroup(branchId, ownerId);
     }
 
     console.log(
@@ -444,7 +439,7 @@ export class UnixIntegrationService {
    * Create a Unix group for a repo's .git directory
    *
    * The repo group controls access to the shared .git/ directory.
-   * Users who have access to ANY worktree in this repo get added to this group,
+   * Users who have access to ANY branch in this repo get added to this group,
    * enabling git operations (commit, push, pull, etc).
    *
    * @param repoId - Repo ID
@@ -453,9 +448,7 @@ export class UnixIntegrationService {
   async createRepoGroup(repoId: RepoID): Promise<string> {
     const groupName = generateRepoGroupName(repoId);
 
-    console.log(
-      `[UnixIntegration] Creating repo group ${groupName} for repo ${repoId.substring(0, 8)}`
-    );
+    console.log(`[UnixIntegration] Creating repo group ${groupName} for repo ${shortId(repoId)}`);
 
     // Check if group already exists
     const exists = await this.executor.check(UnixGroupCommands.groupExists(groupName));
@@ -472,14 +465,14 @@ export class UnixIntegrationService {
 
     // Apply group ownership and permissions to repo Unix-group-managed paths:
     // - repo root (non-recursive, traversal)
-    // - `.git` (recursive, shared git objects/refs + worktree metadata)
+    // - `.git` (recursive, shared git objects/refs + branch metadata)
     const repo = await this.repoRepo.findById(repoId);
     if (repo?.local_path) {
       await this.setRepoPermissions(repoId, repo.local_path);
     }
 
     // Add the daemon user to the repo group so it can run git commands
-    // The daemon needs access to .git for worktree creation, fetching, etc.
+    // The daemon needs access to .git for branch creation, fetching, etc.
     if (this.config.daemonUser) {
       await this.addUnixUserToRepoGroup(groupName, this.config.daemonUser);
     }
@@ -517,12 +510,12 @@ export class UnixIntegrationService {
   async deleteRepoGroup(repoId: RepoID): Promise<void> {
     const repo = await this.repoRepo.findById(repoId);
     if (!repo?.unix_group) {
-      console.log(`[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}`);
+      console.log(`[UnixIntegration] No Unix group for repo ${shortId(repoId)}`);
       return;
     }
 
     console.log(
-      `[UnixIntegration] Deleting repo group ${repo.unix_group} for repo ${repoId.substring(0, 8)}`
+      `[UnixIntegration] Deleting repo group ${repo.unix_group} for repo ${shortId(repoId)}`
     );
 
     // Check if group exists before deleting
@@ -546,7 +539,7 @@ export class UnixIntegrationService {
     const repo = await this.repoRepo.findById(repoId);
     if (!repo?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}, skipping repo permissions`
+        `[UnixIntegration] No Unix group for repo ${shortId(repoId)}, skipping repo permissions`
       );
       return;
     }
@@ -586,53 +579,51 @@ export class UnixIntegrationService {
   }
 
   /**
-   * Fix permissions on a worktree's .git/worktrees/<name>/ directory
+   * Fix permissions on a branch's .git/worktrees/<name>/ directory
    *
-   * When git creates a worktree, it creates a subdirectory in .git/worktrees/.
+   * When git creates a branch, it creates a subdirectory in .git/worktrees/.
    * Due to umask, this directory may not have group write permission even though
    * setgid causes it to inherit the repo group. This method fixes those permissions.
    *
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    */
-  async fixWorktreeGitDirPermissions(worktreeId: WorktreeID): Promise<void> {
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree?.repo_id) {
+  async fixBranchGitDirPermissions(branchId: BranchID): Promise<void> {
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch?.repo_id) {
       console.log(
-        `[UnixIntegration] Worktree ${worktreeId.substring(0, 8)} has no repo, skipping .git/worktrees fix`
+        `[UnixIntegration] Branch ${shortId(branchId)} has no repo, skipping .git/worktrees fix`
       );
       return;
     }
 
-    const repo = await this.repoRepo.findById(worktree.repo_id as RepoID);
+    const repo = await this.repoRepo.findById(branch.repo_id as RepoID);
     if (!repo?.unix_group || !repo?.local_path) {
       console.log(`[UnixIntegration] Repo has no Unix group or path, skipping .git/worktrees fix`);
       return;
     }
 
-    // The worktree's git dir is at .git/worktrees/<worktree-name>/
-    // Extract worktree name from path (last component)
-    const worktreeName = worktree.path.split('/').pop();
-    if (!worktreeName) {
-      console.log(
-        `[UnixIntegration] Could not determine worktree name from path: ${worktree.path}`
-      );
+    // The branch's git dir is at .git/worktrees/<branch-name>/
+    // Extract branch name from path (last component)
+    const branchName = branch.path.split('/').pop();
+    if (!branchName) {
+      console.log(`[UnixIntegration] Could not determine branch name from path: ${branch.path}`);
       return;
     }
 
-    const worktreeGitDir = `${repo.local_path}/.git/worktrees/${worktreeName}`;
+    const branchGitDir = `${repo.local_path}/.git/worktrees/${branchName}`;
 
     console.log(
-      `[UnixIntegration] Setting .git/worktrees/${worktreeName} permissions ${REPO_GIT_PERMISSION_MODE} (group: ${repo.unix_group})`
+      `[UnixIntegration] Setting .git/worktrees/${branchName} permissions ${REPO_GIT_PERMISSION_MODE} (group: ${repo.unix_group})`
     );
 
     await this.executor.execAll(
-      UnixGroupCommands.setDirectoryGroup(worktreeGitDir, repo.unix_group, REPO_GIT_PERMISSION_MODE)
+      UnixGroupCommands.setDirectoryGroup(branchGitDir, repo.unix_group, REPO_GIT_PERMISSION_MODE)
     );
 
     // Set explicit user ACL for the daemon user on .git/worktrees/<name>
     if (this.config.daemonUser) {
       await this.executor.execAll(
-        UnixGroupCommands.setUserAcl(worktreeGitDir, this.config.daemonUser)
+        UnixGroupCommands.setUserAcl(branchGitDir, this.config.daemonUser)
       );
     }
   }
@@ -640,7 +631,7 @@ export class UnixIntegrationService {
   /**
    * Add a user to a repo's Unix group
    *
-   * Called when a user gains access to any worktree in the repo.
+   * Called when a user gains access to any branch in the repo.
    *
    * @param repoId - Repo ID
    * @param userId - User ID to add
@@ -648,16 +639,14 @@ export class UnixIntegrationService {
   async addUserToRepoGroup(repoId: RepoID, userId: UUID): Promise<void> {
     const repo = await this.repoRepo.findById(repoId);
     if (!repo?.unix_group) {
-      console.log(
-        `[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}, skipping user add`
-      );
+      console.log(`[UnixIntegration] No Unix group for repo ${shortId(repoId)}, skipping user add`);
       return;
     }
 
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping repo group add`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping repo group add`
       );
       return;
     }
@@ -682,7 +671,7 @@ export class UnixIntegrationService {
   /**
    * Remove a user from a repo's Unix group
    *
-   * Called when a user loses access to ALL worktrees in the repo.
+   * Called when a user loses access to ALL branches in the repo.
    * Use shouldUserBeInRepoGroup() first to check if removal is appropriate.
    *
    * @param repoId - Repo ID
@@ -692,7 +681,7 @@ export class UnixIntegrationService {
     const repo = await this.repoRepo.findById(repoId);
     if (!repo?.unix_group) {
       console.log(
-        `[UnixIntegration] No Unix group for repo ${repoId.substring(0, 8)}, skipping user remove`
+        `[UnixIntegration] No Unix group for repo ${shortId(repoId)}, skipping user remove`
       );
       return;
     }
@@ -700,7 +689,7 @@ export class UnixIntegrationService {
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping repo group remove`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping repo group remove`
       );
       return;
     }
@@ -724,19 +713,19 @@ export class UnixIntegrationService {
    * Check if a user should be in a repo's Unix group
    *
    * A user should be in the repo group if they have ownership
-   * of ANY worktree in that repo.
+   * of ANY branch in that repo.
    *
    * @param repoId - Repo ID
    * @param userId - User ID to check
    * @returns true if user should remain in the repo group
    */
   async shouldUserBeInRepoGroup(repoId: RepoID, userId: UUID): Promise<boolean> {
-    // Get all worktrees for this repo
-    const worktrees = await this.worktreeRepo.findAll({ repo_id: repoId });
+    // Get all branches for this repo
+    const branches = await this.branchRepo.findAll({ repo_id: repoId });
 
-    // Check if user is owner of any worktree in this repo
-    for (const wt of worktrees) {
-      const isOwner = await this.worktreeRepo.isOwner(wt.worktree_id, userId as UserID);
+    // Check if user is owner of any branch in this repo
+    for (const wt of branches) {
+      const isOwner = await this.branchRepo.isOwner(wt.branch_id, userId as UserID);
       if (isOwner) {
         return true;
       }
@@ -749,19 +738,19 @@ export class UnixIntegrationService {
    * Initialize Unix group for an existing repo
    *
    * Creates group, sets .git permissions, and adds all users who
-   * own any worktree in the repo.
+   * own any branch in the repo.
    *
    * @param repoId - Repo ID
    */
   async initializeRepoGroup(repoId: RepoID): Promise<void> {
     const groupName = await this.createRepoGroup(repoId);
 
-    // Find all unique owners across all worktrees in this repo
-    const worktrees = await this.worktreeRepo.findAll({ repo_id: repoId });
+    // Find all unique owners across all branches in this repo
+    const branches = await this.branchRepo.findAll({ repo_id: repoId });
     const ownerIds = new Set<string>();
 
-    for (const wt of worktrees) {
-      const wtOwners = await this.worktreeRepo.getOwners(wt.worktree_id);
+    for (const wt of branches) {
+      const wtOwners = await this.branchRepo.getOwners(wt.branch_id);
       for (const ownerId of wtOwners) {
         ownerIds.add(ownerId);
       }
@@ -781,22 +770,22 @@ export class UnixIntegrationService {
    * Full sync for a repo
    *
    * Ensures repo group exists, .git permissions are set, and all
-   * worktree owners are in the repo group.
+   * branch owners are in the repo group.
    *
    * @param repoId - Repo ID
    */
   async syncRepo(repoId: RepoID): Promise<void> {
-    console.log(`[UnixIntegration] Full sync for repo ${repoId.substring(0, 8)}`);
+    console.log(`[UnixIntegration] Full sync for repo ${shortId(repoId)}`);
 
     // Ensure repo group exists and .git permissions are set
     await this.createRepoGroup(repoId);
 
-    // Get all unique owners across all worktrees
-    const worktrees = await this.worktreeRepo.findAll({ repo_id: repoId });
+    // Get all unique owners across all branches
+    const branches = await this.branchRepo.findAll({ repo_id: repoId });
     const ownerIds = new Set<string>();
 
-    for (const wt of worktrees) {
-      const wtOwners = await this.worktreeRepo.getOwners(wt.worktree_id);
+    for (const wt of branches) {
+      const wtOwners = await this.branchRepo.getOwners(wt.branch_id);
       for (const ownerId of wtOwners) {
         ownerIds.add(ownerId);
       }
@@ -834,7 +823,7 @@ export class UnixIntegrationService {
       // Generate a default username
       unixUsername = generateUnixUsername(userId);
       console.log(
-        `[UnixIntegration] Generated Unix username: ${unixUsername} for user ${userId.substring(0, 8)}`
+        `[UnixIntegration] Generated Unix username: ${unixUsername} for user ${shortId(userId)}`
       );
     }
 
@@ -855,17 +844,17 @@ export class UnixIntegrationService {
 
       // Setup ~/agor/worktrees directory
       await this.executor.execAll(
-        UnixUserCommands.setupWorktreesDir(unixUsername, this.config.homeBase)
+        UnixUserCommands.setupBranchesDir(unixUsername, this.config.homeBase)
       );
     } else {
       console.log(`[UnixIntegration] Unix user ${unixUsername} already exists`);
 
       // Ensure ~/agor/worktrees exists
-      const worktreesDir = getUserWorktreesDir(unixUsername, this.config.homeBase);
-      const dirExists = await this.executor.check(SymlinkCommands.pathExists(worktreesDir));
+      const branchesDir = getUserBranchesDir(unixUsername, this.config.homeBase);
+      const dirExists = await this.executor.check(SymlinkCommands.pathExists(branchesDir));
       if (!dirExists) {
         await this.executor.execAll(
-          UnixUserCommands.setupWorktreesDir(unixUsername, this.config.homeBase)
+          UnixUserCommands.setupBranchesDir(unixUsername, this.config.homeBase)
         );
       }
     }
@@ -980,7 +969,7 @@ export class UnixIntegrationService {
   async deleteUnixUser(userId: UserID, deleteHome: boolean = false): Promise<void> {
     const user = await this.usersRepo.findById(userId);
     if (!user?.unix_username) {
-      console.log(`[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username`);
+      console.log(`[UnixIntegration] User ${shortId(userId)} has no Unix username`);
       return;
     }
 
@@ -1039,63 +1028,55 @@ export class UnixIntegrationService {
   // ============================================================
 
   /**
-   * Create a symlink for a worktree in a user's home directory
+   * Create a symlink for a branch in a user's home directory
    *
    * @param userId - User ID
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    */
-  async createWorktreeSymlink(userId: UUID, worktreeId: WorktreeID): Promise<void> {
+  async createBranchSymlink(userId: UUID, branchId: BranchID): Promise<void> {
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       console.log(
-        `[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username, skipping symlink`
+        `[UnixIntegration] User ${shortId(userId)} has no Unix username, skipping symlink`
       );
       return;
     }
 
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree?.path || !worktree.name) {
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch?.path || !branch.name) {
       console.log(
-        `[UnixIntegration] Worktree ${worktreeId.substring(0, 8)} has no path/name, skipping symlink`
+        `[UnixIntegration] Branch ${shortId(branchId)} has no path/name, skipping symlink`
       );
       return;
     }
 
-    const linkPath = getWorktreeSymlinkPath(
-      user.unix_username,
-      worktree.name,
-      this.config.homeBase
-    );
+    const linkPath = getBranchSymlinkPath(user.unix_username, branch.name, this.config.homeBase);
 
-    console.log(`[UnixIntegration] Creating symlink: ${linkPath} -> ${worktree.path}`);
+    console.log(`[UnixIntegration] Creating symlink: ${linkPath} -> ${branch.path}`);
 
     await this.executor.execAll(
-      SymlinkCommands.createSymlinkWithOwnership(worktree.path, linkPath, user.unix_username)
+      SymlinkCommands.createSymlinkWithOwnership(branch.path, linkPath, user.unix_username)
     );
   }
 
   /**
-   * Remove a symlink for a worktree from a user's home directory
+   * Remove a symlink for a branch from a user's home directory
    *
    * @param userId - User ID
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    */
-  async removeWorktreeSymlink(userId: UUID, worktreeId: WorktreeID): Promise<void> {
+  async removeBranchSymlink(userId: UUID, branchId: BranchID): Promise<void> {
     const user = await this.usersRepo.findById(userId as UserID);
     if (!user?.unix_username) {
       return;
     }
 
-    const worktree = await this.worktreeRepo.findById(worktreeId);
-    if (!worktree?.name) {
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch?.name) {
       return;
     }
 
-    const linkPath = getWorktreeSymlinkPath(
-      user.unix_username,
-      worktree.name,
-      this.config.homeBase
-    );
+    const linkPath = getBranchSymlinkPath(user.unix_username, branch.name, this.config.homeBase);
 
     console.log(`[UnixIntegration] Removing symlink: ${linkPath}`);
 
@@ -1103,7 +1084,7 @@ export class UnixIntegrationService {
   }
 
   /**
-   * Sync all symlinks for a user based on their worktree ownership
+   * Sync all symlinks for a user based on their branch ownership
    *
    * Removes stale symlinks and creates missing ones.
    *
@@ -1112,52 +1093,52 @@ export class UnixIntegrationService {
   async syncUserSymlinks(userId: UserID): Promise<void> {
     const user = await this.usersRepo.findById(userId);
     if (!user?.unix_username) {
-      console.log(`[UnixIntegration] User ${userId.substring(0, 8)} has no Unix username`);
+      console.log(`[UnixIntegration] User ${shortId(userId)} has no Unix username`);
       return;
     }
 
     console.log(`[UnixIntegration] Syncing symlinks for user: ${user.unix_username}`);
 
-    const worktreesDir = getUserWorktreesDir(user.unix_username, this.config.homeBase);
+    const branchesDir = getUserBranchesDir(user.unix_username, this.config.homeBase);
 
-    // Get all worktrees the user owns
-    const allWorktrees = await this.worktreeRepo.findAll();
-    const ownedWorktreeIds = new Set<string>();
+    // Get all branches the user owns
+    const allBranches = await this.branchRepo.findAll();
+    const ownedBranchIds = new Set<string>();
 
-    for (const wt of allWorktrees) {
-      const isOwner = await this.worktreeRepo.isOwner(wt.worktree_id, userId);
+    for (const wt of allBranches) {
+      const isOwner = await this.branchRepo.isOwner(wt.branch_id, userId);
       if (isOwner) {
-        ownedWorktreeIds.add(wt.worktree_id);
+        ownedBranchIds.add(wt.branch_id);
       }
     }
 
     // Remove broken symlinks
-    await this.executor.exec(SymlinkCommands.removeBrokenSymlinks(worktreesDir));
+    await this.executor.exec(SymlinkCommands.removeBrokenSymlinks(branchesDir));
 
-    // Create symlinks for owned worktrees
-    for (const worktreeId of ownedWorktreeIds) {
-      await this.createWorktreeSymlink(userId, worktreeId as WorktreeID);
+    // Create symlinks for owned branches
+    for (const branchId of ownedBranchIds) {
+      await this.createBranchSymlink(userId, branchId as BranchID);
     }
 
     console.log(
-      `[UnixIntegration] Synced ${ownedWorktreeIds.size} symlinks for ${user.unix_username}`
+      `[UnixIntegration] Synced ${ownedBranchIds.size} symlinks for ${user.unix_username}`
     );
   }
 
   /**
-   * Sync all symlinks for a worktree (for all owners)
+   * Sync all symlinks for a branch (for all owners)
    *
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    */
-  async syncWorktreeSymlinks(worktreeId: WorktreeID): Promise<void> {
-    const ownerIds = await this.worktreeRepo.getOwners(worktreeId);
+  async syncBranchSymlinks(branchId: BranchID): Promise<void> {
+    const ownerIds = await this.branchRepo.getOwners(branchId);
 
     console.log(
-      `[UnixIntegration] Syncing symlinks for worktree ${worktreeId.substring(0, 8)} (${ownerIds.length} owners)`
+      `[UnixIntegration] Syncing symlinks for branch ${shortId(branchId)} (${ownerIds.length} owners)`
     );
 
     for (const ownerId of ownerIds) {
-      await this.createWorktreeSymlink(ownerId, worktreeId);
+      await this.createBranchSymlink(ownerId, branchId);
     }
   }
 
@@ -1166,35 +1147,35 @@ export class UnixIntegrationService {
   // ============================================================
 
   /**
-   * Full sync for a worktree
+   * Full sync for a branch
    *
    * Ensures group exists, all owners are in group, and symlinks are created.
    *
-   * @param worktreeId - Worktree ID
+   * @param branchId - Branch ID
    */
-  async syncWorktree(worktreeId: WorktreeID): Promise<void> {
-    console.log(`[UnixIntegration] Full sync for worktree ${worktreeId.substring(0, 8)}`);
+  async syncBranch(branchId: BranchID): Promise<void> {
+    console.log(`[UnixIntegration] Full sync for branch ${shortId(branchId)}`);
 
     // Ensure group exists and permissions are set
-    // Note: createWorktreeGroup() handles setting directory permissions internally
-    await this.createWorktreeGroup(worktreeId);
+    // Note: createBranchGroup() handles setting directory permissions internally
+    await this.createBranchGroup(branchId);
 
     // Add all owners to group and create symlinks
-    const ownerIds = await this.worktreeRepo.getOwners(worktreeId);
+    const ownerIds = await this.branchRepo.getOwners(branchId);
     for (const ownerId of ownerIds) {
-      await this.addUserToWorktreeGroup(worktreeId, ownerId);
+      await this.addUserToBranchGroup(branchId, ownerId);
     }
   }
 
   /**
    * Full sync for a user
    *
-   * Ensures Unix user exists, syncs all worktree symlinks.
+   * Ensures Unix user exists, syncs all branch symlinks.
    *
    * @param userId - User ID
    */
   async syncUser(userId: UserID): Promise<void> {
-    console.log(`[UnixIntegration] Full sync for user ${userId.substring(0, 8)}`);
+    console.log(`[UnixIntegration] Full sync for user ${shortId(userId)}`);
 
     // Ensure Unix user exists
     await this.ensureUnixUser(userId);
@@ -1221,18 +1202,18 @@ export class UnixIntegrationService {
       }
     }
 
-    // Sync all worktrees
-    const worktrees = await this.worktreeRepo.findAll();
-    for (const wt of worktrees) {
+    // Sync all branches
+    const branches = await this.branchRepo.findAll();
+    for (const wt of branches) {
       try {
-        await this.syncWorktree(wt.worktree_id);
+        await this.syncBranch(wt.branch_id);
       } catch (error) {
-        console.error(`[UnixIntegration] Failed to sync worktree ${wt.worktree_id}:`, error);
+        console.error(`[UnixIntegration] Failed to sync branch ${wt.branch_id}:`, error);
       }
     }
 
     console.log(
-      `[UnixIntegration] Full sync complete. Synced ${repos.length} repos and ${worktrees.length} worktrees.`
+      `[UnixIntegration] Full sync complete. Synced ${repos.length} repos and ${branches.length} branches.`
     );
   }
 }

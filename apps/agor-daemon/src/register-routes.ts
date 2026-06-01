@@ -8,16 +8,18 @@
 
 import { type AgorConfig, loadConfig } from '@agor/core/config';
 import {
+  BranchRepository,
   type Database,
   generateId,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
+  ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  shortId,
   TaskRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
@@ -35,24 +37,25 @@ import type {
   AuthenticatedParams,
   DaemonServicesConfig,
   HookContext,
-  InputRequestContent,
   Message,
   MessageSource,
   Paginated,
   Params,
   PermissionRequestContent,
+  ScheduleID,
   ServiceGroupName,
   ServiceTier,
   SessionID,
   StreamingEventType,
   Task,
+  TaskID,
   User,
   UUID,
-  WorktreeID,
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_CAPABILITIES,
   hasMinimumRole,
+  MessageRole,
   ROLES,
   SERVICE_GROUP_NAMES,
   SessionStatus,
@@ -62,13 +65,20 @@ import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
+import {
+  issueRuntimeToken,
+  issueRuntimeTokenPair,
+  RUNTIME_JWT_AUDIENCE,
+  RUNTIME_JWT_ISSUER,
+} from './auth/runtime-tokens.js';
 import type {
   BoardsServiceImpl,
+  BranchesServiceImpl,
   MessagesServiceImpl,
   ReposServiceImpl,
   SessionsServiceImpl,
   TasksServiceImpl,
-  WorktreesServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
 import {
@@ -80,7 +90,7 @@ import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { registerProxies } from './setup/proxies.js';
 import { applyTierHooks } from './setup/service-tiers.js';
-import { AnonymousStrategy } from './strategies/anonymous.js';
+import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
   ensureMinimumRole,
@@ -88,16 +98,23 @@ import {
   requireMinimumRole,
 } from './utils/authorization.js';
 import {
+  checkSessionOwnerOrAdmin,
+  ensureBranchPermission,
+  loadScheduleAndBranch,
+  PERMISSION_RANK,
+  resolveBranchPermission,
+} from './utils/branch-authorization.js';
+import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
+import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
+import { findActiveTasksForSession } from './utils/session-tasks.js';
+import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
+import {
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
   enforceTotalUploadSize,
 } from './utils/upload.js';
-import {
-  checkSessionOwnerOrAdmin,
-  ensureWorktreePermission,
-  PERMISSION_RANK,
-  resolveWorktreePermission,
-} from './utils/worktree-authorization.js';
+import { resolveWidget } from './widgets/submissions.js';
 
 /**
  * Extended Params with route ID parameter.
@@ -120,17 +137,6 @@ function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
 }
 
 /**
- * Sanitize a user-provided field (name, email) before interpolating into prompts.
- * Strips newlines and control characters to prevent prompt injection, and caps length.
- */
-function sanitizeUserField(value: string, maxLength = 100): string {
-  return value
-    .replace(/[\r\n\t]/g, ' ')
-    .trim()
-    .substring(0, maxLength);
-}
-
-/**
  * Interface for dependencies needed by route registration.
  */
 export interface RegisterRoutesContext {
@@ -140,8 +146,7 @@ export interface RegisterRoutesContext {
   svcEnabled: (group: string) => boolean;
   svcTier: (group: string) => ServiceTier;
   jwtSecret: string;
-  worktreeRbacEnabled: boolean;
-  allowAnonymous: boolean;
+  branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   enforcePasswordChange: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
@@ -165,7 +170,7 @@ export interface RegisterRoutesContext {
   sessionsService: SessionsServiceImpl;
   messagesService: MessagesServiceImpl;
   boardsService: BoardsServiceImpl | undefined;
-  worktreeRepository: WorktreeRepository;
+  branchRepository: BranchRepository;
   usersRepository: UsersRepository;
   sessionsRepository: SessionRepository;
   sessionMCPServersService: ReturnType<
@@ -188,8 +193,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     svcEnabled,
     svcTier,
     jwtSecret,
-    worktreeRbacEnabled,
-    allowAnonymous,
+    branchRbacEnabled,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,
@@ -202,7 +206,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionsService,
     messagesService,
     boardsService,
-    worktreeRepository,
+    branchRepository,
     usersRepository: _usersRepository,
     sessionsRepository,
     sessionMCPServersService,
@@ -233,7 +237,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Authentication Configuration
   // ============================================================================
 
-  const authStrategiesArray = ['api-key', 'jwt', 'local', 'anonymous'];
+  const authStrategiesArray = ['api-key', 'jwt', 'local'];
   if (sessionTokenService) {
     authStrategiesArray.push('session-token');
   }
@@ -255,8 +259,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     authStrategies: authStrategiesArray,
     jwtOptions: {
       header: { typ: 'access' },
-      audience: 'https://agor.dev',
-      issuer: 'agor',
+      audience: RUNTIME_JWT_AUDIENCE,
+      issuer: RUNTIME_JWT_ISSUER,
       algorithm: 'HS256',
       expiresIn: ACCESS_TOKEN_TTL,
     },
@@ -275,7 +279,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Register authentication strategies
   authentication.register('jwt', new ServiceJWTStrategy());
   authentication.register('local', new LocalStrategy());
-  authentication.register('anonymous', new AnonymousStrategy());
 
   // Register API key authentication strategy
   const { ApiKeyStrategy } = await import('./auth/api-key-strategy.js');
@@ -346,20 +349,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // `/authentication` above — by the time we reach this hook the limiter
   // has already 429'd any over-quota request.
   authService.hooks({
-    before: {
-      create: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS context type not fully typed
-        async (context: any) => {
-          const data = Array.isArray(context.data) ? context.data[0] : context.data;
-          console.log('🔐 Authentication attempt:', {
-            strategy: data?.strategy,
-            email: data?.email,
-            hasPassword: !!data?.password,
-          });
-          return context;
-        },
-      ],
-    },
     after: {
       create: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS context type not fully typed
@@ -371,27 +360,43 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             hasAccessToken: !!context.result?.accessToken,
           });
 
-          if (context.result?.user && context.result.user.user_id !== 'anonymous') {
-            const refreshToken = jwt.sign(
-              {
-                sub: context.result.user.user_id,
-                type: 'refresh',
-              },
+          if (context.result?.user) {
+            context.result.refreshToken = issueRuntimeToken(
+              { sub: context.result.user.user_id, type: 'refresh' },
               jwtSecret,
-              {
-                expiresIn: REFRESH_TOKEN_TTL,
-                issuer: 'agor',
-                audience: 'https://agor.dev',
-              }
+              REFRESH_TOKEN_TTL
             );
-
-            context.result.refreshToken = refreshToken;
           }
           return context;
         },
       ],
     },
   });
+
+  // ============================================================================
+  // One-time launch-code authentication endpoint
+  // ============================================================================
+
+  // biome-ignore lint/suspicious/noExplicitAny: Feathers Application vs Express middleware overload
+  app.use('/auth/launch', authRateLimiter as any);
+  app.use(
+    '/auth/launch',
+    createLaunchAuthService({
+      db,
+      config,
+      jwtSecret,
+      accessTokenTtl: ACCESS_TOKEN_TTL,
+      refreshTokenTtl: REFRESH_TOKEN_TTL,
+      usersService,
+    })
+  );
+
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
+  const launchAuthService = app.service('auth/launch') as any;
+  launchAuthService.docs = {
+    description: 'One-time launch-code authentication endpoint for trusted external launch issuers',
+    security: [],
+  };
 
   // ============================================================================
   // Refresh token endpoint
@@ -403,8 +408,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // /authentication mount point (path-prefix match catches /refresh).
       try {
         const decoded = jwt.verify(data.refreshToken, jwtSecret, {
-          issuer: 'agor',
-          audience: 'https://agor.dev',
+          issuer: RUNTIME_JWT_ISSUER,
+          audience: RUNTIME_JWT_AUDIENCE,
         }) as { sub: string; type: string };
 
         if (decoded.type !== 'refresh') {
@@ -416,17 +421,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Use the SAME ACCESS_TOKEN_TTL as the auth-service config above —
         // otherwise this endpoint silently downgrades the access-token
         // hardening. Refresh tokens get the standard 30-day TTL.
-        const accessToken = jwt.sign({ sub: user.user_id, type: 'access' }, jwtSecret, {
-          expiresIn: ACCESS_TOKEN_TTL,
-          issuer: 'agor',
-          audience: 'https://agor.dev',
-        });
-
-        const newRefreshToken = jwt.sign({ sub: user.user_id, type: 'refresh' }, jwtSecret, {
-          expiresIn: REFRESH_TOKEN_TTL,
-          issuer: 'agor',
-          audience: 'https://agor.dev',
-        });
+        const tokens = issueRuntimeTokenPair(user, jwtSecret, ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL);
 
         // Return the full user object — matches what POST /authentication
         // returns via the FeathersJS auth service. Stripping fields here
@@ -438,8 +433,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // omits secrets (password hash, raw API keys, raw env var values)
         // via rowToUser — see services/users.ts.
         return {
-          accessToken,
-          refreshToken: newRefreshToken,
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
           user,
         };
       } catch (_error) {
@@ -470,7 +465,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     async create(data: { user_id?: string; expiry_ms?: number }, params?: Params) {
       // 1. Caller must be authenticated
       const authParams = params as AuthenticatedParams;
-      if (!authParams?.user || !authParams.user.user_id) {
+      if (!authParams?.user?.user_id) {
         throw new NotAuthenticated('Authentication required');
       }
 
@@ -522,7 +517,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const jti = generateId();
       const expiresAt = new Date(Date.now() + expiryMs);
 
-      const accessToken = jwt.sign(
+      const accessToken = issueRuntimeToken(
         {
           sub: targetUser.user_id,
           type: 'access',
@@ -531,11 +526,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           jti,
         },
         jwtSecret,
-        {
-          expiresIn: Math.ceil(expiryMs / 1000),
-          issuer: 'agor',
-          audience: 'https://agor.dev',
-        }
+        Math.ceil(expiryMs / 1000)
       );
 
       // 10. Audit log
@@ -577,7 +568,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const _sessionsRepo = new SessionRepository(db);
   const _sessionMCPRepo = new SessionMCPServerRepository(db);
   const _mcpServerRepo = new MCPServerRepository(db);
-  const _worktreesRepo = new WorktreeRepository(db);
+  const _branchesRepo = new BranchRepository(db);
   const _reposRepo = new RepoRepository(db);
   const _tasksRepo = new TaskRepository(db);
 
@@ -663,9 +654,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: { prompt: string; task_id?: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        console.log(`🔀 Forking session: ${id.substring(0, 8)}`);
+        console.log(`🔀 Forking session: ${shortId(id)}`);
         const forkedSession = await sessionsService.fork(id, data, params);
-        console.log(`✅ Fork created: ${forkedSession.session_id.substring(0, 8)}`);
+        console.log(`✅ Fork created: ${shortId(forkedSession.session_id)}`);
 
         console.log('📡 [FORK] Manually broadcasting created event to all clients');
 
@@ -689,9 +680,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: Partial<import('@agor/core/types').SpawnConfig>, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        console.log(`🌱 Spawning session from: ${id.substring(0, 8)}`);
+        console.log(`🌱 Spawning session from: ${shortId(id)}`);
         const spawnedSession = await sessionsService.spawn(id, data, params);
-        console.log(`✅ Spawn created: ${spawnedSession.session_id.substring(0, 8)}`);
+        console.log(`✅ Spawn created: ${shortId(spawnedSession.session_id)}`);
 
         console.log('📡 [SPAWN] Manually broadcasting created event to all clients');
 
@@ -726,6 +717,139 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   /**
+   * Restart the Zellij pane for a Claude Code CLI session.
+   *
+   * Closes the existing `cli-<short>` tab (if any) and re-spawns `claude`
+   * inside a fresh tab against the same JSONL. The session's
+   * `cli_state.watcher_offset` is preserved so the watcher resumes
+   * tailing from wherever it left off — no events are lost across the
+   * restart.
+   *
+   * Use this when claude has crashed / been Ctrl-C'd inside the pane,
+   * when auth changes and you want a clean process, or when the Zellij
+   * pane's foreground has fallen back to bash after `claude` exited.
+   */
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/restart-cli',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        const session = await sessionsService.get(id, params);
+        if (session.agentic_tool !== 'claude-code-cli') {
+          throw new Error(
+            `Restart is only supported for claude-code-cli sessions; this session is ${session.agentic_tool}`
+          );
+        }
+        const targetUserId = session.created_by;
+        if (!targetUserId) throw new Error('Session has no created_by — cannot route restart');
+
+        const tabName = `cli-${shortId(session.session_id)}`;
+        const channel = `user/${targetUserId}/terminal`;
+
+        // 1) Hard-kill any live `claude` process bound to this session.
+        //    Zellij's `close-tab` SHOULD propagate SIGHUP to its
+        //    foreground, but in practice claude sometimes survives the
+        //    pane death long enough to collide on session-id uniqueness
+        //    ("Session ID … is already in use") when the new spawn
+        //    fires. `pkill -f` against the argv pattern is the reliable
+        //    kill. Match BOTH `--session-id <X>` (first launch) and
+        //    `--resume <X>` (post-restart spawn) — same code path
+        //    `buildClaudeCliSpawn` emits.
+        try {
+          const { spawn: spawnProc } = await import('node:child_process');
+          const killProc = spawnProc(
+            'pkill',
+            ['-f', `claude .*(--session-id|--resume) ${session.session_id}`],
+            { stdio: 'ignore' }
+          );
+          await new Promise<void>((resolve) => {
+            killProc.on('exit', () => resolve());
+            killProc.on('error', () => resolve());
+            // Defensive cap — pkill should be <100ms.
+            setTimeout(() => {
+              try {
+                killProc.kill();
+              } catch {
+                /* already exited */
+              }
+              resolve();
+            }, 2000);
+          });
+        } catch (err) {
+          console.warn('[claude-cli-integration] pkill failed, proceeding anyway', err);
+        }
+
+        // 2) Atomic close-all + create-with-command via `forceRecreate`.
+        //
+        // Previous implementation emitted `close` then waited 800ms
+        // then re-ran `onCliSessionCreated` which emitted `create`.
+        // Two problems:
+        //   - `close` only closed the focused tab (one of potentially
+        //     several duplicates from earlier racing executors), so
+        //     the subsequent `create` would see surviving siblings
+        //     and auto-converse to `focus` — restart "succeeded" but
+        //     claude never actually respawned.
+        //   - The 800ms timer was a guess against an uncoordinated
+        //     race between executors.
+        //
+        // With `forceRecreate: true` the executor closes EVERY tab
+        // matching `tabName` first, then issues `new-tab --layout`
+        // with the freshly-built claude argv — atomic in the
+        // executor's tab-event loop. No timer, no surviving stale
+        // tab, no auto-converse. Restart actually restarts.
+        const branch = (await app.service('branches').get(session.branch_id, params)) as {
+          path?: string;
+        };
+        const cwd = branch?.path;
+        if (!cwd) throw new Error('Branch has no path; cannot restart');
+        const { buildSpawnConfigForSession } = await import('./services/claude-cli-integration.js');
+        const { buildClaudeCliSpawn } = await import('@agor/core/claude-cli');
+        const spawnCfg = buildSpawnConfigForSession(session, cwd);
+        const built = buildClaudeCliSpawn(spawnCfg);
+        if (app.io) {
+          app.io.to(channel).emit('terminal:tab', {
+            userId: targetUserId,
+            action: 'create',
+            tabName,
+            cwd,
+            command: built.bin,
+            commandArgs: built.args,
+            forceRecreate: true,
+          });
+        }
+
+        return { ok: true, tabName };
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS route handler type mismatch
+    } as any,
+    {
+      create: { role: ROLES.MEMBER, action: 'restart claude CLI session' },
+    },
+    requireAuth
+  );
+
+  /**
+   * Per-session "turn" lock — single source of truth for "who's allowed to
+   * spawn an executor for this session right now" mutual exclusion. Shared
+   * by `/sessions/:id/prompt`'s idle branch, `/tasks/:id/run`, and the
+   * queue processor's drain loop. See `utils/session-turn-lock.ts`.
+   *
+   * Without this, two concurrent prompts on the same idle session could
+   * both observe `status === 'idle'` and both spawn executors — a race
+   * that pre-dates the `/tasks/:id/run` route but is now fixed across all
+   * three entry points.
+   */
+  const sessionTurnLocks: SessionTurnLocks = new Map();
+
+  function sessionCanStartTask(status: SessionStatus, readyForPrompt?: boolean): boolean {
+    return (
+      status === SessionStatus.IDLE || (status === SessionStatus.FAILED && readyForPrompt === true)
+    );
+  }
+
+  /**
    * Helper: Safely patch an entity, returning false if it was deleted mid-execution
    */
   async function safePatch<T>(
@@ -743,9 +867,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         error instanceof NotFoundError ||
         (error instanceof Error && error.message.includes('No record found'))
       ) {
-        console.log(
-          `⚠️  ${entityType} ${id.substring(0, 8)} was deleted mid-execution - skipping update`
-        );
+        console.log(`⚠️  ${entityType} ${shortId(id)} was deleted mid-execution - skipping update`);
         return false;
       }
       throw error;
@@ -794,29 +916,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const messageStartIndex = await sessionsRepository.countMessages(task.session_id);
     const startTimestamp = new Date().toISOString();
 
-    // Recapture git state — the sentinels stored on a queued row are
-    // intentionally invalid; this is the moment we pin real values.
-    const { captureGitStateViaShell } = await import('./utils/git-shell-capture.js');
-    let gitStateAtStart = 'unknown';
-    let refAtStart = 'unknown';
-    if (session.worktree_id) {
-      try {
-        const worktree = await app.service('worktrees').get(session.worktree_id, params);
-        const gitState = await captureGitStateViaShell(worktree.path);
-        gitStateAtStart = gitState.sha;
-        refAtStart = gitState.ref;
-        if (gitStateAtStart === 'unknown') {
-          console.warn(
-            `[Git State] captureGitStateViaShell returned 'unknown' for worktree ${worktree.path} (ref: ${refAtStart})`
-          );
-        }
-      } catch (error) {
-        console.warn(
-          `[Git State] Failed to get git state for worktree ${session.worktree_id}:`,
-          error
-        );
-      }
-    }
+    // The daemon transitions the task to RUNNING and writes required sentinel
+    // git fields before executor spawn. The executor overwrites these with the
+    // authoritative task-start git state from inside the managed checkout.
+    const gitStateAtStart = 'unknown';
+    const refAtStart = 'unknown';
 
     // Patch task: queued/created → running, with real ranges. queue_position
     // is cleared here so a draining task is no longer considered queued.
@@ -858,26 +962,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           messageMetadata.source = source;
         }
 
-        const userMessage: Message = {
-          message_id: generateId() as UUID,
-          session_id: task.session_id,
+        const userMessage = buildInitialUserMessage({
+          sessionId: task.session_id,
+          taskId: task.task_id,
+          index: messageStartIndex,
+          timestamp: startTimestamp,
+          content: task.full_prompt,
           // Callback messages are typed `system` so the UI shows the special
           // Agor-callback styling. Normal prompts stay `user`.
           type: isCallback ? 'system' : 'user',
-          role: 'user' as Message['role'],
-          index: messageStartIndex,
-          timestamp: startTimestamp,
-          content_preview: task.full_prompt.substring(0, 200),
-          content: task.full_prompt,
-          task_id: task.task_id,
           metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
-        };
+        });
         await app.service('messages').create(userMessage, params);
       } catch (msgErr) {
         // Don't fail the spawn — the executor's createUserMessage fallback
         // (with skip-if-exists) will write the row when it connects.
         console.warn(
-          `⚠️  [Daemon] Failed to write initial user-message row for task ${task.task_id.substring(0, 8)} (executor will retry):`,
+          `⚠️  [Daemon] Failed to write initial user-message row for task ${shortId(task.task_id)} (executor will retry):`,
           msgErr
         );
       }
@@ -903,29 +1004,115 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       params
     );
 
-    // Build prompter context — preserved from the previous inline impl.
-    let promptForExecutor = task.full_prompt;
-    const prompterUserId = params.user?.user_id;
-    if (prompterUserId && prompterUserId !== session.created_by) {
-      try {
-        const prompterUserRepo = new UsersRepository(db);
-        const prompterUser = await prompterUserRepo.findById(prompterUserId);
-        if (prompterUser) {
-          const prompterName = sanitizeUserField(prompterUser.name || prompterUser.email);
-          const prompterEmail = sanitizeUserField(prompterUser.email);
-          promptForExecutor = `[Prompted by: ${prompterName} (${prompterEmail})]\n\n${task.full_prompt}`;
-        }
-      } catch (err) {
-        console.warn(
-          `[Prompt] Failed to look up prompter user ${prompterUserId.substring(0, 8)}:`,
-          err
-        );
-      }
-    }
+    // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
+    // non-owner is prompting. The prompter identity comes from `task.created_by`
+    // (NOT `params.user`): every persisted Task row requires `created_by`
+    // (`createPending` for the prompt/queue/callback paths, `create`/`createMany`
+    // for pre-created tasks run via `/tasks/:id/run`), so it survives the queue
+    // / hook / drain hop intact. `params.user` can drop on hook-triggered drains
+    // that don't carry `queued_by_user_id` and is therefore not authoritative.
+    // See `./utils/build-prompter-prefix.ts` for the helper + tests.
+    const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
+      rawPrompt: task.full_prompt,
+      sessionCreatedBy: session.created_by,
+      prompterUserId: task.created_by,
+      usersRepo: new UsersRepository(db),
+    });
 
     const useStreaming = options.stream !== false;
     const sessionId = task.session_id;
     const taskId = task.task_id;
+
+    // Claude Code CLI: there is no in-process executor. The `claude` REPL
+    // is already running in the user's Zellij pane. "Prompting" the
+    // session = injecting the prompt text + a newline into that pane's
+    // PTY stdin, exactly as if the user typed it. The watcher (which is
+    // already tailing the session's JSONL) picks up the resulting turn.
+    //
+    // The Agor textarea + MCP `agor_sessions_prompt` both flow through
+    // this code path; for CLI sessions we short-circuit before
+    // `executeTask` and emit `terminal:input` instead.
+    if (session.agentic_tool === 'claude-code-cli') {
+      // Hand the task off to the watcher BEFORE we PTY-inject. The watcher
+      // claims this task on the next `user_message` JSONL line and links
+      // every subsequent assistant/tool message to it — then closes it on
+      // `turn_end`. Without this stash, the watcher would mint a *new*
+      // task on that user line and we'd end up with two task rows per
+      // turn (the empty one from /prompt + the one the watcher minted).
+      //
+      // Import lazily to avoid pulling claude-cli-integration into the
+      // hot-path of every non-CLI prompt.
+      const { setPendingCliTask } = await import('./services/claude-cli-integration.js');
+      setPendingCliTask(sessionId as SessionID, taskId as TaskID, messageStartIndex);
+
+      setImmediate(async () => {
+        try {
+          const targetUserId = session.created_by;
+          if (!targetUserId) {
+            throw new Error('CLI session has no created_by — cannot route PTY injection');
+          }
+          const channel = `user/${targetUserId}/terminal`;
+          const tabName = `cli-${shortId(session.session_id)}`;
+          const io = (
+            app as unknown as {
+              io?: { to(r: string): { emit(ev: string, p: unknown): void } };
+            }
+          ).io;
+
+          // Focus the session's tab BEFORE injecting input. Zellij sends
+          // terminal:input to whichever pane is currently focused, so
+          // without this step a prompt typed in the Agor textarea while
+          // the user happens to be viewing a sibling tab (e.g. the
+          // branch's `test-branch` bash) would land in bash and
+          // produce `bash: hello: command not found`. The 150ms delay
+          // gives Zellij time to process the focus before the input
+          // bytes arrive.
+          io?.to(channel).emit('terminal:tab', {
+            userId: targetUserId,
+            action: 'focus',
+            tabName,
+          });
+          await new Promise((r) => setTimeout(r, 150));
+
+          // Append \r so the REPL submits. Zellij forwards raw bytes
+          // unchanged to claude's pseudo-tty. If the user is currently
+          // mid-typing into the REPL, the bytes interleave — documented
+          // race per the analysis doc § Blind spot #2.
+          const payload = `${promptForExecutor}\r`;
+          io?.to(channel).emit('terminal:input', { userId: targetUserId, input: payload });
+          console.log(
+            `[claude-cli] PTY-injected prompt into ${channel} → tab ${tabName} (task ${shortId(taskId)}, ${promptForExecutor.length} chars)`
+          );
+          // Task lifecycle is now owned by the watcher's sink: it closes
+          // the task and patches the session back to IDLE on `turn_end`.
+          // We deliberately do NOT pre-complete here.
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[claude-cli] PTY injection failed for task ${shortId(taskId)}: ${msg}`);
+          await safePatch(
+            'tasks',
+            taskId,
+            {
+              status: TaskStatus.FAILED,
+              completed_at: new Date().toISOString(),
+              error_message: `PTY injection failed: ${msg}`,
+            },
+            'Task',
+            params
+          );
+          // Failure path: also flip the session back to IDLE so the user
+          // can retry. The success path lets the watcher handle this on
+          // turn_end.
+          await app
+            .service('sessions')
+            .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params)
+            .catch(() => {
+              /* best-effort */
+            });
+        }
+      });
+      return updatedTask;
+    }
 
     // Background spawn + failure handling. Returning the patched Task to the
     // caller before this resolves matches the previous behavior — the HTTP
@@ -933,7 +1120,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     setImmediate(async () => {
       try {
         console.log(
-          `🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor (task ${taskId.substring(0, 8)})`
+          `🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor (task ${shortId(taskId)})`
         );
 
         await sessionsService.executeTask(
@@ -949,12 +1136,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         );
 
         console.log(
-          `✅ [Daemon] Executor spawned for session ${sessionId.substring(0, 8)}, waiting for task completion`
+          `✅ [Daemon] Executor spawned for session ${shortId(sessionId)}, waiting for task completion`
         );
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(
-          `❌ [Daemon] Executor spawn failed for session=${sessionId.substring(0, 8)} task=${taskId.substring(0, 8)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
+          `❌ [Daemon] Executor spawn failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
           error
         );
         await safePatch(
@@ -979,21 +1166,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // `messageStartIndex`. countMessages always reports the live row
           // count, so it lands the system error at the true tail whether
           // the user-message row exists or not (no gap, no collision).
-          const sysIndex = await sessionsRepository.countMessages(sessionId);
           const errorContent = `⚠️ The agent failed to start.\n\n${errorMessage}`;
-          const sysMessage: Message = {
-            message_id: generateId() as UUID,
-            session_id: sessionId,
-            type: 'system',
-            role: 'assistant' as Message['role'],
-            index: sysIndex,
-            timestamp: new Date().toISOString(),
-            content_preview: errorContent.substring(0, 200),
+          await appendSystemMessage({
+            app,
+            db,
+            sessionId,
+            taskId,
             content: errorContent,
-            task_id: taskId,
+            role: MessageRole.ASSISTANT,
             metadata: { is_meta: true },
-          };
-          await app.service('messages').create(sysMessage, params);
+            params,
+          });
         } catch (sysErr) {
           console.warn(
             '[Daemon] Failed to write system error message after spawn failure:',
@@ -1030,10 +1213,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           permissionMode?: import('@agor/core/types').PermissionMode;
           stream?: boolean;
           messageSource?: MessageSource;
+          /**
+           * Optional extra task metadata merged onto the queued/created task.
+           * Used by internal callers (e.g. widget submissions) to stamp
+           * traceability fields like `system_authored` / `widget_id`.
+           * External callers receive no validation on this field — it's
+           * trusted because the route is RBAC-gated.
+           */
+          metadata?: Partial<import('@agor/core/types').TaskMetadata>;
         },
         params: RouteParams
       ) {
-        console.log(`📨 [Daemon] Prompt request for session ${params.route?.id?.substring(0, 8)}`);
+        console.log(
+          `📨 [Daemon] Prompt request for session ${params.route?.id ? shortId(params.route.id) : 'unknown'}`
+        );
         console.log(`   Permission mode: ${data.permissionMode || 'not specified'}`);
         console.log(`   Streaming: ${data.stream !== false}`);
         console.log(`   Message source: ${data.messageSource || 'not specified'}`);
@@ -1043,16 +1236,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!data.prompt) throw new Error('Prompt required');
 
         // Validate and normalize messageSource
-        let messageSource: 'gateway' | 'agor' | undefined = data.messageSource;
-        if (
-          messageSource !== undefined &&
-          messageSource !== 'gateway' &&
-          messageSource !== 'agor'
-        ) {
+        const messageSource = normalizeMessageSource(data.messageSource, params);
+        if (messageSource !== data.messageSource && data.messageSource !== undefined) {
           console.warn(
-            `[Daemon] Invalid messageSource value: ${messageSource}, defaulting based on provider`
+            `[Daemon] Invalid messageSource value: ${data.messageSource}, defaulted based on provider`
           );
-          messageSource = params.provider ? 'agor' : undefined;
         }
 
         let session = await sessionsService.get(id, params);
@@ -1076,7 +1264,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Auto-unarchive on prompt
         if (session.archived) {
           console.log(
-            `📦 [Prompt] Auto-unarchiving session ${id.substring(0, 8)} (was archived: ${session.archived_reason || 'unknown reason'})`
+            `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
           );
           session = (await sessionsService.patch(
             id,
@@ -1093,81 +1281,252 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // immediately or gets queued is the *response*, not a different code
         // path. Sentinels and queue-position assignment live in
         // `taskRepo.createPending` so callers don't reassemble them by hand.
+        //
+        // Wrapped in `withSessionTurnLock` so the queue-vs-idle decision and
+        // the subsequent spawn are atomic with respect to other entry points
+        // (`/tasks/:id/run`, the queue drainer). Without this, two concurrent
+        // prompts on an idle session could both observe `status === 'idle'`
+        // and both spawn executors. Inside the lock the session is re-read,
+        // so the decision is made against the freshest possible state.
         const taskRepo = new TaskRepository(db);
-        const queuedTasks = await taskRepo.findQueued(id as SessionID);
-        const shouldQueue = session.status !== SessionStatus.IDLE || queuedTasks.length > 0;
-        const createdBy = params.user?.user_id ?? 'anonymous';
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to prompt a session');
+        }
+        const createdBy = params.user.user_id;
 
-        if (shouldQueue) {
-          const queuedTask = await taskRepo.createPending({
+        return await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
+          const lockedSession = await sessionsService.get(id, params);
+          if (lockedSession.status === SessionStatus.STOPPING) {
+            // The earlier STOPPING check was against pre-lock state — re-check
+            // here so a session that entered STOPPING while we waited for our
+            // turn doesn't accept a prompt.
+            throw new Error('Cannot send prompt: session is currently stopping');
+          }
+          const queuedTasks = await taskRepo.findQueued(id as SessionID);
+          const shouldQueue =
+            !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
+            queuedTasks.length > 0;
+
+          if (shouldQueue) {
+            const queuedTask = await taskRepo.createPending({
+              session_id: id as SessionID,
+              full_prompt: data.prompt,
+              created_by: createdBy,
+              status: TaskStatus.QUEUED,
+              metadata: {
+                ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
+                ...(messageSource ? { source: messageSource } : {}),
+                ...(data.metadata ?? {}),
+              },
+            });
+
+            console.log(
+              `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
+                `(session status: ${lockedSession.status}, existing queue items: ${queuedTasks.length})`
+            );
+
+            app.service('tasks').emit('queued', queuedTask);
+
+            if (sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)) {
+              setImmediate(async () => {
+                try {
+                  await sessionsService.triggerQueueProcessing(id as SessionID, params);
+                } catch (error) {
+                  console.error(
+                    `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
+                    error
+                  );
+                }
+              });
+            }
+
+            // Uniform response: the entity is always a Task. Caller inspects
+            // `task.status` (`'queued'` here) and `task.queue_position` to know
+            // what happened.
+            return queuedTask;
+          }
+
+          console.log(`   Session agent: ${lockedSession.agentic_tool}`);
+          console.log(
+            `   Session permission_config.mode: ${lockedSession.permission_config?.mode || 'not set'}`
+          );
+
+          // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
+          // which is the sole place that populates message_range / git_state,
+          // writes the user-message row, and spawns the executor. Both this
+          // path and processNextQueuedTask go through that helper so behavior
+          // stays in lockstep.
+          const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
+            ...(messageSource ? { source: messageSource } : {}),
+            ...(data.metadata ?? {}),
+          };
+          const task = await taskRepo.createPending({
             session_id: id as SessionID,
             full_prompt: data.prompt,
             created_by: createdBy,
-            status: TaskStatus.QUEUED,
-            metadata: {
-              ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
-              ...(messageSource ? { source: messageSource } : {}),
-            },
+            status: TaskStatus.CREATED,
+            metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
           });
+          // Bypassing the service means no native 'created' emit; do it here
+          // so reactive clients see the new task before the executor spawns.
+          app.service('tasks').emit('created', task);
 
-          console.log(
-            `📬 [Prompt] Auto-queued task for session ${id.substring(0, 8)} at position ${queuedTask.queue_position} ` +
-              `(session status: ${session.status}, existing queue items: ${queuedTasks.length})`
+          return await spawnTaskExecutor(
+            task,
+            {
+              permissionMode: data.permissionMode,
+              stream: data.stream !== false,
+              messageSource,
+            },
+            params
           );
+        });
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'execute prompts' },
+    },
+    requireAuth
+  );
 
-          app.service('tasks').emit('queued', queuedTask);
+  // ============================================================================
+  // Task run endpoint
+  //
+  // Explicit executor trigger for an already-created task. Lets pure-REST
+  // harnesses (Python, Go, shell+curl — anything without an MCP client) drive
+  // the executor by POSTing a Task row first (`POST /tasks`) and then poking
+  // it awake here. Wraps `spawnTaskExecutor` via `runExistingTask` (status
+  // revalidation) under `withSessionTurnLock` — the same shared session-level
+  // mutex that `/sessions/:id/prompt`'s idle branch and the queue drainer
+  // also acquire — so the on-the-wire effect is identical to "create a task
+  // and run it now."
+  //
+  // Only CREATED tasks on IDLE sessions are accepted. QUEUED tasks are
+  // rejected with a hint to wait for the queue drainer (running them out of
+  // order would violate the queue-position invariant); busy sessions are
+  // rejected with a hint to use `POST /sessions/:id/prompt` (which owns the
+  // atomic create-and-queue path). Splitting the two responsibilities keeps
+  // this endpoint a narrow "run this thing now" trigger.
+  // ============================================================================
 
-          if (session.status === SessionStatus.IDLE) {
-            setImmediate(async () => {
-              try {
-                await sessionsService.triggerQueueProcessing(id as SessionID, params);
-              } catch (error) {
-                console.error(
-                  `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
-                  error
-                );
-              }
-            });
-          }
+  registerAuthenticatedRoute(
+    app,
+    '/tasks/:id/run',
+    {
+      async create(
+        data: {
+          permissionMode?: import('@agor/core/types').PermissionMode;
+          stream?: boolean;
+          messageSource?: MessageSource;
+        },
+        params: RouteParams
+      ) {
+        const taskId = params.route?.id;
+        if (!taskId) throw new BadRequest('Task ID required');
 
-          // Uniform response: the entity is always a Task. Caller inspects
-          // `task.status` (`'queued'` here) and `task.queue_position` to know
-          // what happened.
-          return queuedTask;
+        const taskRepo = new TaskRepository(db);
+        const task = await taskRepo.findById(taskId);
+        if (!task) {
+          throw new NotFound(`Task ${taskId} not found`);
         }
 
-        console.log(`   Session agent: ${session.agentic_tool}`);
-        console.log(
-          `   Session permission_config.mode: ${session.permission_config?.mode || 'not set'}`
-        );
+        // Only CREATED tasks may be triggered. QUEUED tasks must drain in
+        // queue-position order via the queue processor — running them out of
+        // order would violate the invariant documented in
+        // `context/concepts/task-queueing.md`. Terminal/in-flight states are
+        // rejected so the caller doesn't try to revive a finished task or
+        // race a live executor.
+        if (task.status !== TaskStatus.CREATED) {
+          const hint =
+            task.status === TaskStatus.QUEUED
+              ? `Queued tasks drain automatically in queue-position order ` +
+                `when the session becomes idle — wait for it, or stop the ` +
+                `currently running task to free the queue.`
+              : `Only 'created' tasks may be triggered.`;
+          throw new Conflict(
+            `Task ${shortId(taskId)} cannot be run: status is '${task.status}'. ${hint}`
+          );
+        }
 
-        // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
-        // which is the sole place that populates message_range / git_state,
-        // writes the user-message row, and spawns the executor. Both this
-        // path and processNextQueuedTask go through that helper so behavior
-        // stays in lockstep.
-        const task = await taskRepo.createPending({
-          session_id: id as SessionID,
-          full_prompt: data.prompt,
-          created_by: createdBy,
-          status: TaskStatus.CREATED,
-          metadata: messageSource ? { source: messageSource } : undefined,
+        // Branch RBAC — defense in depth. Without this, a member with
+        // 'view' permission could trigger execution; the eventual
+        // `tasks.patch` inside spawnTaskExecutor would still 403 via the
+        // `ensureCanPromptInSession` hook, but only after we'd done extra
+        // work and emitted partial state. Mirrors the upload route's
+        // pattern (~L1467) and `ensureCanPromptInSession` semantics —
+        // including the service-account / no-provider bypasses so executor
+        // callbacks aren't held to the same checks as user requests.
+        const isInternalCall = !params.provider;
+        const isServiceAccount =
+          (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
+        if (branchRbacEnabled && task.session_id && !isInternalCall && !isServiceAccount) {
+          const session = await sessionsService.get(task.session_id, params);
+          if (!session.branch_id) {
+            // Sessions without branches are out of RBAC scope; fall through.
+          } else {
+            const userId = params.user?.user_id as UUID | undefined;
+            if (!userId) {
+              throw new Forbidden('Authentication required to run tasks');
+            }
+            const wt = await branchRepository.findById(session.branch_id);
+            if (!wt) {
+              throw new NotFound(`Branch ${session.branch_id} not found`);
+            }
+            const isOwner = await branchRepository.isOwner(wt.branch_id, userId);
+            const effectiveLevel = resolveBranchPermission(
+              wt,
+              userId,
+              isOwner,
+              params.user?.role,
+              superadminOpts.allowSuperadmin
+            );
+            const canRun =
+              PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
+              (effectiveLevel === 'session' && session.created_by === userId);
+            if (!canRun) {
+              throw new Forbidden(
+                `You have '${effectiveLevel}' permission on this branch, which does not ` +
+                  `allow running tasks. Need 'prompt' or 'all' (or 'session' for own sessions).`
+              );
+            }
+          }
+        }
+
+        // Acquire the session-turn lock before validating session state and
+        // spawning. This is what closes the race against concurrent
+        // /tasks/:id/run on different tasks of the same session, against
+        // /sessions/:id/prompt's idle branch, and against the queue
+        // drainer — they all serialize through `sessionTurnLocks`.
+        return await withSessionTurnLock(sessionTurnLocks, task.session_id, async () => {
+          // Re-read session state inside the lock — it may have flipped to
+          // RUNNING while we waited for our turn.
+          const session = await sessionsService.get(task.session_id, params);
+
+          if (session.status === SessionStatus.STOPPING) {
+            throw new BadRequest('Cannot run task: session is currently stopping');
+          }
+          if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
+            throw new Conflict(
+              `Cannot run task ${shortId(taskId)}: session is '${session.status}'. ` +
+                `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
+                `it creates and queues a task atomically.`
+            );
+          }
+
+          return await runExistingTask(
+            task,
+            {
+              permissionMode: data.permissionMode,
+              stream: data.stream !== false,
+              messageSource: normalizeMessageSource(data.messageSource, params),
+            },
+            params,
+            {
+              findTaskById: (id) => taskRepo.findById(id),
+              spawnFn: spawnTaskExecutor,
+            }
+          );
         });
-        // Bypassing the service means no native 'created' emit; do it here
-        // so reactive clients see the new task before the executor spawns.
-        app.service('tasks').emit('created', task);
-
-        const runningTask = await spawnTaskExecutor(
-          task,
-          {
-            permissionMode: data.permissionMode,
-            stream: data.stream !== false,
-            messageSource,
-          },
-          params
-        );
-
-        return runningTask;
       },
     },
     {
@@ -1242,27 +1601,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Daemon is the source of truth for the zone's trigger template / agent /
   // label — the UI only sends the zone id. The shared
   // `fireAlwaysNewZoneTrigger` helper (also used by the MCP
-  // `agor_worktrees_set_zone(triggerTemplate: true)` always_new branch)
+  // `agor_branches_set_zone(triggerTemplate: true)` always_new branch)
   // does render → validate → resolve defaults → create session → attach MCPs
   // → prompt in one round-trip.
   // ============================================================================
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/fire-zone-trigger',
+    '/branches/:id/fire-zone-trigger',
     {
       async create(data: { zoneId?: string }, params: RouteParams) {
-        const worktreeId = params.route?.id;
-        if (!worktreeId) throw new BadRequest('Worktree ID required');
+        const branchId = params.route?.id;
+        if (!branchId) throw new BadRequest('Branch ID required');
         if (typeof data?.zoneId !== 'string' || !data.zoneId.trim()) {
           throw new BadRequest('zoneId (string) is required');
         }
 
-        const worktree = await app.service('worktrees').get(worktreeId, params);
-        if (!worktree.board_id) {
-          throw new BadRequest('Worktree is not on a board; cannot resolve zone');
+        const branch = await app.service('branches').get(branchId, params);
+        if (!branch.board_id) {
+          throw new BadRequest('Branch is not on a board; cannot resolve zone');
         }
-        const board = await app.service('boards').get(worktree.board_id, params);
+        const board = await app.service('boards').get(branch.board_id, params);
 
         // Zones live on `board.objects` keyed by zone id; type === 'zone'.
         const zoneObj = (board as { objects?: Record<string, unknown> }).objects?.[data.zoneId] as
@@ -1278,7 +1637,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
           | undefined;
         if (!zoneObj || zoneObj.type !== 'zone') {
-          throw new BadRequest(`Zone ${data.zoneId} not found on board ${worktree.board_id}`);
+          throw new BadRequest(`Zone ${data.zoneId} not found on board ${branch.board_id}`);
         }
         if (zoneObj.trigger?.behavior !== 'always_new') {
           // This endpoint is the always_new server-side action. show_picker
@@ -1298,7 +1657,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           return await fireAlwaysNewZoneTrigger({
             app,
             params,
-            worktree,
+            branch,
             board,
             zone: zoneObj,
             user,
@@ -1322,8 +1681,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const sessionRepo = new SessionRepository(db);
-  const worktreeRepo = new WorktreeRepository(db);
-  const uploadMiddleware = createUploadMiddleware(sessionRepo, worktreeRepo);
+  const branchRepo = new BranchRepository(db);
+  const uploadMiddleware = createUploadMiddleware(sessionRepo, branchRepo);
   const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
@@ -1343,8 +1702,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const files = req.files as Express.Multer.File[];
 
       if (DEBUG_UPLOAD) {
-        console.log(`📎 [Upload Handler] Processing for session ${sessionId?.substring(0, 8)}`);
-        console.log(`   Destination: ${destination || 'worktree'}`);
+        console.log(
+          `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
+        );
+        console.log(`   Destination: ${destination || 'branch'}`);
         console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
         console.log(`   Files received: ${files?.length || 0}`);
       }
@@ -1353,7 +1714,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       if (DEBUG_UPLOAD) {
         console.log(`   Auth params:`, {
           hasUser: !!params?.user,
-          userId: params?.user?.user_id?.substring(0, 8),
+          userId: params?.user?.user_id ? shortId(params.user.user_id) : undefined,
           provider: params?.provider,
         });
       }
@@ -1362,27 +1723,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       const session = await sessionsService.get(sessionId, params);
       if (!session) {
-        console.error(`❌ [Upload Handler] Session not found: ${sessionId.substring(0, 8)}`);
+        console.error(`❌ [Upload Handler] Session not found: ${shortId(sessionId)}`);
         return res.status(404).json({ error: 'Session not found' });
       }
 
-      // Worktree RBAC: mirror ensureCanPromptInSession semantics.
+      // Branch RBAC: mirror ensureCanPromptInSession semantics.
       // - 'prompt'/'all' → upload to any session
       // - 'session'      → upload only to own sessions
       // - 'view'/'none'  → denied
-      // Fail-closed: if RBAC is enabled but worktree can't be resolved, deny.
+      // Fail-closed: if RBAC is enabled but branch can't be resolved, deny.
       // When RBAC is disabled, any authenticated member can upload.
-      if (worktreeRbacEnabled) {
+      if (branchRbacEnabled) {
         const userId = params.user?.user_id as UUID;
-        if (!session.worktree_id) {
+        if (!session.branch_id) {
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
-        const wt = await worktreeRepo.findById(session.worktree_id);
+        const wt = await branchRepo.findById(session.branch_id);
         if (!wt) {
-          return res.status(404).json({ error: 'Worktree not found' });
+          return res.status(404).json({ error: 'Branch not found' });
         }
-        const isOwner = await worktreeRepo.isOwner(wt.worktree_id, userId);
-        const effectiveLevel = resolveWorktreePermission(
+        const isOwner = await branchRepo.isOwner(wt.branch_id, userId);
+        const effectiveLevel = resolveBranchPermission(
           wt,
           userId,
           isOwner,
@@ -1396,7 +1757,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         if (!canUpload) {
           console.error(
-            `❌ [Upload Handler] User ${userId.substring(0, 8)} has '${effectiveLevel}' permission, cannot upload to worktree ${wt.worktree_id.substring(0, 8)}`
+            `❌ [Upload Handler] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
           );
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
@@ -1407,15 +1768,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
-      let worktree: Awaited<ReturnType<typeof worktreeRepo.findById>> | undefined;
-      if (session.worktree_id) {
-        worktree = await worktreeRepo.findById(session.worktree_id);
+      let branch: Awaited<ReturnType<typeof branchRepo.findById>> | undefined;
+      if (session.branch_id) {
+        branch = await branchRepo.findById(session.branch_id);
       }
 
       const uploadedFiles = files.map((f) => {
         let relativePath = f.path;
-        if (worktree && f.path.startsWith(worktree.path)) {
-          relativePath = f.path.substring(worktree.path.length + 1);
+        if (branch && f.path.startsWith(branch.path)) {
+          relativePath = f.path.substring(branch.path.length + 1);
         }
         return {
           filename: f.filename,
@@ -1474,7 +1835,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       console.log('   URL:', req.url);
       console.log('   Content-Type:', req.headers['content-type']);
       console.log('   Has auth header:', !!req.headers.authorization);
-      console.log('   Session ID param:', req.params.sessionId?.substring(0, 8));
+      console.log(
+        '   Session ID param:',
+        req.params.sessionId ? shortId(req.params.sessionId) : 'unknown'
+      );
     }
     next();
   };
@@ -1511,7 +1875,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       if (DEBUG_UPLOAD) {
         console.log('✅ [Upload Auth] Authentication successful');
-        console.log('   User:', result.user?.user_id?.substring(0, 8));
+        console.log('   User:', result.user?.user_id ? shortId(result.user.user_id) : 'unknown');
       }
 
       req.feathers = {
@@ -1536,7 +1900,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     ((req: any, res: any, next: any) => {
       if (DEBUG_UPLOAD) {
         console.log('✅ [Upload Route] Authentication passed');
-        console.log('   User:', req.feathers?.user?.user_id?.substring(0, 8) || 'anonymous');
+        console.log(
+          '   User:',
+          req.feathers?.user?.user_id ? shortId(req.feathers.user.user_id) : 'unknown'
+        );
       }
       next();
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
@@ -1603,24 +1970,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           };
         }
 
-        const targetTasksArray: Task[] = [];
-
-        for (const status of [
-          TaskStatus.RUNNING,
-          TaskStatus.AWAITING_PERMISSION,
-          TaskStatus.STOPPING,
-        ]) {
-          const result = await tasksService.find({
-            query: { session_id: id, status, $limit: 10 },
-          });
-          const findResult = result as Task[] | Paginated<Task>;
-          const tasks = isPaginated(findResult) ? findResult.data : findResult;
-          targetTasksArray.push(...tasks);
-        }
+        // `TasksService.find()` short-circuits on session_id and silently
+        // ignores the status filter; use the shared helper that filters in
+        // process. Already recency-DESC sorted.
+        const targetTasksArray = await findActiveTasksForSession(app as never, id as SessionID);
 
         if (targetTasksArray.length === 0) {
           console.warn(
-            `⚠️  [Stop] No active tasks for session ${id.substring(0, 8)}, resetting to IDLE${stopReason ? ` (reason: ${stopReason})` : ''}`
+            `⚠️  [Stop] No active tasks for session ${shortId(id)}, resetting to IDLE${stopReason ? ` (reason: ${stopReason})` : ''}`
           );
           // ready_for_prompt: true so the post-patch hook drains any QUEUED tasks.
           // Stop is "skip current", not "wipe everything" — queued prompts represent
@@ -1640,21 +1997,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           };
         }
 
-        targetTasksArray.sort((a, b) => {
-          const timeA = new Date(a.started_at || a.created_at).getTime();
-          const timeB = new Date(b.started_at || b.created_at).getTime();
-          return timeB - timeA;
-        });
         const latestTask = targetTasksArray[0];
 
         console.log(
-          `🛑 [Stop] Stopping task ${latestTask.task_id.substring(0, 8)} for session ${id.substring(0, 8)}${stopReason ? ` (reason: ${stopReason})` : ''}`
+          `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(id)}${stopReason ? ` (reason: ${stopReason})` : ''}`
         );
 
         const processKilled = killExecutorProcess(id);
         if (!processKilled) {
           console.warn(
-            `⚠️  [Stop] No tracked process for session ${id.substring(0, 8)} — executor may have already exited`
+            `⚠️  [Stop] No tracked process for session ${shortId(id)} — executor may have already exited`
           );
         }
 
@@ -1726,17 +2078,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // Queue processing implementation — task-centric.
-  const queueProcessingLocks = new Map<SessionID, Promise<void>>();
+  // Queue processing implementation — task-centric. Acquires the shared
+  // `sessionTurnLocks` (declared near the top of registerRoutes) so the
+  // drainer can't race `/sessions/:id/prompt` or `/tasks/:id/run` for the
+  // same session. The retry-on-existing-lock indirection (vs. a plain
+  // `withSessionTurnLock` wrapper) preserves the original "if drain is in
+  // flight, schedule a retry instead of stacking concurrent drainers"
+  // semantics — important because callbacks can fire processNextQueuedTask
+  // from arbitrary points in the lifecycle.
   const queueRetryScheduled = new Set<SessionID>();
 
   async function processNextQueuedTask(sessionId: SessionID, params: RouteParams): Promise<void> {
-    const existingLock = queueProcessingLocks.get(sessionId);
+    const existingLock = sessionTurnLocks.get(sessionId);
     if (existingLock) {
-      console.log(
-        `⏳ [Queue] Processing in progress for session ${sessionId.substring(0, 8)}, waiting...`
-      );
-      await existingLock;
+      console.log(`⏳ [Queue] Session turn in progress for ${shortId(sessionId)}, waiting...`);
+      await existingLock.catch(() => undefined);
       if (!queueRetryScheduled.has(sessionId)) {
         queueRetryScheduled.add(sessionId);
         setImmediate(async () => {
@@ -1744,29 +2100,24 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           try {
             await processNextQueuedTask(sessionId, params);
           } catch (error) {
-            console.error(
-              `❌ [Queue] Retry failed for session ${sessionId.substring(0, 8)}:`,
-              error
-            );
+            console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
           }
         });
       }
       return;
     }
 
-    const processingPromise = processNextQueuedTaskInternal(sessionId, params);
-
-    queueProcessingLocks.set(
-      sessionId,
-      processingPromise.catch(() => {
-        // Swallow error for waiters
-      })
-    );
+    let resolveLock!: () => void;
+    const lockPromise = new Promise<void>((resolve) => {
+      resolveLock = resolve;
+    });
+    sessionTurnLocks.set(sessionId, lockPromise);
 
     try {
-      await processingPromise;
+      await processNextQueuedTaskInternal(sessionId, params);
     } finally {
-      queueProcessingLocks.delete(sessionId);
+      sessionTurnLocks.delete(sessionId);
+      resolveLock();
     }
   }
 
@@ -1778,7 +2129,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const nextTask = await taskRepo.getNextQueued(sessionId);
 
     if (!nextTask) {
-      console.log(`📭 No queued tasks for session ${sessionId.substring(0, 8)}`);
+      console.log(`📭 No queued tasks for session ${shortId(sessionId)}`);
       return;
     }
 
@@ -1794,16 +2145,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       : params;
 
     console.log(
-      `📬 Processing queued task ${nextTask.task_id.substring(0, 8)} ` +
+      `📬 Processing queued task ${shortId(nextTask.task_id)} ` +
         `(position ${nextTask.queue_position}) ` +
-        `with user context: ${queuedByUser ? queuedByUser.user_id.substring(0, 8) : 'none'}`
+        `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
     );
 
     const session = await sessionsService.get(sessionId, taskParams);
 
-    if (session.status !== SessionStatus.IDLE) {
+    if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
       console.log(
-        `⏸️  [Queue] Session ${sessionId.substring(0, 8)} is ${session.status}, task ${nextTask.task_id.substring(0, 8)} waiting in queue ` +
+        `⏸️  [Queue] Session ${shortId(sessionId)} is ${session.status}, task ${shortId(nextTask.task_id)} waiting in queue ` +
           `(will be processed when session becomes IDLE via patch hook)`
       );
       return;
@@ -1813,7 +2164,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // by a concurrent caller, or removed by an admin via DELETE /tasks/:id.
     const stillQueued = await taskRepo.findById(nextTask.task_id);
     if (!stillQueued || stillQueued.status !== TaskStatus.QUEUED) {
-      console.log(`⚠️  Queued task ${nextTask.task_id.substring(0, 8)} no longer queued, skipping`);
+      console.log(`⚠️  Queued task ${shortId(nextTask.task_id)} no longer queued, skipping`);
       return;
     }
 
@@ -1831,7 +2182,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       taskParams
     );
 
-    console.log(`✅ Queued task drained for session ${sessionId.substring(0, 8)}`);
+    console.log(`✅ Queued task drained for session ${shortId(sessionId)}`);
   }
 
   // Inject queue processor into sessions service.
@@ -1930,88 +2281,64 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // ============================================================================
-  // Input response endpoint
+  // Widget submission / dismissal endpoints
+  //
+  // See `docs/internal/in-conversation-widgets-design-2026-05-19.md`. The
+  // resolver handles auth, idempotency, registry dispatch, message patching,
+  // auto-resume task queueing, and the `widget:resolved` broadcast.
   // ============================================================================
+
+  const widgetResolverDeps = {
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
+    app: app as any,
+    isBranchOwner: async (branchId: string, userId: UUID) =>
+      branchRepository.isOwner(branchId as import('@agor/core/types').BranchID, userId),
+  };
 
   registerAuthenticatedRoute(
     app,
-    '/sessions/:id/input-response',
+    '/widgets/:id/submit',
     {
-      async create(
-        data: {
-          requestId: string;
-          taskId?: string;
-          answers: Record<string, string>;
-          annotations?: Record<string, { markdown?: string; notes?: string }>;
-          respondedBy: string;
-        },
-        params: RouteParams
-      ) {
-        const id = params.route?.id;
-        if (!id) throw new Error('Session ID required');
-        if (!data.requestId) throw new Error('requestId required');
-        if (!data.answers) throw new Error('answers required');
-
-        const messagesServiceInst = app.service('messages');
-        const messages = await messagesServiceInst.find({
-          query: {
-            session_id: id,
-            type: 'input_request',
-          },
-        });
-
-        const messageList = isPaginated(messages) ? messages.data : messages;
-        const inputMessage = messageList.find((msg: Message) => {
-          const content = msg.content as InputRequestContent;
-          return content?.request_id === data.requestId;
-        });
-
-        if (!inputMessage) {
-          throw new Error(`Input request ${data.requestId} not found`);
+      async create(data: Record<string, unknown>, params: RouteParams) {
+        const widgetId = params.route?.id;
+        if (!widgetId) throw new Error('Widget ID required');
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to submit a widget');
         }
-
-        const inputContent = inputMessage.content as InputRequestContent;
-
-        if (inputContent?.status && inputContent.status !== 'pending') {
-          return {
-            success: false,
-            alreadyResolved: true,
-            status: inputContent.status,
-            message: `Input request already ${inputContent.status}`,
-          };
-        }
-
-        const resolvedTaskId = inputContent.task_id || inputMessage.task_id;
-
-        if (!resolvedTaskId) {
-          throw new Error('Cannot process input response: task_id is missing.');
-        }
-
-        await messagesServiceInst.patch(inputMessage.message_id, {
-          content: {
-            ...inputContent,
-            status: 'answered',
-            answers: data.answers,
-            annotations: data.annotations,
-            answered_by: data.respondedBy,
-            answered_at: new Date().toISOString(),
-          },
-        });
-
-        app.service('messages').emit('input_resolved', {
-          requestId: data.requestId,
-          taskId: resolvedTaskId,
-          sessionId: id,
-          answers: data.answers,
-          annotations: data.annotations,
-          respondedBy: data.respondedBy,
-        });
-
-        return { success: true };
+        return resolveWidget(
+          widgetId,
+          { kind: 'submit', body: data ?? {} },
+          { user_id: params.user.user_id as UUID, role: params.user.role as string | undefined },
+          widgetResolverDeps
+        );
       },
     },
     {
-      create: { role: ROLES.MEMBER, action: 'respond to input requests' },
+      create: { role: ROLES.MEMBER, action: 'submit widgets' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/widgets/:id/dismiss',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const widgetId = params.route?.id;
+        if (!widgetId) throw new Error('Widget ID required');
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to dismiss a widget');
+        }
+        return resolveWidget(
+          widgetId,
+          { kind: 'dismiss' },
+          { user_id: params.user.user_id as UUID, role: params.user.role as string | undefined },
+          widgetResolverDeps
+        );
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'dismiss widgets' },
     },
     requireAuth
   );
@@ -2092,7 +2419,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/repos/clone',
     {
       async create(
-        data: { url: string; name?: string; destination?: string; default_branch?: string },
+        data: { url: string; name?: string; slug?: string; default_branch?: string },
         params: RouteParams
       ) {
         return reposService.cloneRepository(data, params);
@@ -2106,7 +2433,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerAuthenticatedRoute(
     app,
-    '/repos/:id/worktrees',
+    '/repos/:id/branches',
     {
       async create(
         data: {
@@ -2119,12 +2446,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           issue_url?: string;
           pull_request_url?: string;
           boardId?: string;
+          /** Explicit board position. Omit to let the service compute a
+           *  smart default — preferred for MCP/agent callers. The UI
+           *  passes the viewport center so the new card lands where the
+           *  user invoked the dialog. */
+          position?: { x: number; y: number };
+          // Branch storage model — see context/explorations/clone-redesign.md.
+          storage_mode?: 'worktree' | 'clone';
+          clone_depth?: number;
         },
         params: RouteParams
       ) {
         const id = params.route?.id;
         if (!id) throw new Error('Repo ID required');
-        return reposService.createWorktree(
+        return reposService.createBranch(
           id,
           { ...data, refType: data.refType ?? 'branch' },
           params
@@ -2132,25 +2467,25 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      create: { role: ROLES.MEMBER, action: 'create worktrees' },
+      create: { role: ROLES.MEMBER, action: 'create branches' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/repos/:id/worktrees/:name',
+    '/repos/:id/branches/:name',
     {
       async remove(_id: unknown, params: RouteParams & { route?: { name?: string } }) {
         const id = params.route?.id;
         const name = params.route?.name;
         if (!id) throw new Error('Repo ID required');
-        if (!name) throw new Error('Worktree name required');
-        return reposService.removeWorktree(id, name, params);
+        if (!name) throw new Error('Branch name required');
+        return reposService.removeBranch(id, name, params);
       },
     },
     {
-      remove: { role: ROLES.MEMBER, action: 'remove worktrees' },
+      remove: { role: ROLES.MEMBER, action: 'remove branches' },
     },
     requireAuth
   );
@@ -2159,10 +2494,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/repos/:id/import-agor-yml',
     {
-      async create(data: { worktree_id: string }, params: RouteParams) {
+      async create(data: { branch_id: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Repo ID required');
-        if (!data?.worktree_id) throw new Error('worktree_id is required');
+        if (!data?.branch_id) throw new Error('branch_id is required');
         return reposService.importFromAgorYml(id, data, params);
       },
     },
@@ -2176,16 +2511,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/repos/:id/export-agor-yml',
     {
-      async create(data: { worktree_id: string }, params: RouteParams) {
+      async create(data: { branch_id: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Repo ID required');
-        if (!data?.worktree_id) throw new Error('worktree_id is required');
+        if (!data?.branch_id) throw new Error('branch_id is required');
         return reposService.exportToAgorYml(id, data, params);
       },
     },
     {
       // Admin-only, matching Import and repo.environment edit. Export writes a
-      // file to the worktree working tree, so even though the content is
+      // file to the branch working tree, so even though the content is
       // derivable, the side effect warrants the same permission bar as import.
       create: { role: ROLES.ADMIN, action: 'export .agor.yml' },
     },
@@ -2208,32 +2543,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: { name: string }, params: AuthenticatedParams) {
         return userApiKeysService.create(data, params);
       },
+      async patch(id: string, data: { name?: string }, params: AuthenticatedParams) {
+        if (!id) throw new BadRequest('API key ID required');
+        return userApiKeysService.patch(id, data, params);
+      },
+      async remove(id: string, params: AuthenticatedParams) {
+        if (!id) throw new BadRequest('API key ID required');
+        return userApiKeysService.remove(id, params);
+      },
     },
     {
       find: { role: ROLES.MEMBER, action: 'list API keys' },
       create: { role: ROLES.MEMBER, action: 'create API keys' },
-    },
-    requireAuth
-  );
-
-  registerAuthenticatedRoute(
-    app,
-    '/api/v1/user/api-keys/:id',
-    {
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
-      async patch(data: { name?: string }, params: any) {
-        const id = params.route?.id;
-        if (!id) throw new BadRequest('API key ID required');
-        return userApiKeysService.patch(id, data, params);
-      },
-      // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
-      async remove(_id: unknown, params: any) {
-        const keyId = params.route?.id;
-        if (!keyId) throw new BadRequest('API key ID required');
-        return userApiKeysService.remove(keyId, params);
-      },
-    },
-    {
       patch: { role: ROLES.MEMBER, action: 'update API keys' },
       remove: { role: ROLES.MEMBER, action: 'delete API keys' },
     },
@@ -2305,22 +2626,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     );
 
   // ============================================================================
-  // Worktree environment management routes
+  // Branch environment management routes
   // ============================================================================
 
-  const worktreesService = app.service('worktrees') as unknown as WorktreesServiceImpl;
+  const branchesService = app.service('branches') as unknown as BranchesServiceImpl;
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/start',
+    '/branches/:id/start',
     {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.startEnvironment(
-          id as import('@agor/core/types').WorktreeID,
-          params
-        );
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.startEnvironment(id as import('@agor/core/types').BranchID, params);
       },
     },
     {
@@ -2329,80 +2647,74 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // it accepts the lowest authenticated role (viewer). The service gate
       // is the single source of truth for whether the user can actually
       // trigger the command.
-      create: { role: ROLES.VIEWER, action: 'start worktree environments' },
+      create: { role: ROLES.VIEWER, action: 'start branch environments' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/stop',
+    '/branches/:id/stop',
     {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.stopEnvironment(
-          id as import('@agor/core/types').WorktreeID,
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.stopEnvironment(id as import('@agor/core/types').BranchID, params);
+      },
+    },
+    {
+      // Service-layer enforcement via managed_envs_minimum_role
+      create: { role: ROLES.VIEWER, action: 'stop branch environments' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/branches/:id/restart',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.restartEnvironment(
+          id as import('@agor/core/types').BranchID,
           params
         );
       },
     },
     {
       // Service-layer enforcement via managed_envs_minimum_role
-      create: { role: ROLES.VIEWER, action: 'stop worktree environments' },
+      create: { role: ROLES.VIEWER, action: 'restart branch environments' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/restart',
+    '/branches/:id/nuke',
     {
       async create(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.restartEnvironment(
-          id as import('@agor/core/types').WorktreeID,
-          params
-        );
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.nukeEnvironment(id as import('@agor/core/types').BranchID, params);
       },
     },
     {
       // Service-layer enforcement via managed_envs_minimum_role
-      create: { role: ROLES.VIEWER, action: 'restart worktree environments' },
+      create: { role: ROLES.VIEWER, action: 'nuke branch environments' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/nuke',
-    {
-      async create(_data: unknown, params: RouteParams) {
-        const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.nukeEnvironment(
-          id as import('@agor/core/types').WorktreeID,
-          params
-        );
-      },
-    },
-    {
-      // Service-layer enforcement via managed_envs_minimum_role
-      create: { role: ROLES.VIEWER, action: 'nuke worktree environments' },
-    },
-    requireAuth
-  );
-
-  registerAuthenticatedRoute(
-    app,
-    '/worktrees/:id/render-environment',
+    '/branches/:id/render-environment',
     {
       async create(data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.renderEnvironment(
-          id as import('@agor/core/types').WorktreeID,
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.renderEnvironment(
+          id as import('@agor/core/types').BranchID,
           data as { variant?: string } | undefined,
           params
         );
@@ -2411,80 +2723,78 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       // Baseline trigger gate via managed_envs_minimum_role; variant changes
       // are additionally admin-gated inside the service method.
-      create: { role: ROLES.VIEWER, action: 'render worktree environment' },
+      create: { role: ROLES.VIEWER, action: 'render branch environment' },
     },
     requireAuth
   );
 
   registerAuthenticatedRoute(
     app,
-    '/worktrees/:id/health',
+    '/branches/:id/health',
     {
       async find(_data: unknown, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Worktree ID required');
-        return worktreesService.checkHealth(id as import('@agor/core/types').WorktreeID, params);
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.checkHealth(id as import('@agor/core/types').BranchID, params);
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
-      find: { role: ROLES.MEMBER, action: 'check worktree health' },
+      find: { role: ROLES.MEMBER, action: 'check branch health' },
     },
     requireAuth
   );
 
-  // Archive/delete worktree
-  app.use('/worktrees/:id/archive-or-delete', {
+  // Archive/delete branch
+  app.use('/branches/:id/archive-or-delete', {
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
+      if (!id) throw new Error('Branch ID required');
       const options = data as {
         metadataAction: 'archive' | 'delete';
         filesystemAction: 'preserved' | 'cleaned' | 'deleted';
       };
-      return worktreesService.archiveOrDelete(
-        id as import('@agor/core/types').WorktreeID,
+      return branchesService.archiveOrDelete(
+        id as import('@agor/core/types').BranchID,
         options,
         params
       );
     },
   });
 
-  app.service('/worktrees/:id/archive-or-delete').hooks({
+  app.service('/branches/:id/archive-or-delete').hooks({
     before: {
       create: [
         requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'archive or delete worktrees'),
+        requireMinimumRole(ROLES.MEMBER, 'archive or delete branches'),
         async (context: HookContext) => {
           const id = context.params.route?.id;
-          if (!id) throw new Error('Worktree ID required');
+          if (!id) throw new Error('Branch ID required');
 
-          const worktree = await worktreeRepository.findById(id);
-          if (!worktree) {
-            throw new Forbidden(`Worktree not found: ${id}`);
+          const branch = await branchRepository.findById(id);
+          if (!branch) {
+            throw new Forbidden(`Branch not found: ${id}`);
           }
 
           const userId = context.params.user?.user_id as
             | import('@agor/core/types').UUID
             | undefined;
-          const isOwner = userId
-            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
-            : false;
+          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
 
-          context.params.worktree = worktree;
-          context.params.isWorktreeOwner = isOwner;
+          context.params.branch = branch;
+          context.params.isBranchOwner = isOwner;
 
           return context;
         },
-        worktreeRbacEnabled
-          ? ensureWorktreePermission('all', 'archive or delete worktrees', superadminOpts)
+        branchRbacEnabled
+          ? ensureBranchPermission('all', 'archive or delete branches', superadminOpts)
           : (context: HookContext) => {
-              const isOwner = context.params.isWorktreeOwner;
+              const isOwner = context.params.isBranchOwner;
               const userRole = context.params.user?.role;
 
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
-                  'You must be the worktree owner or a global admin to archive/delete worktrees'
+                  'You must be the branch owner or a global admin to archive/delete branches'
                 );
               }
               return context;
@@ -2493,55 +2803,49 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
   });
 
-  // Unarchive worktree
-  app.use('/worktrees/:id/unarchive', {
+  // Unarchive branch
+  app.use('/branches/:id/unarchive', {
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
-      if (!id) throw new Error('Worktree ID required');
+      if (!id) throw new Error('Branch ID required');
       const options = data as { boardId?: import('@agor/core/types').BoardID };
-      return worktreesService.unarchive(
-        id as import('@agor/core/types').WorktreeID,
-        options,
-        params
-      );
+      return branchesService.unarchive(id as import('@agor/core/types').BranchID, options, params);
     },
   });
 
-  app.service('/worktrees/:id/unarchive').hooks({
+  app.service('/branches/:id/unarchive').hooks({
     before: {
       create: [
         requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'unarchive worktrees'),
+        requireMinimumRole(ROLES.MEMBER, 'unarchive branches'),
         async (context: HookContext) => {
           const id = context.params.route?.id;
-          if (!id) throw new Error('Worktree ID required');
+          if (!id) throw new Error('Branch ID required');
 
-          const worktree = await worktreeRepository.findById(id);
-          if (!worktree) {
-            throw new Forbidden(`Worktree not found: ${id}`);
+          const branch = await branchRepository.findById(id);
+          if (!branch) {
+            throw new Forbidden(`Branch not found: ${id}`);
           }
 
           const userId = context.params.user?.user_id as
             | import('@agor/core/types').UUID
             | undefined;
-          const isOwner = userId
-            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
-            : false;
+          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
 
-          context.params.worktree = worktree;
-          context.params.isWorktreeOwner = isOwner;
+          context.params.branch = branch;
+          context.params.isBranchOwner = isOwner;
 
           return context;
         },
-        worktreeRbacEnabled
-          ? ensureWorktreePermission('all', 'unarchive worktrees', superadminOpts)
+        branchRbacEnabled
+          ? ensureBranchPermission('all', 'unarchive branches', superadminOpts)
           : (context: HookContext) => {
-              const isOwner = context.params.isWorktreeOwner;
+              const isOwner = context.params.isBranchOwner;
               const userRole = context.params.user?.role;
 
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
-                  'You must be the worktree owner or a global admin to unarchive worktrees'
+                  'You must be the branch owner or a global admin to unarchive branches'
                 );
               }
               return context;
@@ -2551,15 +2855,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   // ============================================================================
-  // Execute-schedule-now: manually trigger a scheduled run for a worktree
+  // Run-now (canonical): manually trigger a scheduled run for a schedule.
   // ============================================================================
   // Reuses the scheduler's spawn code path so scheduled and manual triggers
   // produce indistinguishable sessions (beyond a triggered_manually marker).
-  // Requires worktree-level 'all' permission (same tier as editing the schedule).
-  app.use('/worktrees/:id/execute-schedule-now', {
+  // Requires branch-level 'all' permission on the schedule's parent branch
+  // (same tier as editing the schedule); see §4.4 of the design doc.
+  const scheduleRepository = new ScheduleRepository(db);
+
+  app.use('/schedules/:id/run-now', {
     async create(_data: unknown, params: RouteParams) {
       const id = params.route?.id;
-      if (!id) throw new BadRequest('Worktree ID required');
+      if (!id) throw new BadRequest('Schedule ID required');
 
       const scheduler = app.get('scheduler') as SchedulerService | undefined;
       if (!scheduler) {
@@ -2568,19 +2875,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       const triggeredBy = params.user?.user_id;
       if (!triggeredBy) {
-        // Should already be caught by requireAuth, but guard anyway so the
-        // scheduler isn't passed an undefined userId.
         throw new NotAuthenticated('Authentication required to trigger schedule.');
       }
 
       try {
         const session = await scheduler.executeScheduleNow({
-          worktreeId: id as WorktreeID,
+          scheduleId: id as ScheduleID,
           triggeredBy: triggeredBy as UUID,
         });
         return {
           session_id: session.session_id,
-          worktree_id: session.worktree_id,
+          schedule_id: session.schedule_id,
+          branch_id: session.branch_id,
           scheduled_run_at: session.scheduled_run_at,
           triggered_manually: true,
         };
@@ -2596,37 +2902,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
   });
 
-  app.service('/worktrees/:id/execute-schedule-now').hooks({
+  app.service('/schedules/:id/run-now').hooks({
     before: {
       create: [
         requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'execute scheduled runs'),
-        async (context: HookContext) => {
-          const id = context.params.route?.id;
-          if (!id) throw new BadRequest('Worktree ID required');
-
-          const worktree = await worktreeRepository.findById(id);
-          if (!worktree) {
-            throw new NotFound(`Worktree not found: ${id}`);
-          }
-
-          const userId = context.params.user?.user_id as UUID | undefined;
-          const isOwner = userId
-            ? await worktreeRepository.isOwner(worktree.worktree_id, userId)
-            : false;
-
-          context.params.worktree = worktree;
-          context.params.isWorktreeOwner = isOwner;
-          return context;
-        },
-        worktreeRbacEnabled
-          ? ensureWorktreePermission('all', 'execute scheduled runs', superadminOpts)
+        requireMinimumRole(ROLES.MEMBER, 'run schedule'),
+        // Reuse the canonical hook so caching semantics (params.schedule
+        // / params.branch / params.isBranchOwner) match every other
+        // schedule-touching path.
+        loadScheduleAndBranch(scheduleRepository, branchRepository),
+        branchRbacEnabled
+          ? ensureBranchPermission('all', 'run schedule', superadminOpts)
           : (context: HookContext) => {
-              const isOwner = context.params.isWorktreeOwner;
+              const isOwner = context.params.isBranchOwner;
               const userRole = context.params.user?.role;
               if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
                 throw new Forbidden(
-                  'You must be the worktree owner or a global admin to execute scheduled runs'
+                  'You must be the branch owner or a global admin to run schedules'
                 );
               }
               return context;
@@ -2635,29 +2927,127 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
   });
 
-  // Worktree logs
+  // ============================================================================
+  // Back-compat shim: POST /branches/:id/execute-schedule-now
+  // ============================================================================
+  // Pre-#1253 callers fired a single per-branch schedule via this route.
+  // Now that a branch can have N schedules, the unambiguous case is "exactly
+  // one schedule on this branch" — we forward to that schedule's run-now.
+  // Zero or multiple → 400 with a pointer to /schedules/:id/run-now.
+  app.use('/branches/:id/execute-schedule-now', {
+    async create(_data: unknown, params: RouteParams) {
+      const branchId = params.route?.id;
+      if (!branchId) throw new BadRequest('Branch ID required');
+
+      const scheduler = app.get('scheduler') as SchedulerService | undefined;
+      if (!scheduler) {
+        throw new NotFound('Scheduler service is not enabled on this instance.');
+      }
+
+      const triggeredBy = params.user?.user_id;
+      if (!triggeredBy) {
+        throw new NotAuthenticated('Authentication required to trigger schedule.');
+      }
+
+      const branch = await branchRepository.findById(branchId);
+      if (!branch) throw new NotFound(`Branch not found: ${branchId}`);
+
+      const branchSchedules = await scheduleRepository.findByBranchId(branch.branch_id);
+      if (branchSchedules.length === 0) {
+        throw new BadRequest(
+          `Branch "${branch.name}" has no schedules. Create one and call POST /schedules/:id/run-now instead.`,
+          { code: 'no_schedules' }
+        );
+      }
+      if (branchSchedules.length > 1) {
+        throw new BadRequest(
+          `Branch "${branch.name}" has ${branchSchedules.length} schedules. ` +
+            `This route is back-compat only for the single-schedule case. ` +
+            `Pick one and call POST /schedules/:id/run-now.`,
+          { code: 'ambiguous_schedule' }
+        );
+      }
+
+      try {
+        const session = await scheduler.executeScheduleNow({
+          scheduleId: branchSchedules[0].schedule_id,
+          triggeredBy: triggeredBy as UUID,
+        });
+        return {
+          session_id: session.session_id,
+          schedule_id: session.schedule_id,
+          branch_id: session.branch_id,
+          scheduled_run_at: session.scheduled_run_at,
+          triggered_manually: true,
+        };
+      } catch (err) {
+        if (err instanceof ScheduleBusyError) {
+          throw new Conflict(err.message, { code: err.code });
+        }
+        if (err instanceof ScheduleNotReadyError) {
+          throw new BadRequest(err.message, { code: err.code });
+        }
+        throw err;
+      }
+    },
+  });
+
+  app.service('/branches/:id/execute-schedule-now').hooks({
+    before: {
+      create: [
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'execute scheduled runs'),
+        async (context: HookContext) => {
+          const id = context.params.route?.id;
+          if (!id) throw new BadRequest('Branch ID required');
+
+          const branch = await branchRepository.findById(id);
+          if (!branch) {
+            throw new NotFound(`Branch not found: ${id}`);
+          }
+
+          const userId = context.params.user?.user_id as UUID | undefined;
+          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
+
+          context.params.branch = branch;
+          context.params.isBranchOwner = isOwner;
+          return context;
+        },
+        branchRbacEnabled
+          ? ensureBranchPermission('all', 'execute scheduled runs', superadminOpts)
+          : (context: HookContext) => {
+              const isOwner = context.params.isBranchOwner;
+              const userRole = context.params.user?.role;
+              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
+                throw new Forbidden(
+                  'You must be the branch owner or a global admin to execute scheduled runs'
+                );
+              }
+              return context;
+            },
+      ],
+    },
+  });
+
+  // Branch logs
   registerAuthenticatedRoute(
     app,
-    '/worktrees/logs',
+    '/branches/logs',
     {
       async find(params: Params) {
-        console.log('📋 Logs endpoint called');
-
-        const id = params?.query?.worktree_id;
+        const id = params?.query?.branch_id;
 
         if (!id) {
-          console.error('❌ No worktree_id in query params');
-          throw new Error('worktree_id query parameter required');
+          throw new Error('branch_id query parameter required');
         }
 
-        console.log('✅ Found worktree ID:', id);
-        return worktreesService.getLogs(id as import('@agor/core/types').WorktreeID, params);
+        return branchesService.getLogs(id as import('@agor/core/types').BranchID, params);
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
       // Service-layer enforcement via managed_envs_minimum_role
-      find: { role: ROLES.VIEWER, action: 'view worktree logs' },
+      find: { role: ROLES.VIEWER, action: 'view branch logs' },
     },
     requireAuth
   );
@@ -2778,13 +3168,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   //   PATCH  /sessions/:id/env-selections           — replace all: { envVarNames: [] }
   //
   // RBAC: only the session's creator or a global admin/superadmin may mutate.
-  // Worktree `all` permission does NOT grant access — selections expose the
+  // Branch `all` permission does NOT grant access — selections expose the
   // creator's private credentials to the executor process.
   // ============================================================================
 
   // Route-side RBAC wrapper: loads the session, then delegates to the shared
   // `checkSessionOwnerOrAdmin` helper used by the Feathers hook. Keeps the
-  // policy in a single place (see `utils/worktree-authorization.ts`) and
+  // policy in a single place (see `utils/branch-authorization.ts`) and
   // respects the daemon's configured `allowSuperadmin` via `superadminOpts`.
   const requireSessionOwnerOrAdmin = async (
     sessionId: string,
@@ -2839,7 +3229,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async find(_data: unknown, params: RouteParams): Promise<string[]> {
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
-        // Read permission: session creator OR admin (no worktree tier).
+        // Read permission: session creator OR admin (no branch tier).
         await requireSessionOwnerOrAdmin(id, params);
         const rows = await sessionEnvSelectionsService.list(id as SessionID, params);
         return rows.map((r) => r.env_var_name);
@@ -2914,6 +3304,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   app.use('/health', {
     async find(params?: AuthenticatedParams) {
+      const publicLaunchAuth = resolvePublicLaunchAuthSettings(config);
       const publicResponse = {
         status: 'ok',
         timestamp: Date.now(),
@@ -2925,8 +3316,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         buildSha: DAEMON_BUILD_INFO.sha,
         builtAt: DAEMON_BUILD_INFO.builtAt,
         auth: {
-          requireAuth: config.daemon?.requireAuth === true,
-          allowAnonymous: allowAnonymous,
+          requireAuth: true,
+          externalLaunch: publicLaunchAuth,
         },
         instance: {
           label: config.daemon?.instanceLabel,
@@ -2950,6 +3341,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             ),
             OPENAI_API_KEY: !!(config.credentials?.OPENAI_API_KEY || process.env.OPENAI_API_KEY),
             GEMINI_API_KEY: !!(config.credentials?.GEMINI_API_KEY || process.env.GEMINI_API_KEY),
+            CURSOR_API_KEY: !!(config.credentials?.CURSOR_API_KEY || process.env.CURSOR_API_KEY),
           },
         },
         services: servicesConfig,
@@ -2962,10 +3354,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Minimum role required to trigger managed environment commands
           // (start / stop / nuke / logs). UI uses this to disable + tooltip
           // the trigger buttons for users below the threshold. The server-side
-          // gate in services/worktrees.ts is the source of truth.
+          // gate in services/branches.ts is the source of truth.
           // Value: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin'.
           // Defaults to 'member' when unset.
           managedEnvsMinimumRole: config.execution?.managed_envs_minimum_role ?? 'member',
+          // True when the daemon runs in a multi-user Unix isolation mode
+          // (insulated/strict). UI hides "trust everyone on this instance"
+          // surfaces when true. Server-side gates (e.g. ArtifactsService.
+          // grantTrust) are the source of truth and reject regardless.
+          multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
+          // Cursor SDK provider is available as a beta surface. The legacy
+          // cursor_sdk_enabled flag is retained in config for compatibility but
+          // no longer gates provider visibility.
+          cursorSdk: true,
         },
       };
 
@@ -3002,7 +3403,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // AGOR_SET_UNIX_MODE) are written into ~/.agor/config.yaml by the
           // entrypoint before boot, so `config.execution` reflects them.
           execution: {
-            worktreeRbac: config.execution?.worktree_rbac === true,
+            branchRbac: config.execution?.branch_rbac === true,
             unixUserMode: config.execution?.unix_user_mode ?? 'simple',
           },
           // Resolved security posture — admins can confirm in Settings → About
@@ -3150,7 +3551,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   const SERVICE_GROUP_PATHS: Partial<Record<ServiceGroupName, string[]>> = {
     core: ['sessions', 'tasks', 'messages'],
-    worktrees: ['worktrees'],
+    branches: ['branches'],
     repos: ['repos'],
     users: ['users'],
     boards: ['boards', 'board-objects', 'board-comments'],

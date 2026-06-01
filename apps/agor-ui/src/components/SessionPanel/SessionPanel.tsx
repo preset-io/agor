@@ -1,5 +1,6 @@
 import type {
   AgorClient,
+  Branch,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
@@ -9,15 +10,16 @@ import type {
   SpawnConfig,
   Task,
   User,
-  Worktree,
 } from '@agor-live/client';
 import {
   AGENTIC_TOOL_CAPABILITIES,
   getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
   SessionStatus,
   TaskStatus,
 } from '@agor-live/client';
 import {
+  AimOutlined,
   BranchesOutlined,
   CloseOutlined,
   CodeOutlined,
@@ -32,19 +34,23 @@ import { Alert, App, Badge, Button, Space, Spin, Tooltip, Typography, theme } fr
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppEntityData } from '../../contexts/AppDataContext';
+import { useAppMcpData, useAppUserData } from '../../contexts/AppDataContext';
+import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
+import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { CallbackToggleButton } from '../CallbackToggleButton';
 import { EffortSelector } from '../EffortSelector';
 import { FileUpload, FileUploadButton } from '../FileUpload';
-import { MCPServerPill } from '../MCPServerPill';
+import { MCPServerPill } from '../MCPServer';
 import { CreatedByTag } from '../metadata';
 import { PermissionModeSelector } from '../PermissionModeSelector';
-import { ContextWindowPill, ModelPill, SessionIdPill, TimerPill, TokenCountPill } from '../Pill';
+import { ContextWindowPill, ModelPill, TimerPill, TokenCountPill } from '../Pill';
+import { SessionIdsButton } from '../SessionIds';
 import { ToolIcon } from '../ToolIcon';
 import { SessionPanelContent } from './SessionPanelContent';
 
@@ -193,6 +199,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         onFilesDrop={onFilesDrop}
         slashCommands={slashCommands}
         skills={skills}
+        highlightWhenEmpty
       />
     );
   }
@@ -205,7 +212,7 @@ PromptInput.displayName = 'PromptInput';
 export interface SessionPanelProps {
   client: AgorClient | null;
   session: Session | null;
-  worktree?: Worktree | null;
+  branch?: Branch | null;
   currentUserId?: string;
   sessionMcpServerIds?: string[];
   open: boolean;
@@ -215,20 +222,24 @@ export interface SessionPanelProps {
 const SessionPanel: React.FC<SessionPanelProps> = ({
   client,
   session,
-  worktree = null,
+  branch = null,
   currentUserId,
   sessionMcpServerIds = [],
   open,
   onClose,
 }) => {
   const { token } = theme.useToken();
-  const { modal, message } = App.useApp();
+  const { modal } = App.useApp();
+  const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
+  const recenterMap = useRecenterMap();
 
-  // Get data from entity context only — SessionPanel intentionally does NOT
-  // subscribe to live (sessions / worktrees / boards) data here, so streaming
-  // session patches don't trigger re-renders of this panel through context.
-  const { userById, mcpServerById, userAuthenticatedMcpServerIds } = useAppEntityData();
+  // Subscribe only to the entity families this panel needs. SessionPanel
+  // intentionally does NOT subscribe to live (sessions / branches / boards)
+  // data here, so streaming session patches don't trigger re-renders through
+  // context; user and MCP updates are also isolated from repo edits.
+  const { userById } = useAppUserData();
+  const { mcpServerById, userAuthenticatedMcpServerIds } = useAppMcpData();
 
   // Get actions from context
   const {
@@ -295,19 +306,33 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // shadow that used to live here was stale (missing gemini/opencode/copilot)
   // and silently drifted from the core definition.
 
-  const [permissionMode, setPermissionMode] = React.useState<PermissionMode>(
-    session?.permission_config?.mode ||
-      (session?.agentic_tool ? getDefaultPermissionMode(session.agentic_tool) : 'acceptEdits')
-  );
+  const initialPermissionMode: PermissionMode =
+    session?.permission_config?.mode ??
+    (session?.agentic_tool
+      ? getDefaultPermissionMode(session.agentic_tool)
+      : getDefaultPermissionMode('claude-code'));
+  const initialCodexDefaults = mapToCodexPermissionConfig(initialPermissionMode);
+  const [permissionMode, setPermissionMode] = React.useState<PermissionMode>(initialPermissionMode);
   const [codexSandboxMode, setCodexSandboxMode] = React.useState<CodexSandboxMode>(
-    session?.permission_config?.codex?.sandboxMode || 'workspace-write'
+    session?.permission_config?.codex?.sandboxMode ?? initialCodexDefaults.sandboxMode
   );
   const [codexApprovalPolicy, setCodexApprovalPolicy] = React.useState<CodexApprovalPolicy>(
-    session?.permission_config?.codex?.approvalPolicy || 'on-request'
+    session?.permission_config?.codex?.approvalPolicy ?? initialCodexDefaults.approvalPolicy
   );
   const [effortLevel, setEffortLevel] = React.useState<EffortLevel>(
     session?.model_config?.effort || 'high'
   );
+  /**
+   * Claude Code CLI view toggle: 'terminal' shows the embedded `claude`
+   * REPL full-height (with the Agor textarea hidden, since `claude` has
+   * its own input prompt); 'conversation' shows Agor's standard message
+   * feed rebuilt from the JSONL by the daemon watcher.
+   *
+   * Only meaningful when `session.agentic_tool === 'claude-code-cli'`.
+   * Defaults to 'terminal' so users see the live REPL on first open.
+   * Persisting this per-session as a UI preference is a v1.5 follow-up.
+   */
+  const [cliViewMode, setCliViewMode] = React.useState<'terminal' | 'conversation'>('terminal');
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
@@ -417,11 +442,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           return {
             used: task.computed_context_window,
             limit: contextWindowLimit || 0,
+            // Forward the full normalized response so ContextWindowPill can
+            // honor `contextUsageSnapshot.percentage` instead of recomputing
+            // from raw used/limit (which is wrong for Codex's baseline-adjusted
+            // display).
             taskMetadata: {
               model: task.model,
               duration_ms: task.duration_ms,
               agentic_tool: session.agentic_tool,
               raw_sdk_response: task.raw_sdk_response,
+              normalized_sdk_response: task.normalized_sdk_response,
             },
           };
         }
@@ -432,7 +462,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const footerGradient = React.useMemo(() => {
     if (!latestContextWindow) return undefined;
-    return getContextWindowGradient(latestContextWindow.used, latestContextWindow.limit);
+    return getContextWindowGradient(
+      latestContextWindow.used,
+      latestContextWindow.limit,
+      latestContextWindow.taskMetadata.normalized_sdk_response?.contextUsageSnapshot
+    );
   }, [latestContextWindow]);
 
   const footerTimerTask = React.useMemo(() => {
@@ -471,16 +505,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   React.useEffect(() => {
     setEffortLevel(session?.model_config?.effort || 'high');
   }, [session?.model_config?.effort]);
-
-  // Scroll to bottom when panel opens or session changes
-  React.useEffect(() => {
-    if (open && scrollToBottom && session) {
-      const timeoutId = setTimeout(() => {
-        scrollToBottom();
-      }, 300);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [open, scrollToBottom, session]);
 
   // When there's no session, render nothing (panel is collapsed to zero).
   // When open=false, we still render the component tree (hidden) so that
@@ -525,7 +549,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     // Show feedback immediately if this is a retry
     if (isStopping) {
-      message.info('Retrying stop request...');
+      showInfo('Retrying stop request...');
     }
 
     setStopRequestInFlight(true);
@@ -533,7 +557,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       await client.service(`sessions/${session.session_id}/stop`).create({});
     } catch (error) {
       console.error('Failed to stop execution:', error);
-      message.error('Failed to stop execution. You can try again.');
+      showError('Failed to stop execution. You can try again.');
     } finally {
       setStopRequestInFlight(false);
     }
@@ -773,14 +797,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at
                 }
                 durationMs={footerTimerTask.duration_ms}
+                lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
               />
             )}
-            <SessionIdPill
-              sessionId={session.session_id}
-              sdkSessionId={session.sdk_session_id}
-              agenticTool={session.agentic_tool}
-              showCopy={true}
-            />
+            <SessionIdsButton session={session} />
             {session.model_config?.model && (
               <ModelPill
                 model={
@@ -831,6 +851,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               size="small"
             />
             {isRunning && <Spin size="small" />}
+            <CallbackToggleButton session={session} />
             <Space.Compact>
               <Tooltip
                 title={
@@ -968,12 +989,25 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </Space>
           <Space size={4}>
-            {onOpenTerminal && worktree && (
-              <Tooltip title="Open terminal in worktree directory">
+            {branch && (
+              <Tooltip title="Center map on branch">
+                <Button
+                  type="text"
+                  icon={<AimOutlined />}
+                  onClick={() =>
+                    recenterMap(branch.branch_id, {
+                      boardId: branch.board_id ?? undefined,
+                    })
+                  }
+                />
+              </Tooltip>
+            )}
+            {onOpenTerminal && branch && (
+              <Tooltip title="Open terminal in branch directory">
                 <Button
                   type="text"
                   icon={<CodeOutlined />}
-                  onClick={() => onOpenTerminal([`cd ${worktree.path}`], worktree.worktree_id)}
+                  onClick={() => onOpenTerminal([`cd ${branch.path}`], branch.branch_id)}
                 />
               </Tooltip>
             )}
@@ -1016,7 +1050,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         <SessionPanelContent
           client={client}
           session={session}
-          worktree={worktree}
+          branch={branch}
           currentUserId={currentUserId}
           sessionMcpServerIds={sessionMcpServerIds}
           scrollToBottom={scrollToBottom}
@@ -1030,11 +1064,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onSpawnModalConfirm={handleSpawnModalConfirm}
           inputValueRef={inputValueRef}
           isOpen={open}
+          cliViewMode={cliViewMode}
+          setCliViewMode={setCliViewMode}
         />
 
         {/* Footer Controls — rendered outside SessionPanelContent so that
-            keystroke-driven re-renders don't propagate to ConversationView */}
-        {footerControls}
+            keystroke-driven re-renders don't propagate to ConversationView.
+            Hidden for CLI sessions in 'terminal' view because the embedded
+            `claude` REPL has its own input prompt; the Agor textarea is
+            redundant (and would inject via PTY anyway, racy with whatever
+            the user is typing into the REPL directly). */}
+        {!(session.agentic_tool === 'claude-code-cli' && cliViewMode === 'terminal') &&
+          footerControls}
 
         {/* File upload modal */}
         {session && (
@@ -1048,7 +1089,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             }}
             initialFiles={droppedFiles}
             onUploadComplete={(files) => {
-              message.success(`Uploaded ${files.length} file(s)`);
+              showSuccess(`Uploaded ${files.length} file(s)`);
             }}
             onInsertMention={(filepath) => {
               // Insert @filepath mention into the textarea
@@ -1062,7 +1103,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 };
 
 // SessionPanel reads only entity-context data (users, MCP servers) and receives
-// session/worktree as props. Wrapping with React.memo (default shallow compare)
+// session/branch as props. Wrapping with React.memo (default shallow compare)
 // lets it bail out of re-renders triggered by App's live-context updates as
 // long as its props are referentially stable. Callers MUST pass stable
 // `onClose` and `sessionMcpServerIds` (use EMPTY_STRING_ARRAY for empty).

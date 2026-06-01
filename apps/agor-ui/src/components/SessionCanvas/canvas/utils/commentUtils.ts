@@ -1,11 +1,11 @@
 /**
  * Utilities for comment positioning and parent lookups
  *
- * Handles zone and worktree parent information for spatial comments,
+ * Handles zone and branch parent information for spatial comments,
  * including labels and colors for UI display.
  */
 
-import type { Board, Worktree } from '@agor-live/client';
+import type { Board, Branch } from '@agor-live/client';
 
 export interface ParentInfo {
   parentId?: string;
@@ -37,24 +37,24 @@ export function getZoneParentInfo(zoneId: string, board?: Board): ParentInfo {
 }
 
 /**
- * Get parent info for worktree attachment
+ * Get parent info for branch attachment
  *
- * Looks up worktree data and returns formatted parent information
+ * Looks up branch data and returns formatted parent information
  * for comment display.
  *
- * @param worktreeId - The worktree ID
- * @param worktrees - Array of all worktrees
- * @returns Parent info with ID and label (no color for worktrees)
+ * @param branchId - The branch ID
+ * @param branches - Array of all branches
+ * @returns Parent info with ID and label (no color for branches)
  *
  * @example
- * const info = getWorktreeParentInfo('wt_123', worktrees);
+ * const info = getBranchParentInfo('wt_123', branches);
  * // { parentId: 'wt_123', parentLabel: '🌳 feature-branch', parentColor: undefined }
  */
-export function getWorktreeParentInfo(worktreeId: string, worktrees: Worktree[]): ParentInfo {
-  const worktree = worktrees.find((w) => w.worktree_id === worktreeId);
+export function getBranchParentInfo(branchId: string, branches: Branch[]): ParentInfo {
+  const branch = branches.find((w) => w.branch_id === branchId);
   return {
-    parentId: worktreeId,
-    parentLabel: worktree ? `🌳 ${worktree.name}` : undefined,
-    parentColor: undefined, // Worktrees don't have colors (yet)
+    parentId: branchId,
+    parentLabel: branch ? `🌳 ${branch.name}` : undefined,
+    parentColor: undefined, // Branches don't have colors (yet)
   };
 }

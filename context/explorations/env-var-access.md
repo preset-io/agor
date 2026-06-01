@@ -2,7 +2,7 @@
 
 **Status:** 🧪 Exploration — problem framing, two-part cleanup + gating model, minimal v1 scope, parked future branches. **V0.5 shipped 2026-04-18** (`feat-env-var-scope` branch): schema + `global`/`session` scopes + session selections + RBAC + UI all landed; v1 (Part A executor-auth homes, additional scope values, full resolver graph) still pending.
 
-Related concepts: [`permissions.md`](../concepts/permissions.md) · [`mcp-integration.md`](../concepts/mcp-integration.md) · [`auth.md`](../concepts/auth.md) · [`agent-integration.md`](../concepts/agent-integration.md) · [`worktrees.md`](../concepts/worktrees.md)
+Related concepts: [`permissions.md`](../concepts/permissions.md) · [`mcp-integration.md`](../concepts/mcp-integration.md) · [`auth.md`](../concepts/auth.md) · [`agent-integration.md`](../concepts/agent-integration.md) · [`branches.md`](../concepts/branches.md)
 
 ---
 
@@ -36,9 +36,9 @@ A chunk of what users currently set in `User Settings → Env Vars` is actually 
 
 These should live in `User Settings → Agentic Tools → <executor> → Auth` as **typed fields**, not free-form env strings. Benefits:
 
-- Injected into the child env *only when that executor fires*. A Codex session never sees `ANTHROPIC_API_KEY`. A Claude session never sees `OPENAI_API_KEY`. Real blast-radius reduction before any runtime gating.
+- Injected into the child env _only when that executor fires_. A Codex session never sees `ANTHROPIC_API_KEY`. A Claude session never sees `OPENAI_API_KEY`. Real blast-radius reduction before any runtime gating.
 - The UI can render each executor's auth options properly: radio between `API key | OAuth | Bedrock | Vertex` instead of users guessing which env vars to set.
-- Multi-account becomes possible (two Anthropic accounts on two worktrees) without env-var collision.
+- Multi-account becomes possible (two Anthropic accounts on two branches) without env-var collision.
 - Cleans up the user's mental model — generic env vars stop being a catch-all for authentication plumbing.
 
 Precedent: MCP OAuth tokens are already per-MCP-server and only injected when that MCP is in session scope. Apply the same shape to executor auth.
@@ -47,7 +47,7 @@ Migration is a one-shot sweep: "we detected these keys in your user env, they lo
 
 ### Part B — Remaining env vars need exposure controls
 
-Once Part A evacuates the executor auth, what remains in `User Settings → Env Vars` is **user-integration env** — `GITHUB_TOKEN` for `gh`/`git`, `DATABASE_URL`, `STRIPE_API_KEY`, custom project keys. These are what the *project* needs, not what the *agent* needs to exist.
+Once Part A evacuates the executor auth, what remains in `User Settings → Env Vars` is **user-integration env** — `GITHUB_TOKEN` for `gh`/`git`, `DATABASE_URL`, `STRIPE_API_KEY`, custom project keys. These are what the _project_ needs, not what the _agent_ needs to exist.
 
 For these, the design question is: **who can see what, and where?**
 
@@ -110,40 +110,40 @@ Properties:
 
 Valid `scope` values:
 
-| Scope | Meaning | `resource_id` | Example |
-|---|---|---|---|
-| `global` | Available to any session | null | `GIT_AUTHOR_EMAIL`, `GITHUB_TOKEN` for trusted users |
-| `session` | Only sessions explicitly opted in via `session_env_selections` | null | `FIVETRAN_EVAN_API_KEY` for a one-off session |
-| `repo` | Sessions in worktrees of this repo | repo uuid | `FIVETRAN_API_KEY` in `datagor` |
-| `mcp_server` | Only when this MCP is in session scope | mcp server uuid | `SHORTCUT_API_TOKEN` ↔ Shortcut MCP |
-| `artifact_feature` | Only when this Agor feature is active | feature name | `AGOR_API_KEY` for Artifacts |
-| `executor` | Part A's home — executor-specific auth | executor name | `ANTHROPIC_API_KEY` for Claude Code |
+| Scope              | Meaning                                                        | `resource_id`   | Example                                              |
+| ------------------ | -------------------------------------------------------------- | --------------- | ---------------------------------------------------- |
+| `global`           | Available to any session                                       | null            | `GIT_AUTHOR_EMAIL`, `GITHUB_TOKEN` for trusted users |
+| `session`          | Only sessions explicitly opted in via `session_env_selections` | null            | `FIVETRAN_EVAN_API_KEY` for a one-off session        |
+| `repo`             | Sessions in branches of this repo                              | repo uuid       | `FIVETRAN_API_KEY` in `datagor`                      |
+| `mcp_server`       | Only when this MCP is in session scope                         | mcp server uuid | `SHORTCUT_API_TOKEN` ↔ Shortcut MCP                  |
+| `artifact_feature` | Only when this Agor feature is active                          | feature name    | `AGOR_API_KEY` for Artifacts                         |
+| `executor`         | Part A's home — executor-specific auth                         | executor name   | `ANTHROPIC_API_KEY` for Claude Code                  |
 
 Do **not** encode enum values in SQL `CHECK` constraints — see [`database-migrations.md`](../concepts/database-migrations.md). Validate in the Drizzle schema + Zod + service hooks. The DB stores text.
 
-Explicitly **not** a scope: `worktree`. Worktrees are ephemeral; scoping to them creates re-granting churn. Repo is the stable boundary.
+Explicitly **not** a scope: `branch`. Branches are ephemeral; scoping to them creates re-granting churn. Repo is the stable boundary.
 
 ---
 
 ## Access method: ambient vs tool-mediated
 
-Orthogonal to *where* a var is eligible is *how* it gets to the agent. Three options on the ladder:
+Orthogonal to _where_ a var is eligible is _how_ it gets to the agent. Three options on the ladder:
 
 1. **Ambient** — exported into the child env. `env` reveals it. Today's default. Adequate when the var is already scoped narrowly (via the authorization table) to a trusted consumer.
-2. **Tool-only** — never in the child env. Agent uses a wrapper MCP tool (e.g., `agor.run_with_env(cmd, env: ["GITHUB_TOKEN"])`) which the daemon resolves server-side and injects only into the spawned subprocess. Stored tool-call args contain the var *name*, not its value. Audit log per access. Enables mid-session revocation.
-3. **Tool-only + approval** — tool-only plus a user permission prompt at first use, with scope options (once / session / worktree / persistent grant). Reuses the existing permission system (same primitive as tool-call approval).
+2. **Tool-only** — never in the child env. Agent uses a wrapper MCP tool (e.g., `agor.run_with_env(cmd, env: ["GITHUB_TOKEN"])`) which the daemon resolves server-side and injects only into the spawned subprocess. Stored tool-call args contain the var _name_, not its value. Audit log per access. Enables mid-session revocation.
+3. **Tool-only + approval** — tool-only plus a user permission prompt at first use, with scope options (once / session / branch / persistent grant). Reuses the existing permission system (same primitive as tool-call approval).
 
 ### Why v1 skips tool-only and approval
 
 A walkthrough of actual user data (see §"Concrete mapping" below) shows 9/10 real env vars want plain ambient. The tool-only and approval tiers solve threats that aren't imminent (prod AWS keys, compliance attestation). Shipping them early means carrying UX weight for cases no one has today.
 
-The **authorization table is the v1 security win** — narrowing *which consumers can see a var at all* delivers most of the blast-radius reduction. Ambient-within-a-narrow-scope is much better than ambient-everywhere, and it preserves the "agent just runs `gh`" ergonomics.
+The **authorization table is the v1 security win** — narrowing _which consumers can see a var at all_ delivers most of the blast-radius reduction. Ambient-within-a-narrow-scope is much better than ambient-everywhere, and it preserves the "agent just runs `gh`" ergonomics.
 
 Tool-only and approval tiers are designed in so the future expansion is additive, not a rewrite.
 
 ### On the logging paradox (captured for future reference)
 
-Tool-only tiers have a subtle design tension worth noting: if the agent fetches a secret via `env.get("KEY")` → value enters the model context → next tool call (e.g., `bash("curl -H 'Authorization: token <value>' ...")`) stores the literal value in the messages table anyway. Redacting *only* the `env.get` result is insufficient.
+Tool-only tiers have a subtle design tension worth noting: if the agent fetches a secret via `env.get("KEY")` → value enters the model context → next tool call (e.g., `bash("curl -H 'Authorization: token <value>' ...")`) stores the literal value in the messages table anyway. Redacting _only_ the `env.get` result is insufficient.
 
 The cleanest fix is a wrapper-tool pattern that never returns the value to the agent at all:
 
@@ -163,18 +163,18 @@ This is deferred to future branches. V1 doesn't introduce the wrapper tool becau
 
 Applied to a real `User Settings → Env Vars` list:
 
-| Var | Part A / Part B | Authorization(s) |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | Part A | moves to Agentic Tools → Claude Code |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Part A | moves to Agentic Tools → Claude Code |
-| `OPENAI_API_KEY` | Part A | moves to Agentic Tools → Codex |
-| `GITHUB_TOKEN` | Part B | `global` |
-| `GIT_AUTHOR_NAME` | Part B | `global` |
-| `GIT_AUTHOR_EMAIL` | Part B | `global` |
-| `AGOR_API_KEY` | Part B | `artifact_feature` (Artifacts) |
-| `SHORTCUT_API_TOKEN` | Part B | `mcp_server` (Shortcut MCP) |
-| `HUBSPOT_API_KEY` | Part B | `repo` (assistants) |
-| `FIVETRAN_API_KEY` | Part B | `repo` (datagor) |
+| Var                       | Part A / Part B | Authorization(s)                     |
+| ------------------------- | --------------- | ------------------------------------ |
+| `ANTHROPIC_API_KEY`       | Part A          | moves to Agentic Tools → Claude Code |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Part A          | moves to Agentic Tools → Claude Code |
+| `OPENAI_API_KEY`          | Part A          | moves to Agentic Tools → Codex       |
+| `GITHUB_TOKEN`            | Part B          | `global`                             |
+| `GIT_AUTHOR_NAME`         | Part B          | `global`                             |
+| `GIT_AUTHOR_EMAIL`        | Part B          | `global`                             |
+| `AGOR_API_KEY`            | Part B          | `artifact_feature` (Artifacts)       |
+| `SHORTCUT_API_TOKEN`      | Part B          | `mcp_server` (Shortcut MCP)          |
+| `HUBSPOT_API_KEY`         | Part B          | `repo` (assistants)                  |
+| `FIVETRAN_API_KEY`        | Part B          | `repo` (datagor)                     |
 
 Session-scope isn't in the target state for this data (every var above has a more specific home), but it's in the scope enum and ships in **v0.5** (see below) as the UX proving ground before the richer scope values are wired.
 
@@ -186,12 +186,12 @@ The narrowing from `global-everywhere` to `specific-resource-only` is the meanin
 
 Following the existing taxonomy (dev / local / solo / team):
 
-| Mode | Default for new env vars | Migration from today's ambient behavior |
-|---|---|---|
-| dev | `global` (opt-out via UI) | Preserves today's UX. |
-| local | `global` | Same. Single-user workstation. |
-| solo | prompt on first save | User picks at save-time: global vs narrower. |
-| team | narrow-default | New vars denied until user authorizes a resource. Existing vars marked `global` with "confirm this is what you want" banner. |
+| Mode  | Default for new env vars  | Migration from today's ambient behavior                                                                                      |
+| ----- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| dev   | `global` (opt-out via UI) | Preserves today's UX.                                                                                                        |
+| local | `global`                  | Same. Single-user workstation.                                                                                               |
+| solo  | prompt on first save      | User picks at save-time: global vs narrower.                                                                                 |
+| team  | narrow-default            | New vars denied until user authorizes a resource. Existing vars marked `global` with "confirm this is what you want" banner. |
 
 Strict / compliance modes would additionally force tool-only or approval tiers for anything classified as secret. Not in v1 scope.
 
@@ -208,7 +208,7 @@ Smaller-than-v1 proving step that establishes the schema and UI pattern without 
    - session-scope env vars where a matching row exists in `session_env_selections` for this session.
 4. **UI — `User Settings → Env Vars`**: add scope dropdown (Global | Session) per row.
 5. **UI — session settings / spawn modal**: multi-select of the user's session-scoped env vars.
-6. **RBAC**: `session_env_selections` editable only by `session.created_by`, admin, superadmin. Worktree `all` tier does **not** grant this — session env vars are the owner's secret material, not shared worktree state.
+6. **RBAC**: `session_env_selections` editable only by `session.created_by`, admin, superadmin. Branch `all` tier does **not** grant this — session env vars are the owner's secret material, not shared branch state.
 7. **Behavior**: selection changes take effect on next spawn, not live.
 8. **Migration**: existing rows default to `'global'`; no user-visible disruption.
 9. **Tests**: scope resolution, RBAC enforcement, migration.
@@ -219,7 +219,7 @@ Beyond v0.5:
 
 1. **Part A — Agentic Tools credential homes** for Claude Code, Codex, Gemini, Copilot. Typed auth field per executor. Migration-detection prompt on existing env keys.
 2. **Part B — remaining scope values** (`repo`, `mcp_server`, `artifact_feature`, `executor`) wired into the resolver, with `resource_id` pickers in the UI.
-3. **Env resolution**: walks the full scope graph (user × worktree repo × in-scope MCPs × executor) at spawn time.
+3. **Env resolution**: walks the full scope graph (user × branch repo × in-scope MCPs × executor) at spawn time.
 4. **Consumer declaration hints** for MCP servers and Agor features so the UI offers sensible pickers.
 5. **UI**:
    - Per-var exposure row with scope + resource picker.
@@ -233,7 +233,7 @@ Explicitly **not in v1**:
 - WebAuthn / passkey / TOTP step-up for sensitive vars.
 - TTL / lease on grants (`extra_config.expires_at` present but unused).
 - Per-call scoping ("only `gh` can use `GITHUB_TOKEN`").
-- Worktree-level grants (ephemeral-object problem).
+- Branch-level grants (ephemeral-object problem).
 - Wildcards within a type ("any repo").
 - Remote-trigger-specific grant objects.
 - Revocation UI beyond "delete a grant row".
@@ -264,23 +264,23 @@ For the `mfa` tier where audit/compliance demands proof of human involvement, no
 
 ### Handle pattern / per-call scoping
 
-Beyond tool-mediated access — agent never even sees the wrapper-tool's env names, just opaque handles. Or: wrapper tools gate which *commands* can resolve which env vars ("`GITHUB_TOKEN` only inside `gh` / `git` / `curl`"). Both reduce exposure further but cost real UX and complexity. Not worth it until a specific threat warrants them.
+Beyond tool-mediated access — agent never even sees the wrapper-tool's env names, just opaque handles. Or: wrapper tools gate which _commands_ can resolve which env vars ("`GITHUB_TOKEN` only inside `gh` / `git` / `curl`"). Both reduce exposure further but cost real UX and complexity. Not worth it until a specific threat warrants them.
 
 ### TTL / leases
 
-The `expires_at` column is there for v2. "Grant `AWS_PROD_KEY` to this worktree for 30 minutes." Background sweeper deletes expired grants. UI shows ticking expiration.
+The `expires_at` column is there for v2. "Grant `AWS_PROD_KEY` to this branch for 30 minutes." Background sweeper deletes expired grants. UI shows ticking expiration.
 
 ### First-class audit objects
 
-Each access becomes a row in an `env_access_log` table, surfaced as a browsable timeline per worktree / per user / per var. Complements per-row grant state on `env_vars` with per-use events from the tool-only path.
+Each access becomes a row in an `env_access_log` table, surfaced as a browsable timeline per branch / per user / per var. Complements per-row grant state on `env_vars` with per-use events from the tool-only path.
 
-### Worktree-as-scope
+### Branch-as-scope
 
-If a user case appears for "just this one worktree", add it as a `scope` value with `resource_id` pointing at a worktree. Schema supports it trivially. Deferred because worktree ephemerality creates UX churn and today's data doesn't demand it.
+If a user case appears for "just this one branch", add it as a `scope` value with `resource_id` pointing at a branch. Schema supports it trivially. Deferred because branch ephemerality creates UX churn and today's data doesn't demand it.
 
 ### Executor-declared required env
 
-Formal registry: each executor publishes the env var names it *requires* to function vs. *accepts* optionally. Authorization UI auto-suggests. Prevents a Claude session from being spawned without a resolvable `ANTHROPIC_API_KEY` and producing a useless failure.
+Formal registry: each executor publishes the env var names it _requires_ to function vs. _accepts_ optionally. Authorization UI auto-suggests. Prevents a Claude session from being spawned without a resolvable `ANTHROPIC_API_KEY` and producing a useless failure.
 
 ---
 
@@ -296,8 +296,8 @@ Formal registry: each executor publishes the env var names it *requires* to func
 
 ## Why this is right as the v1 move
 
-- **Narrow the ambient default without breaking ergonomics.** The agent still does `gh`, `curl $GITHUB_TOKEN`, `terraform` naturally. Only the *set* of vars available to a given session shrinks.
-- **Honest about the threat model.** V1 doesn't pretend to defend against a prompt-injection agent that chooses to exfiltrate what it legitimately has. It defends against *breadth of exposure* — the fact that a doc-edit session has AWS creds available just because they were set globally.
+- **Narrow the ambient default without breaking ergonomics.** The agent still does `gh`, `curl $GITHUB_TOKEN`, `terraform` naturally. Only the _set_ of vars available to a given session shrinks.
+- **Honest about the threat model.** V1 doesn't pretend to defend against a prompt-injection agent that chooses to exfiltrate what it legitimately has. It defends against _breadth of exposure_ — the fact that a doc-edit session has AWS creds available just because they were set globally.
 - **Forward-compatible.** The authorization table, the consumer-declaration pattern, and the user-authorize-consumer model all survive intact when tool-only, approval, and MFA tiers get added.
 - **Small enough to ship.** Two weeks of work (Part A migration + schema + resolution logic + UI) rather than a multi-month identity rewrite.
 

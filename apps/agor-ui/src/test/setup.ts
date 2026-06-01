@@ -1,5 +1,20 @@
 import '@testing-library/jest-dom';
 
+// jsdom does not implement ResizeObserver, but antd Form/Input subscribe
+// to it via rc-resize-observer when rendering Form.Items. Stub it out so
+// component tests can mount antd Forms without throwing.
+if (
+  typeof globalThis !== 'undefined' &&
+  !(globalThis as { ResizeObserver?: unknown }).ResizeObserver
+) {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
+}
+
 // jsdom does not implement matchMedia, but antd's responsive helpers
 // (Grid, Modal, etc.) subscribe to it during layout effects. Stub it out
 // so component tests can render antd-based UI without throwing.

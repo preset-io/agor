@@ -5,7 +5,7 @@
  */
 
 /** Default Codex model */
-export const DEFAULT_CODEX_MODEL = 'gpt-5.4';
+export const DEFAULT_CODEX_MODEL = 'gpt-5.5';
 
 /** Codex Mini model (GPT-5-Codex-Mini for cost-effective usage) */
 export const CODEX_MINI_MODEL = 'gpt-5-codex-mini';
@@ -13,26 +13,37 @@ export const CODEX_MINI_MODEL = 'gpt-5-codex-mini';
 /**
  * Model metadata for UI display (single source of truth).
  *
- * Order matters — the UI dropdown renders models in this order,
- * and the first entry is used as the default for alias mode.
+ * Order matters — the UI dropdown renders models in this order.
  *
  * Uses `as const satisfies` to preserve literal key types for CodexModel.
  */
 const _CODEX_MODEL_METADATA = {
-  // GPT-5.5 models (newest — released 2026-04-23, codename "Spud")
+  // GPT-5.5 models (newest frontier model)
   'gpt-5.5': {
-    name: 'GPT-5.5',
+    name: 'GPT-5.5 (Recommended)',
     description:
-      "OpenAI's newest frontier model - complex coding, computer use, research. ChatGPT-auth only at launch; API access rolling out.",
+      "OpenAI's newest frontier model for complex coding, computer use, knowledge work, and research workflows in Codex.",
+  },
+  'gpt-5.5-pro': {
+    name: 'GPT-5.5 Pro',
+    description: 'Higher-compute GPT-5.5 variant for the toughest professional work',
   },
   // GPT-5.4 models
   'gpt-5.4': {
-    name: 'GPT-5.4 (Recommended)',
-    description: 'Most capable model - unified coding, reasoning, and computer use',
+    name: 'GPT-5.4',
+    description: 'Frontier model for professional work with strong coding and agentic workflows',
+  },
+  'gpt-5.4-pro': {
+    name: 'GPT-5.4 Pro',
+    description: 'Higher-compute GPT-5.4 variant for difficult reasoning tasks',
   },
   'gpt-5.4-mini': {
     name: 'GPT-5.4 Mini',
-    description: 'Smaller, faster GPT-5.4 variant',
+    description: 'Fast, efficient model for responsive coding tasks and subagents',
+  },
+  'gpt-5.4-nano': {
+    name: 'GPT-5.4 Nano',
+    description: 'Lowest-cost GPT-5.4-class model for simple high-volume tasks and subagents',
   },
   // GPT-5.3 models
   'gpt-5.3-codex': {
@@ -46,11 +57,11 @@ const _CODEX_MODEL_METADATA = {
   // GPT-5.2 models
   'gpt-5.2-codex': {
     name: 'GPT-5.2 Codex',
-    description: 'Advanced coding model optimized for agentic tasks - 400k context',
+    description: 'Deprecated coding model optimized for agentic tasks - 400k context',
   },
   'gpt-5.2': {
     name: 'GPT-5.2',
-    description: 'Best for complex tasks - 400k context, thinking mode',
+    description: 'Previous frontier model for complex tasks - 400k context, thinking mode',
   },
   'gpt-5.2-pro': {
     name: 'GPT-5.2 Pro',
@@ -63,15 +74,15 @@ const _CODEX_MODEL_METADATA = {
   // GPT-5.1 models
   'gpt-5.1-codex-max': {
     name: 'GPT-5.1 Codex Max',
-    description: 'Optimized for long-horizon agentic coding',
+    description: 'Deprecated model optimized for long-horizon agentic coding',
   },
   'gpt-5.1-codex': {
     name: 'GPT-5.1 Codex',
-    description: 'Optimized for agentic coding tasks',
+    description: 'Deprecated model optimized for agentic coding tasks',
   },
   'gpt-5.1-codex-mini': {
     name: 'GPT-5.1 Codex Mini',
-    description: 'Cost-effective variant with 4x more usage',
+    description: 'Deprecated cost-effective Codex variant',
   },
   'gpt-5.1': {
     name: 'GPT-5.1',
@@ -115,14 +126,17 @@ const DEFAULT_CODEX_CONTEXT_LIMIT = 200_000;
 
 /**
  * Approximate context window limits for Codex-compatible OpenAI models.
- * Values mirror OpenAI's public docs (Dec 2025) and fall back to 200k if unknown.
+ * Values mirror OpenAI's public docs (May 2026) and fall back to 200k if unknown.
  */
 export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
-  // GPT-5.5 models (400k context in Codex; 1M in API when GA)
-  'gpt-5.5': 400_000,
+  // GPT-5.5 models
+  'gpt-5.5': 1_050_000,
+  'gpt-5.5-pro': 1_050_000,
   // GPT-5.4 models
   'gpt-5.4': 1_050_000,
+  'gpt-5.4-pro': 1_050_000,
   'gpt-5.4-mini': 400_000,
+  'gpt-5.4-nano': 400_000,
   // GPT-5.3 models
   'gpt-5.3-codex': 400_000,
   'gpt-5.3-codex-spark': 128_000,
@@ -137,7 +151,7 @@ export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
   'gpt-5.1-codex-mini': 200_000,
   'gpt-5.1': 200_000,
   // GPT-5 models (legacy)
-  'gpt-5-codex': 200_000,
+  'gpt-5-codex': 400_000,
   'gpt-5-codex-mini': 200_000,
   'gpt-5': 200_000,
   // GPT-4o models

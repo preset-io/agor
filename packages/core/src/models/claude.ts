@@ -24,10 +24,17 @@ export interface ClaudeModel {
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
+    id: 'claude-opus-4-8',
+    displayName: 'Claude Opus 4.8',
+    family: 'claude-4',
+    description:
+      'Most capable model for complex reasoning, long-horizon agentic coding, and high-autonomy work',
+  },
+  {
     id: 'claude-opus-4-7',
     displayName: 'Claude Opus 4.7',
     family: 'claude-4',
-    description: 'Most intelligent model for agents and coding',
+    description: 'Previous generation Opus model for agents and coding',
   },
   {
     id: 'claude-opus-4-7[1m]',
@@ -93,7 +100,7 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
     id: 'claude-sonnet-4-0',
     displayName: 'Claude Sonnet 4.0',
     family: 'claude-4',
-    description: 'Legacy balanced model',
+    description: 'Deprecated legacy balanced model; prefer Sonnet 4.6',
   },
 ];
 

@@ -4,32 +4,32 @@
  * Handles parsing and resolution of repo references in three formats:
  * 1. Absolute path: /Users/max/code/agor
  * 2. Agor-managed slug: anthropics/agor
- * 3. Slug + worktree: anthropics/agor:feat-auth
+ * 3. Slug + branch: anthropics/agor:feat-auth
  */
 
-import type { RepoSlug, UUID, WorktreeName } from '../types';
+import type { BranchName, RepoSlug, UUID } from '../types';
 
 /**
  * Parsed repo reference
  */
 export interface RepoReference {
   /** Reference type */
-  type: 'path' | 'managed' | 'managed-worktree';
+  type: 'path' | 'managed' | 'managed-branch';
 
   /** Absolute path (for type='path') */
   path?: string;
 
-  /** Repository slug (for type='managed' or 'managed-worktree') */
+  /** Repository slug (for type='managed' or 'managed-branch') */
   slug?: RepoSlug;
 
-  /** Worktree name (for type='managed-worktree') */
-  worktree?: WorktreeName;
+  /** Branch name (for type='managed-branch') */
+  branch?: BranchName;
 }
 
 /**
  * Parse a repo reference string
  *
- * @param ref - Repo reference (path | slug | slug:worktree)
+ * @param ref - Repo reference (path | slug | slug:branch)
  * @returns Parsed reference
  *
  * @example
@@ -42,7 +42,7 @@ export interface RepoReference {
  *
  * @example
  * parseRepoReference('anthropics/agor:main')
- * // => { type: 'managed-worktree', slug: 'anthropics/agor', worktree: 'main' }
+ * // => { type: 'managed-branch', slug: 'anthropics/agor', branch: 'main' }
  */
 export function parseRepoReference(ref: string): RepoReference {
   // Check if it's an absolute path
@@ -50,10 +50,10 @@ export function parseRepoReference(ref: string): RepoReference {
     return { type: 'path', path: ref };
   }
 
-  // Check for worktree separator
+  // Check for branch separator
   if (ref.includes(':')) {
-    const [slug, worktree] = ref.split(':', 2);
-    return { type: 'managed-worktree', slug: slug as RepoSlug, worktree: worktree as WorktreeName };
+    const [slug, branch] = ref.split(':', 2);
+    return { type: 'managed-branch', slug: slug as RepoSlug, branch: branch as BranchName };
   }
 
   // Plain slug (Agor-managed)
@@ -178,9 +178,9 @@ export function isValidGitUrl(url: string): boolean {
 export async function resolveRepoReference(ref: string): Promise<{
   repo_id?: UUID;
   repo_slug?: RepoSlug;
-  worktree_name?: WorktreeName;
+  branch_name?: BranchName;
   cwd: string;
-  managed_worktree: boolean;
+  managed_branch: boolean;
 }> {
   // Parse the reference
   const parsed = parseRepoReference(ref);
@@ -189,7 +189,7 @@ export async function resolveRepoReference(ref: string): Promise<{
     // User-managed repo - use path directly
     return {
       cwd: parsed.path as string,
-      managed_worktree: false,
+      managed_branch: false,
     };
   }
 
@@ -205,7 +205,7 @@ export async function resolveRepoReference(ref: string): Promise<{
  * Format repo reference for display
  *
  * @param slug - Repository slug
- * @param worktreeName - Optional worktree name
+ * @param branchName - Optional branch name
  * @returns Formatted reference string
  *
  * @example
@@ -216,9 +216,9 @@ export async function resolveRepoReference(ref: string): Promise<{
  * formatRepoReference('anthropics/agor')
  * // => 'anthropics/agor'
  */
-export function formatRepoReference(slug: RepoSlug, worktreeName?: WorktreeName): string {
-  if (worktreeName) {
-    return `${slug}:${worktreeName}`;
+export function formatRepoReference(slug: RepoSlug, branchName?: BranchName): string {
+  if (branchName) {
+    return `${slug}:${branchName}`;
   }
   return slug;
 }

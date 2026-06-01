@@ -6,7 +6,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mapPermissionMode, mapToCodexPermissionConfig } from './permission-mode-mapper';
+import {
+  getDefaultCodexPermissionConfig,
+  mapPermissionMode,
+  mapToCodexPermissionConfig,
+} from './permission-mode-mapper';
 
 describe('mapPermissionMode', () => {
   describe('Claude Code', () => {
@@ -82,56 +86,78 @@ describe('mapPermissionMode', () => {
 });
 
 describe('mapToCodexPermissionConfig', () => {
-  it('maps ask mode to read-only + untrusted', () => {
-    const config = mapToCodexPermissionConfig('ask');
-    expect(config.sandboxMode).toBe('read-only');
-    expect(config.approvalPolicy).toBe('untrusted');
+  it('maps ask mode to read-only + untrusted + network off', () => {
+    expect(mapToCodexPermissionConfig('ask')).toEqual({
+      sandboxMode: 'read-only',
+      approvalPolicy: 'untrusted',
+      networkAccess: false,
+    });
   });
 
-  it('maps auto mode to workspace-write + on-request', () => {
-    const config = mapToCodexPermissionConfig('auto');
-    expect(config.sandboxMode).toBe('workspace-write');
-    expect(config.approvalPolicy).toBe('on-request');
+  it('maps auto mode to workspace-write + on-request + network off', () => {
+    expect(mapToCodexPermissionConfig('auto')).toEqual({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'on-request',
+      networkAccess: false,
+    });
   });
 
-  it('maps on-failure mode to workspace-write + on-failure', () => {
-    const config = mapToCodexPermissionConfig('on-failure');
-    expect(config.sandboxMode).toBe('workspace-write');
-    expect(config.approvalPolicy).toBe('on-failure');
+  it('maps on-failure mode to workspace-write + on-failure + network off', () => {
+    expect(mapToCodexPermissionConfig('on-failure')).toEqual({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'on-failure',
+      networkAccess: false,
+    });
   });
 
-  it('maps allow-all mode to workspace-write + never', () => {
-    const config = mapToCodexPermissionConfig('allow-all');
-    expect(config.sandboxMode).toBe('workspace-write');
-    expect(config.approvalPolicy).toBe('never');
+  it('maps allow-all mode to workspace-write + never + network on', () => {
+    // The only "sandbox is the defense" mode that gets network on by default.
+    expect(mapToCodexPermissionConfig('allow-all')).toEqual({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+      networkAccess: true,
+    });
   });
 
   it('maps Claude modes through conversion', () => {
-    // default → ask → read-only + untrusted
-    const defaultConfig = mapToCodexPermissionConfig('default');
-    expect(defaultConfig.sandboxMode).toBe('read-only');
-    expect(defaultConfig.approvalPolicy).toBe('untrusted');
-
-    // acceptEdits → auto → workspace-write + on-request
-    const acceptEditsConfig = mapToCodexPermissionConfig('acceptEdits');
-    expect(acceptEditsConfig.sandboxMode).toBe('workspace-write');
-    expect(acceptEditsConfig.approvalPolicy).toBe('on-request');
-
-    // bypassPermissions → allow-all → workspace-write + never
-    const bypassConfig = mapToCodexPermissionConfig('bypassPermissions');
-    expect(bypassConfig.sandboxMode).toBe('workspace-write');
-    expect(bypassConfig.approvalPolicy).toBe('never');
+    expect(mapToCodexPermissionConfig('default')).toEqual({
+      sandboxMode: 'read-only',
+      approvalPolicy: 'untrusted',
+      networkAccess: false,
+    });
+    expect(mapToCodexPermissionConfig('acceptEdits')).toEqual({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'on-request',
+      networkAccess: false,
+    });
+    expect(mapToCodexPermissionConfig('bypassPermissions')).toEqual({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+      networkAccess: true,
+    });
   });
 
   it('maps Gemini modes through conversion', () => {
-    // autoEdit → auto → workspace-write + on-request
-    const autoEditConfig = mapToCodexPermissionConfig('autoEdit');
-    expect(autoEditConfig.sandboxMode).toBe('workspace-write');
-    expect(autoEditConfig.approvalPolicy).toBe('on-request');
+    expect(mapToCodexPermissionConfig('autoEdit')).toEqual({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'on-request',
+      networkAccess: false,
+    });
+    expect(mapToCodexPermissionConfig('yolo')).toEqual({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+      networkAccess: true,
+    });
+  });
+});
 
-    // yolo → allow-all → workspace-write + never
-    const yoloConfig = mapToCodexPermissionConfig('yolo');
-    expect(yoloConfig.sandboxMode).toBe('workspace-write');
-    expect(yoloConfig.approvalPolicy).toBe('never');
+describe('getDefaultCodexPermissionConfig', () => {
+  it('returns the codex sub-config for the system default mode', () => {
+    // System default is currently 'allow-all' — should track that source of truth.
+    expect(getDefaultCodexPermissionConfig()).toEqual({
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'never',
+      networkAccess: true,
+    });
   });
 });

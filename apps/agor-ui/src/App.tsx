@@ -1,6 +1,9 @@
 import type {
   Artifact,
+  AuthCheckResult,
   Board,
+  BoardID,
+  Branch,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -11,23 +14,30 @@ import type {
   Session,
   SessionID,
   SpawnConfig,
-  UpdateMCPServerInput,
   UpdateUserInput,
   User,
   UUID,
-  Worktree,
 } from '@agor-live/client';
-import { getRepoReferenceOptions } from '@agor-live/client';
+import {
+  boardPath,
+  ENTITY_PATH_SEGMENTS,
+  getRepoReferenceOptions,
+  sessionPath,
+  UI_MOUNT_PATH,
+} from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import { App as AgorApp } from './components/App';
+import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
+import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
+import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { OnboardingWizard } from './components/OnboardingWizard';
-import type { WorktreeUpdate } from './components/WorktreeModal/tabs/GeneralTab';
+import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
@@ -37,6 +47,7 @@ import {
   useAuth,
   useAuthConfig,
   useBoardActions,
+  useInitialLoaderPhase,
   useServerVersion,
   useSessionActions,
 } from './hooks';
@@ -117,9 +128,10 @@ function AppContent() {
     reAuthenticate,
   } = useAuth();
 
-  // Call ALL hooks unconditionally BEFORE any conditional returns
-  // Connect to daemon with authentication token
-  // If auth not required and anonymous allowed, connect without token
+  // Call ALL hooks unconditionally BEFORE any conditional returns.
+  // Connect to daemon with authentication token (auth is always required —
+  // anonymous mode was removed; the LoginPage gate below blocks rendering
+  // until we have a token).
   const {
     client,
     connected,
@@ -128,7 +140,6 @@ function AppContent() {
     retryConnection,
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
-    allowAnonymous: authConfig?.allowAnonymous ?? false,
   });
 
   // Track FE/BE drift: capture the daemon's build SHA on first load (via
@@ -138,27 +149,32 @@ function AppContent() {
   // rows). Mounted exactly once so all consumers share the same baseline.
   const { capturedSha, currentSha, outOfSync } = useServerVersion(client);
 
-  // Fetch data (only when connected and authenticated)
-  // Skip data fetch if user needs to change password - the ForcePasswordChangeModal will handle that
+  // Pass the stable client lifetime, not `connected ? client : null`:
+  // useAgorData owns reconnect refetches and `null` is reserved for logout /
+  // token removal. See the reset-effect comment in useAgorData.ts for the full
+  // failure chain we're avoiding.
+  // Skip data fetch if user needs to change password — the ForcePasswordChangeModal handles that.
   const {
     sessionById,
-    sessionsByWorktree,
+    sessionsByBranch,
     boardById,
     boardObjectById,
     commentById,
     cardById,
     cardTypeById,
     repoById,
-    worktreeById,
+    branchById,
     userById,
     mcpServerById,
     gatewayChannelById,
     artifactById,
     sessionMcpServerIds,
     userAuthenticatedMcpServerIds,
+    initialLoadItems,
+    initialLoadComplete,
     loading,
     error: dataError,
-  } = useAgorData(connected ? client : null, {
+  } = useAgorData(client, {
     enabled: !user?.must_change_password,
   });
 
@@ -173,7 +189,7 @@ function AppContent() {
   // Onboarding state (for new users)
   const [settingsTabToOpen, setSettingsTabToOpen] = useState<string | null>(null);
   const [openUserSettings, setOpenUserSettings] = useState(false);
-  const [openNewWorktree, setOpenNewWorktree] = useState(false);
+  const [openNewBranch, setOpenNewBranch] = useState(false);
 
   // Detect GitHub App setup callback URL and auto-open gateway settings
   const location = useLocation();
@@ -193,17 +209,39 @@ function AppContent() {
   // This prevents UI from unmounting during reconnections
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
-  // Mark as loaded once we have data
+  // Mark as loaded once the initial fetch completes (regardless of whether the
+  // workspace is empty — checking map sizes failed for fresh instances with no
+  // sessions/boards/repos yet).
   useEffect(() => {
-    if (!loading && (sessionById.size > 0 || boardById.size > 0 || repoById.size > 0)) {
+    if (!loading && !dataError && initialLoadComplete) {
       setHasLoadedOnce(true);
     }
-  }, [loading, sessionById.size, boardById.size, repoById.size]);
+  }, [loading, initialLoadComplete, dataError]);
+
+  const mustChangePassword = !!user?.must_change_password;
+  const loaderPhase = useInitialLoaderPhase({
+    connecting,
+    loading,
+    dataError,
+    mustChangePassword,
+    initialLoadComplete,
+  });
 
   // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
   // Fall back to user from auth if users Map hasn't loaded yet
   const currentUser = user ? userById.get(user.user_id) || user : null;
+
+  // Keep the global ErrorBoundary's crash context populated so a render
+  // crash anywhere below us can produce a useful report (build SHA + signed-in
+  // user). The boundary is a class component that lives ABOVE this tree, so
+  // it can't read hooks — a module-level setter is the bridge.
+  useEffect(() => {
+    setCrashContext({
+      buildSha: capturedSha,
+      userEmail: currentUser?.email ?? null,
+    });
+  }, [capturedSha, currentUser?.email]);
 
   // Onboarding wizard state
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
@@ -223,7 +261,7 @@ function AppContent() {
 
   // Handle wizard completion
   const handleOnboardingComplete = async (result: {
-    worktreeId: string;
+    branchId: string;
     sessionId: string;
     boardId: string;
     path: 'assistant' | 'own-repo';
@@ -232,19 +270,24 @@ function AppContent() {
 
     if (!currentUser) return;
 
-    // Mark onboarding complete and store result in preferences
-    handleUpdateUser(currentUser.user_id, {
-      onboarding_completed: true,
-      preferences: {
-        ...currentUser.preferences,
-        mainBoardId: result.boardId || currentUser.preferences?.mainBoardId,
-        onboarding: {
-          path: result.path,
-          worktreeId: result.worktreeId,
-          boardId: result.boardId,
+    // Silent + fire-and-forget: wizard closing + navigation is the confirmation here.
+    // Non-critical — if the preference save fails the wizard just re-opens on next login.
+    handleUpdateUser(
+      currentUser.user_id,
+      {
+        onboarding_completed: true,
+        preferences: {
+          ...currentUser.preferences,
+          mainBoardId: result.boardId || currentUser.preferences?.mainBoardId,
+          onboarding: {
+            path: result.path,
+            branchId: result.branchId,
+            boardId: result.boardId,
+          },
         },
       },
-    });
+      { silent: true }
+    ).catch(() => {});
 
     // Clear the assistant pending flag if applicable
     if (result.path === 'assistant' && client) {
@@ -255,11 +298,15 @@ function AppContent() {
       }
     }
 
-    // Navigate to the user's board + session
-    if (result.boardId && result.sessionId) {
-      navigate(`/b/${result.boardId}/${result.sessionId}/`);
+    // Navigate to the user's board + session, or to the boards list if they
+    // skipped. Use the centralized path builders — the old
+    // `/b/<board>/<session>/` shape was removed when we flattened entity URLs.
+    if (result.sessionId) {
+      navigate(sessionPath(result.sessionId as SessionID));
     } else if (result.boardId) {
-      navigate(`/b/${result.boardId}/`);
+      navigate(boardPath(result.boardId as BoardID, boardById.get(result.boardId)?.slug));
+    } else {
+      navigate('/');
     }
   };
 
@@ -314,19 +361,30 @@ function AppContent() {
     );
   }
 
-  // Show login page if auth is required and not authenticated
-  // BUT: Show a reconnecting message if we have tokens but aren't connected yet
+  // Auth is always required (anonymous mode was removed). Show login page
+  // when not authenticated; reconnecting state when we have tokens but the
+  // socket is reconnecting; spinner while authenticating.
   const hasTokens =
     typeof window !== 'undefined' &&
     !!(localStorage.getItem('agor-access-token') || localStorage.getItem('agor-refresh-token'));
 
-  if (authConfig?.requireAuth && !authLoading && !authenticated && !hasTokens) {
-    return <LoginPage onLogin={login} error={authError} />;
+  if (!authLoading && !authenticated && !hasTokens) {
+    return (
+      <LoginPage
+        onLogin={login}
+        error={authError}
+        externalLaunchLoginRedirectUrl={
+          authConfig?.externalLaunch?.enabled
+            ? authConfig.externalLaunch.loginRedirectUrl
+            : undefined
+        }
+      />
+    );
   }
 
-  // Show reconnecting state if we have tokens but lost connection
-  // ONLY show fullscreen on initial connection, not during reconnections
-  if (authConfig?.requireAuth && hasTokens && (!connected || !authenticated) && !hasLoadedOnce) {
+  // Show reconnecting state if we have tokens but lost connection.
+  // ONLY show fullscreen on initial connection, not during reconnections.
+  if (hasTokens && (!connected || !authenticated) && !hasLoadedOnce) {
     return (
       <div
         style={{
@@ -346,8 +404,8 @@ function AppContent() {
     );
   }
 
-  // Show loading while checking authentication (only if auth is required)
-  if (authConfig?.requireAuth && authLoading) {
+  // Show loading while checking authentication
+  if (authLoading) {
     return (
       <div
         style={{
@@ -366,15 +424,7 @@ function AppContent() {
   }
 
   // Show connection error
-  // BUT: If auth is required and anonymous auth failed, show login page instead
   if (connectionError) {
-    const isAnonymousAuthError = connectionError.includes('Anonymous authentication failed');
-
-    if (authConfig?.requireAuth && isAnonymousAuthError && !authenticated) {
-      // Anonymous auth failed but auth is required - show login page
-      return <LoginPage onLogin={login} error={authError || connectionError} />;
-    }
-
     return (
       <div
         style={{
@@ -404,23 +454,9 @@ function AppContent() {
 
   // Show loading state ONLY on initial load, not during reconnections
   // Once data is loaded, keep UI mounted and show connection status in header instead
-  if ((connecting || loading) && !hasLoadedOnce) {
+  if (loaderPhase !== 'done') {
     return (
-      <div
-        style={{
-          height: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: token.colorBgLayout,
-        }}
-      >
-        <Spin size="large" />
-        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>
-          Connecting to daemon...
-        </div>
-      </div>
+      <InitialLoadingScreen phase={loaderPhase} connecting={connecting} items={initialLoadItems} />
     );
   }
 
@@ -445,16 +481,16 @@ function AppContent() {
   // biome-ignore lint/suspicious/noExplicitAny: Config type from AgorApp component props
   const handleCreateSession = async (config: any, boardId: string) => {
     try {
-      const worktree_id = config.worktree_id;
+      const branch_id = config.branch_id;
 
-      if (!worktree_id) {
-        throw new Error('Worktree ID is required to create a session');
+      if (!branch_id) {
+        throw new Error('Branch ID is required to create a session');
       }
 
-      // Create the session with the worktree_id
+      // Create the session with the branch_id
       const session = await createSession({
         ...config,
-        worktree_id,
+        branch_id,
       });
 
       if (session) {
@@ -630,15 +666,25 @@ function AppContent() {
     }
   };
 
-  // Handle update user
-  const handleUpdateUser = async (userId: string, updates: UpdateUserInput) => {
+  const handleUpdateUser = async (
+    userId: string,
+    updates: UpdateUserInput,
+    options: { silent?: boolean } = {}
+  ) => {
     if (!client) return;
     try {
       // Cast UpdateUserInput to Partial<User> - backend handles encryption/conversion
       await client.service('users').patch(userId, updates as Partial<User>);
-      showSuccess('User updated successfully!');
+      if (!options.silent) {
+        showSuccess('User updated successfully!');
+      }
     } catch (error) {
-      showError(`Failed to update user: ${error instanceof Error ? error.message : String(error)}`);
+      if (!options.silent) {
+        showError(
+          `Failed to update user: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      throw error;
     }
   };
 
@@ -665,16 +711,18 @@ function AppContent() {
   };
 
   // Handle board CRUD
-  const handleCreateBoard = async (board: Partial<Board>) => {
+  const handleCreateBoard = async (board: Partial<Board>): Promise<Board | null> => {
     if (board.board_id) {
-      // Board already exists (clone/import already persisted it)
-      return;
+      // Board already exists (clone/import already persisted it) — return
+      // the prebuilt row so callers can navigate to it without re-creating.
+      return board as Board;
     }
 
     const created = await createBoard(board);
     if (created) {
       showSuccess('Board created successfully!');
     }
+    return created;
   };
 
   const handleUpdateBoard = async (boardId: string, updates: Partial<Board>) => {
@@ -712,10 +760,13 @@ function AppContent() {
       return;
     }
 
-    // POST /repos/clone returns { status: 'pending' } immediately; the actual
-    // clone runs asynchronously in the executor. Show a persistent loading
-    // toast and wire one-shot listeners to resolve it on success or failure,
-    // with a safety timeout so the toast doesn't linger if events get lost.
+    // POST /repos/clone returns `{ status: 'pending', repo_id }` immediately;
+    // the daemon pre-creates the repo row with `clone_status: 'cloning'` and
+    // the executor patches it to `'ready'`/`'failed'`. Listen for `patched`
+    // (the durable outcome) — `created` only fires for the placeholder now,
+    // unless the row is a legacy `create_local` (no `clone_status`).
+    // `repo:cloneError` is kept as a belt-and-suspenders fallback so older
+    // executors that don't patch still surface failures.
     const toastKey = `clone-repo-${data.slug}`;
     const CLONE_TIMEOUT_MS = 120_000;
     showLoading(`Cloning ${data.slug}...`, { key: toastKey });
@@ -725,14 +776,41 @@ function AppContent() {
 
     const cleanup = () => {
       reposService.removeListener('created', handleCreated);
+      reposService.removeListener('patched', handlePatched);
       client.io.off('repo:cloneError', handleCloneError);
       clearTimeout(timeoutHandle);
     };
     const handleCreated = (repo: Repo) => {
       if (settled || repo.slug !== data.slug) return;
+      // Skip the `'cloning'` placeholder — `handlePatched` will declare the
+      // outcome once the executor finishes. `undefined` covers legacy rows
+      // and any direct executor-path that bypasses the placeholder.
+      if (repo.clone_status === 'cloning') return;
       settled = true;
       showSuccess(`Cloned ${data.slug}`, { key: toastKey });
       cleanup();
+    };
+    const handlePatched = (repo: Repo) => {
+      if (settled || repo.slug !== data.slug) return;
+      if (repo.clone_status === 'ready') {
+        settled = true;
+        showSuccess(`Cloned ${data.slug}`, { key: toastKey });
+        cleanup();
+      } else if (repo.clone_status === 'failed') {
+        settled = true;
+        const err = repo.clone_error;
+        // Authoring-failed clones almost always mean the user has no
+        // `GITHUB_TOKEN` configured (or it expired). Surface that hint
+        // alongside the raw git message so the recovery path is one click.
+        const hint =
+          err?.category === 'auth_failed'
+            ? ' — configure GITHUB_TOKEN in Settings → API Keys for private repos'
+            : '';
+        showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
+          key: toastKey,
+        });
+        cleanup();
+      }
     };
     const handleCloneError = (payload: { slug?: string; url?: string; error?: string }) => {
       if (settled) return;
@@ -753,14 +831,15 @@ function AppContent() {
     }, CLONE_TIMEOUT_MS);
 
     reposService.on('created', handleCreated);
+    reposService.on('patched', handlePatched);
     client.io.on('repo:cloneError', handleCloneError);
 
     try {
-      const result = (await client.service('repos/clone').create({
+      const result = await client.service('repos/clone').create({
         url: data.url,
         slug: data.slug,
         default_branch: data.default_branch,
-      })) as { status?: 'pending' | 'exists'; slug?: string };
+      });
 
       // Daemon short-circuits with `status: 'exists'` when a repo with this
       // slug is already registered — no `repos.created` event will fire, so
@@ -802,6 +881,7 @@ function AppContent() {
         `Failed to add local repository: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'add-local-repo' }
       );
+      throw error;
     }
   };
 
@@ -846,8 +926,8 @@ function AppContent() {
     }
   };
 
-  const handleArchiveOrDeleteWorktree = async (
-    worktreeId: string,
+  const handleArchiveOrDeleteBranch = async (
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
@@ -858,53 +938,56 @@ function AppContent() {
     }
     try {
       const action = options.metadataAction === 'archive' ? 'archived' : 'deleted';
-      showLoading(
-        `${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} worktree...`,
-        { key: 'archive-delete' }
-      );
-      await client.service(`worktrees/${worktreeId}/archive-or-delete`).create(options);
-      showSuccess(`Worktree ${action} successfully!`, { key: 'archive-delete' });
+      showLoading(`${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} branch...`, {
+        key: 'archive-delete',
+      });
+      await client.service(`branches/${branchId}/archive-or-delete`).create(options);
+      showSuccess(`Branch ${action} successfully!`, { key: 'archive-delete' });
     } catch (error) {
       showError(
-        `Failed to ${options.metadataAction} worktree: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to ${options.metadataAction} branch: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'archive-delete' }
       );
       throw error;
     }
   };
 
-  const handleUnarchiveWorktree = async (worktreeId: string, options?: { boardId?: string }) => {
+  const handleUnarchiveBranch = async (branchId: string, options?: { boardId?: string }) => {
     if (!client) {
       throw new Error('Not connected to daemon');
     }
     try {
-      showLoading('Unarchiving worktree...', { key: 'unarchive' });
-      await client.service(`worktrees/${worktreeId}/unarchive`).create(options || {});
-      showSuccess('Worktree unarchived successfully!', { key: 'unarchive' });
+      showLoading('Unarchiving branch...', { key: 'unarchive' });
+      await client.service(`branches/${branchId}/unarchive`).create(options || {});
+      showSuccess('Branch unarchived successfully!', { key: 'unarchive' });
     } catch (error) {
       showError(
-        `Failed to unarchive worktree: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to unarchive branch: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'unarchive' }
       );
       throw error;
     }
   };
 
-  const handleUpdateWorktree = async (worktreeId: string, updates: WorktreeUpdate) => {
+  const handleUpdateBranch = async (
+    branchId: string,
+    updates: BranchUpdate,
+    options: { silent?: boolean } = {}
+  ) => {
     if (!client) return;
     try {
-      // Cast to Partial<Worktree> to satisfy Feathers type checking
+      // Cast to Partial<Branch> to satisfy Feathers type checking
       // The backend MCP handler properly handles null values for clearing fields
-      await client.service('worktrees').patch(worktreeId, updates as Partial<Worktree>);
-      showSuccess('Worktree updated successfully!');
+      await client.service('branches').patch(branchId, updates as Partial<Branch>);
+      if (!options.silent) showSuccess('Branch updated successfully!');
     } catch (error) {
       showError(
-        `Failed to update worktree: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to update branch: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
 
-  const handleCreateWorktree = async (
+  const handleCreateBranch = async (
     repoId: string,
     data: {
       name: string;
@@ -916,14 +999,18 @@ function AppContent() {
       issue_url?: string;
       pull_request_url?: string;
       boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
       position?: { x: number; y: number };
+      storage_mode?: 'worktree' | 'clone';
+      clone_depth?: number;
     }
-  ): Promise<Worktree | null> => {
+  ): Promise<Branch | null> => {
     if (!client) return null;
     try {
-      showLoading('Creating worktree...', { key: 'create-worktree' });
+      showLoading('Creating branch...', { key: 'create-branch' });
 
-      const worktree = (await client.service(`repos/${repoId}/worktrees`).create({
+      const branch = (await client.service(`repos/${repoId}/branches`).create({
         name: data.name,
         ref: data.ref,
         refType: data.refType,
@@ -933,27 +1020,31 @@ function AppContent() {
         issue_url: data.issue_url,
         pull_request_url: data.pull_request_url,
         boardId: data.boardId, // Optional: add to board
+        custom_context: data.custom_context,
+        notes: data.notes,
         position: data.position, // Optional: position on board (defaults to center of viewport)
-      })) as Worktree;
+        storage_mode: data.storage_mode,
+        clone_depth: data.clone_depth,
+      })) as Branch;
 
-      // Dismiss loading message - worktree will appear on board via WebSocket broadcast
-      destroy('create-worktree');
-      return worktree;
+      // Dismiss loading message - branch will appear on board via WebSocket broadcast
+      destroy('create-branch');
+      return branch;
     } catch (error) {
       showError(
-        `Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
-        { key: 'create-worktree' }
+        `Failed to create branch: ${error instanceof Error ? error.message : String(error)}`,
+        { key: 'create-branch' }
       );
       return null;
     }
   };
 
   // Handle environment control
-  const handleStartEnvironment = async (worktreeId: string) => {
+  const handleStartEnvironment = async (branchId: string) => {
     if (!client) return;
     try {
       showLoading('Starting environment...', { key: 'start-env' });
-      await client.service(`worktrees/${worktreeId}/start`).create({});
+      await client.service(`branches/${branchId}/start`).create({});
       showSuccess('Environment started successfully!', { key: 'start-env' });
     } catch (error) {
       showError(
@@ -963,11 +1054,11 @@ function AppContent() {
     }
   };
 
-  const handleStopEnvironment = async (worktreeId: string) => {
+  const handleStopEnvironment = async (branchId: string) => {
     if (!client) return;
     try {
       showLoading('Stopping environment...', { key: 'stop-env' });
-      await client.service(`worktrees/${worktreeId}/stop`).create({});
+      await client.service(`branches/${branchId}/stop`).create({});
       showSuccess('Environment stopped successfully!', { key: 'stop-env' });
     } catch (error) {
       showError(
@@ -977,11 +1068,11 @@ function AppContent() {
     }
   };
 
-  const handleNukeEnvironment = async (worktreeId: string) => {
+  const handleNukeEnvironment = async (branchId: string) => {
     if (!client) return;
     try {
       showLoading('Nuking environment...', { key: 'nuke-env' });
-      await client.service(`worktrees/${worktreeId}/nuke`).create({});
+      await client.service(`branches/${branchId}/nuke`).create({});
       showSuccess('Environment nuked successfully!', { key: 'nuke-env' });
     } catch (error) {
       showError(
@@ -991,14 +1082,14 @@ function AppContent() {
     }
   };
 
-  // Manually trigger a scheduled run for a worktree (execute-now).
+  // Manually trigger a scheduled run for a branch (execute-now).
   // Reuses the scheduler's spawn path server-side so the session is a
   // first-class scheduled session, just with triggered_manually=true.
-  const handleExecuteScheduleNow = async (worktreeId: string) => {
+  const handleExecuteScheduleNow = async (branchId: string) => {
     if (!client) return;
     try {
       showLoading('Starting scheduled run...', { key: 'execute-now' });
-      await client.service(`worktrees/${worktreeId}/execute-schedule-now`).create({});
+      await client.service(`branches/${branchId}/execute-schedule-now`).create({});
       showSuccess('Scheduled run started!', { key: 'execute-now' });
     } catch (error) {
       // Surface 409 (schedule_busy) and 400 (schedule_disabled/incomplete)
@@ -1018,18 +1109,6 @@ function AppContent() {
     } catch (error) {
       showError(
         `Failed to add MCP server: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  };
-
-  const handleUpdateMCPServer = async (serverId: string, updates: UpdateMCPServerInput) => {
-    if (!client) return;
-    try {
-      await client.service('mcp-servers').patch(serverId, updates);
-      showSuccess('MCP server updated successfully!');
-    } catch (error) {
-      showError(
-        `Failed to update MCP server: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
@@ -1167,7 +1246,7 @@ function AppContent() {
     try {
       await client.service('board-comments').create({
         board_id: boardId,
-        created_by: user?.user_id || 'anonymous',
+        created_by: user?.user_id || 'unknown',
         content,
         content_preview: content.slice(0, 200),
       });
@@ -1210,7 +1289,7 @@ function AppContent() {
       // Use the custom route for creating replies
       await client.service(`board-comments/${parentId}/reply`).create({
         content,
-        created_by: user?.user_id || 'anonymous',
+        created_by: user?.user_id || 'unknown',
       });
     } catch (error) {
       showError(`Failed to send reply: ${error instanceof Error ? error.message : String(error)}`);
@@ -1222,7 +1301,7 @@ function AppContent() {
     try {
       // Use the custom route for toggling reactions
       await client.service(`board-comments/${commentId}/toggle-reaction`).create({
-        user_id: user?.user_id || 'anonymous',
+        user_id: user?.user_id || 'unknown',
         emoji,
       });
     } catch (error) {
@@ -1235,9 +1314,9 @@ function AppContent() {
   // Generate repo reference options for dropdowns
   const allOptions = getRepoReferenceOptions(
     Array.from(repoById.values()),
-    Array.from(worktreeById.values())
+    Array.from(branchById.values())
   );
-  const _worktreeOptions = allOptions.filter((opt) => opt.type === 'managed-worktree');
+  const _branchOptions = allOptions.filter((opt) => opt.type === 'managed-branch');
   const _repoOptions = allOptions.filter((opt) => opt.type === 'managed');
 
   // Modal close handlers
@@ -1249,9 +1328,93 @@ function AppContent() {
     setOpenUserSettings(false);
   };
 
-  const handleNewWorktreeModalClose = () => {
-    setOpenNewWorktree(false);
+  const handleNewBranchModalClose = () => {
+    setOpenNewBranch(false);
   };
+
+  // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
+  // AgorApp — the multiple routes exist so react-router's useParams
+  // (read inside useUrlState) populates the right named params for
+  // each URL shape (board / session / branch / artifact). Extract
+  // the element once instead of duplicating the (long) prop list.
+  const desktopAppElement = (
+    <AgorApp
+      client={client}
+      user={currentUser}
+      connected={connected}
+      connecting={connecting}
+      sessionById={sessionById}
+      sessionsByBranch={sessionsByBranch}
+      availableAgents={AVAILABLE_AGENTS}
+      boardById={boardById}
+      boardObjectById={boardObjectById}
+      commentById={commentById}
+      cardById={cardById}
+      cardTypeById={cardTypeById}
+      repoById={repoById}
+      branchById={branchById}
+      userById={userById}
+      mcpServerById={mcpServerById}
+      sessionMcpServerIds={sessionMcpServerIds}
+      userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
+      initialBoardId={Array.from(boardById.values())[0]?.board_id}
+      openSettingsTab={settingsTabToOpen}
+      onSettingsClose={handleSettingsClose}
+      openUserSettings={openUserSettings}
+      onUserSettingsClose={handleUserSettingsClose}
+      openNewBranchModal={openNewBranch}
+      onNewBranchModalClose={handleNewBranchModalClose}
+      suppressLeftPanel={onboardingWizardOpen}
+      onCreateSession={handleCreateSession}
+      onForkSession={handleForkSession}
+      onBtwForkSession={handleBtwForkSession}
+      onSpawnSession={handleSpawnSession}
+      onSendPrompt={handleSendPrompt}
+      onUpdateSession={handleUpdateSession}
+      onDeleteSession={handleDeleteSession}
+      onCreateBoard={handleCreateBoard}
+      onUpdateBoard={handleUpdateBoard}
+      onDeleteBoard={handleDeleteBoard}
+      onArchiveBoard={handleArchiveBoard}
+      onUnarchiveBoard={handleUnarchiveBoard}
+      onCreateRepo={handleCreateRepo}
+      onCreateLocalRepo={handleCreateLocalRepo}
+      onUpdateRepo={handleUpdateRepo}
+      onDeleteRepo={handleDeleteRepo}
+      onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
+      onUnarchiveBranch={handleUnarchiveBranch}
+      onUpdateBranch={handleUpdateBranch}
+      onCreateBranch={handleCreateBranch}
+      onStartEnvironment={handleStartEnvironment}
+      onStopEnvironment={handleStopEnvironment}
+      onNukeEnvironment={handleNukeEnvironment}
+      onExecuteScheduleNow={handleExecuteScheduleNow}
+      onCreateUser={handleCreateUser}
+      onUpdateUser={handleUpdateUser}
+      onDeleteUser={handleDeleteUser}
+      onCreateMCPServer={handleCreateMCPServer}
+      onDeleteMCPServer={handleDeleteMCPServer}
+      gatewayChannelById={gatewayChannelById}
+      onCreateGatewayChannel={handleCreateGatewayChannel}
+      onUpdateGatewayChannel={handleUpdateGatewayChannel}
+      onDeleteGatewayChannel={handleDeleteGatewayChannel}
+      artifactById={artifactById}
+      onUpdateArtifact={handleUpdateArtifact}
+      onDeleteArtifact={handleDeleteArtifact}
+      onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
+      onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
+      onSendComment={handleSendComment}
+      onReplyComment={handleReplyComment}
+      onResolveComment={handleResolveComment}
+      onToggleReaction={handleToggleReaction}
+      onDeleteComment={handleDeleteComment}
+      onLogout={logout}
+      onRetryConnection={retryConnection}
+      instanceLabel={instanceConfig?.label}
+      instanceDescription={instanceConfig?.description}
+      webTerminalEnabled={featuresConfig?.webTerminal === true}
+    />
+  );
 
   // Render main app
   return (
@@ -1265,26 +1428,48 @@ function AppContent() {
           onLogout={logout}
         />
 
-        {/* Onboarding Wizard - shown for new users */}
+        {/* Onboarding Wizard - shown for new users.
+            Key by user identity so the wizard's local React state (currentStep,
+            resumedRef, createdRepoId, etc.) is bound to the signed-in user.
+            On any user change (logout → login as someone else, or admin
+            impersonate), React tears down + remounts the wizard with fresh
+            state, eliminating any chance of one user's onboarding progress
+            leaking into another user's session. */}
         <OnboardingWizard
+          key={currentUser?.user_id ?? '__anon__'}
           open={onboardingWizardOpen}
           onComplete={handleOnboardingComplete}
           repoById={repoById}
-          worktreeById={worktreeById}
+          branchById={branchById}
           boardById={boardById}
           user={currentUser}
           client={client}
           onCreateRepo={handleCreateRepo}
           onCreateLocalRepo={handleCreateLocalRepo}
-          onCreateWorktree={handleCreateWorktree}
+          onCreateBranch={handleCreateBranch}
           onCreateSession={handleCreateSession}
-          onUpdateUser={handleUpdateUser}
-          onUpdateWorktree={handleUpdateWorktree}
+          onUpdateUser={(userId, updates) => handleUpdateUser(userId, updates, { silent: true })}
+          onUpdateBranch={(branchId, updates) =>
+            handleUpdateBranch(branchId, updates, { silent: true })
+          }
+          onCheckAuth={async (tool, apiKey) => {
+            if (!client) return { authenticated: false, method: 'none' as const };
+            try {
+              return (await client
+                .service('check-auth')
+                .create({ tool, apiKey })) as AuthCheckResult;
+            } catch {
+              return {
+                authenticated: false,
+                method: 'none' as const,
+                hint: 'Connection check failed.',
+              };
+            }
+          }}
           assistantPending={
             onboardingConfig?.assistantPending ?? onboardingConfig?.persistedAgentPending
           }
           frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
-          systemCredentials={onboardingConfig?.systemCredentials}
         />
 
         <DeviceRouter />
@@ -1300,11 +1485,11 @@ function AppContent() {
                 client={client}
                 user={user}
                 sessionById={sessionById}
-                sessionsByWorktree={sessionsByWorktree}
+                sessionsByBranch={sessionsByBranch}
                 boardById={boardById}
                 commentById={commentById}
                 repoById={repoById}
-                worktreeById={worktreeById}
+                branchById={branchById}
                 userById={userById}
                 onSendPrompt={handleSendPrompt}
                 onSendComment={handleSendComment}
@@ -1319,260 +1504,31 @@ function AppContent() {
             }
           />
 
-          {/* Desktop routes - board with session (Django-style trailing slash) */}
+          {/* Desktop routes — flat entity URLs. Boards have their own
+              path because they're a destination; sub-entities (session,
+              branch, artifact) get top-level paths keyed by short ID
+              so they're stable across board moves. The app resolves the
+              entity at click time, looks up its current board, and
+              switches if needed. Path segments come from the shared
+              `ENTITY_PATH_SEGMENTS` constant so this list and the
+              URL/path builders can't drift. See
+              `packages/core/src/utils/url.ts`. */}
+          <Route path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`} element={desktopAppElement} />
           <Route
-            path="/b/:boardParam/:sessionParam/"
-            element={
-              <>
-                <AgorApp
-                  client={client}
-                  user={currentUser}
-                  connected={connected}
-                  connecting={connecting}
-                  sessionById={sessionById}
-                  sessionsByWorktree={sessionsByWorktree}
-                  availableAgents={AVAILABLE_AGENTS}
-                  boardById={boardById}
-                  boardObjectById={boardObjectById}
-                  commentById={commentById}
-                  cardById={cardById}
-                  cardTypeById={cardTypeById}
-                  repoById={repoById}
-                  worktreeById={worktreeById}
-                  userById={userById}
-                  mcpServerById={mcpServerById}
-                  sessionMcpServerIds={sessionMcpServerIds}
-                  userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-                  initialBoardId={Array.from(boardById.values())[0]?.board_id}
-                  openSettingsTab={settingsTabToOpen}
-                  onSettingsClose={handleSettingsClose}
-                  openUserSettings={openUserSettings}
-                  onUserSettingsClose={handleUserSettingsClose}
-                  openNewWorktreeModal={openNewWorktree}
-                  onNewWorktreeModalClose={handleNewWorktreeModalClose}
-                  onCreateSession={handleCreateSession}
-                  onForkSession={handleForkSession}
-                  onBtwForkSession={handleBtwForkSession}
-                  onSpawnSession={handleSpawnSession}
-                  onSendPrompt={handleSendPrompt}
-                  onUpdateSession={handleUpdateSession}
-                  onDeleteSession={handleDeleteSession}
-                  onCreateBoard={handleCreateBoard}
-                  onUpdateBoard={handleUpdateBoard}
-                  onDeleteBoard={handleDeleteBoard}
-                  onArchiveBoard={handleArchiveBoard}
-                  onUnarchiveBoard={handleUnarchiveBoard}
-                  onCreateRepo={handleCreateRepo}
-                  onCreateLocalRepo={handleCreateLocalRepo}
-                  onUpdateRepo={handleUpdateRepo}
-                  onDeleteRepo={handleDeleteRepo}
-                  onArchiveOrDeleteWorktree={handleArchiveOrDeleteWorktree}
-                  onUnarchiveWorktree={handleUnarchiveWorktree}
-                  onUpdateWorktree={handleUpdateWorktree}
-                  onCreateWorktree={handleCreateWorktree}
-                  onStartEnvironment={handleStartEnvironment}
-                  onStopEnvironment={handleStopEnvironment}
-                  onNukeEnvironment={handleNukeEnvironment}
-                  onExecuteScheduleNow={handleExecuteScheduleNow}
-                  onCreateUser={handleCreateUser}
-                  onUpdateUser={handleUpdateUser}
-                  onDeleteUser={handleDeleteUser}
-                  onCreateMCPServer={handleCreateMCPServer}
-                  onUpdateMCPServer={handleUpdateMCPServer}
-                  onDeleteMCPServer={handleDeleteMCPServer}
-                  gatewayChannelById={gatewayChannelById}
-                  onCreateGatewayChannel={handleCreateGatewayChannel}
-                  onUpdateGatewayChannel={handleUpdateGatewayChannel}
-                  onDeleteGatewayChannel={handleDeleteGatewayChannel}
-                  artifactById={artifactById}
-                  onUpdateArtifact={handleUpdateArtifact}
-                  onDeleteArtifact={handleDeleteArtifact}
-                  onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
-                  onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
-                  onSendComment={handleSendComment}
-                  onReplyComment={handleReplyComment}
-                  onResolveComment={handleResolveComment}
-                  onToggleReaction={handleToggleReaction}
-                  onDeleteComment={handleDeleteComment}
-                  onLogout={logout}
-                  onRetryConnection={retryConnection}
-                  instanceLabel={instanceConfig?.label}
-                  instanceDescription={instanceConfig?.description}
-                  webTerminalEnabled={featuresConfig?.webTerminal === true}
-                />
-              </>
-            }
+            path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
+            element={desktopAppElement}
+          />
+          <Route
+            path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
+            element={desktopAppElement}
+          />
+          <Route
+            path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
+            element={desktopAppElement}
           />
 
-          {/* Desktop routes - board only (Django-style trailing slash) */}
-          <Route
-            path="/b/:boardParam/"
-            element={
-              <>
-                <AgorApp
-                  client={client}
-                  user={currentUser}
-                  connected={connected}
-                  connecting={connecting}
-                  sessionById={sessionById}
-                  sessionsByWorktree={sessionsByWorktree}
-                  availableAgents={AVAILABLE_AGENTS}
-                  boardById={boardById}
-                  boardObjectById={boardObjectById}
-                  commentById={commentById}
-                  cardById={cardById}
-                  cardTypeById={cardTypeById}
-                  repoById={repoById}
-                  worktreeById={worktreeById}
-                  userById={userById}
-                  mcpServerById={mcpServerById}
-                  sessionMcpServerIds={sessionMcpServerIds}
-                  userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-                  initialBoardId={Array.from(boardById.values())[0]?.board_id}
-                  openSettingsTab={settingsTabToOpen}
-                  onSettingsClose={handleSettingsClose}
-                  openUserSettings={openUserSettings}
-                  onUserSettingsClose={handleUserSettingsClose}
-                  openNewWorktreeModal={openNewWorktree}
-                  onNewWorktreeModalClose={handleNewWorktreeModalClose}
-                  onCreateSession={handleCreateSession}
-                  onForkSession={handleForkSession}
-                  onBtwForkSession={handleBtwForkSession}
-                  onSpawnSession={handleSpawnSession}
-                  onSendPrompt={handleSendPrompt}
-                  onUpdateSession={handleUpdateSession}
-                  onDeleteSession={handleDeleteSession}
-                  onCreateBoard={handleCreateBoard}
-                  onUpdateBoard={handleUpdateBoard}
-                  onDeleteBoard={handleDeleteBoard}
-                  onArchiveBoard={handleArchiveBoard}
-                  onUnarchiveBoard={handleUnarchiveBoard}
-                  onCreateRepo={handleCreateRepo}
-                  onCreateLocalRepo={handleCreateLocalRepo}
-                  onUpdateRepo={handleUpdateRepo}
-                  onDeleteRepo={handleDeleteRepo}
-                  onArchiveOrDeleteWorktree={handleArchiveOrDeleteWorktree}
-                  onUnarchiveWorktree={handleUnarchiveWorktree}
-                  onUpdateWorktree={handleUpdateWorktree}
-                  onCreateWorktree={handleCreateWorktree}
-                  onStartEnvironment={handleStartEnvironment}
-                  onStopEnvironment={handleStopEnvironment}
-                  onNukeEnvironment={handleNukeEnvironment}
-                  onExecuteScheduleNow={handleExecuteScheduleNow}
-                  onCreateUser={handleCreateUser}
-                  onUpdateUser={handleUpdateUser}
-                  onDeleteUser={handleDeleteUser}
-                  onCreateMCPServer={handleCreateMCPServer}
-                  onUpdateMCPServer={handleUpdateMCPServer}
-                  onDeleteMCPServer={handleDeleteMCPServer}
-                  gatewayChannelById={gatewayChannelById}
-                  onCreateGatewayChannel={handleCreateGatewayChannel}
-                  onUpdateGatewayChannel={handleUpdateGatewayChannel}
-                  onDeleteGatewayChannel={handleDeleteGatewayChannel}
-                  artifactById={artifactById}
-                  onUpdateArtifact={handleUpdateArtifact}
-                  onDeleteArtifact={handleDeleteArtifact}
-                  onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
-                  onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
-                  onSendComment={handleSendComment}
-                  onReplyComment={handleReplyComment}
-                  onResolveComment={handleResolveComment}
-                  onToggleReaction={handleToggleReaction}
-                  onDeleteComment={handleDeleteComment}
-                  onLogout={logout}
-                  onRetryConnection={retryConnection}
-                  instanceLabel={instanceConfig?.label}
-                  instanceDescription={instanceConfig?.description}
-                  webTerminalEnabled={featuresConfig?.webTerminal === true}
-                />
-              </>
-            }
-          />
-
-          {/* Desktop routes - fallback for root path */}
-          <Route
-            path="/*"
-            element={
-              <>
-                <AgorApp
-                  client={client}
-                  user={currentUser}
-                  connected={connected}
-                  connecting={connecting}
-                  sessionById={sessionById}
-                  sessionsByWorktree={sessionsByWorktree}
-                  availableAgents={AVAILABLE_AGENTS}
-                  boardById={boardById}
-                  boardObjectById={boardObjectById}
-                  commentById={commentById}
-                  cardById={cardById}
-                  cardTypeById={cardTypeById}
-                  repoById={repoById}
-                  worktreeById={worktreeById}
-                  userById={userById}
-                  mcpServerById={mcpServerById}
-                  sessionMcpServerIds={sessionMcpServerIds}
-                  userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-                  initialBoardId={Array.from(boardById.values())[0]?.board_id}
-                  openSettingsTab={settingsTabToOpen}
-                  onSettingsClose={handleSettingsClose}
-                  openUserSettings={openUserSettings}
-                  onUserSettingsClose={handleUserSettingsClose}
-                  openNewWorktreeModal={openNewWorktree}
-                  onNewWorktreeModalClose={handleNewWorktreeModalClose}
-                  onCreateSession={handleCreateSession}
-                  onForkSession={handleForkSession}
-                  onBtwForkSession={handleBtwForkSession}
-                  onSpawnSession={handleSpawnSession}
-                  onSendPrompt={handleSendPrompt}
-                  onUpdateSession={handleUpdateSession}
-                  onDeleteSession={handleDeleteSession}
-                  onCreateBoard={handleCreateBoard}
-                  onUpdateBoard={handleUpdateBoard}
-                  onDeleteBoard={handleDeleteBoard}
-                  onArchiveBoard={handleArchiveBoard}
-                  onUnarchiveBoard={handleUnarchiveBoard}
-                  onCreateRepo={handleCreateRepo}
-                  onCreateLocalRepo={handleCreateLocalRepo}
-                  onUpdateRepo={handleUpdateRepo}
-                  onDeleteRepo={handleDeleteRepo}
-                  onArchiveOrDeleteWorktree={handleArchiveOrDeleteWorktree}
-                  onUnarchiveWorktree={handleUnarchiveWorktree}
-                  onUpdateWorktree={handleUpdateWorktree}
-                  onCreateWorktree={handleCreateWorktree}
-                  onStartEnvironment={handleStartEnvironment}
-                  onStopEnvironment={handleStopEnvironment}
-                  onNukeEnvironment={handleNukeEnvironment}
-                  onExecuteScheduleNow={handleExecuteScheduleNow}
-                  onCreateUser={handleCreateUser}
-                  onUpdateUser={handleUpdateUser}
-                  onDeleteUser={handleDeleteUser}
-                  onCreateMCPServer={handleCreateMCPServer}
-                  onUpdateMCPServer={handleUpdateMCPServer}
-                  onDeleteMCPServer={handleDeleteMCPServer}
-                  gatewayChannelById={gatewayChannelById}
-                  onCreateGatewayChannel={handleCreateGatewayChannel}
-                  onUpdateGatewayChannel={handleUpdateGatewayChannel}
-                  onDeleteGatewayChannel={handleDeleteGatewayChannel}
-                  artifactById={artifactById}
-                  onUpdateArtifact={handleUpdateArtifact}
-                  onDeleteArtifact={handleDeleteArtifact}
-                  onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
-                  onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
-                  onSendComment={handleSendComment}
-                  onReplyComment={handleReplyComment}
-                  onResolveComment={handleResolveComment}
-                  onToggleReaction={handleToggleReaction}
-                  onDeleteComment={handleDeleteComment}
-                  onLogout={logout}
-                  onRetryConnection={retryConnection}
-                  instanceLabel={instanceConfig?.label}
-                  instanceDescription={instanceConfig?.description}
-                  webTerminalEnabled={featuresConfig?.webTerminal === true}
-                />
-              </>
-            }
-          />
+          {/* Fallback for unknown / root paths */}
+          <Route path="/*" element={desktopAppElement} />
         </Routes>
       </ConnectionProvider>
     </ServicesConfigContext.Provider>
@@ -1585,15 +1541,26 @@ function AppWrapper() {
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
       <AntApp>
-        <AppContent />
+        <ErrorBoundary variant="global">
+          {/* CanvasNavigationProvider lives outside the agor `App` body so
+              hooks called in that body (useUrlState, useAppNavigation) can
+              read the canvas-nav context. The inner App component used to
+              wrap its own JSX in this provider; that's been removed. */}
+          <CanvasNavigationProvider>
+            <AppContent />
+          </CanvasNavigationProvider>
+        </ErrorBoundary>
       </AntApp>
     </ConfigProvider>
   );
 }
 
 function App() {
-  // Determine base path: '/ui' in production (served by daemon), '/' in dev mode
-  const basename = import.meta.env.BASE_URL === '/ui/' ? '/ui' : '';
+  // Determine base path: UI_MOUNT_PATH ('/ui') in production (served by
+  // daemon at that prefix), '' in dev mode (vite serves at /). Pulled
+  // from the shared core constant so this stays consistent with the
+  // daemon's static-serving block and the server-side URL builders.
+  const basename = import.meta.env.BASE_URL === `${UI_MOUNT_PATH}/` ? UI_MOUNT_PATH : '';
 
   return (
     <BrowserRouter basename={basename}>

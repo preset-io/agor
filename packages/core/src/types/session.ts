@@ -12,18 +12,20 @@ import type {
   CodexApprovalPolicy,
   CodexPermissionMode,
   CodexSandboxMode,
+  CursorPermissionMode,
   GeminiPermissionMode,
   OpenCodePermissionMode,
 } from './agentic-tool';
 import type { ContextFilePath } from './context';
-import type { BoardID, SessionID, TaskID, WorktreeID } from './id';
+import type { BoardID, BranchID, SessionID, TaskID } from './id';
+import type { ScheduleID } from './schedule';
 
 export const SessionStatus = {
   IDLE: 'idle',
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for task to stop
   AWAITING_PERMISSION: 'awaiting_permission',
-  AWAITING_INPUT: 'awaiting_input', // Agent asked user a question (AskUserQuestion tool)
+  AWAITING_INPUT: 'awaiting_input', // Legacy / pre-#1177: AskUserQuestion was disallowed at the SDK; new sessions never enter this state, kept for historical rows
   TIMED_OUT: 'timed_out', // Permission/input request timed out, executor exited — user must re-prompt
   COMPLETED: 'completed',
   FAILED: 'failed',
@@ -77,6 +79,7 @@ export type {
   CodexApprovalPolicy,
   CodexPermissionMode,
   CodexSandboxMode,
+  CursorPermissionMode,
   GeminiPermissionMode,
   OpenCodePermissionMode,
 };
@@ -84,24 +87,42 @@ export type {
 /**
  * Get the default permission mode for a given agentic tool
  *
- * Returns the native SDK default for each tool:
- * - Claude Code: 'acceptEdits' (auto-accept file edits, prompt for other tools)
- * - Gemini: 'autoEdit' (native ApprovalMode.AUTO_EDIT - auto-approve file edits)
- * - Codex: 'auto' (auto-approve safe operations, ask for dangerous ones)
- * - OpenCode: 'autoEdit' (auto-approve, similar to Gemini)
+ * Per tool:
+ * - Claude Code: 'acceptEdits' — auto-accept file edits. Bash/shell tool
+ *   prompts still flow through Agor's permission UI; MCP tool calls for
+ *   the built-in `agor` server and any attached MCP servers are
+ *   auto-approved by the executor's canUseTool hook (see
+ *   sdk-handlers/claude/permissions/permission-hooks.ts), so MCP-heavy
+ *   sessions don't death-by-modal. Users can flip a running session to
+ *   `bypassPermissions` mid-flight from the session UI.
+ * - Codex: 'allow-all' — maps to sandbox `workspace-write` + approval
+ *   `never` + network-on. Codex's MCP auto-approve is wired through
+ *   `default_tools_approval_mode = "approve"` on each server config
+ *   (see prompt-service.ts buildMcpServersConfig), so Agor self-calls
+ *   don't get silently cancelled by the elicitation prompt. Workspace
+ *   sandbox still constrains shell exec.
+ * - Gemini: 'autoEdit' (unchanged — pending separate audit)
+ * - OpenCode: 'autoEdit' (unchanged — pending separate audit)
+ * - Cursor: 'bypassPermissions' — scaffolded as autonomous until the SDK
+ *   exposes/Agor wires a permission callback.
+ *
+ * Users / parent sessions / per-session overrides still trump these
+ * defaults via resolvePermissionConfig.
  */
 export function getDefaultPermissionMode(agenticTool: AgenticToolName): PermissionMode {
   switch (agenticTool) {
     case 'gemini':
       return 'autoEdit'; // Native Gemini SDK mode
     case 'codex':
-      return 'auto'; // Native Codex SDK mode
+      return 'allow-all'; // Maps to Codex sandbox=workspace-write + approval=never
     case 'opencode':
       return 'autoEdit'; // OpenCode auto-approves, similar to Gemini
     case 'copilot':
       return 'acceptEdits'; // Copilot uses same semantics as Claude Code
+    case 'cursor':
+      return 'bypassPermissions'; // Cursor SDK is experimental/autonomous until permission callbacks exist
     default:
-      return 'acceptEdits'; // Claude Code native mode
+      return 'acceptEdits'; // Claude Code
   }
 }
 
@@ -140,24 +161,28 @@ export interface Session {
    */
   unix_username: string | null;
 
-  /** Worktree ID - all sessions must be associated with an Agor-managed worktree */
-  worktree_id: WorktreeID;
+  /** Branch ID - all sessions must be associated with an Agor-managed branch */
+  branch_id: BranchID;
 
   /**
-   * Board ID from the session's worktree (populated via LEFT JOIN)
+   * Board ID from the session's branch (populated via LEFT JOIN)
    *
    * This is a computed property populated by the repository layer when fetching sessions.
-   * It avoids N+1 queries by joining with the worktrees table.
-   * Null if the worktree is not placed on any board.
+   * It avoids N+1 queries by joining with the branches table.
+   * Null if the branch is not placed on any board.
    */
-  worktree_board_id?: BoardID | null;
+  branch_board_id?: BoardID | null;
 
   /**
-   * External/user-facing URL for viewing this session in the UI
+   * External/user-facing URL for viewing this session in the UI.
    *
-   * Computed property added by API hooks based on worktree_board_id.
-   * Format: {baseUrl}/b/{boardId}/{sessionId}/
-   * Null if the worktree is not on a board.
+   * Computed property added by the repository layer.
+   * Format: `{baseUrl}/ui/s/{sessionShortId}/`
+   * Visiting the URL resolves the session, switches to its branch's
+   * board, and opens the conversation panel. Always present when the
+   * repo computes it (baseUrl available); board lookup happens at
+   * click time, so we don't need to know about the board to mint the
+   * URL.
    */
   url: string | null;
 
@@ -235,6 +260,53 @@ export interface Session {
     provider?: string;
   };
 
+  /**
+   * Claude Code CLI adapter state. Only set when `agentic_tool === 'claude-code-cli'`.
+   * Persisted on the session row's `data` blob so the daemon-side watcher can
+   * resume tailing the JSONL across restarts (see
+   * docs/internal/claude-code-cli-integration-analysis-2026-05-14.md).
+   */
+  cli_state?: {
+    /** Bytes consumed from the JSONL — resume point on watcher restart. */
+    watcher_offset?: number;
+    /** ISO 8601 of the most recent processed JSONL line. Telemetry. */
+    last_event_ts?: string;
+    /** `uuid` of the most recent processed JSONL line. Sanity / dedup. */
+    last_event_uuid?: string;
+    /** Slugged dir under `~/.claude/projects/` (`/` and `.` → `-`). */
+    slug?: string;
+    /** Absolute path to the JSONL file. */
+    jsonl_path?: string;
+    /** Zellij pane handle for PTY-injection targeting. */
+    zellij_pane_id?: string;
+    /** Zellij tab name (`cli-<short>` by convention). */
+    zellij_tab_name?: string;
+    /**
+     * In-flight turn snapshot. Written on `user_message`, set to `null`
+     * on `turn_end` (not undefined — `deepMerge` in
+     * `SessionRepository.update` skips undefined, so an explicit `null`
+     * is the documented "clear this field" signal). Lets the watcher
+     * rehydrate the task linkage for assistant/tool messages that
+     * arrive after a daemon restart — without this, post-restart events
+     * would orphan and `turn_end` would skip closing the task.
+     * Analytics accumulated mid-turn (per-message usage,
+     * lastAssistantRaw) are *not* persisted; only the linkage is
+     * recovered.
+     */
+    active_turn?: {
+      task_id: string;
+      user_message_index: number;
+      started_at_ms: number;
+    } | null;
+  };
+
+  /**
+   * Billing model for this session. CLI sessions default to 'subscription'
+   * (Claude Pro/Max interactive limits), SDK sessions to 'api-key' or
+   * 'unknown'. Drives the cost-UI caption and the 5h billing-window banner.
+   */
+  billing_mode?: 'subscription' | 'api-key' | 'unknown';
+
   // Custom context for Handlebars templates
   /**
    * User-defined JSON context for Handlebars templates in zone triggers
@@ -302,14 +374,28 @@ export interface Session {
    * Materialized for UI filtering (show clock icon) and analytics.
    * True = created by scheduler, False = created manually by user
    */
-  scheduled_from_worktree: boolean;
+  scheduled_from_branch: boolean;
+
+  /**
+   * First-class schedule this session was spawned from (if any).
+   *
+   * Nullable: null for ad-hoc sessions and for back-compat rows that
+   * predate the `schedules` table. `ON DELETE SET NULL` so when a
+   * schedule is removed, its sessions become orphaned runs rather
+   * than cascading deletions.
+   *
+   * Use this as the canonical link to a run's schedule;
+   * `scheduled_from_branch` + `scheduled_run_at` are kept for dedup
+   * and UI back-compat.
+   */
+  schedule_id?: ScheduleID;
 
   /**
    * Whether this session is ready to receive a new prompt
    *
    * Set to true when a task completes successfully, indicating the agent is ready for more work.
    * Cleared when the user opens the conversation drawer (acknowledging completion).
-   * Used to highlight worktree cards to show which sessions need attention.
+   * Used to highlight branch cards to show which sessions need attention.
    */
   ready_for_prompt: boolean;
 
@@ -336,8 +422,8 @@ export interface Session {
      * Session ID to notify on completion (for remote session callbacks)
      *
      * When set, completion callbacks are sent to this session instead of
-     * (or in addition to) the genealogy parent. This enables cross-worktree
-     * callbacks where a session creates another session on a different worktree
+     * (or in addition to) the genealogy parent. This enables cross-branch
+     * callbacks where a session creates another session on a different branch
      * and wants to be notified when it completes.
      *
      * Defaults to the creating session's ID when enableCallback is true
@@ -376,7 +462,7 @@ export interface Session {
   /**
    * Whether this session is archived (soft deleted)
    *
-   * Usually cascaded from worktree archive, but can also be manually archived.
+   * Usually cascaded from branch archive, but can also be manually archived.
    * Archived sessions are hidden from UI but data preserved for analytics.
    */
   archived: boolean;
@@ -384,11 +470,11 @@ export interface Session {
   /**
    * Reason for archiving
    *
-   * - 'worktree_archived': Cascaded from parent worktree being archived
+   * - 'branch_archived': Cascaded from parent branch being archived
    * - 'manual': User manually archived this session
    * - 'btw_completed': Ephemeral btw fork auto-archived after task completion
    */
-  archived_reason?: 'worktree_archived' | 'manual' | 'btw_completed';
+  archived_reason?: 'branch_archived' | 'manual' | 'btw_completed';
 }
 
 /**
@@ -433,7 +519,7 @@ export function getGatewaySource(session: Pick<Session, 'custom_context'>): Gate
 }
 
 /**
- * Session type categories matching UI rendering in WorktreeCard
+ * Session type categories matching UI rendering in BranchCard
  */
 export type SessionType = 'gateway' | 'scheduled' | 'agent';
 
@@ -441,10 +527,10 @@ export type SessionType = 'gateway' | 'scheduled' | 'agent';
  * Determine the session type category.
  */
 export function getSessionType(
-  session: Pick<Session, 'custom_context' | 'scheduled_from_worktree'>
+  session: Pick<Session, 'custom_context' | 'scheduled_from_branch'>
 ): SessionType {
   if (isGatewaySession(session)) return 'gateway';
-  if (session.scheduled_from_worktree) return 'scheduled';
+  if (session.scheduled_from_branch) return 'scheduled';
   return 'agent';
 }
 
@@ -458,7 +544,7 @@ export interface ScheduledRunMetadata {
    * Rendered prompt after Handlebars template substitution
    *
    * Example:
-   * Template: "Check PR {{worktree.pull_request_url}}"
+   * Template: "Check PR {{branch.pull_request_url}}"
    * Rendered: "Check PR https://github.com/org/repo/pull/42"
    */
   rendered_prompt: string;
@@ -482,12 +568,19 @@ export interface ScheduledRunMetadata {
   triggered_by?: string;
 
   /**
-   * Snapshot of schedule config at execution time
+   * Snapshot of schedule config at execution time.
    *
-   * Preserves configuration even if schedule is later modified or deleted.
-   * Useful for debugging and understanding past runs.
+   * Preserves configuration even if the schedule is later modified or
+   * deleted. Useful for debugging and understanding past runs.
+   *
+   * `schedule_id` was added when schedules became first-class — it lets
+   * "open the schedule" links resolve even after the live schedule has
+   * been deleted (the FK on `sessions.schedule_id` is SET NULL on
+   * delete, but the snapshot still carries the ID for forensics).
    */
   schedule_config_snapshot?: {
+    /** Optional first-class schedule ID; nullable for pre-#1253 rows. */
+    schedule_id?: string;
     /** Cron expression that triggered this run */
     cron: string;
     /** Timezone for cron evaluation */

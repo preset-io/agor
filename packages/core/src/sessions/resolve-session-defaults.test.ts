@@ -12,7 +12,7 @@ function makeUser(partial: Partial<User['default_agentic_config']> = {}): User {
     onboarding_completed: true,
     must_change_password: false,
     created_at: new Date(),
-    scheduled_from_worktree: false,
+    scheduled_from_branch: false,
     default_agentic_config: partial,
   } as unknown as User;
 }
@@ -50,7 +50,7 @@ describe('resolveSessionDefaults', () => {
       expect(r.permission_config.mode).toBe('yolo');
     });
 
-    it('emits codex sub-config when sandboxMode + approvalPolicy both present (user defaults)', () => {
+    it('emits full codex sub-config from user defaults', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'codex',
         user: makeUser({
@@ -66,6 +66,55 @@ describe('resolveSessionDefaults', () => {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'on-request',
         networkAccess: false,
+      });
+    });
+
+    it('always emits codex sub-config for codex sessions, filling missing fields from the mapped mode', () => {
+      // No user defaults — sub-config should be filled from
+      // mapToCodexPermissionConfig(getDefaultPermissionMode('codex')).
+      const r = resolveSessionDefaults({ agenticTool: 'codex' });
+      expect(r.permission_config).toEqual({
+        mode: 'allow-all',
+        codex: {
+          sandboxMode: 'workspace-write',
+          approvalPolicy: 'never',
+          networkAccess: true,
+        },
+      });
+    });
+
+    it("partial user defaults are preserved; missing fields fill from the user's mode (regression: don't escalate to system default)", () => {
+      // User explicitly chose a stricter approval policy but didn't set
+      // sandboxMode or networkAccess. Pre-fix this dropped the sub-config
+      // entirely and the executor fallback escalated approval to 'never'.
+      const r = resolveSessionDefaults({
+        agenticTool: 'codex',
+        user: makeUser({
+          codex: { permissionMode: 'ask', codexApprovalPolicy: 'untrusted' },
+        }),
+      });
+      expect(r.permission_config).toEqual({
+        mode: 'ask',
+        codex: {
+          // sandboxMode + networkAccess fill from mapToCodexPermissionConfig('ask')
+          sandboxMode: 'read-only',
+          approvalPolicy: 'untrusted',
+          networkAccess: false,
+        },
+      });
+    });
+
+    it('partial user defaults (only sandboxMode) — approvalPolicy + networkAccess fill from mode', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'codex',
+        user: makeUser({
+          codex: { codexSandboxMode: 'read-only' },
+        }),
+      });
+      expect(r.permission_config.codex).toEqual({
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never', // from default mode 'allow-all'
+        networkAccess: true, // from default mode 'allow-all'
       });
     });
 
@@ -102,8 +151,17 @@ describe('resolveSessionDefaults', () => {
   });
 
   describe('model_config', () => {
-    it('returns undefined when no model is configured anywhere', () => {
+    it('falls back to the tool default when no model is configured anywhere', () => {
       const r = resolveSessionDefaults({ agenticTool: 'claude-code', now });
+      expect(r.model_config).toEqual({
+        mode: 'alias',
+        model: 'claude-sonnet-4-6',
+        updated_at: now.toISOString(),
+      });
+    });
+
+    it('still returns undefined for tools without a static default (cursor)', () => {
+      const r = resolveSessionDefaults({ agenticTool: 'cursor', now });
       expect(r.model_config).toBeUndefined();
     });
 
@@ -137,26 +195,26 @@ describe('resolveSessionDefaults', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({ 'claude-code': { mcpServerIds: ['user-1', 'user-2'] } }),
-        worktree: { mcp_server_ids: ['wt-1'] },
+        branch: { mcp_server_ids: ['wt-1'] },
         overrides: { mcpServerIds: [] },
       });
       expect(r.mcp_server_ids).toEqual([]);
     });
 
-    it('worktree config wins over user defaults when no override', () => {
+    it('branch config wins over user defaults when no override', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({ 'claude-code': { mcpServerIds: ['user-1'] } }),
-        worktree: { mcp_server_ids: ['wt-1'] },
+        branch: { mcp_server_ids: ['wt-1'] },
       });
       expect(r.mcp_server_ids).toEqual(['wt-1']);
     });
 
-    it('falls through to user defaults when worktree has no config', () => {
+    it('falls through to user defaults when branch has no config', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({ 'claude-code': { mcpServerIds: ['user-1'] } }),
-        worktree: { mcp_server_ids: [] },
+        branch: { mcp_server_ids: [] },
       });
       expect(r.mcp_server_ids).toEqual(['user-1']);
     });
@@ -190,12 +248,12 @@ describe('resolveSessionDefaults', () => {
     it('cross-tool spawn with no user default for target tool: returns mapped system default permission mode', () => {
       // User has Claude defaults but is spawning a Codex child. There's no
       // codex entry in default_agentic_config, so we should fall back to
-      // codex's system default ('auto'), not to whatever the parent had.
+      // codex's system default ('allow-all'), not to whatever the parent had.
       const r = resolveSessionDefaults({
         agenticTool: 'codex',
         user: makeUser({ 'claude-code': { permissionMode: 'bypassPermissions' } }),
       });
-      expect(r.permission_config.mode).toBe('auto');
+      expect(r.permission_config.mode).toBe('allow-all');
     });
 
     it('cross-tool spawn from Claude → Gemini with no user default: returns gemini system default', () => {
@@ -211,7 +269,7 @@ describe('resolveSessionDefaults', () => {
       // lookup fails. Ensure it still returns a populated permission_config.
       const r = resolveSessionDefaults({ agenticTool: 'codex' });
       expect(r.permission_config).toBeDefined();
-      expect(r.permission_config.mode).toBe('auto');
+      expect(r.permission_config.mode).toBe('allow-all');
     });
   });
 

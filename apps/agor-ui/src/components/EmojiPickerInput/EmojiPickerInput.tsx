@@ -28,6 +28,7 @@ interface EmojiPickerInputProps {
   value?: string;
   onChange?: (value: string) => void;
   defaultEmoji?: string;
+  disabled?: boolean;
 }
 
 /**
@@ -38,6 +39,7 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
   value,
   onChange,
   defaultEmoji = '📋',
+  disabled = false,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -46,11 +48,15 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
     setPickerOpen(false);
   };
 
+  // When disabled, keep the popover closed and never open it on click.
+  const effectivePickerOpen = disabled ? false : pickerOpen;
+
   return (
     <div style={{ display: 'flex', gap: 0 }}>
       <Input
         prefix={<span style={{ fontSize: 14 }}>{value || defaultEmoji}</span>}
         readOnly
+        disabled={disabled}
         style={{
           cursor: 'default',
           width: 40,
@@ -60,13 +66,17 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
       />
       <Popover
         content={<AgorEmojiPicker onEmojiClick={handleEmojiClick} />}
-        trigger="click"
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
+        trigger={disabled ? [] : 'click'}
+        open={effectivePickerOpen}
+        onOpenChange={(next) => {
+          if (disabled) return;
+          setPickerOpen(next);
+        }}
         placement="right"
       >
         <Button
           icon={<SmileOutlined />}
+          disabled={disabled}
           style={{
             borderTopLeftRadius: 0,
             borderBottomLeftRadius: 0,
@@ -80,22 +90,17 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
 
 /**
  * Form.Item wrapper that integrates with Ant Design forms.
- * Thin wrapper around EmojiPickerInput that reads/writes via form.setFieldValue.
+ * Registers the emoji field with the form so validateFields/getFieldsValue
+ * include it in submitted values.
  */
 export const FormEmojiPickerInput: React.FC<{
   form: ReturnType<typeof Form.useForm>[0];
   fieldName: string;
   defaultEmoji?: string;
-}> = ({ form, fieldName, defaultEmoji }) => {
+}> = ({ fieldName, defaultEmoji }) => {
   return (
-    <Form.Item noStyle shouldUpdate>
-      {() => (
-        <EmojiPickerInput
-          value={form.getFieldValue(fieldName)}
-          onChange={(emoji) => form.setFieldValue(fieldName, emoji)}
-          defaultEmoji={defaultEmoji}
-        />
-      )}
+    <Form.Item name={fieldName} noStyle initialValue={defaultEmoji}>
+      <EmojiPickerInput defaultEmoji={defaultEmoji} />
     </Form.Item>
   );
 };

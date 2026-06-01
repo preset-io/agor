@@ -33,6 +33,7 @@
  */
 
 import type { Database } from '@agor/core/db';
+import { shortId } from '@agor/core/db';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import type express from 'express';
 import { escapeHtml } from '../utils/html.js';
@@ -307,7 +308,7 @@ function handleSetupCallback(db: Database, uiUrl: string) {
       await channelRepo.update(githubChannel.id, { config });
 
       console.log(
-        `[github-app-setup] Set installation_id=${installationIdNum} on channel id=${githubChannel.id} (initiated by user=${consumed.userId.substring(0, 8)})`
+        `[github-app-setup] Set installation_id=${installationIdNum} on channel id=${githubChannel.id} (initiated by user=${shortId(consumed.userId)})`
       );
 
       res.setHeader('Content-Type', 'text/html');

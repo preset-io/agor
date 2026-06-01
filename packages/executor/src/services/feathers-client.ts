@@ -71,7 +71,7 @@ export async function createExecutorClient(
       resolve();
     });
 
-    client.io.once('connect_error', (error) => {
+    client.io.once('connect_error', (error: Error) => {
       clearTimeout(timeout);
       reject(error);
     });

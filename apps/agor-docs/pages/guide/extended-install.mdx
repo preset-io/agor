@@ -3,9 +3,11 @@ title: Extended Installation
 description: Alternative ways to install and run Agor — optional companions, authentication options, and custom config locations.
 ---
 
+import InstallTabs from '../../components/InstallTabs.mdx';
+
 # Extended Installation
 
-The [Getting Started](/guide/getting-started) guide covers the recommended user path: `npm install -g agor-live`. This page covers everything else for **users and teams** running Agor — optional companions, deployment alternatives, authentication options, and edge-case configurations.
+The [Getting Started](/guide/getting-started) guide covers the recommended user path: `npm install -g agor-live`. This page covers everything else for **users and teams** running Agor — Homebrew, optional companions, deployment alternatives, authentication options, and edge-case configurations.
 
 > Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development) — it covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
 
@@ -13,7 +15,15 @@ The [Getting Started](/guide/getting-started) guide covers the recommended user 
 
 - **Node.js ≥ 22.12** — see [nodejs.org](https://nodejs.org) for installation.
 
-That's the only hard requirement. Everything below is either an alternative install method or an optional companion.
+That's the only hard requirement for npm installs. The Homebrew formula installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
+
+## Install paths
+
+Use whichever install method fits your setup:
+
+<InstallTabs />
+
+Homebrew is a convenience path for macOS/Linux users; npm remains the canonical cross-platform install path used throughout the docs.
 
 ---
 
@@ -117,5 +127,5 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 ## What's next?
 
 - [Getting Started](/guide/getting-started) — add your first repo and create a session.
-- [Worktrees](/guide/worktrees), [Sessions & Trees](/guide/sessions), [Boards & Zones](/guide/boards) — core primitives.
+- [Branches](/guide/branches), [Sessions & Trees](/guide/sessions), [Boards & Zones](/guide/boards) — core primitives.
 - [Development Guide](/guide/development) — contributor workflow.

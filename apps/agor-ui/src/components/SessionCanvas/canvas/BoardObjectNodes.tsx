@@ -734,7 +734,7 @@ interface CommentNodeData {
   comment: BoardComment;
   replyCount: number;
   user?: User;
-  parentLabel?: string; // Label of parent zone/worktree if pinned
+  parentLabel?: string; // Label of parent zone/branch if pinned
   parentColor?: string; // Color of parent zone if pinned
   onClick?: (commentId: string) => void;
   onHover?: (commentId: string) => void;

@@ -125,23 +125,27 @@ describe('env-locking', () => {
     it('should prevent race conditions with multiple concurrent calls', async () => {
       const executionOrder: string[] = [];
 
+      // Per-user locks serialize same-user calls; different users run concurrently
+      // because process.env is a shared global. The invariant is that each user
+      // uses DISTINCT env var keys — two users sharing the same key name would
+      // require a global mutex (not implemented). Use unique keys here so
+      // concurrent execution can't stomp on each other.
       vi.mocked(resolverModule.resolveUserEnvironment)
-        .mockResolvedValueOnce({ USER_ID: 'user-1-value' })
-        .mockResolvedValueOnce({ USER_ID: 'user-2-value' });
+        .mockResolvedValueOnce({ USER_1_SPECIFIC_KEY: 'user-1-value' })
+        .mockResolvedValueOnce({ USER_2_SPECIFIC_KEY: 'user-2-value' });
 
       const fn1 = async () => {
         executionOrder.push('start-user1');
-        // Simulate some async work
         await new Promise((resolve) => setTimeout(resolve, 10));
         executionOrder.push('end-user1');
-        expect(process.env.USER_ID).toBe('user-1-value');
+        expect(process.env.USER_1_SPECIFIC_KEY).toBe('user-1-value');
       };
 
       const fn2 = async () => {
         executionOrder.push('start-user2');
         await new Promise((resolve) => setTimeout(resolve, 5));
         executionOrder.push('end-user2');
-        expect(process.env.USER_ID).toBe('user-2-value');
+        expect(process.env.USER_2_SPECIFIC_KEY).toBe('user-2-value');
       };
 
       // Execute both concurrently
@@ -155,6 +159,10 @@ describe('env-locking', () => {
       expect(executionOrder).toContain('end-user1');
       expect(executionOrder).toContain('start-user2');
       expect(executionOrder).toContain('end-user2');
+
+      // Both keys cleaned up after completion
+      expect(process.env.USER_1_SPECIFIC_KEY).toBeUndefined();
+      expect(process.env.USER_2_SPECIFIC_KEY).toBeUndefined();
     });
 
     it('should handle sequential calls to same user', async () => {

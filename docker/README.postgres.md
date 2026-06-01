@@ -38,20 +38,20 @@ docker compose up
   - Owns: `bob-private` (full access)
   - Access: `team-shared` (prompt permission - not yet fully implemented)
 
-### Worktrees
+### Branches
 
-- **alice-private** - Alice's private worktree (only alice has access)
-- **bob-private** - Bob's private worktree (only bob has access)
-- **team-shared** - Shared worktree (alice owns, bob can prompt)
+- **alice-private** - Alice's private branch (only alice has access)
+- **bob-private** - Bob's private branch (only bob has access)
+- **team-shared** - Shared branch (alice owns, bob can prompt)
 
 ### Features Enabled
 
 - ✅ PostgreSQL database (multi-user capable)
-- ✅ RBAC feature flag (`execution.worktree_rbac: true`)
+- ✅ RBAC feature flag (`execution.branch_rbac: true`)
 - ✅ Unix integration (`execution.unix_user_mode: insulated`)
 - ✅ SSH server (port 2222)
 - ✅ Test users with Unix accounts
-- ✅ Test worktrees with ownership
+- ✅ Test branches with ownership
 
 ## Ports
 
@@ -74,7 +74,7 @@ Test that alice and bob can SSH in with proper isolation:
 # SSH as alice
 ssh alice@localhost -p 2222  # password: admin
 
-# Check worktree access
+# Check branch access
 ls -la ~/agor/worktrees/
 # Expected: alice-private, team-shared (both writable)
 
@@ -84,14 +84,14 @@ touch test.txt  # Should succeed
 
 # Check filesystem permissions
 ls -la test.txt
-# Expected: -rw-r--r-- alice agor-wt-<worktree-id>
+# Expected: -rw-r--r-- alice agor-wt-<branch-id>
 ```
 
 ```bash
 # SSH as bob
 ssh bob@localhost -p 2222  # password: admin
 
-# Check worktree access
+# Check branch access
 ls -la ~/agor/worktrees/
 # Expected: Only bob-private visible
 
@@ -116,20 +116,20 @@ ALICE_TOKEN=$(docker exec agor-unix-user-always-agor-dev-1 \
 BOB_TOKEN=$(docker exec agor-unix-user-always-agor-dev-1 \
   pnpm agor session-token create bob@agor.live --json | jq -r '.token')
 
-# List worktrees as alice
-curl -H "Authorization: Bearer $ALICE_TOKEN" http://localhost:4091/worktrees
-# Expected: alice-private, team-shared, (and any worktrees she has permission to)
+# List branches as alice
+curl -H "Authorization: Bearer $ALICE_TOKEN" http://localhost:4091/branches
+# Expected: alice-private, team-shared, (and any branches she has permission to)
 
-# List worktrees as bob
-curl -H "Authorization: Bearer $BOB_TOKEN" http://localhost:4091/worktrees
-# Expected: bob-private, (and any worktrees he has permission to)
+# List branches as bob
+curl -H "Authorization: Bearer $BOB_TOKEN" http://localhost:4091/branches
+# Expected: bob-private, (and any branches he has permission to)
 
 # Try to access alice-private as bob (should fail)
 ALICE_PRIVATE_ID=$(docker exec agor-unix-user-always-agor-dev-1 \
-  pnpm agor worktree list --json | jq -r '.[] | select(.name=="alice-private") | .worktree_id')
+  pnpm agor branch list --json | jq -r '.[] | select(.name=="alice-private") | .branch_id')
 
 curl -H "Authorization: Bearer $BOB_TOKEN" \
-  http://localhost:4091/worktrees/$ALICE_PRIVATE_ID
+  http://localhost:4091/branches/$ALICE_PRIVATE_ID
 # Expected: 403 Forbidden
 ```
 
@@ -138,7 +138,7 @@ curl -H "Authorization: Bearer $BOB_TOKEN" \
 Check that Unix groups are created and users are added correctly:
 
 ```bash
-# List all agor worktree groups
+# List all agor branch groups
 docker exec agor-unix-user-always-agor-dev-1 getent group | grep agor-wt-
 
 # Check alice's group membership
@@ -156,10 +156,10 @@ docker exec agor-unix-user-always-agor-dev-1 groups bob
 Verify that filesystem permissions match RBAC policies:
 
 ```bash
-# Check alice-private worktree permissions
+# Check alice-private branch permissions
 docker exec agor-unix-user-always-agor-dev-1 \
   ls -la /var/agor/worktrees/ | grep alice-private
-# Expected: drwxrwx--- alice agor-wt-<worktree-id>
+# Expected: drwxrwx--- alice agor-wt-<branch-id>
 
 # Check that group members can write
 docker exec agor-unix-user-always-agor-dev-1 \
@@ -178,8 +178,8 @@ Test RBAC in the web interface:
 
 1. Open http://localhost:6091
 2. Login as `alice@agor.live` / `admin`
-3. Verify alice-private and team-shared worktrees are visible
-4. Open alice-private worktree modal
+3. Verify alice-private and team-shared branches are visible
+4. Open alice-private branch modal
 5. Check "Owners & Permissions" section shows:
    - Owners: alice
    - Others can: (default setting)
@@ -241,24 +241,24 @@ docker logs agor-unix-user-always-agor-dev-1 | grep ssh
 docker compose --profile postgres restart
 ```
 
-### Permission Denied on Worktree Access
+### Permission Denied on Branch Access
 
 ```bash
 # Verify user is in correct groups
 docker exec agor-unix-user-always-agor-dev-1 groups alice
 
-# Check worktree ownership
+# Check branch ownership
 docker exec agor-unix-user-always-agor-dev-1 \
-  pnpm agor worktree owners list <worktree-id>
+  pnpm agor branch owners list <branch-id>
 
 # Verify filesystem permissions
 docker exec agor-unix-user-always-agor-dev-1 \
-  ls -la /var/agor/worktrees/ | grep <worktree-name>
+  ls -la /var/agor/worktrees/ | grep <branch-name>
 ```
 
 ### Database Schema Error: Missing RBAC Columns
 
-**Error:** `PostgresError: column "others_can" of relation "worktrees" does not exist`
+**Error:** `PostgresError: column "others_can" of relation "branches" does not exist`
 
 **Cause:** Using an existing PostgreSQL volume from before RBAC migrations were added.
 
@@ -275,7 +275,7 @@ docker volume rm agor-unix-user-always_postgres-data
 docker compose --env-file .env.postgres up
 ```
 
-**Why this happens:** The PostgreSQL database was created before migrations 0006-0007 (RBAC columns) were added. When you start the environment, the seed script tries to create worktrees but the RBAC columns don't exist yet.
+**Why this happens:** The PostgreSQL database was created before migrations 0006-0007 (RBAC columns) were added. When you start the environment, the seed script tries to create branches but the RBAC columns don't exist yet.
 
 **Alternative (if you have data to preserve):**
 
@@ -305,7 +305,7 @@ Unix group creation is not yet fully implemented. The current setup:
 
 - ✅ Creates Unix users (alice, bob)
 - ✅ Creates Agor app users
-- ✅ Creates worktrees with ownership in database
+- ✅ Creates branches with ownership in database
 - ❌ Unix group creation (planned)
 - ❌ Filesystem permission sync (planned)
 - ❌ Symlink creation in `~/agor/worktrees/` (planned)
@@ -313,7 +313,7 @@ Unix group creation is not yet fully implemented. The current setup:
 **Next steps for full Unix integration:**
 
 1. Implement Unix group creation in `UnixIntegrationService`
-2. Hook into worktree creation/ownership changes
+2. Hook into branch creation/ownership changes
 3. Sync filesystem permissions based on RBAC
 4. Create/update symlinks in user home directories
 
@@ -330,17 +330,17 @@ docker exec -it agor-unix-user-always-postgres-1 \
 -- List all users
 SELECT email, name, role FROM users;
 
--- List all worktrees with owners
+-- List all branches with owners
 SELECT w.name, u.email as owner
-FROM worktrees w
-JOIN worktree_owners wo ON w.worktree_id = wo.worktree_id
+FROM branches w
+JOIN branch_owners wo ON w.branch_id = wo.branch_id
 JOIN users u ON wo.user_id = u.user_id;
 
--- Check user permissions on worktree
+-- Check user permissions on branch
 SELECT u.email, w.name
-FROM worktree_owners wo
+FROM branch_owners wo
 JOIN users u ON wo.user_id = u.user_id
-JOIN worktrees w ON wo.worktree_id = w.worktree_id
+JOIN branches w ON wo.branch_id = w.branch_id
 WHERE w.name = 'team-shared';
 ```
 

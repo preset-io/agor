@@ -2,9 +2,9 @@
  * Agor Configuration Types
  */
 
+import type { BranchPermissionLevel } from '../types/branch';
 import type { DaemonResourcesConfig } from '../types/config-resources';
 import type { UserRole } from '../types/user';
-import type { WorktreePermissionLevel } from '../types/worktree';
 
 /**
  * Minimum role allowed to trigger managed environment commands
@@ -40,9 +40,6 @@ export interface AgorDisplaySettings {
 
   /** Enable color output */
   colorOutput?: boolean;
-
-  /** Short ID length (default: 8) */
-  shortIdLength?: number;
 }
 
 /**
@@ -101,12 +98,6 @@ export interface AgorDaemonSettings {
    */
   base_url?: string;
 
-  /** Allow anonymous access (default: true for local mode) */
-  allowAnonymous?: boolean;
-
-  /** Require authentication for all requests (default: false) */
-  requireAuth?: boolean;
-
   /** JWT secret (auto-generated if not provided) */
   jwtSecret?: string;
 
@@ -121,7 +112,7 @@ export interface AgorDaemonSettings {
   mcpToolSearch?: boolean;
 
   /** Unix user the daemon runs as. Used to ensure daemon has access to all Unix groups.
-   * Required when Unix isolation is enabled (worktree_rbac or unix_user_mode).
+   * Required when Unix isolation is enabled (branch_rbac or unix_user_mode).
    * In dev mode without isolation, falls back to current process user. */
   unix_user?: string;
 
@@ -176,6 +167,67 @@ export interface AgorUISettings {
 
   /** UI host (default: localhost) */
   host?: string;
+}
+
+/**
+ * Generic one-time launch-code authentication handoff.
+ *
+ * A trusted external launch issuer opens the runtime UI with an opaque,
+ * short-lived code. The daemon exchanges that code over a server-to-server
+ * backchannel, verifies the returned assertion, maps a local user, and issues
+ * normal runtime auth tokens.
+ */
+export interface AgorExternalLaunchSettings {
+  /** Enable POST /auth/launch (default: false). */
+  enabled?: boolean;
+
+  /** Server-to-server exchange endpoint that consumes one-time launch codes. */
+  exchange_url?: string;
+
+  /** Expected JWT issuer for returned launch assertions. */
+  issuer?: string;
+
+  /** Expected JWT audience for returned launch assertions; identifies this runtime. */
+  audience?: string;
+
+  /** Optional runtime instance identifier required to match assertion instance_id/runtime_instance_id. */
+  instance_id?: string;
+
+  /** Stable provider label used in local external identity mapping. Defaults to issuer. */
+  provider_id?: string;
+
+  /** JWKS endpoint used to verify returned launch assertions. */
+  jwks_url?: string;
+
+  /** PEM public key used to verify returned launch assertions. */
+  public_key?: string;
+
+  /** Dev-only symmetric key used to verify HS256 launch assertions. Prefer JWKS/public_key. */
+  dev_shared_secret?: string;
+
+  /** Environment variable that contains the dev-only symmetric key. */
+  dev_shared_secret_env?: string;
+
+  /** Bearer credential sent by the daemon to the exchange endpoint. Prefer service_credential_env. */
+  service_credential?: string;
+
+  /** Environment variable that contains the exchange endpoint bearer credential. */
+  service_credential_env?: string;
+
+  /** Backchannel request timeout in milliseconds (default: 10000). */
+  request_timeout_ms?: number;
+
+  /** Optional allow-list of JWT algorithms for returned launch assertions. */
+  algorithms?: string[];
+
+  /** Allow launch assertions to assign admin/superadmin roles (default: false). */
+  allow_admin_roles?: boolean;
+
+  /**
+   * Optional HTTP(S) URL shown in the unauthenticated UI when external launch
+   * sign-in is unavailable, missing, expired, or invalid.
+   */
+  login_redirect_url?: string;
 }
 
 /**
@@ -243,35 +295,57 @@ export interface AgorDatabaseSettings {
 }
 
 /**
- * Codex-specific configuration
- */
-export interface AgorCodexSettings {
-  /** Codex home directory (default: ~/.agor/codex) */
-  home?: string;
-}
-
-/**
  * Unix user isolation mode controlling how session processes get mapped to
  * OS identities.
  *
  * - `simple` — all processes run as the daemon user (no OS isolation)
- * - `insulated` — executors run as a dedicated user with per-worktree groups
+ * - `insulated` — executors run as a dedicated user with per-branch groups
  * - `strict` — sessions run as the session creator's own Unix user
  */
 export type UnixUserMode = 'simple' | 'insulated' | 'strict';
+
+export interface AgorExecutorHeartbeatSettings {
+  /** Enable executor task heartbeats (default: true). */
+  enabled?: boolean;
+
+  /** Heartbeat interval in milliseconds (default: 10000). */
+  interval_ms?: number;
+
+  /** Stale threshold in milliseconds. Default: max(3 * interval_ms, 30000). */
+  stale_after_ms?: number | null;
+
+  /** Optional external command callback invoked on each heartbeat. */
+  callback?: {
+    /** Shell command to run. Receives heartbeat JSON on stdin. Disabled when null/undefined. */
+    command_template?: string | null;
+    /** Callback timeout in milliseconds (default: 3000). */
+    timeout_ms?: number;
+  };
+}
 
 /**
  * Execution settings
  */
 export interface AgorExecutionSettings {
+  /**
+   * Lightweight heartbeat settings for long-running executor tasks.
+   *
+   * The executor patches `tasks.last_executor_heartbeat_at` immediately and
+   * then every `interval_ms` while a task is active. The daemon may mark stale
+   * active tasks failed after `stale_after_ms` without retrying automatically.
+   * Optional callbacks are shell commands that receive a small JSON payload on
+   * stdin; keep secrets out of the command argv.
+   */
+  executor_heartbeat?: AgorExecutorHeartbeatSettings;
+
   /** Unix user to run executors as (default: undefined = run as daemon user). When set, uses sudo impersonation. */
   executor_unix_user?: string;
 
-  /** Unix user mode: simple (no isolation), insulated (worktree groups), strict (enforce process impersonation) */
+  /** Unix user mode: simple (no isolation), insulated (branch groups), strict (enforce process impersonation) */
   unix_user_mode?: UnixUserMode;
 
-  /** Enable worktree RBAC and ownership system (default: false). When enabled, enforces permission checks and Unix group isolation. */
-  worktree_rbac?: boolean;
+  /** Enable branch RBAC and ownership system (default: false). When enabled, enforces permission checks and Unix group isolation. */
+  branch_rbac?: boolean;
 
   /**
    * Allow authenticated members (and above) to open the web terminal (default: true).
@@ -287,12 +361,15 @@ export interface AgorExecutionSettings {
    * account) or `insulated` (shared executor user, no daemon access). The
    * daemon emits a startup warning when this flag is enabled in `simple` mode.
    *
-   * Worktree-level permissions still apply: opening a terminal against a
-   * worktree requires at least `session` permission on that worktree.
+   * Branch-level permissions still apply: opening a terminal against a
+   * branch requires at least `session` permission on that branch.
    */
   allow_web_terminal?: boolean;
 
-  /** Allow superadmin role (default: false). When true, superadmin role gets worktree RBAC bypass. Opt-in for self-hosted deployments. */
+  /** Enable experimental Cursor SDK provider surfaces (default: false). */
+  cursor_sdk_enabled?: boolean;
+
+  /** Allow superadmin role (default: false). When true, superadmin role gets branch RBAC bypass. Opt-in for self-hosted deployments. */
   allow_superadmin?: boolean;
 
   /**
@@ -369,7 +446,7 @@ export interface AgorExecutionSettings {
    * - {unix_user_uid} - Target Unix UID (for runAsUser)
    * - {unix_user_gid} - Target Unix GID (for fsGroup)
    * - {session_id} - Session ID (if available)
-   * - {worktree_id} - Worktree ID (if available)
+   * - {branch_id} - Branch ID (if available)
    *
    * The template command receives JSON payload via stdin and should pipe it
    * to `agor-executor --stdin`.
@@ -423,7 +500,7 @@ export interface AgorExecutionSettings {
 
   /**
    * Minimum role required to *trigger* managed environment commands
-   * (start/stop/nuke/logs) for a worktree.
+   * (start/stop/nuke/logs) for a branch.
    *
    * - `'none'` — disables triggers for everyone (kill switch; authoring is still allowed)
    * - `'viewer'` — any authenticated user
@@ -438,10 +515,74 @@ export interface AgorExecutionSettings {
    * `requireAdminForEnvConfig`. This flag is orthogonal and controls who can
    * *trigger* those admin-authored commands.
    *
-   * Worktree-level RBAC (`others_can` on each worktree) still applies on top
-   * of this flag when `worktree_rbac: true`.
+   * Branch-level RBAC (`others_can` on each branch) still applies on top
+   * of this flag when `branch_rbac: true`.
    */
   managed_envs_minimum_role?: ManagedEnvsMinimumRole;
+
+  /**
+   * Branch storage configuration — operator gate for which storage modes a
+   * branch can be created with. The API/UI/MCP `storage_mode` field is
+   * always exposed (stable shape), but requests for a mode not listed in
+   * `allowed_modes` are rejected at the daemon service boundary with a
+   * clear "enable it in config" error.
+   *
+   * v0.20+ default already allows both `worktree` and `clone` with
+   * `default_mode: worktree`, so this block is only needed when an
+   * operator wants to deviate. See `context/explorations/clone-redesign.md`
+   * for the storage-model design.
+   *
+   * @example Disable clone mode entirely (security-gradient deployment)
+   * ```yaml
+   * execution:
+   *   branch_storage:
+   *     allowed_modes:
+   *       - worktree
+   * ```
+   *
+   * @example Make clone the default backing for new branches
+   * ```yaml
+   * execution:
+   *   branch_storage:
+   *     default_mode: clone
+   *     allowed_modes:
+   *       - worktree
+   *       - clone
+   * ```
+   */
+  branch_storage?: AgorBranchStorageSettings;
+}
+
+/**
+ * Storage model for a branch's filesystem.
+ *
+ * - `'worktree'` — native `git worktree add` (shared base `.git/config`,
+ *   legacy default).
+ * - `'clone'` — self-standing `git clone` with its own `.git/` directory;
+ *   closes cross-branch credential/config leak vectors.
+ */
+export type BranchStorageMode = 'worktree' | 'clone';
+
+/**
+ * Operator gate for which storage modes can be selected at branch-create
+ * time. Defaults (v0.20+) enable both modes so users can pick per branch;
+ * `default_mode` stays on `'worktree'` for backwards compatibility. Pin
+ * `allowed_modes: ['worktree']` to disable clone mode entirely (e.g. for
+ * security gradient reasons).
+ */
+export interface AgorBranchStorageSettings {
+  /**
+   * Mode used when a create request doesn't specify one. Must also appear
+   * in `allowed_modes`. Default: `'worktree'`.
+   */
+  default_mode?: BranchStorageMode;
+
+  /**
+   * Storage modes the operator has enabled for this instance. Requests for
+   * a mode not in this list are rejected. Default: `['worktree', 'clone']`
+   * — both modes selectable from the UI / MCP tool out of the box.
+   */
+  allowed_modes?: BranchStorageMode[];
 }
 
 /**
@@ -590,6 +731,20 @@ export interface AgorCorsSettings {
 }
 
 /**
+ * `security.git_config_parameters` shape. Mirrors `security.csp`: `extras`
+ * appends to safe defaults, `override` replaces them. Mutually exclusive.
+ *
+ * Defaults + rationale: `docs/internal/credential-leak-defenses-2026-05-11.md`.
+ * Don't bake credential-bearing values (e.g. `http.proxy=http://user:pass@…`)
+ * here — the daemon redacts them from logs but the env var itself isn't
+ * routed through the encrypted env-file path.
+ */
+export interface AgorGitConfigParametersSettings {
+  extras?: string[];
+  override?: string[];
+}
+
+/**
  * Top-level security config block.
  */
 export interface AgorSecuritySettings {
@@ -598,22 +753,25 @@ export interface AgorSecuritySettings {
 
   /** CORS configuration (origins, credentials, methods, headers, max-age). */
   cors?: AgorCorsSettings;
+
+  /** Git config hardening — see {@link AgorGitConfigParametersSettings}. */
+  git_config_parameters?: AgorGitConfigParametersSettings;
 }
 
 /**
  * Path configuration settings
  *
  * Allows separation of daemon operating files from git data files.
- * This enables different storage backends (e.g., local SSD for daemon, EFS for worktrees).
+ * This enables different storage backends (e.g., local SSD for daemon, EFS for branches).
  *
  * @see context/explorations/executor-expansion.md
  */
 export interface AgorPathSettings {
   /**
-   * Git data directory (repos, worktrees)
+   * Git data directory (repos, branches)
    *
-   * When set, repos and worktrees are stored here instead of under agor_home.
-   * Useful for k8s deployments where worktrees need to be on shared storage (EFS).
+   * When set, repos and branches are stored here instead of under agor_home.
+   * Useful for k8s deployments where branches need to be on shared storage (EFS).
    *
    * Default: same as agor_home (~/.agor)
    *
@@ -629,6 +787,75 @@ export interface AgorPathSettings {
 }
 
 /**
+ * Backend analytics settings.
+ *
+ * Disabled by default. When enabled, daemon/server code sends curated
+ * lifecycle events through a central analytics client. Plugin configuration is
+ * resolved by type at daemon startup.
+ */
+export interface AgorAnalyticsSettings {
+  /** Master kill-switch. Defaults to false. */
+  enabled?: boolean;
+
+  /** Static client options passed to the underlying analytics package. */
+  client?: {
+    app?: string;
+    version?: string | number;
+    debug?: boolean;
+  };
+
+  /** Simple event-name filters. */
+  filters?: {
+    /** Exact names or simple `*` globs to exclude before delivery. */
+    exclude_events?: string[];
+  };
+
+  /** Analytics delivery plugins. */
+  plugins?: AgorAnalyticsPluginSettings[];
+}
+
+export type AgorAnalyticsPluginSettings =
+  | AgorAnalyticsStdoutPluginSettings
+  | AgorAnalyticsHttpBatchPluginSettings
+  | AgorAnalyticsModulePluginSettings;
+
+export interface AgorAnalyticsStdoutPluginSettings {
+  type: 'stdout';
+  enabled?: boolean;
+  options?: {
+    /** Pretty-print JSON instead of emitting JSON lines. Defaults to false. */
+    pretty?: boolean;
+  };
+}
+
+export interface AgorAnalyticsHttpBatchPluginSettings {
+  type: 'http_batch';
+  enabled?: boolean;
+  options?: {
+    /** Destination URL. Required when this plugin is enabled. */
+    url?: string | null;
+    flush_interval_ms?: number;
+    max_batch_size?: number;
+    timeout_ms?: number;
+    /** Static headers only. */
+    headers?: Record<string, string>;
+  };
+}
+
+export interface AgorAnalyticsModulePluginSettings {
+  type: 'module';
+  enabled?: boolean;
+  options?: {
+    /** Package name or absolute local module path to dynamically import. */
+    module_path?: string | null;
+    /** Factory export to call. Defaults to createAnalyticsPlugin. */
+    export_name?: string;
+    /** Passed as the first argument to the module factory. */
+    plugin_options?: Record<string, unknown>;
+  };
+}
+
+/**
  * Supported credential keys (enum for type safety)
  */
 export enum CredentialKey {
@@ -638,6 +865,7 @@ export enum CredentialKey {
   OPENAI_API_KEY = 'OPENAI_API_KEY',
   GEMINI_API_KEY = 'GEMINI_API_KEY',
   COPILOT_GITHUB_TOKEN = 'COPILOT_GITHUB_TOKEN',
+  CURSOR_API_KEY = 'CURSOR_API_KEY',
 }
 
 /**
@@ -663,13 +891,16 @@ export interface AgorCredentials {
 
   /** GitHub token for Copilot */
   COPILOT_GITHUB_TOKEN?: string;
+
+  /** Cursor API key for the experimental Cursor SDK provider */
+  CURSOR_API_KEY?: string;
 }
 
 /**
- * Onboarding settings (stored by CLI init, consumed by UI wizard)
+ * Onboarding settings (consumed by UI wizard; may be set by existing installs)
  */
 export interface AgorOnboardingSettings {
-  /** Whether assistant setup was requested during init */
+  /** Whether assistant setup is pending (set by existing installs, consumed by UI wizard) */
   assistantPending?: boolean;
   /** @deprecated Use assistantPending instead */
   persistedAgentPending?: boolean;
@@ -678,17 +909,17 @@ export interface AgorOnboardingSettings {
 }
 
 /**
- * Worktree-level defaults.
+ * Branch-level defaults.
  *
- * Top-level `worktrees:` section (not under `execution:`) because these
- * settings shape *how worktrees are created*, not how sessions execute.
- * Ignored when `execution.worktree_rbac: false` (open-access mode has no
- * per-worktree ACL to default).
+ * Top-level `branches:` section (not under `execution:`) because these
+ * settings shape *how branches are created*, not how sessions execute.
+ * Ignored when `execution.branch_rbac: false` (open-access mode has no
+ * per-branch ACL to default).
  */
-export interface AgorWorktreesSettings {
+export interface AgorBranchesSettings {
   /**
-   * Default value for a new worktree's `others_can` when the caller doesn't
-   * specify one. Controls what non-owners can do on the worktree.
+   * Default value for a new branch's `others_can` when the caller doesn't
+   * specify one. Controls what non-owners can do on the branch.
    *
    * - `'none'`  — private to owners
    * - `'view'`  — read-only access
@@ -698,15 +929,15 @@ export interface AgorWorktreesSettings {
    *
    * Default: `'session'` (matches current repository-layer default).
    */
-  others_can_default?: WorktreePermissionLevel;
+  others_can_default?: BranchPermissionLevel;
 
   /**
-   * Default filesystem access tier for non-owners on new worktrees.
+   * Default filesystem access tier for non-owners on new branches.
    * Only meaningful in `unix_user_mode: insulated` or `strict`.
    *
    * - `'none'`  — no filesystem access
-   * - `'read'`  (default) — read-only via worktree group
-   * - `'write'` — full write access via worktree group
+   * - `'read'`  (default) — read-only via branch group
+   * - `'write'` — full write access via branch group
    */
   others_fs_access_default?: 'none' | 'read' | 'write';
 }
@@ -769,8 +1000,8 @@ export interface AgorConfig {
   /** OpenCode.ai integration settings */
   opencode?: AgorOpenCodeSettings;
 
-  /** Codex-specific configuration */
-  codex?: AgorCodexSettings;
+  /** Generic external one-time launch-code authentication. */
+  external_launch?: AgorExternalLaunchSettings;
 
   /** Execution isolation settings */
   execution?: AgorExecutionSettings;
@@ -778,11 +1009,14 @@ export interface AgorConfig {
   /** Security headers & CORS (CSP extras/override, CORS mode/origins, etc.) */
   security?: AgorSecuritySettings;
 
-  /** Worktree-level defaults (others_can_default, others_fs_access_default) */
-  worktrees?: AgorWorktreesSettings;
+  /** Branch-level defaults (others_can_default, others_fs_access_default) */
+  branches?: AgorBranchesSettings;
 
-  /** Path configuration (data_home for repos/worktrees separation) */
+  /** Path configuration (data_home for repos/branches separation) */
   paths?: AgorPathSettings;
+
+  /** Backend analytics settings. Disabled by default. */
+  analytics?: AgorAnalyticsSettings;
 
   /** Tool credentials (API keys, tokens) */
   credentials?: AgorCredentials;
@@ -813,7 +1047,7 @@ export interface AgorConfig {
    * ```yaml
    * services:
    *   core: on
-   *   worktrees: on
+   *   branches: on
    *   repos: readonly
    *   users: internal
    *   boards: off
@@ -833,11 +1067,12 @@ export type ConfigKey =
   | `ui.${keyof AgorUISettings}`
   | `database.${keyof AgorDatabaseSettings}`
   | `opencode.${keyof AgorOpenCodeSettings}`
-  | `codex.${keyof AgorCodexSettings}`
+  | `external_launch.${keyof AgorExternalLaunchSettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
-  | `worktrees.${keyof AgorWorktreesSettings}`
+  | `branches.${keyof AgorBranchesSettings}`
   | `paths.${keyof AgorPathSettings}`
+  | `analytics.${keyof AgorAnalyticsSettings}`
   | `credentials.${keyof AgorCredentials}`
   | `onboarding.${keyof AgorOnboardingSettings}`
   | `services.${keyof import('../types/config-services').DaemonServicesConfig}`;

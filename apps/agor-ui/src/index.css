@@ -5,6 +5,14 @@
 
 /* Global styles for Agor UI */
 
+/* Header icon buttons are inline-flex by default in AntD, which lets the
+   inherited 64px header line-height place them on the text baseline. Force the
+   badge wrapper into flex layout so comment icon buttons center like the rest. */
+.app-header-icon-badge {
+  display: flex;
+  align-items: center;
+}
+
 /* Prevent long text from causing horizontal scroll in collapse headers,
    but allow vertical overflow so flex-wrapped pill rows aren't clipped (#869). */
 .ant-collapse-header {

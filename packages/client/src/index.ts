@@ -34,15 +34,24 @@ export type {
   AgorClient,
   AgorService,
   BoardsService,
+  BranchesService,
   MessagesService,
+  ReposCloneService,
   ReposLocalService,
   ReposService,
   ServiceTypes,
   SessionsService,
   TasksService,
-  WorktreesService,
 } from '@agor/core/client';
-
+export * from '@agor/core/client';
+// `shortId` is the canonical display helper (always SHORT_ID_LENGTH chars).
+// Use it for any UUID rendered to a user — URLs, pills, logs, notifications.
+// `toShortId(id, length)` is the lower-level primitive for rare cases that
+// need a non-canonical length (e.g. `findMinimumPrefixLength`).
+export { shortId } from '@agor/core/client';
+export { isValidSlug, REPO_SLUG_PATTERN } from '@agor/core/config/browser';
+export type { PaginatedResult } from '@agor/core/types';
+export * from './models';
 export type {
   ReactiveAgorClient,
   ReactiveLoadedTaskIds,
@@ -57,11 +66,6 @@ export type {
   ToolExecutionState,
 };
 
-export * from '@agor/core/client';
-// Re-export full browser-safe type/runtime surface for UI consumers.
-export { toShortId as formatShortId } from '@agor/core/client';
-export * from './models';
-
 export function createClient(...args: Parameters<typeof createCoreClient>): ReactiveAgorClient {
   const client = createCoreClient(...args);
   return attachReactiveSessionApi(client as CoreAgorClient);
@@ -73,7 +77,10 @@ export async function createRestClient(
   return createCoreRestClient(...args);
 }
 
-export { attachReactiveSessionApi };
-export { releaseReactiveSession, retainReactiveSession };
-export { getApiKeyFromEnv };
-export { isDaemonRunning };
+export {
+  attachReactiveSessionApi,
+  getApiKeyFromEnv,
+  isDaemonRunning,
+  releaseReactiveSession,
+  retainReactiveSession,
+};

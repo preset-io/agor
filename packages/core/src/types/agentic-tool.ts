@@ -3,19 +3,48 @@
 import type { AgenticToolID } from './id';
 
 /**
+ * The set of credential env-var names the resolver knows how to look up.
+ * Kept as an explicit union so callers can't accidentally use an unrelated var.
+ * Lives in types (not config) so it is accessible to the browser bundle and
+ * executor without creating a circular config→types dependency.
+ */
+export type ApiKeyName =
+  | 'ANTHROPIC_API_KEY'
+  | 'ANTHROPIC_AUTH_TOKEN'
+  | 'CLAUDE_CODE_OAUTH_TOKEN'
+  | 'OPENAI_API_KEY'
+  | 'GEMINI_API_KEY'
+  | 'COPILOT_GITHUB_TOKEN'
+  | 'CURSOR_API_KEY';
+
+/**
  * Agentic coding tool names
  *
  * These are the external agentic CLI/IDE tools that connect to Agor:
- * - claude-code: Anthropic's Claude Code CLI
+ * - claude-code: Anthropic's Claude Code via the Agent SDK (API-key path).
+ *   Renaming to 'claude-agent-sdk' is staged for a follow-up commit; the
+ *   string value stays 'claude-code' for backward compatibility with
+ *   existing DB rows until a coordinated DB+UI migration ships.
+ * - claude-code-cli: The `claude` shell binary running interactively in a
+ *   Zellij pane, JSONL-tailed by the daemon. Subscription-auth friendly.
+ *   See docs/internal/claude-code-cli-integration-analysis-2026-05-14.md.
  * - codex: OpenAI's Codex CLI
  * - gemini: Google's Gemini Code Assist
  * - opencode: Open-source terminal-based AI assistant with 75+ LLM providers
  * - copilot: GitHub Copilot's agentic runtime via @github/copilot-sdk
+ * - cursor: Cursor's agentic runtime via @cursor/sdk (experimental)
  *
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
  */
-export type AgenticToolName = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+export type AgenticToolName =
+  | 'claude-code'
+  | 'claude-code-cli'
+  | 'codex'
+  | 'gemini'
+  | 'opencode'
+  | 'copilot'
+  | 'cursor';
 
 /**
  * Agentic tool metadata for UI display
@@ -128,6 +157,14 @@ export type CodexNetworkAccess = boolean;
  */
 export type CopilotPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
 
+/**
+ * Cursor permission modes (via @cursor/sdk, experimental).
+ *
+ * Cursor SDK does not currently expose a blocking Agor-style permission callback,
+ * so these mirror the autonomous-provider modes until a richer policy surface exists.
+ */
+export type CursorPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
+
 // ============================================================================
 // Tool Capabilities (static, shared between backend and UI)
 // ============================================================================
@@ -153,6 +190,30 @@ export interface AgenticToolCapabilities {
  * Static capability map for all agentic tools.
  * Source of truth for what each tool supports — avoids scattered `if (tool === 'codex')` checks.
  */
+/**
+ * Auth check result — shared type for ITool.isAuthenticated and the daemon /check-auth service.
+ */
+export interface AuthCheckResult {
+  authenticated: boolean;
+  method: 'api-key' | 'oauth' | 'native' | 'none';
+  hint?: string;
+}
+
+/**
+ * Canonical mapping from AgenticToolName to the env-var name that holds its primary API key.
+ * Tools that authenticate without a key (opencode) are intentionally absent.
+ *
+ * Single source of truth — used by the daemon check-auth service, the executor tool registry,
+ * and the onboarding wizard's API-key step.
+ */
+export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> = {
+  'claude-code': 'ANTHROPIC_API_KEY',
+  codex: 'OPENAI_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+  copilot: 'COPILOT_GITHUB_TOKEN',
+  cursor: 'CURSOR_API_KEY',
+};
+
 export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapabilities> = {
   'claude-code': {
     supportsSessionFork: true,
@@ -160,8 +221,20 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsSessionImport: true,
     supportsStatelessFsMode: true,
   },
+  'claude-code-cli': {
+    // First-class CLI flag: `claude --resume <id> --fork-session`
+    supportsSessionFork: true,
+    // New `claude --session-id <new uuid>` in a fresh Zellij pane
+    supportsChildSpawn: true,
+    // v1: false. The on-disk JSONL is ingestable but the "adopt existing
+    // session" UI flow is deferred to v2 (see analysis doc § Phased delivery).
+    supportsSessionImport: false,
+    // CLI sessions live in long-running PTYs; state is on disk in the JSONL,
+    // not a serializable filesystem snapshot the daemon manages.
+    supportsStatelessFsMode: false,
+  },
   codex: {
-    supportsSessionFork: false,
+    supportsSessionFork: true,
     supportsChildSpawn: true,
     supportsSessionImport: false,
     supportsStatelessFsMode: true,
@@ -179,6 +252,12 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsStatelessFsMode: false,
   },
   copilot: {
+    supportsSessionFork: false,
+    supportsChildSpawn: true,
+    supportsSessionImport: false,
+    supportsStatelessFsMode: false,
+  },
+  cursor: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,

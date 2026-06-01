@@ -33,7 +33,7 @@ export default class Init extends Command {
     force: Flags.boolean({
       char: 'f',
       description:
-        'Force re-initialization without prompts (deletes database, repos, and worktrees)',
+        'Force re-initialization without prompts (deletes database, repos, and branches)',
       default: false,
     }),
     'skip-if-exists': Flags.boolean({
@@ -108,7 +108,7 @@ export default class Init extends Command {
   }
 
   /**
-   * List directories in a path (repos, worktrees)
+   * List directories in a path (repos, branches)
    */
   private async listDirs(path: string): Promise<string[]> {
     try {
@@ -174,13 +174,13 @@ export default class Init extends Command {
     try {
       const dbPath = join(baseDir, 'agor.db');
       const reposDir = join(baseDir, 'repos');
-      const worktreesDir = join(baseDir, 'worktrees');
+      const branchesDir = join(baseDir, 'worktrees');
 
       // Check if already initialized
       const alreadyExists = await this.pathExists(baseDir);
       const dbExists = await this.pathExists(dbPath);
       const reposExist = await this.pathExists(reposDir);
-      const worktreesExist = await this.pathExists(worktreesDir);
+      const branchesExist = await this.pathExists(branchesDir);
 
       if (!alreadyExists) {
         // Fresh initialization
@@ -195,7 +195,7 @@ export default class Init extends Command {
       // Gather information about what exists
       const dbStats = dbExists ? await this.getDbStats(dbPath) : null;
       const repos = reposExist ? await this.listDirs(reposDir) : [];
-      const worktrees = worktreesExist ? await this.listDirs(worktreesDir) : [];
+      const branches = branchesExist ? await this.listDirs(branchesDir) : [];
 
       // Show what will be deleted
       this.log(chalk.bold.red('⚠  Re-initialization will delete:'));
@@ -222,13 +222,13 @@ export default class Init extends Command {
         }
       }
 
-      if (worktrees.length > 0) {
-        this.log(`${chalk.cyan('  Worktrees:')} ${worktreesDir}`);
-        for (const wt of worktrees.slice(0, 5)) {
+      if (branches.length > 0) {
+        this.log(`${chalk.cyan('  Branches:')} ${branchesDir}`);
+        for (const wt of branches.slice(0, 5)) {
           this.log(chalk.dim(`    - ${wt}`));
         }
-        if (worktrees.length > 5) {
-          this.log(chalk.dim(`    ... and ${worktrees.length - 5} more`));
+        if (branches.length > 5) {
+          this.log(chalk.dim(`    ... and ${branches.length - 5} more`));
         }
       }
 
@@ -237,7 +237,7 @@ export default class Init extends Command {
       // If --force, skip prompts and nuke everything
       if (flags.force) {
         this.log(chalk.yellow('🗑️  --force flag set: deleting everything without prompts...'));
-        await this.cleanupExisting(baseDir, dbPath, reposDir, worktreesDir);
+        await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
         await this.performInit(baseDir, dbPath, true);
         return;
       }
@@ -259,7 +259,7 @@ export default class Init extends Command {
       }
 
       // User confirmed - clean up and reinitialize
-      await this.cleanupExisting(baseDir, dbPath, reposDir, worktreesDir);
+      await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
       await this.performInit(baseDir, dbPath, false);
     } catch (error) {
       this.error(
@@ -275,7 +275,7 @@ export default class Init extends Command {
     _baseDir: string,
     dbPath: string,
     reposDir: string,
-    worktreesDir: string
+    branchesDir: string
   ): Promise<void> {
     this.log('');
     this.log('🗑️  Cleaning up existing installation...');
@@ -292,10 +292,10 @@ export default class Init extends Command {
       this.log(`${chalk.green('   ✓')} Deleted repos`);
     }
 
-    // Delete worktrees
-    if (await this.pathExists(worktreesDir)) {
-      await rm(worktreesDir, { recursive: true, force: true });
-      this.log(`${chalk.green('   ✓')} Deleted worktrees`);
+    // Delete branches
+    if (await this.pathExists(branchesDir)) {
+      await rm(branchesDir, { recursive: true, force: true });
+      this.log(`${chalk.green('   ✓')} Deleted branches`);
     }
   }
 
@@ -338,16 +338,11 @@ export default class Init extends Command {
     await seedInitialData(db);
     this.log(`${chalk.green('   ✓')} Created Main Board`);
 
-    // Prompt for auth/multiplayer setup (unless --force)
+    // Create the admin user (auth is always required — anonymous mode was removed).
     if (!skipPrompts) {
-      await this.promptAuthSetup(dbPath);
+      await this.promptAdminSetup(dbPath);
     } else {
-      // With --force, enable auth by default (multiplayer mode) with default admin user
-      await setConfigValue('daemon.requireAuth', true);
-      await setConfigValue('daemon.allowAnonymous', false);
-      this.log(`${chalk.green('   ✓')} Enabled authentication (multiplayer mode)`);
-
-      // Create default admin user with credentials displayed to user
+      // --force: create default admin (admin@agor.live / admin) and warn.
       try {
         const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
         const defaultEmail = 'admin@agor.live';
@@ -372,18 +367,13 @@ export default class Init extends Command {
       }
     }
 
-    // Prompt for assistant setup (unless --force or skipped prompts)
-    if (!skipPrompts) {
-      await this.promptAssistantSetup();
-    }
-
     // Success summary
     this.log('');
     this.log(chalk.green.bold('✅ Agor initialized successfully!'));
     this.log('');
     this.log(`   Database: ${chalk.cyan(dbPath)}`);
     this.log(`   Repos: ${chalk.cyan(join(baseDir, 'repos'))}`);
-    this.log(`   Worktrees: ${chalk.cyan(join(baseDir, 'worktrees'))}`);
+    this.log(`   Branches: ${chalk.cyan(join(baseDir, 'worktrees'))}`);
     this.log(`   Concepts: ${chalk.cyan(join(baseDir, 'concepts'))}`);
     this.log(`   Logs: ${chalk.cyan(join(baseDir, 'logs'))}`);
     this.log('');
@@ -420,38 +410,36 @@ export default class Init extends Command {
   }
 
   /**
-   * Prompt user for auth/multiplayer setup
+   * Prompt user for admin account setup.
+   *
+   * Authentication is always required (anonymous mode was removed). If the
+   * user skips the prompts here, the daemon will auto-bootstrap an admin on
+   * first start (`runFirstRunAdminBootstrap`) and write credentials to
+   * `~/.agor/admin-credentials`.
    */
-  private async promptAuthSetup(dbPath: string): Promise<void> {
+  private async promptAdminSetup(dbPath: string): Promise<void> {
+    this.log('');
+    this.log(chalk.bold('👤 Create your admin account:'));
+    this.log(chalk.gray('   (Skip this and the daemon will auto-create one on first start)'));
     this.log('');
 
-    const { enableAuth } = await inquirer.prompt([
+    const { setupNow } = await inquirer.prompt([
       {
         type: 'confirm',
-        name: 'enableAuth',
-        message: 'Enable authentication and multiplayer features?',
+        name: 'setupNow',
+        message: 'Set up your admin account now?',
         default: true,
       },
     ]);
 
-    if (!enableAuth) {
-      this.log(chalk.gray('Authentication disabled. Running in single-user mode.'));
-      this.log('');
-      this.log(chalk.gray('You can enable auth later with:'));
-      this.log(chalk.gray('  agor config set daemon.requireAuth true'));
-      this.log(chalk.gray('  agor user create-admin'));
+    if (!setupNow) {
+      this.log(
+        chalk.gray(
+          '   Skipped. The daemon will create admin@agor.live on first start; the generated password lands in ~/.agor/admin-credentials.'
+        )
+      );
       return;
     }
-
-    // Enable auth in config
-    await setConfigValue('daemon.requireAuth', true);
-    await setConfigValue('daemon.allowAnonymous', false);
-    this.log(`${chalk.green('   ✓')} Enabled authentication`);
-
-    // Admin user is required when auth is enabled
-    this.log('');
-    this.log(chalk.bold('👤 Create your admin account:'));
-    this.log('');
 
     // Prompt for user details
     const { email, username, password } = await inquirer.prompt([
@@ -502,56 +490,6 @@ export default class Init extends Command {
     });
 
     this.log(`${chalk.green('   ✓')} Admin user created (${chalk.gray(email)})`);
-  }
-
-  /**
-   * Prompt user for assistant setup
-   *
-   * Stores intent in config.yaml for the UI wizard to pick up.
-   * The framework repo is public, so HTTPS always works.
-   */
-  private async promptAssistantSetup(): Promise<void> {
-    this.log('');
-    this.log(chalk.bold('🤖 Assistant'));
-    this.log('');
-    this.log(
-      chalk.gray('An assistant is a persistent AI companion that manages your Agor instance.')
-    );
-    this.log(
-      chalk.gray(
-        'It maintains memory across sessions, orchestrates work, and learns your preferences.'
-      )
-    );
-    this.log('');
-
-    const { setupAssistant } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'setupAssistant',
-        message: 'Set up your assistant?',
-        default: true,
-      },
-    ]);
-
-    if (setupAssistant) {
-      const frameworkRepoUrl = 'https://github.com/preset-io/agor-assistant.git';
-      await setConfigValue('onboarding.assistantPending', true);
-      await setConfigValue('onboarding.frameworkRepoUrl', frameworkRepoUrl);
-      this.log(`${chalk.green('   ✓')} Assistant setup queued for the UI wizard`);
-
-      // Check for ANTHROPIC_API_KEY
-      if (!process.env.ANTHROPIC_API_KEY) {
-        this.log('');
-        this.log(
-          chalk.yellow(
-            '   💡 Tip: Set ANTHROPIC_API_KEY in your environment for Claude Code sessions'
-          )
-        );
-        this.log(chalk.gray('   You can also configure API keys in the UI after setup'));
-      }
-    } else {
-      this.log(chalk.gray('   Skipped. You can set this up later from the UI.'));
-    }
   }
 
   /**
@@ -734,11 +672,6 @@ export default class Init extends Command {
       await setConfigValue('daemon.instanceLabel', instanceLabel);
       this.log(`${chalk.green('   ✓')} Set daemon.instanceLabel = ${instanceLabel}`);
     }
-
-    // Enable authentication for Docker/deployment environments
-    await setConfigValue('daemon.requireAuth', true);
-    await setConfigValue('daemon.allowAnonymous', false);
-    this.log(`${chalk.green('   ✓')} Enabled authentication`);
 
     // Set OpenCode server URL (Docker-specific)
     await setConfigValue('opencode.enabled', true);

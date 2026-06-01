@@ -25,7 +25,7 @@ agor-daemon (FeathersJS server, REST + WS + JSON-RPC /mcp)
       └── Storage:
             SQLite (LibSQL) at ~/.agor/agor.db          (default)
             PostgreSQL                                   (multi-tenant)
-            Filesystem at ~/.agor/worktrees/<repo>/<wt> (git worktrees)
+            Filesystem at ~/.agor/worktrees/<repo>/<wt> (git branches)
 ```
 
 ## Key decisions you'll bump into
@@ -35,20 +35,20 @@ agor-daemon (FeathersJS server, REST + WS + JSON-RPC /mcp)
 - **simple-git only.** No `execSync`/`spawn` for git. `packages/core/src/git/index.ts` is the single git wrapper.
 - **WebSocket events** (`<service>:<created|patched|removed>`) are emitted by Feathers automatically; UI subscribes via `@agor/client` reactive helpers.
 - **Executor isolation.** Agents run in `packages/executor` as a separate process tree, optionally as a different unix user (`unix_user_mode`). See `context/explorations/executor-isolation.md` for the design.
-- **MCP self-access.** Daemon exposes `POST /mcp` so agents introspect Agor (sessions, worktrees, boards). Token-authenticated. Routes in `apps/agor-daemon/src/mcp/routes.ts`.
+- **MCP self-access.** Daemon exposes `POST /mcp` so agents introspect Agor (sessions, branches, boards). Token-authenticated. Routes in `apps/agor-daemon/src/mcp/routes.ts`.
 
 ## Where to look first
 
-| If you're touching... | Open this |
-|---|---|
-| Data model | `packages/core/src/types/` + `packages/core/src/db/schema.{sqlite,postgres}.ts` |
-| New service / endpoint | `apps/agor-daemon/src/services/` + `context/guides/extending-feathers-services.md` |
-| Migrations | `packages/core/drizzle/{sqlite,postgres}/` + `context/guides/creating-database-migrations.md` |
-| Git operations | `packages/core/src/git/index.ts` |
-| Auth / RBAC | `apps/agor-daemon/src/utils/worktree-authorization.ts` + `context/guides/rbac-and-unix-isolation.md` |
-| Agent runtime | `packages/executor/` + `context/explorations/executor-isolation.md` |
-| Real-time UI | `packages/client/` reactive helpers + `apps/agor-ui/src/hooks/` |
-| MCP tools | `apps/agor-daemon/src/mcp/routes.ts` |
+| If you're touching...  | Open this                                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| Data model             | `packages/core/src/types/` + `packages/core/src/db/schema.{sqlite,postgres}.ts`                    |
+| New service / endpoint | `apps/agor-daemon/src/services/` + `context/guides/extending-feathers-services.md`                 |
+| Migrations             | `packages/core/drizzle/{sqlite,postgres}/` + `context/guides/creating-database-migrations.md`      |
+| Git operations         | `packages/core/src/git/index.ts`                                                                   |
+| Auth / RBAC            | `apps/agor-daemon/src/utils/branch-authorization.ts` + `context/guides/rbac-and-unix-isolation.md` |
+| Agent runtime          | `packages/executor/` + `context/explorations/executor-isolation.md`                                |
+| Real-time UI           | `packages/client/` reactive helpers + `apps/agor-ui/src/hooks/`                                    |
+| MCP tools              | `apps/agor-daemon/src/mcp/routes.ts`                                                               |
 
 ## Tech stack (one-liner)
 

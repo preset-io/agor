@@ -12,15 +12,15 @@
  * - ❌ Session fork (emulated via new sessions in Phase 2)
  */
 
-import { generateId } from '@agor/core/db';
+import { generateId, shortId } from '@agor/core/db';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
@@ -34,10 +34,16 @@ import {
   type SessionID,
   type TaskID,
 } from '../../types.js';
-import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
-import type { MessagesService, SessionsService, TasksService } from '../claude/claude-tool.js';
+import type {
+  ITool,
+  MessagesService,
+  SessionsPatchClient,
+  StreamingCallbacks,
+  TasksService,
+  ToolCapabilities,
+} from '../base/index.js';
+import { buildAssistantMessageMetadata, patchTaskModelIfKnown } from '../base/model-recording.js';
 import { createUserMessage } from '../claude/message-builder.js';
-import { DEFAULT_COPILOT_MODEL } from './models.js';
 import { CopilotPromptService } from './prompt-service.js';
 
 interface CopilotExecutionResult {
@@ -65,7 +71,7 @@ export class CopilotTool implements ITool {
     messagesRepo?: MessagesRepository,
     sessionsRepo?: SessionRepository,
     sessionMCPServerRepo?: SessionMCPServerRepository,
-    worktreesRepo?: WorktreeRepository,
+    branchesRepo?: BranchRepository,
     reposRepo?: RepoRepository,
     apiKey?: string,
     messagesService?: MessagesService,
@@ -74,7 +80,7 @@ export class CopilotTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     usersRepo?: UsersRepository,
     permissionService?: PermissionService,
-    sessionsService?: SessionsService
+    sessionsService?: SessionsPatchClient
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -86,7 +92,7 @@ export class CopilotTool implements ITool {
         messagesRepo,
         sessionsRepo,
         sessionMCPServerRepo,
-        worktreesRepo,
+        branchesRepo,
         reposRepo,
         apiKey,
         mcpServerRepo,
@@ -319,7 +325,7 @@ export class CopilotTool implements ITool {
       tokenUsage,
       contextWindow: undefined,
       contextWindowLimit: undefined,
-      model: resolvedModel || DEFAULT_COPILOT_MODEL,
+      model: resolvedModel,
       rawSdkResponse,
       wasStopped,
     };
@@ -337,7 +343,7 @@ export class CopilotTool implements ITool {
       if (existingSession?.sdk_session_id) {
         if (existingSession.sdk_session_id !== sdkSessionId) {
           console.warn(
-            `⚠️  Copilot returned new session_id ${sdkSessionId.substring(0, 8)} but session already has ${existingSession.sdk_session_id.substring(0, 8)} — keeping original`
+            `⚠️  Copilot returned new session_id ${shortId(sdkSessionId)} but session already has ${shortId(existingSession.sdk_session_id)} — keeping original`
           );
         }
         return;
@@ -382,20 +388,11 @@ export class CopilotTool implements ITool {
       content: content as Message['content'],
       tool_uses: toolUses,
       task_id: taskId,
-      metadata: {
-        model: resolvedModel || DEFAULT_COPILOT_MODEL,
-        tokens: {
-          input: tokenUsage?.input_tokens ?? 0,
-          output: tokenUsage?.output_tokens ?? 0,
-        },
-      },
+      metadata: buildAssistantMessageMetadata({ model: resolvedModel, tokenUsage }),
     };
 
     await this.messagesService?.create(message);
-
-    if (taskId && resolvedModel && this.tasksService) {
-      await this.tasksService.patch(taskId, { model: resolvedModel });
-    }
+    await patchTaskModelIfKnown(this.tasksService, taskId, resolvedModel);
 
     return message;
   }

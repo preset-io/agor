@@ -4,20 +4,20 @@
  * CRUD + cascade + membership semantics for the v0.5 env-var-access join table.
  */
 
-import type { Session, SessionID, UUID, WorktreeID } from '@agor/core/types';
+import type { BranchID, Session, SessionID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
+import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { SessionEnvSelectionRepository } from './session-env-selections';
 import { SessionRepository } from './sessions';
-import { WorktreeRepository } from './worktrees';
 
-function createSessionData(worktreeId: UUID, overrides?: Partial<Session>): Partial<Session> {
+function createSessionData(branchId: UUID, overrides?: Partial<Session>): Partial<Session> {
   return {
     session_id: (overrides?.session_id ?? generateId()) as SessionID,
-    worktree_id: worktreeId,
+    branch_id: branchId,
     agentic_tool: 'claude-code',
     status: SessionStatus.IDLE,
     created_by: 'test-user',
@@ -34,7 +34,7 @@ function createSessionData(worktreeId: UUID, overrides?: Partial<Session>): Part
 // biome-ignore lint/suspicious/noExplicitAny: test helper
 async function setup(db: any) {
   const repoRepo = new RepoRepository(db);
-  const worktreeRepo = new WorktreeRepository(db);
+  const branchRepo = new BranchRepository(db);
   const sessionRepo = new SessionRepository(db);
 
   const repo = await repoRepo.create({
@@ -47,19 +47,20 @@ async function setup(db: any) {
     default_branch: 'main',
   });
 
-  const worktree = await worktreeRepo.create({
-    worktree_id: generateId() as WorktreeID,
+  const branch = await branchRepo.create({
+    branch_id: generateId() as BranchID,
     repo_id: repo.repo_id,
     name: 'main',
     ref: 'main',
-    worktree_unique_id: Math.floor(Math.random() * 1000000),
+    branch_unique_id: Math.floor(Math.random() * 1000000),
     path: '/tmp/test-repo',
     base_ref: 'main',
     new_branch: false,
+    created_by: 'test-user' as UUID,
   });
 
-  const session = await sessionRepo.create(createSessionData(worktree.worktree_id));
-  const otherSession = await sessionRepo.create(createSessionData(worktree.worktree_id));
+  const session = await sessionRepo.create(createSessionData(branch.branch_id));
+  const otherSession = await sessionRepo.create(createSessionData(branch.branch_id));
 
   return { session, otherSession, sessionRepo };
 }

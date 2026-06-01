@@ -124,7 +124,7 @@ export function registerHandlebarsHelpers(): void {
 
   /**
    * Convert string to uppercase
-   * Usage: {{uppercase worktree.name}}
+   * Usage: {{uppercase branch.name}}
    */
   Handlebars.registerHelper('uppercase', (str: unknown): string => {
     return String(str || '').toUpperCase();
@@ -132,7 +132,7 @@ export function registerHandlebarsHelpers(): void {
 
   /**
    * Convert string to lowercase
-   * Usage: {{lowercase worktree.name}}
+   * Usage: {{lowercase branch.name}}
    */
   Handlebars.registerHelper('lowercase', (str: unknown): string => {
     return String(str || '').toLowerCase();
@@ -140,7 +140,7 @@ export function registerHandlebarsHelpers(): void {
 
   /**
    * Replace characters in string
-   * Usage: {{replace worktree.name "-" "_"}}
+   * Usage: {{replace branch.name "-" "_"}}
    */
   Handlebars.registerHelper('replace', (str: unknown, search: string, replace: string): string => {
     return String(str || '')
@@ -285,21 +285,27 @@ export function renderTemplate(
 }
 
 /**
- * Build standard template context for worktree environments
+ * Build standard template context for branch environments
  *
  * Provides scoped entity references (consistent with zone triggers):
- * - {{worktree.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
- * - {{worktree.name}} - Worktree name (slug format)
- * - {{worktree.path}} - Absolute path to worktree directory
- * - {{worktree.gid}} - Unix GID of worktree's unix_group (resolved dynamically at execution time)
+ * - {{branch.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
+ * - {{branch.name}} - Branch name (slug format)
+ * - {{branch.path}} - Absolute path to branch directory
+ * - {{branch.gid}} - Unix GID of branch's unix_group (resolved dynamically at execution time)
  * - {{repo.slug}} - Repository slug
  * - {{host.ip_address}} - Primary non-loopback IPv4 of the daemon host
  *   (for health checks/URLs that must reach the host from inside a container).
- *   Frozen at worktree creation time. Empty string if not resolved.
- * - {{custom.*}} - Any custom context from worktree.custom_context
+ *   Frozen at branch creation time. Empty string if not resolved.
+ * - {{custom.*}} - Any custom context from branch.custom_context
+ *
+ * Backwards-compat: also exposes the same scoped entity under `{{worktree.*}}`
+ * so existing `.agor.yml` env-template configurations using the v0.19 names
+ * (`{{worktree.unique_id}}`, `{{worktree.name}}`, etc.) continue to render.
+ * New configs should use `{{branch.*}}`. The legacy alias may be removed in
+ * a future major release.
  */
-export function buildWorktreeContext(worktree: {
-  worktree_unique_id: number;
+export function buildBranchContext(branch: {
+  branch_unique_id: number;
   name: string;
   path: string;
   repo_slug?: string;
@@ -307,21 +313,25 @@ export function buildWorktreeContext(worktree: {
   unix_gid?: number;
   host_ip_address?: string;
 }): Record<string, unknown> {
+  const branchEntity = {
+    unique_id: branch.branch_unique_id,
+    name: branch.name,
+    path: branch.path,
+    gid: branch.unix_gid,
+  };
   return {
     // Scoped entities (accessible as {{entity.property}})
-    worktree: {
-      unique_id: worktree.worktree_unique_id,
-      name: worktree.name,
-      path: worktree.path,
-      gid: worktree.unix_gid,
-    },
+    branch: branchEntity,
+    // Legacy alias — preserved for existing env templates that reference
+    // {{worktree.*}} keys. Points at the same object so updates stay in sync.
+    worktree: branchEntity,
     repo: {
-      slug: worktree.repo_slug || '',
+      slug: branch.repo_slug || '',
     },
     host: {
-      ip_address: worktree.host_ip_address || '',
+      ip_address: branch.host_ip_address || '',
     },
     // User-defined custom context (accessible as {{custom.key}})
-    custom: worktree.custom_context || {},
+    custom: branch.custom_context || {},
   };
 }

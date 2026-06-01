@@ -6,7 +6,9 @@
  * the standardized format used by UI and analytics.
  *
  * Usage:
- *   const normalized = normalizeRawSdkResponse('claude-code', rawSdkResponse);
+ *   const normalized = normalizeRawSdkResponse('codex', rawSdkResponse, {
+ *     modelHint: result.model, // configured model from session.model_config
+ *   });
  */
 
 import type { NormalizedSdkData } from './base/normalizer.interface.js';
@@ -21,16 +23,23 @@ const codexNormalizer = new CodexNormalizer();
 const copilotNormalizer = new CopilotNormalizer();
 const geminiNormalizer = new GeminiNormalizer();
 
+/** `modelHint` refines `contextWindowLimit` lookup; never used as `primaryModel`. */
+export interface NormalizeOptions {
+  modelHint?: string;
+}
+
 /**
  * Normalize raw SDK response to common format
  *
  * @param agenticTool - The agentic tool type (determines which normalizer to use)
  * @param rawSdkResponse - Raw SDK response from the tool
+ * @param options - Optional context (see `NormalizeOptions`)
  * @returns Normalized data with consistent structure, or undefined if normalization fails
  */
 export function normalizeRawSdkResponse(
-  agenticTool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | string,
-  rawSdkResponse: unknown
+  agenticTool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor' | string,
+  rawSdkResponse: unknown,
+  options?: NormalizeOptions
 ): NormalizedSdkData | undefined {
   if (!rawSdkResponse) {
     return undefined;
@@ -45,12 +54,14 @@ export function normalizeRawSdkResponse(
 
       case 'codex':
         return codexNormalizer.normalize(
-          rawSdkResponse as Parameters<typeof codexNormalizer.normalize>[0]
+          rawSdkResponse as Parameters<typeof codexNormalizer.normalize>[0],
+          options
         );
 
       case 'gemini':
         return geminiNormalizer.normalize(
-          rawSdkResponse as Parameters<typeof geminiNormalizer.normalize>[0]
+          rawSdkResponse as Parameters<typeof geminiNormalizer.normalize>[0],
+          options
         );
 
       case 'copilot':
@@ -61,6 +72,11 @@ export function normalizeRawSdkResponse(
       case 'opencode':
         // OpenCode doesn't have a normalizer yet - return undefined
         console.debug('[Normalizer] OpenCode normalizer not implemented yet');
+        return undefined;
+
+      case 'cursor':
+        // Cursor runtime adapter and event normalizer are not implemented yet.
+        console.debug('[Normalizer] Cursor normalizer not implemented yet');
         return undefined;
 
       default:

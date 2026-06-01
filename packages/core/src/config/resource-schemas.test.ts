@@ -5,9 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   daemonResourcesConfigSchema,
+  resourceBranchConfigSchema,
   resourceRepoConfigSchema,
   resourceUserConfigSchema,
-  resourceWorktreeConfigSchema,
   validateResourceCrossReferences,
 } from './resource-schemas';
 
@@ -28,9 +28,9 @@ function validRepo(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function validWorktree(overrides: Record<string, unknown> = {}) {
+function validBranch(overrides: Record<string, unknown> = {}) {
   return {
-    worktree_id: VALID_UUID_2,
+    branch_id: VALID_UUID_2,
     name: 'main',
     ref: 'main',
     repo: 'my-org/my-repo',
@@ -103,18 +103,18 @@ describe('resourceRepoConfigSchema', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Worktree schema
+// Branch schema
 // ---------------------------------------------------------------------------
 
-describe('resourceWorktreeConfigSchema', () => {
-  it('accepts valid worktree config', () => {
-    const result = resourceWorktreeConfigSchema.safeParse(validWorktree());
+describe('resourceBranchConfigSchema', () => {
+  it('accepts valid branch config', () => {
+    const result = resourceBranchConfigSchema.safeParse(validBranch());
     expect(result.success).toBe(true);
   });
 
-  it('accepts worktree with agent config', () => {
-    const result = resourceWorktreeConfigSchema.safeParse(
-      validWorktree({
+  it('accepts branch with agent config', () => {
+    const result = resourceBranchConfigSchema.safeParse(
+      validBranch({
         agent: {
           agentic_tool: 'claude-code',
           permission_mode: 'bypassPermissions',
@@ -126,18 +126,18 @@ describe('resourceWorktreeConfigSchema', () => {
   });
 
   it('rejects empty name', () => {
-    const result = resourceWorktreeConfigSchema.safeParse(validWorktree({ name: '' }));
+    const result = resourceBranchConfigSchema.safeParse(validBranch({ name: '' }));
     expect(result.success).toBe(false);
   });
 
   it('rejects empty ref', () => {
-    const result = resourceWorktreeConfigSchema.safeParse(validWorktree({ ref: '' }));
+    const result = resourceBranchConfigSchema.safeParse(validBranch({ ref: '' }));
     expect(result.success).toBe(false);
   });
 
   it('accepts all permission levels', () => {
     for (const level of ['none', 'view', 'session', 'prompt', 'all']) {
-      const result = resourceWorktreeConfigSchema.safeParse(validWorktree({ others_can: level }));
+      const result = resourceBranchConfigSchema.safeParse(validBranch({ others_can: level }));
       expect(result.success).toBe(true);
     }
   });
@@ -184,7 +184,7 @@ describe('daemonResourcesConfigSchema', () => {
   it('accepts full resources config', () => {
     const result = daemonResourcesConfigSchema.safeParse({
       repos: [validRepo()],
-      worktrees: [validWorktree()],
+      branches: [validBranch()],
       users: [validUser()],
     });
     expect(result.success).toBe(true);
@@ -199,7 +199,7 @@ describe('validateResourceCrossReferences', () => {
   it('returns no errors for valid config', () => {
     const resources = daemonResourcesConfigSchema.parse({
       repos: [validRepo()],
-      worktrees: [validWorktree()],
+      branches: [validBranch()],
       users: [validUser()],
     });
     const errors = validateResourceCrossReferences(resources);
@@ -224,24 +224,24 @@ describe('validateResourceCrossReferences', () => {
     expect(errors[0].message).toContain('Duplicate repo slug');
   });
 
-  it('detects worktree referencing unknown repo', () => {
+  it('detects branch referencing unknown repo', () => {
     const resources = daemonResourcesConfigSchema.parse({
       repos: [validRepo()],
-      worktrees: [validWorktree({ repo: 'nonexistent/repo' })],
+      branches: [validBranch({ repo: 'nonexistent/repo' })],
     });
     const errors = validateResourceCrossReferences(resources);
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toContain('unknown repo slug');
   });
 
-  it('detects duplicate worktree IDs', () => {
+  it('detects duplicate branch IDs', () => {
     const resources = daemonResourcesConfigSchema.parse({
       repos: [validRepo()],
-      worktrees: [validWorktree(), validWorktree({ name: 'develop' })],
+      branches: [validBranch(), validBranch({ name: 'develop' })],
     });
     const errors = validateResourceCrossReferences(resources);
     expect(errors).toHaveLength(1);
-    expect(errors[0].message).toContain('Duplicate worktree_id');
+    expect(errors[0].message).toContain('Duplicate branch_id');
   });
 
   it('detects duplicate user IDs', () => {

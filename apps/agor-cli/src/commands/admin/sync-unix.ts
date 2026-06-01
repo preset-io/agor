@@ -6,14 +6,14 @@
  *
  * Default behavior (no flags needed):
  * - Creates missing Unix users for users with unix_username set
- * - Creates missing worktree groups (agor_wt_*) and repo groups (agor_rp_*)
- * - Backfills unix_group on worktrees that don't have one
- * - Sets filesystem permissions on worktrees and repo directories (incl. .git)
- * - Creates missing worktree directories for non-archived worktrees
- * - Adds users to their worktree and repo groups
- * - Prunes stale group memberships (users no longer owning a worktree)
+ * - Creates missing branch groups (agor_wt_*) and repo groups (agor_rp_*)
+ * - Backfills unix_group on branches that don't have one
+ * - Sets filesystem permissions on branches and repo directories (incl. .git)
+ * - Creates missing branch directories for non-archived branches
+ * - Adds users to their branch and repo groups
+ * - Prunes stale group memberships (users no longer owning a branch)
  * - Ensures agor_users group exists and contains all managed users
- * - Applies daemon user ACLs on worktree directories
+ * - Applies daemon user ACLs on branch directories
  * - Syncs user symlinks (creates missing, removes broken)
  *
  * Cleanup (opt-in, destructive):
@@ -28,41 +28,42 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '@agor/core/config';
 import {
+  branches,
+  branchOwners,
   createDatabase,
   eq,
   inArray,
   repos,
   select,
+  shortId,
   update,
   users,
-  worktreeOwners,
-  worktrees,
 } from '@agor/core/db';
-import { restoreWorktreeFilesystem } from '@agor/core/git';
+import { restoreBranchFilesystem } from '@agor/core/git';
 import {
   AGOR_USERS_GROUP,
   CommandError,
   createAdminExecutor,
+  generateBranchGroupName,
   generateRepoGroupName,
-  generateWorktreeGroupName,
+  getBranchDirectoryAction,
+  getBranchPermissionMode,
+  getBranchSymlinkPath,
   getGroupMembers,
+  getUserBranchesDir,
   getUserGroups,
-  getUserWorktreesDir,
-  getWorktreeDirectoryAction,
-  getWorktreePermissionMode,
-  getWorktreeSymlinkPath,
   groupExists,
   isUserInGroup,
   listAgorUsers,
+  listBranchGroups,
   listRepoGroups,
-  listWorktreeGroups,
   REPO_GIT_PERMISSION_MODE,
   SymlinkCommands,
   UnixGroupCommands,
   UnixUserCommands,
   unixUserExists,
 } from '@agor/core/unix';
-import type { RepoID, WorktreeID } from '@agor-live/client';
+import type { BranchID, RepoID } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 
@@ -73,8 +74,8 @@ interface UserWithUnix {
   unix_username: string;
 }
 
-interface WorktreeOwnership {
-  worktree_id: string;
+interface BranchOwnership {
+  branch_id: string;
   name: string;
   unix_group: string | null;
   repo_id: string;
@@ -102,7 +103,7 @@ export default class SyncUnix extends Command {
     '<%= config.bin %> <%= command.id %> --dry-run      # Preview what would be done',
     '<%= config.bin %> <%= command.id %> --cleanup      # Full sync + remove stale users/groups',
     '<%= config.bin %> <%= command.id %> --verbose      # Show detailed output',
-    '<%= config.bin %> <%= command.id %> --worktree-id <uuid> --dry-run  # Preview sync for a single worktree',
+    '<%= config.bin %> <%= command.id %> --branch-id <uuid> --dry-run  # Preview sync for a single branch',
   ];
 
   static override flags = {
@@ -129,10 +130,10 @@ export default class SyncUnix extends Command {
       description: 'Delete stale agor_* users not in database (keeps home directories)',
       default: false,
     }),
-    'worktree-id': Flags.string({
+    'branch-id': Flags.string({
       char: 'w',
       description:
-        'Sync a single worktree and its parent repo (skips unrelated user/membership/symlink phases)',
+        'Sync a single branch and its parent repo (skips unrelated user/membership/symlink phases)',
     }),
   };
 
@@ -144,10 +145,10 @@ export default class SyncUnix extends Command {
     // Cleanup flags - --cleanup enables both
     const cleanupGroups = flags.cleanup || flags['cleanup-groups'];
     const cleanupUsers = flags.cleanup || flags['cleanup-users'];
-    const targetWorktreeId = flags['worktree-id'];
+    const targetBranchId = flags['branch-id'];
 
-    if (targetWorktreeId) {
-      this.log(chalk.cyan(`🎯 Targeting single worktree: ${targetWorktreeId}\n`));
+    if (targetBranchId) {
+      this.log(chalk.cyan(`🎯 Targeting single branch: ${targetBranchId}\n`));
     }
 
     if (dryRun) {
@@ -208,13 +209,13 @@ export default class SyncUnix extends Command {
     let groupsDeleted = 0;
     let usersDeleted = 0;
     let cleanupErrors = 0;
-    let worktreesSynced = 0;
-    let worktreesBackfilled = 0; // Worktrees that needed unix_group set in DB
-    let worktreeDirsCreated = 0; // Worktree directories created on disk
-    let worktreesRestored = 0; // Worktrees restored from failed status
-    let groupsCleaned = 0; // Archived+deleted worktree groups removed
-    let statusFixed = 0; // Worktrees with filesystem_status corrected to 'ready'
-    let worktreesSkipped = 0; // Worktrees skipped (archived/deleted, missing path, etc.)
+    let branchesSynced = 0;
+    let branchesBackfilled = 0; // Branches that needed unix_group set in DB
+    let branchDirsCreated = 0; // Branch directories created on disk
+    let branchesRestored = 0; // Branches restored from failed status
+    let groupsCleaned = 0; // Archived+deleted branch groups removed
+    let statusFixed = 0; // Branches with filesystem_status corrected to 'ready'
+    let branchesSkipped = 0; // Branches skipped (archived/deleted, missing path, etc.)
     let reposBackfilled = 0; // Repos that needed unix_group set in DB
     let reposPermSynced = 0; // Repos that had root/.git permissions synced
     let membershipsRemoved = 0; // Stale group memberships pruned
@@ -297,7 +298,7 @@ export default class SyncUnix extends Command {
       if (verbose) {
         this.log(
           chalk.gray(
-            `   (from config.daemon.unix_user, will be added to all repo and worktree groups)\n`
+            `   (from config.daemon.unix_user, will be added to all repo and branch groups)\n`
           )
         );
       }
@@ -305,23 +306,23 @@ export default class SyncUnix extends Command {
       // Track daemon memberships added
       let daemonMembershipsAdded = 0;
 
-      // Resolve the parent repo when scoping to a single worktree.
-      // --worktree-id is expected to sync *everything* the worktree depends on,
+      // Resolve the parent repo when scoping to a single branch.
+      // --branch-id is expected to sync *everything* the branch depends on,
       // including the parent repo's group/permissions — otherwise a migrated
-      // box with a broken repo root leaves the targeted worktree unusable.
+      // box with a broken repo root leaves the targeted branch unusable.
       let targetRepoId: RepoID | undefined;
-      if (targetWorktreeId) {
+      if (targetBranchId) {
         const targetWts = await select(db)
-          .from(worktrees)
-          .where(eq(worktrees.worktree_id, targetWorktreeId))
+          .from(branches)
+          .where(eq(branches.branch_id, targetBranchId))
           .all();
         if (targetWts.length === 0) {
-          this.log(chalk.red(`✗ Worktree ${targetWorktreeId} not found in database\n`));
+          this.log(chalk.red(`✗ Branch ${targetBranchId} not found in database\n`));
           process.exit(1);
         }
         targetRepoId = (targetWts[0] as { repo_id: string }).repo_id as RepoID;
         this.log(
-          chalk.cyan(`   Parent repo: ${targetRepoId.substring(0, 8)} (also scoped to this repo)\n`)
+          chalk.cyan(`   Parent repo: ${shortId(targetRepoId)} (also scoped to this repo)\n`)
         );
       }
 
@@ -356,13 +357,13 @@ export default class SyncUnix extends Command {
       //   3. unix_group is backfilled in the DB if NULL.
       //   4. Group ownership + ACLs + setgid applied to repo root
       //      (non-recursive, for traversal) and recursively to `.git`
-      //      (shared git objects/refs + worktree metadata).
+      //      (shared git objects/refs + branch metadata).
       //
       // Idempotent: steps 1–3 only run when state drift is detected; step 4
       // always runs because ACL/perm drift is cheap to fix and hard to detect.
       //
-      // Runs BEFORE user/worktree phases because they depend on repo groups
-      // being in place. In --worktree-id mode, scoped to the parent repo only.
+      // Runs BEFORE user/branch phases because they depend on repo groups
+      // being in place. In --branch-id mode, scoped to the parent repo only.
       // ========================================
       {
         const reposInScope = targetRepoId
@@ -393,7 +394,7 @@ export default class SyncUnix extends Command {
           const pathUsable = repoPath ? existsSync(repoPath) : false;
 
           this.log(chalk.bold(`📁 ${rawRepo.slug}`));
-          this.log(chalk.gray(`   repo_id: ${rawRepo.repo_id.substring(0, 8)}`));
+          this.log(chalk.gray(`   repo_id: ${shortId(rawRepo.repo_id)}`));
           this.log(
             chalk.gray(`   unix_group: ${expectedGroup}${dbNeedsBackfill ? ' (to backfill)' : ''}`)
           );
@@ -515,8 +516,8 @@ export default class SyncUnix extends Command {
         }
       }
 
-      if (targetWorktreeId) {
-        this.log(chalk.gray('   ⊘ Skipping user sync phase (--worktree-id mode)\n'));
+      if (targetBranchId) {
+        this.log(chalk.gray('   ⊘ Skipping user sync phase (--branch-id mode)\n'));
       } else if (validUsers.length === 0) {
         this.log(chalk.yellow('No users with unix_username found in database'));
         this.log(chalk.gray('\nTo set a unix_username for a user:'));
@@ -525,34 +526,34 @@ export default class SyncUnix extends Command {
       } else {
         this.log(chalk.cyan(`Found ${validUsers.length} user(s) with unix_username\n`));
 
-        // Prefetch all worktree ownerships in a single query to avoid N+1
+        // Prefetch all branch ownerships in a single query to avoid N+1
         const userIds = validUsers.map((u) => u.user_id);
         // biome-ignore lint/suspicious/noExplicitAny: Join query requires type assertion
         const allOwnerships = await (db as any)
           .select()
-          .from(worktreeOwners)
-          .innerJoin(worktrees, eq(worktreeOwners.worktree_id, worktrees.worktree_id))
-          .where(inArray(worktreeOwners.user_id, userIds));
+          .from(branchOwners)
+          .innerJoin(branches, eq(branchOwners.branch_id, branches.branch_id))
+          .where(inArray(branchOwners.user_id, userIds));
 
         // Group ownerships by user_id for O(1) lookup
-        const ownershipsByUser = new Map<string, WorktreeOwnership[]>();
+        const ownershipsByUser = new Map<string, BranchOwnership[]>();
         for (const row of allOwnerships) {
           const userId = (
             row as {
-              worktree_owners: { user_id: string };
-              worktrees: {
-                worktree_id: string;
+              branch_owners: { user_id: string };
+              branches: {
+                branch_id: string;
                 name: string;
                 unix_group: string | null;
                 repo_id: string;
               };
             }
-          ).worktree_owners.user_id;
-          const ownership: WorktreeOwnership = {
-            worktree_id: (row as { worktrees: { worktree_id: string } }).worktrees.worktree_id,
-            name: (row as { worktrees: { name: string } }).worktrees.name,
-            unix_group: (row as { worktrees: { unix_group: string | null } }).worktrees.unix_group,
-            repo_id: (row as { worktrees: { repo_id: string } }).worktrees.repo_id,
+          ).branch_owners.user_id;
+          const ownership: BranchOwnership = {
+            branch_id: (row as { branches: { branch_id: string } }).branches.branch_id,
+            name: (row as { branches: { name: string } }).branches.name,
+            unix_group: (row as { branches: { unix_group: string | null } }).branches.unix_group,
+            repo_id: (row as { branches: { repo_id: string } }).branches.repo_id,
           };
           const existing = ownershipsByUser.get(userId) || [];
           existing.push(ownership);
@@ -585,7 +586,7 @@ export default class SyncUnix extends Command {
 
           this.log(chalk.bold(`📋 ${user.email}`));
           this.log(chalk.gray(`   unix_username: ${user.unix_username}`));
-          this.log(chalk.gray(`   user_id: ${user.user_id.substring(0, 8)}`));
+          this.log(chalk.gray(`   user_id: ${shortId(user.user_id)}`));
 
           // Check if Unix user exists
           result.unixUserExists = unixUserExists(user.unix_username);
@@ -630,18 +631,18 @@ export default class SyncUnix extends Command {
               }
             }
 
-            // Get worktrees owned by this user (from prefetched data)
-            const ownedWorktrees: WorktreeOwnership[] = ownershipsByUser.get(user.user_id) || [];
+            // Get branches owned by this user (from prefetched data)
+            const ownedBranches: BranchOwnership[] = ownershipsByUser.get(user.user_id) || [];
 
             if (verbose) {
-              this.log(chalk.gray(`   Owns ${ownedWorktrees.length} worktree(s)`));
+              this.log(chalk.gray(`   Owns ${ownedBranches.length} branch(s)`));
             }
 
-            // Build expected groups from owned worktrees
-            for (const wt of ownedWorktrees) {
-              // Use existing unix_group or generate from worktree_id
+            // Build expected groups from owned branches
+            for (const wt of ownedBranches) {
+              // Use existing unix_group or generate from branch_id
               const expectedGroup =
-                wt.unix_group || generateWorktreeGroupName(wt.worktree_id as WorktreeID);
+                wt.unix_group || generateBranchGroupName(wt.branch_id as BranchID);
               result.groups.expected.push(expectedGroup);
 
               const isInGroup = result.groups.actual.includes(expectedGroup);
@@ -650,7 +651,7 @@ export default class SyncUnix extends Command {
               if (verbose) {
                 this.log(
                   chalk.gray(
-                    `   Worktree "${wt.name}" → group ${expectedGroup} ` +
+                    `   Branch "${wt.name}" → group ${expectedGroup} ` +
                       `(exists: ${groupExistsOnSystem ? 'yes' : 'no'}, member: ${isInGroup ? 'yes' : 'no'})`
                   )
                 );
@@ -685,7 +686,7 @@ export default class SyncUnix extends Command {
                 }
               }
 
-              // Add daemon user to worktree group
+              // Add daemon user to branch group
               if (groupReady && daemonUser) {
                 const daemonInWtGroup = dryRun ? false : isUserInGroup(daemonUser, expectedGroup);
                 if (!daemonInWtGroup) {
@@ -704,9 +705,9 @@ export default class SyncUnix extends Command {
               }
             }
 
-            // Sync repo groups - user should be in repo group for each unique repo they own worktrees in
+            // Sync repo groups - user should be in repo group for each unique repo they own branches in
             const repoIdsSeen = new Set<string>();
-            for (const wt of ownedWorktrees) {
+            for (const wt of ownedBranches) {
               if (repoIdsSeen.has(wt.repo_id)) continue;
               repoIdsSeen.add(wt.repo_id);
 
@@ -721,7 +722,7 @@ export default class SyncUnix extends Command {
               if (verbose) {
                 this.log(
                   chalk.gray(
-                    `   Repo ${wt.repo_id.substring(0, 8)} → group ${repoGroup} ` +
+                    `   Repo ${shortId(wt.repo_id)} → group ${repoGroup} ` +
                       `(exists: ${repoGroupExistsOnSystem ? 'yes' : 'no'}, member: ${isInRepoGroup ? 'yes' : 'no'})`
                   )
                 );
@@ -779,43 +780,43 @@ export default class SyncUnix extends Command {
           results.push(result);
           this.log('');
         }
-      } // end if (targetWorktreeId / validUsers.length)
+      } // end if (targetBranchId / validUsers.length)
 
       // ========================================
-      // Sync Worktree Groups Phase (deterministic)
+      // Sync Branch Groups Phase (deterministic)
       //
-      // For every non-archived-deleted worktree in scope, brings group
+      // For every non-archived-deleted branch in scope, brings group
       // state to canonical:
       //   1. Unix group exists on the system (creates if missing — covers
-      //      fresh worktrees and DB-migration cruft).
+      //      fresh branches and DB-migration cruft).
       //   2. Daemon user is a member of the group.
       //   3. unix_group is backfilled in the DB if NULL.
       //
-      // Archived+deleted worktrees are left alone here; the Sync Worktree
+      // Archived+deleted branches are left alone here; the Sync Branch
       // Permissions phase below handles their group cleanup.
       // ========================================
 
-      this.log(chalk.cyan.bold('\n━━━ Sync Worktree Groups ━━━\n'));
+      this.log(chalk.cyan.bold('\n━━━ Sync Branch Groups ━━━\n'));
 
-      // Existence of the target worktree was already verified earlier
+      // Existence of the target branch was already verified earlier
       // when resolving targetRepoId, so we can safely scope the fetch here.
-      const allWorktreesForBackfill = targetWorktreeId
-        ? await select(db).from(worktrees).where(eq(worktrees.worktree_id, targetWorktreeId)).all()
-        : await select(db).from(worktrees).all();
+      const allBranchesForBackfill = targetBranchId
+        ? await select(db).from(branches).where(eq(branches.branch_id, targetBranchId)).all()
+        : await select(db).from(branches).all();
 
-      const worktreesForGroupSync = allWorktreesForBackfill.filter(
+      const branchesForGroupSync = allBranchesForBackfill.filter(
         (wt: { archived: boolean; filesystem_status: string | null }) =>
           !(wt.archived && wt.filesystem_status === 'deleted')
       );
 
-      if (worktreesForGroupSync.length === 0) {
-        this.log(chalk.yellow('   No active worktrees in scope\n'));
+      if (branchesForGroupSync.length === 0) {
+        this.log(chalk.yellow('   No active branches in scope\n'));
       } else {
-        this.log(chalk.cyan(`Processing ${worktreesForGroupSync.length} worktree(s)\n`));
+        this.log(chalk.cyan(`Processing ${branchesForGroupSync.length} branch(s)\n`));
 
-        for (const wt of worktreesForGroupSync) {
+        for (const wt of branchesForGroupSync) {
           const rawWt = wt as {
-            worktree_id: string;
+            branch_id: string;
             name: string;
             repo_id: string;
             unix_group: string | null;
@@ -823,11 +824,11 @@ export default class SyncUnix extends Command {
           };
 
           const expectedGroup =
-            rawWt.unix_group || generateWorktreeGroupName(rawWt.worktree_id as WorktreeID);
+            rawWt.unix_group || generateBranchGroupName(rawWt.branch_id as BranchID);
           const dbNeedsBackfill = rawWt.unix_group === null;
           const groupMissingOnSystem = !groupExists(expectedGroup);
 
-          // Skip logging for worktrees already in canonical state (quiet mode)
+          // Skip logging for branches already in canonical state (quiet mode)
           if (!dbNeedsBackfill && !groupMissingOnSystem && !verbose) {
             // Still need to ensure daemon membership, which is cheap to check
             if (daemonUser && !isUserInGroup(daemonUser, expectedGroup)) {
@@ -847,7 +848,7 @@ export default class SyncUnix extends Command {
           }
 
           this.log(chalk.bold(`📁 ${rawWt.name}`));
-          this.log(chalk.gray(`   worktree_id: ${rawWt.worktree_id.substring(0, 8)}`));
+          this.log(chalk.gray(`   branch_id: ${shortId(rawWt.branch_id)}`));
           this.log(
             chalk.gray(`   unix_group: ${expectedGroup}${dbNeedsBackfill ? ' (to backfill)' : ''}`)
           );
@@ -893,17 +894,17 @@ export default class SyncUnix extends Command {
             if (dryRun) {
               this.log(
                 chalk.gray(
-                  `   [dry-run] Would update database: SET unix_group = '${expectedGroup}' WHERE worktree_id = '${rawWt.worktree_id}'`
+                  `   [dry-run] Would update database: SET unix_group = '${expectedGroup}' WHERE branch_id = '${rawWt.branch_id}'`
                 )
               );
-              worktreesBackfilled++;
+              branchesBackfilled++;
             } else {
               try {
-                await update(db, worktrees)
+                await update(db, branches)
                   .set({ unix_group: expectedGroup })
-                  .where(eq(worktrees.worktree_id, rawWt.worktree_id))
+                  .where(eq(branches.branch_id, rawWt.branch_id))
                   .run();
-                worktreesBackfilled++;
+                branchesBackfilled++;
                 this.log(chalk.green(`   ✓ Backfilled unix_group in database`));
               } catch (error) {
                 syncErrors++;
@@ -915,29 +916,29 @@ export default class SyncUnix extends Command {
           this.log('');
         }
 
-        if (worktreesBackfilled > 0 || groupsCreated > 0 || daemonMembershipsAdded > 0) {
-          this.log(chalk.bold('Sync Worktree Groups Summary:'));
-          this.log(`  DB backfilled: ${worktreesBackfilled}${dryRun ? ' (dry-run)' : ''}`);
+        if (branchesBackfilled > 0 || groupsCreated > 0 || daemonMembershipsAdded > 0) {
+          this.log(chalk.bold('Sync Branch Groups Summary:'));
+          this.log(`  DB backfilled: ${branchesBackfilled}${dryRun ? ' (dry-run)' : ''}`);
           this.log('');
         }
       }
 
       // ========================================
-      // Worktree Permission Sync Phase
+      // Branch Permission Sync Phase
       // Archive-aware: handles missing directories, skips archived+deleted
       // ========================================
 
-      this.log(chalk.cyan.bold('\n━━━ Sync Worktree Permissions ━━━\n'));
+      this.log(chalk.cyan.bold('\n━━━ Sync Branch Permissions ━━━\n'));
 
       // Refresh from DB to pick up unix_group values backfilled in the phase above.
-      const allWorktreesForSync = targetWorktreeId
-        ? await select(db).from(worktrees).where(eq(worktrees.worktree_id, targetWorktreeId)).all()
-        : await select(db).from(worktrees).all();
-      const worktreesWithGroup = allWorktreesForSync.filter(
+      const allBranchesForSync = targetBranchId
+        ? await select(db).from(branches).where(eq(branches.branch_id, targetBranchId)).all()
+        : await select(db).from(branches).all();
+      const branchesWithGroup = allBranchesForSync.filter(
         (wt: { unix_group: string | null }) => wt.unix_group !== null
       );
 
-      // Build repo path lookup map for git worktree operations
+      // Build repo path lookup map for git branch operations
       const allReposForWtSync = await select(db).from(repos).all();
       const repoPathMap = new Map<string, { localPath: string; defaultBranch: string }>();
       for (const repo of allReposForWtSync) {
@@ -953,14 +954,14 @@ export default class SyncUnix extends Command {
         }
       }
 
-      if (worktreesWithGroup.length === 0) {
-        this.log(chalk.yellow('No worktrees with unix_group found\n'));
+      if (branchesWithGroup.length === 0) {
+        this.log(chalk.yellow('No branches with unix_group found\n'));
       } else {
-        this.log(chalk.cyan(`Found ${worktreesWithGroup.length} worktree(s) with unix_group\n`));
+        this.log(chalk.cyan(`Found ${branchesWithGroup.length} branch(s) with unix_group\n`));
 
-        for (const wt of worktreesWithGroup) {
-          const rawWorktree = wt as {
-            worktree_id: string;
+        for (const wt of branchesWithGroup) {
+          const rawBranch = wt as {
+            branch_id: string;
             name: string;
             ref: string;
             repo_id: string;
@@ -971,31 +972,31 @@ export default class SyncUnix extends Command {
             data: { path?: string; base_ref?: string } | null;
           };
 
-          const worktreePath = rawWorktree.data?.path;
+          const branchPath = rawBranch.data?.path;
 
-          // Skip worktrees without a path in the data blob
-          if (!worktreePath) {
+          // Skip branches without a path in the data blob
+          if (!branchPath) {
             if (verbose) {
-              this.log(chalk.gray(`   ⚠ ${rawWorktree.name}: no path in data, skipping`));
+              this.log(chalk.gray(`   ⚠ ${rawBranch.name}: no path in data, skipping`));
             }
-            worktreesSkipped++;
+            branchesSkipped++;
             continue;
           }
 
-          const dirExists = existsSync(worktreePath);
-          const action = getWorktreeDirectoryAction(
+          const dirExists = existsSync(branchPath);
+          const action = getBranchDirectoryAction(
             dirExists,
-            rawWorktree.archived,
-            rawWorktree.filesystem_status
+            rawBranch.archived,
+            rawBranch.filesystem_status
           );
 
           if (action === 'cleanup') {
             // Archived+deleted: remove Unix group cruft
-            const wtGroup = rawWorktree.unix_group;
+            const wtGroup = rawBranch.unix_group;
             if (groupExists(wtGroup)) {
               this.log(
                 chalk.yellow(
-                  `   🧹 ${rawWorktree.name}: archived+deleted, removing group ${wtGroup}...`
+                  `   🧹 ${rawBranch.name}: archived+deleted, removing group ${wtGroup}...`
                 )
               );
               if (await execCmd(UnixGroupCommands.deleteGroup(wtGroup))) {
@@ -1008,7 +1009,7 @@ export default class SyncUnix extends Command {
             } else if (verbose) {
               this.log(
                 chalk.gray(
-                  `   ⊘ ${rawWorktree.name}: archived+deleted, group ${wtGroup} already gone`
+                  `   ⊘ ${rawBranch.name}: archived+deleted, group ${wtGroup} already gone`
                 )
               );
             }
@@ -1018,116 +1019,114 @@ export default class SyncUnix extends Command {
           if (action === 'skip') {
             if (verbose) {
               const reason =
-                rawWorktree.filesystem_status === 'creating'
+                rawBranch.filesystem_status === 'creating'
                   ? 'still creating'
-                  : rawWorktree.archived && !dirExists
-                    ? `archived (${rawWorktree.filesystem_status || 'unknown'}), dir missing`
+                  : rawBranch.archived && !dirExists
+                    ? `archived (${rawBranch.filesystem_status || 'unknown'}), dir missing`
                     : 'unknown';
-              this.log(chalk.gray(`   ⊘ ${rawWorktree.name}: ${reason}, skipping`));
+              this.log(chalk.gray(`   ⊘ ${rawBranch.name}: ${reason}, skipping`));
             }
-            worktreesSkipped++;
+            branchesSkipped++;
             continue;
           }
 
-          // Restore failed non-archived worktrees via shared restoreWorktreeFilesystem()
+          // Restore failed non-archived branches via shared restoreBranchFilesystem()
           if (action === 'restore') {
-            const repoInfo = repoPathMap.get(rawWorktree.repo_id);
+            const repoInfo = repoPathMap.get(rawBranch.repo_id);
             if (!repoInfo) {
               if (verbose) {
                 this.log(
-                  chalk.gray(
-                    `   ⊘ ${rawWorktree.name}: failed, no repo path found, skipping restore`
-                  )
+                  chalk.gray(`   ⊘ ${rawBranch.name}: failed, no repo path found, skipping restore`)
                 );
               }
-              worktreesSkipped++;
+              branchesSkipped++;
               continue;
             }
 
-            const baseRef = rawWorktree.data?.base_ref || repoInfo.defaultBranch;
+            const baseRef = rawBranch.data?.base_ref || repoInfo.defaultBranch;
 
-            this.log(chalk.bold(`🔧 ${rawWorktree.name}`));
-            this.log(chalk.gray(`   worktree_id: ${rawWorktree.worktree_id.substring(0, 8)}`));
+            this.log(chalk.bold(`🔧 ${rawBranch.name}`));
+            this.log(chalk.gray(`   branch_id: ${shortId(rawBranch.branch_id)}`));
             this.log(chalk.gray(`   status: failed → attempting restore`));
-            this.log(chalk.gray(`   ref: ${rawWorktree.ref}, base: ${baseRef}`));
-            this.log(chalk.gray(`   path: ${worktreePath}`));
+            this.log(chalk.gray(`   ref: ${rawBranch.ref}, base: ${baseRef}`));
+            this.log(chalk.gray(`   path: ${branchPath}`));
 
             if (dryRun) {
               this.log(
                 chalk.gray(
-                  `   [dry-run] Would attempt restoreWorktreeFilesystem() for ${rawWorktree.ref} at ${worktreePath}`
+                  `   [dry-run] Would attempt restoreBranchFilesystem() for ${rawBranch.ref} at ${branchPath}`
                 )
               );
-              worktreesRestored++;
+              branchesRestored++;
               this.log('');
               continue;
             }
 
-            this.log(chalk.yellow(`   → Restoring worktree filesystem...`));
-            const result = await restoreWorktreeFilesystem(
+            this.log(chalk.yellow(`   → Restoring branch filesystem...`));
+            const result = await restoreBranchFilesystem(
               repoInfo.localPath,
-              worktreePath,
-              rawWorktree.ref,
+              branchPath,
+              rawBranch.ref,
               baseRef
             );
 
             if (result.success) {
               // Update filesystem_status to ready
-              await update(db, worktrees)
+              await update(db, branches)
                 .set({ filesystem_status: 'ready' })
-                .where(eq(worktrees.worktree_id, rawWorktree.worktree_id))
+                .where(eq(branches.branch_id, rawBranch.branch_id))
                 .run();
 
-              worktreesRestored++;
-              this.log(chalk.green(`   ✓ Restored worktree (${result.strategy}), status → ready`));
+              branchesRestored++;
+              this.log(chalk.green(`   ✓ Restored branch (${result.strategy}), status → ready`));
             } else {
               syncErrors++;
-              this.log(chalk.red(`   ✗ Failed to restore worktree: ${result.error}`));
+              this.log(chalk.red(`   ✗ Failed to restore branch: ${result.error}`));
             }
             this.log('');
             continue;
           }
 
-          this.log(chalk.bold(`📁 ${rawWorktree.name}`));
-          this.log(chalk.gray(`   worktree_id: ${rawWorktree.worktree_id.substring(0, 8)}`));
-          this.log(chalk.gray(`   unix_group: ${rawWorktree.unix_group}`));
-          this.log(chalk.gray(`   path: ${worktreePath}`));
-          if (rawWorktree.archived) {
+          this.log(chalk.bold(`📁 ${rawBranch.name}`));
+          this.log(chalk.gray(`   branch_id: ${shortId(rawBranch.branch_id)}`));
+          this.log(chalk.gray(`   unix_group: ${rawBranch.unix_group}`));
+          this.log(chalk.gray(`   path: ${branchPath}`));
+          if (rawBranch.archived) {
             this.log(
-              chalk.gray(`   archived: yes (fs: ${rawWorktree.filesystem_status || 'preserved'})`)
+              chalk.gray(`   archived: yes (fs: ${rawBranch.filesystem_status || 'preserved'})`)
             );
           }
 
-          // Create missing worktree directory using shared restoreWorktreeFilesystem()
+          // Create missing branch directory using shared restoreBranchFilesystem()
           if (action === 'create') {
-            const repoInfo = repoPathMap.get(rawWorktree.repo_id);
+            const repoInfo = repoPathMap.get(rawBranch.repo_id);
 
             if (repoInfo) {
-              const baseRef = rawWorktree.data?.base_ref || repoInfo.defaultBranch;
+              const baseRef = rawBranch.data?.base_ref || repoInfo.defaultBranch;
               this.log(
                 chalk.yellow(
-                  `   → Directory missing, creating git worktree (branch: ${rawWorktree.ref}, base: ${baseRef})...`
+                  `   → Directory missing, creating git branch (branch: ${rawBranch.ref}, base: ${baseRef})...`
                 )
               );
 
               if (dryRun) {
-                worktreeDirsCreated++;
+                branchDirsCreated++;
                 this.log(
                   chalk.gray(
-                    `   [dry-run] Would run restoreWorktreeFilesystem() for ${rawWorktree.ref} at ${worktreePath}`
+                    `   [dry-run] Would run restoreBranchFilesystem() for ${rawBranch.ref} at ${branchPath}`
                   )
                 );
               } else {
-                const result = await restoreWorktreeFilesystem(
+                const result = await restoreBranchFilesystem(
                   repoInfo.localPath,
-                  worktreePath,
-                  rawWorktree.ref,
+                  branchPath,
+                  rawBranch.ref,
                   baseRef
                 );
 
                 if (result.success) {
-                  worktreeDirsCreated++;
-                  this.log(chalk.green(`   ✓ Created git worktree (${result.strategy})`));
+                  branchDirsCreated++;
+                  this.log(chalk.green(`   ✓ Created git branch (${result.strategy})`));
                 } else {
                   // Fallback to mkdir -p
                   this.log(
@@ -1135,8 +1134,8 @@ export default class SyncUnix extends Command {
                       `   ⚠ git worktree add failed (${result.error}), falling back to mkdir -p`
                     )
                   );
-                  if (await execCmd(`sudo -n mkdir -p "${worktreePath}"`)) {
-                    worktreeDirsCreated++;
+                  if (await execCmd(`sudo -n mkdir -p "${branchPath}"`)) {
+                    branchDirsCreated++;
                     this.log(chalk.green(`   ✓ Created directory (mkdir fallback)`));
                   } else {
                     syncErrors++;
@@ -1149,10 +1148,10 @@ export default class SyncUnix extends Command {
             } else {
               // No repo info available, fall back to mkdir -p
               this.log(
-                chalk.yellow(`   → Directory missing, creating (no repo path for git worktree)...`)
+                chalk.yellow(`   → Directory missing, creating (no repo path for git branch)...`)
               );
-              if (await execCmd(`sudo -n mkdir -p "${worktreePath}"`)) {
-                worktreeDirsCreated++;
+              if (await execCmd(`sudo -n mkdir -p "${branchPath}"`)) {
+                branchDirsCreated++;
                 this.log(chalk.green(`   ✓ Created directory`));
               } else {
                 syncErrors++;
@@ -1163,27 +1162,27 @@ export default class SyncUnix extends Command {
             }
           }
 
-          // Fix filesystem_status for active worktrees stuck as 'deleted' or 'preserved'
+          // Fix filesystem_status for active branches stuck as 'deleted' or 'preserved'
           if (
             action === 'sync' &&
-            !rawWorktree.archived &&
-            (rawWorktree.filesystem_status === 'deleted' ||
-              rawWorktree.filesystem_status === 'preserved')
+            !rawBranch.archived &&
+            (rawBranch.filesystem_status === 'deleted' ||
+              rawBranch.filesystem_status === 'preserved')
           ) {
-            // Verify it's a valid git worktree (has .git file)
-            const gitFilePath = join(worktreePath, '.git');
+            // Verify it's a valid git branch (has .git file)
+            const gitFilePath = join(branchPath, '.git');
             if (existsSync(gitFilePath)) {
-              const oldStatus = rawWorktree.filesystem_status;
+              const oldStatus = rawBranch.filesystem_status;
               this.log(chalk.yellow(`   → Fixing filesystem_status: ${oldStatus} → ready`));
               if (!dryRun) {
                 try {
-                  await update(db, worktrees)
+                  await update(db, branches)
                     .set({ filesystem_status: 'ready' })
-                    .where(eq(worktrees.worktree_id, rawWorktree.worktree_id))
+                    .where(eq(branches.branch_id, rawBranch.branch_id))
                     .run();
                   this.log(
                     chalk.green(
-                      `   ✓ Fixed filesystem_status: ${oldStatus} → ready for ${rawWorktree.name}`
+                      `   ✓ Fixed filesystem_status: ${oldStatus} → ready for ${rawBranch.name}`
                     )
                   );
                 } catch (error) {
@@ -1193,7 +1192,7 @@ export default class SyncUnix extends Command {
               } else {
                 this.log(
                   chalk.gray(
-                    `   [dry-run] Would fix filesystem_status: ${oldStatus} → ready for ${rawWorktree.name}`
+                    `   [dry-run] Would fix filesystem_status: ${oldStatus} → ready for ${rawBranch.name}`
                   )
                 );
               }
@@ -1202,18 +1201,18 @@ export default class SyncUnix extends Command {
           }
 
           // Calculate permission mode based on others_fs_access
-          const othersAccess = rawWorktree.others_fs_access || 'read';
-          const permissionMode = getWorktreePermissionMode(othersAccess);
+          const othersAccess = rawBranch.others_fs_access || 'read';
+          const permissionMode = getBranchPermissionMode(othersAccess);
 
           this.log(chalk.gray(`   others_fs_access: ${othersAccess} → mode: ${permissionMode}`));
 
           const permCmds = UnixGroupCommands.setDirectoryGroup(
-            worktreePath,
-            rawWorktree.unix_group,
+            branchPath,
+            rawBranch.unix_group,
             permissionMode
           );
           if (await execAllCmds(permCmds)) {
-            worktreesSynced++;
+            branchesSynced++;
             this.log(chalk.green(`   ✓ Applied permissions (${permissionMode})`));
           } else {
             syncErrors++;
@@ -1222,7 +1221,7 @@ export default class SyncUnix extends Command {
 
           // Apply daemon user ACL so the running daemon can access without restart
           if (daemonUser && (dirExists || action === 'create')) {
-            const aclCmds = UnixGroupCommands.setUserAcl(worktreePath, daemonUser);
+            const aclCmds = UnixGroupCommands.setUserAcl(branchPath, daemonUser);
             if (await execAllCmds(aclCmds)) {
               daemonAclsApplied++;
               if (verbose) {
@@ -1237,15 +1236,15 @@ export default class SyncUnix extends Command {
           this.log('');
         }
 
-        // Summary for worktree sync
-        this.log(chalk.bold('Worktree Sync Summary:'));
-        this.log(`  Worktrees synced: ${worktreesSynced}${dryRun ? ' (dry-run)' : ''}`);
-        this.log(`  Directories created: ${worktreeDirsCreated}${dryRun ? ' (dry-run)' : ''}`);
-        this.log(`  Worktrees restored: ${worktreesRestored}${dryRun ? ' (dry-run)' : ''}`);
+        // Summary for branch sync
+        this.log(chalk.bold('Branch Sync Summary:'));
+        this.log(`  Branches synced: ${branchesSynced}${dryRun ? ' (dry-run)' : ''}`);
+        this.log(`  Directories created: ${branchDirsCreated}${dryRun ? ' (dry-run)' : ''}`);
+        this.log(`  Branches restored: ${branchesRestored}${dryRun ? ' (dry-run)' : ''}`);
         this.log(`  Groups cleaned: ${groupsCleaned}${dryRun ? ' (dry-run)' : ''}`);
         this.log(`  Status fixed: ${statusFixed}${dryRun ? ' (dry-run)' : ''}`);
         this.log(`  Daemon ACLs applied: ${daemonAclsApplied}${dryRun ? ' (dry-run)' : ''}`);
-        this.log(`  Skipped: ${worktreesSkipped}`);
+        this.log(`  Skipped: ${branchesSkipped}`);
         if (syncErrors > 0) {
           this.log(chalk.red(`  Errors: ${syncErrors}`));
         }
@@ -1254,33 +1253,33 @@ export default class SyncUnix extends Command {
 
       // ========================================
       // Membership Pruning Phase
-      // Removes users from worktree groups they no longer own
+      // Removes users from branch groups they no longer own
       // ========================================
 
-      if (targetWorktreeId) {
-        this.log(chalk.gray('   ⊘ Skipping membership pruning phase (--worktree-id mode)\n'));
+      if (targetBranchId) {
+        this.log(chalk.gray('   ⊘ Skipping membership pruning phase (--branch-id mode)\n'));
       } else {
         this.log(chalk.cyan.bold('\n━━━ Prune Stale Group Memberships ━━━\n'));
 
         {
-          // Build a map of worktree group → expected members (owners + daemon)
-          const allWtForPrune = await select(db).from(worktrees).all();
-          const allOwnerRows = await select(db).from(worktreeOwners).all();
+          // Build a map of branch group → expected members (owners + daemon)
+          const allWtForPrune = await select(db).from(branches).all();
+          const allOwnerRows = await select(db).from(branchOwners).all();
 
-          // Map worktree_id → unix_group
+          // Map branch_id → unix_group
           const wtGroupMap = new Map<string, string>();
           for (const wt of allWtForPrune) {
-            const raw = wt as { worktree_id: string; unix_group: string | null };
+            const raw = wt as { branch_id: string; unix_group: string | null };
             if (raw.unix_group) {
-              wtGroupMap.set(raw.worktree_id, raw.unix_group);
+              wtGroupMap.set(raw.branch_id, raw.unix_group);
             }
           }
 
           // Map unix_group → set of expected user_ids
           const groupToOwnerIds = new Map<string, Set<string>>();
           for (const row of allOwnerRows) {
-            const raw = row as { worktree_id: string; user_id: string };
-            const group = wtGroupMap.get(raw.worktree_id);
+            const raw = row as { branch_id: string; user_id: string };
+            const group = wtGroupMap.get(raw.branch_id);
             if (group) {
               const owners = groupToOwnerIds.get(group) || new Set();
               owners.add(raw.user_id);
@@ -1299,7 +1298,7 @@ export default class SyncUnix extends Command {
             }
           }
 
-          // Iterate ALL worktree groups (including those with zero owners)
+          // Iterate ALL branch groups (including those with zero owners)
           let pruneChecked = 0;
           for (const [, group] of wtGroupMap.entries()) {
             if (!groupExists(group)) continue;
@@ -1347,23 +1346,23 @@ export default class SyncUnix extends Command {
             this.log('');
           }
         }
-      } // end if (!targetWorktreeId) for membership pruning
+      } // end if (!targetBranchId) for membership pruning
 
       // ========================================
       // Symlink Sync Phase
       // Creates missing symlinks, removes broken ones
       // ========================================
 
-      if (targetWorktreeId) {
-        this.log(chalk.gray('   ⊘ Skipping symlink sync phase (--worktree-id mode)\n'));
+      if (targetBranchId) {
+        this.log(chalk.gray('   ⊘ Skipping symlink sync phase (--branch-id mode)\n'));
       } else if (validUsers.length > 0) {
         this.log(chalk.cyan.bold('\n━━━ Sync User Symlinks ━━━\n'));
 
-        // Build worktree ownership data for symlink creation
-        const allWtForSymlinks = await select(db).from(worktrees).all();
-        const allOwnershipsForSymlinks = await select(db).from(worktreeOwners).all();
+        // Build branch ownership data for symlink creation
+        const allWtForSymlinks = await select(db).from(branches).all();
+        const allOwnershipsForSymlinks = await select(db).from(branchOwners).all();
 
-        // Map worktree_id → worktree info
+        // Map branch_id → branch info
         const wtInfoMap = new Map<
           string,
           {
@@ -1375,13 +1374,13 @@ export default class SyncUnix extends Command {
         >();
         for (const wt of allWtForSymlinks) {
           const raw = wt as {
-            worktree_id: string;
+            branch_id: string;
             name: string;
             archived: boolean;
             filesystem_status: string | null;
             data: { path?: string } | null;
           };
-          wtInfoMap.set(raw.worktree_id, {
+          wtInfoMap.set(raw.branch_id, {
             name: raw.name,
             path: raw.data?.path,
             archived: raw.archived,
@@ -1389,53 +1388,53 @@ export default class SyncUnix extends Command {
           });
         }
 
-        // Map user_id → list of worktree_ids they own
-        const userToWorktrees = new Map<string, string[]>();
+        // Map user_id → list of branch_ids they own
+        const userToBranches = new Map<string, string[]>();
         for (const row of allOwnershipsForSymlinks) {
-          const raw = row as { user_id: string; worktree_id: string };
-          const existing = userToWorktrees.get(raw.user_id) || [];
-          existing.push(raw.worktree_id);
-          userToWorktrees.set(raw.user_id, existing);
+          const raw = row as { user_id: string; branch_id: string };
+          const existing = userToBranches.get(raw.user_id) || [];
+          existing.push(raw.branch_id);
+          userToBranches.set(raw.user_id, existing);
         }
 
         for (const user of validUsers) {
-          const worktreesDir = getUserWorktreesDir(user.unix_username);
+          const branchesDir = getUserBranchesDir(user.unix_username);
 
           if (verbose) {
             this.log(chalk.gray(`   ${user.unix_username}: checking symlinks...`));
           }
 
           // Ensure ~/agor/worktrees/ directory exists
-          if (!existsSync(worktreesDir)) {
-            const setupCmds = UnixUserCommands.setupWorktreesDir(user.unix_username);
+          if (!existsSync(branchesDir)) {
+            const setupCmds = UnixUserCommands.setupBranchesDir(user.unix_username);
             if (!(await execAllCmds(setupCmds))) {
               // May already exist or user home may not exist yet
               if (verbose) {
-                this.log(chalk.gray(`   ⚠ Could not create ${worktreesDir}`));
+                this.log(chalk.gray(`   ⚠ Could not create ${branchesDir}`));
               }
               continue;
             }
           }
 
           // Clean up broken symlinks
-          if (existsSync(worktreesDir)) {
-            await execCmd(SymlinkCommands.removeBrokenSymlinks(worktreesDir));
+          if (existsSync(branchesDir)) {
+            await execCmd(SymlinkCommands.removeBrokenSymlinks(branchesDir));
             symlinksCleaned++; // Count users cleaned, not individual symlinks
           }
 
-          // Create symlinks for owned worktrees where directory exists
-          const ownedWtIds = userToWorktrees.get(user.user_id) || [];
+          // Create symlinks for owned branches where directory exists
+          const ownedWtIds = userToBranches.get(user.user_id) || [];
           for (const wtId of ownedWtIds) {
             const wtInfo = wtInfoMap.get(wtId);
             if (!wtInfo?.path) continue;
 
-            // Skip archived+deleted worktrees
+            // Skip archived+deleted branches
             if (wtInfo.archived && wtInfo.filesystem_status === 'deleted') continue;
 
             // Skip if target directory doesn't exist
             if (!existsSync(wtInfo.path)) continue;
 
-            const symlinkPath = getWorktreeSymlinkPath(user.unix_username, wtInfo.name);
+            const symlinkPath = getBranchSymlinkPath(user.unix_username, wtInfo.name);
 
             // Check if symlink already exists and points to the correct target
             let needsCreate = true;
@@ -1487,27 +1486,27 @@ export default class SyncUnix extends Command {
       // Cleanup Phase
       // ========================================
 
-      if (targetWorktreeId && (cleanupGroups || cleanupUsers)) {
-        this.log(chalk.gray('   ⊘ Skipping cleanup phase (--worktree-id mode)\n'));
+      if (targetBranchId && (cleanupGroups || cleanupUsers)) {
+        this.log(chalk.gray('   ⊘ Skipping cleanup phase (--branch-id mode)\n'));
       } else if (cleanupGroups || cleanupUsers) {
         this.log(chalk.cyan.bold('━━━ Cleanup ━━━\n'));
       }
 
-      // Cleanup stale worktree groups
-      if (cleanupGroups && !targetWorktreeId) {
-        this.log(chalk.cyan('Checking for stale worktree groups...\n'));
+      // Cleanup stale branch groups
+      if (cleanupGroups && !targetBranchId) {
+        this.log(chalk.cyan('Checking for stale branch groups...\n'));
 
-        // Get all worktree groups that should exist (from DB)
-        const allWorktrees = await select(db).from(worktrees).all();
+        // Get all branch groups that should exist (from DB)
+        const allBranches = await select(db).from(branches).all();
         const expectedGroups = new Set(
-          allWorktrees.map(
-            (wt: { worktree_id: string; unix_group: string | null }) =>
-              wt.unix_group || generateWorktreeGroupName(wt.worktree_id as WorktreeID)
+          allBranches.map(
+            (wt: { branch_id: string; unix_group: string | null }) =>
+              wt.unix_group || generateBranchGroupName(wt.branch_id as BranchID)
           )
         );
 
         // Get all agor_wt_* groups on the system
-        const systemGroups = listWorktreeGroups();
+        const systemGroups = listBranchGroups();
 
         if (verbose) {
           this.log(chalk.gray(`   Found ${systemGroups.length} agor_wt_* group(s) on system`));
@@ -1518,7 +1517,7 @@ export default class SyncUnix extends Command {
         const staleGroups = systemGroups.filter((g) => !expectedGroups.has(g));
 
         if (staleGroups.length === 0) {
-          this.log(chalk.green('   ✓ No stale worktree groups found\n'));
+          this.log(chalk.green('   ✓ No stale branch groups found\n'));
         } else {
           this.log(chalk.yellow(`   Found ${staleGroups.length} stale group(s) to remove:\n`));
 
@@ -1580,7 +1579,7 @@ export default class SyncUnix extends Command {
       }
 
       // Cleanup stale users
-      if (cleanupUsers && !targetWorktreeId) {
+      if (cleanupUsers && !targetBranchId) {
         this.log(chalk.cyan('Checking for stale Agor users...\n'));
 
         // Get all unix_usernames that should exist (from DB)
@@ -1641,16 +1640,16 @@ export default class SyncUnix extends Command {
         this.log(`  Daemon memberships: ${daemonMembershipsAdded}${dryRunSuffix}`);
       }
 
-      // Worktree/Repo sync stats
+      // Branch/Repo sync stats
       this.log('');
       this.log(chalk.bold('Filesystem Sync:'));
-      this.log(`  WT groups backfilled: ${worktreesBackfilled}${dryRunSuffix}`);
-      this.log(`  Worktrees synced:  ${worktreesSynced}${dryRunSuffix}`);
-      this.log(`  Dirs created:      ${worktreeDirsCreated}${dryRunSuffix}`);
-      this.log(`  Worktrees restored:${worktreesRestored}${dryRunSuffix}`);
+      this.log(`  WT groups backfilled: ${branchesBackfilled}${dryRunSuffix}`);
+      this.log(`  Branches synced:  ${branchesSynced}${dryRunSuffix}`);
+      this.log(`  Dirs created:      ${branchDirsCreated}${dryRunSuffix}`);
+      this.log(`  Branches restored:${branchesRestored}${dryRunSuffix}`);
       this.log(`  Groups cleaned:    ${groupsCleaned}${dryRunSuffix}`);
       this.log(`  Status fixed:      ${statusFixed}${dryRunSuffix}`);
-      this.log(`  Skipped:           ${worktreesSkipped}`);
+      this.log(`  Skipped:           ${branchesSkipped}`);
       this.log(`  Daemon ACLs:       ${daemonAclsApplied}${dryRunSuffix}`);
       this.log(`  Repos backfilled:  ${reposBackfilled}${dryRunSuffix}`);
       this.log(`  Repo perms synced: ${reposPermSynced}${dryRunSuffix}`);
@@ -1693,10 +1692,10 @@ export default class SyncUnix extends Command {
         membershipsRemoved > 0 ||
         usersDeleted > 0 ||
         groupsDeleted > 0 ||
-        worktreesSynced > 0 ||
-        worktreesBackfilled > 0 ||
-        worktreeDirsCreated > 0 ||
-        worktreesRestored > 0 ||
+        branchesSynced > 0 ||
+        branchesBackfilled > 0 ||
+        branchDirsCreated > 0 ||
+        branchesRestored > 0 ||
         groupsCleaned > 0 ||
         statusFixed > 0 ||
         daemonAclsApplied > 0 ||

@@ -5,32 +5,25 @@
  * including FK validation, bulk operations, and enabled state toggling.
  */
 
-import type {
-  MCPServer,
-  MCPServerID,
-  Session,
-  SessionID,
-  UUID,
-  WorktreeID,
-} from '@agor/core/types';
+import type { BranchID, MCPServer, MCPServerID, Session, SessionID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
 import { EntityNotFoundError } from './base';
+import { BranchRepository } from './branches';
 import { MCPServerRepository } from './mcp-servers';
 import { RepoRepository } from './repos';
 import { SessionMCPServerRepository } from './session-mcp-servers';
 import { SessionRepository } from './sessions';
-import { WorktreeRepository } from './worktrees';
 
 /**
  * Create test session data
  */
-function createSessionData(worktreeId: UUID, overrides?: Partial<Session>): Partial<Session> {
+function createSessionData(branchId: UUID, overrides?: Partial<Session>): Partial<Session> {
   return {
     session_id: (overrides?.session_id ?? generateId()) as SessionID,
-    worktree_id: worktreeId,
+    branch_id: branchId,
     agentic_tool: overrides?.agentic_tool ?? 'claude-code',
     status: overrides?.status ?? SessionStatus.IDLE,
     created_by: overrides?.created_by ?? 'test-user',
@@ -70,11 +63,11 @@ function createMCPServerData(overrides?: Partial<MCPServer>) {
 }
 
 /**
- * Set up test database with repo, worktree, session, and MCP servers
+ * Set up test database with repo, branch, session, and MCP servers
  */
 async function setupTestData(db: any) {
   const repoRepo = new RepoRepository(db);
-  const worktreeRepo = new WorktreeRepository(db);
+  const branchRepo = new BranchRepository(db);
   const sessionRepo = new SessionRepository(db);
   const mcpServerRepo = new MCPServerRepository(db);
 
@@ -89,20 +82,21 @@ async function setupTestData(db: any) {
     default_branch: 'main',
   });
 
-  // Create worktree
-  const worktree = await worktreeRepo.create({
-    worktree_id: generateId() as WorktreeID,
+  // Create branch
+  const branch = await branchRepo.create({
+    branch_id: generateId() as BranchID,
     repo_id: repo.repo_id,
     name: 'main',
     ref: 'main',
-    worktree_unique_id: Math.floor(Math.random() * 1000000),
+    branch_unique_id: Math.floor(Math.random() * 1000000),
     path: '/tmp/test-repo',
     base_ref: 'main',
     new_branch: false,
+    created_by: 'test-user' as UUID,
   });
 
   // Create session
-  const session = await sessionRepo.create(createSessionData(worktree.worktree_id));
+  const session = await sessionRepo.create(createSessionData(branch.branch_id));
 
   // Create MCP servers
   const server1 = await mcpServerRepo.create(createMCPServerData({ name: 'test-server-1' }));
@@ -583,7 +577,7 @@ describe('SessionMCPServerRepository.count', () => {
 describe('SessionMCPServerRepository error handling', () => {
   dbTest('should handle multiple sessions with same server', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
-    const worktreeRepo = new WorktreeRepository(db);
+    const branchRepo = new BranchRepository(db);
     const sessionRepo = new SessionRepository(db);
     const mcpServerRepo = new MCPServerRepository(db);
     const repo = new SessionMCPServerRepository(db);
@@ -599,22 +593,23 @@ describe('SessionMCPServerRepository error handling', () => {
       default_branch: 'main',
     });
 
-    const worktree = await worktreeRepo.create({
-      worktree_id: generateId() as WorktreeID,
+    const branch = await branchRepo.create({
+      branch_id: generateId() as BranchID,
       repo_id: testRepo.repo_id,
       name: 'main',
       ref: 'main',
-      worktree_unique_id: Math.floor(Math.random() * 1000000),
+      branch_unique_id: Math.floor(Math.random() * 1000000),
       path: '/tmp/test-repo',
       base_ref: 'main',
       new_branch: false,
+      created_by: 'test-user' as UUID,
     });
 
     const server = await mcpServerRepo.create(createMCPServerData());
 
     // Create two sessions
-    const session1 = await sessionRepo.create(createSessionData(worktree.worktree_id));
-    const session2 = await sessionRepo.create(createSessionData(worktree.worktree_id));
+    const session1 = await sessionRepo.create(createSessionData(branch.branch_id));
+    const session2 = await sessionRepo.create(createSessionData(branch.branch_id));
 
     // Add same server to both sessions
     await repo.addServer(session1.session_id, server.mcp_server_id);
@@ -631,7 +626,7 @@ describe('SessionMCPServerRepository error handling', () => {
 
   dbTest('should independently toggle same server across different sessions', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
-    const worktreeRepo = new WorktreeRepository(db);
+    const branchRepo = new BranchRepository(db);
     const sessionRepo = new SessionRepository(db);
     const mcpServerRepo = new MCPServerRepository(db);
     const repo = new SessionMCPServerRepository(db);
@@ -646,20 +641,21 @@ describe('SessionMCPServerRepository error handling', () => {
       default_branch: 'main',
     });
 
-    const worktree = await worktreeRepo.create({
-      worktree_id: generateId() as WorktreeID,
+    const branch = await branchRepo.create({
+      branch_id: generateId() as BranchID,
       repo_id: testRepo.repo_id,
       name: 'main',
       ref: 'main',
-      worktree_unique_id: Math.floor(Math.random() * 1000000),
+      branch_unique_id: Math.floor(Math.random() * 1000000),
       path: '/tmp/test-repo',
       base_ref: 'main',
       new_branch: false,
+      created_by: 'test-user' as UUID,
     });
 
     const server = await mcpServerRepo.create(createMCPServerData());
-    const session1 = await sessionRepo.create(createSessionData(worktree.worktree_id));
-    const session2 = await sessionRepo.create(createSessionData(worktree.worktree_id));
+    const session1 = await sessionRepo.create(createSessionData(branch.branch_id));
+    const session2 = await sessionRepo.create(createSessionData(branch.branch_id));
 
     await repo.addServer(session1.session_id, server.mcp_server_id);
     await repo.addServer(session2.session_id, server.mcp_server_id);

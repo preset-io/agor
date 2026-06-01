@@ -2,7 +2,7 @@
  * Show details for an MCP server
  */
 
-import type { MCPServer } from '@agor-live/client';
+import { type MCPServer, shortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -50,7 +50,7 @@ export default class McpShow extends BaseCommand {
       this.log(chalk.bold(chalk.cyan('MCP Server Details')));
       this.log('');
       this.log(`${chalk.cyan('ID')}: ${server.mcp_server_id}`);
-      this.log(`${chalk.cyan('Short ID')}: ${String(server.mcp_server_id).substring(0, 8)}`);
+      this.log(`${chalk.cyan('Short ID')}: ${shortId(String(server.mcp_server_id))}`);
       this.log(`${chalk.cyan('Name')}: ${server.name}`);
 
       if (server.display_name) {

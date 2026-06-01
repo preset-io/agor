@@ -9,11 +9,12 @@
  */
 
 import { CopyOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
-import { message, Tooltip, Typography, theme } from 'antd';
+import { Tooltip, Typography, theme } from 'antd';
 import { createPatch } from 'diff';
 import type React from 'react';
 import { useState } from 'react';
 import { copyToClipboard } from '@/utils/clipboard';
+import { useThemedMessage } from '@/utils/message';
 import { isDarkTheme } from '@/utils/theme';
 import { type DiffLine, type StructuredPatchHunk, useDiff, type WordSegment } from './useDiff';
 
@@ -37,15 +38,15 @@ export interface DiffBlockProps {
 
 /** Shorten an absolute file path for display */
 const shortenPath = (filePath: string): string => {
-  // Strip common worktree prefixes
-  const markers = ['/worktrees/', '/home/', '/Users/'];
+  // Strip common branch prefixes
+  const markers = ['/branches/', '/home/', '/Users/'];
   for (const marker of markers) {
     const idx = filePath.indexOf(marker);
     if (idx !== -1) {
       // Find the repo/project root after the marker
       const afterMarker = filePath.slice(idx + marker.length);
       const parts = afterMarker.split('/');
-      // Skip user/worktree name segments, show from project root
+      // Skip user/branch name segments, show from project root
       if (parts.length > 3) {
         return parts.slice(parts.length > 5 ? -4 : 2).join('/');
       }
@@ -79,6 +80,7 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
   forceExpanded,
 }) => {
   const { token } = theme.useToken();
+  const { showSuccess } = useThemedMessage();
   const isDark = isDarkTheme(token);
   const diff = useDiff(oldContent, newContent, structuredPatch);
 
@@ -135,7 +137,7 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
         .join('\n');
     }
     await copyToClipboard(diffText);
-    message.success('Diff copied');
+    showSuccess('Diff copied');
   };
 
   const needsTruncation = diff.totalLines > TRUNCATE_THRESHOLD && !showAll;

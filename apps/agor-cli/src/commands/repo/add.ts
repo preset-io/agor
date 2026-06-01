@@ -4,10 +4,15 @@
  * Clones the repo to ~/.agor/repos/<name> and registers it with the daemon.
  */
 
+import type { Repo } from '@agor-live/client';
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
+
+/** How long to wait for the async clone to land on the placeholder row. */
+const CLONE_POLL_TIMEOUT_MS = 2 * 60 * 1000;
+const CLONE_POLL_INTERVAL_MS = 1000;
 
 export default class RepoAdd extends BaseCommand {
   static description = 'Clone a remote git repository and register it with Agor';
@@ -83,12 +88,68 @@ export default class RepoAdd extends BaseCommand {
       this.log(chalk.dim(`URL: ${args.url}`));
       this.log('');
 
-      // Call daemon API to clone repo
-      const repo = await client.service('repos').clone({
+      // Daemon returns `{ status, slug, repo_id }` immediately while the
+      // clone runs in the background; the placeholder row carries
+      // `clone_status: 'cloning'` and is patched to `'ready'`/`'failed'`
+      // when the executor finishes. Use the route exposed at `/repos/clone`
+      // (same path the UI calls) — there is no client method shortcut for it.
+      const result = await client.service('repos/clone').create({
         url: args.url,
         name: slug,
         slug,
       });
+
+      if (result.status === 'exists') {
+        this.log(`${chalk.yellow('⚠')} Repository '${slug}' is already registered`);
+        this.log(chalk.dim(`Use ${chalk.cyan('agor repo list')} to see registered repos.`));
+        this.log('');
+        await this.cleanupClient(client);
+        return;
+      }
+
+      if (!result.repo_id) {
+        // Defensive: pre-create path always returns repo_id, but if the
+        // daemon ever stops including it we don't want the CLI to silently
+        // hang on a missing target.
+        this.log(chalk.yellow('⚠ Clone started but daemon did not return a repo_id.'));
+        this.log(chalk.dim(`Run ${chalk.cyan('agor repo list')} to check progress.`));
+        await this.cleanupClient(client);
+        return;
+      }
+
+      // Poll `agor_repos_get` (via the standard Feathers get) until the
+      // executor patches the placeholder. Bounded to CLONE_POLL_TIMEOUT_MS
+      // so a hung executor cannot wedge the CLI indefinitely.
+      const reposService = client.service('repos');
+      const deadline = Date.now() + CLONE_POLL_TIMEOUT_MS;
+      let repo: Repo | undefined;
+      while (Date.now() < deadline) {
+        const fetched = (await reposService.get(result.repo_id)) as Repo;
+        if (fetched.clone_status === 'ready' || fetched.clone_status === undefined) {
+          repo = fetched;
+          break;
+        }
+        if (fetched.clone_status === 'failed') {
+          const err = fetched.clone_error;
+          const hint =
+            err?.category === 'auth_failed'
+              ? '\nConfigure GITHUB_TOKEN in Settings → API Keys for private repos.'
+              : '';
+          await this.cleanupClient(client);
+          this.log('');
+          this.log(chalk.red(`✗ Clone failed: ${err?.message ?? 'unknown error'}${hint}`));
+          this.log('');
+          this.exit(1);
+        }
+        await new Promise((resolve) => setTimeout(resolve, CLONE_POLL_INTERVAL_MS));
+      }
+
+      if (!repo) {
+        await this.cleanupClient(client);
+        this.log(chalk.red(`✗ Clone timed out after ${CLONE_POLL_TIMEOUT_MS / 1000}s.`));
+        this.log(chalk.dim('Check daemon logs or run `agor repo list` to see current state.'));
+        this.exit(1);
+      }
 
       this.log(`${chalk.green('✓')} Repository cloned and registered`);
       this.log(chalk.dim(`  Path: ${repo.local_path}`));

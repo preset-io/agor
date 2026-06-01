@@ -12,14 +12,14 @@
 import {
   AGOR_HOME_BASE,
   createAdminExecutor,
-  getUserWorktreesDir,
+  getUserBranchesDir,
   isValidUnixUsername,
   SymlinkCommands,
 } from '@agor/core/unix';
 import { Command, Flags } from '@oclif/core';
 
 export default class SyncUserSymlinks extends Command {
-  static override description = 'Clean up broken symlinks in user worktrees directory (admin only)';
+  static override description = 'Clean up broken symlinks in user branches directory (admin only)';
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --username alice',
@@ -66,20 +66,20 @@ export default class SyncUserSymlinks extends Command {
       this.error(`Invalid Unix username format: ${username}`);
     }
 
-    const worktreesDir = getUserWorktreesDir(username, homeBase);
+    const branchesDir = getUserBranchesDir(username, homeBase);
 
     // Check if directory exists
-    const dirExists = await executor.check(SymlinkCommands.pathExists(worktreesDir));
+    const dirExists = await executor.check(SymlinkCommands.pathExists(branchesDir));
 
     if (!dirExists) {
-      this.log(`✅ Worktrees directory does not exist: ${worktreesDir} (nothing to do)`);
+      this.log(`✅ Branches directory does not exist: ${branchesDir} (nothing to do)`);
       return;
     }
 
     // Remove broken symlinks
     try {
-      await executor.exec(SymlinkCommands.removeBrokenSymlinks(worktreesDir));
-      this.log(`✅ Cleaned up broken symlinks in: ${worktreesDir}`);
+      await executor.exec(SymlinkCommands.removeBrokenSymlinks(branchesDir));
+      this.log(`✅ Cleaned up broken symlinks in: ${branchesDir}`);
     } catch (error) {
       this.error(`Failed to sync symlinks: ${error}`);
     }

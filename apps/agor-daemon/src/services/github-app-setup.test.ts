@@ -26,6 +26,8 @@ vi.mock('@agor/core/db', () => {
       findById = mockFindById;
       update = mockUpdate;
     },
+    // shortId is used in log lines inside github-app-setup; passthrough mock.
+    shortId: (id: string) => id,
   };
 });
 

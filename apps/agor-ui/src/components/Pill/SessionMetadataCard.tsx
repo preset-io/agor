@@ -5,13 +5,13 @@
  * Compact, read-only design focused on quick context ("what is this session?")
  */
 
-import type { Repo, Session, User, Worktree } from '@agor-live/client';
-import { CopyOutlined, FolderOutlined } from '@ant-design/icons';
-import { Button, Space, Typography, theme } from 'antd';
+import type { Branch, Repo, Session, User } from '@agor-live/client';
+import { FolderOutlined } from '@ant-design/icons';
+import { Space, Typography, theme } from 'antd';
 import type React from 'react';
-import { copyToClipboard } from '../../utils/clipboard';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { CreatedByTag } from '../metadata';
+import { SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
 import { ForkPill, PILL_COLORS, RepoPill, SpawnPill, StatusPill } from './Pill';
@@ -20,7 +20,7 @@ const { Text } = Typography;
 
 export interface SessionMetadataCardProps {
   session: Session;
-  worktree?: Worktree;
+  branch?: Branch;
   repo?: Repo;
   userById?: Map<string, User>;
   currentUserId?: string;
@@ -29,23 +29,13 @@ export interface SessionMetadataCardProps {
 
 export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
   session,
-  worktree,
+  branch,
   repo,
   userById = new Map(),
   currentUserId,
   compact = true,
 }) => {
   const { token } = theme.useToken();
-
-  const handleCopyAgor = () => {
-    copyToClipboard(session.session_id);
-  };
-
-  const handleCopySdk = () => {
-    if (session.sdk_session_id) {
-      copyToClipboard(session.sdk_session_id);
-    }
-  };
 
   return (
     <div style={{ width: 400, maxWidth: '90vw' }}>
@@ -79,7 +69,11 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
         </div>
       </div>
 
-      {/* Agor Session ID */}
+      {/* Session IDs — shared with SessionIdsButton popover and Settings modal.
+          For Claude Code CLI sessions the two are the same UUID by design
+          (we pass --session-id <agor> to the binary); for SDK adapters they
+          typically differ. SDK row is hidden when no sdk_session_id has
+          been captured yet (fresh SDK sessions before the first response). */}
       <div
         style={{
           marginBottom: 12,
@@ -87,63 +81,8 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
           borderTop: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: 8 }}>Agor Session ID</div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '6px 12px',
-            background: token.colorBgLayout,
-            borderRadius: token.borderRadiusSM,
-            fontFamily: token.fontFamilyCode,
-            fontSize: '0.85em',
-          }}
-        >
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {session.session_id}
-          </span>
-          <Button
-            type="text"
-            size="small"
-            icon={<CopyOutlined />}
-            onClick={handleCopyAgor}
-            style={{ padding: '0 4px' }}
-          />
-        </div>
+        <SessionIdsList session={session} />
       </div>
-
-      {/* SDK Session ID (if available) */}
-      {session.sdk_session_id && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: 8 }}>
-            {session.agentic_tool || 'SDK'} Session ID
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '6px 12px',
-              background: token.colorBgLayout,
-              borderRadius: token.borderRadiusSM,
-              fontFamily: token.fontFamilyCode,
-              fontSize: '0.85em',
-            }}
-          >
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {session.sdk_session_id}
-            </span>
-            <Button
-              type="text"
-              size="small"
-              icon={<CopyOutlined />}
-              onClick={handleCopySdk}
-              style={{ padding: '0 4px' }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Genealogy (if applicable) */}
       {(session.genealogy.forked_from_session_id || session.genealogy.parent_session_id) && (
@@ -160,14 +99,14 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
         </div>
       )}
 
-      {/* Worktree context (if available) */}
-      {worktree && repo && (
+      {/* Branch context (if available) */}
+      {branch && repo && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: 8 }}>Worktree</div>
+          <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: 8 }}>Branch</div>
           <Space size={4} wrap>
             <RepoPill repoName={repo.slug} />
-            <Tag icon={<FolderOutlined />} color={PILL_COLORS.worktree}>
-              <span style={{ fontFamily: token.fontFamilyCode }}>{worktree.name}</span>
+            <Tag icon={<FolderOutlined />} color={PILL_COLORS.branch}>
+              <span style={{ fontFamily: token.fontFamilyCode }}>{branch.name}</span>
             </Tag>
           </Space>
         </div>

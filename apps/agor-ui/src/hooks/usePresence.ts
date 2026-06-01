@@ -8,7 +8,14 @@
  * Subscribes to cursor-moved events and maintains active user state for Facepile
  */
 
-import type { ActiveUser, AgorClient, BoardID, CursorMovedEvent, User } from '@agor-live/client';
+import type {
+  ActiveUser,
+  AgorClient,
+  BoardID,
+  CursorMovedEvent,
+  PresenceUpdatedEvent,
+  User,
+} from '@agor-live/client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PRESENCE_CONFIG } from '../config/presence';
 
@@ -18,6 +25,12 @@ interface UsePresenceOptions {
   users: User[]; // All users (for looking up user details by ID)
   enabled?: boolean;
   globalPresence?: boolean; // If true, track users across all boards (for navbar facepile)
+  /**
+   * Optional coalescing window for presenceMap updates. When set, repeated
+   * cursor-moved events for the same user on the same board within this window
+   * are treated as no-ops for facepile state.
+   */
+  presenceMinUpdateIntervalMs?: number;
 }
 
 interface UsePresenceResult {
@@ -32,7 +45,14 @@ interface UsePresenceResult {
  * @returns Active users for facepile and remote cursors for rendering
  */
 export function usePresence(options: UsePresenceOptions): UsePresenceResult {
-  const { client, boardId, users, enabled = true, globalPresence = false } = options;
+  const {
+    client,
+    boardId,
+    users,
+    enabled = true,
+    globalPresence = false,
+    presenceMinUpdateIntervalMs = 0,
+  } = options;
 
   // Use ref for users to avoid triggering useMemo recalculation
   const usersRef = useRef(users);
@@ -46,7 +66,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
   >(new Map());
 
   const [presenceMap, setPresenceMap] = useState<
-    Map<string, { boardId: BoardID; x: number; y: number; timestamp: number }>
+    Map<string, { boardId: BoardID; x?: number; y?: number; timestamp: number }>
   >(new Map());
 
   useEffect(() => {
@@ -75,6 +95,16 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
             return prev; // Reject stale update
           }
 
+          // Duplicate payload (same coordinates + timestamp) is a no-op.
+          if (
+            existing &&
+            existing.x === updateData.x &&
+            existing.y === updateData.y &&
+            existing.timestamp === updateData.timestamp
+          ) {
+            return prev;
+          }
+
           // Only create new Map after confirming we need to update
           const next = new Map(prev);
           next.set(event.userId, updateData);
@@ -82,8 +112,10 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
         });
       }
 
-      // For presence (facepile), track globally or board-scoped based on globalPresence flag
-      if (globalPresence || event.boardId === boardId) {
+      // Board-scoped presence consumers can derive active users directly from
+      // cursor traffic. Global presence uses the lightweight server-side
+      // `presence-updated` channel below instead.
+      if (!globalPresence && event.boardId === boardId) {
         const presenceData = {
           boardId: event.boardId,
           x: event.x,
@@ -100,12 +132,73 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
             return prev; // Reject stale update
           }
 
+          // Facepile doesn't need every 100ms cursor sample when the user is
+          // still on the same board; keep the existing reference stable unless
+          // enough time has passed or the board actually changed.
+          if (
+            existing &&
+            existing.boardId === presenceData.boardId &&
+            presenceMinUpdateIntervalMs > 0 &&
+            event.timestamp - existing.timestamp < presenceMinUpdateIntervalMs
+          ) {
+            return prev;
+          }
+
+          // Duplicate payload (same board/position/timestamp) is a no-op.
+          if (
+            existing &&
+            existing.boardId === presenceData.boardId &&
+            existing.x === presenceData.x &&
+            existing.y === presenceData.y &&
+            existing.timestamp === presenceData.timestamp
+          ) {
+            return prev;
+          }
+
           // Only create new Map after confirming we need to update
           const next = new Map(prev);
           next.set(event.userId, presenceData);
           return next;
         });
       }
+    };
+
+    const handlePresenceUpdated = (event: PresenceUpdatedEvent) => {
+      if (!globalPresence) return;
+
+      const presenceData = {
+        boardId: event.boardId,
+        timestamp: event.timestamp,
+      };
+
+      setPresenceMap((prev) => {
+        const existing = prev.get(event.userId);
+
+        if (existing && event.timestamp < existing.timestamp) {
+          return prev;
+        }
+
+        if (
+          existing &&
+          existing.boardId === presenceData.boardId &&
+          presenceMinUpdateIntervalMs > 0 &&
+          event.timestamp - existing.timestamp < presenceMinUpdateIntervalMs
+        ) {
+          return prev;
+        }
+
+        if (
+          existing &&
+          existing.boardId === presenceData.boardId &&
+          existing.timestamp === presenceData.timestamp
+        ) {
+          return prev;
+        }
+
+        const next = new Map(prev);
+        next.set(event.userId, presenceData);
+        return next;
+      });
     };
 
     // Handle cursor-left events (user navigated away)
@@ -120,24 +213,12 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
         });
       }
 
-      // For presence (facepile), handle globally or board-scoped
-      if (globalPresence || event.boardId === boardId) {
+      // Only board-scoped presence consumers delete on cursor-left. Global
+      // presence relies on the longer timeout + explicit presence-updated
+      // heartbeats so board switches don't cause facepile flicker.
+      if (!globalPresence && event.boardId === boardId) {
         setPresenceMap((prev) => {
           if (!prev.has(event.userId)) return prev; // No-op if user not tracked
-
-          // In global presence mode, only delete if the stored boardId matches the leave event
-          if (globalPresence) {
-            const existing = prev.get(event.userId);
-            if (existing && existing.boardId === event.boardId) {
-              const next = new Map(prev);
-              next.delete(event.userId);
-              return next;
-            }
-            // User is on a different board now, keep them in the map
-            return prev;
-          }
-
-          // Board-scoped mode: always delete on leave
           const next = new Map(prev);
           next.delete(event.userId);
           return next;
@@ -147,6 +228,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
 
     // Subscribe to WebSocket events
     client.io.on('cursor-moved', handleCursorMoved);
+    client.io.on('presence-updated', handlePresenceUpdated);
     client.io.on('cursor-left', handleCursorLeft);
 
     // Cleanup stale cursors every 5 seconds (for cursor rendering)
@@ -214,11 +296,12 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
     // Cleanup
     return () => {
       client.io.off('cursor-moved', handleCursorMoved);
+      client.io.off('presence-updated', handlePresenceUpdated);
       client.io.off('cursor-left', handleCursorLeft);
       clearInterval(cursorCleanupInterval);
       clearInterval(presenceCleanupInterval);
     };
-  }, [client, boardId, enabled, globalPresence]);
+  }, [client, boardId, enabled, globalPresence, presenceMinUpdateIntervalMs]);
 
   // Derive active users and remote cursors from separate maps
   // - activeUsers from presenceMap (5 minute timeout for facepile)
@@ -240,10 +323,13 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
         user,
         lastSeen: presence.timestamp,
         boardId: presence.boardId,
-        cursor: {
-          x: presence.x,
-          y: presence.y,
-        },
+        cursor:
+          typeof presence.x === 'number' && typeof presence.y === 'number'
+            ? {
+                x: presence.x,
+                y: presence.y,
+              }
+            : undefined,
       });
     }
 

@@ -5,8 +5,9 @@
  * Includes interactive permission handling via PermissionService (same as Claude Code).
  */
 
-import { loadConfig } from '@agor/core/config';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { TOOL_API_KEY_NAMES } from '@agor/core/types';
+import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { CopilotTool } from '../../sdk-handlers/copilot/index.js';
@@ -25,15 +26,15 @@ export async function executeCopilotTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  resolvedConfig?: ResolvedConfigSlice;
 }): Promise<void> {
   const { client, sessionId } = params;
 
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');
 
-  // Load config for permission timeout setting
-  const config = await loadConfig();
-  const permissionTimeoutMs = config.execution?.permission_timeout_ms ?? 600_000; // default: 10 minutes
+  // Permission timeout: daemon-resolved slice, fallback to 10-minute default.
+  const permissionTimeoutMs = params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000;
 
   // Create PermissionService that emits via Feathers WebSocket
   const permissionService = new PermissionService(async (event, data) => {
@@ -48,14 +49,14 @@ export async function executeCopilotTask(params: {
     // Execute using base helper with Copilot-specific factory
     await executeToolTask({
       ...params,
-      apiKeyEnvVar: 'COPILOT_GITHUB_TOKEN',
+      apiKeyEnvVar: TOOL_API_KEY_NAMES['copilot']!,
       toolName: 'copilot',
       createTool: (repos, apiKey, useNativeAuth) =>
         new CopilotTool(
           repos.messages,
           repos.sessions,
           repos.sessionMCP,
-          repos.worktrees,
+          repos.branches,
           repos.repos,
           apiKey,
           repos.messagesService,

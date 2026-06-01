@@ -1,6 +1,6 @@
 ---
 title: agor Documentation
-description: Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants, anchored on git worktrees, with real-time multiplayer and an MCP surface agents drive themselves.
+description: Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants, anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.
 ---
 
 <div style={{ textAlign: 'center', marginTop: '2rem', marginBottom: '2rem' }}>
@@ -15,7 +15,7 @@ description: Team command center for all things agentic. A shared canvas for cod
 
 **Team command center for all things agentic.**
 
-Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived assistants run side-by-side on isolated git worktrees — the anchor entity where sessions, dev environments, prompts, and PRs converge. Your whole team rallies around the same live work in real time, and the agents themselves drive Agor over MCP.
+Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived assistants run side-by-side on isolated git branches — the anchor entity where sessions, dev environments, prompts, and PRs converge. Your whole team rallies around the same live work in real time, and the agents themselves drive Agor over MCP.
 
 import { GifGallery } from '../../components';
 
@@ -38,11 +38,11 @@ agor daemon start
 agor open
 ```
 
-See the [Getting Started Guide](/guide/getting-started) to add your first repo, or [Extended Installation](/guide/extended-install) for Docker, source builds, and other options.
+Prefer Homebrew on macOS or Linux? See the [Getting Started Guide](/guide/getting-started) for that install path, then add your first repo. For Docker, source builds, and other options, see [Extended Installation](/guide/extended-install).
 
 **Then dive in:**
 
-- **[Features Overview](/guide/features-overview)** — A map of what Agor does, starting with worktrees, sessions, and boards
+- **[Features Overview](/guide/features-overview)** — A map of what Agor does, starting with branches, sessions, and boards
 - **[Architecture](/guide/architecture)** — System design and the typed TypeScript client
 - **[Development Guide](/guide/development)** — Run Agor in Agor and contribute
 
@@ -50,9 +50,9 @@ See the [Getting Started Guide](/guide/getting-started) to add your first repo, 
 
 ## Screenshots
 
-![Agor board with custom-styled zones organizing worktrees into a pipeline (MAIN SESH, Agor Coding Tasks, Create a pull request, Codex review, Human review). Each worktree card shows its session tree, env tabs, and PR badge.](/screenshots/board-hero.png)
+![Agor board with custom-styled zones organizing branches into a pipeline (MAIN SESH, Agor Coding Tasks, Create a pull request, Codex review, Human review). Each branch card shows its session tree, env tabs, and PR badge.](/screenshots/board-hero.png)
 
-_Multiplayer spatial canvas with custom-styled zones, session trees, and worktree pipelines_
+_Multiplayer spatial canvas with custom-styled zones, session trees, and branch pipelines_
 
 <div
   style={{
@@ -76,17 +76,17 @@ _Multiplayer spatial canvas with custom-styled zones, session trees, and worktre
   <div>
     <img
       src="/screenshots/settings_modal.png"
-      alt="Agor settings modal for configuring MCP servers, managing worktrees, and agent preferences"
+      alt="Agor settings modal for configuring MCP servers, managing branches, and agent preferences"
       style={{ width: '100%', borderRadius: '8px' }}
     />
     <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>MCP server and worktree management</em>
+      <em>MCP server and branch management</em>
     </p>
   </div>
   <div>
     <img
       src="/screenshots/zone-trigger.png"
-      alt="Agor zone trigger modal showing a templated prompt with mustache placeholders ({{ worktree.name }}, {{ worktree.pull_request_url }}) and Prompt/Fork/Spawn action choices"
+      alt="Agor zone trigger modal showing a templated prompt with mustache placeholders ({{ branch.name }}, {{ branch.pull_request_url }}) and Prompt/Fork/Spawn action choices"
       style={{ width: '100%', borderRadius: '8px' }}
     />
     <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
@@ -106,11 +106,11 @@ _Multiplayer spatial canvas with custom-styled zones, session trees, and worktre
   <div>
     <img
       src="/screenshots/env-variants-full.png"
-      alt="Agor worktree environment tab showing YAML config with named variants (docs, full, sqlite, postgres) and Docker compose commands"
+      alt="Agor branch environment tab showing YAML config with named variants (docs, full, sqlite, postgres) and Docker compose commands"
       style={{ width: '100%', borderRadius: '8px' }}
     />
     <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Worktree environment with named variants</em>
+      <em>Branch environment with named variants</em>
     </p>
   </div>
   <div>
@@ -126,11 +126,11 @@ _Multiplayer spatial canvas with custom-styled zones, session trees, and worktre
   <div>
     <img
       src="/screenshots/baked_in_terminal.png"
-      alt="Agor built-in terminal with automatic worktree context and environment variable injection"
+      alt="Agor built-in terminal with automatic branch context and environment variable injection"
       style={{ width: '100%', borderRadius: '8px' }}
     />
     <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Built-in terminal with worktree context</em>
+      <em>Built-in terminal with branch context</em>
     </p>
   </div>
   <div>
@@ -165,7 +165,7 @@ See the [Architecture Guide](/guide/architecture) for details.
 Highlights:
 
 - **Match CLI-Native Features** — SDKs are evolving rapidly and exposing more functionality. Our goal is to push integrations deeper to match all key features available in the underlying CLIs, closing the gap between SDK-based orchestration and native tool capabilities
-- **Bring Your Own IDE** — Connect VSCode, Cursor, or any IDE directly to Agor-managed worktrees via SSH/Remote. Keep your familiar editor and agent while Agor orchestrates sessions, tracks progress, and enables team visibility on the multiplayer board
+- **Bring Your Own IDE** — Connect VSCode, Cursor, or any IDE directly to Agor-managed branches via SSH/Remote. Keep your familiar editor and agent while Agor orchestrates sessions, tracks progress, and enables team visibility on the multiplayer board
 - **Unix User Integration** — Enable true multi-tenancy with per-user Unix isolation for secure collaboration. [Read the guide →](/guide/multiplayer-unix-isolation)
 
 ---

@@ -25,6 +25,19 @@ export interface CursorMovedEvent {
 }
 
 /**
+ * Lightweight presence broadcast (server → clients).
+ *
+ * Used by global presence consumers like the navbar facepile, which only need
+ * to know that a user is active and which board they're on — not every cursor
+ * coordinate sample.
+ */
+export interface PresenceUpdatedEvent {
+  userId: string;
+  boardId: BoardID;
+  timestamp: number;
+}
+
+/**
  * Cursor leave event (user navigates away from board)
  */
 export interface CursorLeaveEvent {

@@ -1,4 +1,4 @@
-import type { Repo, Worktree } from '@agor-live/client';
+import type { Branch, Repo } from '@agor-live/client';
 import type { Meta, StoryObj } from '@storybook/react';
 import { EnvironmentPill } from './EnvironmentPill';
 
@@ -37,8 +37,8 @@ const repoWithConfig: Repo = {
       default: {
         start: 'docker compose up -d',
         stop: 'docker compose down',
-        health: 'http://localhost:{{add 9000 worktree.unique_id}}/health',
-        app: 'http://localhost:{{add 9000 worktree.unique_id}}',
+        health: 'http://localhost:{{add 9000 branch.unique_id}}/health',
+        app: 'http://localhost:{{add 9000 branch.unique_id}}',
       },
     },
   },
@@ -47,17 +47,17 @@ const repoWithConfig: Repo = {
     down_command: 'docker compose down',
     health_check: {
       type: 'http',
-      url_template: 'http://localhost:{{add 9000 worktree.unique_id}}/health',
+      url_template: 'http://localhost:{{add 9000 branch.unique_id}}/health',
     },
-    app_url_template: 'http://localhost:{{add 9000 worktree.unique_id}}',
+    app_url_template: 'http://localhost:{{add 9000 branch.unique_id}}',
   },
 };
 
-// Base worktree
-const baseWorktree: Worktree = {
-  worktree_id: '0193d1e2-3f4a-7b5c-a8f3-9d2e1c4b5a6f',
+// Base branch
+const baseBranch: Branch = {
+  branch_id: '0193d1e2-3f4a-7b5c-a8f3-9d2e1c4b5a6f',
   repo_id: baseRepo.repo_id,
-  worktree_unique_id: 1,
+  branch_unique_id: 1,
   name: 'feature-auth',
   ref: 'feature/auth',
   path: '/Users/user/.agor/worktrees/myapp/feature-auth',
@@ -68,13 +68,13 @@ const baseWorktree: Worktree = {
   last_used: '2025-01-20T10:00:00Z',
 };
 
-const logStart = (worktreeId: string) => console.log('Start environment', worktreeId);
-const logStop = (worktreeId: string) => console.log('Stop environment', worktreeId);
+const logStart = (branchId: string) => console.log('Start environment', branchId);
+const logStop = (branchId: string) => console.log('Stop environment', branchId);
 
 export const NotConfigured: Story = {
   args: {
     repo: baseRepo,
-    worktree: baseWorktree,
+    branch: baseBranch,
     onEdit: () => alert('Opening environment settings...'),
   },
 };
@@ -82,8 +82,8 @@ export const NotConfigured: Story = {
 export const ConfiguredButStopped: Story = {
   args: {
     repo: repoWithConfig,
-    worktree: {
-      ...baseWorktree,
+    branch: {
+      ...baseBranch,
       environment_instance: {
         status: 'stopped',
       },
@@ -97,8 +97,8 @@ export const ConfiguredButStopped: Story = {
 export const Running: Story = {
   args: {
     repo: repoWithConfig,
-    worktree: {
-      ...baseWorktree,
+    branch: {
+      ...baseBranch,
       environment_instance: {
         status: 'running',
         access_urls: [{ name: 'UI', url: 'http://localhost:9001' }],
@@ -122,8 +122,8 @@ export const Running: Story = {
 export const Starting: Story = {
   args: {
     repo: repoWithConfig,
-    worktree: {
-      ...baseWorktree,
+    branch: {
+      ...baseBranch,
       environment_instance: {
         status: 'starting',
       },
@@ -137,8 +137,8 @@ export const Starting: Story = {
 export const Stopping: Story = {
   args: {
     repo: repoWithConfig,
-    worktree: {
-      ...baseWorktree,
+    branch: {
+      ...baseBranch,
       environment_instance: {
         status: 'stopping',
         access_urls: [{ name: 'UI', url: 'http://localhost:9001' }],
@@ -153,8 +153,8 @@ export const Stopping: Story = {
 export const ErrorState: Story = {
   args: {
     repo: repoWithConfig,
-    worktree: {
-      ...baseWorktree,
+    branch: {
+      ...baseBranch,
       environment_instance: {
         status: 'error',
         last_health_check: {

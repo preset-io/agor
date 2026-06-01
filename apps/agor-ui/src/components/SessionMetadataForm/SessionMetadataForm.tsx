@@ -7,8 +7,8 @@
  * Used in both NewSessionModal and SessionSettingsModal
  *
  * Note: Custom Context (JSON) has been moved to AdvancedSettingsForm.
- * Issue URL and Pull Request URL have been moved to the Worktree entity.
- * These are now managed in the WorktreeModal instead.
+ * Issue URL and Pull Request URL have been moved to the Branch entity.
+ * These are now managed in the BranchModal instead.
  */
 
 import { Form, Input } from 'antd';

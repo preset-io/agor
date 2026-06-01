@@ -7,7 +7,7 @@
 
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
-import { validateDirectory } from '@agor/core';
+import { shortId, validateDirectory } from '@agor/core';
 import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
@@ -18,18 +18,19 @@ type Options = Claude.Options;
 
 import { getDaemonUrl, resolveUserEnvironment } from '../../config.js';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import type { MessagesService, SessionsService, TasksService } from './claude-tool.js';
+import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
@@ -92,7 +93,7 @@ function logPromptStart(
   _cwd: string,
   agentSessionId?: string
 ) {
-  console.log(`🤖 Prompting Claude for session ${sessionId.substring(0, 8)}...`);
+  console.log(`🤖 Prompting Claude for session ${shortId(sessionId)}...`);
   if (agentSessionId) {
     console.log(`   Resuming session: ${agentSessionId}`);
   }
@@ -106,11 +107,10 @@ export interface QuerySetupDeps {
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
   permissionService?: PermissionService;
-  inputRequestService?: import('../../input-requests/input-request-service.js').InputRequestService;
   tasksService?: TasksService;
-  sessionsService?: SessionsService;
+  sessionsService?: SessionsPatchClient;
   messagesService?: MessagesService;
-  worktreesRepo?: WorktreeRepository;
+  branchesRepo?: BranchRepository;
   usersRepo?: UsersRepository;
   permissionLocks: Map<SessionID, Promise<void>>;
   mcpEnabled?: boolean;
@@ -187,25 +187,25 @@ export async function setupQuery(
   const rawModel = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
   const { model, betas } = parseModelWithBetas(rawModel);
 
-  // Determine CWD from worktree (if session has one)
+  // Determine CWD from branch (if session has one)
   let cwd = process.cwd();
-  if (session.worktree_id && deps.worktreesRepo) {
+  if (session.branch_id && deps.branchesRepo) {
     try {
-      const worktree = await deps.worktreesRepo.findById(session.worktree_id);
-      if (worktree) {
-        cwd = worktree.path;
-        console.log(`✅ Using worktree path as cwd: ${cwd}`);
+      const branch = await deps.branchesRepo.findById(session.branch_id);
+      if (branch) {
+        cwd = branch.path;
+        console.log(`✅ Using branch path as cwd: ${cwd}`);
       } else {
         console.warn(
-          `⚠️  Session ${sessionId} references non-existent worktree ${session.worktree_id}, using process.cwd(): ${cwd}`
+          `⚠️  Session ${sessionId} references non-existent branch ${session.branch_id}, using process.cwd(): ${cwd}`
         );
       }
     } catch (error) {
-      console.error(`❌ Failed to fetch worktree ${session.worktree_id}:`, error);
+      console.error(`❌ Failed to fetch branch ${session.branch_id}:`, error);
       console.warn(`   Falling back to process.cwd(): ${cwd}`);
     }
   } else {
-    console.warn(`⚠️  Session ${sessionId} has no worktree_id, using process.cwd(): ${cwd}`);
+    console.warn(`⚠️  Session ${sessionId} has no branch_id, using process.cwd(): ${cwd}`);
   }
 
   logPromptStart(sessionId, prompt, cwd, resume ? session.sdk_session_id : undefined);
@@ -224,9 +224,9 @@ export async function setupQuery(
         `✅ Working directory validated: ${cwd} (${fileCount} files/dirs${hasGit ? ', has .git' : ', NO .git!'}${hasClaude ? ', has .claude/' : ''}${hasCLAUDEmd ? ', has CLAUDE.md' : ''})`
       );
       if (fileCount === 0) {
-        console.warn(`⚠️  Working directory is EMPTY - worktree may be from bare repo!`);
+        console.warn(`⚠️  Working directory is EMPTY - branch may be from bare repo!`);
       } else if (!hasGit) {
-        console.warn(`⚠️  Working directory has no .git - not a valid worktree!`);
+        console.warn(`⚠️  Working directory has no .git - not a valid branch!`);
       }
       if (!hasCLAUDEmd && !hasClaude) {
         console.warn(`⚠️  No CLAUDE.md or .claude/ directory found - SDK may not load properly`);
@@ -239,8 +239,8 @@ export async function setupQuery(
     console.error(`❌ Working directory validation failed: ${errorMessage}`);
     throw new Error(
       `${errorMessage}${
-        session.worktree_id
-          ? ` Session references worktree ${session.worktree_id} which may not be initialized.`
+        session.branch_id
+          ? ` Session references branch ${session.branch_id} which may not be initialized.`
           : ''
       }`
     );
@@ -252,10 +252,10 @@ export async function setupQuery(
   // Buffer to capture stderr for better error messages
   let stderrBuffer = '';
 
-  // Render Agor system prompt with full session/worktree/repo context
+  // Render Agor system prompt with full session/branch/repo context
   const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
     sessions: deps.sessionsRepo,
-    worktrees: deps.worktreesRepo,
+    branches: deps.branchesRepo,
     repos: deps.reposRepo,
     users: deps.usersRepo,
   });
@@ -265,9 +265,11 @@ export async function setupQuery(
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
-      append: agorSystemPrompt, // Append rich Agor context (session, worktree, repo)
+      append: agorSystemPrompt, // Append rich Agor context (session, branch, repo)
     },
     settingSources: ['user', 'project', 'local'], // Load user + project + local permissions, auto-loads CLAUDE.md
+    // Defensive copy — the const is readonly but the SDK option is typed `string[]`.
+    disallowedTools: [...CLAUDE_CODE_DISALLOWED_TOOLS],
     model, // Use configured model or default
     pathToClaudeCodeExecutable: claudeCodePath,
     // Allow access to common directories outside CWD (e.g., /tmp)
@@ -321,35 +323,31 @@ export async function setupQuery(
     console.log(`🔬 Beta flags: ${betas.join(', ')}`);
   }
 
-  // Add canUseTool callback if permission service is available and taskId provided
-  // This enables Agor's custom permission UI (WebSocket-based) when SDK would show a prompt
-  // Fires AFTER SDK checks settings.json - respects user's existing Claude CLI permissions!
+  // Add canUseTool callback if permission service is available and taskId provided.
+  // This enables Agor's custom permission UI (WebSocket-based) when the SDK would
+  // show a prompt. Fires AFTER the SDK checks settings.json — respects user's
+  // existing Claude CLI permissions.
   //
-  // We register canUseTool even in `bypassPermissions` mode. AskUserQuestion's tool
-  // descriptor sets `requiresUserInteraction: true`, which makes the SDK's permission
-  // resolver return `{behavior: "ask", message: "Answer questions?"}` BEFORE checking
-  // the bypass-mode shortcut (see @anthropic-ai/claude-agent-sdk 0.2.x). With no
-  // canUseTool registered, the SDK's default deny fires and the model receives
-  // "Answer questions?" as the tool error — bypassing Agor's input-request UI.
-  // The callback itself fast-paths non-AskUserQuestion tools to `allow` when in
-  // bypass mode so the rest of bypass semantics are preserved.
-  if (deps.permissionService && taskId && deps.sessionMCPRepo && deps.mcpServerRepo) {
+  // Skip in bypassPermissions mode: the SDK skips canUseTool there anyway, and
+  // we no longer need a workaround to intercept AskUserQuestion (now disallowed).
+  if (
+    deps.permissionService &&
+    taskId &&
+    deps.sessionMCPRepo &&
+    deps.mcpServerRepo &&
+    effectivePermissionMode !== 'bypassPermissions'
+  ) {
     queryOptions.canUseTool = createCanUseToolCallback(sessionId, taskId, {
       permissionService: deps.permissionService,
-      inputRequestService: deps.inputRequestService,
       tasksService: deps.tasksService!,
-      sessionsRepo: deps.sessionsRepo,
       messagesRepo: deps.messagesRepo!,
       messagesService: deps.messagesService,
       sessionsService: deps.sessionsService,
       permissionLocks: deps.permissionLocks,
       mcpServerRepo: deps.mcpServerRepo,
       sessionMCPRepo: deps.sessionMCPRepo,
-      permissionMode: effectivePermissionMode,
     });
     console.log(`✅ canUseTool callback added (permission mode: ${effectivePermissionMode})`);
-    console.log(`   SDK will check settings.json first, then call Agor UI if needed`);
-    console.log(`   Using SDK's built-in permission persistence (updatedPermissions)`);
   }
 
   // Add optional apiKey if provided
@@ -374,9 +372,7 @@ export async function setupQuery(
       userEnvCount = totalVarCount - systemVarCount;
 
       if (userEnvCount > 0) {
-        console.log(
-          `🔐 Using ${userEnvCount} environment vars for user ${contextUserId.substring(0, 8)}`
-        );
+        console.log(`🔐 Using ${userEnvCount} environment vars for user ${shortId(contextUserId)}`);
       }
     } catch (err) {
       console.error(`⚠️  Failed to resolve user environment:`, err);
@@ -401,13 +397,11 @@ export async function setupQuery(
       if (parentSession?.sdk_session_id) {
         queryOptions.resume = parentSession.sdk_session_id;
         queryOptions.forkSession = true; // SDK will create new session ID from parent's history
-        console.log(
-          `🍴 Forking from parent session: ${parentSession.sdk_session_id.substring(0, 8)}`
-        );
+        console.log(`🍴 Forking from parent session: ${shortId(parentSession.sdk_session_id)}`);
         console.log(`   SDK will return new session ID for this fork`);
       } else {
         console.warn(
-          `⚠️  Parent session ${forkedFromSessionId.substring(0, 8)} has no sdk_session_id - starting fresh`
+          `⚠️  Parent session ${shortId(forkedFromSessionId)} has no sdk_session_id - starting fresh`
         );
       }
     }
@@ -415,7 +409,7 @@ export async function setupQuery(
     else if (parentSessionId && !forkedFromSessionId && !session.sdk_session_id) {
       // This is a SPAWN - start FRESH, do NOT resume from parent
       console.log(
-        `🌱 Spawning fresh session (parent: ${parentSessionId.substring(0, 8)}) - NOT forking SDK session`
+        `🌱 Spawning fresh session (parent: ${shortId(parentSessionId)}) - NOT forking SDK session`
       );
       console.log(`   Child will start with clean context (spawns don't inherit parent history)`);
       // Don't set queryOptions.resume - let it start completely fresh
@@ -461,7 +455,7 @@ export async function setupQuery(
         );
         console.warn(`   🔧 SOLUTION: Clearing sdk_session_id to force fresh session start`);
         console.warn(
-          `   Previous SDK session: ${session.sdk_session_id.substring(0, 8)} (will be discarded)`
+          `   Previous SDK session: ${shortId(session.sdk_session_id)} (will be discarded)`
         );
 
         // Clear SDK session ID to force fresh start with new MCP config
@@ -479,11 +473,11 @@ export async function setupQuery(
 
         const isLikelyStale =
           hoursSinceUpdate > 24 || // Session older than 24 hours
-          !session.worktree_id; // No worktree = can't resume properly
+          !session.branch_id; // No branch = can't resume properly
 
         if (isLikelyStale) {
           console.warn(
-            `⚠️  Resume session ${session.sdk_session_id.substring(0, 8)} appears stale (${Math.round(hoursSinceUpdate)}h old) - starting fresh`
+            `⚠️  Resume session ${shortId(session.sdk_session_id)} appears stale (${Math.round(hoursSinceUpdate)}h old) - starting fresh`
           );
 
           // Clear stale session ID to prevent exit code 1
@@ -493,7 +487,7 @@ export async function setupQuery(
           // Don't set queryOptions.resume - start fresh
         } else {
           queryOptions.resume = session.sdk_session_id;
-          console.log(`   Resuming SDK session: ${session.sdk_session_id.substring(0, 8)}`);
+          console.log(`   Resuming SDK session: ${shortId(session.sdk_session_id)}`);
         }
       }
     }
@@ -522,7 +516,7 @@ export async function setupQuery(
       queryOptions.mcpServers = mcpConfig;
     } else {
       console.warn(
-        `⚠️  No MCP token found for session ${sessionId.substring(0, 8)} - MCP tools unavailable`
+        `⚠️  No MCP token found for session ${shortId(sessionId)} - MCP tools unavailable`
       );
     }
   }

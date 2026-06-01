@@ -5,6 +5,7 @@
  * Routes permission_resolved notifications from daemon to the correct session's PermissionService.
  */
 
+import { shortId } from '@agor/core/db';
 import type { PermissionDecision, PermissionService } from './permission-service.js';
 
 export class PermissionManager {
@@ -15,7 +16,7 @@ export class PermissionManager {
    */
   register(sessionId: string, service: PermissionService): void {
     this.services.set(sessionId, service);
-    console.log(`[PermissionManager] Registered service for session ${sessionId.substring(0, 8)}`);
+    console.log(`[PermissionManager] Registered service for session ${shortId(sessionId)}`);
   }
 
   /**
@@ -23,9 +24,7 @@ export class PermissionManager {
    */
   unregister(sessionId: string): void {
     this.services.delete(sessionId);
-    console.log(
-      `[PermissionManager] Unregistered service for session ${sessionId.substring(0, 8)}`
-    );
+    console.log(`[PermissionManager] Unregistered service for session ${shortId(sessionId)}`);
   }
 
   /**

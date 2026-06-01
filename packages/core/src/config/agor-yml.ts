@@ -22,7 +22,7 @@ import type {
   RepoEnvironment,
   RepoEnvironmentConfigV1,
   RepoEnvironmentVariant,
-} from '../types/worktree';
+} from '../types/branch';
 import * as yaml from '../yaml/index.js';
 import {
   type AgorYmlSchema,
@@ -39,13 +39,13 @@ import {
 // (daemon, CLI) keep working without touching call sites.
 export {
   type AgorYmlSchema,
-  type YamlVariant,
   parseAgorYmlString,
   resolveVariant,
   resolveVariantOrThrow,
   validateAgorYmlSchema,
   validateExtends,
   validateRepoEnvironment,
+  type YamlVariant,
 };
 
 /**

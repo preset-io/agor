@@ -116,7 +116,7 @@ export const RepoFormFields: React.FC<RepoFormFieldsProps> = ({
           label="Default Branch"
           name="default_branch"
           rules={[{ required: true, message: 'Please enter the default branch' }]}
-          extra="The main branch to base new worktrees on"
+          extra="The main branch to base new branches on"
         >
           <Input placeholder="main" />
         </Form.Item>

@@ -4,8 +4,8 @@ import type { EffortLevel, PermissionMode } from './session';
 
 /**
  * User role types
- * - superadmin: Full system access including worktree RBAC bypass (requires allow_superadmin=true in config)
- * - admin: Can manage most resources (MCP servers, config, users), no worktree RBAC bypass
+ * - superadmin: Full system access including branch RBAC bypass (requires allow_superadmin=true in config)
+ * - admin: Can manage most resources (MCP servers, config, users), no branch RBAC bypass
  * - member: Standard user access, can create and manage own sessions
  * - viewer: Read-only access
  *
@@ -22,6 +22,35 @@ export const ROLES = {
   MEMBER: 'member',
   VIEWER: 'viewer',
 } as const satisfies Record<string, UserRole>;
+
+/**
+ * Display metadata for each role. Ordered from most → least privileged so UI
+ * dropdowns can render directly from this list without re-sorting.
+ *
+ * This is the single source of truth for role labels and descriptions —
+ * dropdowns, CLI prompts, and any other surface listing roles should map
+ * over this array instead of hard-coding role strings.
+ */
+export interface RoleOption {
+  value: UserRole;
+  label: string;
+  description: string;
+}
+
+export const ROLE_OPTIONS: readonly RoleOption[] = [
+  {
+    value: ROLES.SUPERADMIN,
+    label: 'Superadmin',
+    description: 'Full system access + branch RBAC bypass',
+  },
+  {
+    value: ROLES.ADMIN,
+    label: 'Admin',
+    description: 'Manage resources (users, MCP servers, config)',
+  },
+  { value: ROLES.MEMBER, label: 'Member', description: 'Standard user' },
+  { value: ROLES.VIEWER, label: 'Viewer', description: 'Read-only access' },
+] as const;
 
 /**
  * Role rank used for minimum-role comparisons.
@@ -88,10 +117,12 @@ export interface DefaultAgenticToolConfig {
  */
 export interface DefaultAgenticConfig {
   'claude-code'?: DefaultAgenticToolConfig;
+  'claude-code-cli'?: DefaultAgenticToolConfig;
   codex?: DefaultAgenticToolConfig;
   gemini?: DefaultAgenticToolConfig;
   opencode?: DefaultAgenticToolConfig;
   copilot?: DefaultAgenticToolConfig;
+  cursor?: DefaultAgenticToolConfig;
 }
 
 /**
@@ -121,15 +152,25 @@ export interface CopilotConfig {
   COPILOT_GITHUB_TOKEN?: string;
 }
 
+export interface CursorConfig {
+  CURSOR_API_KEY?: string;
+}
+
 /**
  * Per-tool credential map. Each tool's config is independent and
  * scoped to its own SDK at session-spawn time.
  */
 export interface AgenticToolsConfig {
   'claude-code'?: ClaudeCodeConfig;
+  // claude-code-cli wraps the `claude` shell binary. Same Anthropic env vars
+  // apply as the SDK path (ANTHROPIC_API_KEY, OAuth token, base URL); the
+  // subscription path doesn't use env vars at all — it reads
+  // ~/.claude/.credentials.json managed by `claude auth login`.
+  'claude-code-cli'?: ClaudeCodeConfig;
   codex?: CodexConfig;
   gemini?: GeminiConfig;
   copilot?: CopilotConfig;
+  cursor?: CursorConfig;
   opencode?: Record<string, never>;
 }
 
@@ -138,7 +179,8 @@ export type AgenticToolConfigField =
   | keyof ClaudeCodeConfig
   | keyof CodexConfig
   | keyof GeminiConfig
-  | keyof CopilotConfig;
+  | keyof CopilotConfig
+  | keyof CursorConfig;
 
 /**
  * Public DTO shape: per-tool credential presence flags.
@@ -222,6 +264,7 @@ export const AGENTIC_TOOLS_PUBLIC_FIELDS: {
   >;
 } = {
   'claude-code': ['ANTHROPIC_BASE_URL'],
+  'claude-code-cli': ['ANTHROPIC_BASE_URL'],
   codex: ['OPENAI_BASE_URL'],
 } as const;
 
@@ -317,10 +360,16 @@ export interface EventStreamPreferences {
 export interface OnboardingState {
   /** Which path the user took */
   path?: 'assistant' | 'own-repo' | 'persisted-agent';
-  /** The worktree ID created during onboarding */
-  worktreeId?: string;
+  /** The repo ID associated with this onboarding (framework repo or user's repo) */
+  repoId?: string;
+  /** The branch ID created during onboarding */
+  branchId?: string;
   /** The board ID created for this user */
   boardId?: string;
+  /** Assistant display name captured during onboarding identity step */
+  assistantDisplayName?: string;
+  /** Assistant emoji captured during onboarding identity step */
+  assistantEmoji?: string;
 }
 
 /**
@@ -334,6 +383,21 @@ export interface UserPreferences {
   mainBoardId?: string;
   // Future preferences can be added here
   [key: string]: unknown;
+}
+
+/** Stable external identity link stored with a local user. */
+export interface UserExternalIdentity {
+  /** SHA-256 of provider + issuer + subject; stable lookup key. */
+  key: string;
+  /** Stable provider label configured for the external launch provider. */
+  provider: string;
+  /** Trusted issuer that produced the launch assertion. */
+  issuer: string;
+  /** Subject from the trusted issuer; not an email address. */
+  subject: string;
+  email?: string;
+  name?: string;
+  last_login_at: string;
 }
 
 /**

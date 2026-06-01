@@ -11,24 +11,25 @@
  * - Events stream back through the session's event emitter
  */
 
+import { shortId } from '@agor/core/db';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import type { CopilotSession } from '@github/copilot-sdk';
 import { CopilotClient } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import type { MessagesService, SessionsService, TasksService } from '../claude/claude-tool.js';
 import type { CopilotSessionEvents } from './event-mapper.js';
 import { DEFAULT_COPILOT_MODEL } from './models.js';
 import { createPermissionHandler, type PermissionDeps } from './permission-mapper.js';
@@ -110,14 +111,14 @@ export class CopilotPromptService {
   private messagesRepo: MessagesRepository;
   private messagesService?: MessagesService;
   private tasksService?: TasksService;
-  private sessionsService?: SessionsService;
+  private sessionsService?: SessionsPatchClient;
   private permissionLocks = new Map<SessionID, Promise<void>>();
 
   constructor(
     messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
     private sessionMCPServerRepo?: SessionMCPServerRepository,
-    private worktreesRepo?: WorktreeRepository,
+    private branchesRepo?: BranchRepository,
     private reposRepo?: RepoRepository,
     apiKey?: string,
     private mcpServerRepo?: MCPServerRepository,
@@ -125,7 +126,7 @@ export class CopilotPromptService {
     permissionService?: PermissionService,
     messagesService?: MessagesService,
     tasksService?: TasksService,
-    sessionsService?: SessionsService
+    sessionsService?: SessionsPatchClient
   ) {
     this.apiKey = apiKey;
     this.messagesRepo = messagesRepo;
@@ -210,7 +211,7 @@ export class CopilotPromptService {
   private async buildSystemMessage(sessionId: SessionID): Promise<string> {
     return renderAgorSystemPrompt(sessionId, {
       sessions: this.sessionsRepo,
-      worktrees: this.worktreesRepo,
+      branches: this.branchesRepo,
       repos: this.reposRepo,
       users: this.usersRepo,
     });
@@ -242,21 +243,19 @@ export class CopilotPromptService {
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    console.log(`🔍 [Copilot] Starting prompt execution for session ${sessionId.substring(0, 8)}`);
+    console.log(`🔍 [Copilot] Starting prompt execution for session ${shortId(sessionId)}`);
     console.log(`   Permission mode: ${permissionMode || 'not specified (will use default)'}`);
     console.log(
       `   Existing SDK session ID: ${session.sdk_session_id || 'none (will create new)'}`
     );
 
-    // Fetch worktree to get working directory
-    const worktree = this.worktreesRepo
-      ? await this.worktreesRepo.findById(session.worktree_id)
-      : null;
-    if (!worktree) {
-      throw new Error(`Worktree ${session.worktree_id} not found for session ${sessionId}`);
+    // Fetch branch to get working directory
+    const branch = this.branchesRepo ? await this.branchesRepo.findById(session.branch_id) : null;
+    if (!branch) {
+      throw new Error(`Branch ${session.branch_id} not found for session ${sessionId}`);
     }
 
-    console.log(`   Working directory: ${worktree.path}`);
+    console.log(`   Working directory: ${branch.path}`);
 
     // Create CopilotClient (spawns CLI process)
     this.client = new CopilotClient({
@@ -300,14 +299,17 @@ export class CopilotPromptService {
       const mcpServers = await this.buildMcpServers(sessionId, session.mcp_token);
       const systemMessage = await this.buildSystemMessage(sessionId);
 
-      // Read model from session config
-      const resolvedModel = session.model_config?.model || DEFAULT_COPILOT_MODEL;
+      // configuredModel for recording, invocationModel for the SDK.
+      const configuredModel = session.model_config?.model;
+      const invocationModel = configuredModel || DEFAULT_COPILOT_MODEL;
+      console.log(`🎯 [Copilot] Using model: ${invocationModel}`);
 
       // Create or resume session
       let copilotSession: CopilotSession;
       const sessionConfig = {
-        workingDirectory: worktree.path,
+        workingDirectory: branch.path,
         streaming: true,
+        model: invocationModel,
         onPermissionRequest: permissionHandler,
         mcpServers: mcpServers as Record<string, import('@github/copilot-sdk').MCPServerConfig>,
         systemMessage: { mode: 'append' as const, content: systemMessage },
@@ -340,6 +342,24 @@ export class CopilotPromptService {
           console.log(`🔑 Captured Copilot session ID: ${sdkSessionId}`);
           await this.sessionsRepo.update(sessionId, { sdk_session_id: sdkSessionId });
         }
+      }
+
+      // Belt-and-suspenders: explicitly bind the model on the session object
+      // after create/resume. The SDK accepts `model` in the session config
+      // above, but `setModel()` is the documented post-init API and guarantees
+      // mid-session picker changes take effect on the next prompt — even on a
+      // resumed session whose original model differs.
+      try {
+        await (
+          copilotSession as unknown as {
+            setModel: (m: string) => Promise<void>;
+          }
+        ).setModel(invocationModel);
+      } catch (err) {
+        console.warn(
+          `⚠️  [Copilot] setModel("${invocationModel}") failed; relying on session config:`,
+          err instanceof Error ? err.message : err
+        );
       }
 
       // Clear any stale stop flag
@@ -423,7 +443,7 @@ export class CopilotPromptService {
           error instanceof Error &&
           (error.name === 'AbortError' || error.message.includes('abort'))
         ) {
-          console.log(`🛑 [Copilot] Query aborted for session ${sessionId.substring(0, 8)}`);
+          console.log(`🛑 [Copilot] Query aborted for session ${shortId(sessionId)}`);
           yield { type: 'stopped', sessionId: copilotSessionId };
           return;
         }
@@ -471,7 +491,6 @@ export class CopilotPromptService {
         content.push({ type: 'text', text: fullText });
       }
 
-      // Build raw SDK response for normalization
       const rawSdkResponse: CopilotRawResponse = {
         usage: usageData
           ? {
@@ -480,7 +499,7 @@ export class CopilotPromptService {
               total_tokens: usageData.total_tokens,
             }
           : undefined,
-        model: resolvedModel,
+        ...(configuredModel ? { model: configuredModel } : {}),
         sessionId: copilotSessionId,
       };
 
@@ -493,7 +512,7 @@ export class CopilotPromptService {
             ? toolUses.map((t) => ({ id: t.id, name: t.name, input: t.input }))
             : undefined,
         sessionId: copilotSessionId,
-        resolvedModel,
+        resolvedModel: configuredModel,
         usage: usageData,
         rawSdkResponse,
       };
@@ -507,7 +526,7 @@ export class CopilotPromptService {
         (error.name === 'AbortError' || error.message.includes('abort'))
       ) {
         console.log(
-          `🛑 [Stop] Copilot query aborted for session ${sessionId.substring(0, 8)} - this is expected`
+          `🛑 [Stop] Copilot query aborted for session ${shortId(sessionId)} - this is expected`
         );
         yield { type: 'stopped', sessionId: '' };
         return;

@@ -102,6 +102,28 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   }
 
   /**
+   * Custom method: Set the board's primary assistant branch.
+   */
+  async setPrimaryAssistant(
+    data: { boardId?: string; id?: string; branchId?: string } | string,
+    branchIdOrParams?: string | BoardParams,
+    _maybeParams?: BoardParams
+  ): Promise<Board> {
+    const boardId = typeof data === 'string' ? data : (data.boardId ?? data.id);
+    const branchId = typeof data === 'string' ? branchIdOrParams : data.branchId;
+    if (!boardId) throw new Error('Board ID required');
+    if (!branchId || typeof branchId !== 'string') throw new Error('Branch ID required');
+    return this.boardRepo.setPrimaryAssistant(boardId, branchId);
+  }
+
+  /**
+   * Custom method: Clear the board's primary assistant branch.
+   */
+  async clearPrimaryAssistant(boardId: string, _params?: BoardParams): Promise<Board> {
+    return this.boardRepo.clearPrimaryAssistant(boardId);
+  }
+
+  /**
    * Custom method: Batch upsert board objects
    */
   async batchUpsertBoardObjects(
@@ -139,7 +161,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    * Import board from blob (JSON)
    */
   async fromBlob(blob: BoardExportBlob, params?: BoardParams): Promise<Board> {
-    const userId = params?.user?.user_id || 'anonymous';
+    // Hook chain enforces auth before we get here.
+    const userId = params!.user!.user_id;
     this.boardRepo.validateBoardBlob(blob);
     const data = this.buildBoardDataFromBlob(blob, userId);
 
@@ -204,7 +227,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     if (!boardIdentifier) throw new Error('Board ID or slug required');
     if (!name) throw new Error('Board name required');
 
-    const userId = params?.user?.user_id || 'anonymous';
+    // Hook chain enforces auth before we get here.
+    const userId = params!.user!.user_id;
     const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
     const boardData = this.buildBoardDataFromBlob(blob, userId, name);
@@ -230,7 +254,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 
     console.log(`📦 Archiving board: ${board.name}`);
 
-    const currentUserId = params?.user?.user_id || 'anonymous';
+    // Hook chain enforces auth before we get here.
+    const currentUserId = params!.user!.user_id;
     const archivedBoard = await this.patch(
       id,
       {

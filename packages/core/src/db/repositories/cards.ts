@@ -2,12 +2,12 @@
  * Card Repository
  *
  * Type-safe CRUD operations for cards with short ID support.
- * Cards live on boards alongside worktrees and can be placed in zones.
+ * Cards live on boards alongside branches and can be placed in zones.
  */
 
 import type { BoardID, Card, CardType, CardTypeID, CardWithType, UUID } from '@agor/core/types';
 import { and, eq, like } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { boardObjects, type CardInsert, type CardRow, cards, cardTypes } from '../schema';
@@ -15,7 +15,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 
 const ALLOWED_URL_PROTOCOLS = ['http:', 'https:', 'mailto:'];
@@ -55,21 +57,14 @@ export class CardRepository implements BaseRepository<Card, Partial<Card>> {
   }
 
   private async resolveId(id: string): Promise<string> {
-    if (id.length === 36 && id.includes('-')) return id;
-
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
-    const results = await select(this.db).from(cards).where(like(cards.card_id, pattern)).all();
-
-    if (results.length === 0) throw new EntityNotFoundError('Card', id);
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'Card',
-        id,
-        results.map((r: { card_id: string }) => formatShortId(r.card_id as UUID))
-      );
-    }
-    return results[0].card_id;
+    return resolveByShortIdPrefix(id, 'Card', async (pattern) => {
+      const rows = await select(this.db)
+        .from(cards)
+        .where(like(cards.card_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { card_id: string }) => r.card_id);
+    });
   }
 
   async create(data: Partial<Card>): Promise<Card> {

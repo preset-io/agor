@@ -18,9 +18,11 @@
  *   2. No vendor library — yaml-driven only, no built-in vendor presets.
  *   3. Read-only default — `allowed_methods` defaults to `[GET]`.
  *   4. Off by default — no `proxies:` block = no route mounted at all.
- *   5. No auth injection — daemon does not read user env vars or set auth
- *      headers. Auth stays in the artifact via the existing Handlebars
- *      convention (`agor.config.js`).
+ *   5. No auth injection — daemon does not set vendor auth headers on
+ *      forwarded requests. Auth stays in the artifact: declare
+ *      `agor_grants.agor_token: true` and `requiredEnvVars: [...]` at
+ *      publish time and the daemon synthesizes the values into a
+ *      per-viewer `.env`.
  */
 
 import type { AgorConfig } from '@agor/core/config';
@@ -30,6 +32,7 @@ import type { UUID } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 
 /**
  * Default per-(user, vendor) rate limit. In-memory bucket; no redis.
@@ -121,8 +124,8 @@ async function authenticateRequest(
   let decoded: { sub?: string; type?: string };
   try {
     decoded = jwt.verify(match[1], jwtSecret, {
-      issuer: 'agor',
-      audience: 'https://agor.dev',
+      issuer: RUNTIME_JWT_ISSUER,
+      audience: RUNTIME_JWT_AUDIENCE,
     }) as { sub?: string; type?: string };
   } catch {
     return null;

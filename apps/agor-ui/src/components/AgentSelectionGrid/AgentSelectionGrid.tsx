@@ -1,17 +1,25 @@
 /**
  * Agent Selection Grid
  *
- * Reusable component for displaying agent selection cards in a grid layout.
- * Uses 3-column layout by default for a compact, side-by-side view.
+ * Reusable component for picking an agentic tool. Two variants:
+ *
+ * - `variant="cards"` (default) — grid of AgentSelectionCard, used when the
+ *   modal wants to highlight each agent's pitch (e.g. NewSessionModal).
+ * - `variant="select"` — single Antd Select dropdown, used when the picker
+ *   should stay out of the way (e.g. ScheduleModal, where the prompt + cron
+ *   matter more than which agent runs them).
  *
  * Used in:
- * - NewSessionModal (3 columns)
- * - ScheduleTab (3 columns)
+ * - NewSessionModal (cards, 2 columns)
+ * - ForkSpawnModal (cards, 2 columns)
+ * - ScheduleModal (select)
  */
 
-import { Typography } from 'antd';
+import { Select, Space, Typography } from 'antd';
 import type { AgenticToolOption } from '../../types';
 import { AgentSelectionCard } from '../AgentSelectionCard';
+import { Tag } from '../Tag';
+import { ToolIcon } from '../ToolIcon';
 
 const { Text } = Typography;
 
@@ -25,30 +33,51 @@ export interface AgentSelectionGridProps {
   selectedAgentId: string | null;
   /** Callback when an agent is selected */
   onSelect: (agentId: string) => void;
-  /** Number of columns (2 or 3) */
+  /** Rendering style. `cards` (default) = grid of cards; `select` = compact Antd Select. */
+  variant?: 'cards' | 'select';
+  /** Number of columns (cards variant only) */
   columns?: 2 | 3;
-  /** Show helper text when no agent selected */
+  /** Show helper text when no agent selected (cards variant only) */
   showHelperText?: boolean;
-  /** Helper text to display */
+  /** Helper text to display (cards variant only) */
   helperText?: string;
-  /** Show SDK comparison link */
+  /** Show SDK comparison link (both variants) */
   showComparisonLink?: boolean;
 }
 
-/**
- * Grid of agent selection cards
- *
- * Default: 3 columns for a clean side-by-side layout
- */
 export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
   agents,
   selectedAgentId,
   onSelect,
+  variant = 'cards',
   columns = 3,
   showHelperText = false,
   helperText = 'Click on an agent card to select it',
   showComparisonLink = false,
 }) => {
+  if (variant === 'select') {
+    return (
+      <>
+        <Select
+          value={selectedAgentId ?? undefined}
+          onChange={(id) => onSelect(id)}
+          style={{ width: '100%' }}
+          options={agents.map((agent) => ({
+            value: agent.id,
+            label: (
+              <Space size={8}>
+                <ToolIcon tool={agent.id} size={16} />
+                <span>{agent.name}</span>
+                {agent.beta && <Tag color="warning">BETA</Tag>}
+              </Space>
+            ),
+          }))}
+        />
+        {showComparisonLink && <ComparisonLink />}
+      </>
+    );
+  }
+
   return (
     <>
       {showHelperText && !selectedAgentId && (
@@ -73,21 +102,19 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
           />
         ))}
       </div>
-      {showComparisonLink && (
-        <Text
-          type="secondary"
-          style={{ fontSize: 11, marginTop: 8, display: 'block', textAlign: 'center' }}
-        >
-          Compare features:{' '}
-          <a
-            href="https://agor.live/guide/sdk-comparison"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            SDK Comparison Guide
-          </a>
-        </Text>
-      )}
+      {showComparisonLink && <ComparisonLink />}
     </>
   );
 };
+
+const ComparisonLink: React.FC = () => (
+  <Text
+    type="secondary"
+    style={{ fontSize: 11, marginTop: 8, display: 'block', textAlign: 'center' }}
+  >
+    Compare features:{' '}
+    <a href="https://agor.live/guide/sdk-comparison" target="_blank" rel="noopener noreferrer">
+      SDK Comparison Guide
+    </a>
+  </Text>
+);

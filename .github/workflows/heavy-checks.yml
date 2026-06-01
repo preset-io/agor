@@ -1,0 +1,203 @@
+# Heavy checks — full Node-version matrix + agor-live publish smoke.
+#
+# Runs on:
+#   * nightly cron @ 04:00 UTC — catches drift (engine bumps, registry tarball
+#                                rot, transitive dep changes) that nothing
+#                                else would surface until a release
+#   * workflow_dispatch  — ad-hoc full-matrix runs (e.g. as a pre-release
+#                          gate against a tag or branch:
+#                          `gh workflow run heavy-checks.yml --ref <ref>`,
+#                          or the Actions tab "Run workflow" button)
+#
+# Why this isn't on every PR push OR every merge to main:
+#   The matrix is engine-compat insurance that moves slowly. PR-push and
+#   merge-to-main both rely on the same fast `ci.yml` lane (~3 min wall).
+#   This workflow is the slow lane: a daily drift check and an on-demand
+#   pre-release gate. If a merge to main breaks the matrix, the next
+#   nightly catches it within ~24h and opens a tracking issue.
+#
+# On nightly failure: a tracking issue is opened / commented on with the
+# `ci-nightly-failure` label so it shows up in normal GitHub notifications.
+# `workflow_dispatch` runs do NOT open issues — a human clicked the button
+# and is watching the run.
+name: Heavy checks (matrix + publish smoke)
+
+on:
+  schedule:
+    # 04:00 UTC daily — off-peak, well after typical US/EU dev hours.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for `notify-failure` to open / comment on the tracking issue.
+  issues: write
+
+jobs:
+  node-compat:
+    name: Node ${{ matrix.node }} install compat
+    # Reproduces the user-facing #278 path: `npm install agor-live` on a
+    # given Node version. We isolate agor-live's runtime dependencies into
+    # a temp project (skipping the workspace:* @agor-live/client link, which
+    # only resolves at publish time) and run `npm install` so we get the
+    # real `EBADENGINE` warnings npm emits — pnpm uses different warning
+    # text and only reports the root manifest's engines, not transitive
+    # ones. We then dynamically load `node-pty` to confirm the native
+    # binary actually loads on the matrix Node version.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '25']
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: npm install agor-live's runtime deps in isolation
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/agor-compat"
+          cd "$RUNNER_TEMP/agor-compat"
+          node -e '
+            const fs = require("fs");
+            const pkg = require(process.env.GITHUB_WORKSPACE + "/packages/agor-live/package.json");
+            const deps = Object.fromEntries(
+              Object.entries(pkg.dependencies || {})
+                .filter(([_, v]) => !String(v).startsWith("workspace:"))
+            );
+            fs.writeFileSync("package.json", JSON.stringify({
+              name: "agor-compat", version: "0.0.0", private: true, dependencies: deps,
+            }, null, 2));
+          '
+          npm install --no-fund --no-audit 2>&1 | tee install.log
+          if grep -q "EBADENGINE" install.log; then
+            echo "::error::EBADENGINE warning on Node ${{ matrix.node }}"
+            grep -A 3 "EBADENGINE" install.log
+            exit 1
+          fi
+
+      - name: Load node-pty native binary on Node ${{ matrix.node }}
+        run: |
+          cd "$RUNNER_TEMP/agor-compat"
+          node -e '
+            (async () => {
+              const m = await import("node-pty");
+              if (typeof m.spawn !== "function") {
+                console.error("node-pty.spawn not a function"); process.exit(1);
+              }
+              const p = m.spawn("/bin/echo", ["ok"], {
+                name: "xterm", cols: 80, rows: 24, cwd: process.cwd(), env: process.env,
+              });
+              let out = "";
+              p.onData(d => { out += d; });
+              p.onExit(({ exitCode }) => {
+                console.log("exit:", exitCode, "stdout:", JSON.stringify(out));
+                process.exit(exitCode === 0 && out.includes("ok") ? 0 : 1);
+              });
+            })().catch(e => { console.error(e); process.exit(1); });
+          '
+
+  agor-live-smoke:
+    name: agor-live publish smoke
+    uses: ./.github/workflows/agor-live-smoke.yml
+
+  audit:
+    name: pnpm audit (ambient CVE check)
+    # Invoke the same audit workflow that runs on dep-changing PRs.
+    # On a quiet day with no dep PRs this is the only place audit runs,
+    # so a new advisory against an existing dep can't sit silent.
+    uses: ./.github/workflows/audit.yml
+
+  notify-failure:
+    name: Open / update nightly-failure tracking issue
+    needs: [node-compat, agor-live-smoke, audit]
+    # Only notify on scheduled failures — push-to-main and workflow_dispatch
+    # already have a human in the loop (a merger or whoever clicked Run).
+    if: |
+      always() &&
+      github.event_name == 'schedule' &&
+      (needs.node-compat.result == 'failure'
+        || needs.agor-live-smoke.result == 'failure'
+        || needs.audit.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or comment on nightly-failure issue
+        uses: actions/github-script@v9
+        env:
+          NODE_COMPAT_RESULT: ${{ needs.node-compat.result }}
+          SMOKE_RESULT: ${{ needs.agor-live-smoke.result }}
+          AUDIT_RESULT: ${{ needs.audit.result }}
+        with:
+          script: |
+            const title = 'Nightly CI failure — heavy-checks workflow';
+            const label = 'ci-nightly-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const nodeResult = process.env.NODE_COMPAT_RESULT;
+            const smokeResult = process.env.SMOKE_RESULT;
+            const auditResult = process.env.AUDIT_RESULT;
+            const body = [
+              `Nightly heavy-checks run failed at ${new Date().toISOString()}.`,
+              ``,
+              `- \`node-compat\` matrix: **${nodeResult}**`,
+              `- \`agor-live-smoke\`:    **${smokeResult}**`,
+              `- \`audit\`:               **${auditResult}**`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `Event: \`${context.eventName}\` · Commit: \`${context.sha.slice(0, 8)}\``,
+              ``,
+              `_This issue is auto-managed: subsequent nightly failures will`,
+              `comment here instead of opening a new issue. Close it once green._`,
+            ].join('\n');
+
+            // Ensure the label exists (idempotent).
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+              });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                  color: 'b60205',
+                  description: 'Tracking issue for nightly heavy-checks failures.',
+                });
+              } else {
+                throw e;
+              }
+            }
+
+            // Dedupe by stable title within open issues carrying our label.
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              per_page: 50,
+            });
+            const match = existing.find((i) => i.title === title);
+            if (match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body,
+              });
+              core.info(`Commented on existing issue #${match.number}`);
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: [label],
+              });
+              core.info(`Opened new tracking issue #${created.number}`);
+            }

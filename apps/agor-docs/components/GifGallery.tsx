@@ -5,7 +5,7 @@ const gifs = [
   {
     src: '/Area.gif',
     alt: 'Spatial 2D Canvas',
-    caption: 'Spatial canvas with worktrees and zones',
+    caption: 'Spatial canvas with branches and zones',
   },
   {
     src: '/Convo.gif',
@@ -15,7 +15,7 @@ const gifs = [
   {
     src: '/Settings.gif',
     alt: 'Settings and Configuration',
-    caption: 'MCP servers and worktree management',
+    caption: 'MCP servers and branch management',
   },
   {
     src: '/Social.gif',

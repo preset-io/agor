@@ -1,18 +1,9 @@
 import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Input,
-  Modal,
-  message,
-  Popconfirm,
-  Space,
-  Table,
-  Typography,
-  theme,
-} from 'antd';
+import { Alert, Button, Input, Modal, Popconfirm, Space, Table, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { copyToClipboard } from '../../utils/clipboard';
+import { useThemedMessage } from '../../utils/message';
 
 interface ApiKeyEntry {
   id: string;
@@ -35,6 +26,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const { token } = theme.useToken();
+  const { showSuccess, showError } = useThemedMessage();
 
   const fetchKeys = useCallback(async () => {
     if (!client) return;
@@ -64,7 +56,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
       setNewKeyName('');
       await fetchKeys();
     } catch (err: unknown) {
-      message.error((err as Error)?.message || 'Failed to create API key');
+      showError((err as Error)?.message || 'Failed to create API key');
     } finally {
       setCreating(false);
     }
@@ -75,18 +67,22 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
     setDeletingId(id);
     try {
       await client.service('api/v1/user/api-keys').remove(id);
-      message.success('API key revoked');
+      showSuccess('API key revoked');
       await fetchKeys();
     } catch (err: unknown) {
-      message.error((err as Error)?.message || 'Failed to delete API key');
+      showError((err as Error)?.message || 'Failed to delete API key');
     } finally {
       setDeletingId(null);
     }
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    message.success('Copied to clipboard');
+  const handleCopy = async (text: string) => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      showSuccess('Copied to clipboard');
+    } else {
+      showError('Failed to copy to clipboard');
+    }
   };
 
   const columns = [

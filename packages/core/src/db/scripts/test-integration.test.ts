@@ -9,7 +9,7 @@
 
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId, SHORT_ID_LENGTH, shortId } from '../../lib/ids';
 import type { Session, SessionID, TaskID, UserID } from '../../types';
 import { SessionStatus, TaskStatus } from '../../types';
 import { createDatabase } from '../client';
@@ -17,10 +17,10 @@ import { isSQLiteDatabase } from '../database-wrapper';
 import { initializeDatabase, seedInitialData } from '../migrate';
 import {
   BoardRepository,
+  BranchRepository,
   RepoRepository,
   SessionRepository,
   TaskRepository,
-  WorktreeRepository,
 } from '../repositories';
 
 /**
@@ -31,11 +31,11 @@ function createTestDb() {
 }
 
 /**
- * Helper to setup repo and worktree for tests
+ * Helper to setup repo and branch for tests
  */
-async function setupRepoAndWorktree(db: ReturnType<typeof createDatabase>) {
+async function setupRepoAndBranch(db: ReturnType<typeof createDatabase>) {
   const repoRepo = new RepoRepository(db);
-  const worktreeRepo = new WorktreeRepository(db);
+  const branchRepo = new BranchRepository(db);
 
   const repo = await repoRepo.create({
     slug: 'test-repo',
@@ -46,16 +46,16 @@ async function setupRepoAndWorktree(db: ReturnType<typeof createDatabase>) {
     default_branch: 'main',
   });
 
-  const worktree = await worktreeRepo.create({
+  const branch = await branchRepo.create({
     repo_id: repo.repo_id,
     name: 'main',
     ref: 'refs/heads/main',
-    worktree_unique_id: 1,
-    path: '/tmp/test-worktree',
+    branch_unique_id: 1,
+    path: '/tmp/test-branch',
     created_by: 'test-user' as UserID,
   });
 
-  return { repo, worktree };
+  return { repo, branch };
 }
 
 // ============================================================================
@@ -71,14 +71,14 @@ describe('Database Initialization', () => {
       ? await db.run(sql`
           SELECT name FROM sqlite_master
           WHERE type='table' AND name IN (
-            'sessions', 'tasks', 'boards', 'repos', 'worktrees',
+            'sessions', 'tasks', 'boards', 'repos', 'branches',
             'messages', 'users', 'board_comments', 'board_objects',
             'mcp_servers', 'session_mcp_servers'
           )`)
       : await db.execute(sql`
           SELECT table_name as name FROM information_schema.tables
           WHERE table_schema = 'public' AND table_name IN (
-            'sessions', 'tasks', 'boards', 'repos', 'worktrees',
+            'sessions', 'tasks', 'boards', 'repos', 'branches',
             'messages', 'users', 'board_comments', 'board_objects',
             'mcp_servers', 'session_mcp_servers'
           )
@@ -162,10 +162,11 @@ describe('ID Generation', () => {
 
   it('should format short IDs correctly', () => {
     const id = generateId();
-    const shortId = formatShortId(id);
+    const localShortId = shortId(id);
 
-    expect(shortId).toHaveLength(8);
-    expect(shortId).toBe(id.slice(0, 8));
+    expect(localShortId).toHaveLength(SHORT_ID_LENGTH);
+    // Canonical short form is a 24-char hex prefix (no hyphens).
+    expect(localShortId).toBe(id.replace(/-/g, '').slice(0, SHORT_ID_LENGTH));
   });
 });
 
@@ -177,14 +178,14 @@ describe('Session Repository Integration', () => {
   it('should create session with all required fields', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
     const session = await repo.create({
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: {
         ref: 'main',
         base_sha: 'abc123',
@@ -198,28 +199,28 @@ describe('Session Repository Integration', () => {
     expect(session.session_id).toBeDefined();
     expect(session.agentic_tool).toBe('claude-code');
     expect(session.status).toBe(SessionStatus.IDLE);
-    expect(session.worktree_id).toBe(worktree.worktree_id);
+    expect(session.branch_id).toBe(branch.branch_id);
   });
 
   it('should resolve short ID to full session', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
     const session = await repo.create({
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
       tasks: [],
     });
 
-    const shortId = formatShortId(session.session_id);
-    const found = await repo.findById(shortId);
+    const localShortId = shortId(session.session_id);
+    const found = await repo.findById(localShortId);
 
     expect(found).toBeDefined();
     expect(found!.session_id).toBe(session.session_id);
@@ -228,7 +229,7 @@ describe('Session Repository Integration', () => {
   it('should preserve JSON data integrity', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
     const gitState = { ref: 'main', base_sha: 'abc123', current_sha: 'abc123' };
@@ -236,7 +237,7 @@ describe('Session Repository Integration', () => {
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: gitState,
       genealogy: { children: [] },
       contextFiles: ['file1.ts', 'file2.ts'],
@@ -252,7 +253,7 @@ describe('Session Repository Integration', () => {
   it('should find sessions by status', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
 
@@ -261,7 +262,7 @@ describe('Session Repository Integration', () => {
         agentic_tool: 'claude-code',
         status,
         created_by: 'test-user' as UserID,
-        worktree_id: worktree.worktree_id,
+        branch_id: branch.branch_id,
         git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
         genealogy: { children: [] },
         contextFiles: [],
@@ -283,7 +284,7 @@ describe('Session Repository Integration', () => {
   it('should handle different agentic tools', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
 
@@ -294,7 +295,7 @@ describe('Session Repository Integration', () => {
         agentic_tool: tool,
         status: SessionStatus.IDLE,
         created_by: 'test-user' as UserID,
-        worktree_id: worktree.worktree_id,
+        branch_id: branch.branch_id,
         git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
         genealogy: { children: [] },
         contextFiles: [],
@@ -313,7 +314,7 @@ describe('Task Repository Integration', () => {
   it('should create task linked to session', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const sessionRepo = new SessionRepository(db);
     const taskRepo = new TaskRepository(db);
@@ -322,7 +323,7 @@ describe('Task Repository Integration', () => {
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
@@ -333,6 +334,7 @@ describe('Task Repository Integration', () => {
       session_id: session.session_id,
       full_prompt: 'This is a test task',
       status: TaskStatus.CREATED,
+      created_by: 'test-user' as UserID,
       message_range: {
         start_index: 0,
         end_index: 1,
@@ -355,7 +357,7 @@ describe('Task Repository Integration', () => {
   it('should find tasks by session', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const sessionRepo = new SessionRepository(db);
     const taskRepo = new TaskRepository(db);
@@ -365,7 +367,7 @@ describe('Task Repository Integration', () => {
         agentic_tool: 'claude-code',
         status: SessionStatus.IDLE,
         created_by: 'test-user' as UserID,
-        worktree_id: worktree.worktree_id,
+        branch_id: branch.branch_id,
         git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
         genealogy: { children: [] },
         contextFiles: [],
@@ -380,6 +382,7 @@ describe('Task Repository Integration', () => {
         session_id: sessionId,
         full_prompt: fullPrompt,
         status: TaskStatus.CREATED,
+        created_by: 'test-user' as UserID,
         message_range: {
           start_index: 0,
           end_index: 1,
@@ -403,7 +406,7 @@ describe('Task Repository Integration', () => {
   it('should update task status and completion time', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const sessionRepo = new SessionRepository(db);
     const taskRepo = new TaskRepository(db);
@@ -412,7 +415,7 @@ describe('Task Repository Integration', () => {
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
@@ -423,6 +426,7 @@ describe('Task Repository Integration', () => {
       session_id: session.session_id,
       full_prompt: 'Test prompt',
       status: TaskStatus.CREATED,
+      created_by: 'test-user' as UserID,
       message_range: {
         start_index: 0,
         end_index: 1,
@@ -472,6 +476,7 @@ describe('Board Repository Integration', () => {
       description: 'A test board',
       color: '#ff0000',
       icon: 'rocket',
+      created_by: 'test-user' as UserID,
     });
 
     expect(board.board_id).toBeDefined();
@@ -491,6 +496,7 @@ describe('Board Repository Integration', () => {
       description: 'Test',
       color: '#000000',
       icon: 'star',
+      created_by: 'test-user' as UserID,
     });
 
     const found = await repo.findBySlug('my-board');
@@ -581,7 +587,7 @@ describe('Session Genealogy', () => {
   it('should create parent-child fork relationship', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
 
@@ -589,7 +595,7 @@ describe('Session Genealogy', () => {
       agentic_tool: 'claude-code',
       status: TaskStatus.COMPLETED,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
       genealogy: { children: [] },
       contextFiles: [],
@@ -600,7 +606,7 @@ describe('Session Genealogy', () => {
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
       genealogy: {
         forked_from_session_id: parent.session_id,
@@ -618,7 +624,7 @@ describe('Session Genealogy', () => {
   it('should find all children of parent session', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
 
@@ -626,7 +632,7 @@ describe('Session Genealogy', () => {
       agentic_tool: 'claude-code',
       status: TaskStatus.COMPLETED,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
@@ -637,7 +643,7 @@ describe('Session Genealogy', () => {
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: {
         forked_from_session_id: parent.session_id,
@@ -652,7 +658,7 @@ describe('Session Genealogy', () => {
       agentic_tool: 'codex',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: {
         parent_session_id: parent.session_id,
@@ -676,7 +682,7 @@ describe('Session Genealogy', () => {
   it('should find ancestors of forked session', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
 
@@ -684,7 +690,7 @@ describe('Session Genealogy', () => {
       agentic_tool: 'claude-code',
       status: TaskStatus.COMPLETED,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
       genealogy: { children: [] },
       contextFiles: [],
@@ -695,7 +701,7 @@ describe('Session Genealogy', () => {
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
       genealogy: {
         forked_from_session_id: parent.session_id,
@@ -727,7 +733,7 @@ describe('Error Handling', () => {
   it('should handle missing required session fields', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    await setupRepoAndWorktree(db);
+    await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
 
@@ -736,7 +742,7 @@ describe('Error Handling', () => {
         agentic_tool: 'claude-code',
         status: SessionStatus.IDLE,
         created_by: 'test-user' as UserID,
-        // Missing worktree_id (required)
+        // Missing branch_id (required)
       } as any)
     ).rejects.toThrow();
   });
@@ -746,7 +752,7 @@ describe('Error Handling', () => {
     // treats `status` as an opaque text column (SQLite has no CHECK constraint).
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
 
@@ -754,7 +760,7 @@ describe('Error Handling', () => {
       agentic_tool: 'claude-code',
       status: 'invalid-status' as any,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
@@ -778,6 +784,7 @@ describe('Error Handling', () => {
       description: 'Test',
       color: '#000',
       icon: 'star',
+      created_by: 'test-user' as UserID,
     });
 
     const second = await repo.create({
@@ -786,6 +793,7 @@ describe('Error Handling', () => {
       description: 'Test',
       color: '#fff',
       icon: 'rocket',
+      created_by: 'test-user' as UserID,
     });
 
     expect(first.slug).toBe('duplicate-slug');
@@ -802,14 +810,14 @@ describe('Edge Cases and Data Integrity', () => {
   it('should handle empty arrays and zero counts', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
     const session = await repo.create({
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
@@ -823,7 +831,7 @@ describe('Edge Cases and Data Integrity', () => {
   it('should preserve exact ISO timestamp format', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const sessionRepo = new SessionRepository(db);
     const taskRepo = new TaskRepository(db);
@@ -832,7 +840,7 @@ describe('Edge Cases and Data Integrity', () => {
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
@@ -844,6 +852,7 @@ describe('Edge Cases and Data Integrity', () => {
       session_id: session.session_id,
       full_prompt: 'Test',
       status: TaskStatus.CREATED,
+      created_by: 'test-user' as UserID,
       message_range: {
         start_index: 0,
         end_index: 1,
@@ -859,7 +868,7 @@ describe('Edge Cases and Data Integrity', () => {
   it('should handle special characters in full_prompt', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const sessionRepo = new SessionRepository(db);
     const taskRepo = new TaskRepository(db);
@@ -868,7 +877,7 @@ describe('Edge Cases and Data Integrity', () => {
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
       genealogy: { children: [] },
       contextFiles: [],
@@ -880,6 +889,7 @@ describe('Edge Cases and Data Integrity', () => {
       session_id: session.session_id,
       full_prompt: fullPrompt,
       status: TaskStatus.CREATED,
+      created_by: 'test-user' as UserID,
       message_range: {
         start_index: 0,
         end_index: 1,
@@ -895,7 +905,7 @@ describe('Edge Cases and Data Integrity', () => {
   it('should preserve exact SHA hashes', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    const { worktree } = await setupRepoAndWorktree(db);
+    const { branch } = await setupRepoAndBranch(db);
 
     const repo = new SessionRepository(db);
 
@@ -904,7 +914,7 @@ describe('Edge Cases and Data Integrity', () => {
       agentic_tool: 'claude-code',
       status: SessionStatus.IDLE,
       created_by: 'test-user' as UserID,
-      worktree_id: worktree.worktree_id,
+      branch_id: branch.branch_id,
       git_state: {
         ref: 'main',
         base_sha: sha,

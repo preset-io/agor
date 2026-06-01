@@ -71,6 +71,8 @@ interface AutocompleteTextareaProps {
   slashCommands?: string[];
   /** Available skills from the SDK (stored on session.custom_context) */
   skills?: string[];
+  /** Draw attention to the textarea while it is empty. */
+  highlightWhenEmpty?: boolean;
 }
 
 // Minimum characters required after : before showing emoji picker (like Slack)
@@ -251,6 +253,7 @@ export const AutocompleteTextarea = React.forwardRef<
       onFilesDrop,
       slashCommands = [],
       skills = [],
+      highlightWhenEmpty = false,
     },
     ref
   ) => {
@@ -312,7 +315,7 @@ export const AutocompleteTextarea = React.forwardRef<
     }, [highlightedIndex]);
 
     /**
-     * Search files in session's worktree
+     * Search files in session's branch
      */
     const searchFiles = useCallback(
       async (searchQuery: string) => {
@@ -741,6 +744,32 @@ export const AutocompleteTextarea = React.forwardRef<
       [onFilesDrop]
     );
 
+    const handlePaste = useCallback(
+      (e: React.ClipboardEvent) => {
+        if (!onFilesDrop) return;
+
+        const imageFiles: File[] = [];
+        for (const item of Array.from(e.clipboardData.items)) {
+          if (item.kind === 'file' && item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) {
+              const ext = item.type.split('/')[1] || 'png';
+              const niceName = `pasted-screenshot-${new Date()
+                .toISOString()
+                .replace(/[:.]/g, '-')}.${ext}`;
+              imageFiles.push(new File([file], niceName, { type: file.type }));
+            }
+          }
+        }
+
+        if (imageFiles.length === 0) return;
+
+        e.preventDefault();
+        onFilesDrop(imageFiles);
+      },
+      [onFilesDrop]
+    );
+
     /**
      * Render popover content
      */
@@ -903,6 +932,7 @@ export const AutocompleteTextarea = React.forwardRef<
     // Compute highlighted text
     const highlightColor = token.colorBgTextHover;
     const hasHighlights = value?.includes('@') ?? false;
+    const shouldHighlightEmpty = highlightWhenEmpty && !value.trim();
 
     return (
       <Popover
@@ -917,6 +947,7 @@ export const AutocompleteTextarea = React.forwardRef<
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onPaste={handlePaste}
         >
           {/* Drag-over overlay */}
           {isDragOver && (
@@ -1013,8 +1044,12 @@ export const AutocompleteTextarea = React.forwardRef<
             autoSize={autoSize || { minRows: 2, maxRows: 10 }}
             className="agor-textarea agor-textarea-with-highlights"
             style={{
-              borderColor: token.colorBorder,
+              borderColor: shouldHighlightEmpty ? token.colorPrimary : token.colorBorder,
+              boxShadow: shouldHighlightEmpty
+                ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
+                : undefined,
               backgroundColor: hasHighlights ? 'transparent' : undefined,
+              transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
               position: 'relative',
               zIndex: 1,
             }}

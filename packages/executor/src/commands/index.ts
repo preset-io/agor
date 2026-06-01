@@ -9,12 +9,18 @@
 
 import type { ExecutorPayload, ExecutorResult, PromptPayload } from '../payload-types.js';
 import {
+  handleBranchAgorYmlExport,
+  handleBranchAgorYmlImport,
+  handleBranchFilesList,
+  handleBranchInspect,
+  handleGitBranchAdd,
+  handleGitBranchClean,
+  handleGitBranchRemove,
   handleGitClone,
-  handleGitWorktreeAdd,
-  handleGitWorktreeClean,
-  handleGitWorktreeRemove,
+  handleGitRepoDelete,
+  handleGitRepoRealignOrigin,
 } from './git.js';
-import { handleUnixSyncRepo, handleUnixSyncUser, handleUnixSyncWorktree } from './unix.js';
+import { handleUnixSyncBranch, handleUnixSyncRepo, handleUnixSyncUser } from './unix.js';
 import { handleZellijAttach, handleZellijTab } from './zellij.js';
 
 export interface CommandOptions {
@@ -146,11 +152,17 @@ async function handlePromptCommand(
 
 registerCommand('prompt', handlePromptCommand);
 registerCommand('git.clone', handleGitClone);
-registerCommand('git.worktree.add', handleGitWorktreeAdd);
-registerCommand('git.worktree.remove', handleGitWorktreeRemove);
-registerCommand('git.worktree.clean', handleGitWorktreeClean);
+registerCommand('git.branch.add', handleGitBranchAdd);
+registerCommand('git.branch.remove', handleGitBranchRemove);
+registerCommand('git.branch.clean', handleGitBranchClean);
+registerCommand('branch.files.list', handleBranchFilesList);
+registerCommand('branch.inspect', handleBranchInspect);
+registerCommand('branch.agor-yml.import', handleBranchAgorYmlImport);
+registerCommand('branch.agor-yml.export', handleBranchAgorYmlExport);
+registerCommand('git.repo.realign-origin', handleGitRepoRealignOrigin);
+registerCommand('git.repo.delete', handleGitRepoDelete);
 registerCommand('unix.sync-repo', handleUnixSyncRepo);
-registerCommand('unix.sync-worktree', handleUnixSyncWorktree);
+registerCommand('unix.sync-branch', handleUnixSyncBranch);
 registerCommand('unix.sync-user', handleUnixSyncUser);
 registerCommand('zellij.attach', handleZellijAttach);
 registerCommand('zellij.tab', handleZellijTab);

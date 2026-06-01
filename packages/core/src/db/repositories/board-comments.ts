@@ -2,12 +2,12 @@
  * Board Comments Repository
  *
  * Type-safe CRUD operations for board comments with short ID support.
- * Supports flexible attachments (board, session, task, message, worktree, spatial).
+ * Supports flexible attachments (board, session, task, message, branch, spatial).
  */
 
 import type { BoardComment, CommentID, UUID } from '@agor/core/types';
 import { and, eq, isNull, like } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type BoardCommentInsert, type BoardCommentRow, boardComments } from '../schema';
@@ -15,7 +15,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 
 /**
@@ -58,7 +60,7 @@ export class BoardCommentsRepository
       session_id: row.session_id ? (row.session_id as UUID) : undefined,
       task_id: row.task_id ? (row.task_id as UUID) : undefined,
       message_id: row.message_id ? (row.message_id as UUID) : undefined,
-      worktree_id: row.worktree_id ? (row.worktree_id as UUID) : undefined,
+      branch_id: row.branch_id ? (row.branch_id as UUID) : undefined,
       parent_comment_id: row.parent_comment_id ? (row.parent_comment_id as CommentID) : undefined,
       resolved: Boolean(row.resolved),
       edited: Boolean(row.edited),
@@ -76,6 +78,9 @@ export class BoardCommentsRepository
   private commentToInsert(comment: Partial<BoardComment>): BoardCommentInsert {
     const now = Date.now();
     const commentId = comment.comment_id ?? generateId();
+    if (!comment.created_by) {
+      throw new RepositoryError('BoardComment must have a created_by');
+    }
 
     // Auto-generate content_preview if not provided
     const contentPreview =
@@ -84,13 +89,13 @@ export class BoardCommentsRepository
     return {
       comment_id: commentId,
       board_id: comment.board_id!,
-      created_by: comment.created_by ?? 'anonymous',
+      created_by: comment.created_by,
       content: comment.content ?? '',
       content_preview: contentPreview,
       session_id: comment.session_id ?? null,
       task_id: comment.task_id ?? null,
       message_id: comment.message_id ?? null,
-      worktree_id: comment.worktree_id ?? null,
+      branch_id: comment.branch_id ?? null,
       parent_comment_id: comment.parent_comment_id ?? null,
       resolved: comment.resolved ?? false,
       edited: comment.edited ?? false,
@@ -105,36 +110,17 @@ export class BoardCommentsRepository
   }
 
   /**
-   * Resolve short ID to full ID
+   * Resolve short ID to full ID via the centralized helper.
    */
   private async resolveId(id: string): Promise<string> {
-    // If already a full UUID, return as-is
-    if (id.length === 36 && id.includes('-')) {
-      return id;
-    }
-
-    // Short ID - need to resolve
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
-
-    const results = await select(this.db)
-      .from(boardComments)
-      .where(like(boardComments.comment_id, pattern))
-      .all();
-
-    if (results.length === 0) {
-      throw new EntityNotFoundError('BoardComment', id);
-    }
-
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'BoardComment',
-        id,
-        results.map((r: { comment_id: string }) => formatShortId(r.comment_id as UUID))
-      );
-    }
-
-    return results[0].comment_id as UUID;
+    return resolveByShortIdPrefix(id, 'BoardComment', async (pattern) => {
+      const rows = await select(this.db)
+        .from(boardComments)
+        .where(like(boardComments.comment_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { comment_id: string }) => r.comment_id);
+    });
   }
 
   /**
@@ -194,7 +180,7 @@ export class BoardCommentsRepository
     session_id?: string;
     task_id?: string;
     message_id?: string;
-    worktree_id?: string;
+    branch_id?: string;
     resolved?: boolean;
     created_by?: string;
   }): Promise<BoardComment[]> {
@@ -227,11 +213,11 @@ export class BoardCommentsRepository
           conditions.push(eq(boardComments.message_id, filters.message_id));
         }
       }
-      if (filters?.worktree_id !== undefined) {
-        if (filters.worktree_id === null) {
-          conditions.push(isNull(boardComments.worktree_id));
+      if (filters?.branch_id !== undefined) {
+        if (filters.branch_id === null) {
+          conditions.push(isNull(boardComments.branch_id));
         } else {
-          conditions.push(eq(boardComments.worktree_id, filters.worktree_id));
+          conditions.push(eq(boardComments.branch_id, filters.branch_id));
         }
       }
       if (filters?.resolved !== undefined) {
@@ -289,7 +275,7 @@ export class BoardCommentsRepository
           session_id: insertData.session_id,
           task_id: insertData.task_id,
           message_id: insertData.message_id,
-          worktree_id: insertData.worktree_id,
+          branch_id: insertData.branch_id,
           parent_comment_id: insertData.parent_comment_id,
           resolved: insertData.resolved,
           edited: insertData.edited,
@@ -492,7 +478,7 @@ export class BoardCommentsRepository
         session_id: undefined,
         task_id: undefined,
         message_id: undefined,
-        worktree_id: undefined,
+        branch_id: undefined,
         position: undefined,
       };
 

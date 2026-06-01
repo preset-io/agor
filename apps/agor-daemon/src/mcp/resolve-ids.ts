@@ -16,12 +16,13 @@
 import type {
   ArtifactID,
   BoardID,
+  BranchID,
   IdInput,
   RepoID,
+  ScheduleID,
   SessionID,
   TaskID,
   UserID,
-  WorktreeID,
 } from '@agor/core/types';
 import type { McpContext } from './server.js';
 
@@ -30,9 +31,9 @@ export async function resolveSessionId(ctx: McpContext, id: IdInput): Promise<Se
   return entity.session_id;
 }
 
-export async function resolveWorktreeId(ctx: McpContext, id: IdInput): Promise<WorktreeID> {
-  const entity = await ctx.app.service('worktrees').get(id, ctx.baseServiceParams);
-  return entity.worktree_id;
+export async function resolveBranchId(ctx: McpContext, id: IdInput): Promise<BranchID> {
+  const entity = await ctx.app.service('branches').get(id, ctx.baseServiceParams);
+  return entity.branch_id;
 }
 
 export async function resolveBoardId(ctx: McpContext, id: IdInput): Promise<BoardID> {
@@ -68,4 +69,9 @@ export async function resolveMcpServerId(ctx: McpContext, id: IdInput): Promise<
 export async function resolveArtifactId(ctx: McpContext, id: IdInput): Promise<ArtifactID> {
   const entity = await ctx.app.service('artifacts').get(id, ctx.baseServiceParams);
   return entity.artifact_id;
+}
+
+export async function resolveScheduleId(ctx: McpContext, id: IdInput): Promise<ScheduleID> {
+  const entity = await ctx.app.service('schedules').get(id, ctx.baseServiceParams);
+  return entity.schedule_id;
 }

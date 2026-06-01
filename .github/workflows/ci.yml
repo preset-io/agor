@@ -1,3 +1,18 @@
+# Fast PR + main checks.
+#
+# Everything in this workflow is expected to pass on every PR push.
+# The slow / cross-Node-version / publish-path stuff lives in
+# `heavy-checks.yml` and runs on a nightly cron (and on-demand via
+# workflow_dispatch), not on every push.
+#
+# Shape: one job, `ci` — one install, then all checks via turbo's
+# internal task graph. The five-jobs-after-an-install fanout we used to
+# have meant every job re-ran `pnpm install`; collapsing into one removes
+# ~4 redundant installs per CI run.
+#
+# `pnpm audit` lives in its own workflow (`audit.yml`) — path-filtered to
+# dependency-manifest changes only, and also invoked by `heavy-checks.yml`
+# nightly to catch ambient CVEs.
 name: CI
 
 on:
@@ -17,16 +32,15 @@ on:
 env:
   PNPM_VERSION: '9.15.1'
   NODE_VERSION: '22'
-  TURBO_CACHE_KEY: turbo-Linux-node22-${{ github.sha }}
 
 jobs:
-  install:
-    name: Install & Build deps
+  ci:
+    name: Lint, typecheck, build, test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 
@@ -37,217 +51,29 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Build all packages to populate turbo cache for parallel jobs
-      - run: pnpm turbo run build --filter='!@agor/docs'
-
-      - name: Save turbo cache
-        uses: actions/cache/save@v5
-        with:
-          path: .turbo/cache
-          key: ${{ env.TURBO_CACHE_KEY }}
-
-  typecheck:
-    name: Typecheck
-    runs-on: ubuntu-latest
-    needs: [install]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Restore turbo cache
-        uses: actions/cache/restore@v5
-        with:
-          path: .turbo/cache
-          key: ${{ env.TURBO_CACHE_KEY }}
-
-      - run: pnpm typecheck
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    needs: [install]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Restore turbo cache
-        uses: actions/cache/restore@v5
-        with:
-          path: .turbo/cache
-          key: ${{ env.TURBO_CACHE_KEY }}
-
+      # Cheap structural check — runs before lint so its output is the
+      # first thing you see in failure output.
       - run: pnpm check:agor-live-deps
 
+      # Biome at the repo root — not a turbo task. Runs independently of
+      # the build graph.
       - run: pnpm lint
 
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: [install]
-    steps:
-      - uses: actions/checkout@v4
+      # `build` and `typecheck` both `dependsOn: ['^build']` in turbo.json,
+      # so a single invocation lets turbo run them with internal
+      # parallelism (typecheck on one workspace can run as soon as its
+      # deps' build outputs exist). The `--filter='!@agor/docs'` excludes
+      # the docs app, which has its own dedicated workflows.
+      - run: pnpm turbo run build typecheck --filter='!@agor/docs'
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Restore turbo cache
-        uses: actions/cache/restore@v5
-        with:
-          path: .turbo/cache
-          key: ${{ env.TURBO_CACHE_KEY }}
-
-      - run: pnpm turbo run build --filter='!@agor/docs'
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    needs: [install]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Restore turbo cache
-        uses: actions/cache/restore@v5
-        with:
-          path: .turbo/cache
-          key: ${{ env.TURBO_CACHE_KEY }}
-
+      # Test runs against a narrower filter set than build/typecheck —
+      # only the packages with real test suites worth gating on. Kept as
+      # a separate turbo invocation to preserve that filter.
       - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core
 
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-latest
-    # Intentionally independent of the install/build pipeline so security
-    # checks surface as early as possible and don't block on build-prep.
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-
-      - run: pnpm install --frozen-lockfile
-
-      # Blocking: any CRITICAL advisory in prod deps fails the build.
-      - name: pnpm audit (prod, critical — blocking)
-        run: pnpm audit --audit-level=critical --prod
-
-      # Advisory: HIGH+ advisories are surfaced but non-blocking.
-      # Promote to blocking once the prod tree is clean at the HIGH level.
-      - name: pnpm audit (prod, high — advisory)
-        if: always()
-        run: pnpm audit --audit-level=high --prod || true
-
-      # Full tree (incl. dev deps) — advisory only.
-      - name: pnpm audit (all, high — advisory)
-        if: always()
-        run: pnpm audit --audit-level=high || true
-
-  node-compat:
-    name: Node ${{ matrix.node }} install compat
-    # Reproduces the user-facing #278 path: `npm install agor-live` on a
-    # given Node version. We isolate agor-live's runtime dependencies into
-    # a temp project (skipping the workspace:* @agor-live/client link, which
-    # only resolves at publish time) and run `npm install` so we get the
-    # real `EBADENGINE` warnings npm emits — pnpm uses different warning
-    # text and only reports the root manifest's engines, not transitive
-    # ones. We then dynamically load `node-pty` to confirm the native
-    # binary actually loads on the matrix Node version.
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ['22', '24', '25']
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ matrix.node }}
-
-      - name: npm install agor-live's runtime deps in isolation
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/agor-compat"
-          cd "$RUNNER_TEMP/agor-compat"
-          node -e '
-            const fs = require("fs");
-            const pkg = require(process.env.GITHUB_WORKSPACE + "/packages/agor-live/package.json");
-            const deps = Object.fromEntries(
-              Object.entries(pkg.dependencies || {})
-                .filter(([_, v]) => !String(v).startsWith("workspace:"))
-            );
-            fs.writeFileSync("package.json", JSON.stringify({
-              name: "agor-compat", version: "0.0.0", private: true, dependencies: deps,
-            }, null, 2));
-          '
-          npm install --no-fund --no-audit 2>&1 | tee install.log
-          if grep -q "EBADENGINE" install.log; then
-            echo "::error::EBADENGINE warning on Node ${{ matrix.node }}"
-            grep -A 3 "EBADENGINE" install.log
-            exit 1
-          fi
-
-      - name: Load node-pty native binary on Node ${{ matrix.node }}
-        run: |
-          cd "$RUNNER_TEMP/agor-compat"
-          node -e '
-            (async () => {
-              const m = await import("node-pty");
-              if (typeof m.spawn !== "function") {
-                console.error("node-pty.spawn not a function"); process.exit(1);
-              }
-              const p = m.spawn("/bin/echo", ["ok"], {
-                name: "xterm", cols: 80, rows: 24, cwd: process.cwd(), env: process.env,
-              });
-              let out = "";
-              p.onData(d => { out += d; });
-              p.onExit(({ exitCode }) => {
-                console.log("exit:", exitCode, "stdout:", JSON.stringify(out));
-                process.exit(exitCode === 0 && out.includes("ok") ? 0 : 1);
-              });
-            })().catch(e => { console.error(e); process.exit(1); });
-          '
+  # The Node-version matrix (`npm install agor-live` compat across 22/24/25)
+  # used to live here. It now runs nightly + workflow_dispatch in
+  # `heavy-checks.yml`. PR pushes rely on the agor-live publish smoke
+  # test (which itself does `npm install` of the packed tarball on Node 22)
+  # to catch publish-path regressions when publish-relevant paths change.
+  # The `audit` job moved to `audit.yml` (path-filtered to dep changes).

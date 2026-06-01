@@ -7,14 +7,14 @@
 import type { Task, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { generateId } from '../../lib/ids';
+import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
+import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
-import { WorktreeRepository } from './worktrees';
 
 /**
  * Create test task data
@@ -42,11 +42,11 @@ function createTaskData(overrides?: Partial<Task>): Partial<Task> {
   };
 }
 
-// Counter for unique worktree IDs
-let worktreeCounter = 1;
+// Counter for unique branch IDs
+let branchCounter = 1;
 
 /**
- * Create a session with required dependencies (repo and worktree)
+ * Create a session with required dependencies (repo and branch)
  * Returns the session_id that can be used for tasks
  */
 async function createSessionWithDeps(db: Database): Promise<UUID> {
@@ -62,23 +62,25 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
     default_branch: 'main',
   });
 
-  // Create worktree
-  const worktreeRepo = new WorktreeRepository(db);
-  const worktree = await worktreeRepo.create({
-    worktree_id: generateId(),
+  // Create branch
+  const branchRepo = new BranchRepository(db);
+  const branch = await branchRepo.create({
+    branch_id: generateId(),
     repo_id: repo.repo_id,
-    name: 'test-worktree',
+    name: 'test-branch',
     ref: 'main',
-    worktree_unique_id: worktreeCounter++,
-    path: '/tmp/test/worktree',
+    branch_unique_id: branchCounter++,
+    path: '/tmp/test/branch',
+    created_by: 'test-user' as UUID,
   });
 
   // Create session
   const sessionRepo = new SessionRepository(db);
   const session = await sessionRepo.create({
     session_id: generateId(),
-    worktree_id: worktree.worktree_id,
+    branch_id: branch.branch_id,
     agentic_tool: 'claude-code',
+    created_by: 'test-user' as UUID,
   });
 
   return session.session_id;
@@ -103,6 +105,7 @@ describe('TaskRepository.create', () => {
     expect(created.status).toBe(data.status);
     expect(created.created_at).toBeDefined();
     expect(created.completed_at).toBeUndefined();
+    expect(created.last_executor_heartbeat_at).toBeUndefined();
   });
 
   dbTest('should generate task_id if not provided', async ({ db }) => {
@@ -130,15 +133,13 @@ describe('TaskRepository.create', () => {
     expect(created.status).toBe(TaskStatus.CREATED);
   });
 
-  dbTest('should default created_by to anonymous', async ({ db }) => {
+  dbTest('should throw if created_by is missing', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
     const data = createTaskData({ session_id: sessionId });
     delete (data as any).created_by;
 
-    const created = await taskRepo.create(data);
-
-    expect(created.created_by).toBe('anonymous');
+    await expect(taskRepo.create(data)).rejects.toThrow(/created_by/);
   });
 
   dbTest('should throw error if session_id is missing', async ({ db }) => {
@@ -148,6 +149,27 @@ describe('TaskRepository.create', () => {
 
     await expect(taskRepo.create(data)).rejects.toThrow(RepositoryError);
     await expect(taskRepo.create(data)).rejects.toThrow('session_id is required');
+  });
+
+  dbTest('should leave Task.model undefined when not provided', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const data = createTaskData({ session_id: sessionId });
+    delete (data as any).model;
+
+    const created = await taskRepo.create(data);
+
+    expect(created.model).toBeUndefined();
+  });
+
+  dbTest('should preserve explicit Task.model when provided', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const data = createTaskData({ session_id: sessionId, model: 'gpt-5.5' });
+
+    const created = await taskRepo.create(data);
+
+    expect(created.model).toBe('gpt-5.5');
   });
 
   dbTest('should handle complex task data with all optional fields', async ({ db }) => {
@@ -331,12 +353,12 @@ describe('TaskRepository.findById', () => {
     expect(byFull?.task_id).toBe(data.task_id);
 
     // Short ID
-    const shortId = data.task_id!.replace(/-/g, '').slice(0, 8);
-    const byShort = await taskRepo.findById(shortId);
+    const idPrefix = toShortId(data.task_id!, 8);
+    const byShort = await taskRepo.findById(idPrefix);
     expect(byShort?.task_id).toBe(data.task_id);
 
     // Case insensitive
-    const byUpper = await taskRepo.findById(shortId.toUpperCase());
+    const byUpper = await taskRepo.findById(idPrefix.toUpperCase());
     expect(byUpper?.task_id).toBe(data.task_id);
   });
 
@@ -626,8 +648,8 @@ describe('TaskRepository.update', () => {
     expect(updated.status).toBe(TaskStatus.RUNNING);
 
     // Update by short ID
-    const shortId = data.task_id!.replace(/-/g, '').slice(0, 8);
-    const updated2 = await taskRepo.update(shortId, { status: TaskStatus.COMPLETED });
+    const idPrefix = toShortId(data.task_id!, 8);
+    const updated2 = await taskRepo.update(idPrefix, { status: TaskStatus.COMPLETED });
     expect(updated2.status).toBe(TaskStatus.COMPLETED);
   });
 
@@ -672,6 +694,23 @@ describe('TaskRepository.update', () => {
     // Unchanged fields
     expect(updated.full_prompt).toBe(created.full_prompt);
     expect(updated.session_id).toBe(created.session_id);
+  });
+
+  dbTest('should round-trip last_executor_heartbeat_at on update', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    const heartbeatAt = '2026-01-01T00:00:00.000Z';
+
+    const updated = await taskRepo.update(created.task_id, {
+      last_executor_heartbeat_at: heartbeatAt,
+    });
+    const found = await taskRepo.findById(created.task_id);
+
+    expect(updated.last_executor_heartbeat_at).toBe(heartbeatAt);
+    expect(found?.last_executor_heartbeat_at).toBe(heartbeatAt);
   });
 
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
@@ -726,8 +765,8 @@ describe('TaskRepository.delete', () => {
     expect(await taskRepo.findById(data1.task_id!)).toBeNull();
 
     // Delete by short ID
-    const shortId = data2.task_id!.replace(/-/g, '').slice(0, 8);
-    await taskRepo.delete(shortId);
+    const idPrefix = toShortId(data2.task_id!, 8);
+    await taskRepo.delete(idPrefix);
     expect(await taskRepo.findById(data2.task_id!)).toBeNull();
   });
 

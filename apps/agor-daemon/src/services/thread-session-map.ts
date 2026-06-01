@@ -30,11 +30,11 @@ export class ThreadSessionMapService extends DrizzleService<
   }
 
   /**
-   * Find all thread-session mappings for a worktree
+   * Find all thread-session mappings for a branch
    * Used by UI to identify gateway-created sessions
    */
-  async findByWorktree(worktreeId: string): Promise<ThreadSessionMap[]> {
-    return this.threadMapRepo.findByWorktree(worktreeId);
+  async findByBranch(branchId: string): Promise<ThreadSessionMap[]> {
+    return this.threadMapRepo.findByBranch(branchId);
   }
 }
 

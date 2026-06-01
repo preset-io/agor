@@ -9,8 +9,8 @@ import { generateId } from '@agor/core';
 import type { Message, MessageID, MessageSource, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import type { TokenUsage } from '../../types/token-usage.js';
-import type { MessagesService, TasksService } from './claude-tool.js';
-import { DEFAULT_CLAUDE_MODEL } from './models.js';
+import type { MessagesService, TasksService } from '../base/index.js';
+import { buildAssistantMessageMetadata, patchTaskModelIfKnown } from '../base/model-recording.js';
 
 /**
  * Safely extract and validate token usage from SDK response
@@ -195,21 +195,11 @@ export async function createAssistantMessage(
     tool_uses: toolUses,
     task_id: taskId,
     parent_tool_use_id: parentToolUseId || undefined,
-    metadata: {
-      model: resolvedModel || DEFAULT_CLAUDE_MODEL,
-      tokens: {
-        input: tokenUsage?.input_tokens ?? 0,
-        output: tokenUsage?.output_tokens ?? 0,
-      },
-    },
+    metadata: buildAssistantMessageMetadata({ model: resolvedModel, tokenUsage }),
   };
 
   await messagesService.create(message);
-
-  // If task exists, update it with resolved model
-  if (taskId && resolvedModel && tasksService) {
-    await tasksService.patch(taskId, { model: resolvedModel });
-  }
+  await patchTaskModelIfKnown(tasksService, taskId, resolvedModel);
 
   return message;
 }
@@ -266,7 +256,7 @@ export async function createSystemMessage(
     content: content as Message['content'],
     task_id: taskId,
     metadata: {
-      model: resolvedModel || DEFAULT_CLAUDE_MODEL,
+      ...(resolvedModel ? { model: resolvedModel } : {}),
       is_meta: true, // Mark as synthetic system message
     },
   };

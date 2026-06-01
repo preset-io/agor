@@ -1,5 +1,5 @@
 // src/types/task.ts
-import type { SessionID, TaskID } from './id';
+import type { MessageID, SessionID, TaskID } from './id';
 import type { MessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
@@ -9,7 +9,7 @@ export const TaskStatus = {
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for SDK to halt
   AWAITING_PERMISSION: 'awaiting_permission',
-  AWAITING_INPUT: 'awaiting_input', // Agent asked user a question (AskUserQuestion tool)
+  AWAITING_INPUT: 'awaiting_input', // Legacy / pre-#1177: AskUserQuestion was disallowed at the SDK; new tasks never enter this state, kept for historical rows
   TIMED_OUT: 'timed_out', // Permission/input request timed out, executor exited — user must re-prompt
   COMPLETED: 'completed',
   FAILED: 'failed',
@@ -42,6 +42,17 @@ export interface TaskMetadata {
   queued_by_user_id?: string;
   child_session_id?: SessionID;
   child_task_id?: TaskID;
+  /**
+   * Marks a task whose prompt was authored by the daemon (not typed by a
+   * human). Used by widget auto-resume so the UI can label the queued
+   * prompt appropriately.
+   */
+  system_authored?: boolean;
+  /**
+   * For tasks queued by widget resolution, the widget message that fired
+   * this prompt. Links the task back to the originating widget for audit.
+   */
+  widget_id?: MessageID;
 }
 
 /**
@@ -51,6 +62,26 @@ export interface TaskMetadata {
  */
 export function isNaturalCompletion(status: TaskStatus): boolean {
   return status === TaskStatus.COMPLETED || status === TaskStatus.FAILED;
+}
+
+/**
+ * Authoritative context-window snapshot captured at task completion.
+ *
+ * Source depends on the agentic tool:
+ * - Claude Code: derived from the Claude Agent SDK `getContextUsage()` response.
+ * - Codex: extracted from the Codex CLI's `event_msg/token_count.last_token_usage`
+ *   payload — see `extractCodexContextSnapshotFromEvent` in the executor.
+ *
+ * `percentage` is the value the source tool itself reports/displays for
+ * "Context XX% used" (i.e. for Codex it is baseline-adjusted to match the
+ * CLI TUI's indicator). Consumers should prefer this over recomputing
+ * `totalTokens / maxTokens` so per-tool conventions are respected.
+ */
+export interface ContextUsageSnapshot {
+  totalTokens: number;
+  maxTokens: number;
+  /** 0–100, integer, ready to display */
+  percentage: number;
 }
 
 export interface Task {
@@ -137,17 +168,23 @@ export interface Task {
     costUsd?: number; // Estimated cost in USD (if pricing available)
     primaryModel?: string; // Resolved model used for the task
     durationMs?: number; // Total execution duration from SDK, when available
-    contextUsageSnapshot?: {
-      totalTokens: number;
-      maxTokens: number;
-      percentage: number;
-    }; // Authoritative SDK context snapshot when available
+    /** Authoritative SDK/protocol context-window snapshot when available */
+    contextUsageSnapshot?: ContextUsageSnapshot;
   };
 
-  // Computed context window - cumulative token usage for this session
-  // Calculated by tool.computeContextWindow() and stored for efficient access
-  // For Claude Code: sum of input+output tokens from all tasks since last compaction
-  // For Codex/Gemini: may use latest task's SDK-reported cumulative value
+  // Current context-window occupancy in tokens at the end of this task.
+  //
+  // Source precedence (set by base-executor):
+  // 1. `normalized_sdk_response.contextUsageSnapshot.totalTokens` when the
+  //    tool surfaced an authoritative snapshot (Claude SDK getContextUsage,
+  //    Codex CLI event_msg/token_count last_token_usage). This is the common
+  //    case and is what UI consumers should rely on.
+  // 2. Otherwise the tool's `computeContextWindow()` fallback (per-tool
+  //    heuristic — see tool.interface.ts).
+  //
+  // For display percentages, prefer `contextUsageSnapshot.percentage` over
+  // recomputing here — Codex applies a baseline subtraction that does NOT
+  // equal raw `computed_context_window / contextWindowLimit`.
   computed_context_window?: number;
 
   // Report (auto-generated after task completion)
@@ -178,5 +215,7 @@ export interface Task {
 
   created_at: string;
   started_at?: string; // When task status changed to RUNNING (UTC ISO string)
+  /** Latest heartbeat emitted by the executor while this task is active. */
+  last_executor_heartbeat_at?: string; // UTC ISO string
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }

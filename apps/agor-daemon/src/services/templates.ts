@@ -8,7 +8,7 @@
  *
  * Used by the UI for:
  *   - Zone-trigger templates (user-defined, stored on zones)
- *   - Env health-URL templates (worktree env config)
+ *   - Env health-URL templates (branch env config)
  *   - The bundled spawn-subsession prompt template (`spawn_subsession.hbs`)
  *
  * Endpoint: POST /templates  body: { template, context, onError? } → { rendered }

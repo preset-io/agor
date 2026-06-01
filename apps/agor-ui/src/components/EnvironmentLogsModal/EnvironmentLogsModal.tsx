@@ -1,15 +1,16 @@
-import type { AgorClient, Worktree } from '@agor-live/client';
+import type { AgorClient, Branch } from '@agor-live/client';
 import { ReloadOutlined } from '@ant-design/icons';
-import Ansi from 'ansi-to-react';
 import { Alert, Button, Checkbox, Modal, Space, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Ansi } from '../AnsiText';
+import { ErrorBoundary } from '../ErrorBoundary';
 
 const { Text } = Typography;
 
 interface EnvironmentLogsModalProps {
   open: boolean;
   onClose: () => void;
-  worktree: Worktree;
+  branch: Branch;
   client: AgorClient | null;
 }
 
@@ -23,7 +24,7 @@ interface LogsResponse {
 export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
   open,
   onClose,
-  worktree,
+  branch,
   client,
 }) => {
   const { token } = theme.useToken();
@@ -51,9 +52,9 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
 
       try {
         // Call the custom logs endpoint using Feathers client with query params
-        const data = (await client.service('worktrees/logs').find({
+        const data = (await client.service('branches/logs').find({
           query: {
-            worktree_id: worktree.worktree_id,
+            branch_id: branch.branch_id,
           },
         })) as unknown as LogsResponse;
         setLogs(data);
@@ -80,7 +81,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         }
       }
     },
-    [client, worktree.worktree_id]
+    [client, branch.branch_id]
   );
 
   // Fetch logs when modal opens
@@ -124,7 +125,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
 
   return (
     <Modal
-      title={`Environment Logs - ${worktree.name}`}
+      title={`Environment Logs - ${branch.name}`}
       open={open}
       onCancel={onClose}
       width={900}
@@ -150,83 +151,85 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         </Button>,
       ]}
     >
-      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        {/* Timestamp and truncation warning */}
-        {logs && !logs.error && (
-          <div>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Fetched at: {formatTimestamp(logs.timestamp)}
-            </Text>
-            {logs.truncated && (
-              <Alert
-                title="Logs truncated (showing last 500 lines)"
-                type="warning"
-                showIcon
-                style={{ marginTop: 8 }}
-                banner
-              />
-            )}
-          </div>
-        )}
+      <ErrorBoundary fallbackTitle="Couldn't render the logs viewer." resetKey={logs?.timestamp}>
+        <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+          {/* Timestamp and truncation warning */}
+          {logs && !logs.error && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                Fetched at: {formatTimestamp(logs.timestamp)}
+              </Text>
+              {logs.truncated && (
+                <Alert
+                  title="Logs truncated (showing last 500 lines)"
+                  type="warning"
+                  showIcon
+                  style={{ marginTop: 8 }}
+                  banner
+                />
+              )}
+            </div>
+          )}
 
-        {/* Error state */}
-        {logs?.error && (
-          <Alert
-            title="Error fetching logs"
-            description={
-              <div>
-                <div>{logs.error}</div>
-                {logs.error.includes('No logs command') && (
-                  <div style={{ marginTop: 8, fontSize: 12 }}>
-                    Configure a 'logs' command in .env-config.yaml to view logs.
-                  </div>
-                )}
-              </div>
-            }
-            type="error"
-            showIcon
-          />
-        )}
+          {/* Error state */}
+          {logs?.error && (
+            <Alert
+              title="Error fetching logs"
+              description={
+                <div>
+                  <div>{logs.error}</div>
+                  {logs.error.includes('No logs command') && (
+                    <div style={{ marginTop: 8, fontSize: 12 }}>
+                      Configure a 'logs' command in .env-config.yaml to view logs.
+                    </div>
+                  )}
+                </div>
+              }
+              type="error"
+              showIcon
+            />
+          )}
 
-        {/* Logs display */}
-        {logs && !logs.error && (
-          <div
-            ref={logsContainerRef}
-            style={{
-              backgroundColor: '#000',
-              border: `1px solid ${token.colorBorder}`,
-              borderRadius: token.borderRadius,
-              padding: 16,
-              height: '60vh',
-              overflowY: 'auto',
-              fontFamily: 'monospace',
-              fontSize: 12,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              color: '#fff',
-            }}
-          >
-            {logs.logs ? <Ansi>{logs.logs}</Ansi> : '(no logs)'}
-          </div>
-        )}
+          {/* Logs display */}
+          {logs && !logs.error && (
+            <div
+              ref={logsContainerRef}
+              style={{
+                backgroundColor: '#000',
+                border: `1px solid ${token.colorBorder}`,
+                borderRadius: token.borderRadius,
+                padding: 16,
+                height: '60vh',
+                overflowY: 'auto',
+                fontFamily: 'monospace',
+                fontSize: 12,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                color: '#fff',
+              }}
+            >
+              {logs.logs ? <Ansi>{String(logs.logs)}</Ansi> : '(no logs)'}
+            </div>
+          )}
 
-        {/* Loading state */}
-        {loading && !logs && (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: 40,
-              color: token.colorTextSecondary,
-              height: '60vh',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            Loading logs...
-          </div>
-        )}
-      </Space>
+          {/* Loading state */}
+          {loading && !logs && (
+            <div
+              style={{
+                textAlign: 'center',
+                padding: 40,
+                color: token.colorTextSecondary,
+                height: '60vh',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              Loading logs...
+            </div>
+          )}
+        </Space>
+      </ErrorBoundary>
     </Modal>
   );
 };

@@ -1,13 +1,14 @@
 // src/types/repo.ts
+
+import type { RepoEnvironment, RepoEnvironmentConfigV1 } from './branch';
 import type { SessionID, UUID } from './id';
-import type { RepoEnvironment, RepoEnvironmentConfigV1 } from './worktree';
 
 /**
- * URL-friendly identifier for repositories and worktrees
+ * URL-friendly identifier for repositories and branches
  *
  * Used for:
  * - Repository slugs (e.g., "myapp", "backend-api")
- * - Worktree names (e.g., "feat-auth", "fix-cors")
+ * - Branch names (e.g., "feat-auth", "fix-cors")
  * - Directory names in ~/.agor/repos/ and ~/.agor/worktrees/
  *
  * Format: lowercase, alphanumeric, hyphens only
@@ -17,11 +18,11 @@ import type { RepoEnvironment, RepoEnvironmentConfigV1 } from './worktree';
 export type RepoSlug = string;
 
 /**
- * Worktree name (slug-formatted)
+ * Branch name (slug-formatted)
  *
  * Becomes both the directory name and (optionally) the branch name.
  */
-export type WorktreeName = string;
+export type BranchName = string;
 
 /**
  * Git repository registered with Agor
@@ -30,7 +31,7 @@ export type WorktreeName = string;
  * - remote: cloned into ~/.agor/repos/{slug} and managed by Agor
  * - local: referencing a user-managed clone elsewhere on disk
  *
- * Both repository types support the same worktree operations.
+ * Both repository types support the same branch operations.
  */
 export type RepoType = 'remote' | 'local';
 
@@ -44,7 +45,7 @@ export interface Repo {
    * Used for:
    * - Directory name: ~/.agor/repos/{slug}
    * - CLI references: agor repo show {slug}
-   * - Worktree organization
+   * - Branch organization
    *
    * Must be unique across all repos.
    */
@@ -86,15 +87,15 @@ export interface Repo {
    * Default branch name
    *
    * Detected from remote or HEAD.
-   * Used when creating new worktrees without explicit ref.
+   * Used when creating new branches without explicit ref.
    */
   default_branch?: string;
 
   /**
    * Environment configuration (v2) — named variants.
    *
-   * Defines how to run environments for all worktrees in this repo.
-   * Contains a default variant name and a map of named variants; worktrees
+   * Defines how to run environments for all branches in this repo.
+   * Contains a default variant name and a map of named variants; branches
    * render one variant into their own command fields at creation time and
    * can re-render against a different variant via the admin-only flow.
    *
@@ -121,16 +122,65 @@ export interface Repo {
    *
    * Format: agor_rp_<short-id> (e.g., 'agor_rp_03b62447')
    *
-   * This group is created when worktree RBAC is enabled and controls access
-   * to the shared .git/ directory. Users who have access to ANY worktree
+   * This group is created when branch RBAC is enabled and controls access
+   * to the shared .git/ directory. Users who have access to ANY branch
    * in this repo get added to this group, enabling git operations
    * (commit, push, etc) by granting read/write access to .git/.
    */
   unix_group?: string;
 
+  /**
+   * Async clone lifecycle status for `repo_type: 'remote'` repos.
+   *
+   * - `'cloning'`: row was pre-created by the daemon; executor is running `git clone`
+   * - `'ready'`: clone finished successfully (executor patched the row)
+   * - `'failed'`: clone exited non-zero — see `clone_error` for details
+   * - `undefined`: legacy row created before this field existed, or `repo_type: 'local'`
+   *
+   * Callers that need to know whether a remote clone succeeded should poll
+   * `agor_repos_get(repoId)` and treat anything other than `'ready'`/`undefined`
+   * as not-yet-usable.
+   */
+  clone_status?: RepoCloneStatus;
+
+  /**
+   * Populated when `clone_status === 'failed'`. Cleared on retry.
+   *
+   * `category` exists so a UI can suggest the right next step
+   * (e.g. `auth_failed` → "configure GITHUB_TOKEN in Settings → API Keys").
+   */
+  clone_error?: RepoCloneError;
+
   /** Repository metadata */
   created_at: string;
   last_updated: string;
+}
+
+export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
+
+export type RepoCloneErrorCategory = 'auth_failed' | 'not_found' | 'network' | 'unknown';
+
+export interface RepoCloneError {
+  exit_code: number;
+  category: RepoCloneErrorCategory;
+  /** Short, user-facing first-line message (stderr excerpt or wrapper message). */
+  message: string;
+}
+
+/**
+ * Return shape of `reposService.cloneRepository` (and the REST + MCP layers
+ * that wrap it).
+ *
+ * - `'pending'`: row pre-created with `clone_status: 'cloning'`. Callers should
+ *   poll `agor_repos_get(repo_id)` or listen for `repos.patched` until
+ *   `clone_status` is `'ready'` or `'failed'`.
+ * - `'exists'`: no-op — a row with the requested slug is already registered.
+ *   `repo_id` is included so callers can fetch the existing row.
+ */
+export interface CloneRepositoryResult {
+  status: 'pending' | 'exists';
+  slug: string;
+  repo_id?: string;
 }
 
 /**
@@ -158,16 +208,16 @@ export interface CreateLocalRepoRequest {
 }
 
 /**
- * Git worktree configuration
+ * Git branch configuration
  *
- * Worktrees are working directories for specific branches,
+ * Branches are working directories for specific branches,
  * allowing multiple branches to be checked out simultaneously.
  *
  * Structure: ~/.agor/worktrees/{repo-slug}/{name}/
  */
-export interface WorktreeConfig {
+export interface BranchConfig {
   /**
-   * Worktree name (slug format)
+   * Branch name (slug format)
    *
    * Used for:
    * - Directory name: ~/.agor/worktrees/{repo-slug}/{name}
@@ -176,17 +226,17 @@ export interface WorktreeConfig {
    *
    * Examples: "main", "feat-auth", "exp-rewrite"
    */
-  name: WorktreeName;
+  name: BranchName;
 
   /**
-   * Absolute path to worktree directory
+   * Absolute path to branch directory
    *
    * Example: "/Users/max/.agor/worktrees/myapp/feat-auth"
    */
   path: string;
 
   /**
-   * Git ref (branch/tag/commit) checked out in this worktree
+   * Git ref (branch/tag/commit) checked out in this branch
    *
    * Examples: "feat-auth", "main", "v1.2.3", "a1b2c3d"
    */
@@ -195,7 +245,7 @@ export interface WorktreeConfig {
   /**
    * Whether this ref is a new branch created by Agor
    *
-   * true:  Branch was created during worktree creation
+   * true:  Branch was created during branch creation
    * false: Branch existed before (tracked from remote or local)
    */
   new_branch: boolean;
@@ -208,9 +258,9 @@ export interface WorktreeConfig {
   tracking_branch?: string;
 
   /**
-   * Sessions using this worktree
+   * Sessions using this branch
    *
-   * Multiple sessions can share a worktree (same working directory).
+   * Multiple sessions can share a branch (same working directory).
    * Useful for:
    * - Continuing work across sessions
    * - Fork/spawn relationships on same branch
@@ -218,13 +268,13 @@ export interface WorktreeConfig {
   sessions: SessionID[];
 
   /**
-   * Last git commit SHA in this worktree
+   * Last git commit SHA in this branch
    *
    * Updated when sessions complete tasks.
    */
   last_commit_sha?: string;
 
-  /** Worktree metadata */
+  /** Branch metadata */
   created_at: string;
   last_used: string;
 }

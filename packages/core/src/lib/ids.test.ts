@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { prefixToLikePattern, SHORT_ID_LENGTH, toShortId } from '../types/id';
 import {
   expandPrefix,
   findByShortIdPrefix,
@@ -26,8 +27,23 @@ describe('generateId', () => {
     expect(uniqueIds.size).toBe(3);
   });
 
-  it('should generate chronologically sortable IDs', () => {
-    const ids = [generateId(), generateId(), generateId()];
+  it('should generate chronologically sortable IDs at millisecond resolution', () => {
+    // Sleep between generations to guarantee different ms timestamps.
+    // Within a single ms our `generateId` randomizes rand_a (to make short
+    // IDs collision-safe), so sub-ms sort order is deliberately not
+    // guaranteed — only the ms timestamp prefix is.
+    const id1 = generateId();
+    const t1 = Date.now();
+    while (Date.now() === t1) {
+      /* spin until next ms */
+    }
+    const id2 = generateId();
+    const t2 = Date.now();
+    while (Date.now() === t2) {
+      /* spin */
+    }
+    const id3 = generateId();
+    const ids = [id1, id2, id3];
     const sorted = [...ids].sort();
     expect(ids).toEqual(sorted);
   });
@@ -91,38 +107,59 @@ describe('isValidShortID', () => {
 describe('shortId', () => {
   const uuid = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' as UUID;
 
-  it('should extract 8-char prefix by default', () => {
-    expect(shortId(uuid)).toBe('01933e4a');
+  it('returns the canonical SHORT_ID_LENGTH (24-char) prefix', () => {
+    expect(shortId(uuid)).toBe('01933e4a7b897c35a8f39d2e');
+    expect(shortId(uuid)).toHaveLength(SHORT_ID_LENGTH);
   });
 
-  it('should handle custom lengths', () => {
-    expect(shortId(uuid, 12)).toBe('01933e4a7b89');
-    expect(shortId(uuid, 16)).toBe('01933e4a7b897c35');
+  it('strips hyphens', () => {
+    expect(shortId(uuid)).not.toContain('-');
   });
 
-  it('should remove hyphens', () => {
-    const result = shortId(uuid, 16);
-    expect(result).not.toContain('-');
+  it('is deterministic for the same input', () => {
+    expect(shortId(uuid)).toBe(shortId(uuid));
   });
 
-  it('should cap at 32 characters', () => {
-    expect(shortId(uuid, 100)).toBe('01933e4a7b897c35a8f39d2e1c4b5a6f');
+  it('takes no length parameter — every site agrees on one shape', () => {
+    // The whole point of this helper. If a length knob existed, sites would
+    // pick their own and we'd re-introduce the same-ms collision bug. The
+    // lower-level `toShortId` is available for the rare case that needs a
+    // documented non-canonical length.
+    expect(toShortId(uuid, 12)).toBe('01933e4a7b89');
+  });
+
+  it('does NOT collide for IDs generated in the same millisecond', () => {
+    // Freeze the clock so every ID lands in the exact same ms — this is the
+    // scenario the helper exists to handle (parent fan-out spawning, MCP
+    // tools firing in rapid succession). The library's monotonic-counter
+    // UUIDv7 default would collapse 2000 IDs into a handful of unique
+    // 24-char prefixes; our `generateId()` passes fresh random bytes per
+    // call (RFC 9562 method 3) so every prefix is unique.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      const ids = Array.from({ length: 2000 }, () => generateId());
+      // Confirm the test fixture actually pins the same ms — first 12 hex
+      // chars of UUIDv7 are the timestamp.
+      const tsPrefix = ids[0].replace(/-/g, '').slice(0, 12);
+      expect(ids.every((id) => id.replace(/-/g, '').startsWith(tsPrefix))).toBe(true);
+      const shorts = new Set(ids.map((id) => shortId(id)));
+      expect(shorts.size).toBe(ids.length);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
 describe('formatIdForDisplay', () => {
   const uuid = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' as UUID;
 
-  it('should return short ID by default', () => {
-    expect(formatIdForDisplay(uuid)).toBe('01933e4a');
+  it('should return canonical short ID by default', () => {
+    expect(formatIdForDisplay(uuid)).toBe('01933e4a7b897c35a8f39d2e');
   });
 
   it('should return full UUID when verbose', () => {
     expect(formatIdForDisplay(uuid, { verbose: true })).toBe(uuid);
-  });
-
-  it('should respect custom length', () => {
-    expect(formatIdForDisplay(uuid, { length: 12 })).toBe('01933e4a7b89');
   });
 });
 
@@ -318,6 +355,48 @@ describe('findByShortIdPrefix', () => {
     const iter = new Set(entities);
     const matches = findByShortIdPrefix('0193', iter);
     expect(matches).toHaveLength(3);
+  });
+});
+
+describe('prefixToLikePattern', () => {
+  // The whole point: stored IDs are hyphenated UUIDs, so the LIKE pattern
+  // must match that format. A bare-hex prefix that spans a hyphen
+  // boundary used to silently match nothing.
+  it('passes through a sub-8 prefix unchanged (no hyphen yet)', () => {
+    expect(prefixToLikePattern('019e0eca')).toBe('019e0eca%');
+    expect(prefixToLikePattern('019')).toBe('019%');
+  });
+
+  it('inserts a hyphen at position 8 for prefixes that cross it', () => {
+    expect(prefixToLikePattern('019e0eca0d2d')).toBe('019e0eca-0d2d%');
+    expect(prefixToLikePattern('019e0eca0d')).toBe('019e0eca-0d%');
+  });
+
+  it('inserts hyphens at the canonical positions 8, 12, 16, 20', () => {
+    expect(prefixToLikePattern('019e0eca0d2d7000')).toBe('019e0eca-0d2d-7000%');
+    expect(prefixToLikePattern('019e0eca0d2d70008000')).toBe('019e0eca-0d2d-7000-8000%');
+    expect(prefixToLikePattern('019e0eca0d2d7000800000000000')).toBe(
+      '019e0eca-0d2d-7000-8000-00000000%'
+    );
+  });
+
+  it('accepts already-hyphenated prefixes and re-emits canonical form', () => {
+    expect(prefixToLikePattern('019e0eca-0d2d')).toBe('019e0eca-0d2d%');
+    // Even malformed-but-equivalent hyphen placement normalizes correctly.
+    expect(prefixToLikePattern('019e0-eca0d2d')).toBe('019e0eca-0d2d%');
+  });
+
+  it('lowercases the prefix', () => {
+    expect(prefixToLikePattern('019E0ECA-0D2D')).toBe('019e0eca-0d2d%');
+  });
+
+  it('handles the full 32/36-char canonical UUID', () => {
+    expect(prefixToLikePattern('019e0eca0d2d7000800000000000abcd')).toBe(
+      '019e0eca-0d2d-7000-8000-00000000abcd%'
+    );
+    expect(prefixToLikePattern('019e0eca-0d2d-7000-8000-00000000abcd')).toBe(
+      '019e0eca-0d2d-7000-8000-00000000abcd%'
+    );
   });
 });
 

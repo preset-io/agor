@@ -5,7 +5,7 @@
  * `tools/list` and discover the rest via `agor_search_tools`. All tools
  * remain registered and callable; only the listing is filtered.
  *
- * Tools are organized into domains (e.g. "sessions", "worktrees", "cards")
+ * Tools are organized into domains (e.g. "sessions", "branches", "cards")
  * and support progressive detail levels and annotation filtering.
  */
 
@@ -43,14 +43,17 @@ export interface SearchOptions {
 const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   sessions: 'Agent conversations with genealogy (fork/spawn), task tracking, and message history',
   repos: 'Repository registration and management',
-  worktrees: 'Git worktrees with isolated branches, board placement, and zone pinning',
-  environment: 'Start/stop/health/logs/nuke for worktree dev environments',
-  boards: 'Spatial canvases with zones for organizing worktrees and cards',
+  branches:
+    'Branches — isolated workspaces (backed by git worktrees or self-standing clones) with their own git refs, board placement, and zone pinning.',
+  environment: 'Start/stop/health/logs/nuke for branch dev environments',
+  boards: 'Spatial canvases with zones for organizing branches and cards',
   cards: 'Kanban-style cards and card type definitions on boards',
   users: 'User accounts, profiles, preferences, and administration',
   analytics: 'Usage and cost tracking leaderboard',
   'mcp-servers': 'External MCP server configuration and OAuth management',
   proxies: 'Configured HTTP proxies for third-party APIs (Shortcut, Linear, Jira, etc.)',
+  widgets:
+    'In-conversation interactive widgets — agents render small forms/buttons inline in the transcript to capture user input that never enters the LLM context',
 };
 
 /** Tools always visible in `tools/list` even when search mode is enabled. */

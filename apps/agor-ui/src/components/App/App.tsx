@@ -5,6 +5,7 @@ import type {
   BoardComment,
   BoardEntityObject,
   BoardID,
+  Branch,
   CardType,
   CardWithType,
   CreateLocalRepoRequest,
@@ -19,7 +20,6 @@ import type {
   SpawnConfig,
   UpdateUserInput,
   User,
-  Worktree,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
 import { Layout, Upload } from 'antd';
@@ -33,23 +33,31 @@ import {
 import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { AppEntityDataProvider, AppLiveDataProvider } from '../../contexts/AppDataContext';
+import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
+import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { usePresence } from '../../hooks/usePresence';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
-import { useUrlState } from '../../hooks/useUrlState';
+import { type ActiveUrlTarget, useUrlState } from '../../hooks/useUrlState';
+import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import type { AgenticToolOption } from '../../types';
-import { createAssistantWorktree } from '../../utils/assistantCreation';
+import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
+import { createAssistantBranch } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
+import { useThemedMessage } from '../../utils/message';
+import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { AppHeader } from '../AppHeader';
-import { CommentsPanel } from '../CommentsPanel';
-import { CreateDialog } from '../CreateDialog';
+import type { BoardAssistantPanelTab } from '../BoardAssistantPanel';
+import { BoardAssistantPanel } from '../BoardAssistantPanel';
+import { BranchModal, type BranchModalTab } from '../BranchModal';
+import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
+import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
 import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
-import type { WorktreeTabConfig } from '../CreateDialog/tabs/WorktreeTab';
+import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { NewSessionButton } from '../NewSessionButton';
@@ -60,11 +68,17 @@ import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal, UserSettingsModal } from '../SettingsModal';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
-import { WorktreeListDrawer } from '../WorktreeListDrawer';
-import { WorktreeModal, type WorktreeModalTab } from '../WorktreeModal';
-import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
 
 const { Content } = Layout;
+
+/** Lives inside CanvasNavigationProvider so cross-board recenter calls can
+ *  ask App to switch boards. Renders nothing. */
+const BoardSwitcherBridge: React.FC<{ setCurrentBoardId: (id: string) => void }> = ({
+  setCurrentBoardId,
+}) => {
+  useRegisterBoardSwitcher(setCurrentBoardId);
+  return null;
+};
 
 export interface AppProps {
   client: AgorClient | null;
@@ -72,7 +86,7 @@ export interface AppProps {
   connected?: boolean;
   connecting?: boolean;
   sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
-  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree-scoped filtering
+  sessionsByBranch: Map<string, Session[]>; // O(1) branch-scoped filtering
   availableAgents: AgenticToolOption[];
   boardById: Map<string, Board>; // Map-based board storage
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
@@ -80,7 +94,7 @@ export interface AppProps {
   cardById: Map<string, CardWithType>; // Map-based card storage
   cardTypeById: Map<string, CardType>; // Map-based card type storage
   repoById: Map<string, Repo>; // Map-based repo storage
-  worktreeById: Map<string, Worktree>; // Efficient worktree lookups
+  branchById: Map<string, Branch>; // Efficient branch lookups
   userById: Map<string, User>; // Map-based user storage
   mcpServerById: Map<string, MCPServer>; // Map-based MCP server storage
   sessionMcpServerIds: Map<string, string[]>; // Map-based session-MCP relationships
@@ -90,8 +104,9 @@ export interface AppProps {
   onSettingsClose?: () => void; // Called when settings modal closes
   openUserSettings?: boolean; // Open user settings modal directly (e.g., from onboarding)
   onUserSettingsClose?: () => void; // Called when user settings modal closes
-  openNewWorktreeModal?: boolean; // Open new worktree modal
-  onNewWorktreeModalClose?: () => void; // Called when new worktree modal closes
+  openNewBranchModal?: boolean; // Open new branch modal
+  onNewBranchModalClose?: () => void; // Called when new branch modal closes
+  suppressLeftPanel?: boolean; // Temporarily hide the assistant/comments panel behind modal-first flows
   onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
@@ -99,7 +114,7 @@ export interface AppProps {
   onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;
-  onCreateBoard?: (board: Partial<Board>) => void;
+  onCreateBoard?: (board: Partial<Board>) => Promise<Board | null>;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
@@ -108,16 +123,16 @@ export interface AppProps {
   onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
-  onArchiveOrDeleteWorktree?: (
-    worktreeId: string,
+  onArchiveOrDeleteBranch?: (
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
-  onUnarchiveWorktree?: (worktreeId: string, options?: { boardId?: string }) => void;
-  onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
-  onCreateWorktree?: (
+  onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
+  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
+  onCreateBranch?: (
     repoId: string,
     data: {
       name: string;
@@ -128,17 +143,22 @@ export interface AppProps {
       pullLatest: boolean;
       issue_url?: string;
       pull_request_url?: string;
+      boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
+      position?: { x: number; y: number };
+      storage_mode?: 'worktree' | 'clone';
+      clone_depth?: number;
     }
-  ) => Promise<Worktree | null>;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
-  onNukeEnvironment?: (worktreeId: string) => void;
-  onExecuteScheduleNow?: (worktreeId: string) => Promise<void>;
+  ) => Promise<Branch | null>;
+  onStartEnvironment?: (branchId: string) => void;
+  onStopEnvironment?: (branchId: string) => void;
+  onNukeEnvironment?: (branchId: string) => void;
+  onExecuteScheduleNow?: (branchId: string) => Promise<void>;
   onCreateUser?: (data: CreateUserInput) => void;
   onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
-  onUpdateMCPServer?: (mcpServerId: string, updates: Partial<MCPServer>) => void;
   onDeleteMCPServer?: (mcpServerId: string) => void;
   gatewayChannelById: Map<string, GatewayChannel>;
   onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
@@ -169,13 +189,24 @@ export interface AppProps {
 // Frozen at runtime; the consuming components only read it.
 const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
 
+// 320px keeps the three left-panel tabs (Assistant / All sessions / Comments)
+// on one readable line with Ant's tab padding at the 768px desktop breakpoint.
+const LEFT_PANEL_MIN_WIDTH_PX = 320;
+const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
+
+const getLeftPanelMinSizePercent = (viewportWidth: number) =>
+  Math.min(LEFT_PANEL_MAX_SIZE_PERCENT, (LEFT_PANEL_MIN_WIDTH_PX / viewportWidth) * 100);
+
+const clampPercent = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
 export const App: React.FC<AppProps> = ({
   client,
   user,
   connected = false,
   connecting = false,
   sessionById,
-  sessionsByWorktree,
+  sessionsByBranch,
   availableAgents,
   boardById,
   boardObjectById,
@@ -183,7 +214,7 @@ export const App: React.FC<AppProps> = ({
   cardById,
   cardTypeById,
   repoById,
-  worktreeById,
+  branchById,
   userById,
   mcpServerById,
   sessionMcpServerIds,
@@ -193,8 +224,9 @@ export const App: React.FC<AppProps> = ({
   onSettingsClose,
   openUserSettings,
   onUserSettingsClose,
-  openNewWorktreeModal,
-  onNewWorktreeModalClose,
+  openNewBranchModal,
+  onNewBranchModalClose,
+  suppressLeftPanel = false,
   onCreateSession,
   onForkSession,
   onBtwForkSession,
@@ -211,10 +243,10 @@ export const App: React.FC<AppProps> = ({
   onCreateLocalRepo,
   onUpdateRepo,
   onDeleteRepo,
-  onArchiveOrDeleteWorktree,
-  onUnarchiveWorktree,
-  onUpdateWorktree,
-  onCreateWorktree,
+  onArchiveOrDeleteBranch,
+  onUnarchiveBranch,
+  onUpdateBranch,
+  onCreateBranch,
   onStartEnvironment,
   onStopEnvironment,
   onNukeEnvironment,
@@ -223,7 +255,6 @@ export const App: React.FC<AppProps> = ({
   onUpdateUser,
   onDeleteUser,
   onCreateMCPServer,
-  onUpdateMCPServer,
   onDeleteMCPServer,
   gatewayChannelById,
   onCreateGatewayChannel,
@@ -245,14 +276,27 @@ export const App: React.FC<AppProps> = ({
   instanceDescription,
   webTerminalEnabled = false,
 }) => {
+  const { showWarning } = useThemedMessage();
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
-  const [newSessionWorktreeId, setNewSessionWorktreeId] = useState<string | null>(null);
+  const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [newWorktreeDefaultPosition, setNewWorktreeDefaultPosition] = useState<{
+  const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<
+    'branch' | 'assistant' | 'board' | 'repository'
+  >('assistant');
+  const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
     x: number;
     y: number;
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const autoOpenedAssistantBoardRef = useRef<string | null>(null);
+  // Active URL deep-link target (branch or artifact). Folds into the
+  // unified dashed "selected" outline alongside `selectedSessionId` —
+  // both answer "what am I looking at right now?" so they share one
+  // visual.
+  const [activeUrlTarget, setActiveUrlTarget] = useState<ActiveUrlTarget | null>(null);
+  const activeUrlTargetBranchId = activeUrlTarget?.kind === 'branch' ? activeUrlTarget.id : null;
+  const activeUrlTargetArtifactId =
+    activeUrlTarget?.kind === 'artifact' ? activeUrlTarget.id : null;
 
   // Synchronously derive the effective session selection. When a session is
   // archived/deleted, it vanishes from sessionById. Without this, there is a
@@ -270,8 +314,24 @@ export const App: React.FC<AppProps> = ({
     [selectedSessionId, sessionById]
   );
 
-  const [listDrawerOpen, setListDrawerOpen] = useState(false);
+  const [leftPanelTab, setLeftPanelTab] = useState<BoardAssistantPanelTab>('assistant');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === 'undefined' ? 1440 : window.innerWidth
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const leftPanelMinSize = useMemo(
+    () => getLeftPanelMinSizePercent(viewportWidth),
+    [viewportWidth]
+  );
 
   // Settings modal state via URL routing
   const {
@@ -294,22 +354,37 @@ export const App: React.FC<AppProps> = ({
   // Initialize comments panel state from localStorage (collapsed by default)
   const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useLocalStorage<boolean>(
     'agor:commentsPanelCollapsed',
-    true
+    false
   );
 
-  // Comments panel size persistence (percentage of available width)
-  const [commentsPanelSize, setCommentsPanelSize] = useLocalStorage<number>(
-    'agor:commentsPanelSize',
-    25
+  // Left panel size persistence (percentage of available width), scoped per user.
+  const [commentsPanelSize, setCommentsPanelSize] = useUserLocalStorage<number>(
+    user?.user_id,
+    'panel:left:size',
+    24
   );
+
+  const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel;
 
   // Ref for programmatically controlling the comments panel
   const commentsPanelRef = useRef<ImperativePanelHandle>(null);
-  // Session panel size persistence (percentage of available width)
-  const [sessionPanelSize, setSessionPanelSize] = useLocalStorage<number>(
-    'agor:sessionPanelSize',
+  const effectiveCommentsPanelSize = clampPercent(
+    commentsPanelSize,
+    leftPanelMinSize,
+    LEFT_PANEL_MAX_SIZE_PERCENT
+  );
+
+  // Session panel size persistence (percentage of available width), scoped per user.
+  const [sessionPanelSize, setSessionPanelSize] = useUserLocalStorage<number>(
+    user?.user_id,
+    'panel:right:size',
     50
   );
+
+  const effectiveSessionPanelSize = clampPercent(sessionPanelSize, 15, 75);
+  const sessionPanelRef = useRef<ImperativePanelHandle>(null);
+  const leftPanelResizeDraggingRef = useRef(false);
+  const rightPanelResizeDraggingRef = useRef(false);
 
   // Comment highlight state (hover and sticky selection)
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
@@ -317,11 +392,11 @@ export const App: React.FC<AppProps> = ({
 
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
-  const [terminalWorktreeId, setTerminalWorktreeId] = useState<string | undefined>(undefined);
+  const [terminalBranchId, setTerminalBranchId] = useState<string | undefined>(undefined);
   const [sessionSettingsId, setSessionSettingsId] = useState<string | null>(null);
-  const [worktreeModalWorktreeId, setWorktreeModalWorktreeId] = useState<string | null>(null);
-  const [worktreeModalTab, setWorktreeModalTab] = useState<WorktreeModalTab | undefined>(undefined);
-  const [logsModalWorktreeId, setLogsModalWorktreeId] = useState<string | null>(null);
+  const [branchModalBranchId, setBranchModalBranchId] = useState<string | null>(null);
+  const [branchModalTab, setBranchModalTab] = useState<BranchModalTab | undefined>(undefined);
+  const [logsModalBranchId, setLogsModalBranchId] = useState<string | null>(null);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 
   // Initialize event stream panel state from localStorage (collapsed by default)
@@ -360,16 +435,23 @@ export const App: React.FC<AppProps> = ({
   // Subscribed globally so it fires regardless of which session panel is open.
   useTaskCompletionChime(client, user?.user_id, user?.preferences?.audio);
 
-  // Programmatically collapse/expand the comments panel when toggle state changes
+  // Programmatically collapse/expand the left panel when toggle/suppression state changes
   useEffect(() => {
     if (commentsPanelRef.current) {
-      if (commentsPanelCollapsed) {
+      if (leftPanelCollapsed) {
         commentsPanelRef.current.collapse();
       } else {
         commentsPanelRef.current.expand();
+        commentsPanelRef.current.resize(effectiveCommentsPanelSize);
       }
     }
-  }, [commentsPanelCollapsed]);
+  }, [effectiveCommentsPanelSize, leftPanelCollapsed]);
+
+  useEffect(() => {
+    if (sessionPanelRef.current && (effectiveSelectedSessionId || !eventStreamPanelCollapsed)) {
+      sessionPanelRef.current.resize(effectiveSessionPanelSize);
+    }
+  }, [effectiveSelectedSessionId, effectiveSessionPanelSize, eventStreamPanelCollapsed]);
 
   // URL state synchronization - bidirectional sync between URL and state
   useUrlState({
@@ -377,12 +459,27 @@ export const App: React.FC<AppProps> = ({
     currentSessionId: effectiveSelectedSessionId,
     boardById,
     sessionById,
+    branchById,
+    artifactById,
     onBoardChange: (boardId) => {
       setCurrentBoardIdInternal(boardId);
     },
     onSessionChange: (sessionId) => {
       setSelectedSessionId(sessionId);
     },
+    onActiveUrlTargetChange: setActiveUrlTarget,
+  });
+
+  // Central navigation API. Every deliberate "go to X" call site routes
+  // through this so the URL stays the single source of truth and the back
+  // button restores prior board+session+camera. The hook reads live data
+  // via refs internally so its function identities stay stable across
+  // socket churn — important because they flow into memoized children.
+  const navigation = useAppNavigation({
+    boardById,
+    sessionById,
+    branchById,
+    artifactById,
   });
 
   // Wrapper to update board ID (updates both state and URL via hook)
@@ -397,26 +494,37 @@ export const App: React.FC<AppProps> = ({
     [currentBoardId]
   );
 
-  // If the stored board no longer exists (e.g., deleted), fallback to first board
+  // If the stored board no longer exists (deleted/archived), fall back to the
+  // first board. Distinguish the two reasons `boardById` can be empty:
+  //   - Disconnected and data was never loaded, or was momentarily wiped by a
+  //     stale upstream effect → treat as transient, keep the id sticky so the
+  //     `/b/<id>` URL survives.
+  //   - Connected with an authoritative empty set (user deleted last board) →
+  //     clear the selection so we stop pointing at a tombstone.
   useEffect(() => {
+    if (boardById.size === 0) {
+      if (!connected) return;
+      if (currentBoardId) setCurrentBoardId('');
+      return;
+    }
     if (currentBoardId && !boardById.has(currentBoardId)) {
       const fallback = mapToArray(boardById)[0]?.board_id || '';
       setCurrentBoardId(fallback);
     }
-  }, [boardById, currentBoardId, setCurrentBoardId]);
+  }, [boardById, currentBoardId, setCurrentBoardId, connected]);
 
   // Recalculate default position when board changes while modal is open
-  // This ensures worktrees spawn at the center of the new board's viewport
+  // This ensures branches spawn at the center of the new board's viewport
   // biome-ignore lint/correctness/useExhaustiveDependencies: currentBoardId is intentionally included to trigger recalculation on board switch
   useEffect(() => {
     if (createDialogOpen) {
       const center = sessionCanvasRef.current?.getViewportCenter();
-      setNewWorktreeDefaultPosition(center || null);
+      setNewBranchDefaultPosition(center || null);
     }
   }, [currentBoardId, createDialogOpen]);
 
   // Update favicon based on session activity on current board
-  useFaviconStatus(currentBoardId, sessionsByWorktree, mapToArray(boardObjectById));
+  useFaviconStatus(currentBoardId, sessionsByBranch, mapToArray(boardObjectById));
 
   // Check if event stream is enabled in user preferences (default: true)
   const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? true;
@@ -427,9 +535,9 @@ export const App: React.FC<AppProps> = ({
     enabled: !eventStreamPanelCollapsed,
   });
 
-  const handleOpenTerminal = useCallback((commands: string[] = [], worktreeId?: string) => {
+  const handleOpenTerminal = useCallback((commands: string[] = [], branchId?: string) => {
     setTerminalCommands(commands);
-    setTerminalWorktreeId(worktreeId);
+    setTerminalBranchId(branchId);
     setTerminalOpen(true);
   }, []);
 
@@ -438,6 +546,7 @@ export const App: React.FC<AppProps> = ({
   // render — that propagated into the canvas's `initialNodes` useMemo deps
   // and triggered a full node-list recompute on every socket event.
   const handleOpenCommentsPanel = useCallback(() => {
+    setLeftPanelTab('comments');
     setCommentsPanelCollapsed(false);
   }, [setCommentsPanelCollapsed]);
 
@@ -448,28 +557,39 @@ export const App: React.FC<AppProps> = ({
 
   // Stable handler so SessionPanel's React.memo bailout isn't defeated by a
   // fresh inline arrow on every App render (App re-renders on every live patch).
+  // Routes through URL nav so the back button works (push, not replace).
+  // With the flat entity-URL scheme there's no `closeSession` — closing
+  // the panel is the same as navigating to the board we're already on.
   const handleCloseSessionPanel = useCallback(() => {
-    setSelectedSessionId(null);
-  }, []);
+    if (currentBoardId) navigation.goToBoard(currentBoardId);
+  }, [navigation, currentBoardId]);
 
   const handleCloseTerminal = () => {
     setTerminalOpen(false);
     setTerminalCommands([]);
-    setTerminalWorktreeId(undefined);
+    setTerminalBranchId(undefined);
   };
 
   const handleCreateSession = async (config: NewSessionConfig) => {
     const sessionId = await onCreateSession?.(config, currentBoardId);
-    setNewSessionWorktreeId(null);
+    setNewSessionBranchId(null);
 
-    // If session was created successfully, open the drawer to show it
+    // Route through the URL so useUrlState owns selection — setting
+    // selectedSessionId directly raced with the cleanup effect (and the
+    // state→URL self-heal) before the socket `created` event arrived.
     if (sessionId) {
-      setSelectedSessionId(sessionId);
+      navigation.goToSession(sessionId);
     }
   };
 
-  const handleCreateWorktree = async (config: WorktreeTabConfig) => {
-    const worktree = await onCreateWorktree?.(config.repoId, {
+  const handleCreateBranch = async (config: BranchTabConfig) => {
+    // Thread board placement (boardId + position) through the create
+    // call so it lands atomically. The previous shape did a follow-up
+    // PATCH for board_id and dropped position entirely — the API already
+    // accepts both at create time, so the patch is redundant and the
+    // dropped position made the BranchTab `defaultPosition` plumbing a
+    // no-op.
+    const branch = await onCreateBranch?.(config.repoId, {
       name: config.name,
       ref: config.ref,
       refType: config.refType,
@@ -478,51 +598,132 @@ export const App: React.FC<AppProps> = ({
       pullLatest: config.pullLatest,
       issue_url: config.issue_url,
       pull_request_url: config.pull_request_url,
+      ...(config.board_id ? { boardId: config.board_id } : {}),
+      ...(config.position ? { position: config.position } : {}),
+      ...(config.storage_mode ? { storage_mode: config.storage_mode } : {}),
+      ...(config.clone_depth !== undefined ? { clone_depth: config.clone_depth } : {}),
     });
 
-    // If board_id is provided and worktree was created, assign it to the board
-    if (worktree && config.board_id) {
-      await onUpdateWorktree?.(worktree.worktree_id, {
-        board_id: config.board_id as BoardID,
-      });
-    }
-
     setCreateDialogOpen(false);
+
+    // Mirror handleCreateSession: route through the URL so useUrlState
+    // owns selection. The just-created branch may not be in branchById
+    // yet (socket `created` event still in flight) — goToBranch pushes
+    // `/w/<short>/` unconditionally and useUrlState's URL→state effect
+    // resolves the branch on a subsequent render to switch boards (if
+    // needed) and recenter the canvas.
+    if (branch) {
+      navigation.goToBranch(branch.branch_id);
+    }
   };
 
-  const handleCreateAssistant = async (result: AssistantTabResult) => {
-    const repoId = result.repoId;
-    if (!repoId || !onCreateWorktree || !onUpdateWorktree) return;
+  const handleCreateBoardFromDialog = async (board: Partial<Board>) => {
+    if (!onCreateBoard) return;
+    const created = await onCreateBoard(board);
+    // Boards have their own URL (/b/<slug-or-short>/) — switch to the
+    // new board after creation so the user lands on the empty canvas
+    // they're about to populate. Same intent as goToBranch/goToSession
+    // after their respective creates.
+    if (created?.board_id) {
+      navigation.goToBoard(created.board_id);
+    }
+  };
 
-    await createAssistantWorktree(
+  const handleCreateAssistant = async (
+    result: AssistantTabResult,
+    progress?: CreateDialogProgress
+  ) => {
+    const repoId = result.repoId;
+    if (!repoId || !onCreateBranch || !onUpdateBranch) {
+      throw new Error('Missing repository or branch creation handler for assistant creation.');
+    }
+
+    progress?.onStatusChange?.('Creating assistant branch…');
+
+    const branch = await createAssistantBranch(
       {
         displayName: result.displayName,
         description: result.description,
         emoji: result.emoji,
-        boardChoice: result.boardChoice,
         repoId,
-        worktreeName: result.worktreeName,
+        branchName: result.branchName,
         sourceBranch: result.sourceBranch,
       },
-      { client, repoById, onCreateWorktree, onUpdateWorktree }
+      { client, repoById, onCreateBranch, onUpdateBranch }
     );
+
+    if (!branch) {
+      throw new Error(
+        'Assistant branch could not be created. Please check the branch details and try again.'
+      );
+    }
+
+    const sessionConfig: NewSessionConfig = {
+      branch_id: branch.branch_id,
+      agent: result.agent,
+      title: `${result.emoji ? `${result.emoji} ` : ''}${result.displayName} bootstrap`,
+      initialPrompt: buildAssistantBootstrapPrompt({
+        displayName: result.displayName,
+        emoji: result.emoji,
+        description: result.description,
+        userName: user?.name,
+        userEmail: user?.email,
+      }),
+      modelConfig: result.modelConfig,
+      effort: result.effort,
+      mcpServerIds: result.mcpServerIds,
+      permissionMode: result.permissionMode,
+      codexSandboxMode: result.codexSandboxMode,
+      codexApprovalPolicy: result.codexApprovalPolicy,
+      codexNetworkAccess: result.codexNetworkAccess,
+    };
+
+    try {
+      if (!onCreateSession) {
+        throw new Error('Missing session creation handler.');
+      }
+      const sessionId = await startAssistantBootstrapSession({
+        client,
+        branchId: branch.branch_id,
+        boardId: branch.board_id || currentBoardId,
+        sessionConfig,
+        onCreateSession,
+        onStatusChange: progress?.onStatusChange,
+      });
+      navigation.goToSession(sessionId);
+      return;
+    } catch (error) {
+      console.error('Assistant session bootstrap failed:', error);
+      showWarning(
+        `Assistant branch was created, but the first session could not start: ${
+          error instanceof Error ? error.message : String(error)
+        }. Opening the branch instead.`,
+        { key: 'assistant-bootstrap-session', duration: 8 }
+      );
+    }
+
+    // If the branch was created but the session failed, still take the user
+    // to the assistant branch so the created assistant is not lost. The
+    // top-level create-session handler surfaces the failure toast.
+    progress?.onStatusChange?.('Opening assistant branch…');
+    navigation.goToBranch(branch.branch_id);
   };
 
-  // Refs for the data this handler reads. Using refs (vs useCallback deps)
-  // means `handleSessionClick` keeps a stable identity across renders even
-  // as `sessionById` / `worktreeById` change on every socket event. Without
-  // this, the handler reference flips on every patch and gets passed into
-  // SessionCanvas → initialNodes deps → recomputed → every WorktreeCard
-  // memo fails. Pattern: ref holds latest values; closure never changes.
+  // Refs for the data `handleSessionClick` reads. Using refs (vs
+  // useCallback deps) keeps the handler's identity stable across
+  // socket-driven map churn — important because it flows through
+  // SessionCanvas → initialNodes deps and a flipping identity would
+  // cascade re-renders into every BranchCard. Inline `useRef(...)`
+  // rather than going through a helper so biome's
+  // `useExhaustiveDependencies` heuristic recognizes the refs as
+  // stable and doesn't false-positive on `.current.get` reads.
   const sessionByIdRef = useRef(sessionById);
   sessionByIdRef.current = sessionById;
-  const worktreeByIdRef = useRef(worktreeById);
-  worktreeByIdRef.current = worktreeById;
+  const branchByIdRef = useRef(branchById);
+  branchByIdRef.current = branchById;
 
   const handleSessionClick = useCallback(
     (sessionId: string) => {
-      setSelectedSessionId(sessionId);
-
       const session = sessionByIdRef.current.get(sessionId);
 
       // Best-effort: clear highlight flags when opening the conversation.
@@ -535,17 +736,20 @@ export const App: React.FC<AppProps> = ({
           .catch(() => {});
       }
 
-      const worktree = session?.worktree_id
-        ? worktreeByIdRef.current.get(session.worktree_id)
-        : undefined;
-      if (client && worktree?.needs_attention) {
+      const branch = session?.branch_id ? branchByIdRef.current.get(session.branch_id) : undefined;
+      if (client && branch?.needs_attention) {
         client
-          .service('worktrees')
-          .patch(worktree.worktree_id, { needs_attention: false })
+          .service('branches')
+          .patch(branch.branch_id, { needs_attention: false })
           .catch(() => {});
       }
+
+      // Route through URL nav so deep links / back-forward / cross-board
+      // recenter all funnel through the same pipe. setSelectedSessionId
+      // happens via useUrlState's onSessionChange callback.
+      navigation.goToSession(sessionId);
     },
-    [client]
+    [client, navigation]
   );
 
   const handlePermissionDecision = useCallback(
@@ -567,7 +771,7 @@ export const App: React.FC<AppProps> = ({
           reason: allow ? 'Approved by user' : 'Denied by user',
           remember: scope !== PermissionScope.ONCE, // Only remember if not 'once'
           scope,
-          decidedBy: user?.user_id || 'anonymous',
+          decidedBy: user?.user_id || 'unknown',
         });
       } catch (error) {
         console.error('❌ Failed to send permission decision:', error);
@@ -576,37 +780,10 @@ export const App: React.FC<AppProps> = ({
     [client, user?.user_id]
   );
 
-  const handleInputResponse = useCallback(
-    async (
-      sessionId: string,
-      requestId: string,
-      taskId: string,
-      answers: Record<string, string>,
-      annotations?: Record<string, { markdown?: string; notes?: string }>
-    ) => {
-      if (!client) return;
-
-      try {
-        await client.service(`sessions/${sessionId}/input-response`).create({
-          requestId,
-          taskId,
-          answers,
-          annotations,
-          respondedBy: user?.user_id || 'anonymous',
-        });
-      } catch (error) {
-        console.error('Failed to send input response:', error);
-      }
-    },
-    [client, user?.user_id]
-  );
-
   const selectedSession = effectiveSelectedSessionId
     ? sessionById.get(effectiveSelectedSessionId) || null
     : null;
-  const selectedSessionWorktree = selectedSession
-    ? worktreeById.get(selectedSession.worktree_id)
-    : null;
+  const selectedSessionBranch = selectedSession ? branchById.get(selectedSession.branch_id) : null;
 
   // Sync the actual state when a session disappears (for URL, localStorage, etc.).
   // The rendering already uses effectiveSelectedSessionId so this is cosmetic.
@@ -618,58 +795,57 @@ export const App: React.FC<AppProps> = ({
 
   const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
   const currentBoard = boardById.get(currentBoardId);
+  const primaryAssistantId = currentBoard?.primary_assistant_id ?? null;
+  const primaryAssistantBranch = primaryAssistantId
+    ? branchById.get(primaryAssistantId)
+    : undefined;
+  const primaryAssistantRepo = primaryAssistantBranch
+    ? repoById.get(primaryAssistantBranch.repo_id)
+    : undefined;
+  const primaryAssistantInaccessible = Boolean(primaryAssistantId && !primaryAssistantBranch);
+
+  useEffect(() => {
+    if (!currentBoard || !primaryAssistantBranch || effectiveSelectedSessionId) return;
+    if (autoOpenedAssistantBoardRef.current === currentBoard.board_id) return;
+    const latestSession = (sessionsByBranch.get(primaryAssistantBranch.branch_id) || [])
+      .filter((session) => !session.archived)
+      .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime())[0];
+    if (latestSession) {
+      autoOpenedAssistantBoardRef.current = currentBoard.board_id;
+      navigation.goToSession(latestSession.session_id);
+    }
+  }, [
+    currentBoard,
+    primaryAssistantBranch,
+    sessionsByBranch,
+    effectiveSelectedSessionId,
+    navigation,
+  ]);
 
   // Update browser tab title based on current board
   useBoardTitle(currentBoard);
 
-  // Find worktree and repo for WorktreeModal
-  const selectedWorktree = worktreeModalWorktreeId
-    ? worktreeById.get(worktreeModalWorktreeId)
-    : null;
-  const selectedWorktreeRepo = selectedWorktree ? repoById.get(selectedWorktree.repo_id) : null;
-  const worktreeSessions = selectedWorktree
-    ? sessionsByWorktree.get(selectedWorktree.worktree_id) || []
-    : [];
+  // Find branch and repo for BranchModal
+  const selectedBranch = branchModalBranchId ? branchById.get(branchModalBranchId) : null;
+  const selectedBranchRepo = selectedBranch ? repoById.get(selectedBranch.repo_id) : null;
+  const branchSessions = selectedBranch ? sessionsByBranch.get(selectedBranch.branch_id) || [] : [];
 
-  // Find worktree for NewSessionModal
-  const newSessionWorktree = newSessionWorktreeId ? worktreeById.get(newSessionWorktreeId) : null;
+  // Find branch for NewSessionModal
+  const newSessionBranch = newSessionBranchId ? branchById.get(newSessionBranchId) : null;
 
-  // Filter worktrees by current board (via board_objects). Memoized so that
+  // Filter branches by current board (via board_objects). Memoized so that
   // unrelated socket churn (e.g. another user's session patch) doesn't
   // produce a fresh array reference on every render — that array flows into
   // SessionCanvas's `initialNodes` deps and would otherwise cascade into
-  // every WorktreeCard re-rendering.
-  const boardWorktrees = useMemo(
+  // every BranchCard re-rendering.
+  const boardBranches = useMemo(
     () =>
       mapToArray(boardObjectById)
-        .filter((bo: BoardEntityObject) => bo.board_id === currentBoard?.board_id && bo.worktree_id)
-        .map((bo: BoardEntityObject) => worktreeById.get(bo.worktree_id!))
-        .filter((wt): wt is Worktree => wt !== undefined),
-    [boardObjectById, currentBoard?.board_id, worktreeById]
+        .filter((bo: BoardEntityObject) => bo.board_id === currentBoard?.board_id && bo.branch_id)
+        .map((bo: BoardEntityObject) => branchById.get(bo.branch_id!))
+        .filter((wt): wt is Branch => wt !== undefined),
+    [boardObjectById, currentBoard?.board_id, branchById]
   );
-
-  // Track global presence for navbar facepile (across all boards)
-  const { activeUsers: globalActiveUsers } = usePresence({
-    client,
-    boardId: currentBoard?.board_id as BoardID | null,
-    users: mapToArray(userById),
-    enabled: !!client,
-    globalPresence: true,
-  });
-
-  // Include current user in the global facepile (always first)
-  // Filter out current user from globalActiveUsers to avoid duplication
-  const allActiveUsers = user
-    ? [
-        {
-          user,
-          lastSeen: Date.now(),
-          boardId: currentBoard?.board_id,
-          cursor: undefined, // Current user doesn't have a remote cursor
-        },
-        ...globalActiveUsers.filter((activeUser) => activeUser.user.user_id !== user.user_id),
-      ]
-    : globalActiveUsers;
 
   // Check if current user is mentioned in active comments
   const activeComments = mapToArray(commentById).filter(
@@ -691,7 +867,7 @@ export const App: React.FC<AppProps> = ({
     });
 
   // Two separately memoized context values so that high-frequency live
-  // updates (sessions / worktrees / boards / board-objects / comments)
+  // updates (sessions / branches / boards / board-objects / comments)
   // don't invalidate the slow-moving entity context that SessionPanel etc.
   // subscribe to. See AppDataContext for the rationale.
   const appEntityDataValue = useMemo(
@@ -707,16 +883,16 @@ export const App: React.FC<AppProps> = ({
   const appLiveDataValue = useMemo(
     () => ({
       sessionById,
-      worktreeById,
-      sessionsByWorktree,
+      branchById,
+      sessionsByBranch,
     }),
-    [sessionById, worktreeById, sessionsByWorktree]
+    [sessionById, branchById, sessionsByBranch]
   );
 
   // Web terminal is gated by both the instance-level feature flag and the
   // user's role (`WEB_TERMINAL_MIN_ROLE`, shared with TerminalModal so the
   // threshold lives in one place). When disabled, we pass `undefined` so
-  // consumers (WorktreeCard, SessionPanel, EventStreamPanel) can hide their
+  // consumers (BranchCard, SessionPanel, EventStreamPanel) can hide their
   // terminal buttons via `{onOpenTerminal && ...}`.
   const canOpenTerminal = webTerminalEnabled && hasMinimumRole(user?.role, WEB_TERMINAL_MIN_ROLE);
 
@@ -730,15 +906,15 @@ export const App: React.FC<AppProps> = ({
       onUpdateSession,
       onDeleteSession,
       onPermissionDecision: handlePermissionDecision,
-      onInputResponse: handleInputResponse,
       onStartEnvironment,
       onStopEnvironment,
       onNukeEnvironment,
-      onViewLogs: (worktreeId: string) => setLogsModalWorktreeId(worktreeId),
+      onViewLogs: (branchId: string) => setLogsModalBranchId(branchId),
       onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
-      onOpenWorktree: (worktreeId: string, tab?: WorktreeModalTab) => {
-        setWorktreeModalWorktreeId(worktreeId);
-        setWorktreeModalTab(tab);
+      onSessionClick: handleSessionClick,
+      onOpenBranch: (branchId: string, tab?: BranchModalTab) => {
+        setBranchModalBranchId(branchId);
+        setBranchModalTab(tab);
       },
       onOpenTerminal: canOpenTerminal ? handleOpenTerminal : undefined,
     }),
@@ -750,10 +926,10 @@ export const App: React.FC<AppProps> = ({
       onUpdateSession,
       onDeleteSession,
       handlePermissionDecision,
-      handleInputResponse,
       onStartEnvironment,
       onStopEnvironment,
       onNukeEnvironment,
+      handleSessionClick,
       handleOpenTerminal,
       canOpenTerminal,
     ]
@@ -763,19 +939,24 @@ export const App: React.FC<AppProps> = ({
     <AppEntityDataProvider value={appEntityDataValue}>
       <AppLiveDataProvider value={appLiveDataValue}>
         <AppActionsProvider value={appActionsValue}>
+          <BoardSwitcherBridge setCurrentBoardId={setCurrentBoardId} />
           <Layout style={{ height: '100vh' }}>
             <AppHeader
               user={user}
-              activeUsers={allActiveUsers}
+              presenceClient={client}
+              presenceUsers={mapToArray(userById)}
               currentUserId={user?.user_id}
               connected={connected}
               connecting={connecting}
-              onMenuClick={() => setListDrawerOpen(true)}
-              onCommentsClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+              onMenuClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+              onCommentsClick={() => {
+                setLeftPanelTab('comments');
+                setCommentsPanelCollapsed(false);
+              }}
               onEventStreamClick={() => {
                 // If session is open, close it and show event stream
                 if (effectiveSelectedSessionId) {
-                  setSelectedSessionId(null);
+                  if (currentBoardId) navigation.goToBoard(currentBoardId);
                   setEventStreamPanelCollapsed(false);
                 } else {
                   // Toggle event stream panel
@@ -796,17 +977,18 @@ export const App: React.FC<AppProps> = ({
               hasUserMentions={hasUserMentions}
               boards={mapToArray(boardById)}
               currentBoardId={currentBoardId}
-              onBoardChange={setCurrentBoardId}
-              worktreeById={worktreeById}
+              onBoardChange={navigation.goToBoard}
+              branchById={branchById}
               boardById={boardById}
               onUserClick={(
                 userId: string,
                 boardId?: BoardID,
                 cursor?: { x: number; y: number }
               ) => {
-                // Navigate to the user's board
+                // Navigate to the user's board (pushes history, so back
+                // button returns to the previous board)
                 if (boardId) {
-                  setCurrentBoardId(boardId);
+                  navigation.goToBoard(boardId);
                   // TODO: If cursor position is provided, we could pan to that position
                   // This would require exposing a method on SessionCanvasRef
                 }
@@ -814,6 +996,9 @@ export const App: React.FC<AppProps> = ({
               instanceLabel={instanceLabel}
               recentBoards={recentBoards}
               instanceDescription={instanceDescription}
+              sessionById={sessionById}
+              artifactById={artifactById}
+              mcpServerById={mcpServerById}
             />
             <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
               <PanelGroup
@@ -821,36 +1006,66 @@ export const App: React.FC<AppProps> = ({
                 direction="horizontal"
                 style={{ flex: 1 }}
                 onLayout={(sizes) => {
-                  // Save left panel size when user resizes (only when panel is open)
-                  if (!commentsPanelCollapsed && sizes.length >= 2) {
+                  // Persist only user drag updates. Programmatic resizing enforces
+                  // the responsive minimum without clobbering the user's desired size.
+                  if (
+                    !leftPanelCollapsed &&
+                    leftPanelResizeDraggingRef.current &&
+                    sizes.length >= 2
+                  ) {
                     // Comments panel is the first panel (index 0)
-                    setCommentsPanelSize(sizes[0]);
+                    setCommentsPanelSize(
+                      clampPercent(sizes[0], leftPanelMinSize, LEFT_PANEL_MAX_SIZE_PERCENT)
+                    );
                   }
                 }}
               >
                 <Panel
-                  id="comments-panel"
+                  id="assistant-panel"
                   order={1}
                   ref={commentsPanelRef}
                   collapsible
-                  defaultSize={commentsPanelCollapsed ? 0 : commentsPanelSize}
+                  defaultSize={leftPanelCollapsed ? 0 : effectiveCommentsPanelSize}
                   collapsedSize={0}
-                  minSize={commentsPanelCollapsed ? 0 : 15}
-                  maxSize={40}
+                  minSize={leftPanelCollapsed ? 0 : leftPanelMinSize}
+                  maxSize={LEFT_PANEL_MAX_SIZE_PERCENT}
+                  style={{ minWidth: leftPanelCollapsed ? 0 : LEFT_PANEL_MIN_WIDTH_PX }}
                 >
-                  {!commentsPanelCollapsed && (
-                    <CommentsPanel
+                  {!leftPanelCollapsed && (
+                    <BoardAssistantPanel
                       client={client}
-                      boardId={currentBoardId || ''}
+                      board={currentBoard || null}
+                      activeTab={leftPanelTab}
+                      onTabChange={setLeftPanelTab}
+                      primaryAssistantBranch={primaryAssistantBranch}
+                      primaryAssistantRepo={primaryAssistantRepo}
+                      primaryAssistantInaccessible={primaryAssistantInaccessible}
+                      sessionsByBranch={sessionsByBranch}
+                      branchById={branchById}
+                      repoById={repoById}
+                      userById={userById}
+                      currentUserId={user?.user_id}
+                      selectedSessionId={effectiveSelectedSessionId}
+                      onSessionClick={handleSessionClick}
+                      onCreateSession={setNewSessionBranchId}
+                      onForkSession={onForkSession}
+                      onSpawnSession={onSpawnSession}
+                      onArchiveOrDelete={onArchiveOrDeleteBranch}
+                      onOpenSettings={(branchId, tab) => {
+                        setBranchModalBranchId(branchId);
+                        setBranchModalTab(tab);
+                      }}
+                      onOpenSessionSettings={setSessionSettingsId}
+                      onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
+                      onStartEnvironment={onStartEnvironment}
+                      onStopEnvironment={onStopEnvironment}
+                      onViewLogs={setLogsModalBranchId}
+                      onNukeEnvironment={onNukeEnvironment}
+                      onExecuteScheduleNow={onExecuteScheduleNow}
                       comments={mapToArray(commentById).filter(
                         (c: BoardComment) => c.board_id === currentBoardId
                       )}
-                      userById={userById}
-                      currentUserId={user?.user_id || 'anonymous'}
                       boardObjects={currentBoard?.objects}
-                      worktreeById={worktreeById}
-                      collapsed={commentsPanelCollapsed}
-                      onToggleCollapse={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
                       onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
                       onReplyComment={onReplyComment}
                       onResolveComment={onResolveComment}
@@ -863,20 +1078,23 @@ export const App: React.FC<AppProps> = ({
                 </Panel>
                 <PanelResizeHandle
                   style={{
-                    width: commentsPanelCollapsed ? '0px' : '4px',
+                    width: leftPanelCollapsed ? '0px' : '4px',
                     background: 'var(--ant-color-border-secondary)',
-                    cursor: commentsPanelCollapsed ? 'default' : 'col-resize',
+                    cursor: leftPanelCollapsed ? 'default' : 'col-resize',
                     transition: 'background 0.2s',
-                    pointerEvents: commentsPanelCollapsed ? 'none' : 'auto',
+                    pointerEvents: leftPanelCollapsed ? 'none' : 'auto',
+                  }}
+                  onDragging={(isDragging) => {
+                    leftPanelResizeDraggingRef.current = isDragging;
                   }}
                   onMouseEnter={(e) => {
-                    if (!commentsPanelCollapsed) {
+                    if (!leftPanelCollapsed) {
                       (e.currentTarget as unknown as HTMLDivElement).style.background =
                         'var(--ant-color-primary)';
                     }
                   }}
                   onMouseLeave={(e) => {
-                    if (!commentsPanelCollapsed) {
+                    if (!leftPanelCollapsed) {
                       (e.currentTarget as unknown as HTMLDivElement).style.background =
                         'var(--ant-color-border-secondary)';
                     }
@@ -885,7 +1103,7 @@ export const App: React.FC<AppProps> = ({
                 <Panel
                   id="content-panel"
                   order={2}
-                  defaultSize={commentsPanelCollapsed ? 100 : 100 - commentsPanelSize}
+                  defaultSize={leftPanelCollapsed ? 100 : 100 - effectiveCommentsPanelSize}
                   minSize={40}
                 >
                   <PanelGroup
@@ -893,16 +1111,23 @@ export const App: React.FC<AppProps> = ({
                     direction="horizontal"
                     style={{ flex: 1 }}
                     onLayout={(sizes) => {
-                      // Save right panel size when user resizes (only when panel is open)
-                      if (effectiveSelectedSessionId && sizes.length === 2) {
-                        setSessionPanelSize(sizes[1]);
+                      // Persist only user drag updates so panel open/close and
+                      // programmatic restores do not overwrite the user's preference.
+                      if (
+                        effectiveSelectedSessionId &&
+                        rightPanelResizeDraggingRef.current &&
+                        sizes.length === 2
+                      ) {
+                        setSessionPanelSize(clampPercent(sizes[1], 15, 75));
                       }
                     }}
                   >
                     <Panel
                       id="canvas-panel"
                       order={1}
-                      defaultSize={effectiveSelectedSessionId ? 100 - sessionPanelSize : 100}
+                      defaultSize={
+                        effectiveSelectedSessionId ? 100 - effectiveSessionPanelSize : 100
+                      }
                       minSize={20}
                     >
                       <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
@@ -911,16 +1136,19 @@ export const App: React.FC<AppProps> = ({
                           board={currentBoard || null}
                           client={client}
                           sessionById={sessionById}
-                          sessionsByWorktree={sessionsByWorktree}
+                          sessionsByBranch={sessionsByBranch}
                           userById={userById}
                           repoById={repoById}
-                          worktrees={boardWorktrees}
-                          worktreeById={worktreeById}
+                          branches={boardBranches}
+                          primaryAssistantId={primaryAssistantId}
+                          branchById={branchById}
                           boardObjectById={boardObjectById}
                           commentById={commentById}
                           cardById={cardById}
                           currentUserId={user?.user_id}
                           selectedSessionId={effectiveSelectedSessionId}
+                          activeUrlTargetBranchId={activeUrlTargetBranchId}
+                          activeUrlTargetArtifactId={activeUrlTargetArtifactId}
                           availableAgents={availableAgents}
                           mcpServerById={mcpServerById}
                           sessionMcpServerIds={sessionMcpServerIds}
@@ -931,13 +1159,13 @@ export const App: React.FC<AppProps> = ({
                           onSpawnSession={onSpawnSession}
                           onUpdateSessionMcpServers={onUpdateSessionMcpServers}
                           onOpenSettings={setSessionSettingsId}
-                          onCreateSessionForWorktree={setNewSessionWorktreeId}
-                          onOpenWorktree={setWorktreeModalWorktreeId}
-                          onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
+                          onCreateSessionForBranch={setNewSessionBranchId}
+                          onOpenBranch={setBranchModalBranchId}
+                          onArchiveOrDeleteBranch={onArchiveOrDeleteBranch}
                           onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
                           onStartEnvironment={onStartEnvironment}
                           onStopEnvironment={onStopEnvironment}
-                          onViewLogs={setLogsModalWorktreeId}
+                          onViewLogs={setLogsModalBranchId}
                           onNukeEnvironment={onNukeEnvironment}
                           onOpenCommentsPanel={handleOpenCommentsPanel}
                           onCommentHover={setHoveredCommentId}
@@ -946,7 +1174,8 @@ export const App: React.FC<AppProps> = ({
                         <NewSessionButton
                           onClick={() => {
                             const center = sessionCanvasRef.current?.getViewportCenter();
-                            setNewWorktreeDefaultPosition(center || null);
+                            setNewBranchDefaultPosition(center || null);
+                            setCreateDialogDefaultTab('assistant');
                             setCreateDialogOpen(true);
                           }}
                         />
@@ -961,6 +1190,9 @@ export const App: React.FC<AppProps> = ({
                             cursor: 'col-resize',
                             transition: 'background 0.2s',
                           }}
+                          onDragging={(isDragging) => {
+                            rightPanelResizeDraggingRef.current = isDragging;
+                          }}
                           onMouseEnter={(e) => {
                             (e.currentTarget as unknown as HTMLDivElement).style.background =
                               'var(--ant-color-primary)';
@@ -973,7 +1205,8 @@ export const App: React.FC<AppProps> = ({
                         <Panel
                           id="session-panel"
                           order={2}
-                          defaultSize={sessionPanelSize}
+                          ref={sessionPanelRef}
+                          defaultSize={effectiveSessionPanelSize}
                           minSize={15}
                           maxSize={75}
                         >
@@ -981,7 +1214,7 @@ export const App: React.FC<AppProps> = ({
                             <SessionPanel
                               client={client}
                               session={selectedSession}
-                              worktree={selectedSessionWorktree}
+                              branch={selectedSessionBranch}
                               currentUserId={user?.user_id}
                               sessionMcpServerIds={
                                 sessionMcpServerIds.get(effectiveSelectedSessionId) ??
@@ -1000,12 +1233,10 @@ export const App: React.FC<AppProps> = ({
                               selectedSessionId={effectiveSelectedSessionId}
                               currentBoard={currentBoard}
                               client={client}
-                              worktreeActions={{
+                              branchActions={{
                                 onSessionClick: handleSessionClick,
-                                onCreateSession: (worktreeId) =>
-                                  setNewSessionWorktreeId(worktreeId),
-                                onOpenSettings: (worktreeId) =>
-                                  setWorktreeModalWorktreeId(worktreeId),
+                                onCreateSession: (branchId) => setNewSessionBranchId(branchId),
+                                onOpenSettings: (branchId) => setBranchModalBranchId(branchId),
                                 onNukeEnvironment,
                               }}
                             />
@@ -1025,14 +1256,14 @@ export const App: React.FC<AppProps> = ({
               openFileDialogOnClick={false}
               showUploadList={false}
             />
-            {newSessionWorktreeId && (
+            {newSessionBranchId && (
               <NewSessionModal
                 open={true}
-                onClose={() => setNewSessionWorktreeId(null)}
+                onClose={() => setNewSessionBranchId(null)}
                 onCreate={handleCreateSession}
                 availableAgents={availableAgents}
-                worktreeId={newSessionWorktreeId}
-                worktree={newSessionWorktree || undefined}
+                branchId={newSessionBranchId}
+                branch={newSessionBranch || undefined}
                 mcpServerById={mcpServerById}
                 currentUser={user}
                 client={client}
@@ -1050,9 +1281,9 @@ export const App: React.FC<AppProps> = ({
               boardById={boardById}
               boardObjects={mapToArray(boardObjectById)}
               repoById={repoById}
-              worktreeById={worktreeById}
+              branchById={branchById}
               sessionById={sessionById}
-              sessionsByWorktree={sessionsByWorktree}
+              sessionsByBranch={sessionsByBranch}
               userById={userById}
               mcpServerById={mcpServerById}
               cardById={cardById}
@@ -1075,17 +1306,16 @@ export const App: React.FC<AppProps> = ({
               onCreateLocalRepo={onCreateLocalRepo}
               onUpdateRepo={onUpdateRepo}
               onDeleteRepo={onDeleteRepo}
-              onArchiveOrDeleteWorktree={onArchiveOrDeleteWorktree}
-              onUnarchiveWorktree={onUnarchiveWorktree}
-              onUpdateWorktree={onUpdateWorktree}
-              onCreateWorktree={onCreateWorktree}
+              onArchiveOrDeleteBranch={onArchiveOrDeleteBranch}
+              onUnarchiveBranch={onUnarchiveBranch}
+              onUpdateBranch={onUpdateBranch}
+              onCreateBranch={onCreateBranch}
               onStartEnvironment={onStartEnvironment}
               onStopEnvironment={onStopEnvironment}
               onCreateUser={onCreateUser}
               onUpdateUser={onUpdateUser}
               onDeleteUser={onDeleteUser}
               onCreateMCPServer={onCreateMCPServer}
-              onUpdateMCPServer={onUpdateMCPServer}
               onDeleteMCPServer={onDeleteMCPServer}
               gatewayChannelById={gatewayChannelById}
               onCreateGatewayChannel={onCreateGatewayChannel}
@@ -1111,70 +1341,64 @@ export const App: React.FC<AppProps> = ({
                 currentUser={user}
               />
             )}
-            <WorktreeModal
-              open={!!worktreeModalWorktreeId}
+            <BranchModal
+              open={!!branchModalBranchId}
               onClose={() => {
-                setWorktreeModalWorktreeId(null);
-                setWorktreeModalTab(undefined);
+                setBranchModalBranchId(null);
+                setBranchModalTab(undefined);
               }}
-              defaultTab={worktreeModalTab}
-              worktree={selectedWorktree || null}
-              repo={selectedWorktreeRepo || null}
-              sessions={worktreeSessions}
+              defaultTab={branchModalTab}
+              branch={selectedBranch || null}
+              repo={selectedBranchRepo || null}
+              sessions={branchSessions}
               boardById={boardById}
               mcpServerById={mcpServerById}
               client={client}
               currentUser={user}
-              onUpdateWorktree={onUpdateWorktree}
+              onUpdateBranch={onUpdateBranch}
               onUpdateRepo={onUpdateRepo}
-              onArchiveOrDelete={onArchiveOrDeleteWorktree}
+              onArchiveOrDelete={onArchiveOrDeleteBranch}
               onOpenSettings={() => {
-                setWorktreeModalWorktreeId(null);
+                setBranchModalBranchId(null);
                 openSettings();
               }}
               onSessionClick={handleSessionClick}
               onExecuteScheduleNow={onExecuteScheduleNow}
-            />
-            <WorktreeListDrawer
-              open={listDrawerOpen}
-              onClose={() => setListDrawerOpen(false)}
-              boards={mapToArray(boardById)}
-              currentBoardId={currentBoardId}
-              onBoardChange={setCurrentBoardId}
-              sessionsByWorktree={sessionsByWorktree}
-              worktreeById={worktreeById}
-              repoById={repoById}
-              onSessionClick={handleSessionClick}
             />
             <TerminalModal
               open={terminalOpen}
               onClose={handleCloseTerminal}
               client={client}
               user={user}
-              worktreeId={terminalWorktreeId}
+              branchId={terminalBranchId}
               initialCommands={terminalCommands}
             />
             <CreateDialog
               open={createDialogOpen}
               onClose={() => {
                 setCreateDialogOpen(false);
-                setNewWorktreeDefaultPosition(null);
+                setCreateDialogDefaultTab('assistant');
+                setNewBranchDefaultPosition(null);
               }}
+              defaultTab={createDialogDefaultTab}
               repoById={repoById}
-              boardById={boardById}
               currentBoardId={currentBoardId}
-              defaultPosition={newWorktreeDefaultPosition || undefined}
-              onCreateWorktree={handleCreateWorktree}
-              onCreateBoard={(board) => onCreateBoard?.(board)}
+              defaultPosition={newBranchDefaultPosition || undefined}
+              onCreateBranch={handleCreateBranch}
+              onCreateBoard={handleCreateBoardFromDialog}
               onCreateRepo={(data) => onCreateRepo?.(data)}
               onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
               onCreateAssistant={handleCreateAssistant}
+              availableAgents={availableAgents}
+              mcpServerById={mcpServerById}
+              currentUser={user}
+              client={client}
             />
-            {logsModalWorktreeId && (
+            {logsModalBranchId && (
               <EnvironmentLogsModal
-                open={!!logsModalWorktreeId}
-                onClose={() => setLogsModalWorktreeId(null)}
-                worktree={worktreeById.get(logsModalWorktreeId)!}
+                open={!!logsModalBranchId}
+                onClose={() => setLogsModalBranchId(null)}
+                branch={branchById.get(logsModalBranchId)!}
                 client={client}
               />
             )}

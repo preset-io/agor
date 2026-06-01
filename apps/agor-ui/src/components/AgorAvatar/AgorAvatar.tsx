@@ -15,12 +15,14 @@ const STANDARD_AVATAR_SIZE = 40;
 export interface AgorAvatarProps extends Omit<AvatarProps, 'style' | 'size'> {
   /** Optional style overrides */
   style?: CSSProperties;
+  /** Override font size (defaults to 24px for emoji) */
+  fontSize?: string;
 }
 
 /**
  * Standardized avatar component with consistent Agor styling
  */
-export const AgorAvatar: React.FC<AgorAvatarProps> = ({ style, children, ...props }) => {
+export const AgorAvatar: React.FC<AgorAvatarProps> = ({ style, fontSize, children, ...props }) => {
   const { token } = theme.useToken();
 
   return (
@@ -30,7 +32,7 @@ export const AgorAvatar: React.FC<AgorAvatarProps> = ({ style, children, ...prop
       style={{
         backgroundColor: token.colorPrimaryBg,
         color: token.colorText,
-        fontSize: '24px', // Standard emoji size for 40px avatar
+        fontSize: fontSize ?? '24px',
         ...style,
       }}
     >

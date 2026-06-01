@@ -21,15 +21,16 @@ import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 type ResumedSessionData = Gemini.ResumedSessionData;
 type Part = GenAI.Part;
 
+import { shortId } from '@agor/core/db';
 import { getDaemonUrl } from '../../config.js';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
@@ -84,8 +85,17 @@ export type GeminiStreamEvent =
       result: unknown;
     };
 
+/** SDK invocation model — falls back to DEFAULT_GEMINI_MODEL. Never used for recording. */
+export function resolveGeminiInvocationModel(session: {
+  model_config?: { model?: string };
+}): GeminiModel {
+  return (session.model_config?.model as GeminiModel | undefined) ?? DEFAULT_GEMINI_MODEL;
+}
+
 export class GeminiPromptService {
   private sessionClients = new Map<SessionID, InstanceType<typeof Gemini.GeminiClient>>();
+  /** Invocation model bound on each cached client — triggers recreate when it changes. */
+  private sessionClientInvocationModels = new Map<SessionID, string>();
   private activeControllers = new Map<SessionID, AbortController>();
   private apiKey?: string; // Resolved API key from base-executor
   private useNativeAuth: boolean; // Whether to use OAuth (no API key found)
@@ -94,7 +104,7 @@ export class GeminiPromptService {
     _messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
     apiKey?: string,
-    private worktreesRepo?: WorktreeRepository,
+    private branchesRepo?: BranchRepository,
     private reposRepo?: RepoRepository,
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
@@ -133,7 +143,9 @@ export class GeminiPromptService {
     // Get or create Gemini client for this session
     const client = await this.getOrCreateClient(sessionId, permissionMode, contextUserId);
 
-    const model = (session.model_config?.model as GeminiModel) || DEFAULT_GEMINI_MODEL;
+    // For recording on stream events. SDK invocation uses the model bound
+    // on the cached client (see getOrCreateClient).
+    const configuredModel = session.model_config?.model;
 
     // Prepare initial prompt (just text for now - can enhance with file paths later)
     let parts: Part[] = [{ text: prompt }];
@@ -188,7 +200,7 @@ export class GeminiPromptService {
               yield {
                 type: 'partial',
                 textChunk,
-                resolvedModel: model,
+                resolvedModel: configuredModel,
                 sessionId,
               };
               break;
@@ -287,7 +299,7 @@ export class GeminiPromptService {
                   type: 'complete',
                   content,
                   toolUses: toolUses.length > 0 ? toolUses : undefined,
-                  resolvedModel: model,
+                  resolvedModel: configuredModel,
                   sessionId,
                   usage: mappedUsage,
                   rawSdkResponse: finishedEvent, // Pass through the actual SDK response (UNMUTATED)
@@ -501,7 +513,7 @@ export class GeminiPromptService {
       }
 
       // Find session file matching pattern: session-*-{sessionId-first8}.json
-      const sessionIdShort = sessionId.slice(0, 8);
+      const sessionIdShort = shortId(sessionId);
       const files = await fs.readdir(chatsDir);
       const sessionFile = files.find((f) => f.includes(sessionIdShort) && f.endsWith('.json'));
 
@@ -562,19 +574,20 @@ export class GeminiPromptService {
     // Map Agor permission mode to Gemini ApprovalMode
     const approvalMode = mapPermissionMode(permissionMode || 'ask');
 
-    // Check if client exists - NEVER clear the cache to preserve conversation history
-    if (this.sessionClients.has(sessionId)) {
-      const existingClient = this.sessionClients.get(sessionId)!;
-      const config = (existingClient as unknown as GeminiClientWithConfig).config;
+    // Recreate the cached client if the session's model changed —
+    // Gemini binds the model at construction.
+    const invocationModel = resolveGeminiInvocationModel(session);
+    const cachedInvocationModel = this.sessionClientInvocationModels.get(sessionId);
+    const cachedClient = this.sessionClients.get(sessionId);
 
-      // Update approval mode on existing client (in case it changed)
+    if (cachedClient && cachedInvocationModel === invocationModel) {
+      const config = (cachedClient as unknown as GeminiClientWithConfig).config;
+
       if (config && typeof config.setApprovalMode === 'function') {
         config.setApprovalMode(approvalMode);
         console.log(`🔄 [Gemini] Updated approval mode for existing client: ${approvalMode}`);
       }
 
-      // Refresh authentication if available
-      // Use pre-resolved API key and auth type (no need to re-check process.env)
       if (config && typeof config.refreshAuth === 'function') {
         try {
           await config.refreshAuth(authType);
@@ -589,39 +602,48 @@ export class GeminiPromptService {
         }
       }
 
-      return existingClient;
+      return cachedClient;
+    }
+
+    if (cachedClient) {
+      // Model changed — recreate. Conversation history is preserved via
+      // the SDK's per-session chat-recording file.
+      console.log(
+        `🔄 [Gemini] Model changed (${cachedInvocationModel} → ${invocationModel}); recreating client`
+      );
+      this.sessionClients.delete(sessionId);
+      this.sessionClientInvocationModels.delete(sessionId);
     }
 
     // Session was already fetched above for API key resolution
-    // Determine working directory from worktree (worktree-centric architecture)
+    // Determine working directory from branch (branch-centric architecture)
     let workingDirectory = process.cwd();
-    if (session.worktree_id && this.worktreesRepo) {
+    if (session.branch_id && this.branchesRepo) {
       try {
-        const worktree = await this.worktreesRepo.findById(session.worktree_id);
-        if (worktree) {
-          workingDirectory = worktree.path;
-          console.log(`✅ Using worktree path as cwd: ${workingDirectory}`);
+        const branch = await this.branchesRepo.findById(session.branch_id);
+        if (branch) {
+          workingDirectory = branch.path;
+          console.log(`✅ Using branch path as cwd: ${workingDirectory}`);
         } else {
           console.warn(
-            `⚠️  Session ${sessionId} references non-existent worktree ${session.worktree_id}, using process.cwd(): ${workingDirectory}`
+            `⚠️  Session ${sessionId} references non-existent branch ${session.branch_id}, using process.cwd(): ${workingDirectory}`
           );
         }
       } catch (error) {
-        console.error(`❌ Failed to fetch worktree ${session.worktree_id}:`, error);
+        console.error(`❌ Failed to fetch branch ${session.branch_id}:`, error);
         console.warn(`   Falling back to process.cwd(): ${workingDirectory}`);
       }
-    } else if (!this.worktreesRepo) {
+    } else if (!this.branchesRepo) {
       console.warn(
-        `⚠️  GeminiPromptService initialized without worktreesRepo, using process.cwd(): ${workingDirectory}`
+        `⚠️  GeminiPromptService initialized without branchesRepo, using process.cwd(): ${workingDirectory}`
       );
     } else {
       console.warn(
-        `⚠️  Session ${sessionId} has no worktree_id, using process.cwd(): ${workingDirectory}`
+        `⚠️  Session ${sessionId} has no branch_id, using process.cwd(): ${workingDirectory}`
       );
     }
 
-    // Get model from session config
-    const model = (session.model_config?.model as GeminiModel) || DEFAULT_GEMINI_MODEL;
+    const model = invocationModel;
 
     // approvalMode already mapped at top of function
     console.log(
@@ -636,7 +658,7 @@ export class GeminiPromptService {
     // User's project GEMINI.md files are still loaded hierarchically.
     const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
       sessions: this.sessionsRepo,
-      worktrees: this.worktreesRepo,
+      branches: this.branchesRepo,
       repos: this.reposRepo,
       users: this.usersRepo,
     });
@@ -676,7 +698,7 @@ export class GeminiPromptService {
         );
       } else {
         console.warn(
-          `⚠️  No MCP token found for session ${sessionId.substring(0, 8)} - MCP tools unavailable`
+          `⚠️  No MCP token found for session ${shortId(sessionId)} - MCP tools unavailable`
         );
       }
     } else {
@@ -710,7 +732,7 @@ export class GeminiPromptService {
               server.command,
               server.args || [],
               server.env || {},
-              workingDirectory // Use worktree path as cwd
+              workingDirectory // Use branch path as cwd
             );
           } else if (server.transport === 'http') {
             // HTTP transport: use httpUrl parameter
@@ -851,8 +873,11 @@ export class GeminiPromptService {
       }
     }
 
-    // Cache client for reuse
+    // Cache client + the invocation model it was bound to. Both maps must
+    // be set together so the next call's cache-invalidation check sees a
+    // consistent (client, model) pair.
     this.sessionClients.set(sessionId, client);
+    this.sessionClientInvocationModels.set(sessionId, invocationModel);
 
     return client;
   }
@@ -921,6 +946,7 @@ export class GeminiPromptService {
     if (client) {
       await client.resetChat(); // Clear history
       this.sessionClients.delete(sessionId);
+      this.sessionClientInvocationModels.delete(sessionId);
       console.log(`🗑️  Closed Gemini client for session ${sessionId}`);
     }
 

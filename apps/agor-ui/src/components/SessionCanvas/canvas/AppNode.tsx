@@ -129,6 +129,13 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
       >
         <div
           ref={iframeContainerRef}
+          // In interact mode, React Flow's node-drag / canvas-pan / wheel-zoom
+          // listeners would otherwise capture every mousedown and wheel event
+          // before the iframe sees them — text selection (and therefore
+          // copy/paste) breaks, and scrolling zooms the canvas. The
+          // `nodrag nopan nowheel` classes are React Flow's documented
+          // escape hatch.
+          className={interactMode ? 'nodrag nopan nowheel' : undefined}
           style={{
             flex: 1,
             position: 'relative',

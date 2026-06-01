@@ -2,7 +2,7 @@ import { generateId } from '@agor/core';
 import type { MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import type { MessagesService, TasksService } from './claude-tool.js';
+import type { MessagesService, TasksService } from '../base/index.js';
 import {
   createAssistantMessage,
   createUserMessage,
@@ -838,7 +838,10 @@ describe('createAssistantMessage', () => {
     expect(result.content_preview).toBe('');
   });
 
-  it('should use default model when resolvedModel is undefined', async () => {
+  it('omits metadata.model entirely when resolvedModel is undefined', async () => {
+    // Regression: previously we silently substituted DEFAULT_CLAUDE_MODEL,
+    // which lied about what actually ran on legacy sessions / when the SDK
+    // didn't echo the model. Honest record = leave the key absent.
     const messagesService = createMockMessagesService();
     const sessionId = generateId() as SessionID;
     const messageId = generateId() as MessageID;
@@ -855,7 +858,7 @@ describe('createAssistantMessage', () => {
       messagesService
     );
 
-    expect(result.metadata?.model).toBe('claude-sonnet-4-6'); // DEFAULT_CLAUDE_MODEL
+    expect(result.metadata).not.toHaveProperty('model');
   });
 
   it('should update task with resolved model', async () => {

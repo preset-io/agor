@@ -38,7 +38,7 @@ export interface CardType {
  * Card - Generic entity on a board
  *
  * Cards are visual work items managed by agents via MCP tools.
- * They live on boards alongside worktrees and can be placed in zones.
+ * They live on boards alongside branches and can be placed in zones.
  *
  * Key fields:
  * - title: Always shown on card

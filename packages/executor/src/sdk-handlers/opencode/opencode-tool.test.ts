@@ -4,7 +4,7 @@
  * Tests for:
  * - Directory-scoped client caching
  * - MCP server injection (Agor + user-defined)
- * - Session context management (worktree path, MCP token)
+ * - Session context management (branch path, MCP token)
  * - Capabilities reflecting MCP support
  */
 
@@ -134,7 +134,7 @@ describe('OpenCodeTool', () => {
   });
 
   describe('Session Context', () => {
-    it('should store and retrieve session context with worktree path and MCP token', () => {
+    it('should store and retrieve session context with branch path and MCP token', () => {
       const tool = new OpenCodeTool(
         { enabled: true, serverUrl: 'http://localhost:4096' },
         mockMessagesService
@@ -145,7 +145,7 @@ describe('OpenCodeTool', () => {
         'opencode-session-1',
         'claude-sonnet-4-6',
         'anthropic',
-        '/path/to/worktree',
+        '/path/to/branch',
         'mcp-token-abc'
       );
 
@@ -155,7 +155,7 @@ describe('OpenCodeTool', () => {
       expect(ctx.opencodeSessionId).toBe('opencode-session-1');
       expect(ctx.model).toBe('claude-sonnet-4-6');
       expect(ctx.provider).toBe('anthropic');
-      expect(ctx.worktreePath).toBe('/path/to/worktree');
+      expect(ctx.branchPath).toBe('/path/to/branch');
       expect(ctx.mcpToken).toBe('mcp-token-abc');
     });
 
@@ -172,7 +172,7 @@ describe('OpenCodeTool', () => {
       expect(ctx.opencodeSessionId).toBe('opencode-session-2');
       expect(ctx.model).toBeUndefined();
       expect(ctx.provider).toBeUndefined();
-      expect(ctx.worktreePath).toBeUndefined();
+      expect(ctx.branchPath).toBeUndefined();
       expect(ctx.mcpToken).toBeUndefined();
     });
 
@@ -211,9 +211,9 @@ describe('OpenCodeTool', () => {
         mockMessagesService
       );
 
-      (tool as any).getClientForDirectory('/path/to/worktree');
+      (tool as any).getClientForDirectory('/path/to/branch');
       expect(clientCreateCount).toBe(1);
-      expect(createdClients[0].directory).toBe('/path/to/worktree');
+      expect(createdClients[0].directory).toBe('/path/to/branch');
     });
 
     it('should cache directory-scoped clients by path', () => {
@@ -284,9 +284,10 @@ describe('OpenCodeTool', () => {
       await (tool as any).ensureMcpServers('session-1', client, 'test-token');
 
       // Should have called client.mcp.add with Agor MCP config
-      // MCP name format: agor_${sessionId.substring(0, 8)}
+      // MCP name format: agor_${shortId(sessionId)} — shortId strips hyphens,
+      // so 'session-1' becomes 'session1' (under the canonical-length cap).
       expect(mockMcpAddCalls.length).toBeGreaterThanOrEqual(1);
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session-');
+      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session1');
       expect(agorCall).toBeDefined();
       expect(agorCall!.config).toEqual({
         type: 'remote',
@@ -504,7 +505,8 @@ describe('OpenCodeTool', () => {
 
       await (tool as any).ensureMcpServers('session-encode', client, tokenWithSpecialChars);
 
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session-');
+      // shortId('session-encode') strips the hyphen → 'sessionencode'
+      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_sessionencode');
       expect(agorCall).toBeDefined();
       const config = agorCall!.config as {
         url: string;
@@ -522,7 +524,7 @@ describe('OpenCodeTool', () => {
   });
 
   describe('executeTask Integration', () => {
-    it('should use directory-scoped client based on session worktree path', async () => {
+    it('should use directory-scoped client based on session branch path', async () => {
       const tool = new OpenCodeTool(
         { enabled: true, serverUrl: 'http://localhost:4096' },
         mockMessagesService,
@@ -530,21 +532,21 @@ describe('OpenCodeTool', () => {
         mockMCPServerRepo
       );
 
-      // Set context with a worktree path
+      // Set context with a branch path
       tool.setSessionContext(
         'session-wt',
         'oc-session-1',
         'model',
         'provider',
-        '/worktree/path',
+        '/branch/path',
         'token'
       );
 
       // Call executeTask (no streaming callbacks for simpler test)
       await tool.executeTask?.('session-wt', 'test prompt', 'task-1');
 
-      // Should have created a client with directory = /worktree/path
-      const dirClient = createdClients.find((c) => c.directory === '/worktree/path');
+      // Should have created a client with directory = /branch/path
+      const dirClient = createdClients.find((c) => c.directory === '/branch/path');
       expect(dirClient).toBeDefined();
     });
 
@@ -567,7 +569,7 @@ describe('OpenCodeTool', () => {
 
       await tool.executeTask?.('session-mcp', 'test prompt', 'task-2');
 
-      // Should have injected Agor MCP (name format: agor_${sessionId.substring(0, 8)})
+      // Should have injected Agor MCP (name format: agor_${shortId(sessionId)})
       const agorCall = mockMcpAddCalls.find((c) => c.name.startsWith('agor_'));
       expect(agorCall).toBeDefined();
     });
@@ -586,6 +588,76 @@ describe('OpenCodeTool', () => {
     });
   });
 
+  describe('Response content mapping', () => {
+    it('should treat reasoning-only responses as regular text blocks', () => {
+      const tool = new OpenCodeTool(
+        { enabled: true, serverUrl: 'http://localhost:4096' },
+        mockMessagesService
+      );
+
+      const result = (tool as any).buildContentBlocksFromParts([
+        {
+          type: 'reasoning',
+          text: 'Final answer from model',
+        },
+      ]);
+
+      expect(result.contentBlocks).toEqual([
+        {
+          type: 'text',
+          text: 'Final answer from model',
+        },
+      ]);
+    });
+
+    it('should keep reasoning as thinking when text blocks exist', () => {
+      const tool = new OpenCodeTool(
+        { enabled: true, serverUrl: 'http://localhost:4096' },
+        mockMessagesService
+      );
+
+      const result = (tool as any).buildContentBlocksFromParts([
+        {
+          type: 'reasoning',
+          text: 'Internal reasoning',
+        },
+        {
+          type: 'text',
+          text: 'User-visible answer',
+        },
+      ]);
+
+      expect(result.contentBlocks).toEqual([
+        {
+          type: 'thinking',
+          text: 'Internal reasoning',
+        },
+        {
+          type: 'text',
+          text: 'User-visible answer',
+        },
+      ]);
+    });
+
+    it('should prefer text parts for display text and fall back to reasoning', () => {
+      const tool = new OpenCodeTool(
+        { enabled: true, serverUrl: 'http://localhost:4096' },
+        mockMessagesService
+      );
+
+      const withText = (tool as any).extractDisplayTextFromParts([
+        { type: 'reasoning', text: 'Reasoning text' },
+        { type: 'text', text: 'Final response text' },
+      ]);
+      expect(withText).toBe('Final response text');
+
+      const reasoningOnly = (tool as any).extractDisplayTextFromParts([
+        { type: 'reasoning', text: 'Reasoning as fallback output' },
+      ]);
+      expect(reasoningOnly).toBe('Reasoning as fallback output');
+    });
+  });
+
   describe('createSession with workingDirectory', () => {
     it('should use directory-scoped client when workingDirectory is provided', async () => {
       const tool = new OpenCodeTool(
@@ -595,11 +667,11 @@ describe('OpenCodeTool', () => {
 
       await tool.createSession?.({
         title: 'Test Session',
-        workingDirectory: '/path/to/worktree',
+        workingDirectory: '/path/to/branch',
       });
 
       // Should have created a client with directory set
-      const dirClient = createdClients.find((c) => c.directory === '/path/to/worktree');
+      const dirClient = createdClients.find((c) => c.directory === '/path/to/branch');
       expect(dirClient).toBeDefined();
     });
 

@@ -7,6 +7,7 @@
  * - sdk_event → Shows unhandled SDK events (blacklist approach: surface by default)
  */
 
+import { shouldHidePersistedClaudeSdkEvent } from '@agor/core/client/claude-system-suppression';
 import type { Message } from '@agor-live/client';
 import { ClockCircleOutlined, InfoCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { Space, Typography, theme } from 'antd';
@@ -32,20 +33,10 @@ export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({ message, agentic
   const block = rateLimitBlock || apiWaitBlock || sdkEventBlock;
   if (!block) return null;
 
-  // Defensive filter: hide already-persisted system/status messages with status='requesting'.
-  // Server-side filter in message-processor.ts drops these going forward; this catches noise
-  // already in the DB from sessions created between the SDK bump and this fix.
-  if (
-    block.type === 'sdk_event' &&
-    'sdkType' in block &&
-    block.sdkType === 'system' &&
-    'sdkSubtype' in block &&
-    block.sdkSubtype === 'status' &&
-    'metadata' in block &&
-    typeof block.metadata === 'object' &&
-    block.metadata !== null &&
-    (block.metadata as { status?: unknown }).status === 'requesting'
-  ) {
+  // Defensive filter for sdk_event rows already in the DB. The server-side
+  // suppression in message-processor.ts is forward-only; the shared helper
+  // keeps both sides honest. See @agor/core/client/claude-system-suppression.
+  if (shouldHidePersistedClaudeSdkEvent(block)) {
     return null;
   }
 

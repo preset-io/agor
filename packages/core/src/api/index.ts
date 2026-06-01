@@ -9,21 +9,24 @@ import type {
   AuthenticationResult,
   Board,
   BoardExportBlob,
+  Branch,
+  BranchPermissionLevel,
   CardType,
   CardWithType,
+  CloneRepositoryResult,
   ContextFileDetail,
   ContextFileListItem,
   MCPServer,
   Message,
   PermissionMode,
   Repo,
+  Schedule,
   Session,
   Task,
   TemplateRenderRequest,
   TemplateRenderResponse,
   User,
   UUID,
-  Worktree,
 } from '@agor/core/types';
 import authentication from '@feathersjs/authentication-client';
 import type { Application, Paginated, Params } from '@feathersjs/feathers';
@@ -44,10 +47,11 @@ const DEFAULT_DAEMON_URL = `http://${DAEMON.DEFAULT_HOST}:${DAEMON.DEFAULT_PORT}
 const BOARDS_SERVICE_EXTENDED = Symbol('agor.boardsServiceExtended');
 const USERS_SERVICE_EXTENDED = Symbol('agor.usersServiceExtended');
 const REPOS_SERVICE_EXTENDED = Symbol('agor.reposServiceExtended');
-const WORKTREES_SERVICE_EXTENDED = Symbol('agor.worktreesServiceExtended');
+const BRANCHES_SERVICE_EXTENDED = Symbol('agor.branchesServiceExtended');
 const SERVICE_FIND_ALL_EXTENDED = Symbol('agor.serviceFindAllExtended');
 const CLIENT_SERVICE_FACTORY_EXTENDED = Symbol('agor.clientServiceFactoryExtended');
 const CLIENT_SESSIONS_HELPERS_EXTENDED = Symbol('agor.clientSessionsHelpersExtended');
+const CLIENT_TASKS_HELPERS_EXTENDED = Symbol('agor.clientTasksHelpersExtended');
 
 /**
  * Client-side input type helper:
@@ -108,6 +112,33 @@ export interface SessionsClientHelpers {
 }
 
 /**
+ * Body shape for `POST /tasks/:id/run`. Matches the prompt route's options
+ * so the same defaults (`stream: true`, agor messageSource for socket
+ * callers) apply when explicitly triggering an already-created task.
+ */
+export interface TaskRunRequest {
+  permissionMode?: PermissionMode;
+  stream?: boolean;
+  messageSource?: 'gateway' | 'agor';
+}
+
+export interface TaskRunOptions extends TaskRunRequest {
+  params?: Params;
+}
+
+export interface TasksClientHelpers {
+  /**
+   * Trigger executor pickup for an already-created task. Pure-REST harnesses
+   * use this after `POST /tasks` to avoid needing an MCP client. Returns the
+   * Task with `status: 'running'`. Only `'created'` tasks on idle sessions
+   * are accepted — `'queued'` tasks drain automatically in queue-position
+   * order via the queue processor, and busy sessions should be prompted via
+   * `client.sessions.prompt()` (which creates and queues the task atomically).
+   */
+  run(taskId: string, options?: TaskRunOptions): Promise<Task>;
+}
+
+/**
  * Server-side Handlebars renderer. UI sends `{template, context}` via
  * `client.service('templates').create(...)`; daemon returns `{rendered}`.
  * Used so the browser bundle doesn't need Handlebars (avoids CSP
@@ -130,8 +161,10 @@ export interface ServiceTypes {
   tasks: Task;
   boards: Board;
   repos: Repo;
+  'repos/clone': Repo;
   'repos/local': Repo;
-  worktrees: Worktree;
+  branches: Branch;
+  schedules: Schedule;
   users: User;
   cards: CardWithType;
   'card-types': CardType; // CardType CRUD
@@ -162,7 +195,7 @@ export interface AgorService<
   // Event emitter methods (for real-time updates)
   // Standard CRUD events use the service entity type T
   on(event: 'created' | 'updated' | 'patched' | 'removed', handler: (data: T) => void): void;
-  // Custom events (e.g. permission_resolved, input_resolved, queued)
+  // Custom events (e.g. permission_resolved, queued)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event handlers have varied signatures
   on(event: string, handler: (...args: any[]) => void): void;
   off(event: 'created' | 'updated' | 'patched' | 'removed', handler: (data: T) => void): void;
@@ -239,14 +272,9 @@ export interface MessagesService extends AgorService<Message> {
 }
 
 /**
- * Repos service with worktree management
+ * Repos service with branch management
  */
 export interface ReposService extends AgorService<Repo> {
-  /**
-   * Clone a repository and register it
-   */
-  clone(data: { url: string; name?: string; slug?: string }, params?: Params): Promise<Repo>;
-
   /**
    * Initialize Unix group for a repo (daemon-side privileged operation).
    * Called by executor after cloning.
@@ -257,28 +285,70 @@ export interface ReposService extends AgorService<Repo> {
   ): Promise<{ unixGroup: string }>;
 
   /**
-   * Create a git worktree for a repository
+   * Create a git branch for a repository.
+   *
+   * Shape matches the daemon's `/repos/:id/branches` route + Feathers
+   * service. Keep this in sync with `RepoService.createBranch()` in
+   * apps/agor-daemon/src/services/repos.ts — drift here means CLI/client
+   * consumers silently drop fields.
    */
-  createWorktree(
+  createBranch(
     id: string,
     data: {
       name: string;
       ref: string;
+      refType?: 'branch' | 'tag';
       createBranch?: boolean;
       pullLatest?: boolean;
       sourceBranch?: string;
+      issue_url?: string;
+      pull_request_url?: string;
+      boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
+      /** Explicit board position. Honored as-is when supplied. */
+      position?: { x: number; y: number };
+      zoneId?: string;
+      others_can?: BranchPermissionLevel;
+      others_fs_access?: 'none' | 'read' | 'write';
+      environment_variant?: string;
+      /**
+       * Branch storage model — see
+       * context/explorations/clone-redesign.md.
+       * 'worktree' (default) = native `git worktree add`.
+       * 'clone' = self-standing `git clone` with its own `.git/`.
+       */
+      storage_mode?: 'worktree' | 'clone';
+      /** Shallow clone depth (only when storage_mode='clone'). */
+      clone_depth?: number;
     },
     params?: Params
-  ): Promise<Repo>;
+  ): Promise<Branch>;
 
   /**
-   * Remove a git worktree
+   * Remove a git branch
    */
-  removeWorktree(id: string, name: string, params?: Params): Promise<Repo>;
+  removeBranch(id: string, name: string, params?: Params): Promise<Repo>;
 }
 
 export interface ReposLocalService extends AgorService<Repo> {
   create(data: { path: string; slug?: string }, params?: Params): Promise<Repo>;
+}
+
+/**
+ * `POST /repos/clone` returns the async `CloneRepositoryResult` envelope
+ * (status + repo_id for polling), not a fully-materialized `Repo`. Declared
+ * as a minimal standalone interface (not `AgorService<Repo>`) because
+ * overriding `create()` with a non-`Repo` return type would be a structural
+ * mismatch on the base service. Callers should fetch the full `Repo` via
+ * `client.service('repos').get(repo_id)` once polling shows `clone_status:
+ * 'ready'`.
+ */
+export interface ReposCloneService {
+  create(
+    data: { url: string; name?: string; slug?: string; default_branch?: string },
+    params?: Params
+  ): Promise<CloneRepositoryResult>;
 }
 
 /**
@@ -316,6 +386,15 @@ export interface BoardsService extends AgorService<Board> {
     newName?: string,
     params?: Params
   ): Promise<Board>;
+
+  /**
+   * Set or clear the board's primary assistant branch.
+   */
+  setPrimaryAssistant(
+    data: { id?: string; boardId?: string; branchId: string },
+    params?: Params
+  ): Promise<Board>;
+  clearPrimaryAssistant(boardId: string, params?: Params): Promise<Board>;
 }
 
 /**
@@ -331,74 +410,74 @@ export interface UsersService extends AgorService<User> {
 }
 
 /**
- * Worktrees service with environment management
+ * Branches service with environment management
  */
-export interface WorktreesService extends AgorService<Worktree> {
+export interface BranchesService extends AgorService<Branch> {
   /**
-   * Initialize Unix group for a worktree (daemon-side privileged operation).
-   * Called by executor after creating the git worktree.
+   * Initialize Unix group for a branch (daemon-side privileged operation).
+   * Called by executor after creating the git branch.
    */
   initializeUnixGroup(
-    data: { worktreeId: string; othersAccess?: 'none' | 'read' | 'write' },
+    data: { branchId: string; othersAccess?: 'none' | 'read' | 'write' },
     params?: Params
   ): Promise<{ unixGroup: string }>;
 
   /**
-   * Find worktree by repo_id and name
+   * Find branch by repo_id and name
    */
-  findByRepoAndName(repoId: string, name: string, params?: Params): Promise<Worktree | null>;
+  findByRepoAndName(repoId: string, name: string, params?: Params): Promise<Branch | null>;
 
   /**
-   * Add session to worktree
+   * Add session to branch
    */
-  addSession(id: string, sessionId: string, params?: Params): Promise<Worktree>;
+  addSession(id: string, sessionId: string, params?: Params): Promise<Branch>;
 
   /**
-   * Remove session from worktree
+   * Remove session from branch
    */
-  removeSession(id: string, sessionId: string, params?: Params): Promise<Worktree>;
+  removeSession(id: string, sessionId: string, params?: Params): Promise<Branch>;
 
   /**
-   * Add worktree to board
+   * Add branch to board
    */
-  addToBoard(id: string, boardId: string, params?: Params): Promise<Worktree>;
+  addToBoard(id: string, boardId: string, params?: Params): Promise<Branch>;
 
   /**
-   * Remove worktree from board
+   * Remove branch from board
    */
-  removeFromBoard(id: string, params?: Params): Promise<Worktree>;
+  removeFromBoard(id: string, params?: Params): Promise<Branch>;
 
   /**
    * Update environment status
    */
   updateEnvironment(
     id: string,
-    environmentUpdate: Partial<Worktree['environment_instance']>,
+    environmentUpdate: Partial<Branch['environment_instance']>,
     params?: Params
-  ): Promise<Worktree>;
+  ): Promise<Branch>;
 
   /**
-   * Start worktree environment
+   * Start branch environment
    */
-  startEnvironment(id: string, params?: Params): Promise<Worktree>;
+  startEnvironment(id: string, params?: Params): Promise<Branch>;
 
   /**
-   * Stop worktree environment
+   * Stop branch environment
    */
-  stopEnvironment(id: string, params?: Params): Promise<Worktree>;
+  stopEnvironment(id: string, params?: Params): Promise<Branch>;
 
   /**
-   * Restart worktree environment
+   * Restart branch environment
    */
-  restartEnvironment(id: string, params?: Params): Promise<Worktree>;
+  restartEnvironment(id: string, params?: Params): Promise<Branch>;
 
   /**
    * Check environment health
    */
-  checkHealth(id: string, params?: Params): Promise<Worktree>;
+  checkHealth(id: string, params?: Params): Promise<Branch>;
 
   /**
-   * Archive or delete a worktree with filesystem cleanup options
+   * Archive or delete a branch with filesystem cleanup options
    */
   archiveOrDelete(
     id: string,
@@ -407,12 +486,12 @@ export interface WorktreesService extends AgorService<Worktree> {
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     },
     params?: Params
-  ): Promise<Worktree | { deleted: true; worktree_id: string }>;
+  ): Promise<Branch | { deleted: true; branch_id: string }>;
 
   /**
-   * Unarchive a worktree
+   * Unarchive a branch
    */
-  unarchive(id: string, options?: { boardId?: string }, params?: Params): Promise<Worktree>;
+  unarchive(id: string, options?: { boardId?: string }, params?: Params): Promise<Branch>;
 }
 
 /**
@@ -421,14 +500,16 @@ export interface WorktreesService extends AgorService<Worktree> {
 export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   io: Socket;
   sessions: SessionsClientHelpers;
+  tasks: TasksClientHelpers;
 
   // Typed service overloads for services with custom methods
   service(path: 'sessions'): SessionsService;
   service(path: 'tasks'): TasksService;
   service(path: 'messages'): MessagesService;
   service(path: 'repos'): ReposService;
+  service(path: 'repos/clone'): ReposCloneService;
   service(path: 'repos/local'): ReposLocalService;
-  service(path: 'worktrees'): WorktreesService;
+  service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
 
   // Bulk operation endpoints
@@ -480,7 +561,16 @@ function extendBoardsService(client: AgorClient): void {
     ).methods;
 
     if (typeof methodsFn === 'function') {
-      methodsFn.call(service, 'toBlob', 'fromBlob', 'toYaml', 'fromYaml', 'clone');
+      methodsFn.call(
+        service,
+        'toBlob',
+        'fromBlob',
+        'toYaml',
+        'fromYaml',
+        'clone',
+        'setPrimaryAssistant',
+        'clearPrimaryAssistant'
+      );
     }
   };
 
@@ -680,16 +770,16 @@ function extendReposService(client: AgorClient): void {
   reposService[REPOS_SERVICE_EXTENDED] = true;
 }
 
-function extendWorktreesService(client: AgorClient): void {
-  const worktreesService = client.service('worktrees') as AgorService<Worktree> & {
-    [WORKTREES_SERVICE_EXTENDED]?: boolean;
+function extendBranchesService(client: AgorClient): void {
+  const branchesService = client.service('branches') as AgorService<Branch> & {
+    [BRANCHES_SERVICE_EXTENDED]?: boolean;
     methods?: (...names: string[]) => unknown;
   };
-  if (worktreesService[WORKTREES_SERVICE_EXTENDED]) return;
-  if (typeof worktreesService.methods === 'function') {
-    worktreesService.methods('initializeUnixGroup');
+  if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
+  if (typeof branchesService.methods === 'function') {
+    branchesService.methods('initializeUnixGroup');
   }
-  worktreesService[WORKTREES_SERVICE_EXTENDED] = true;
+  branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }
 
 function extendServiceFactory(client: AgorClient): void {
@@ -732,6 +822,28 @@ function extendSessionsHelpers(client: AgorClient): void {
   };
 
   augmentedClient[CLIENT_SESSIONS_HELPERS_EXTENDED] = true;
+}
+
+function extendTasksHelpers(client: AgorClient): void {
+  const augmentedClient = client as AgorClient & {
+    [CLIENT_TASKS_HELPERS_EXTENDED]?: boolean;
+  };
+
+  if (augmentedClient[CLIENT_TASKS_HELPERS_EXTENDED]) {
+    return;
+  }
+
+  client.tasks = {
+    run: async (taskId: string, options?: TaskRunOptions) => {
+      const { params, ...requestOptions } = options ?? {};
+      const response = await client
+        .service(`tasks/${taskId}/run`)
+        .create(requestOptions as TaskRunRequest, params);
+      return response as Task;
+    },
+  };
+
+  augmentedClient[CLIENT_TASKS_HELPERS_EXTENDED] = true;
 }
 
 /**
@@ -799,8 +911,9 @@ export async function createRestClient(
   extendBoardsService(client);
   extendUsersService(client);
   extendReposService(client);
-  extendWorktreesService(client);
+  extendBranchesService(client);
   extendSessionsHelpers(client);
+  extendTasksHelpers(client);
 
   return client;
 }
@@ -881,8 +994,9 @@ export function createClient(
   extendBoardsService(client);
   extendUsersService(client);
   extendReposService(client);
-  extendWorktreesService(client);
+  extendBranchesService(client);
   extendSessionsHelpers(client);
+  extendTasksHelpers(client);
 
   return client;
 }

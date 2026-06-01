@@ -1,11 +1,11 @@
 import type {
   AgorClient,
+  Branch,
   PermissionMode,
   Repo,
   Session,
   SessionID,
   User,
-  Worktree,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant, PermissionScope } from '@agor-live/client';
 import { Alert, Spin } from 'antd';
@@ -18,7 +18,7 @@ import { MobilePromptInput } from './MobilePromptInput';
 interface SessionPageProps {
   client: AgorClient | null;
   sessionById: Map<string, Session>; // O(1) ID lookups
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   userById: Map<string, User>;
   currentUser?: User | null;
@@ -31,7 +31,7 @@ interface SessionPageProps {
 export const SessionPage: React.FC<SessionPageProps> = ({
   client,
   sessionById,
-  worktreeById,
+  branchById,
   repoById,
   userById,
   currentUser,
@@ -43,7 +43,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   const { sessionId } = useParams<{ sessionId: string }>();
 
   const session = sessionId ? sessionById.get(sessionId) : undefined;
-  const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) || null : null;
+  const branch = session?.branch_id ? branchById.get(session.branch_id) || null : null;
 
   if (!sessionId) {
     return (
@@ -89,32 +89,10 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         reason: allow ? 'Approved by user' : 'Denied by user',
         remember: scope !== PermissionScope.ONCE,
         scope,
-        decidedBy: currentUser?.user_id || 'anonymous',
+        decidedBy: currentUser?.user_id || 'unknown',
       });
     } catch (error) {
       console.error('Failed to send permission decision:', error);
-    }
-  };
-
-  const handleInputResponse = async (
-    _sessionId: string,
-    requestId: string,
-    taskId: string,
-    answers: Record<string, string>,
-    annotations?: Record<string, { markdown?: string; notes?: string }>
-  ) => {
-    if (!client) return;
-
-    try {
-      await client.service(`sessions/${_sessionId}/input-response`).create({
-        requestId,
-        taskId,
-        answers,
-        annotations,
-        respondedBy: currentUser?.user_id || 'anonymous',
-      });
-    } catch (error) {
-      console.error('Failed to send input response:', error);
     }
   };
 
@@ -122,7 +100,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <MobileHeader
         title={
-          worktree?.name ||
+          branch?.name ||
           getSessionDisplayTitle(session, { fallbackChars: 30, includeIdFallback: true })
         }
         showMenu
@@ -144,13 +122,12 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           userById={userById}
           currentUserId={currentUser?.user_id}
           onPermissionDecision={handlePermissionDecision}
-          onInputResponse={handleInputResponse}
-          scheduledFromWorktree={session.scheduled_from_worktree}
+          scheduledFromBranch={session.scheduled_from_branch}
           scheduledRunAt={session.scheduled_run_at}
           genealogy={session.genealogy}
           emptyStateMessage="Tap the menu icon to browse boards and sessions"
           assistantEmoji={
-            worktree && isAssistant(worktree) ? getAssistantConfig(worktree)?.emoji : undefined
+            branch && isAssistant(branch) ? getAssistantConfig(branch)?.emoji : undefined
           }
         />
       </div>

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { resolveModelConfig, resolveModelConfigPrecedence } from './resolve-config.js';
+import {
+  getDefaultModelForTool,
+  resolveModelConfig,
+  resolveModelConfigPrecedence,
+  resolveModelConfigWithFallback,
+} from './resolve-config.js';
 
 describe('resolveModelConfig', () => {
   const now = new Date('2026-04-23T00:00:00.000Z');
@@ -84,5 +89,54 @@ describe('resolveModelConfigPrecedence', () => {
     const result = resolveModelConfigPrecedence([explicit, userDefault], { now });
     expect(result?.model).toBe('claude-opus-4-6');
     expect(result).not.toHaveProperty('effort');
+  });
+});
+
+describe('getDefaultModelForTool', () => {
+  it('returns the static default for tools that have one', () => {
+    expect(getDefaultModelForTool('claude-code')).toBe('claude-sonnet-4-6');
+    expect(getDefaultModelForTool('claude-code-cli')).toBe('claude-sonnet-4-6');
+    expect(getDefaultModelForTool('codex')).toBe('gpt-5.5');
+    expect(getDefaultModelForTool('gemini')).toBe('gemini-2.0-flash');
+    expect(getDefaultModelForTool('copilot')).toBe('claude-sonnet-4.6');
+  });
+
+  it('returns undefined for cursor / opencode', () => {
+    expect(getDefaultModelForTool('cursor')).toBeUndefined();
+    expect(getDefaultModelForTool('opencode')).toBeUndefined();
+  });
+});
+
+describe('resolveModelConfigWithFallback', () => {
+  const now = new Date('2026-04-23T00:00:00.000Z');
+
+  it('returns the first usable source when one is provided', () => {
+    const result = resolveModelConfigWithFallback(
+      'codex',
+      [{ model: 'gpt-5.5' }, { model: 'gpt-4o' }],
+      { now }
+    );
+    expect(result?.model).toBe('gpt-5.5');
+  });
+
+  it('falls back to the tool default when no source has a model', () => {
+    const result = resolveModelConfigWithFallback('codex', [undefined, null], { now });
+    expect(result).toEqual({
+      mode: 'alias',
+      model: 'gpt-5.5',
+      updated_at: '2026-04-23T00:00:00.000Z',
+    });
+  });
+
+  it('returns undefined for cursor / opencode when sources are empty', () => {
+    expect(resolveModelConfigWithFallback('cursor', [undefined], { now })).toBeUndefined();
+    expect(resolveModelConfigWithFallback('opencode', [undefined], { now })).toBeUndefined();
+  });
+
+  it('still uses an explicit source for tools without a static default', () => {
+    const result = resolveModelConfigWithFallback('cursor', [{ model: 'composer-experimental' }], {
+      now,
+    });
+    expect(result?.model).toBe('composer-experimental');
   });
 });

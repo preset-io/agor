@@ -10,6 +10,7 @@ import {
   type Database,
   GatewayChannelRepository,
   MCPServerRepository,
+  shortId,
   ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -18,8 +19,10 @@ import type { Application } from '@agor/core/feathers';
 import type { GatewayConnector, GatewayContext, InboundMessage } from '@agor/core/gateway';
 import {
   formatGatewayContext,
+  formatGatewaySystemMessage,
   getConnector,
   hasConnector,
+  normalizeOutbound,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
 import { resolveSessionDefaults } from '@agor/core/sessions';
@@ -276,7 +279,10 @@ export class GatewayService {
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
       connector
-        .sendMessage({ threadId, text: `_[system] ${text}_` })
+        .sendMessage({
+          threadId,
+          text: formatGatewaySystemMessage(channel.channel_type as ChannelType, text),
+        })
         .catch((err) => console.warn('[gateway] Debug message failed:', err));
     } catch {
       // Ignore — debug messages are best-effort
@@ -314,7 +320,7 @@ export class GatewayService {
       const otherChannelMapping = await this.threadMapRepo.findByThread(data.thread_id);
       if (otherChannelMapping) {
         console.log(
-          `[gateway] IGNORED: Thread ${data.thread_id} owned by channel ${otherChannelMapping.channel_id.substring(0, 8)}, not ours (${channel.id.substring(0, 8)}). Silently dropping.`
+          `[gateway] IGNORED: Thread ${data.thread_id} owned by channel ${shortId(otherChannelMapping.channel_id)}, not ours (${shortId(channel.id)}). Silently dropping.`
         );
         return {
           success: false,
@@ -335,7 +341,7 @@ export class GatewayService {
       // Use debug level — this fires for every non-Agor thread reply in monitored
       // channels and would create excessive log noise at info level.
       console.debug(
-        `[gateway] IGNORED: Thread reply without mention in unmapped thread: channel=${channel.id.substring(0, 8)}, thread=${data.thread_id}`
+        `[gateway] IGNORED: Thread reply without mention in unmapped thread: channel=${shortId(channel.id)}, thread=${data.thread_id}`
       );
       return {
         success: false,
@@ -401,7 +407,7 @@ export class GatewayService {
 
         if (matchedUser) {
           console.log(
-            `[gateway] Slack user aligned: ${email} → Agor user ${matchedUser.user_id.substring(0, 8)} (${matchedUser.name || matchedUser.email})`
+            `[gateway] Slack user aligned: ${email} → Agor user ${shortId(matchedUser.user_id)} (${matchedUser.name || matchedUser.email})`
           );
           user = await usersService.get(matchedUser.user_id);
         } else {
@@ -455,7 +461,7 @@ export class GatewayService {
         const matchedUser = await this.usersRepo.findByEmail(mappedEmail);
         if (matchedUser) {
           console.log(
-            `[gateway] GitHub user aligned via user_map: ${githubLogin} → ${mappedEmail} → Agor user ${matchedUser.user_id.substring(0, 8)}`
+            `[gateway] GitHub user aligned via user_map: ${githubLogin} → ${mappedEmail} → Agor user ${shortId(matchedUser.user_id)}`
           );
           user = await usersService.get(matchedUser.user_id);
           resolved = true;
@@ -477,7 +483,7 @@ export class GatewayService {
           const matchedUser = await this.usersRepo.findByEmail(githubEmail);
           if (matchedUser) {
             console.log(
-              `[gateway] GitHub user aligned via email: ${githubLogin} (${githubEmail}) → Agor user ${matchedUser.user_id.substring(0, 8)}`
+              `[gateway] GitHub user aligned via email: ${githubLogin} (${githubEmail}) → Agor user ${shortId(matchedUser.user_id)}`
             );
             user = await usersService.get(matchedUser.user_id);
             resolved = true;
@@ -563,7 +569,7 @@ export class GatewayService {
       this.sendDebugMessage(
         channel,
         data.thread_id,
-        `Received follow-up, routing to session ${sessionId.substring(0, 8)}...`
+        `Received follow-up, routing to session ${shortId(sessionId)}...`
       );
     } else {
       // New thread → create session via FeathersJS service
@@ -603,7 +609,7 @@ export class GatewayService {
       const session = await sessionsService.create({
         title: data.text.substring(0, 100),
         description: data.text,
-        worktree_id: channel.target_worktree_id,
+        branch_id: channel.target_branch_id,
         created_by: user.user_id,
         // Stamp session with creator's unix_username for executor impersonation.
         // Normally set by the setSessionUnixUsername hook, but that hook skips
@@ -676,7 +682,7 @@ export class GatewayService {
         channel_id: channel.id,
         thread_id: data.thread_id,
         session_id: session.session_id,
-        worktree_id: channel.target_worktree_id,
+        branch_id: channel.target_branch_id,
         status: 'active',
         metadata: data.metadata ?? null,
       });
@@ -695,7 +701,7 @@ export class GatewayService {
       }
 
       // Send debug message with session URL
-      const sessionIdShort = sessionId.substring(0, 8);
+      const sessionIdShort = shortId(sessionId);
       const message = sessionUrl
         ? `Session created: ${sessionUrl}`
         : `Session ${sessionIdShort} created, sending prompt to agent...`;
@@ -709,7 +715,7 @@ export class GatewayService {
           const connector = getConnector(channel.channel_type as ChannelType, channel.config);
           const processingText = sessionUrl
             ? `⏳ Processing... [View session](${sessionUrl})`
-            : `⏳ Processing in session \`${sessionId.substring(0, 8)}\`...`;
+            : `⏳ Processing in session \`${shortId(sessionId)}\`...`;
           await connector.sendMessage({
             threadId: data.thread_id,
             text: processingText,
@@ -770,7 +776,7 @@ export class GatewayService {
 
       if (task.status === 'queued') {
         console.log(
-          `[gateway] Message queued for session ${sessionId.substring(0, 8)} at position ${task.queue_position}`
+          `[gateway] Message queued for session ${shortId(sessionId)} at position ${task.queue_position}`
         );
         this.sendDebugMessage(
           channel,
@@ -779,7 +785,7 @@ export class GatewayService {
         );
       } else {
         console.log(
-          `[gateway] Prompt sent to session ${sessionId.substring(0, 8)} via /sessions/:id/prompt`
+          `[gateway] Prompt sent to session ${shortId(sessionId)} via /sessions/:id/prompt`
         );
       }
     } catch (error) {
@@ -815,7 +821,7 @@ export class GatewayService {
     }
 
     console.log(
-      `[gateway] Found mapping: channel=${mapping.channel_id.substring(0, 8)}, thread=${mapping.thread_id}`
+      `[gateway] Found mapping: channel=${shortId(mapping.channel_id)}, thread=${mapping.thread_id}`
     );
 
     const channel = await this.channelRepo.findById(mapping.channel_id);
@@ -840,7 +846,7 @@ export class GatewayService {
     if (channel.channel_type === 'github') {
       this.githubMessageBuffer.set(data.session_id, data.message);
       console.log(
-        `[gateway] Buffered GitHub message for session ${data.session_id.substring(0, 8)} (${data.message.length} chars)`
+        `[gateway] Buffered GitHub message for session ${shortId(data.session_id)} (${data.message.length} chars)`
       );
       return { routed: true, channelType: 'github' };
     }
@@ -849,11 +855,14 @@ export class GatewayService {
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
 
-      const text = connector.formatMessage ? connector.formatMessage(data.message) : data.message;
+      const { text, blocks } = normalizeOutbound(
+        connector.formatMessage ? connector.formatMessage(data.message) : data.message
+      );
 
       await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
+        blocks,
         metadata: data.metadata,
       });
 
@@ -891,7 +900,7 @@ export class GatewayService {
     const mapping = await this.threadMapRepo.findBySession(sessionId);
     if (!mapping) {
       console.warn(
-        `[gateway] flushGitHubBuffer: no thread mapping for session ${sessionId.substring(0, 8)}`
+        `[gateway] flushGitHubBuffer: no thread mapping for session ${shortId(sessionId)}`
       );
       return;
     }
@@ -904,9 +913,9 @@ export class GatewayService {
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
 
-      const text = connector.formatMessage
-        ? connector.formatMessage(bufferedMessage)
-        : bufferedMessage;
+      const { text, blocks } = normalizeOutbound(
+        connector.formatMessage ? connector.formatMessage(bufferedMessage) : bufferedMessage
+      );
 
       // Edit the "Processing..." comment with the final response
       const outboundMetadata: Record<string, unknown> = {};
@@ -922,11 +931,12 @@ export class GatewayService {
       await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
+        blocks,
         metadata: outboundMetadata,
       });
 
       console.log(
-        `[gateway] Flushed GitHub buffer for session ${sessionId.substring(0, 8)} → ${mapping.thread_id} (${bufferedMessage.length} chars)`
+        `[gateway] Flushed GitHub buffer for session ${shortId(sessionId)} → ${mapping.thread_id} (${bufferedMessage.length} chars)`
       );
     } catch (error) {
       // Re-queue the message so it can be retried on next flush (e.g. session
@@ -934,7 +944,7 @@ export class GatewayService {
       // API error would permanently lose the agent's final response.
       this.githubMessageBuffer.set(sessionId, bufferedMessage);
       console.error(
-        `[gateway] Failed to flush GitHub buffer for session ${sessionId.substring(0, 8)} (re-queued):`,
+        `[gateway] Failed to flush GitHub buffer for session ${shortId(sessionId)} (re-queued):`,
         error
       );
     }
@@ -1025,7 +1035,7 @@ export class GatewayService {
       if (connector.stopListening) {
         await connector.stopListening();
       }
-      console.log(`[gateway] Listener stopped for channel ${channelId.substring(0, 8)}`);
+      console.log(`[gateway] Listener stopped for channel ${shortId(channelId)}`);
     } catch (error) {
       // Old socket may still be alive — duplicate inbound messages are possible
       // until the next daemon restart. See: listener lifecycle serialization (tech debt).
@@ -1083,7 +1093,7 @@ export class GatewayService {
         if (connector.stopListening) {
           await connector.stopListening();
         }
-        console.log(`[gateway] Listener stopped for channel ${channelId.substring(0, 8)}`);
+        console.log(`[gateway] Listener stopped for channel ${shortId(channelId)}`);
       } catch (error) {
         console.error(`[gateway] Error stopping listener for ${channelId}:`, error);
       }

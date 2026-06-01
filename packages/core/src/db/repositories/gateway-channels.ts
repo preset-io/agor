@@ -13,8 +13,9 @@ import type {
   GatewayEnvVar,
   UUID,
 } from '@agor/core/types';
+import { prefixToLikePattern } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
@@ -159,7 +160,7 @@ export class GatewayChannelRepository
       created_by: row.created_by,
       name: row.name,
       channel_type: row.channel_type as ChannelType,
-      target_worktree_id: row.target_worktree_id as UUID,
+      target_branch_id: row.target_branch_id as UUID,
       agor_user_id: row.agor_user_id as UUID,
       channel_key: row.channel_key,
       config: decryptConfig(config),
@@ -177,6 +178,9 @@ export class GatewayChannelRepository
   private channelToInsert(data: Partial<GatewayChannel>): GatewayChannelInsert {
     const now = Date.now();
     const id = data.id ?? generateId();
+    if (!data.created_by) {
+      throw new RepositoryError('GatewayChannel must have a created_by');
+    }
 
     const encryptedAgenticConfig = encryptAgenticConfig(
       (data.agentic_config as unknown as Record<string, unknown> | null) ?? null
@@ -186,10 +190,10 @@ export class GatewayChannelRepository
       id,
       created_at: new Date(data.created_at ?? now),
       updated_at: new Date(data.updated_at ?? now),
-      created_by: data.created_by ?? 'anonymous',
+      created_by: data.created_by,
       name: data.name ?? 'Untitled Channel',
       channel_type: data.channel_type ?? 'slack',
-      target_worktree_id: data.target_worktree_id ?? '',
+      target_branch_id: data.target_branch_id ?? '',
       agor_user_id: data.agor_user_id ?? '',
       channel_key: data.channel_key ?? generateId(),
       enabled: data.enabled ?? true,
@@ -207,8 +211,7 @@ export class GatewayChannelRepository
       return id;
     }
 
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
 
     const results = await select(this.db)
       .from(gatewayChannels)
@@ -223,7 +226,7 @@ export class GatewayChannelRepository
       throw new AmbiguousIdError(
         'GatewayChannel',
         id,
-        results.map((r: { id: string }) => formatShortId(r.id as UUID))
+        results.map((r: { id: string }) => r.id)
       );
     }
 
@@ -334,7 +337,7 @@ export class GatewayChannelRepository
         .set({
           name: insertData.name,
           channel_type: insertData.channel_type,
-          target_worktree_id: insertData.target_worktree_id,
+          target_branch_id: insertData.target_branch_id,
           agor_user_id: insertData.agor_user_id,
           enabled: insertData.enabled,
           config: insertData.config,

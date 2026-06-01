@@ -89,7 +89,7 @@ export function ensureCanTriggerManagedEnv(
  * Fields that contain executable commands or environment configuration.
  *
  * Repos store templates in `environment` (v2 source of truth) or the legacy
- * `environment_config` view; worktrees store resolved values as top-level
+ * `environment_config` view; branches store resolved values as top-level
  * fields plus the currently-rendered `environment_variant` name. All of these
  * execute as (or select) commands that run as the system user, so only admins
  * may write them.
@@ -97,8 +97,8 @@ export function ensureCanTriggerManagedEnv(
 const ENV_COMMAND_FIELDS = [
   'environment', // Repo-level: v2 named variants (source of truth)
   'environment_config', // Repo-level: legacy v1 view (still guarded)
-  'environment_variant', // Worktree-level: selected variant name
-  'start_command', // Worktree-level: resolved commands
+  'environment_variant', // Branch-level: selected variant name
+  'start_command', // Branch-level: resolved commands
   'stop_command',
   'nuke_command',
   'logs_command',
@@ -111,7 +111,7 @@ const ENV_COMMAND_FIELDS = [
  *
  * Environment commands execute as the system user, so only admins/superadmins
  * may set or change them. Works for both repo-level (environment_config) and
- * worktree-level (start_command, stop_command, etc.) fields.
+ * branch-level (start_command, stop_command, etc.) fields.
  */
 export function requireAdminForEnvConfig() {
   return (context: HookContext) => {

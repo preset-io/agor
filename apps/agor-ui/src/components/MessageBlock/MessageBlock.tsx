@@ -10,30 +10,30 @@
  */
 
 import {
+  type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
-  type InputRequestContent,
-  InputRequestStatus,
   type Message,
   type PermissionRequestContent,
   PermissionScope,
   PermissionStatus,
+  shortId,
   type User,
 } from '@agor-live/client';
-import { RobotOutlined } from '@ant-design/icons';
+import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Tooltip, theme } from 'antd';
 
-import type React from 'react';
+import React from 'react';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { CopyableContent } from '../CopyableContent';
-import { InputRequestBlock } from '../InputRequestBlock';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
+import { SystemMessage } from '../SystemMessage';
 import { ThinkingBlock } from '../ThinkingBlock';
 import {
   buildBashDescriptionNode,
@@ -45,6 +45,10 @@ import {
 } from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+// Side-effect import: registers every built-in widget component with the
+// `WidgetBlock` dispatcher (e.g. `env_vars`).
+import '../Widgets';
+import { WidgetBlock } from './WidgetBlock';
 
 interface ToolUseBlock {
   type: 'tool_use';
@@ -83,23 +87,16 @@ interface MessageBlockProps {
   sessionId?: string | null;
   taskId?: string;
   isFirstPendingPermission?: boolean; // For sequencing permission requests
-  isFirstPendingInput?: boolean; // For sequencing input requests
   isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
-  allMessages?: Message[]; // All messages for aggregation (e.g., finding matching compaction events)
   assistantEmoji?: string; // Emoji override for assistant avatar (replaces tool icon)
+  /** Authenticated Feathers client, forwarded to WidgetBlock for inline-form submission. */
+  client?: AgorClient | null;
   onPermissionDecision?: (
     sessionId: string,
     requestId: string,
     taskId: string,
     allow: boolean,
     scope: PermissionScope
-  ) => void;
-  onInputResponse?: (
-    sessionId: string,
-    requestId: string,
-    taskId: string,
-    answers: Record<string, string>,
-    annotations?: Record<string, { markdown?: string; notes?: string }>
   ) => void;
 }
 
@@ -235,7 +232,19 @@ function getAgentAvatar({
   );
 }
 
-export const MessageBlock: React.FC<MessageBlockProps> = ({
+// Memoized: every text block / tool block of every message in the conversation
+// re-rendered on every streaming chunk because TaskBlock's `messages` array
+// gets a fresh reference each tick. Default shallow compare is sufficient
+// here because callers pass:
+//   - `message`: stable per message_id (only the actively streaming message
+//     gets a new ref each chunk — correct: it should re-render)
+//   - `userById`: from AppUserDataContext (stable across session patches)
+//   - `currentUserId`, `agentic_tool`, `sessionId`, `taskId`, `assistantEmoji`,
+//     `isTaskRunning`, `isLatestMessage`, `isFirstPending*`: primitives or
+//     stable derived values
+//   - `onPermissionDecision`, `onInputResponse`: useCallback-wrapped in App.tsx
+//     and passed through useMemo'd AppActionsContext
+const MessageBlockInner: React.FC<MessageBlockProps> = ({
   message,
   userById = new Map(),
   currentUserId,
@@ -244,12 +253,10 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
   sessionId,
   taskId,
   isFirstPendingPermission = false,
-  isFirstPendingInput = false,
   isLatestMessage = false,
-  allMessages = [],
   onPermissionDecision,
-  onInputResponse,
   assistantEmoji,
+  client = null,
 }) => {
   const { token } = theme.useToken();
 
@@ -294,26 +301,21 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
     );
   }
 
-  // Handle input request messages (AskUserQuestion)
+  // Legacy `input_request` messages (from before AskUserQuestion was disallowed
+  // in #1177) are skipped — the interactive widget no longer ships, and the
+  // surrounding agent text already carries the question/answer context.
   if (message.type === 'input_request') {
-    const content = message.content as InputRequestContent;
-    const isPending = content.status === InputRequestStatus.PENDING;
-    const canInteract = isPending && isFirstPendingInput;
+    return null;
+  }
 
+  // In-conversation interactive widgets. WidgetBlock looks up the registered
+  // component by `metadata.widget.widget_type` and falls back to an
+  // "Unknown widget type" placeholder for forward-compat with newer
+  // daemons. See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
+  if (message.type === 'widget_request') {
     return (
       <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
-        <InputRequestBlock
-          message={message}
-          content={content}
-          isActive={canInteract}
-          onSubmit={
-            canInteract && onInputResponse && sessionId && taskId
-              ? (_messageId, answers, annotations) => {
-                  onInputResponse(sessionId, content.request_id, taskId, answers, annotations);
-                }
-              : undefined
-          }
-        />
+        <WidgetBlock message={message} client={client} />
       </div>
     );
   }
@@ -371,10 +373,10 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
           : '';
     const btwPrompt = message.metadata?.btw_prompt as string | undefined;
     const btwSessionId = message.metadata?.btw_session_id as string | undefined;
-    const btwShortId = btwSessionId ? btwSessionId.substring(0, 8) : undefined;
+    const btwShortId = btwSessionId ? shortId(btwSessionId) : undefined;
     const callerSessionId = message.metadata?.btw_caller_session_id as string | undefined;
     const callerTitle = message.metadata?.btw_caller_title as string | undefined;
-    const callerShortId = callerSessionId ? callerSessionId.substring(0, 8) : undefined;
+    const callerShortId = callerSessionId ? shortId(callerSessionId) : undefined;
     const isRemote = !!callerSessionId;
 
     // Build markdown content
@@ -415,6 +417,34 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
         </div>
         <MarkdownRenderer content={markdownContent} />
       </div>
+    );
+  }
+
+  // Daemon restart / crash notice — injected by startup reconciliation.
+  // Intentionally low-frequency and user-meaningful; contrast with PR #1116
+  // which filtered high-frequency SDK lifecycle noise.
+  if (message.type === 'daemon_restart' || message.type === 'daemon_crash') {
+    const isGraceful = message.type === 'daemon_restart';
+    const text = typeof message.content === 'string' ? message.content : '';
+    return (
+      <SystemMessage
+        content={
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <span
+              style={{
+                color: isGraceful ? token.colorInfo : token.colorWarning,
+                flexShrink: 0,
+                marginTop: 2,
+              }}
+            >
+              {isGraceful ? <SyncOutlined /> : <WarningOutlined />}
+            </span>
+            <div style={{ fontSize: 13 }}>
+              <MarkdownRenderer content={text} />
+            </div>
+          </div>
+        }
+      />
     );
   }
 
@@ -597,12 +627,12 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
                         gap: token.sizeUnit,
                       }}
                     >
-                      {textBeforeTools.map((text, idx) => {
+                      {textBeforeTools.map((text) => {
                         // Use CollapsibleMarkdown for long text blocks (15+ lines)
                         const shouldTruncate = text.split('\n').length > 15;
 
                         return (
-                          <div key={`text-${idx}-${text.substring(0, 20)}`}>
+                          <div key={`text-${text.length}-${text.substring(0, 32)}`}>
                             {shouldTruncate ? (
                               <CollapsibleMarkdown
                                 maxLines={10}
@@ -766,3 +796,6 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
     </>
   );
 };
+
+export const MessageBlock = React.memo(MessageBlockInner);
+MessageBlock.displayName = 'MessageBlock';

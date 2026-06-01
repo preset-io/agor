@@ -1,7 +1,7 @@
 import type { PermissionMode, PermissionScope, Session, SpawnConfig } from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext } from 'react';
-import type { WorktreeModalTab } from '../components/WorktreeModal/WorktreeModal';
+import type { BranchModalTab } from '../components/BranchModal/BranchModal';
 
 /**
  * AppActionsContext - Provides action callbacks for domain operations
@@ -24,24 +24,19 @@ export interface AppActionsContextValue {
     allow: boolean,
     scope: PermissionScope
   ) => void;
-  onInputResponse?: (
-    sessionId: string,
-    requestId: string,
-    taskId: string,
-    answers: Record<string, string>,
-    annotations?: Record<string, { markdown?: string; notes?: string }>
-  ) => void;
 
-  // Worktree/Environment actions
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
-  onNukeEnvironment?: (worktreeId: string) => void;
-  onViewLogs?: (worktreeId: string) => void;
+  // Branch/Environment actions
+  onStartEnvironment?: (branchId: string) => void;
+  onStopEnvironment?: (branchId: string) => void;
+  onNukeEnvironment?: (branchId: string) => void;
+  onViewLogs?: (branchId: string) => void;
 
   // Navigation/UI actions
   onOpenSettings?: (sessionId: string) => void;
-  onOpenWorktree?: (worktreeId: string, tab?: WorktreeModalTab) => void;
-  onOpenTerminal?: (commands: string[], worktreeId?: string) => void;
+  /** Open / select a session by id (cross-board navigation when needed). */
+  onSessionClick?: (sessionId: string) => void;
+  onOpenBranch?: (branchId: string, tab?: BranchModalTab) => void;
+  onOpenTerminal?: (commands: string[], branchId?: string) => void;
 }
 
 const AppActionsContext = createContext<AppActionsContextValue | undefined>(undefined);

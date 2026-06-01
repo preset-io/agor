@@ -56,6 +56,7 @@ describe('assertEnvCommandAllowed', () => {
       'docker compose up -d',
       'docker run -v ./data:/data ubuntu', // relative path
       'docker run -v /home/agor/data:/data ubuntu', // specific path, not /
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal `${PWD}` is a shell variable consumed by docker, not a JS template literal.
       'docker run -v ${PWD}/data:/data ubuntu',
     ])('allows: %s', (cmd) => {
       expect(() => assertEnvCommandAllowed(cmd, 'start')).not.toThrow();

@@ -7,7 +7,7 @@ Quick-start your Agor development environment with pre-populated test data.
 The default seed (`seedDevFixtures`) creates:
 
 - **Agor Repository** - Clones https://github.com/preset-io/agor.git
-- **Test Worktree** - Creates a worktree named `test-worktree`
+- **Test Branch** - Creates a branch named `test-branch`
 
 ## Usage
 
@@ -48,7 +48,7 @@ const result = await seedDevFixtures({
 });
 
 console.log(result.repo_id);
-console.log(result.worktree_id);
+console.log(result.branch_id);
 ```
 
 ## Adding Custom Seed Data
@@ -76,7 +76,7 @@ export async function seedDevFixtures(options: SeedOptions = {}): Promise<SeedRe
   // Return custom result
   return {
     repo_id: repo.repo_id,
-    worktree_id: worktree.worktree_id,
+    branch_id: branch.branch_id,
     skipped: false,
   };
 }
@@ -111,7 +111,7 @@ await addCustomSeed(async () => {
 1. Checks if data already exists (via `skipIfExists` flag)
 2. Clones Agor repo to `~/.agor/repos/agor` (or custom `baseDir`)
 3. Creates repo record in database
-4. Creates worktree record in database
+4. Creates branch record in database
 5. Returns result with IDs
 
 ## Troubleshooting

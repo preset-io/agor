@@ -62,7 +62,7 @@ fi
 # and plain profiles use the same naming contract.
 if [ -n "$AGOR_RBAC_ENABLED" ] || [ -n "$AGOR_UNIX_USER_MODE" ]; then
   echo "⚙️  RBAC settings from environment:"
-  [ "$AGOR_RBAC_ENABLED" = "true" ] && echo "  execution.worktree_rbac = true"
+  [ "$AGOR_RBAC_ENABLED" = "true" ] && echo "  execution.branch_rbac = true"
   [ -n "$AGOR_UNIX_USER_MODE" ] && echo "  execution.unix_user_mode = $AGOR_UNIX_USER_MODE"
   echo ""
 fi

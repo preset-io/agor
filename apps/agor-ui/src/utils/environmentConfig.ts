@@ -15,7 +15,7 @@ import { type Repo, resolveVariant } from '@agor-live/client';
 
 /**
  * Normalized view of the *default* environment commands for a repo — the ones
- * a fresh worktree would render against. Fields mirror v2 variant keys.
+ * a fresh branch would render against. Fields mirror v2 variant keys.
  */
 export interface EffectiveEnv {
   start?: string;

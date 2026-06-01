@@ -36,7 +36,7 @@ export * as Gemini from '@google/gemini-cli-core';
 // Google GenAI SDK
 export * as GenAI from '@google/genai';
 // Codex SDK - direct type exports for convenience
-export type { Thread, ThreadItem } from '@openai/codex-sdk';
+export type { CodexOptions, Thread, ThreadItem } from '@openai/codex-sdk';
 // Codex SDK - namespace export
 export * as Codex from '@openai/codex-sdk';
 

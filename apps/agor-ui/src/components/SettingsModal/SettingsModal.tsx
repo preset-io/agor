@@ -3,6 +3,7 @@ import type {
   Artifact,
   Board,
   BoardEntityObject,
+  Branch,
   CardType,
   CardWithType,
   CreateLocalRepoRequest,
@@ -13,10 +14,8 @@ import type {
   MCPServer,
   Repo,
   Session,
-  UpdateMCPServerInput,
   UpdateUserInput,
   User,
-  Worktree,
 } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
@@ -37,33 +36,33 @@ import type { MenuProps } from 'antd';
 import { Layout, Menu, Modal, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
-import { WorktreeModal } from '../WorktreeModal';
-import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
+import { BranchModal } from '../BranchModal';
+import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
 import { ArtifactsTable } from './ArtifactsTable';
 import { AssistantsTable } from './AssistantsTable';
 import { BoardsTable } from './BoardsTable';
+import { BranchesTable } from './BranchesTable';
 import { CardsTable } from './CardsTable';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
 import { UsersTable } from './UsersTable';
-import { WorktreesTable } from './WorktreesTable';
 
 const { Sider, Content } = Layout;
 
 export interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
-  client: AgorClient | null; // Still needed for WorktreeModal
+  client: AgorClient | null; // Still needed for BranchModal
   currentUser?: User | null; // Current logged-in user
   boardById: Map<string, Board>;
   boardObjects: BoardEntityObject[];
   repoById: Map<string, Repo>;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   sessionById: Map<string, Session>; // O(1) ID lookups - efficient, stable references
-  sessionsByWorktree: Map<string, Session[]>; // O(1) worktree filtering
+  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
   cardById?: Map<string, CardWithType>;
@@ -79,16 +78,16 @@ export interface SettingsModalProps {
   onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
-  onArchiveOrDeleteWorktree?: (
-    worktreeId: string,
+  onArchiveOrDeleteBranch?: (
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
-  onUnarchiveWorktree?: (worktreeId: string, options?: { boardId?: string }) => void;
-  onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
-  onCreateWorktree?: (
+  onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
+  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
+  onCreateBranch?: (
     repoId: string,
     data: {
       name: string;
@@ -98,15 +97,16 @@ export interface SettingsModalProps {
       pullLatest: boolean;
       issue_url?: string;
       pull_request_url?: string;
+      storage_mode?: 'worktree' | 'clone';
+      clone_depth?: number;
     }
-  ) => Promise<Worktree | null>;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
+  ) => Promise<Branch | null>;
+  onStartEnvironment?: (branchId: string) => void;
+  onStopEnvironment?: (branchId: string) => void;
   onCreateUser?: (data: CreateUserInput) => void;
   onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
-  onUpdateMCPServer?: (serverId: string, updates: UpdateMCPServerInput) => void;
   onDeleteMCPServer?: (serverId: string) => void;
   gatewayChannelById?: Map<string, GatewayChannel>;
   onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
@@ -125,8 +125,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   boardById,
   boardObjects,
   repoById,
-  worktreeById,
-  sessionsByWorktree,
+  branchById,
+  sessionsByBranch,
   userById,
   mcpServerById,
   cardById = new Map(),
@@ -142,17 +142,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onCreateLocalRepo,
   onUpdateRepo,
   onDeleteRepo,
-  onArchiveOrDeleteWorktree,
-  onUnarchiveWorktree,
-  onUpdateWorktree,
-  onCreateWorktree,
+  onArchiveOrDeleteBranch,
+  onUnarchiveBranch,
+  onUpdateBranch,
+  onCreateBranch,
   onStartEnvironment,
   onStopEnvironment,
   onCreateUser,
   onUpdateUser,
   onDeleteUser,
   onCreateMCPServer,
-  onUpdateMCPServer,
   onDeleteMCPServer,
   gatewayChannelById = new Map(),
   onCreateGatewayChannel,
@@ -162,37 +161,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onUpdateArtifact,
   onDeleteArtifact,
 }) => {
-  const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
+  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
-  const [worktreeSessions, setWorktreeSessions] = useState<Session[]>([]);
-  const [worktreeModalOpen, setWorktreeModalOpen] = useState(false);
+  const [branchSessions, setBranchSessions] = useState<Session[]>([]);
+  const [branchModalOpen, setBranchModalOpen] = useState(false);
 
-  const handleWorktreeRowClick = (worktree: Worktree) => {
+  const handleBranchRowClick = (branch: Branch) => {
     // Snapshot the data when opening modal
-    setSelectedWorktree(worktree);
-    setSelectedRepo(repoById.get(worktree.repo_id) || null);
-    setWorktreeSessions(sessionsByWorktree.get(worktree.worktree_id) || []);
-    setWorktreeModalOpen(true);
+    setSelectedBranch(branch);
+    setSelectedRepo(repoById.get(branch.repo_id) || null);
+    setBranchSessions(sessionsByBranch.get(branch.branch_id) || []);
+    setBranchModalOpen(true);
   };
 
-  const handleWorktreeModalClose = () => {
-    setWorktreeModalOpen(false);
+  const handleBranchModalClose = () => {
+    setBranchModalOpen(false);
     // Clear after modal closes
-    setSelectedWorktree(null);
+    setSelectedBranch(null);
     setSelectedRepo(null);
-    setWorktreeSessions([]);
+    setBranchSessions([]);
   };
 
   // Wrapper to close modal after archive/delete
-  const handleArchiveOrDeleteWorktreeWithClose = async (
-    worktreeId: string,
+  const handleArchiveOrDeleteBranchWithClose = async (
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => {
-    await onArchiveOrDeleteWorktree?.(worktreeId, options);
-    handleWorktreeModalClose();
+    await onArchiveOrDeleteBranch?.(branchId, options);
+    handleBranchModalClose();
   };
 
   const { token } = theme.useToken();
@@ -229,8 +228,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             icon: <FolderOutlined />,
           },
           {
-            key: 'worktrees',
-            label: 'Worktrees',
+            key: 'branches',
+            label: 'Branches',
             icon: <BranchesOutlined />,
           },
           {
@@ -342,8 +341,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <BoardsTable
             client={client}
             boardById={boardById}
-            sessionsByWorktree={sessionsByWorktree}
-            worktreeById={worktreeById}
+            sessionsByBranch={sessionsByBranch}
+            branchById={branchById}
             onCreate={onCreateBoard}
             onUpdate={onUpdateBoard}
             onDelete={onDeleteBoard}
@@ -361,37 +360,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onDelete={onDeleteRepo}
           />
         );
-      case 'worktrees':
+      case 'branches':
         return (
-          <WorktreesTable
+          <BranchesTable
             client={client}
-            worktreeById={worktreeById}
+            branchById={branchById}
             repoById={repoById}
             boardById={boardById}
-            sessionsByWorktree={sessionsByWorktree}
-            onArchiveOrDelete={onArchiveOrDeleteWorktree}
-            onUnarchive={onUnarchiveWorktree}
-            onCreate={onCreateWorktree}
-            onRowClick={handleWorktreeRowClick}
+            sessionsByBranch={sessionsByBranch}
+            onArchiveOrDelete={onArchiveOrDeleteBranch}
+            onUnarchive={onUnarchiveBranch}
+            onCreate={onCreateBranch}
+            onRowClick={handleBranchRowClick}
             onStartEnvironment={onStartEnvironment}
             onStopEnvironment={onStopEnvironment}
+            onClose={onClose}
           />
         );
       case 'assistants':
         return (
           <AssistantsTable
-            worktreeById={worktreeById}
+            branchById={branchById}
             repoById={repoById}
             boardById={boardById}
-            sessionsByWorktree={sessionsByWorktree}
+            sessionsByBranch={sessionsByBranch}
+            userById={userById}
             client={client}
-            onArchiveOrDelete={onArchiveOrDeleteWorktree}
-            onRowClick={handleWorktreeRowClick}
-            onCreateWorktree={onCreateWorktree}
-            onUpdateWorktree={onUpdateWorktree}
+            onArchiveOrDelete={onArchiveOrDeleteBranch}
+            onRowClick={handleBranchRowClick}
+            onCreateBranch={onCreateBranch}
+            onUpdateBranch={onUpdateBranch}
             onCreateRepo={onCreateRepo}
-            onStartEnvironment={onStartEnvironment}
-            onStopEnvironment={onStopEnvironment}
+            onClose={onClose}
           />
         );
       case 'cards':
@@ -408,10 +408,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         return (
           <ArtifactsTable
             artifactById={artifactById}
-            worktreeById={worktreeById}
+            branchById={branchById}
             boardById={boardById}
             onUpdate={onUpdateArtifact}
             onDelete={onDeleteArtifact}
+            onClose={onClose}
           />
         );
       case 'mcp':
@@ -420,7 +421,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             mcpServerById={mcpServerById}
             client={client}
             onCreate={onCreateMCPServer}
-            onUpdate={onUpdateMCPServer}
             onDelete={onDeleteMCPServer}
           />
         );
@@ -431,7 +431,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <GatewayChannelsTable
             client={client}
             gatewayChannelById={gatewayChannelById}
-            worktreeById={worktreeById}
+            branchById={branchById}
             userById={userById}
             mcpServerById={mcpServerById}
             currentUser={currentUser}
@@ -530,21 +530,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </Sider>
         <Content style={{ padding: '40px 32px 32px', overflow: 'auto' }}>{renderContent()}</Content>
       </Layout>
-      <WorktreeModal
-        open={worktreeModalOpen}
-        onClose={handleWorktreeModalClose}
-        worktree={selectedWorktree}
+      <BranchModal
+        open={branchModalOpen}
+        onClose={handleBranchModalClose}
+        branch={selectedBranch}
         repo={selectedRepo}
-        sessions={worktreeSessions}
+        sessions={branchSessions}
         boardById={boardById}
         boardObjects={boardObjects}
         mcpServerById={mcpServerById}
         client={client}
         currentUser={currentUser}
-        onUpdateWorktree={onUpdateWorktree}
+        onUpdateBranch={onUpdateBranch}
         onUpdateRepo={onUpdateRepo}
-        onArchiveOrDelete={handleArchiveOrDeleteWorktreeWithClose}
-        onOpenSettings={onClose} // Close worktree modal and keep settings modal open
+        onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
+        onOpenSettings={onClose} // Close branch modal and keep settings modal open
       />
     </Modal>
   );

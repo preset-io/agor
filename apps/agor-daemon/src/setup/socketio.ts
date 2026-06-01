@@ -14,15 +14,18 @@
  * agor.db, and the JWT secret). See `terminal:*` handlers below.
  */
 
+import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   AuthenticatedUser,
   CursorLeaveEvent,
   CursorMovedEvent,
   CursorMoveEvent,
+  PresenceUpdatedEvent,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
+import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import type { BuildInfo } from './build-info.js';
 import type { CorsOrigin } from './cors.js';
 
@@ -37,7 +40,7 @@ import type { CorsOrigin } from './cors.js';
  *
  * Service accounts (the executor) are identified via `user._isServiceAccount`,
  * which is the canonical marker set by ServiceJWTStrategy and consumed by
- * every other daemon authz path (worktree-authorization.ts, register-hooks.ts,
+ * every other daemon authz path (branch-authorization.ts, register-hooks.ts,
  * utils/authorization.ts). We extend FeathersJS's `User` type locally to
  * include it — see `AuthenticatedUser` in `@agor/core/types/feathers.ts`.
  *
@@ -55,6 +58,8 @@ interface FeathersSocket extends Socket {
   };
   data: {
     isService?: boolean;
+    currentBoardId?: string;
+    lastPresenceEmitAt?: number;
   };
 }
 
@@ -63,8 +68,6 @@ export interface SocketIOOptions {
   corsOrigin: CorsOrigin;
   /** JWT secret for token verification */
   jwtSecret: string;
-  /** Whether anonymous access is allowed */
-  allowAnonymous: boolean;
   /**
    * Whether the HTTP CORS layer is allowing credentials. The socket.io
    * transport must mirror this — when the HTTP side has dropped credentials
@@ -195,6 +198,16 @@ export function userRoomName(userId: string): string {
 }
 
 /**
+ * Per-board room name for high-frequency collaborative cursor traffic.
+ *
+ * Only tabs actively viewing a board should join this room so cursor motion
+ * doesn't fan out to the entire app.
+ */
+export function boardPresenceRoomName(boardId: string): string {
+  return `board:${boardId}:presence`;
+}
+
+/**
  * Validate a terminal channel name and extract its target user_id.
  *
  * Channel format: `user/<uuid>/terminal`. Returns null on bad shape.
@@ -214,6 +227,13 @@ export interface SocketIOResult {
   /** Socket.io server instance (for graceful shutdown) */
   socketServer: Server | null;
 }
+
+/**
+ * Global presence consumers (e.g. navbar facepile) don't need every cursor
+ * sample. Emit a lightweight presence heartbeat at most this often while a
+ * user stays on the same board.
+ */
+const GLOBAL_PRESENCE_EMIT_INTERVAL_MS = 10_000;
 
 /**
  * Create Socket.io configuration callback for FeathersJS
@@ -239,7 +259,7 @@ export function createSocketIOConfig(
   callback: (io: Server) => void;
   getSocketServer: () => Server | null;
 } {
-  const { corsOrigin, jwtSecret, allowAnonymous, credentialsAllowed, buildInfo } = options;
+  const { corsOrigin, jwtSecret, credentialsAllowed, buildInfo } = options;
   // Default ON to mirror the daemon-wide default (see register-hooks.ts).
   const webTerminalEnabled = options.webTerminalEnabled !== false;
 
@@ -281,23 +301,19 @@ export function createSocketIOConfig(
           socket.handshake.headers?.authorization?.replace('Bearer ', '');
 
         if (!token) {
-          // SECURITY: Always allow unauthenticated socket connections
-          // This is required for the login flow to work (client needs to connect before authenticating)
-          // Service-level hooks (requireAuth) will enforce authentication for protected endpoints
-          // The /authentication endpoint explicitly allows unauthenticated access for login
-          if (allowAnonymous) {
-            console.log(`🔓 WebSocket connection without auth (anonymous allowed): ${socket.id}`);
-          } else {
-            console.log(`🔓 WebSocket connection without auth (for login flow): ${socket.id}`);
-          }
-          // Don't set socket.feathers.user - will be handled by FeathersJS auth
+          // Allow the socket to connect without auth so the client can run the
+          // login flow (POST /authentication). Service-level hooks (requireAuth)
+          // enforce authentication on every protected endpoint, so an
+          // unauthenticated socket can't read or write anything until it
+          // authenticates.
+          console.log(`🔓 WebSocket connection without auth (for login flow): ${socket.id}`);
           return next();
         }
 
         // Verify JWT token
         const decoded = jwt.verify(token, jwtSecret, {
-          issuer: 'agor',
-          audience: 'https://agor.dev',
+          issuer: RUNTIME_JWT_ISSUER,
+          audience: RUNTIME_JWT_AUDIENCE,
         }) as { sub: string; type?: string; role?: string };
 
         // Allow user tokens and service tokens (used by executor)
@@ -343,9 +359,7 @@ export function createSocketIOConfig(
         // Attach user to socket (FeathersJS convention)
         (socket as FeathersSocket).feathers = { user };
 
-        console.log(
-          `🔐 WebSocket authenticated: ${socket.id} (user: ${user.user_id.substring(0, 8)})`
-        );
+        console.log(`🔐 WebSocket authenticated: ${socket.id} (user: ${shortId(user.user_id)})`);
         next();
       } catch (error) {
         console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
@@ -358,7 +372,7 @@ export function createSocketIOConfig(
       activeConnections++;
       const user = (socket as FeathersSocket).feathers?.user;
       console.log(
-        `🔌 Socket.io connection established: ${socket.id} (user: ${user ? user.user_id.substring(0, 8) : 'anonymous'}, total: ${activeConnections})`
+        `🔌 Socket.io connection established: ${socket.id} (user: ${user ? shortId(user.user_id) : 'unknown'}, total: ${activeConnections})`
       );
 
       // Welcome event: ship the daemon's build identity so UI tabs can spot
@@ -378,7 +392,7 @@ export function createSocketIOConfig(
       if (user?.user_id) {
         socket.join(userRoomName(user.user_id));
         console.log(
-          `🏠 Socket ${socket.id} joined user room at connection: user:${user.user_id.substring(0, 8)}`
+          `🏠 Socket ${socket.id} joined user room at connection: user:${shortId(user.user_id)}`
         );
       }
 
@@ -395,14 +409,34 @@ export function createSocketIOConfig(
       const getUserId = () => {
         // In FeathersJS, the authenticated user is stored in socket.feathers
         const user = (socket as FeathersSocket).feathers?.user;
-        return user?.user_id || 'anonymous';
+        return user?.user_id || 'unknown';
       };
+
+      socket.on('presence:watch-board', (boardId: string) => {
+        const auth = getSocketAuthState(socket);
+        if (!isAuthenticated(auth) || typeof boardId !== 'string' || !boardId.trim()) return;
+        socket.join(boardPresenceRoomName(boardId));
+      });
+
+      socket.on('presence:unwatch-board', (boardId: string) => {
+        if (typeof boardId !== 'string' || !boardId.trim()) return;
+        socket.leave(boardPresenceRoomName(boardId));
+      });
 
       // Handle cursor movement events
       socket.on('cursor-move', (data: CursorMoveEvent) => {
         const userId = getUserId();
+        const fs = socket as FeathersSocket;
+        const previousBoardId = fs.data.currentBoardId;
 
-        // Broadcast cursor position to all users on the same board except sender
+        if (previousBoardId && previousBoardId !== data.boardId) {
+          socket.broadcast.to(boardPresenceRoomName(previousBoardId)).emit('cursor-left', {
+            userId,
+            boardId: previousBoardId,
+            timestamp: Date.now(),
+          });
+        }
+
         const broadcastData: CursorMovedEvent = {
           userId,
           boardId: data.boardId,
@@ -411,18 +445,43 @@ export function createSocketIOConfig(
           timestamp: data.timestamp,
         };
 
-        socket.broadcast.emit('cursor-moved', broadcastData);
+        // Broadcast cursor position only to tabs actively watching this board.
+        socket.broadcast
+          .to(boardPresenceRoomName(data.boardId))
+          .emit('cursor-moved', broadcastData);
+
+        fs.data.currentBoardId = data.boardId;
+
+        const shouldEmitPresenceUpdate =
+          previousBoardId !== data.boardId ||
+          !fs.data.lastPresenceEmitAt ||
+          data.timestamp - fs.data.lastPresenceEmitAt >= GLOBAL_PRESENCE_EMIT_INTERVAL_MS;
+
+        if (shouldEmitPresenceUpdate) {
+          const presenceData: PresenceUpdatedEvent = {
+            userId,
+            boardId: data.boardId,
+            timestamp: data.timestamp,
+          };
+          socket.broadcast.emit('presence-updated', presenceData);
+          fs.data.lastPresenceEmitAt = data.timestamp;
+        }
       });
 
       // Handle cursor leave events (user navigates away from board)
       socket.on('cursor-leave', (data: CursorLeaveEvent) => {
         const userId = getUserId();
+        const fs = socket as FeathersSocket;
 
-        socket.broadcast.emit('cursor-left', {
+        socket.broadcast.to(boardPresenceRoomName(data.boardId)).emit('cursor-left', {
           userId,
           boardId: data.boardId,
           timestamp: Date.now(),
         });
+
+        if (fs.data.currentBoardId === data.boardId) {
+          delete fs.data.currentBoardId;
+        }
       });
 
       // =========================================================================
@@ -441,7 +500,7 @@ export function createSocketIOConfig(
       //     - terminal:tab      requires service auth
       //                         (the daemon ALSO emits terminal:tab via
       //                          io.to(...) directly from terminals.ts after
-      //                          enforcing worktree RBAC at the HTTP layer;
+      //                          enforcing branch RBAC at the HTTP layer;
       //                          server-side emits never hit this handler.)
       //
       //   join / leave:
@@ -450,11 +509,11 @@ export function createSocketIOConfig(
       //       for service sockets). This stops a member from joining another
       //       user's terminal channel and harvesting their PTY output.
       //
-      //   Worktree RBAC for opening a terminal against a specific worktree
-      //   is enforced at the HTTP `terminals.create({ worktreeId })` entry
+      //   Branch RBAC for opening a terminal against a specific branch
+      //   is enforced at the HTTP `terminals.create({ branchId })` entry
       //   point (see services/terminals.ts ~L194). Browsers cannot bypass
       //   that gate from the WS side, because creating a Zellij tab in an
-      //   arbitrary worktree requires terminal:tab — and only service-token
+      //   arbitrary branch requires terminal:tab — and only service-token
       //   sockets are allowed to emit terminal:tab here.
       //
       //   `webTerminalEnabled === false` short-circuits ALL of the above —
@@ -496,8 +555,8 @@ export function createSocketIOConfig(
           // refuse to relay.
           rejectTerminal(
             event,
-            `payload userId (${String(payloadUserId).slice(0, 8)}…) does not match ` +
-              `authed userId (${auth.userId.slice(0, 8)}…)`
+            `payload userId (${shortId(String(payloadUserId))}…) does not match ` +
+              `authed userId (${shortId(auth.userId)}…)`
           );
           return null;
         }
@@ -526,7 +585,7 @@ export function createSocketIOConfig(
         if (!auth.isService && auth.userId !== target) {
           rejectTerminal(
             'join',
-            `user ${auth.userId?.slice(0, 8)}… tried to join ${target.slice(0, 8)}…'s channel`
+            `user ${auth.userId ? shortId(auth.userId) : 'unknown'}… tried to join ${shortId(target)}…'s channel`
           );
           return;
         }
@@ -548,7 +607,7 @@ export function createSocketIOConfig(
           if (!auth.isService && auth.userId !== target) {
             rejectTerminal(
               'leave',
-              `user ${auth.userId?.slice(0, 8)}… tried to leave ${target.slice(0, 8)}…'s channel`
+              `user ${auth.userId ? shortId(auth.userId) : 'unknown'}… tried to leave ${shortId(target)}…'s channel`
             );
             return;
           }
@@ -611,10 +670,10 @@ export function createSocketIOConfig(
       });
 
       // Route terminal tab commands. The daemon emits this server-side via
-      // io.to() (terminals.ts) AFTER enforcing worktree RBAC on the HTTP
+      // io.to() (terminals.ts) AFTER enforcing branch RBAC on the HTTP
       // create() path. We must NOT let browsers emit it directly — doing so
-      // would let a user with 'view'-only on a worktree open a Zellij tab
-      // (and a shell) inside that worktree, bypassing the HTTP RBAC gate.
+      // would let a user with 'view'-only on a branch open a Zellij tab
+      // (and a shell) inside that branch, bypassing the HTTP RBAC gate.
       socket.on(
         'terminal:tab',
         (data: { userId: string; action: string; tabName: string; cwd?: string }) => {
@@ -691,7 +750,7 @@ export function createSocketIOConfig(
         if ((socket as FeathersSocket).feathers === context.connection) {
           socket.join(userRoomName(userId));
           console.log(
-            `🏠 Socket ${socket.id} joined user room after login: user:${userId.substring(0, 8)}`
+            `🏠 Socket ${socket.id} joined user room after login: user:${shortId(userId)}`
           );
           break;
         }

@@ -16,7 +16,7 @@
  * Returns: 'approved' | 'denied-interactively-by-user' | 'denied-by-rules' | etc.
  */
 
-import { generateId } from '@agor/core';
+import { generateId, shortId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole, PermissionStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import type {
@@ -32,7 +32,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { PermissionMode } from '../../types.js';
-import type { MessagesService, SessionsService, TasksService } from '../claude/claude-tool.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 
 /**
  * Re-export SDK types for convenience
@@ -50,7 +50,7 @@ export interface PermissionDeps {
   sessionsRepo: SessionRepository;
   messagesRepo: MessagesRepository;
   messagesService?: MessagesService;
-  sessionsService?: SessionsService;
+  sessionsService?: SessionsPatchClient;
   permissionLocks: Map<SessionID, Promise<void>>;
   mcpServerRepo?: MCPServerRepository;
   sessionMCPRepo?: SessionMCPServerRepository;
@@ -221,7 +221,7 @@ export function createPermissionHandler(
       const existingLock = deps.permissionLocks.get(sessionId);
       if (existingLock) {
         console.log(
-          `⏳ [Copilot Permission] Waiting for pending permission check (session ${sessionId.substring(0, 8)})`
+          `⏳ [Copilot Permission] Waiting for pending permission check (session ${shortId(sessionId)})`
         );
         await existingLock;
       }
@@ -409,7 +409,7 @@ export function createPermissionHandler(
         releaseLock();
         deps.permissionLocks.delete(sessionId);
         console.log(
-          `🔓 [Copilot Permission] Released permission lock for session ${sessionId.substring(0, 8)}`
+          `🔓 [Copilot Permission] Released permission lock for session ${shortId(sessionId)}`
         );
       }
     }

@@ -11,7 +11,10 @@ import { getDaemonUrl } from '../config/daemon';
 
 interface AuthConfig {
   requireAuth: boolean;
-  allowAnonymous: boolean;
+  externalLaunch?: {
+    enabled?: boolean;
+    loginRedirectUrl?: string;
+  };
 }
 
 interface InstanceConfig {
@@ -23,6 +26,7 @@ interface SystemCredentials {
   ANTHROPIC_API_KEY?: boolean;
   OPENAI_API_KEY?: boolean;
   GEMINI_API_KEY?: boolean;
+  CURSOR_API_KEY?: boolean;
 }
 
 interface OnboardingConfig {
@@ -44,9 +48,18 @@ interface FeaturesConfig {
    * (start/stop/nuke/logs). Value: 'none' | 'viewer' | 'member' | 'admin' |
    * 'superadmin'. UI uses this to disable trigger buttons with a tooltip for
    * users below the threshold. Server-side enforcement in
-   * services/worktrees.ts is the source of truth. Defaults to 'member'.
+   * services/branches.ts is the source of truth. Defaults to 'member'.
    */
   managedEnvsMinimumRole?: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin';
+  /**
+   * True when the daemon runs in a multi-user Unix isolation mode
+   * (insulated/strict). The UI uses this to hide "trust everyone on this
+   * instance" surfaces (e.g. the `instance` scope option in the artifact
+   * consent modal). Server-side gates are the source of truth.
+   */
+  multiUser?: boolean;
+  /** Experimental Cursor SDK provider enabled on the daemon. */
+  cursorSdk?: boolean;
 }
 
 interface HealthResponse {
@@ -88,7 +101,7 @@ export function useAuthConfig() {
       } catch (err) {
         setError(err instanceof Error ? err : new Error(String(err)));
         // Default to requiring auth on error (secure by default)
-        setConfig({ requireAuth: true, allowAnonymous: false });
+        setConfig({ requireAuth: true });
         setInstanceConfig(null);
         setOnboardingConfig(null);
         setServicesConfig(undefined);

@@ -5,6 +5,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
+import { ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,
@@ -61,7 +62,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           password: values.password,
           name: values.name,
           emoji: values.emoji || '👤',
-          role: values.role || 'member',
+          role: values.role || ROLES.MEMBER,
           unix_username: values.unix_username,
           must_change_password: values.must_change_password || false,
         });
@@ -237,15 +238,16 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           <Form.Item
             label="Role"
             name="role"
-            initialValue="member"
+            initialValue={ROLES.MEMBER}
             rules={[{ required: true, message: 'Please select a role' }]}
           >
-            <Select>
-              {/* <Select.Option value="owner">Owner</Select.Option> */}
-              <Select.Option value="admin">Admin</Select.Option>
-              <Select.Option value="member">Member</Select.Option>
-              <Select.Option value="viewer">Viewer</Select.Option>
-            </Select>
+            <Select
+              options={ROLE_OPTIONS.map((opt) => ({
+                value: opt.value,
+                label: opt.label,
+                title: opt.description,
+              }))}
+            />
           </Form.Item>
 
           <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>

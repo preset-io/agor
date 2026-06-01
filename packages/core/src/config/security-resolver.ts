@@ -14,7 +14,15 @@
  * rather than emitting a subtly-broken header and failing at request time.
  */
 
-import type { AgorConfig, AgorCorsMode, AgorCspDirectives, AgorSecuritySettings } from './types';
+import type {
+  AgorConfig,
+  AgorCorsMode,
+  AgorCspDirectives,
+  AgorGitConfigParametersSettings,
+  AgorSecuritySettings,
+} from './types';
+
+export type { AgorGitConfigParametersSettings } from './types';
 
 /**
  * Known CSP directive names (lowercase, hyphenated). Used to validate config
@@ -432,4 +440,140 @@ export function resolveSecurity(
   };
 
   return { csp: cspResult, cors: corsResult };
+}
+
+// ============================================================================
+// Git config hardening (security.git_config_parameters)
+// ============================================================================
+// Defaults + resolver semantics; the env-var encoding lives in @agor/core/git.
+// Design: docs/internal/credential-leak-defenses-2026-05-11.md.
+
+/**
+ * Conservative defaults. `transfer.credentialsInUrl=die` (git 2.41+) is
+ * scoped to `remote.<name>.url` per git's docs — NOT `pushurl`, NOT argv.
+ * The protocol/HFS/NTFS pairs are either git defaults already (modern git
+ * or macOS/Windows) or near-zero risk on Linux. `fsckObjects` is deliberately
+ * out — too prone to refusing legacy repos; opt in via `extras` if needed.
+ */
+const DEFAULT_GIT_CONFIG_PARAMETERS: readonly string[] = Object.freeze([
+  'transfer.credentialsInUrl=die',
+  'protocol.file.allow=user',
+  'protocol.ext.allow=never',
+  'core.protectHFS=true',
+  'core.protectNTFS=true',
+]);
+
+export function getDefaultGitConfigParameters(): string[] {
+  return [...DEFAULT_GIT_CONFIG_PARAMETERS];
+}
+
+function gitConfigParameterKey(pair: string): string {
+  const trimmed = pair.trim();
+  const eq = trimmed.indexOf('=');
+  return eq >= 0 ? trimmed.slice(0, eq) : trimmed;
+}
+
+/**
+ * Runtime validation for an `extras` or `override` list. YAML can produce
+ * shapes the TS type doesn't catch (a bare string instead of an array, a
+ * mix of strings and numbers, etc.), and silent acceptance would either
+ * corrupt the Map merge (strings iterate as characters) or crash later in
+ * the protocol encoder. Throw at config-load with a clear path.
+ */
+function validateGitConfigParameterList(value: unknown, path: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${path} must be an array of strings`);
+  }
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      throw new Error(`${path} must be an array of strings; got ${typeof item}`);
+    }
+  }
+  return value;
+}
+
+export function resolveGitConfigParameters(
+  configured: AgorGitConfigParametersSettings | undefined
+): readonly string[] {
+  if (configured === undefined || configured === null) {
+    return getDefaultGitConfigParameters();
+  }
+
+  // Flat-array shape was the v1 of this key on the design branch (now
+  // superseded by { extras, override }). Catch operators who copied it from
+  // earlier docs / forks and migrate them with a clear hint.
+  if (Array.isArray(configured)) {
+    throw new Error(
+      'security.git_config_parameters: takes { extras: [...] } or { override: [...] }, ' +
+        'not a flat array. Move your list under `extras` (to append to the safe defaults) ' +
+        'or `override` (to replace them).'
+    );
+  }
+
+  if (typeof configured !== 'object') {
+    throw new Error(
+      'security.git_config_parameters: must be an object with optional `extras` / `override` arrays'
+    );
+  }
+
+  const extras = validateGitConfigParameterList(
+    (configured as { extras?: unknown }).extras,
+    'security.git_config_parameters.extras'
+  );
+  const override = validateGitConfigParameterList(
+    (configured as { override?: unknown }).override,
+    'security.git_config_parameters.override'
+  );
+
+  if (extras !== undefined && override !== undefined) {
+    throw new Error(
+      'security.git_config_parameters: cannot set both `extras` and `override`. ' +
+        'Use `extras` to append to the safe defaults, or `override` to replace them entirely.'
+    );
+  }
+
+  if (override !== undefined) return override;
+  if (extras === undefined || extras.length === 0) return getDefaultGitConfigParameters();
+
+  // Map-based merge handles defaults+extras AND duplicate keys within extras
+  // (last write wins) AND whitespace normalization in one pass.
+  const byKey = new Map<string, string>();
+  for (const raw of [...DEFAULT_GIT_CONFIG_PARAMETERS, ...extras]) {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) continue;
+    byKey.set(gitConfigParameterKey(trimmed), trimmed);
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * Replace userinfo in any URL with `<redacted>`. Catches creds embedded in
+ * either the value (e.g. `http.proxy=http://USER:TOK@host/`) or the config
+ * KEY (git config keys can carry URLs as subsections, e.g.
+ * `url."https://USER:TOK@host/".insteadOf=…`). Anchored to `://` so SCP-form
+ * `git@host:path` URLs aren't false-positively matched.
+ */
+export function redactUrlUserinfo(s: string): string {
+  return s.replace(/:\/\/[^/@\s]+@/g, '://<redacted>@');
+}
+
+/** True when a pair still looks credential-bearing AFTER URL-userinfo redaction. */
+export function gitConfigParameterLooksSecret(pair: string): boolean {
+  return /authorization:/i.test(pair);
+}
+
+/**
+ * Render for log: scrub URL userinfo from key+value, then mask the value if
+ * the residue still matches an auth-header pattern.
+ */
+export function renderGitConfigParametersForLog(pairs: readonly string[]): string {
+  return pairs
+    .filter((p) => p.trim().length > 0)
+    .map((pair) => {
+      const scrubbed = redactUrlUserinfo(pair);
+      if (!gitConfigParameterLooksSecret(scrubbed)) return scrubbed;
+      return `${gitConfigParameterKey(scrubbed)}=<redacted>`;
+    })
+    .join(' ');
 }

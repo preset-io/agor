@@ -19,6 +19,7 @@ export interface InitializedCredentials {
   anthropicBaseUrl?: string;
   geminiApiKey?: string;
   copilotGithubToken?: string;
+  cursorApiKey?: string;
 }
 
 /**
@@ -171,6 +172,25 @@ export function initializeCopilotGithubToken(
 }
 
 /**
+ * Initialize Cursor API key for the experimental Cursor SDK provider.
+ *
+ * Priority: config.yaml > env var. Runtime support is intentionally gated
+ * elsewhere; this only keeps config/env propagation consistent with other
+ * provider credentials.
+ */
+export function initializeCursorApiKey(
+  config: { credentials?: CredentialsConfig },
+  envApiKey?: string
+): string | undefined {
+  if (config.credentials?.CURSOR_API_KEY && !envApiKey) {
+    process.env.CURSOR_API_KEY = config.credentials.CURSOR_API_KEY;
+    console.log('✅ Set CURSOR_API_KEY from config for Cursor SDK');
+  }
+
+  return config.credentials?.CURSOR_API_KEY || envApiKey;
+}
+
+/**
  * Initialize all AI service credentials
  *
  * Convenience function to initialize all supported API keys at once.
@@ -192,5 +212,6 @@ export function initializeCredentials(config: {
       process.env.GH_TOKEN,
       process.env.GITHUB_TOKEN
     ),
+    cursorApiKey: initializeCursorApiKey(config, process.env.CURSOR_API_KEY),
   };
 }

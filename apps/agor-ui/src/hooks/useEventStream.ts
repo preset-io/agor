@@ -66,7 +66,8 @@ export function useEventStream(options: UseEventStreamOptions): UseEventStreamRe
         eventName === 'cursor-move' ||
         eventName === 'cursor-leave' ||
         eventName === 'cursor-moved' ||
-        eventName === 'cursor-left'
+        eventName === 'cursor-left' ||
+        eventName === 'presence-updated'
       ) {
         type = 'cursor';
       } else if (eventName.includes('message') || eventName === 'thinking:chunk') {

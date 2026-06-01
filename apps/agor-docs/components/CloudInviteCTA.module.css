@@ -1,0 +1,99 @@
+.wrapper {
+  margin: 2rem 0;
+  display: flex;
+  gap: 0.85rem;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Shared sizing so primary + secondary line up. */
+.primary,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.9rem 1.85rem;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  border-radius: 8px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+/* Primary — saturated teal pill, the "Join Private Beta" path. */
+.primary {
+  color: #0a0a0a;
+  background: linear-gradient(135deg, #2e9a92 0%, #4ec4ba 100%);
+  box-shadow: 0 4px 14px rgba(46, 154, 146, 0.4);
+}
+
+.primary:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, #3db4aa 0%, #6dd5cb 100%);
+  box-shadow: 0 6px 20px rgba(46, 154, 146, 0.55);
+}
+
+.primary:focus-visible {
+  outline: 2px solid #a8f5ed;
+  outline-offset: 3px;
+}
+
+/* Secondary — outline / ghost, the "Book a Demo" path. Lighter visual
+ * weight so the primary stays the obvious default. */
+.secondary {
+  color: #7fe8df;
+  background: rgba(46, 154, 146, 0.08);
+  border: 1.5px solid rgba(127, 232, 223, 0.45);
+  box-shadow: 0 2px 8px rgba(46, 154, 146, 0.12);
+}
+
+.secondary:hover {
+  transform: translateY(-1px);
+  color: #a8f5ed;
+  background: rgba(46, 154, 146, 0.15);
+  border-color: rgba(127, 232, 223, 0.75);
+  box-shadow: 0 4px 14px rgba(46, 154, 146, 0.25);
+}
+
+.secondary:focus-visible {
+  outline: 2px solid #a8f5ed;
+  outline-offset: 3px;
+}
+
+/* Beat the global `.dark a` color rule from pages/styles.css so the
+ * dark text on the bright primary, and the brand-teal text on the
+ * outline secondary, both stay correct. */
+:global(.dark) .primary,
+:global(.dark) .primary:hover {
+  color: #0a0a0a;
+}
+
+:global(.dark) .secondary {
+  color: #7fe8df;
+}
+
+:global(.dark) .secondary:hover {
+  color: #a8f5ed;
+}
+
+@media (max-width: 640px) {
+  .wrapper {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .primary,
+  .secondary {
+    width: 100%;
+    max-width: 320px;
+    justify-content: center;
+    padding: 0.8rem 1.5rem;
+    font-size: 1rem;
+  }
+}

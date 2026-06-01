@@ -12,7 +12,7 @@ export * from './command-executor.js';
 export * from './environment-command-deny-list.js';
 // Environment command spawn utilities
 export * from './environment-command-spawn.js';
-// Worktree group management
+// Branch group management
 export * from './group-manager.js';
 // ID lookup utilities
 export * from './id-lookups.js';

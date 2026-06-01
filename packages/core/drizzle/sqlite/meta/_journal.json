@@ -281,6 +281,55 @@
       "when": 1777300000000,
       "tag": "0041_restructure_agentic_tool_config",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1777400000000,
+      "tag": "0042_artifacts_format_refactor",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1778500000000,
+      "tag": "0043_artifacts_agor_runtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1779840000000,
+      "tag": "0044_add_worktree_storage_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1780100000000,
+      "tag": "0045_rename_worktree_to_branch",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1780300000000,
+      "tag": "0046_schedules_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1780400000000,
+      "tag": "0047_primary_assistant_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1780500000000,
+      "tag": "0048_executor_heartbeat",
+      "breakpoints": true
     }
   ]
 }

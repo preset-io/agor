@@ -110,7 +110,7 @@ describe('createUser', () => {
   });
 
   dbTest('should set member emoji for non-admin roles', async ({ db }) => {
-    const roles = ['superadmin', 'member', 'viewer'] as const;
+    const roles = ['member', 'viewer'] as const;
 
     for (const role of roles) {
       const data = createUserData({
@@ -122,8 +122,16 @@ describe('createUser', () => {
       const user = await createUser(db, data);
 
       expect(user.role).toBe(role);
-      expect(user.emoji).toBe('👤'); // Member emoji (not admin)
+      expect(user.emoji).toBe('👤'); // Member emoji
     }
+  });
+
+  dbTest('should set star emoji for superadmin role', async ({ db }) => {
+    const user = await createUser(
+      db,
+      createUserData({ email: 'sa@example.com', password: 'pass', role: 'superadmin' })
+    );
+    expect(user.emoji).toBe('⭐');
   });
 
   dbTest('should default to member role if not specified', async ({ db }) => {
@@ -367,7 +375,7 @@ describe('getUserByEmail', () => {
     expect(user?.email).toBe('complete@example.com');
     expect(user?.name).toBe('Complete User');
     expect(user?.role).toBe('superadmin');
-    expect(user?.emoji).toBe('👤');
+    expect(user?.emoji).toBe('⭐');
     expect(user?.onboarding_completed).toBe(false);
     expect(user?.created_at).toBeInstanceOf(Date);
     expect(user?.updated_at).toBeInstanceOf(Date);
@@ -419,7 +427,8 @@ describe('DEFAULT_ADMIN_USER', () => {
     expect(DEFAULT_ADMIN_USER.email).toBe('admin@agor.live');
     expect(DEFAULT_ADMIN_USER.password).toBe('admin');
     expect(DEFAULT_ADMIN_USER.name).toBe('Admin');
-    expect(DEFAULT_ADMIN_USER.role).toBe('admin');
+    expect(DEFAULT_ADMIN_USER.role).toBe('superadmin');
+    expect(DEFAULT_ADMIN_USER.unix_username).toBe('admin');
   });
 
   it('should be a const object', () => {
@@ -438,7 +447,8 @@ describe('createDefaultAdminUser', () => {
 
     expect(admin.email).toBe('admin@agor.live');
     expect(admin.name).toBe('Admin');
-    expect(admin.role).toBe('admin');
+    expect(admin.role).toBe('superadmin');
+    expect(admin.unix_username).toBe('admin');
     expect(admin.emoji).toBe('⭐'); // Admin emoji
     expect(admin.user_id).toBeDefined();
   });
@@ -551,7 +561,7 @@ describe('User utilities integration', () => {
     expect(viewer.role).toBe('viewer');
 
     expect(admin.emoji).toBe('⭐');
-    expect(superadmin.emoji).toBe('👤');
+    expect(superadmin.emoji).toBe('⭐');
     expect(member.emoji).toBe('👤');
     expect(viewer.emoji).toBe('👤');
   });
@@ -569,7 +579,7 @@ describe('User utilities integration', () => {
     expect(await userExists(db, 'user1@example.com')).toBe(true);
     expect(await userExists(db, 'user2@example.com')).toBe(true);
 
-    expect(admin.role).toBe('admin');
+    expect(admin.role).toBe('superadmin');
     expect(user1.role).toBe('member');
     expect(user2.role).toBe('member');
   });

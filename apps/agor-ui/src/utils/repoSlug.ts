@@ -14,7 +14,7 @@ export function extractSlugFromPath(path: string): string {
   return `local/${sanitized}`;
 }
 
-/** Slugify a display name into a valid worktree name */
+/** Slugify a display name into a valid branch name */
 export function slugify(name: string): string {
   return name
     .toLowerCase()

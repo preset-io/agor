@@ -1,3 +1,29 @@
 services:
   agor-dev:
     user: '${UID:-1000}:${GID:-1000}'
+    # Allow nested unprivileged user namespaces inside the container so
+    # tools that sandbox each child process via `unshare(CLONE_NEWUSER)` —
+    # Codex's `codex-linux-sandbox` (workspace-write mode), bwrap-based
+    # tools like Flatpak / Steam helpers, podman-in-docker, etc. — can
+    # actually initialize their sandbox.
+    #
+    # BOTH `apparmor` and `seccomp` need to be unconfined: on a stock
+    # Debian 12 + Linux 6.1 host the default Docker seccomp profile
+    # rejects `unshare(CLONE_NEWUSER)` even after AppArmor has been
+    # lifted (verified empirically — `seccomp=unconfined` alone makes
+    # `unshare --user` succeed, `apparmor=unconfined` alone does not).
+    # Without these, Codex sessions fail the very first command with
+    # a misleading "kernel does not allow non-privileged user
+    # namespaces" error (the kernel allows it; the container LSMs
+    # don't).
+    #
+    # Trade-off: drops two LSM layers between container and host, but
+    # leaves the namespace / cgroup isolation untouched — acceptable
+    # for a dev environment, and the right call alongside Agor's
+    # "the dev container IS the security boundary" model. Users who
+    # prefer not to relax these can switch a session to
+    # `danger-full-access` per-session and skip the userns dance
+    # entirely.
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined

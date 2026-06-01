@@ -12,7 +12,11 @@ import type {
   SessionID,
   SpawnConfig,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, SessionStatus } from '@agor-live/client';
+import {
+  getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
+  SessionStatus,
+} from '@agor-live/client';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
 
@@ -52,12 +56,12 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       setCreating(true);
       setError(null);
 
-      // Worktree ID is now passed directly (resolved in NewSessionModal or from worktree creation)
-      if (!config.worktree_id) {
-        throw new Error('Worktree ID is required');
+      // Branch ID is now passed directly (resolved in NewSessionModal or from branch creation)
+      if (!config.branch_id) {
+        throw new Error('Branch ID is required');
       }
 
-      // Create session with worktree_id
+      // Create session with branch_id
       const agenticTool = config.agent as AgenticToolName;
       const permissionMode: PermissionMode =
         config.permissionMode || getDefaultPermissionMode(agenticTool);
@@ -67,10 +71,14 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       };
 
       if (agenticTool === 'codex') {
+        // Fill any missing field from the mode-derived defaults so the UI
+        // doesn't silently restore the old `on-request` / network-off
+        // behavior when advanced fields aren't expanded.
+        const codexDefaults = mapToCodexPermissionConfig(permissionMode);
         permissionConfig.codex = {
-          sandboxMode: config.codexSandboxMode || 'workspace-write',
-          approvalPolicy: config.codexApprovalPolicy || 'on-request',
-          networkAccess: config.codexNetworkAccess ?? false,
+          sandboxMode: config.codexSandboxMode ?? codexDefaults.sandboxMode,
+          approvalPolicy: config.codexApprovalPolicy ?? codexDefaults.approvalPolicy,
+          networkAccess: config.codexNetworkAccess ?? codexDefaults.networkAccess,
         };
       }
 
@@ -79,7 +87,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         status: SessionStatus.IDLE,
         title: config.title || undefined,
         description: config.initialPrompt || undefined,
-        worktree_id: config.worktree_id,
+        branch_id: config.branch_id,
         model_config: config.modelConfig
           ? {
               ...config.modelConfig,

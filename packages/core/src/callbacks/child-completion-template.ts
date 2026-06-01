@@ -2,9 +2,11 @@
  * Child-session completion callback template.
  *
  * Variables available:
- * - childSessionId: Short ID of completed child session
+ * - childSessionId: Short ID of completed child session (canonical
+ *   `SHORT_ID_LENGTH` chars via `shortId(id)`; collision-safe even when
+ *   parents fan out children in the same millisecond)
  * - childSessionFullId: Full UUIDv7 of child session
- * - childTaskId: Short ID of completed task
+ * - childTaskId: Short ID of completed task (same shape)
  * - childTaskFullId: Full UUIDv7 of task
  * - parentSessionId: Short ID of callback target session (alias: callbackSessionId)
  * - spawnPrompt: Original prompt given to child
@@ -36,12 +38,12 @@ const DEFAULT_TEMPLATE = `[Agor] Child session {{childSessionId}} has {{#if (eq 
 Review what went wrong and decide whether to retry or take a different approach.{{/if}}`;
 
 export interface ChildCompletionContext {
-  childSessionId: string; // Short ID (first 8 chars)
+  childSessionId: string; // Canonical short ID (shortId(childSession.session_id))
   childSessionFullId: string; // Full UUIDv7
-  childTaskId: string; // Short ID of completed task
+  childTaskId: string; // Canonical short ID
   childTaskFullId: string; // Full UUIDv7 of task
-  parentSessionId: string; // Short ID of callback target (kept for backward compat)
-  callbackSessionId: string; // Alias: Short ID of callback target session
+  parentSessionId: string; // Canonical short ID of callback target (kept for backward compat)
+  callbackSessionId: string; // Alias: Canonical short ID of callback target session
   spawnPrompt?: string; // Original prompt from spawn (truncated to 120 chars, optional based on include_original_prompt)
   status: string; // Task status (COMPLETED, FAILED, etc.)
   completedAt: string; // ISO timestamp

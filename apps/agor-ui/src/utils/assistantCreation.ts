@@ -1,28 +1,20 @@
-import type {
-  AgorClient,
-  AssistantConfig,
-  Board,
-  BoardID,
-  Repo,
-  Worktree,
-} from '@agor-live/client';
-import { CREATE_NEW_BOARD } from '@/utils/assistantConstants';
+import type { AgorClient, AssistantConfig, Board, BoardID, Branch, Repo } from '@agor-live/client';
+import { ensureAssistantWelcomeNote } from '@/utils/assistantWelcomeNote';
 import { slugify } from '@/utils/repoSlug';
 
 export interface AssistantCreationInput {
   displayName: string;
   description?: string;
   emoji?: string;
-  boardChoice?: string;
   repoId: string;
-  worktreeName?: string;
+  branchName?: string;
   sourceBranch?: string;
 }
 
 export interface AssistantCreationDeps {
   client: AgorClient | null;
   repoById: Map<string, Repo>;
-  onCreateWorktree: (
+  onCreateBranch: (
     repoId: string,
     data: {
       name: string;
@@ -31,78 +23,84 @@ export interface AssistantCreationDeps {
       sourceBranch: string;
       pullLatest: boolean;
       boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
     }
-  ) => Promise<Worktree | null>;
-  onUpdateWorktree: (
-    worktreeId: string,
+  ) => Promise<Branch | null>;
+  onUpdateBranch: (
+    branchId: string,
     updates: { board_id?: BoardID; custom_context?: Record<string, unknown>; notes?: string | null }
-  ) => void;
+  ) => void | Promise<void>;
 }
 
 /**
  * Shared assistant creation logic used by both the CreateDialog (via App.tsx)
  * and the SettingsModal AssistantsTable.
  *
- * Flow: resolve repo → generate worktree name → optionally create board →
- * create worktree → tag worktree with assistant metadata.
+ * Flow: resolve repo → create board → create branch → tag branch with
+ * assistant metadata → designate the branch as the board primary.
  */
-export async function createAssistantWorktree(
+export async function createAssistantBranch(
   input: AssistantCreationInput,
   deps: AssistantCreationDeps
-): Promise<Worktree | null> {
+): Promise<Branch | null> {
   const repo = deps.repoById.get(input.repoId);
-  const worktreeName = input.worktreeName || `private-${slugify(input.displayName)}`;
+  const branchName = input.branchName || `private-${slugify(input.displayName)}`;
   const sourceBranch = input.sourceBranch || repo?.default_branch || 'main';
 
-  // Create a new board if requested
-  let boardId: string | undefined;
-  if (input.boardChoice === CREATE_NEW_BOARD) {
-    if (deps.client) {
-      try {
-        const newBoard = (await deps.client.service('boards').create({
-          name: input.displayName.trim(),
-          icon: input.emoji || '\u{1F916}',
-        })) as Board;
-        boardId = newBoard.board_id;
-      } catch (err) {
-        console.error('Failed to create board:', err);
-      }
-    }
-  } else if (input.boardChoice) {
-    boardId = input.boardChoice;
+  if (!deps.client) {
+    throw new Error('Not connected');
   }
 
-  // Create the worktree
-  const worktree = await deps.onCreateWorktree(input.repoId, {
-    name: worktreeName,
-    ref: worktreeName,
+  const displayName = input.displayName.trim() || 'My Assistant';
+  const newBoard = (await deps.client.service('boards').create({
+    name: `${displayName}'s Board`,
+    icon: input.emoji || '\u{1F916}',
+  })) as Board;
+  const boardId = newBoard.board_id;
+
+  await ensureAssistantWelcomeNote({
+    client: deps.client,
+    boardId,
+    assistantName: displayName,
+    assistantEmoji: input.emoji,
+  });
+
+  const assistantConfig: AssistantConfig = {
+    kind: 'assistant',
+    displayName: input.displayName.trim(),
+    emoji: input.emoji || undefined,
+    frameworkRepo: repo?.slug,
+    createdViaOnboarding: false,
+  };
+
+  // Create the branch with assistant metadata on the initial row. That keeps
+  // the board card consistent immediately and avoids a race where a later
+  // executor readiness patch can arrive before the UI sees the metadata patch.
+  const branch = await deps.onCreateBranch(input.repoId, {
+    name: branchName,
+    ref: branchName,
     createBranch: true,
     sourceBranch,
     pullLatest: true,
     boardId,
+    custom_context: { assistant: assistantConfig },
+    ...(input.description?.trim() ? { notes: input.description.trim() } : {}),
   });
 
-  if (worktree) {
+  if (branch) {
     // Assign to board (if not already passed via boardId above)
-    if (boardId && !worktree.board_id) {
-      deps.onUpdateWorktree(worktree.worktree_id, {
+    if (boardId && !branch.board_id) {
+      await deps.onUpdateBranch(branch.branch_id, {
         board_id: boardId as BoardID,
       });
     }
-
-    // Tag as assistant and set description as notes
-    const assistantConfig: AssistantConfig = {
-      kind: 'assistant',
-      displayName: input.displayName.trim(),
-      emoji: input.emoji || undefined,
-      frameworkRepo: repo?.slug,
-      createdViaOnboarding: false,
-    };
-    deps.onUpdateWorktree(worktree.worktree_id, {
-      custom_context: { assistant: assistantConfig },
-      ...(input.description?.trim() ? { notes: input.description.trim() } : {}),
-    });
+    if (boardId) {
+      await deps.client
+        ?.service('boards')
+        .setPrimaryAssistant({ boardId, branchId: branch.branch_id });
+    }
   }
 
-  return worktree;
+  return branch;
 }

@@ -12,6 +12,11 @@ import { getDaemonUrl } from '../config/daemon';
 import { isTransientConnectionError } from '../utils/authErrors';
 import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
 import {
+  exchangeLaunchCode,
+  getLaunchCodeFromSearch,
+  removeLaunchCodeFromCurrentUrl,
+} from '../utils/launchAuth';
+import {
   RefreshUnrecoverableError,
   refreshTokensSingleFlight,
   resetRefreshFailureState,
@@ -56,26 +61,23 @@ export function useAuth(): UseAuthReturn {
    * Re-authenticate using stored token (with automatic refresh)
    * Retries up to 3 times to handle daemon restarts gracefully
    */
-  const reAuthenticate = useCallback(async (retryCount = 0) => {
+  const reAuthenticate = useCallback(async (retryCount = 0, pendingLaunchCode?: string) => {
     const MAX_RETRIES = 5;
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
-    try {
-      const storedAccessToken = getStoredAccessToken();
-      const storedRefreshToken = getStoredRefreshToken();
+    const storedAccessToken = getStoredAccessToken();
+    const storedRefreshToken = getStoredRefreshToken();
+    const hasStoredTokens = !!storedAccessToken || !!storedRefreshToken;
+    const activeLaunchCode =
+      pendingLaunchCode ||
+      (typeof window !== 'undefined' ? getLaunchCodeFromSearch(window.location.search) : null);
+    let attemptedLaunch = false;
+    let launchFailed = false;
 
-      if (!storedAccessToken && !storedRefreshToken) {
-        setState({
-          user: null,
-          accessToken: null,
-          authenticated: false,
-          loading: false,
-          error: null,
-        });
-        return;
-      }
-
-      const client = await createRestClient(getDaemonUrl());
+    async function authenticateWithStoredTokens(
+      client: Awaited<ReturnType<typeof createRestClient>>
+    ) {
+      if (!storedAccessToken && !storedRefreshToken) return false;
 
       // Try to authenticate with stored access token first
       if (storedAccessToken) {
@@ -93,7 +95,7 @@ export function useAuth(): UseAuthReturn {
             error: null,
           });
 
-          return;
+          return true;
         } catch (_accessTokenError) {
           // Access token expired or invalid, try refresh token
         }
@@ -112,11 +114,68 @@ export function useAuth(): UseAuthReturn {
             error: null,
           });
 
-          return;
+          return true;
         } catch (_refreshError) {
           // Refresh token also expired or invalid
         }
       }
+
+      return false;
+    }
+
+    try {
+      const client = await createRestClient(getDaemonUrl());
+
+      if (activeLaunchCode) {
+        attemptedLaunch = true;
+        // Remove the opaque one-time code before the network round-trip so a
+        // refresh, copy/paste, or dev-mode double effect does not replay it.
+        removeLaunchCodeFromCurrentUrl();
+
+        try {
+          const result = await exchangeLaunchCode(client, activeLaunchCode);
+          resetRefreshFailureState();
+
+          setState({
+            user: result.user,
+            accessToken: result.accessToken,
+            authenticated: true,
+            loading: false,
+            error: null,
+          });
+
+          return;
+        } catch (launchError) {
+          const isConnectionError = isTransientConnectionError(launchError);
+          if (isConnectionError && retryCount < MAX_RETRIES) {
+            const delay = Math.min(2000 * 1.5 ** retryCount, 10000);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            return reAuthenticate(retryCount + 1, activeLaunchCode);
+          }
+
+          launchFailed = true;
+          if (!hasStoredTokens) {
+            throw launchError;
+          }
+
+          console.warn('Launch sign-in failed; falling back to stored auth tokens:', launchError);
+        }
+      }
+
+      if (!hasStoredTokens) {
+        setState({
+          user: null,
+          accessToken: null,
+          authenticated: false,
+          loading: false,
+          error: launchFailed
+            ? 'Launch sign-in failed. The one-time launch code may have expired or already been used.'
+            : null,
+        });
+        return;
+      }
+
+      if (await authenticateWithStoredTokens(client)) return;
 
       // Both tokens invalid or expired — expected when refresh token hits its TTL.
       clearTokens();
@@ -125,7 +184,9 @@ export function useAuth(): UseAuthReturn {
         accessToken: null,
         authenticated: false,
         loading: false,
-        error: null,
+        error: launchFailed
+          ? 'Launch sign-in failed. The one-time launch code may have expired or already been used.'
+          : null,
       });
     } catch (error) {
       // Connection or authentication error - retry if daemon just restarted
@@ -134,14 +195,23 @@ export function useAuth(): UseAuthReturn {
       if (isConnectionError && retryCount < MAX_RETRIES) {
         const delay = Math.min(2000 * 1.5 ** retryCount, 10000); // Exponential backoff: 2s, 3s, 4.5s, 6.75s, 10s (capped)
         await new Promise((resolve) => setTimeout(resolve, delay));
-        return reAuthenticate(retryCount + 1);
+        return reAuthenticate(
+          retryCount + 1,
+          attemptedLaunch ? activeLaunchCode || undefined : undefined
+        );
       }
 
-      // IMPORTANT: Don't clear tokens if this is a connection error
-      // The daemon might still be restarting, and we want to keep tokens for next retry
-      if (!isConnectionError) {
+      // IMPORTANT: Don't clear tokens for connection errors or for failed
+      // launch-code attempts when stored tokens exist. A stale/consumed URL
+      // code must not log out a user with an otherwise valid local session.
+      if (!isConnectionError && !(attemptedLaunch && hasStoredTokens)) {
         console.error('Authentication failure, clearing tokens:', error);
         clearTokens();
+      }
+
+      if (attemptedLaunch && hasStoredTokens) {
+        const client = await createRestClient(getDaemonUrl());
+        if (await authenticateWithStoredTokens(client)) return;
       }
 
       setState({
@@ -149,7 +219,11 @@ export function useAuth(): UseAuthReturn {
         accessToken: null,
         authenticated: false,
         loading: false,
-        error: isConnectionError ? 'Connection lost - waiting for daemon...' : null,
+        error: isConnectionError
+          ? 'Connection lost - waiting for daemon...'
+          : attemptedLaunch
+            ? 'Launch sign-in failed. The one-time launch code may have expired or already been used.'
+            : null,
       });
     }
   }, []);
@@ -374,17 +448,8 @@ export function useAuth(): UseAuthReturn {
     }
   };
 
-  /**
-   * Logout
-   *
-   * Clears authentication tokens and forces a full page reload to clear all cached state.
-   * This prevents cached data from one user from leaking to another user on the same browser.
-   */
   const logout = async () => {
-    // Clear tokens from localStorage
     clearTokens();
-
-    // Clear state (will be reset on reload anyway, but good practice)
     setState({
       user: null,
       accessToken: null,
@@ -392,13 +457,6 @@ export function useAuth(): UseAuthReturn {
       loading: false,
       error: null,
     });
-
-    // Force full page reload to clear:
-    // - Feathers client cache
-    // - All React state (sessionById, worktreeById, etc.)
-    // - Any other in-memory cached data
-    // This prevents security issues where User A's data remains visible after User B logs in
-    window.location.href = '/';
   };
 
   return {

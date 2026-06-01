@@ -44,7 +44,7 @@ export const blogPosts: BlogPost[] = [
     slug: 'agor-platform',
     title: 'More Than a GUI: Agor is a Full Platform to Orchestrate AI Agents',
     description:
-      "Agor's rich GUI sits atop a fully-typed REST API, powerful CLI, and TypeScript client enabling git worktree management, agent orchestration from CI/CD, and custom workflows.",
+      "Agor's rich GUI sits atop a fully-typed REST API, powerful CLI, and TypeScript client enabling git branch management, agent orchestration from CI/CD, and custom workflows.",
     date: '2025-11-16',
     image: '/images/blog/agor-platform.png',
   },
@@ -68,7 +68,7 @@ export const blogPosts: BlogPost[] = [
     slug: 'announcement',
     title: 'Agor: A Multiplayer-ready, Spatial Layer for Agentic Coding',
     description:
-      'Agent orchestration across Claude Code, Codex, and Gemini on a real-time spatial board with session trees, zone triggers, and per-worktree environments.',
+      'Agent orchestration across Claude Code, Codex, and Gemini on a real-time spatial board with session trees, zone triggers, and per-branch environments.',
     date: '2025-10-26',
     image: '/images/blog/announcement.png',
   },

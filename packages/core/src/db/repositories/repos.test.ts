@@ -6,7 +6,7 @@
 
 import type { UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { RepoRepository } from './repos';
@@ -163,6 +163,72 @@ describe('RepoRepository.create', () => {
     expect(created.created_at).toBe(createdAt);
     expect(created.last_updated).toBe(lastUpdated);
   });
+
+  // Issue #1126 / Bug B: pre-#1126 a failed clone left zero state because the
+  // executor only wrote the row on success. Pre-create + patch lets MCP
+  // callers discover the outcome via `agor_repos_get(repoId)`.
+  dbTest('should round-trip clone_status and clone_error through data blob', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const placeholder = await repo.create({
+      ...createRepoData({ slug: 'test/cloning' }),
+      clone_status: 'cloning',
+    });
+    expect(placeholder.clone_status).toBe('cloning');
+    expect(placeholder.clone_error).toBeUndefined();
+
+    const failed = await repo.update(placeholder.repo_id, {
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 128,
+        category: 'auth_failed',
+        message: 'fatal: Authentication failed for github.com',
+      },
+    });
+    expect(failed.clone_status).toBe('failed');
+    expect(failed.clone_error?.category).toBe('auth_failed');
+    expect(failed.clone_error?.exit_code).toBe(128);
+
+    // findById must surface the same shape (catches a regression where
+    // `rowToRepo` forgot to forward the new fields).
+    const fetched = await repo.findById(placeholder.repo_id);
+    expect(fetched?.clone_status).toBe('failed');
+    expect(fetched?.clone_error?.category).toBe('auth_failed');
+  });
+
+  // The executor's success patch sends `clone_error: null` to drop the prior
+  // failure shape from the row. `repoToInsert` coerces null → undefined so
+  // the stored value matches the `clone_error?: RepoCloneError` invariant
+  // (set only when failed). Without that coercion, the type would lie about
+  // the shape of `repo.clone_error` after a recovery patch.
+  dbTest(
+    'should clear clone_error when success patch sends null (via deepMerge + repoToInsert)',
+    async ({ db }) => {
+      const repo = new RepoRepository(db);
+      const placeholder = await repo.create({
+        ...createRepoData({ slug: 'test/recovers' }),
+        clone_status: 'failed',
+        clone_error: {
+          exit_code: 128,
+          category: 'auth_failed',
+          message: 'fatal: Authentication failed',
+        },
+      });
+      expect(placeholder.clone_error?.category).toBe('auth_failed');
+
+      // `null` is the explicit-clear signal honored by `deepMerge`. Cast to
+      // mirror the executor's call site (Feathers' `Partial<Repo>` rejects
+      // null on optional fields even when the merger handles it).
+      const cleared = await repo.update(placeholder.repo_id, {
+        clone_status: 'ready',
+        clone_error: null as unknown as undefined,
+      });
+      expect(cleared.clone_status).toBe('ready');
+      expect(cleared.clone_error).toBeUndefined();
+
+      const refetched = await repo.findById(placeholder.repo_id);
+      expect(refetched?.clone_error).toBeUndefined();
+    }
+  );
 });
 
 // ============================================================================
@@ -187,8 +253,8 @@ describe('RepoRepository.findById', () => {
     const data = createRepoData();
     await repo.create(data);
 
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = shortId(data.repo_id);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.repo_id).toBe(data.repo_id);
@@ -201,8 +267,8 @@ describe('RepoRepository.findById', () => {
 
     // Use only first 8 chars since resolveId uses simple LIKE without expanding hyphens
     // For 12+ chars, the pattern won't match UUIDs with hyphens in database
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = shortId(data.repo_id);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.repo_id).toBe(data.repo_id);
@@ -214,8 +280,8 @@ describe('RepoRepository.findById', () => {
     await repo.create(data);
 
     // Use first 8 chars with hyphen still in place (resolveId strips hyphens)
-    const shortId = data.repo_id.slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = shortId(data.repo_id);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.repo_id).toBe(data.repo_id);
@@ -226,8 +292,8 @@ describe('RepoRepository.findById', () => {
     const data = createRepoData();
     await repo.create(data);
 
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8).toUpperCase();
-    const found = await repo.findById(shortId);
+    const idPrefix = shortId(data.repo_id).toUpperCase();
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.repo_id).toBe(data.repo_id);
@@ -276,9 +342,10 @@ describe('RepoRepository.findById', () => {
       expect(error).toBeInstanceOf(AmbiguousIdError);
       const ambiguousError = error as AmbiguousIdError;
       expect(ambiguousError.matches).toHaveLength(2);
-      // formatShortId returns 8 chars by default
-      expect(ambiguousError.matches[0]).toBe('01933e4a');
-      expect(ambiguousError.matches[1]).toBe('01933e4a');
+      // AmbiguousIdError carries full UUIDs so the user can disambiguate by
+      // pasting one back — short forms collapse to the same string when the
+      // prefix collides (which is exactly when the error fires).
+      expect(ambiguousError.matches).toEqual(expect.arrayContaining([id1, id2]));
     }
   });
 });
@@ -423,8 +490,8 @@ describe('RepoRepository.update', () => {
     const data = createRepoData({ default_branch: 'main' });
     await repo.create(data);
 
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8);
-    const updated = await repo.update(shortId, { default_branch: 'develop' });
+    const idPrefix = shortId(data.repo_id);
+    const updated = await repo.update(idPrefix, { default_branch: 'develop' });
 
     expect(updated.default_branch).toBe('develop');
     expect(updated.repo_id).toBe(data.repo_id);
@@ -701,8 +768,8 @@ describe('RepoRepository.delete', () => {
     const data = createRepoData();
     await repo.create(data);
 
-    const shortId = data.repo_id.replace(/-/g, '').slice(0, 8);
-    await repo.delete(shortId);
+    const idPrefix = shortId(data.repo_id);
+    await repo.delete(idPrefix);
 
     const found = await repo.findById(data.repo_id);
     expect(found).toBeNull();
@@ -785,18 +852,18 @@ describe('RepoRepository.count', () => {
 // ============================================================================
 
 describe('RepoRepository deprecated methods', () => {
-  dbTest('should throw error for addWorktree (deprecated)', async ({ db }) => {
+  dbTest('should throw error for addBranch (deprecated)', async ({ db }) => {
     const repo = new RepoRepository(db);
 
-    await expect((repo as any).addWorktree()).rejects.toThrow('deprecated');
-    await expect((repo as any).addWorktree()).rejects.toThrow('WorktreeRepository');
+    await expect((repo as any).addBranch()).rejects.toThrow('deprecated');
+    await expect((repo as any).addBranch()).rejects.toThrow('BranchRepository');
   });
 
-  dbTest('should throw error for removeWorktree (deprecated)', async ({ db }) => {
+  dbTest('should throw error for removeBranch (deprecated)', async ({ db }) => {
     const repo = new RepoRepository(db);
 
-    await expect((repo as any).removeWorktree()).rejects.toThrow('deprecated');
-    await expect((repo as any).removeWorktree()).rejects.toThrow('WorktreeRepository');
+    await expect((repo as any).removeBranch()).rejects.toThrow('deprecated');
+    await expect((repo as any).removeBranch()).rejects.toThrow('BranchRepository');
   });
 });
 

@@ -6,10 +6,9 @@
  * Uses SDK's built-in permission persistence via updatedPermissions.
  */
 
-import { generateId } from '@agor/core';
-import type { Message, MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import { generateId, shortId } from '@agor/core';
+import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import {
-  InputRequestStatus,
   MessageRole,
   PermissionScope,
   PermissionStatus,
@@ -20,11 +19,9 @@ import type {
   MCPServerRepository,
   MessagesRepository,
   SessionMCPServerRepository,
-  SessionRepository,
 } from '../../../db/feathers-repositories.js';
-import type { InputRequestService } from '../../../input-requests/input-request-service.js';
 import type { PermissionService } from '../../../permissions/permission-service.js';
-import type { MessagesService, SessionsService, TasksService } from '../claude-tool.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from '../../base/index.js';
 
 /**
  * Create canUseTool callback for permission handling
@@ -38,23 +35,13 @@ export function createCanUseToolCallback(
   taskId: TaskID,
   deps: {
     permissionService: PermissionService;
-    inputRequestService?: InputRequestService;
     tasksService: TasksService;
-    sessionsRepo: SessionRepository;
     messagesRepo: MessagesRepository;
     messagesService?: MessagesService;
-    sessionsService?: SessionsService;
+    sessionsService?: SessionsPatchClient;
     permissionLocks: Map<SessionID, Promise<void>>;
     mcpServerRepo: MCPServerRepository;
     sessionMCPRepo: SessionMCPServerRepository;
-    /**
-     * Effective permission mode for this query. Used to fast-path non-
-     * AskUserQuestion tools to `allow` when running in `bypassPermissions`,
-     * since the callback is now registered in bypass mode too (see
-     * query-builder.ts for why — AskUserQuestion's `requiresUserInteraction`
-     * forces the SDK to invoke `canUseTool` regardless of mode).
-     */
-    permissionMode?: PermissionMode;
   }
 ) {
   return async (
@@ -72,171 +59,6 @@ export function createCanUseToolCallback(
     }>;
     message?: string;
   }> => {
-    // Intercept AskUserQuestion tool calls (BEFORE permission flow)
-    // This tool is Claude's way of asking the user interactive questions with options.
-    // We route it through Agor's UI instead of the CLI.
-    if (toolName === 'AskUserQuestion' && deps.inputRequestService) {
-      console.log(`❓ [canUseTool] Intercepting AskUserQuestion tool call`);
-
-      try {
-        const requestId = generateId();
-        const timestamp = new Date().toISOString();
-
-        // Extract questions from tool input
-        const questions =
-          (toolInput.questions as Array<{
-            question: string;
-            header: string;
-            options: Array<{ label: string; description: string; markdown?: string }>;
-            multiSelect: boolean;
-          }>) || [];
-
-        // Get current message index for this session
-        const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
-        const nextIndex = existingMessages.length;
-
-        // Create input_request message
-        const inputMessage: Message = {
-          message_id: generateId() as MessageID,
-          session_id: sessionId,
-          task_id: taskId,
-          type: 'input_request',
-          role: MessageRole.SYSTEM,
-          index: nextIndex,
-          timestamp,
-          content_preview:
-            questions.length > 0
-              ? `Question: ${questions[0].question.substring(0, 100)}`
-              : 'User input required',
-          content: {
-            request_id: requestId,
-            task_id: taskId,
-            questions,
-            status: InputRequestStatus.PENDING,
-          },
-        };
-
-        if (deps.messagesService) {
-          await deps.messagesService.create(inputMessage);
-          console.log(`✅ [canUseTool] Input request message created`);
-        }
-
-        // Update task status to 'awaiting_input'
-        await deps.tasksService.patch(taskId, {
-          status: TaskStatus.AWAITING_INPUT,
-        });
-
-        // Update session status to 'awaiting_input'
-        if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: SessionStatus.AWAITING_INPUT,
-          });
-        }
-
-        // Emit WebSocket event for UI
-        await deps.inputRequestService.emitRequest(sessionId, {
-          requestId,
-          taskId,
-          questions,
-          timestamp,
-        });
-
-        // Wait for user response (Promise pauses SDK execution)
-        const response = await deps.inputRequestService.waitForResponse(
-          requestId,
-          taskId,
-          sessionId,
-          options.signal
-        );
-
-        // Handle timeout
-        if (response.timedOut) {
-          console.log(`⏰ [canUseTool] Input request timed out, setting timed_out state...`);
-
-          // Update message status
-          if (deps.messagesService) {
-            await deps.messagesService.patch(inputMessage.message_id, {
-              content: {
-                ...(inputMessage.content as unknown as Record<string, unknown>),
-                status: InputRequestStatus.TIMED_OUT,
-              },
-            } as Partial<Message>);
-          }
-
-          await deps.tasksService.patch(taskId, {
-            status: TaskStatus.TIMED_OUT,
-            completed_at: new Date().toISOString(),
-          });
-
-          if (deps.sessionsService) {
-            await deps.sessionsService.patch(sessionId, {
-              status: SessionStatus.TIMED_OUT,
-              ready_for_prompt: true,
-            });
-          }
-
-          return {
-            behavior: 'deny' as const,
-            message: 'User input request timed out. Send a new prompt to retry.',
-          };
-        }
-
-        // Update message with answer
-        if (deps.messagesService) {
-          await deps.messagesService.patch(inputMessage.message_id, {
-            content: {
-              ...(inputMessage.content as unknown as Record<string, unknown>),
-              status: InputRequestStatus.ANSWERED,
-              answers: response.answers,
-              annotations: response.annotations,
-              answered_by: response.respondedBy,
-              answered_at: new Date().toISOString(),
-            },
-          } as Partial<Message>);
-        }
-
-        // Restore task/session status to running
-        await deps.tasksService.patch(taskId, {
-          status: TaskStatus.RUNNING,
-        });
-
-        if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: SessionStatus.RUNNING,
-          });
-        }
-
-        // Return allow with answers injected into the tool input
-        return {
-          behavior: 'allow' as const,
-          updatedInput: {
-            ...toolInput,
-            answers: response.answers,
-            annotations: response.annotations,
-          },
-        };
-      } catch (error) {
-        console.error('[canUseTool] Error in AskUserQuestion flow:', error);
-        return {
-          behavior: 'deny' as const,
-          message: error instanceof Error ? error.message : 'Error processing user question',
-        };
-      }
-    }
-
-    // Bypass-mode fast-path: when permissionMode is `bypassPermissions`, the SDK
-    // would normally skip canUseTool entirely. We register the callback anyway
-    // so AskUserQuestion (handled above) still routes through Agor's UI — but
-    // every other tool should be auto-allowed without prompting, matching the
-    // mode's semantics. Without this, registering canUseTool in bypass mode
-    // would force every tool through the WebSocket permission flow.
-    if (deps.permissionMode === 'bypassPermissions') {
-      return {
-        behavior: 'allow' as const,
-        updatedInput: toolInput,
-      };
-    }
-
     // Auto-approve MCP tools only if they belong to an attached MCP server
     // MCP tool names follow pattern: mcp__<server_name>__<tool_name>
     if (toolName.startsWith('mcp__')) {
@@ -323,7 +145,7 @@ export function createCanUseToolCallback(
       const existingLock = deps.permissionLocks.get(sessionId);
       if (existingLock) {
         console.log(
-          `⏳ [canUseTool] Waiting for pending permission check (session ${sessionId.substring(0, 8)})`
+          `⏳ [canUseTool] Waiting for pending permission check (session ${shortId(sessionId)})`
         );
         await existingLock;
         console.log(`✅ [canUseTool] Permission check complete, proceeding...`);
@@ -566,9 +388,7 @@ export function createCanUseToolCallback(
       if (releaseLock) {
         releaseLock();
         deps.permissionLocks.delete(sessionId);
-        console.log(
-          `🔓 [canUseTool] Released permission lock for session ${sessionId.substring(0, 8)}`
-        );
+        console.log(`🔓 [canUseTool] Released permission lock for session ${shortId(sessionId)}`);
       }
     }
   };

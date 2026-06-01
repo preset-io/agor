@@ -1,5 +1,5 @@
 /**
- * Admin Command: Remove Worktree Symlink
+ * Admin Command: Remove Branch Symlink
  *
  * PRIVILEGED OPERATION - Must be called via sudo
  *
@@ -12,18 +12,18 @@
 import {
   AGOR_HOME_BASE,
   createAdminExecutor,
-  getWorktreeSymlinkPath,
+  getBranchSymlinkPath,
   isValidUnixUsername,
   SymlinkCommands,
 } from '@agor/core/unix';
 import { Command, Flags } from '@oclif/core';
 
 export default class RemoveSymlink extends Command {
-  static override description = 'Remove a worktree symlink from user home directory (admin only)';
+  static override description = 'Remove a branch symlink from user home directory (admin only)';
 
   static override examples = [
-    '<%= config.bin %> <%= command.id %> --username alice --worktree-name my-feature',
-    '<%= config.bin %> <%= command.id %> --username alice --worktree-name my-feature --dry-run',
+    '<%= config.bin %> <%= command.id %> --username alice --branch-name my-feature',
+    '<%= config.bin %> <%= command.id %> --username alice --branch-name my-feature --dry-run',
   ];
 
   static override flags = {
@@ -32,9 +32,9 @@ export default class RemoveSymlink extends Command {
       description: 'Unix username (owner of symlink)',
       required: true,
     }),
-    'worktree-name': Flags.string({
+    'branch-name': Flags.string({
       char: 'w',
-      description: 'Worktree name/slug (symlink name)',
+      description: 'Branch name/slug (symlink name)',
       required: true,
     }),
     'home-base': Flags.string({
@@ -56,7 +56,7 @@ export default class RemoveSymlink extends Command {
   public async run(): Promise<void> {
     const { flags } = await this.parse(RemoveSymlink);
     const { username, verbose } = flags;
-    const worktreeName = flags['worktree-name'];
+    const branchName = flags['branch-name'];
     const homeBase = flags['home-base'];
     const dryRun = flags['dry-run'];
 
@@ -72,7 +72,7 @@ export default class RemoveSymlink extends Command {
       this.error(`Invalid Unix username format: ${username}`);
     }
 
-    const linkPath = getWorktreeSymlinkPath(username, worktreeName, homeBase);
+    const linkPath = getBranchSymlinkPath(username, branchName, homeBase);
 
     // Check if symlink exists
     const symlinkExists = await executor.check(SymlinkCommands.symlinkExists(linkPath));

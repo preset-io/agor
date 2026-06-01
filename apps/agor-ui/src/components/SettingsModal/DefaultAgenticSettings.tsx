@@ -34,17 +34,21 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
 
   // Separate form for each tool
   const [claudeForm] = Form.useForm();
+  const [claudeCliForm] = Form.useForm();
   const [codexForm] = Form.useForm();
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
   const [copilotForm] = Form.useForm();
+  const [cursorForm] = Form.useForm();
 
   const [saving, setSaving] = useState<Record<AgenticToolName, boolean>>({
     'claude-code': false,
+    'claude-code-cli': false,
     codex: false,
     gemini: false,
     opencode: false,
     copilot: false,
+    cursor: false,
   });
   const [activeTab, setActiveTab] = useState<AgenticToolName>('claude-code');
 
@@ -55,6 +59,8 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
     switch (tool) {
       case 'claude-code':
         return claudeForm;
+      case 'claude-code-cli':
+        return claudeCliForm;
       case 'codex':
         return codexForm;
       case 'gemini':
@@ -63,6 +69,8 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
         return opencodeForm;
       case 'copilot':
         return copilotForm;
+      case 'cursor':
+        return cursorForm;
     }
   };
 
@@ -120,10 +128,22 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       form: opencodeForm,
     },
     {
+      key: 'cursor',
+      label: 'Cursor SDK',
+      tool: 'cursor',
+      form: cursorForm,
+    },
+    {
       key: 'copilot',
       label: 'GitHub Copilot',
       tool: 'copilot',
       form: copilotForm,
+    },
+    {
+      key: 'claude-code-cli',
+      label: 'Claude Code CLI',
+      tool: 'claude-code-cli',
+      form: claudeCliForm,
     },
   ];
 

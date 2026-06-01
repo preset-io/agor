@@ -1,45 +1,61 @@
 import type {
   AgorClient,
   Board,
+  Branch,
   CreateRepoRequest,
   Repo,
   Session,
-  Worktree,
+  User,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
+  AimOutlined,
   DeleteOutlined,
   EditOutlined,
-  FolderOutlined,
   PlusOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Form, Input, Modal, Space, Table, Tooltip, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import {
+  Button,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Popover,
+  Space,
+  Table,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
+import { useCallback, useMemo, useState } from 'react';
 import { useAssistantForm } from '@/hooks/useAssistantForm';
 import { useEnsureFrameworkRepo } from '@/hooks/useEnsureFrameworkRepo';
-import { createAssistantWorktree } from '@/utils/assistantCreation';
+import { createAssistantBranch } from '@/utils/assistantCreation';
 import { mapToArray } from '@/utils/mapHelpers';
-import { ArchiveDeleteWorktreeModal } from '../ArchiveDeleteWorktreeModal';
-import { AssistantFormFields, CREATE_NEW_BOARD } from '../forms/AssistantFormFields';
-import type { WorktreeUpdate } from '../WorktreeModal/tabs/GeneralTab';
-import { renderEnvCell } from './WorktreeEnvColumn';
+import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
+import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
+import { AssistantFormFields } from '../forms/AssistantFormFields';
+import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
+import { UserAvatar } from '../metadata/UserAvatar';
 
 interface AssistantsTableProps {
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
-  sessionsByWorktree: Map<string, Session[]>;
+  sessionsByBranch: Map<string, Session[]>;
+  userById: Map<string, User>;
   client: AgorClient | null;
   onArchiveOrDelete?: (
-    worktreeId: string,
+    branchId: string,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
-  onRowClick?: (worktree: Worktree) => void;
-  onCreateWorktree?: (
+  onRowClick?: (branch: Branch) => void;
+  onCreateBranch?: (
     repoId: string,
     data: {
       name: string;
@@ -49,29 +65,47 @@ interface AssistantsTableProps {
       pullLatest: boolean;
       boardId?: string;
     }
-  ) => Promise<Worktree | null>;
-  onUpdateWorktree?: (worktreeId: string, updates: WorktreeUpdate) => void;
+  ) => Promise<Branch | null>;
+  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
+  /** Close the parent Settings modal so the canvas isn't obscured by
+   *  it after recenter. Wired by SettingsModal. */
+  onClose?: () => void;
 }
 
 export const AssistantsTable: React.FC<AssistantsTableProps> = ({
-  worktreeById,
+  branchById,
   repoById,
   boardById,
-  sessionsByWorktree,
+  sessionsByBranch,
+  userById,
   client,
   onArchiveOrDelete,
   onRowClick,
-  onCreateWorktree,
-  onUpdateWorktree,
+  onCreateBranch,
+  onUpdateBranch,
   onCreateRepo,
-  onStartEnvironment,
-  onStopEnvironment,
+  onClose,
 }) => {
   const repos = mapToArray(repoById);
-  const boards = mapToArray(boardById);
+
+  // Assistants ARE branches (just branches flagged via
+  // `custom_context.assistant`), so navigation reuses the `/w/<short>/`
+  // URL via `goToBranch` — no separate `/assistant/<short>/` route.
+  // Reuses the `branchById` prop directly so we don't read the same
+  // data twice (props + context).
+  const navigation = useAppNavigation({ boardById, branchById });
+
+  const handleRecenter = useCallback(
+    (assistant: Branch) => {
+      // Close the modal first so the canvas isn't obscured. goToBranch
+      // pushes `/w/<short>/`; the URL→state effect handles cross-board
+      // switching + recenter.
+      onClose?.();
+      navigation.goToBranch(assistant.branch_id);
+    },
+    [onClose, navigation]
+  );
   const { token } = theme.useToken();
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -94,7 +128,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
 
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
-  const [selectedWorktree, setSelectedWorktree] = useState<Worktree | null>(null);
+  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
 
   const handleCreate = async () => {
     try {
@@ -114,23 +148,31 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         return;
       }
 
-      if (!onCreateWorktree || !onUpdateWorktree) return;
+      if (!onCreateBranch || !onUpdateBranch) return;
 
-      await createAssistantWorktree(
+      const branch = await createAssistantBranch(
         {
           displayName: values.displayName.trim(),
           description: values.description || undefined,
           emoji: values.emoji || undefined,
-          boardChoice: values.boardChoice,
           repoId,
-          worktreeName: values.name || undefined,
+          branchName: values.name || undefined,
           sourceBranch: values.sourceBranch || undefined,
         },
-        { client, repoById, onCreateWorktree, onUpdateWorktree }
+        { client, repoById, onCreateBranch, onUpdateBranch }
       );
 
       setCreateModalOpen(false);
       resetForm();
+
+      // Match the recenter-from-row behavior: close the Settings modal
+      // so the canvas isn't obscured, then push `/w/<short>/`. Cross-
+      // board switching (when the assistant landed on a freshly created
+      // board) is handled by useUrlState's URL→state effect.
+      if (branch) {
+        onClose?.();
+        navigation.goToBranch(branch.branch_id);
+      }
     } catch (error) {
       console.error('Assistant creation failed:', error);
     } finally {
@@ -145,7 +187,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
 
   const assistants = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    const assistantWorktrees = Array.from(worktreeById.values())
+    const assistantBranches = Array.from(branchById.values())
       .filter((w) => !w.archived && isAssistant(w))
       .sort((a, b) => {
         const nameA = getAssistantConfig(a)?.displayName ?? a.name;
@@ -153,21 +195,31 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
       });
 
-    if (!term) return assistantWorktrees;
+    if (!term) return assistantBranches;
 
-    return assistantWorktrees.filter((w) => {
+    return assistantBranches.filter((w) => {
       const config = getAssistantConfig(w);
       const repo = repoById.get(w.repo_id);
-      const haystacks = [config?.displayName, w.name, repo?.name, repo?.slug];
+      const creator = userById.get(w.created_by);
+      const haystacks = [
+        config?.displayName,
+        w.name,
+        w.notes,
+        creator?.name,
+        creator?.email,
+        repo?.name,
+        repo?.slug,
+      ];
       return haystacks.some((v) => v?.toLowerCase().includes(term));
     });
-  }, [worktreeById, repoById, searchTerm]);
+  }, [branchById, repoById, userById, searchTerm]);
 
   const columns = [
     {
       title: 'Assistant',
       key: 'assistant',
-      render: (_: unknown, record: Worktree) => {
+      width: 220,
+      render: (_: unknown, record: Branch) => {
         const config = getAssistantConfig(record);
         return (
           <Space>
@@ -176,79 +228,98 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
             ) : (
               <RobotOutlined style={{ color: token.colorInfo }} />
             )}
-            <div>
-              <Typography.Text strong>{config?.displayName ?? record.name}</Typography.Text>
-              <br />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {record.name}
-              </Typography.Text>
-            </div>
+            <Typography.Text strong>{config?.displayName ?? record.name}</Typography.Text>
           </Space>
         );
       },
     },
     {
-      title: 'Env',
-      key: 'env',
-      width: 120,
-      align: 'center' as const,
-      render: (_: unknown, record: Worktree) => {
-        const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
-        return renderEnvCell(record, repo, token, { onStartEnvironment, onStopEnvironment });
-      },
-    },
-    {
-      title: 'Repo',
-      key: 'repo',
-      render: (_: unknown, record: Worktree) => {
-        const repo = repoById.get(record.repo_id);
+      title: 'Description',
+      key: 'description',
+      render: (_: unknown, record: Branch) => {
+        const notes = (record.notes ?? '').trim();
+        if (!notes) {
+          return (
+            <Typography.Text type="secondary" italic style={{ fontSize: 12 }}>
+              No description
+            </Typography.Text>
+          );
+        }
+        const firstLine = notes.split('\n').find((l) => l.trim().length > 0) ?? notes;
+        // Cell shows plain first-line ellipsis; popover renders full markdown.
+        // MarkdownRenderer's `inline` is currently a no-op (Streamdown still
+        // emits block nodes), so plain text is the honest preview here.
         return (
-          <Space>
-            <FolderOutlined />
-            <Typography.Text>{repo?.name || 'Unknown'}</Typography.Text>
-          </Space>
+          <Popover
+            content={
+              <div
+                className="markdown-compact"
+                style={{
+                  maxWidth: 480,
+                  maxHeight: 400,
+                  overflowY: 'auto',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                <MarkdownRenderer content={notes} showControls={false} />
+              </div>
+            }
+            trigger="hover"
+            placement="topLeft"
+            mouseEnterDelay={0.3}
+          >
+            <Typography.Text
+              type="secondary"
+              ellipsis
+              style={{
+                display: 'block',
+                maxWidth: 480,
+                fontSize: 12,
+                cursor: 'help',
+              }}
+            >
+              {firstLine}
+            </Typography.Text>
+          </Popover>
         );
       },
     },
     {
-      title: 'Branch',
-      dataIndex: 'ref',
-      key: 'ref',
-      render: (ref: string) => <Typography.Text code>{ref}</Typography.Text>,
-    },
-    {
-      title: 'Sessions',
-      key: 'sessions',
-      width: 100,
-      render: (_: unknown, record: Worktree) => {
-        const count = (sessionsByWorktree.get(record.worktree_id) || []).length;
-        return (
-          <Typography.Text type="secondary">
-            {count} {count === 1 ? 'session' : 'sessions'}
-          </Typography.Text>
-        );
+      title: 'Creator',
+      key: 'creator',
+      width: 160,
+      render: (_: unknown, record: Branch) => {
+        const user = userById.get(record.created_by);
+        if (!user || record.created_by === 'anonymous') {
+          return (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {record.created_by === 'anonymous' ? 'Anonymous' : 'Unknown User'}
+            </Typography.Text>
+          );
+        }
+        return <UserAvatar user={user} showName size="small" />;
       },
-    },
-    {
-      title: 'Path',
-      key: 'path',
-      width: 60,
-      align: 'center' as const,
-      render: (_: unknown, record: Worktree) => (
-        <Typography.Text
-          copyable={{
-            text: record.path,
-            tooltips: [`Copy path: ${record.path}`, 'Copied!'],
-          }}
-        />
-      ),
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 100,
-      render: (_: unknown, record: Worktree) => (
+      width: 130,
+      render: (_: unknown, record: Branch) => (
         <Space size="small">
+          {record.board_id && (
+            <Tooltip title="Center map on assistant">
+              <Button
+                type="text"
+                size="small"
+                icon={<AimOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRecenter(record);
+                }}
+              />
+            </Tooltip>
+          )}
           <Tooltip title="Edit assistant">
             <Button
               type="text"
@@ -268,7 +339,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
               danger
               onClick={(e) => {
                 e.stopPropagation();
-                setSelectedWorktree(record);
+                setSelectedBranch(record);
                 setArchiveDeleteModalOpen(true);
               }}
             />
@@ -287,7 +358,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       >
         <Typography.Text type="secondary">
           Assistants are persistent AI companions backed by a framework repo. They maintain memory,
-          orchestrate work across worktrees, and run on scheduled heartbeats.
+          orchestrate work across branches, and run on scheduled heartbeats.
         </Typography.Text>
         <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
           <Input
@@ -332,7 +403,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         <Table
           dataSource={assistants}
           columns={columns}
-          rowKey="worktree_id"
+          rowKey="branch_id"
           pagination={{ pageSize: 10 }}
           size="small"
           onRow={(record) => ({
@@ -355,12 +426,11 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           form={form}
           layout="vertical"
           onFieldsChange={validateForm}
-          initialValues={{ boardChoice: CREATE_NEW_BOARD, sourceBranch: 'main' }}
+          initialValues={{ sourceBranch: 'main' }}
         >
           <AssistantFormFields
             form={form}
             repos={repos}
-            boards={boards}
             frameworkRepo={frameworkRepo}
             isCloning={isCloning}
             onDisplayNameChange={handleDisplayNameChange}
@@ -371,20 +441,20 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       </Modal>
 
       {/* Archive/Delete Modal */}
-      {selectedWorktree && (
-        <ArchiveDeleteWorktreeModal
+      {selectedBranch && (
+        <ArchiveDeleteBranchModal
           open={archiveDeleteModalOpen}
-          worktree={selectedWorktree}
-          sessionCount={(sessionsByWorktree.get(selectedWorktree.worktree_id) || []).length}
-          environmentRunning={selectedWorktree.environment_instance?.status === 'running'}
+          branch={selectedBranch}
+          sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}
+          environmentRunning={selectedBranch.environment_instance?.status === 'running'}
           onConfirm={(options) => {
-            onArchiveOrDelete?.(selectedWorktree.worktree_id, options);
+            onArchiveOrDelete?.(selectedBranch.branch_id, options);
             setArchiveDeleteModalOpen(false);
-            setSelectedWorktree(null);
+            setSelectedBranch(null);
           }}
           onCancel={() => {
             setArchiveDeleteModalOpen(false);
-            setSelectedWorktree(null);
+            setSelectedBranch(null);
           }}
         />
       )}

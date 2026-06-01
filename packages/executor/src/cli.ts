@@ -37,6 +37,10 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
+function emitExecutorResult(result: unknown): void {
+  console.log(`AGOR_EXECUTOR_RESULT ${JSON.stringify(result)}`);
+}
+
 /**
  * Handle JSON-over-stdin mode
  */
@@ -82,8 +86,8 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   if (payload.command === 'zellij.attach') {
     const result = await executeCommand(payload, { dryRun: options.dryRun });
 
-    // Output result as JSON to stdout (for daemon to parse)
-    console.log(JSON.stringify(result));
+    // Output result on a sentinel line so daemon parsers can suppress it from logs.
+    emitExecutorResult(result);
 
     if (!result.success) {
       process.exit(1);
@@ -98,8 +102,8 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   // All other commands go through the command router
   const result = await executeCommand(payload, { dryRun: options.dryRun });
 
-  // Output result as JSON to stdout
-  console.log(JSON.stringify(result));
+  // Output result on a sentinel line so daemon parsers can suppress it from logs.
+  emitExecutorResult(result);
 
   process.exit(result.success ? 0 : 1);
 }
@@ -163,6 +167,15 @@ async function handlePromptPayload(
     process.exit(1);
   }
 
+  // Seed DAEMON_URL so executor-local getDaemonUrl() works regardless of
+  // whether spawn-executor.ts already set it. In stdin-via-daemon mode the
+  // env var is already populated by spawn-executor.ts; in `agor-executor
+  // --stdin < payload.json` debug runs the payload's daemonUrl is the
+  // only source. The executor never reads config.yaml for this — see
+  // packages/executor/src/config.ts.
+  const resolvedDaemonUrl = payload.daemonUrl || 'http://localhost:3030';
+  process.env.DAEMON_URL = resolvedDaemonUrl;
+
   // Start executor in Feathers mode
   const executor = new AgorExecutor({
     sessionToken: payload.sessionToken,
@@ -171,8 +184,9 @@ async function handlePromptPayload(
     prompt: payload.params.prompt,
     tool: payload.params.tool,
     permissionMode: payload.params.permissionMode,
-    daemonUrl: payload.daemonUrl || 'http://localhost:3030',
+    daemonUrl: resolvedDaemonUrl,
     messageSource: payload.params.messageSource,
+    resolvedConfig: payload.resolvedConfig,
   });
 
   await executor.start();
@@ -212,15 +226,20 @@ async function handleLegacyMode(values: {
     process.exit(1);
   }
 
+  // Seed DAEMON_URL so executor-local getDaemonUrl() works in the legacy
+  // CLI flow too (no parent process to set it). See config.ts.
+  const resolvedDaemonUrl = (values['daemon-url'] as string) || 'http://localhost:3030';
+  process.env.DAEMON_URL = resolvedDaemonUrl;
+
   // Start executor in Feathers mode
   const executor = new AgorExecutor({
     sessionToken: values['session-token'] as string,
     sessionId: values['session-id'] as string,
     taskId: values['task-id'] as string,
     prompt: values.prompt as string,
-    tool: values.tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot',
+    tool: values.tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor',
     permissionMode: (values['permission-mode'] as 'ask' | 'auto' | 'allow-all') || undefined,
-    daemonUrl: (values['daemon-url'] as string) || 'http://localhost:3030',
+    daemonUrl: resolvedDaemonUrl,
   });
 
   await executor.start();

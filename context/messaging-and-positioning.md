@@ -19,7 +19,7 @@ Use it alone. Don't pair it with a co-tagline.
 
 > **Team command center for all things agentic.** Agor is a shared canvas
 > where coding agents (Claude Code, Codex, Gemini) and long-lived
-> assistants run side-by-side on isolated git worktrees — the anchor
+> assistants run side-by-side on isolated git branches — the anchor
 > entity where sessions, dev environments, prompts, and PRs converge. Your
 > whole team rallies around the same live work in real time, and the
 > agents themselves drive Agor over MCP.
@@ -37,7 +37,7 @@ For: README intro, docs landing TL;DR, deck slide 1, blog lead.
 > configs rot on individual laptops, parallel runs are an afterthought,
 > and nobody can see what anyone else's agent is doing. Agor is a
 > Figma-like spatial canvas for that work: every unit of work is a git
-> worktree with its own branch, environment, and session tree; Claude
+> branch with its own branch, environment, and session tree; Claude
 > Code, Codex,
 > Gemini, and any MCP-driven assistant are interchangeable runtimes you
 > pick per session; teammates show up live with cursors, facepile,
@@ -72,7 +72,7 @@ working. Specifically:
    credentials, scripts. There's no shared place to publish an agent, a
    skill, or a workflow.
 5. **Parallel work is still an afterthought.** Spinning up an agent is
-   cheap now — parallel runs should be the *premise*, not the exception.
+   cheap now — parallel runs should be the _premise_, not the exception.
    But one branch / one terminal / one dev server is still the default.
 6. **The CLI is the wrong medium long-term.** Today's coding CLIs are
    impressively pushing the limits of what a terminal can do, but the
@@ -82,8 +82,8 @@ working. Specifically:
    solid, but they're laid out for a single human editing files — not
    for orchestrating multiple agents with conversations, dev
    environments, and teammate presence. We need a higher-level control
-   plane that sits *above* the IDE: team-oriented, agent-oriented,
-   multi-worktree by default. Keep your IDE; attach it to Agor.
+   plane that sits _above_ the IDE: team-oriented, agent-oriented,
+   multi-branch by default. Keep your IDE; attach it to Agor.
 
 These bullets are the internal source. What propagates into customer-
 facing copy is two compressed forms:
@@ -110,8 +110,8 @@ slides, sales conversations.
 1. **A team workspace for AI agents.** Multiplayer is the core
    differentiator. Most agentic tools today are solo. Agor isn't. Why it
    matters:
-   - **Shared worktrees and dev envs.** Engineers, reviewers, PMs, QA, and
-     stakeholders rally around the *same* live dev environment instead of
+   - **Shared branches and dev envs.** Engineers, reviewers, PMs, QA, and
+     stakeholders rally around the _same_ live dev environment instead of
      "spin up your own to see it." One link, one running thing,
      everyone's looking at it.
    - **Shared AI sessions.** Work alongside teammates' agents in real
@@ -120,11 +120,11 @@ slides, sales conversations.
    - **Cross-team observability.** Clarity on who's running what, which
      tools they use, how their workflows are structured, where tokens
      get spent. The team learns from itself.
-2. **Worktrees as the anchor.** Every unit of work is a git worktree —
-   and a worktree is where sessions, dev environments, zone-triggered
+2. **Branches as the anchor.** Every unit of work is a git branch —
+   and a branch is where sessions, dev environments, zone-triggered
    standard prompts, issues, and PRs all converge. One entity to point
    at, one place where the full context of a piece of work lives.
-3. **A Figma-like spatial canvas.** Boards are 2D — worktrees are cards,
+3. **A Figma-like spatial canvas.** Boards are 2D — branches are cards,
    zones are regions, you arrange your work and your teammates see where
    you're at. The spatial layout is what makes the multiplayer real.
 4. **Shared, long-lived assistants.** Persistent agents with identity, a
@@ -140,7 +140,7 @@ slides, sales conversations.
 6. **Observable end-to-end.** Every session, every prompt, every tool
    call, every dollar — visible, durable, queryable. Status dots,
    completion chimes, token + dollar accounting per prompt, full
-   conversation history per worktree. No more "what was that agent doing
+   conversation history per branch. No more "what was that agent doing
    again."
 7. **MCP-native.** Anything a user can do in Agor, an agent can do too.
    Sessions are auto-issued tokens; agents fork, spawn, schedule, and
@@ -156,19 +156,19 @@ slides, sales conversations.
 
 One-liner for talks, intros, and DMs:
 
-> *Agor is the team command center for everything you're doing with AI agents — Claude Code, Codex, Gemini, custom assistants — on a shared spatial canvas, with full observability and self-hosted isolation.*
+> _Agor is the team command center for everything you're doing with AI agents — Claude Code, Codex, Gemini, custom assistants — on a shared spatial canvas, with full observability and self-hosted isolation._
 
 When the audience is technical and skeptical, lead with the problem:
 
-> *One agent in a terminal is fine. Five agents across a team is chaos. Agor is the workspace that makes that scale.*
+> _One agent in a terminal is fine. Five agents across a team is chaos. Agor is the workspace that makes that scale._
 
 When the audience is multiplayer-curious, lead with the Figma frame:
 
-> *Think Figma's spatial canvas, applied to AI agents. You see your teammates, you see what their agents are running, you coordinate live instead of after-the-fact.*
+> _Think Figma's spatial canvas, applied to AI agents. You see your teammates, you see what their agents are running, you coordinate live instead of after-the-fact._
 
 When the audience is non-engineering (PMs, QA, design, leadership), lead with the rally:
 
-> *Agor is where the whole team — not just the engineer — gathers around a piece of work. The worktree is the anchor: live dev env, agent conversations, the PR, the prompts that produced it. Everyone sees the same thing.*
+> _Agor is where the whole team — not just the engineer — gathers around a piece of work. The branch is the anchor: live dev env, agent conversations, the PR, the prompts that produced it. Everyone sees the same thing._
 
 The Figma analogy is reserved for team / multiplayer / canvas framing —
 it's the right reference there. Don't use it as the master tagline (the
@@ -182,7 +182,7 @@ it's the right reference there. Don't use it as the master tagline (the
   (Cards) are equal citizens.
 - **Not an LLM or model gateway.** Bring your own runtime.
 - **Not an IDE.** Roadmap is "bring your own IDE," attached to
-  Agor-managed worktrees.
+  Agor-managed branches.
 - **Not CI/CD.** Scheduler triggers prompts on a cadence; doesn't replace
   Actions/Buildkite/Argo.
 - **Not closed SaaS.** Self-hosted-first, BSL 1.1.
@@ -192,7 +192,7 @@ it's the right reference there. Don't use it as the master tagline (the
 ## Vocabulary
 
 ✅ **Use:** team, team command center, agentic, multiplayer, Figma-like
-spatial canvas (in team/multiplayer context), orchestrate, worktree,
+spatial canvas (in team/multiplayer context), orchestrate, branch,
 session, board, zone, agent, assistant, observability, isolation,
 real-time, MCP, self-hosted.
 
@@ -204,27 +204,27 @@ revolutionary, 10x, supercharge, productivity, "Figma for AI coding"
 
 ## Audience tiers
 
-| Audience | Lead with |
-|---|---|
-| **Solo dev** | Visibility, isolation, durable conversation history. "Even solo, every agent run lands somewhere — branches don't collide, dev servers don't fight, conversations don't vanish." |
-| **Team lead** | Shared canvas, RBAC, cross-team observability. "Five teammates each running two agents — Agor is what turns that from chaos into a board you can actually read." |
-| **Platform engineer** | Self-hosted, four progressive isolation modes (`simple` / `insulated` / `strict`), MCP integration with internal tools. "Your OS permissions, your DB, your audit trail." |
+| Audience              | Lead with                                                                                                                                                                        |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Solo dev**          | Visibility, isolation, durable conversation history. "Even solo, every agent run lands somewhere — branches don't collide, dev servers don't fight, conversations don't vanish." |
+| **Team lead**         | Shared canvas, RBAC, cross-team observability. "Five teammates each running two agents — Agor is what turns that from chaos into a board you can actually read."                 |
+| **Platform engineer** | Self-hosted, four progressive isolation modes (`simple` / `insulated` / `strict`), MCP integration with internal tools. "Your OS permissions, your DB, your audit trail."        |
 
 ---
 
 ## Where each form belongs
 
-| Surface | Form |
-|---|---|
-| Docs landing Hero (`apps/agor-docs/pages/index.mdx`) | Tagline + short paragraph |
-| Guide overview (`apps/agor-docs/pages/guide/index.mdx`) | Tagline + short paragraph |
-| README intro | Tagline + short paragraph + top 3–4 bullets from "What Agor is" |
-| `package.json` `description` (root) | One-liner |
-| Meta description / OG / JSON-LD (`theme.config.tsx`) | One-liner |
-| GitHub repo description, X bio, Discord description | Tagline only |
-| Conference / talk title slide | Tagline only |
-| Blog announcement, deck slide 1 | Short paragraph |
-| Sales one-pager, partner deck, deep blog post | Long paragraph + audience tiers |
+| Surface                                                 | Form                                                            |
+| ------------------------------------------------------- | --------------------------------------------------------------- |
+| Docs landing Hero (`apps/agor-docs/pages/index.mdx`)    | Tagline + short paragraph                                       |
+| Guide overview (`apps/agor-docs/pages/guide/index.mdx`) | Tagline + short paragraph                                       |
+| README intro                                            | Tagline + short paragraph + top 3–4 bullets from "What Agor is" |
+| `package.json` `description` (root)                     | One-liner                                                       |
+| Meta description / OG / JSON-LD (`theme.config.tsx`)    | One-liner                                                       |
+| GitHub repo description, X bio, Discord description     | Tagline only                                                    |
+| Conference / talk title slide                           | Tagline only                                                    |
+| Blog announcement, deck slide 1                         | Short paragraph                                                 |
+| Sales one-pager, partner deck, deep blog post           | Long paragraph + audience tiers                                 |
 
 ---
 
@@ -264,33 +264,33 @@ Rows are kept for historical reference; the "Action" column reflects what
 landed in the cascade. Dated blog posts (e.g. `pages/blog/announcement.mdx`)
 were intentionally left untouched as historical records.
 
-| File | Line | Quoted phrase | Action |
-|---|---|---|---|
-| `README.md` | 5 | "Think Figma, but for AI coding assistants. Orchestrate Claude Code, Codex, and Gemini sessions on a multiplayer canvas." | Replace |
-| `README.md` | 7 | "Agor is a multiplayer spatial canvas where you coordinate multiple AI coding assistants on parallel tasks…" | Replace |
-| `apps/agor-docs/pages/index.mdx` | 7 | "Next-gen agent orchestration for AI coding" (Hero subtitle) | Replace |
-| `apps/agor-docs/pages/index.mdx` | 8 | "The multiplayer-ready, spatial layer that connects Claude Code, Codex, Gemini, and any agentic coding tool into one unified workspace." | Replace |
-| `apps/agor-docs/pages/guide/index.mdx` | 3 | "Complete guide to agor - next-gen agent orchestration for AI coding…" (meta) | Replace |
-| `apps/agor-docs/pages/guide/index.mdx` | 16 | "Think Figma, but for AI coding assistants." | Remove |
-| `apps/agor-docs/pages/guide/index.mdx` | 18 | "Next-gen agent orchestration for AI coding. The multiplayer-ready, spatial layer…" | Remove |
-| `apps/agor-docs/pages/guide/index.mdx` | 20 | "Agor is a multiplayer spatial canvas where you coordinate multiple AI coding assistants on parallel tasks…" | Remove |
-| `apps/agor-docs/pages/guide/index.mdx` | 22–23 | "Visualize, coordinate, and automate your AI workflows… coordinate entire swarms of AI agents." | Remove |
-| `apps/agor-docs/pages/guide/index.mdx` | 192 | "git tracks code, Agor tracks the conversations that produced it." | Remove |
-| `apps/agor-docs/theme.config.tsx` | 83 | "Next-gen agent orchestration for AI coding. Multiplayer workspace for Claude Code, Codex, and Gemini." (default meta) | Replace |
-| `apps/agor-docs/theme.config.tsx` | 85 | "agor – Next-gen agent orchestration" (title fallback) | Replace |
-| `apps/agor-docs/theme.config.tsx` | 121 | meta keywords list | Refresh |
-| `apps/agor-docs/theme.config.tsx` | 179–181 | JSON-LD `SoftwareApplication.description` | Replace |
-| `package.json` (root) | — | "Next-gen agent orchestration platform" | Replace |
-| `packages/agor-live/package.json` | — | "Multiplayer canvas for orchestrating AI coding sessions" | Refresh |
-| `apps/agor-docs/pages/guide/multiplayer-social.mdx` | 8 | "Agor is great solo. Multiplayer is what makes it Figma." | Keep |
-| `apps/agor-docs/pages/guide/features-overview.mdx` | 70 | "Figma for AI coding." | Keep (in multiplayer/team context only) |
+| File                                                | Line    | Quoted phrase                                                                                                                            | Action                                  |
+| --------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `README.md`                                         | 5       | "Think Figma, but for AI coding assistants. Orchestrate Claude Code, Codex, and Gemini sessions on a multiplayer canvas."                | Replace                                 |
+| `README.md`                                         | 7       | "Agor is a multiplayer spatial canvas where you coordinate multiple AI coding assistants on parallel tasks…"                             | Replace                                 |
+| `apps/agor-docs/pages/index.mdx`                    | 7       | "Next-gen agent orchestration for AI coding" (Hero subtitle)                                                                             | Replace                                 |
+| `apps/agor-docs/pages/index.mdx`                    | 8       | "The multiplayer-ready, spatial layer that connects Claude Code, Codex, Gemini, and any agentic coding tool into one unified workspace." | Replace                                 |
+| `apps/agor-docs/pages/guide/index.mdx`              | 3       | "Complete guide to agor - next-gen agent orchestration for AI coding…" (meta)                                                            | Replace                                 |
+| `apps/agor-docs/pages/guide/index.mdx`              | 16      | "Think Figma, but for AI coding assistants."                                                                                             | Remove                                  |
+| `apps/agor-docs/pages/guide/index.mdx`              | 18      | "Next-gen agent orchestration for AI coding. The multiplayer-ready, spatial layer…"                                                      | Remove                                  |
+| `apps/agor-docs/pages/guide/index.mdx`              | 20      | "Agor is a multiplayer spatial canvas where you coordinate multiple AI coding assistants on parallel tasks…"                             | Remove                                  |
+| `apps/agor-docs/pages/guide/index.mdx`              | 22–23   | "Visualize, coordinate, and automate your AI workflows… coordinate entire swarms of AI agents."                                          | Remove                                  |
+| `apps/agor-docs/pages/guide/index.mdx`              | 192     | "git tracks code, Agor tracks the conversations that produced it."                                                                       | Remove                                  |
+| `apps/agor-docs/theme.config.tsx`                   | 83      | "Next-gen agent orchestration for AI coding. Multiplayer workspace for Claude Code, Codex, and Gemini." (default meta)                   | Replace                                 |
+| `apps/agor-docs/theme.config.tsx`                   | 85      | "agor – Next-gen agent orchestration" (title fallback)                                                                                   | Replace                                 |
+| `apps/agor-docs/theme.config.tsx`                   | 121     | meta keywords list                                                                                                                       | Refresh                                 |
+| `apps/agor-docs/theme.config.tsx`                   | 179–181 | JSON-LD `SoftwareApplication.description`                                                                                                | Replace                                 |
+| `package.json` (root)                               | —       | "Next-gen agent orchestration platform"                                                                                                  | Replace                                 |
+| `packages/agor-live/package.json`                   | —       | "Multiplayer canvas for orchestrating AI coding sessions"                                                                                | Refresh                                 |
+| `apps/agor-docs/pages/guide/multiplayer-social.mdx` | 8       | "Agor is great solo. Multiplayer is what makes it Figma."                                                                                | Keep                                    |
+| `apps/agor-docs/pages/guide/features-overview.mdx`  | 70      | "Figma for AI coding."                                                                                                                   | Keep (in multiplayer/team context only) |
 
 ### Additional surfaces caught during cascade (not in original survey)
 
-| File | Line | Quoted phrase | Action |
-|---|---|---|---|
-| `apps/agor-cli/src/lib/banner.ts` | 22 | `TAGLINE = 'Next-gen agent orchestration platform'` (CLI banner shown on every command) | Replaced |
-| `apps/agor-ui/src/components/LoginPage/LoginPage.tsx` | 108 | "Next-gen agent orchestration" (login subtitle) | Replaced |
-| `context/concepts/core.md` | 7, 13–14 | "Multiplayer canvas for orchestrating agentic coding sessions" + "spatial layer" framing in the internal concept doc that other agents read | Replaced (and added pointer to this M&P doc) |
-| `apps/agor-docs/pages/blog/announcement.mdx` | 2, 8, 12 | "A Multiplayer-ready, Spatial Layer for Agentic Coding" (launch post, dated 2025-10-26) | Kept as historical record |
-| `apps/agor-docs/pages/blog/agor-cloud.mdx` | 10 | "next-gen, multi-agent, multiplayer servers" (body text, not tagline) | Kept (incidental use, not positioning) |
+| File                                                  | Line     | Quoted phrase                                                                                                                               | Action                                       |
+| ----------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `apps/agor-cli/src/lib/banner.ts`                     | 22       | `TAGLINE = 'Next-gen agent orchestration platform'` (CLI banner shown on every command)                                                     | Replaced                                     |
+| `apps/agor-ui/src/components/LoginPage/LoginPage.tsx` | 108      | "Next-gen agent orchestration" (login subtitle)                                                                                             | Replaced                                     |
+| `context/concepts/core.md`                            | 7, 13–14 | "Multiplayer canvas for orchestrating agentic coding sessions" + "spatial layer" framing in the internal concept doc that other agents read | Replaced (and added pointer to this M&P doc) |
+| `apps/agor-docs/pages/blog/announcement.mdx`          | 2, 8, 12 | "A Multiplayer-ready, Spatial Layer for Agentic Coding" (launch post, dated 2025-10-26)                                                     | Kept as historical record                    |
+| `apps/agor-docs/pages/blog/agor-cloud.mdx`            | 10       | "next-gen, multi-agent, multiplayer servers" (body text, not tagline)                                                                       | Kept (incidental use, not positioning)       |

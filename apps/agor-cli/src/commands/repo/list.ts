@@ -4,20 +4,12 @@
  * Displays repositories in a beautiful table.
  */
 
-import type { Repo } from '@agor-live/client';
-import { formatShortId, PAGINATION } from '@agor-live/client';
+import type { PaginatedResult, Repo } from '@agor-live/client';
+import { PAGINATION, shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import { BaseCommand } from '../../base-command';
-
-// Type for paginated responses
-interface Paginated<T> {
-  total: number;
-  limit: number;
-  skip: number;
-  data: T[];
-}
 
 export default class RepoList extends BaseCommand {
   static description = 'List all registered repositories';
@@ -55,8 +47,8 @@ export default class RepoList extends BaseCommand {
       const reposService = client.service('repos');
       const result = await reposService.find({ query });
       const isPaginated = !Array.isArray(result);
-      const repos = Array.isArray(result) ? result : (result as Paginated<Repo>).data;
-      const total = isPaginated ? (result as Paginated<Repo>).total : repos.length;
+      const repos = Array.isArray(result) ? result : (result as PaginatedResult<Repo>).data;
+      const total = isPaginated ? (result as PaginatedResult<Repo>).total : repos.length;
 
       if (!Array.isArray(repos) || repos.length === 0) {
         this.log(chalk.dim('No repositories found.'));
@@ -90,10 +82,10 @@ export default class RepoList extends BaseCommand {
 
       // Add rows
       for (const repo of repos) {
-        const shortId = formatShortId(repo.repo_id);
+        const localShortId = shortId(repo.repo_id);
 
         table.push([
-          chalk.dim(shortId),
+          chalk.dim(localShortId),
           repo.slug,
           repo.repo_type,
           this.truncate(repo.remote_url || '(no remote)', 35),

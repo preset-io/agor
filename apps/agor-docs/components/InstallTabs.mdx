@@ -1,0 +1,36 @@
+import { Tabs } from 'nextra/components';
+
+<Tabs items={['npm (Recommended)', 'Homebrew']} defaultIndex={0}>
+  <Tabs.Tab>
+    Most users should start here. It's the most universal path, and it's the one the rest of the docs assume.
+
+    Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)).
+
+    ```bash
+    # Install Agor
+    npm install -g agor-live
+
+    # First run
+    agor init
+    agor daemon start
+    agor open
+    ```
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+    If you already use Homebrew, this is a convenient alternative on macOS or Linux.
+
+    The Homebrew formula installs a compatible Node runtime for you.
+
+    ```bash
+    # Install Agor
+    brew tap preset-io/agor https://github.com/preset-io/agor
+    brew install agor-live
+
+    # First run
+    agor init
+    agor daemon start
+    agor open
+    ```
+  </Tabs.Tab>
+</Tabs>

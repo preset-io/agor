@@ -7,6 +7,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { shortId } from '@agor/core/db';
 import type { SessionID } from '@agor/core/types';
 
 /**
@@ -16,7 +17,7 @@ import type { SessionID } from '@agor/core/types';
  * @param sdkSessionId - Claude SDK session ID (for conversation continuity, optional)
  */
 export function generateSessionContext(sessionId: SessionID, sdkSessionId?: string): string {
-  const shortId = sessionId.substring(0, 8);
+  const sessionShort = shortId(sessionId);
 
   let sdkSessionLine = '';
   if (sdkSessionId) {
@@ -32,7 +33,7 @@ export function generateSessionContext(sessionId: SessionID, sdkSessionId?: stri
 You are currently running within **Agor** (https://agor.live), a multiplayer canvas for orchestrating AI coding agents.
 
 **Session IDs:**
-- **Agor Session ID:** \`${sessionId}\` (short: \`${shortId}\`) - Agor's internal session tracking${sdkSessionLine}
+- **Agor Session ID:** \`${sessionId}\` (short: \`${sessionShort}\`) - Agor's internal session tracking${sdkSessionLine}
 
 When you see these IDs referenced in prompts or tool calls, they refer to THIS session you're currently in.
 
@@ -41,21 +42,21 @@ For more information about Agor, visit https://agor.live
 }
 
 /**
- * Append session context to CLAUDE.md in a worktree
+ * Append session context to CLAUDE.md in a branch
  *
  * CRITICAL: This APPENDS to existing CLAUDE.md, never replaces it!
  * This ensures we don't overwrite the Claude Code system prompt.
  *
- * @param worktreePath - Path to the worktree directory
+ * @param branchPath - Path to the branch directory
  * @param sessionId - Agor session ID
  * @param sdkSessionId - Claude SDK session ID (optional, for conversation continuity)
  */
 export async function appendSessionContextToCLAUDEmd(
-  worktreePath: string,
+  branchPath: string,
   sessionId: SessionID,
   sdkSessionId?: string
 ): Promise<void> {
-  const claudeMdPath = path.join(worktreePath, 'CLAUDE.md');
+  const claudeMdPath = path.join(branchPath, 'CLAUDE.md');
 
   try {
     // Read existing CLAUDE.md
@@ -78,9 +79,7 @@ export async function appendSessionContextToCLAUDEmd(
     const newContent = existingContent + sessionContext;
 
     await fs.writeFile(claudeMdPath, newContent, 'utf-8');
-    console.log(
-      `✅ Appended session context to CLAUDE.md for session ${sessionId.substring(0, 8)}`
-    );
+    console.log(`✅ Appended session context to CLAUDE.md for session ${shortId(sessionId)}`);
   } catch (error) {
     console.error(`❌ Failed to append session context to CLAUDE.md:`, error);
     // Non-fatal - agent will still work, just won't know its session ID
@@ -90,8 +89,8 @@ export async function appendSessionContextToCLAUDEmd(
 /**
  * Remove session context from CLAUDE.md (cleanup)
  */
-export async function removeSessionContextFromCLAUDEmd(worktreePath: string): Promise<void> {
-  const claudeMdPath = path.join(worktreePath, 'CLAUDE.md');
+export async function removeSessionContextFromCLAUDEmd(branchPath: string): Promise<void> {
+  const claudeMdPath = path.join(branchPath, 'CLAUDE.md');
 
   try {
     const content = await fs.readFile(claudeMdPath, 'utf-8');

@@ -72,8 +72,8 @@ export default class RepoRm extends BaseCommand {
       this.log(`  ${chalk.cyan('Type')}: ${repo.repo_type}`);
       this.log(`  ${chalk.cyan('Path')}: ${repo.local_path}`);
 
-      // Note: Worktrees are now in a separate table, not nested in repo
-      // For now, we just show repo info (would need to query worktrees table separately)
+      // Note: Branches are now in a separate table, not nested in repo
+      // For now, we just show repo info (would need to query branches table separately)
       this.log('');
 
       if (flags['delete-files']) {
@@ -87,7 +87,7 @@ export default class RepoRm extends BaseCommand {
         } else {
           this.log(chalk.yellow('⚠ WARNING: Local files will also be deleted:'));
           this.log(chalk.yellow(`  Main repo: ${repo.local_path}`));
-          this.log(chalk.yellow(`  Note: Any associated worktrees will also be deleted`));
+          this.log(chalk.yellow(`  Note: Any associated branches will also be deleted`));
           this.log('');
         }
       } else {
@@ -126,7 +126,7 @@ export default class RepoRm extends BaseCommand {
           {
             type: 'confirm',
             name: 'shouldDelete',
-            message: 'Do you want to remove the local folders (repo + worktrees)?',
+            message: 'Do you want to remove the local folders (repo + branches)?',
             default: false,
           },
         ]);
@@ -157,12 +157,12 @@ export default class RepoRm extends BaseCommand {
           );
         }
 
-        // TODO: Query worktrees table separately and delete associated worktree directories
-        // For now, worktrees cascade delete in database but files remain
+        // TODO: Query branches table separately and delete associated branch directories
+        // For now, branches cascade delete in database but files remain
       } else {
         this.log(chalk.dim('Local files preserved:'));
         this.log(chalk.dim('  Main repo: ') + repo.local_path);
-        // TODO: List worktrees from worktrees table
+        // TODO: List branches from branches table
       }
 
       this.log('');

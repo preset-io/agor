@@ -4,13 +4,138 @@
  * Handles loading and saving YAML configuration file.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
+import { resolveExecutorHeartbeatConfig } from './executor-heartbeat';
 import type { AgorConfig, UnknownJson } from './types';
+
+// ---------------------------------------------------------------------------
+// In-memory cache for the default-path config
+//
+// The daemon's hot paths call loadConfig()/loadConfigSync() per-request — 10+
+// times in services/branches.ts, services/artifacts.ts, services/terminals.ts,
+// register-routes.ts, etc. Each call re-reads the YAML from disk and parses
+// it. That's wasted work for a file that rarely changes.
+//
+// Strategy: stat-validated cache. On every call, stat() the file (a few
+// microseconds on Linux) and compare (mtimeMs, size). Cache hit → return a
+// fresh deep clone of the parsed config. Cache miss → read + parse + cache.
+//
+// Why a clone and not the cached object itself?
+// Callers mutate the loaded config (`setConfigValue`, `unsetConfigValue`,
+// `ConfigService.patch`) and then call `saveConfig()`. If we returned the
+// shared cache object, a failed save would leave unsaved mutations visible
+// to every subsequent reader. Returning a clone makes the cache effectively
+// immutable from the outside.
+//
+// Why size in addition to mtimeMs?
+// Some filesystems have coarse mtime resolution, and rapid same-tick rewrites
+// can land on the same mtime. Combining mtimeMs with size catches the common
+// "same instant, different bytes" case cheaply. It's not a cryptographic
+// guarantee — a write that preserves size and mtime can still slip through —
+// but in practice the pair is more than enough.
+//
+// Why not fs.watch? Surprising behavior on atomic renames (which is what
+// saveConfig() effectively is), platform quirks, and stat is already free.
+//
+// Custom-path loads via loadConfigFromFile() are NOT cached — they're a
+// startup-only path and adding a Map<path, entry> isn't worth the complexity.
+// ---------------------------------------------------------------------------
+
+interface CacheKey {
+  /** mtimeMs from stat, or `NO_FILE` sentinel when the file doesn't exist. */
+  mtimeMs: number;
+  /** size in bytes, 0 when the file doesn't exist. */
+  size: number;
+}
+
+interface ConfigCacheEntry {
+  path: string;
+  config: AgorConfig;
+  key: CacheKey;
+}
+
+/** Sentinel: file didn't exist at cache time; default config is cached. */
+const NO_FILE: number = -1;
+const NO_FILE_KEY: CacheKey = { mtimeMs: NO_FILE, size: 0 };
+
+let cachedEntry: ConfigCacheEntry | null = null;
+
+function cacheKeyMatches(a: CacheKey, b: CacheKey): boolean {
+  return a.mtimeMs === b.mtimeMs && a.size === b.size;
+}
+
+function statCacheKey(configPath: string): CacheKey | null {
+  try {
+    const stat = statSync(configPath);
+    return { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return NO_FILE_KEY;
+    }
+    // Stat failed for some non-ENOENT reason — caller should not trust cache.
+    return null;
+  }
+}
+
+/**
+ * Return a deep clone of the cached config if (path, mtime, size) still match
+ * the file on disk. Returns null on any kind of mismatch — caller should
+ * re-read.
+ *
+ * The clone is what makes the cache safe to expose: callers mutate the result
+ * before `saveConfig()` and we don't want those mutations bleeding into the
+ * next reader if the save fails.
+ */
+function readCachedConfig(configPath: string): AgorConfig | null {
+  if (cachedEntry === null || cachedEntry.path !== configPath) {
+    return null;
+  }
+  const currentKey = statCacheKey(configPath);
+  if (currentKey === null || !cacheKeyMatches(currentKey, cachedEntry.key)) {
+    return null;
+  }
+  return structuredClone(cachedEntry.config);
+}
+
+function writeCachedConfig(configPath: string, config: AgorConfig, key: CacheKey): void {
+  // Clone on write too so a caller mutating their own copy can't reach back
+  // through object identity and corrupt the cached value.
+  cachedEntry = { path: configPath, config: structuredClone(config), key };
+}
+
+/**
+ * Invalidate the in-memory config cache. Called from saveConfig() so that
+ * the daemon's next read sees the fresh value.
+ */
+function invalidateConfigCache(): void {
+  cachedEntry = null;
+}
+
+/**
+ * Test-only: reset the in-memory config cache. Prefer this over poking at
+ * module state directly. Production code should not need to call this.
+ */
+export function __resetConfigCacheForTests(): void {
+  invalidateConfigCache();
+}
+
+/**
+ * Parse + validate raw YAML config content. Shared by every load path so
+ * `loadConfig()`, `loadConfigSync()`, and `loadConfigFromFile()` all reject
+ * the same invalid inputs (e.g. deprecated `unix_user_mode: opportunistic`).
+ */
+function parseAndValidateConfig(content: string): AgorConfig {
+  const parsed = yaml.load(content) as AgorConfig | undefined | null;
+  const finalConfig = parsed || {};
+  validateConfig(finalConfig);
+  return finalConfig;
+}
 
 /**
  * Get Agor home directory (~/.agor)
@@ -54,31 +179,109 @@ function validateConfig(config: AgorConfig): void {
         `To update: agor config set execution.unix_user_mode insulated`
     );
   }
+
+  validateOptionalHttpUrl(
+    config.external_launch as Record<string, unknown> | undefined,
+    'login_redirect_url',
+    'external_launch.login_redirect_url'
+  );
+}
+
+function validateOptionalHttpUrl(
+  container: Record<string, unknown> | undefined,
+  key: string,
+  configPath: string
+): void {
+  if (!container || container[key] === undefined) return;
+
+  const raw = container[key];
+  if (typeof raw !== 'string') {
+    throw new Error(`Config error: ${configPath} must be an HTTP(S) URL string`);
+  }
+
+  container[key] = validateHttpUrlString(raw, configPath);
+}
+
+function validateHttpUrlString(
+  url: string,
+  label: string,
+  options: { stripTrailingSlash?: boolean } = {}
+): string {
+  const trimmed = options.stripTrailingSlash ? url.trim().replace(/\/$/, '') : url.trim();
+
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    throw new Error(`Invalid ${label}: "${url}". Must start with http:// or https://`);
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`Invalid ${label} format: "${url}". Must be a valid HTTP(S) URL.`);
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Invalid ${label}: "${url}". Must use http:// or https://`);
+  }
+
+  return trimmed;
 }
 
 /**
  * Load config from ~/.agor/config.yaml
  *
  * Returns default config if file doesn't exist.
+ *
+ * Stat-validated cache: subsequent calls with an unchanged file return a
+ * fresh clone of the parsed result without re-reading or re-parsing YAML.
+ * Callers can mutate the result freely without affecting other readers.
  */
 export async function loadConfig(): Promise<AgorConfig> {
   const configPath = getConfigPath();
 
+  const cached = readCachedConfig(configPath);
+  if (cached !== null) {
+    return cached;
+  }
+
+  // Stat-read-stat: if the file changes mid-read, the two stats won't match
+  // and we skip caching this read entirely (returning the freshly parsed
+  // value but leaving the cache empty so the next call re-reads).
+  let beforeKey: CacheKey | null;
+  let content: string;
+  let afterKey: CacheKey | null;
   try {
-    const content = await fs.readFile(configPath, 'utf-8');
-    const config = yaml.load(content) as AgorConfig;
-    const finalConfig = config || {};
-    validateConfig(finalConfig);
-    return finalConfig;
+    beforeKey = statCacheKey(configPath);
+    if (beforeKey?.mtimeMs === NO_FILE) {
+      const defaults = getDefaultConfig();
+      writeCachedConfig(configPath, defaults, NO_FILE_KEY);
+      return defaults;
+    }
+    content = await fs.readFile(configPath, 'utf-8');
+    afterKey = statCacheKey(configPath);
   } catch (error) {
-    // File doesn't exist or parse error - return default config
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return getDefaultConfig();
+      const defaults = getDefaultConfig();
+      writeCachedConfig(configPath, defaults, NO_FILE_KEY);
+      return defaults;
     }
     throw new Error(
       `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
     );
   }
+
+  let finalConfig: AgorConfig;
+  try {
+    finalConfig = parseAndValidateConfig(content);
+  } catch (error) {
+    throw new Error(
+      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (beforeKey !== null && afterKey !== null && cacheKeyMatches(beforeKey, afterKey)) {
+    writeCachedConfig(configPath, finalConfig, beforeKey);
+  }
+  return finalConfig;
 }
 
 /**
@@ -89,16 +292,16 @@ export async function loadConfig(): Promise<AgorConfig> {
  */
 export async function loadConfigFromFile(filePath: string): Promise<AgorConfig> {
   const content = await fs.readFile(filePath, 'utf-8');
-  const config = yaml.load(content) as AgorConfig;
-  const finalConfig = config || {};
-  validateConfig(finalConfig);
-  return finalConfig;
+  return parseAndValidateConfig(content);
 }
 
 /**
  * Save config to ~/.agor/config.yaml
+ *
+ * Invalidates the in-memory cache so the next load reflects the fresh value.
  */
 export async function saveConfig(config: AgorConfig): Promise<void> {
+  validateConfig(config);
   await ensureAgorHome();
 
   const configPath = getConfigPath();
@@ -109,6 +312,7 @@ export async function saveConfig(config: AgorConfig): Promise<void> {
   });
 
   await fs.writeFile(configPath, content, 'utf-8');
+  invalidateConfigCache();
 }
 
 /**
@@ -123,28 +327,24 @@ export function getDefaultConfig(): AgorConfig {
     display: {
       tableStyle: 'unicode',
       colorOutput: true,
-      shortIdLength: 8,
     },
     daemon: {
       port: DAEMON.DEFAULT_PORT,
       host: DAEMON.DEFAULT_HOST,
-      allowAnonymous: true, // Default: Allow anonymous access (local mode)
-      requireAuth: false, // Default: Do not require authentication
       mcpEnabled: true, // Default: Enable built-in MCP server
     },
     ui: {
       port: 5173,
       host: 'localhost',
     },
-    codex: {
-      home: '~/.agor/codex',
-    },
     execution: {
       session_token_expiration_ms: 86400000, // 24 hours
       session_token_max_uses: 1, // Single-use tokens
       mcp_token_expiration_ms: MCP_TOKEN.DEFAULT_EXPIRATION_MS,
       sync_unix_passwords: true, // Default: sync passwords to Unix
+      executor_heartbeat: resolveExecutorHeartbeatConfig(),
     },
+    analytics: getDefaultAnalyticsConfig(),
   };
 }
 
@@ -159,27 +359,6 @@ export function expandHomePath(input: string): string {
     return path.join(os.homedir(), input.slice(2));
   }
   return input;
-}
-
-/**
- * Resolve configured Codex home directory (expanded to absolute path)
- */
-export async function resolveCodexHome(): Promise<string> {
-  const config = await loadConfig();
-  const configured = config.codex?.home;
-  const defaultHome = getDefaultConfig().codex?.home ?? '~/.agor/codex';
-  const selected =
-    typeof configured === 'string' && configured.trim().length > 0 ? configured : defaultHome;
-  return expandHomePath(selected.trim());
-}
-
-/**
- * Ensure Codex home directory exists and return its absolute path.
- */
-export async function ensureCodexHome(): Promise<string> {
-  const home = await resolveCodexHome();
-  await fs.mkdir(home, { recursive: true });
-  return home;
 }
 
 /**
@@ -217,9 +396,9 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     display: { ...defaults.display, ...config.display },
     daemon: { ...defaults.daemon, ...config.daemon },
     ui: { ...defaults.ui, ...config.ui },
-    codex: { ...defaults.codex, ...config.codex },
     execution: { ...defaults.execution, ...config.execution },
     paths: { ...defaults.paths, ...config.paths },
+    analytics: { ...defaults.analytics, ...config.analytics },
   };
 
   const parts = key.split('.');
@@ -336,21 +515,7 @@ export async function getDaemonUrl(): Promise<string> {
  * @throws Error if URL is invalid or uses unsupported scheme
  */
 function validateBaseUrl(url: string): string {
-  const trimmed = url.trim().replace(/\/$/, ''); // Remove trailing slash and whitespace
-
-  // Basic validation: must start with http:// or https://
-  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
-    throw new Error(`Invalid base URL: "${url}". Must start with http:// or https://`);
-  }
-
-  // Additional validation: ensure it's a valid URL structure
-  try {
-    new URL(trimmed);
-  } catch {
-    throw new Error(`Invalid base URL format: "${url}". Must be a valid HTTP(S) URL.`);
-  }
-
-  return trimmed;
+  return validateHttpUrlString(url, 'base URL', { stripTrailingSlash: true });
 }
 
 /**
@@ -448,23 +613,54 @@ export async function requirePublicBaseUrl(): Promise<string> {
  *
  * Returns default config if file doesn't exist.
  * Use for hot paths where async is not possible.
+ *
+ * Shares the same stat-validated cache and the same parse+validate code as
+ * {@link loadConfig}, so the sync entry point cannot poison the cache with
+ * an invalid config that a later async caller would silently return.
  */
 export function loadConfigSync(): AgorConfig {
   const configPath = getConfigPath();
 
+  const cached = readCachedConfig(configPath);
+  if (cached !== null) {
+    return cached;
+  }
+
+  let beforeKey: CacheKey | null;
+  let content: string;
+  let afterKey: CacheKey | null;
   try {
-    const content = readFileSync(configPath, 'utf-8');
-    const config = yaml.load(content) as AgorConfig;
-    return config || {};
+    beforeKey = statCacheKey(configPath);
+    if (beforeKey?.mtimeMs === NO_FILE) {
+      const defaults = getDefaultConfig();
+      writeCachedConfig(configPath, defaults, NO_FILE_KEY);
+      return defaults;
+    }
+    content = readFileSync(configPath, 'utf-8');
+    afterKey = statCacheKey(configPath);
   } catch (error) {
-    // File doesn't exist or parse error - return default config
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return getDefaultConfig();
+      const defaults = getDefaultConfig();
+      writeCachedConfig(configPath, defaults, NO_FILE_KEY);
+      return defaults;
     }
     throw new Error(
       `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
     );
   }
+
+  let finalConfig: AgorConfig;
+  try {
+    finalConfig = parseAndValidateConfig(content);
+  } catch (error) {
+    throw new Error(
+      `Failed to load config: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (beforeKey !== null && afterKey !== null && cacheKeyMatches(beforeKey, afterKey)) {
+    writeCachedConfig(configPath, finalConfig, beforeKey);
+  }
+  return finalConfig;
 }
 
 /**
@@ -479,7 +675,8 @@ export type ConfigCredentialKey =
   | 'ANTHROPIC_AUTH_TOKEN'
   | 'ANTHROPIC_BASE_URL'
   | 'OPENAI_API_KEY'
-  | 'GEMINI_API_KEY';
+  | 'GEMINI_API_KEY'
+  | 'CURSOR_API_KEY';
 
 const CONFIG_CREDENTIAL_KEYS: ReadonlySet<string> = new Set<ConfigCredentialKey>([
   'ANTHROPIC_API_KEY',
@@ -487,6 +684,7 @@ const CONFIG_CREDENTIAL_KEYS: ReadonlySet<string> = new Set<ConfigCredentialKey>
   'ANTHROPIC_BASE_URL',
   'OPENAI_API_KEY',
   'GEMINI_API_KEY',
+  'CURSOR_API_KEY',
 ]);
 
 export function isConfigCredentialKey(key: string): key is ConfigCredentialKey {
@@ -530,7 +728,7 @@ export function getCredential(key: ConfigCredentialKey): string | undefined {
  * @example
  * ```ts
  * const daemonUser = getDaemonUser();
- * if (daemonUser && isWorktreeRbacEnabled()) {
+ * if (daemonUser && isBranchRbacEnabled()) {
  *   runAsUser('git status', { asUser: daemonUser });
  * }
  * ```
@@ -567,12 +765,12 @@ export function requireDaemonUser(config: AgorConfig): string {
 
   // 2. Check if Unix isolation is enabled - if so, require explicit config
   const unixIsolationEnabled =
-    config.execution?.worktree_rbac === true ||
+    config.execution?.branch_rbac === true ||
     (config.execution?.unix_user_mode && config.execution.unix_user_mode !== 'simple');
 
   if (unixIsolationEnabled) {
     throw new Error(
-      'Unix isolation is enabled (worktree_rbac or unix_user_mode) but daemon.unix_user is not configured.\n' +
+      'Unix isolation is enabled (branch_rbac or unix_user_mode) but daemon.unix_user is not configured.\n' +
         'Please set daemon.unix_user in ~/.agor/config.yaml to the user running the daemon.\n' +
         'Example:\n' +
         '  daemon:\n' +
@@ -592,16 +790,16 @@ export function requireDaemonUser(config: AgorConfig): string {
 }
 
 /**
- * Check if worktree RBAC is enabled
+ * Check if branch RBAC is enabled
  *
  * When RBAC is enabled, git operations need to run via sudo to get fresh group memberships.
  *
- * @returns true if worktree_rbac is enabled in config
+ * @returns true if branch_rbac is enabled in config
  */
-export function isWorktreeRbacEnabled(): boolean {
+export function isBranchRbacEnabled(): boolean {
   try {
     const config = loadConfigSync();
-    return config.execution?.worktree_rbac === true;
+    return config.execution?.branch_rbac === true;
   } catch {
     return false;
   }
@@ -623,6 +821,80 @@ export function isUnixImpersonationEnabled(): boolean {
   }
 }
 
+/**
+ * Resolve `execution.branch_storage` with defaults applied.
+ *
+ * Default posture (v0.20+): both storage modes are enabled out of the box so
+ * users can pick worktree or clone per branch from the create form / MCP
+ * tool. `default_mode` stays on `'worktree'` for backwards compatibility —
+ * existing automations that create branches without specifying a mode keep
+ * landing on the legacy `git worktree add` path. Operators who want to
+ * disable clone-mode entirely (e.g. for security gradient reasons) can pin
+ * `allowed_modes: ['worktree']` in `~/.agor/config.yaml`.
+ *
+ * `default_mode` always falls back into `allowed_modes` if the operator
+ * configured an inconsistent shape (e.g. set `default_mode: clone` but
+ * forgot to add `clone` to `allowed_modes`) — load-time normalisation
+ * keeps service code from needing to defensively re-validate.
+ */
+export function resolveBranchStorageConfig(): {
+  defaultMode: import('./types').BranchStorageMode;
+  allowedModes: import('./types').BranchStorageMode[];
+} {
+  let raw: import('./types').AgorBranchStorageSettings | undefined;
+  try {
+    raw = loadConfigSync().execution?.branch_storage;
+  } catch {
+    // Config unloadable (no file, parse error, etc.) — fall through to
+    // the safe legacy default.
+    raw = undefined;
+  }
+  const allowed: import('./types').BranchStorageMode[] =
+    raw?.allowed_modes && raw.allowed_modes.length > 0 ? raw.allowed_modes : ['worktree', 'clone'];
+  const requestedDefault = raw?.default_mode ?? 'worktree';
+  // Normalise: if the operator's default_mode isn't in allowed_modes, fall
+  // back to the first allowed mode so we never hand out a default that the
+  // gate would immediately reject.
+  const defaultMode = allowed.includes(requestedDefault) ? requestedDefault : allowed[0];
+  return { defaultMode, allowedModes: allowed };
+}
+
+/**
+ * Throw a clear error if `mode` isn't in the operator-allowed set.
+ * Centralised so the same wording appears across the daemon service, the
+ * REST route, and the MCP tool.
+ */
+export function ensureBranchStorageModeAllowed(mode: import('./types').BranchStorageMode): void {
+  const { allowedModes } = resolveBranchStorageConfig();
+  if (!allowedModes.includes(mode)) {
+    throw new Error(
+      `storage_mode='${mode}' is not enabled on this Agor instance. ` +
+        `Enable it by adding '${mode}' to execution.branch_storage.allowed_modes ` +
+        `in ~/.agor/config.yaml. Currently allowed: ${allowedModes.map((m) => `'${m}'`).join(', ')}.`
+    );
+  }
+}
+
+/**
+ * Whether the daemon needs to wrap git operations in `sudo -u` to pick up
+ * supplemental Unix groups created after daemon startup.
+ *
+ * `sudo -u` is the only way to force a fresh `initgroups()` on a long-running
+ * daemon process — without it, `agor_wt_*` groups added at runtime are
+ * invisible and ACL-gated git operations fail with permission errors.
+ *
+ * Why: Issue #1140 — in the open-access default (no RBAC, simple unix mode)
+ * no supplemental groups are ever created, so wrapping in sudo is pure
+ * overhead AND breaks for users who never configured passwordless sudoers.
+ *
+ * Returns true when:
+ * - `branch_rbac` is enabled (RBAC creates `agor_wt_*` groups), OR
+ * - `unix_user_mode` is `insulated` or `strict` (per-user impersonation)
+ */
+export function isUnixGroupRefreshNeeded(): boolean {
+  return isBranchRbacEnabled() || isUnixImpersonationEnabled();
+}
+
 // =============================================================================
 // Data Home Path Resolution
 // =============================================================================
@@ -634,7 +906,7 @@ export function isUnixImpersonationEnabled(): boolean {
 //   - Fast local storage (SSD)
 //
 // AGOR_DATA_HOME (defaults to AGOR_HOME):
-//   - Git data: repos/, worktrees/
+//   - Git data: repos/, branches/
 //   - Can be shared storage (EFS) for k8s deployments
 //
 // Priority (highest to lowest):
@@ -648,7 +920,7 @@ export function isUnixImpersonationEnabled(): boolean {
 /**
  * Get Agor data home directory
  *
- * This is where git repos and worktrees are stored.
+ * This is where git repos and branches are stored.
  * Defaults to AGOR_HOME for backward compatibility.
  *
  * Resolution order:
@@ -698,27 +970,35 @@ export function getReposDir(): string {
 }
 
 /**
- * Get worktrees directory path
+ * Get the on-disk root for branch directories.
  *
  * Returns: $AGOR_DATA_HOME/worktrees
  *
- * @returns Absolute path to worktrees directory
+ * The on-disk dir name is `worktrees/` even though the conceptual entity
+ * is now Branch — the v0.20 rename deliberately kept the dir name to
+ * avoid a filesystem migration on existing installs (renaming would
+ * orphan every branch.path row + every per-user symlink). The helper
+ * name reflects the conceptual entity; the value is a compat artifact.
+ *
+ * @returns Absolute path to the branches directory
  */
-export function getWorktreesDir(): string {
+export function getBranchesDir(): string {
   return path.join(getDataHome(), 'worktrees');
 }
 
 /**
- * Get path for a specific worktree
+ * Get path for a specific branch on disk.
  *
- * Returns: $AGOR_DATA_HOME/worktrees/<repoSlug>/<worktreeName>
+ * Returns: $AGOR_DATA_HOME/worktrees/<repoSlug>/<branchName>
+ *
+ * See {@link getBranchesDir} for why the on-disk dir is still `worktrees/`.
  *
  * @param repoSlug - Repository slug (e.g., "preset-io/agor")
- * @param worktreeName - Worktree name (e.g., "feature-x")
- * @returns Absolute path to the worktree
+ * @param branchName - Branch name (e.g., "feature-x")
+ * @returns Absolute path to the branch
  */
-export function getWorktreePath(repoSlug: string, worktreeName: string): string {
-  return path.join(getWorktreesDir(), repoSlug, worktreeName);
+export function getBranchPath(repoSlug: string, branchName: string): string {
+  return path.join(getBranchesDir(), repoSlug, branchName);
 }
 
 /**
@@ -759,10 +1039,13 @@ export async function getReposDirAsync(): Promise<string> {
 }
 
 /**
- * Get worktrees directory path (async version)
+ * Get branches directory path (async version).
  *
- * @returns Absolute path to worktrees directory
+ * Same on-disk-dir compat as {@link getBranchesDir} — value is
+ * `worktrees/`, helper name is Branch-conceptual.
+ *
+ * @returns Absolute path to branches directory
  */
-export async function getWorktreesDirAsync(): Promise<string> {
+export async function getBranchesDirAsync(): Promise<string> {
   return path.join(await getDataHomeAsync(), 'worktrees');
 }

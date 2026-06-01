@@ -3,6 +3,7 @@
  */
 
 import type { User } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -199,7 +200,7 @@ export default class UserUpdate extends BaseCommand {
       this.log(`  Name:          ${chalk.cyan(updatedUser.name || '(not set)')}`);
       this.log(`  Role:          ${chalk.cyan(updatedUser.role)}`);
       this.log(`  Unix Username: ${chalk.cyan(updatedUser.unix_username || '(not set)')}`);
-      this.log(`  ID:            ${chalk.gray(updatedUser.user_id.substring(0, 8))}`);
+      this.log(`  ID:            ${chalk.gray(shortId(updatedUser.user_id))}`);
       if (updatedUser.must_change_password) {
         this.log(`  ${chalk.yellow('⚠')} User must change password on next login`);
       }

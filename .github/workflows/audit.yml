@@ -1,0 +1,68 @@
+# Security audit — `pnpm audit` against the GitHub advisory database.
+#
+# Triggers:
+#   * PR / push to main when dependency manifests change. Most PRs don't
+#     touch deps and re-running audit against an unchanged lockfile
+#     returns the same result as the previous run, so we path-filter to
+#     skip the no-op case.
+#   * Nightly via `workflow_call` from `heavy-checks.yml` — catches
+#     ambient CVEs: a new advisory published against a dep that's been in
+#     the tree for weeks would otherwise stay silent until the next
+#     incidental lockfile change.
+#   * `workflow_dispatch` for ad-hoc runs.
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pnpm-lock.yaml'
+      - '**/package.json'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/audit.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'pnpm-lock.yaml'
+      - '**/package.json'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/audit.yml'
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  PNPM_VERSION: '9.15.1'
+  NODE_VERSION: '22'
+
+jobs:
+  audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      # Blocking: any CRITICAL advisory in prod deps fails the build.
+      - name: pnpm audit (prod, critical — blocking)
+        run: pnpm audit --audit-level=critical --prod
+
+      # Advisory: HIGH+ advisories are surfaced but non-blocking.
+      # Promote to blocking once the prod tree is clean at the HIGH level.
+      - name: pnpm audit (prod, high — advisory)
+        if: always()
+        run: pnpm audit --audit-level=high --prod || true
+
+      # Full tree (incl. dev deps) — advisory only.
+      - name: pnpm audit (all, high — advisory)
+        if: always()
+        run: pnpm audit --audit-level=high || true

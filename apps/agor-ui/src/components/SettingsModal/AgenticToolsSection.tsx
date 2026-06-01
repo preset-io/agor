@@ -37,12 +37,18 @@ const GLOBAL_TOOL_FIELDS: Record<AgenticToolName, AgenticToolFieldConfig[]> = {
   'claude-code': TOOL_FIELD_CONFIGS['claude-code'].filter(
     (f) => f.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
   ),
+  // Claude Code CLI shares credentials with the SDK path. Same filter
+  // (OAUTH_TOKEN is per-user only).
+  'claude-code-cli': TOOL_FIELD_CONFIGS['claude-code-cli'].filter(
+    (f) => f.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
+  ),
   // OPENAI_BASE_URL is per-user only: in multiplayer Agor instances hosting
   // multiple companies, a global override would silently route every user's
   // Codex traffic through one tenant's endpoint. Each user sets their own.
   codex: TOOL_FIELD_CONFIGS.codex.filter((f) => f.field !== 'OPENAI_BASE_URL'),
   gemini: TOOL_FIELD_CONFIGS.gemini,
   copilot: TOOL_FIELD_CONFIGS.copilot,
+  cursor: TOOL_FIELD_CONFIGS.cursor,
   opencode: TOOL_FIELD_CONFIGS.opencode,
 };
 
@@ -122,11 +128,6 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   const [opencodeConnected, setOpencodeConnected] = useState<boolean | null>(null);
   const [opencodeTesting, setOpencodeTesting] = useState(false);
   const [loadingOpencode, setLoadingOpencode] = useState(true);
-  const defaultCodexHome = '~/.agor/codex';
-  const [codexHome, setCodexHome] = useState(defaultCodexHome);
-  const [initialCodexHome, setInitialCodexHome] = useState(defaultCodexHome);
-  const [loadingCodexConfig, setLoadingCodexConfig] = useState(true);
-  const [savingCodexHome, setSavingCodexHome] = useState(false);
 
   // Load API keys configuration
   useEffect(() => {
@@ -190,29 +191,6 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     loadOpenCode();
   }, [client]);
 
-  // Load Codex configuration
-  useEffect(() => {
-    if (!client) return;
-
-    const loadCodex = async () => {
-      try {
-        setLoadingCodexConfig(true);
-        const config = (await client.service('config').get('codex')) as { home?: string } | null;
-        const home = config?.home || defaultCodexHome;
-        setCodexHome(home);
-        setInitialCodexHome(home);
-      } catch (err) {
-        console.error('Failed to load Codex config:', err);
-        setCodexHome(defaultCodexHome);
-        setInitialCodexHome(defaultCodexHome);
-      } finally {
-        setLoadingCodexConfig(false);
-      }
-    };
-
-    loadCodex();
-  }, [client]);
-
   // Save API key
   const handleSaveKey = async (field: string, value: string) => {
     if (!client) return;
@@ -261,32 +239,6 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     }
   };
 
-  const handleSaveCodexHome = async () => {
-    if (!client) return;
-
-    const trimmed = codexHome.trim();
-    if (!trimmed) {
-      showError('Codex home directory cannot be empty');
-      return;
-    }
-
-    try {
-      setSavingCodexHome(true);
-      await client.service('config').patch(null, {
-        codex: {
-          home: trimmed,
-        },
-      });
-      setInitialCodexHome(trimmed);
-      showSuccess('Codex home updated');
-    } catch (err) {
-      console.error('Failed to save Codex home:', err);
-      showError(err instanceof Error ? err.message : 'Failed to save Codex home');
-    } finally {
-      setSavingCodexHome(false);
-    }
-  };
-
   // Test OpenCode connection
   const handleTestOpenCodeConnection = async () => {
     if (!client) return;
@@ -326,8 +278,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     }
   };
 
-  const codexHomeChanged = codexHome !== initialCodexHome;
-  const loading = loadingKeys || loadingOpencode || loadingCodexConfig;
+  const loading = loadingKeys || loadingOpencode;
 
   if (loading) {
     return (
@@ -362,53 +313,15 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
             key: 'codex',
             label: 'Codex',
             children: (
-              <div
-                style={{
-                  paddingTop: token.paddingMD,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: token.marginXL,
-                }}
-              >
-                <ApiKeyTabContent
-                  tool="codex"
-                  fieldStatus={fieldStatus}
-                  keysError={keysError}
-                  savingKeys={savingKeys}
-                  onSave={handleSaveKey}
-                  onClear={handleClearKey}
-                  onClearError={() => setKeysError(null)}
-                />
-
-                <Form layout="vertical">
-                  <Form.Item
-                    label="Codex home directory"
-                    extra="Agor sets CODEX_HOME before launching Codex. Point this at another directory to reuse an existing Codex configuration."
-                  >
-                    <Input
-                      value={codexHome}
-                      onChange={(event) => setCodexHome(event.target.value)}
-                      placeholder={defaultCodexHome}
-                    />
-                  </Form.Item>
-                  <Space>
-                    <Button
-                      type="primary"
-                      onClick={handleSaveCodexHome}
-                      disabled={!codexHomeChanged}
-                      loading={savingCodexHome}
-                    >
-                      Save Codex home
-                    </Button>
-                    <Button
-                      onClick={() => setCodexHome(defaultCodexHome)}
-                      disabled={codexHome === defaultCodexHome}
-                    >
-                      Reset to default
-                    </Button>
-                  </Space>
-                </Form>
-              </div>
+              <ApiKeyTabContent
+                tool="codex"
+                fieldStatus={fieldStatus}
+                keysError={keysError}
+                savingKeys={savingKeys}
+                onSave={handleSaveKey}
+                onClear={handleClearKey}
+                onClearError={() => setKeysError(null)}
+              />
             ),
           },
           {
@@ -432,6 +345,21 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
             children: (
               <ApiKeyTabContent
                 tool="copilot"
+                fieldStatus={fieldStatus}
+                keysError={keysError}
+                savingKeys={savingKeys}
+                onSave={handleSaveKey}
+                onClear={handleClearKey}
+                onClearError={() => setKeysError(null)}
+              />
+            ),
+          },
+          {
+            key: 'cursor',
+            label: 'Cursor SDK',
+            children: (
+              <ApiKeyTabContent
+                tool="cursor"
                 fieldStatus={fieldStatus}
                 keysError={keysError}
                 savingKeys={savingKeys}

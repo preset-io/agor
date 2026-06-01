@@ -34,9 +34,9 @@ import { createRestClient, getApiKeyFromEnv } from '@agor-live/client';
 const apiKey = getApiKeyFromEnv() ?? 'agor_sk_…'; // from User Settings → Personal API Keys
 const client = await createRestClient('http://localhost:3030', apiKey);
 
-const worktrees = await client.service('worktrees').find({ query: { $limit: 50 } });
+const branches = await client.service('branches').find({ query: { $limit: 50 } });
 const session = await client.service('sessions').create({
-  worktree_id: worktrees.data[0].worktree_id,
+  branch_id: branches.data[0].branch_id,
   agentic_tool: 'claude-code',
   initial_prompt: 'Run the test suite and summarize the output.',
 });
@@ -45,6 +45,27 @@ console.log(`Session ${session.session_id} started`);
 ```
 
 REST clients exit cleanly without keeping a socket open — perfect for CLI tools and short-lived scripts.
+
+### Driving the executor without MCP
+
+Two equivalent ways to send work to a session — pick whichever fits your harness:
+
+```ts
+// One-shot: create the task and start execution in a single call.
+await client.sessions.prompt(session.session_id, 'Run the tests and summarize.', {
+  stream: true,
+});
+
+// Or do it in two steps if your orchestrator wants the task_id up-front.
+const task = await client.service('tasks').create({
+  session_id: session.session_id,
+  full_prompt: 'Run the tests and summarize.',
+  status: 'created',
+});
+await client.tasks.run(task.task_id, { stream: true });
+```
+
+`client.tasks.run()` calls `POST /tasks/:id/run` — the explicit "fire this task now" trigger. It accepts `created` tasks on idle sessions; `queued` tasks drain automatically in order, and busy sessions should be prompted via `client.sessions.prompt()` (which queues atomically).
 
 ## Quickstart — Real-time
 
@@ -56,7 +77,6 @@ import { createClient } from '@agor-live/client';
 const client = createClient('http://localhost:3030');
 
 await client.authenticate({ strategy: 'jwt', accessToken: '…' });
-// or { strategy: 'anonymous' } when the daemon allows it
 
 client.service('messages').on('created', (msg) => {
   console.log('[message]', msg.session_id, msg.role, msg.content?.slice(0, 80));
@@ -120,19 +140,20 @@ This is what you'd reach for if you wanted to:
 |---|---|---|
 | **API Key** | Scripts, services, CI | Pass to `createRestClient(url, apiKey)`, or set `AGOR_API_KEY=agor_sk_…` and use `getApiKeyFromEnv()` |
 | **JWT** | Browser apps after login | `await client.authenticate({ strategy: 'jwt', accessToken })` |
-| **Anonymous** | Open-access instances | `await client.authenticate({ strategy: 'anonymous' })` |
+
+Authentication is required on every endpoint. There is no anonymous strategy.
 
 Issue API keys from **User Settings → Personal API Keys**. Keys are scoped to your user — every action runs under your identity, billing, env vars, and MCP OAuth grants.
 
 ## What's in the surface
 
-Service types are exported and fully typed — `client.service('sessions')`, `client.service('worktrees')`, `client.service('boards')`, `client.service('messages')`, `client.service('tasks')`, `client.service('repos')`, `client.service('users')`, and the rest. Every model lives in `@agor/core/types` (re-exported from `@agor-live/client`), so `Session`, `Worktree`, `Task`, `Message`, `Board`, etc. are available without round-tripping through `any`.
+Service types are exported and fully typed — `client.service('sessions')`, `client.service('branches')`, `client.service('boards')`, `client.service('messages')`, `client.service('tasks')`, `client.service('repos')`, `client.service('users')`, and the rest. Every model lives in `@agor/core/types` (re-exported from `@agor-live/client`), so `Session`, `Branch`, `Task`, `Message`, `Board`, etc. are available without round-tripping through `any`.
 
 Helpers worth knowing:
 
 - `isDaemonRunning(url)` — health check before connecting
 - `getApiKeyFromEnv()` — pull `AGOR_API_KEY` from the environment
-- `formatShortId(id)` — render the 8-char short form Agor uses everywhere
+- `shortId(id)` — render the canonical short form Agor uses everywhere (URLs, pills, logs, notifications)
 
 ## When to reach for which client
 

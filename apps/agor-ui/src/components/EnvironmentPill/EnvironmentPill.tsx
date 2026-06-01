@@ -1,4 +1,4 @@
-import type { Repo, Worktree } from '@agor-live/client';
+import type { Branch, Repo } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -11,24 +11,25 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Button, Space, Spin, Tooltip, theme } from 'antd';
+import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
 
 interface EnvironmentPillProps {
   repo: Repo; // Need repo for environment_config
-  worktree: Worktree; // Has environment_instance (runtime state)
-  onEdit?: () => void; // Opens WorktreeModal → Environment tab
-  onStartEnvironment?: (worktreeId: string) => void;
-  onStopEnvironment?: (worktreeId: string) => void;
-  onNukeEnvironment?: (worktreeId: string) => void;
-  onViewLogs?: (worktreeId: string) => void;
+  branch: Branch; // Has environment_instance (runtime state)
+  onEdit?: () => void; // Opens BranchModal → Environment tab
+  onStartEnvironment?: (branchId: string) => void;
+  onStopEnvironment?: (branchId: string) => void;
+  onNukeEnvironment?: (branchId: string) => void;
+  onViewLogs?: (branchId: string) => void;
   connectionDisabled?: boolean; // Disable actions when disconnected
 }
 
 export function EnvironmentPill({
   repo,
-  worktree,
+  branch,
   onEdit,
   onStartEnvironment,
   onStopEnvironment,
@@ -37,12 +38,13 @@ export function EnvironmentPill({
   connectionDisabled = false,
 }: EnvironmentPillProps) {
   const { token } = theme.useToken();
+  const confirmNuke = useConfirmNukeEnvironment();
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
-  const env = worktree.environment_instance;
+  const env = branch.environment_instance;
 
   // Get static app_url (user-editable, initialized from template)
-  const environmentUrl = worktree.app_url;
+  const environmentUrl = branch.app_url;
 
   // Case 1: No config at all - show grayed discovery pill
   if (!hasConfig) {
@@ -246,7 +248,7 @@ export function EnvironmentPill({
                   onClick={(event) => {
                     event.stopPropagation();
                     if (!startDisabled) {
-                      onStartEnvironment(worktree.worktree_id);
+                      onStartEnvironment(branch.branch_id);
                     }
                   }}
                   disabled={startDisabled}
@@ -278,7 +280,7 @@ export function EnvironmentPill({
                   onClick={(event) => {
                     event.stopPropagation();
                     if (!stopDisabled) {
-                      onStopEnvironment(worktree.worktree_id);
+                      onStopEnvironment(branch.branch_id);
                     }
                   }}
                   disabled={stopDisabled}
@@ -304,7 +306,7 @@ export function EnvironmentPill({
                   onClick={(event) => {
                     event.stopPropagation();
                     if (effectiveEnv.logs) {
-                      onViewLogs(worktree.worktree_id);
+                      onViewLogs(branch.branch_id);
                     }
                   }}
                   disabled={!effectiveEnv.logs}
@@ -317,16 +319,17 @@ export function EnvironmentPill({
                 />
               </Tooltip>
             )}
-            {onNukeEnvironment && worktree.nuke_command && (
+            {onNukeEnvironment && branch.nuke_command && (
               <Tooltip title="Nuke environment (destructive - removes all data and volumes)">
                 <Button
                   type="text"
                   size="small"
                   danger
+                  aria-label="Nuke environment"
                   icon={<FireOutlined />}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onNukeEnvironment(worktree.worktree_id);
+                    confirmNuke(() => onNukeEnvironment(branch.branch_id));
                   }}
                   disabled={connectionDisabled}
                   style={{

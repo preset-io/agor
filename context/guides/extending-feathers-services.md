@@ -49,7 +49,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     );
 
     // Business logic
-    const userId = params?.user?.user_id || 'anonymous';
+    const userId = params?.user?.user_id;
+    if (!userId) throw new Error('Authenticated user required');
     const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
     const boardData = this.buildBoardDataFromBlob(blob, userId, name);
@@ -69,7 +70,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    * Import board from blob (JSON)
    */
   async fromBlob(blob: BoardExportBlob, params?: BoardParams): Promise<Board> {
-    const userId = params?.user?.user_id || 'anonymous';
+    const userId = params?.user?.user_id;
+    if (!userId) throw new Error('Authenticated user required');
     this.boardRepo.validateBoardBlob(blob);
     const data = this.buildBoardDataFromBlob(blob, userId);
 
@@ -113,7 +115,7 @@ app.use('/boards', createBoardsService(db), {
 ```typescript
 app.service('boards').hooks({
   before: {
-    all: [validateQuery, ...getReadAuthHooks()],
+    all: [validateQuery, requireAuth],
     create: [requireMinimumRole('member', 'create boards')],
     patch: [requireMinimumRole('member', 'update boards')],
     remove: [requireMinimumRole('admin', 'delete boards')],
@@ -372,7 +374,7 @@ Does your method operate on the service's primary resource?
 │         └─ NO: Use Service Method (Pattern 1)
 └─ NO: Does it span multiple resources or need complex routing?
        └─ YES: Use Custom Route (Pattern 2)
-              Example: POST /repos/:id/worktrees
+              Example: POST /repos/:id/branches
 ```
 
 ---

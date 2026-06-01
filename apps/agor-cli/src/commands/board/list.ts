@@ -3,7 +3,7 @@
  */
 
 import type { BoardEntityObject } from '@agor-live/client';
-import { PAGINATION } from '@agor-live/client';
+import { PAGINATION, shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
@@ -38,7 +38,7 @@ export default class BoardList extends BaseCommand {
         return;
       }
 
-      // Fetch all board objects to count worktrees per board
+      // Fetch all board objects to count branches per board
       const boardObjects = await client
         .service('board-objects')
         .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
@@ -52,7 +52,7 @@ export default class BoardList extends BaseCommand {
         head: [
           chalk.cyan('ID'),
           chalk.cyan('Name'),
-          chalk.cyan('Worktrees'),
+          chalk.cyan('Branches'),
           chalk.cyan('Description'),
           chalk.cyan('Created'),
         ],
@@ -62,13 +62,11 @@ export default class BoardList extends BaseCommand {
 
       // Add rows
       for (const board of displayBoards) {
-        const worktreeCount = typedBoardObjects.filter(
-          (bo) => bo.board_id === board.board_id
-        ).length;
+        const branchCount = typedBoardObjects.filter((bo) => bo.board_id === board.board_id).length;
         table.push([
-          board.board_id.substring(0, 8),
+          shortId(board.board_id),
           `${board.icon || '📋'} ${board.name}`,
-          worktreeCount.toString(),
+          branchCount.toString(),
           board.description || '',
           new Date(board.created_at).toLocaleDateString(),
         ]);

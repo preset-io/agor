@@ -7,6 +7,7 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
+  HeartOutlined,
   HourglassOutlined,
   PauseCircleOutlined,
   QuestionCircleOutlined,
@@ -26,6 +27,7 @@ interface TimerPillProps {
   startedAt?: string | number | Date;
   endedAt?: string | number | Date;
   durationMs?: number | null;
+  lastExecutorHeartbeatAt?: string | number | Date | null;
   style?: React.CSSProperties;
 }
 
@@ -135,11 +137,16 @@ export const TimerPill: React.FC<TimerPillProps> = ({
   startedAt,
   endedAt,
   durationMs,
+  lastExecutorHeartbeatAt,
   style,
 }) => {
   const { token } = theme.useToken();
   const startMs = useMemo(() => parseTimestamp(startedAt), [startedAt]);
   const endMs = useMemo(() => parseTimestamp(endedAt), [endedAt]);
+  const heartbeatMs = useMemo(
+    () => parseTimestamp(lastExecutorHeartbeatAt ?? undefined),
+    [lastExecutorHeartbeatAt]
+  );
 
   const fixedDuration = useMemo(() => {
     if (typeof durationMs === 'number' && durationMs >= 0) {
@@ -212,6 +219,8 @@ export const TimerPill: React.FC<TimerPillProps> = ({
       alignItems: 'baseline',
     };
 
+    const heartbeatAgeMs = heartbeatMs ? Math.max(0, Date.now() - heartbeatMs) : null;
+
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
         {startMs && (
@@ -230,9 +239,21 @@ export const TimerPill: React.FC<TimerPillProps> = ({
           <span style={labelStyle}>Duration</span>
           <span style={valueStyle}>{formatDuration(elapsedMs)}</span>
         </div>
+        {heartbeatMs && (
+          <div style={rowStyle}>
+            <span style={labelStyle}>Heartbeat</span>
+            <span style={valueStyle}>
+              <HeartOutlined style={{ marginRight: 4 }} />
+              {heartbeatAgeMs !== null ? `${formatDuration(heartbeatAgeMs)} ago` : '—'}
+              <span style={{ color: token.colorTextSecondary, marginLeft: 6 }}>
+                {formatAbsoluteTime(new Date(heartbeatMs))}
+              </span>
+            </span>
+          </div>
+        )}
       </div>
     );
-  }, [startMs, endMs, isActive, elapsedMs, token]);
+  }, [startMs, endMs, isActive, elapsedMs, heartbeatMs, token]);
 
   if (!startMs && fixedDuration === null) {
     return null;

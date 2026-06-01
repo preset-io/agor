@@ -1,7 +1,7 @@
 /**
  * Tests for Git Utils
  *
- * Tests git operations for repo management and worktree isolation.
+ * Tests git operations for repo management and branch isolation.
  * Uses temporary directories for all file system operations.
  */
 
@@ -11,9 +11,13 @@ import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  categorizeGitError,
   cloneRepo,
-  createWorktree,
+  createBranch,
+  createBranchAsClone,
   extractRepoName,
+  getBranchesDir,
+  getBranchPath,
   getCurrentBranch,
   getCurrentSha,
   getDefaultBranch,
@@ -21,15 +25,13 @@ import {
   getRemoteBranches,
   getRemoteUrl,
   getReposDir,
-  getWorktreePath,
-  getWorktreesDir,
   hasRemoteBranch,
   isClean,
   isGitRepo,
   isValidGitRepo,
-  listWorktrees,
-  pruneWorktrees,
-  removeWorktree,
+  listGitWorktrees,
+  pruneGitWorktrees,
+  removeGitWorktree,
 } from './index';
 
 /**
@@ -136,29 +138,30 @@ describe('getReposDir', () => {
   });
 });
 
-describe('getWorktreesDir', () => {
-  it('should return worktrees path under data home (defaults to ~/.agor/worktrees)', () => {
-    const worktreesDir = getWorktreesDir();
-    // Default behavior: data_home = agor_home = ~/.agor
-    expect(worktreesDir).toContain('worktrees');
-    // Path should end with /worktrees
-    expect(worktreesDir).toMatch(/worktrees$/);
+describe('getBranchesDir', () => {
+  it('should return branches path under data home (defaults to ~/.agor/worktrees)', () => {
+    // On-disk dir name stays `worktrees/` for backwards compatibility with
+    // existing installs — see getBranchesDir() JSDoc.
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toContain('worktrees');
+    expect(branchesDir).toMatch(/worktrees$/);
   });
 });
 
-describe('getWorktreePath', () => {
-  it('should construct worktree path from repo slug and name', () => {
-    const worktreePath = getWorktreePath('org/repo', 'feature-1');
-    // Should contain worktrees directory, repo slug, and worktree name
-    expect(worktreePath).toContain('worktrees');
-    expect(worktreePath).toContain('org/repo');
-    expect(worktreePath).toContain('feature-1');
+describe('getBranchPath', () => {
+  it('should construct branch path from repo slug and name', () => {
+    const branchPath = getBranchPath('org/repo', 'feature-1');
+    // Should contain branches directory (still `worktrees/` on disk for
+    // backwards compatibility), repo slug, and branch name.
+    expect(branchPath).toContain('worktrees');
+    expect(branchPath).toContain('org/repo');
+    expect(branchPath).toContain('feature-1');
   });
 
   it('should handle repo slugs with special characters', () => {
-    const worktreePath = getWorktreePath('org/repo-name', 'branch-name');
-    expect(worktreePath).toContain('org/repo-name');
-    expect(worktreePath).toContain('branch-name');
+    const branchPath = getBranchPath('org/repo-name', 'branch-name');
+    expect(branchPath).toContain('org/repo-name');
+    expect(branchPath).toContain('branch-name');
   });
 });
 
@@ -550,50 +553,50 @@ describe('getRemoteBranches', () => {
   });
 });
 
-describe('createWorktree', () => {
+describe('createBranch', () => {
   let tempDir: string;
   let repoDir: string;
-  let worktreeDir: string;
+  let branchDir: string;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-git-test-'));
     repoDir = path.join(tempDir, 'repo');
-    worktreeDir = path.join(tempDir, 'worktree');
+    branchDir = path.join(tempDir, 'branch');
   });
 
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it('should create worktree from existing branch', async () => {
+  it('should create branch from existing branch', async () => {
     await createTestRepoWithBranches(repoDir);
 
-    await createWorktree(repoDir, worktreeDir, 'feature-branch', false, false);
+    await createBranch(repoDir, branchDir, 'feature-branch', false, false);
 
-    expect(await isGitRepo(worktreeDir)).toBe(true);
-    expect(await getCurrentBranch(worktreeDir)).toBe('feature-branch');
+    expect(await isGitRepo(branchDir)).toBe(true);
+    expect(await getCurrentBranch(branchDir)).toBe('feature-branch');
   });
 
-  it('should create worktree with new branch', async () => {
+  it('should create branch with new branch', async () => {
     await createTestRepo(repoDir);
 
-    await createWorktree(repoDir, worktreeDir, 'new-branch', true, false);
+    await createBranch(repoDir, branchDir, 'new-branch', true, false);
 
-    expect(await isGitRepo(worktreeDir)).toBe(true);
-    expect(await getCurrentBranch(worktreeDir)).toBe('new-branch');
+    expect(await isGitRepo(branchDir)).toBe(true);
+    expect(await getCurrentBranch(branchDir)).toBe('new-branch');
   });
 
-  it('should create worktree with new branch from source branch', async () => {
+  it('should create branch with new branch from source branch', async () => {
     await createTestRepoWithBranches(repoDir);
 
-    await createWorktree(repoDir, worktreeDir, 'new-feature', true, false, 'feature-branch');
+    await createBranch(repoDir, branchDir, 'new-feature', true, false, 'feature-branch');
 
-    expect(await isGitRepo(worktreeDir)).toBe(true);
-    expect(await getCurrentBranch(worktreeDir)).toBe('new-feature');
+    expect(await isGitRepo(branchDir)).toBe(true);
+    expect(await getCurrentBranch(branchDir)).toBe('new-feature');
 
     // Verify it was based on feature-branch (should have feature.txt)
     const featureFileExists = await fs
-      .access(path.join(worktreeDir, 'feature.txt'))
+      .access(path.join(branchDir, 'feature.txt'))
       .then(() => true)
       .catch(() => false);
     expect(featureFileExists).toBe(true);
@@ -603,15 +606,15 @@ describe('createWorktree', () => {
     const remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-git-remote-'));
     await createRepoWithRemote(repoDir, remoteDir);
 
-    // Create worktree with new branch (avoids force update error)
-    await createWorktree(repoDir, worktreeDir, 'new-main-worktree', true, true, 'main');
+    // Create branch with new branch (avoids force update error)
+    await createBranch(repoDir, branchDir, 'new-main-branch', true, true, 'main');
 
-    expect(await isGitRepo(worktreeDir)).toBe(true);
+    expect(await isGitRepo(branchDir)).toBe(true);
 
     await fs.rm(remoteDir, { recursive: true, force: true });
   });
 
-  it('should handle worktree at specific commit', async () => {
+  it('should handle branch at specific commit', async () => {
     await createTestRepo(repoDir);
     const git = simpleGit(repoDir);
 
@@ -620,14 +623,14 @@ describe('createWorktree', () => {
     const sha = log.latest?.hash;
 
     if (sha) {
-      await createWorktree(repoDir, worktreeDir, sha, false, false);
+      await createBranch(repoDir, branchDir, sha, false, false);
 
-      expect(await isGitRepo(worktreeDir)).toBe(true);
-      expect(await getCurrentSha(worktreeDir)).toBe(sha);
+      expect(await isGitRepo(branchDir)).toBe(true);
+      expect(await getCurrentSha(branchDir)).toBe(sha);
     }
   });
 
-  it('should create worktree with new branch from tag', async () => {
+  it('should create branch with new branch from tag', async () => {
     await createTestRepo(repoDir);
     const git = simpleGit(repoDir);
 
@@ -639,10 +642,10 @@ describe('createWorktree', () => {
     await git.add('new-file.txt');
     await git.commit('Post-tag commit');
 
-    // Create worktree with new branch from tag
-    await createWorktree(
+    // Create branch with new branch from tag
+    await createBranch(
       repoDir,
-      worktreeDir,
+      branchDir,
       'hotfix-branch', // new branch name
       true, // createBranch
       false, // pullLatest
@@ -651,28 +654,28 @@ describe('createWorktree', () => {
       'tag' // refType
     );
 
-    expect(await isGitRepo(worktreeDir)).toBe(true);
-    expect(await getCurrentBranch(worktreeDir)).toBe('hotfix-branch');
+    expect(await isGitRepo(branchDir)).toBe(true);
+    expect(await getCurrentBranch(branchDir)).toBe('hotfix-branch');
 
     // Verify it was based on the tag (should NOT have new-file.txt from post-tag commit)
     const newFileExists = await fs
-      .access(path.join(worktreeDir, 'new-file.txt'))
+      .access(path.join(branchDir, 'new-file.txt'))
       .then(() => true)
       .catch(() => false);
     expect(newFileExists).toBe(false);
   });
 
-  it('should create worktree directly from tag without new branch', async () => {
+  it('should create branch directly from tag without new branch', async () => {
     await createTestRepo(repoDir);
     const git = simpleGit(repoDir);
 
     // Create a tag
     await git.tag(['v2.0.0']);
 
-    // Create worktree from tag (detached HEAD)
-    await createWorktree(
+    // Create branch from tag (detached HEAD)
+    await createBranch(
       repoDir,
-      worktreeDir,
+      branchDir,
       'v2.0.0', // ref is the tag name
       false, // createBranch = false
       false, // pullLatest
@@ -681,9 +684,9 @@ describe('createWorktree', () => {
       'tag' // refType
     );
 
-    expect(await isGitRepo(worktreeDir)).toBe(true);
+    expect(await isGitRepo(branchDir)).toBe(true);
     // When checking out a tag without creating a branch, git goes to detached HEAD
-    const branch = await getCurrentBranch(worktreeDir);
+    const branch = await getCurrentBranch(branchDir);
     // simple-git returns 'HEAD' for detached state
     expect(branch).toBe('HEAD');
   });
@@ -697,10 +700,10 @@ describe('createWorktree', () => {
     await git.tag(['v3.0.0']);
     await git.push('origin', 'v3.0.0');
 
-    // Create worktree with new branch from tag
-    await createWorktree(
+    // Create branch with new branch from tag
+    await createBranch(
       repoDir,
-      worktreeDir,
+      branchDir,
       'release-branch',
       true, // createBranch
       true, // pullLatest - should fetch tags
@@ -709,8 +712,8 @@ describe('createWorktree', () => {
       'tag'
     );
 
-    expect(await isGitRepo(worktreeDir)).toBe(true);
-    expect(await getCurrentBranch(worktreeDir)).toBe('release-branch');
+    expect(await isGitRepo(branchDir)).toBe(true);
+    expect(await getCurrentBranch(branchDir)).toBe('release-branch');
 
     await fs.rm(remoteDir, { recursive: true, force: true });
   });
@@ -728,9 +731,9 @@ describe('createWorktree', () => {
     const localDir = path.join(tempDir, 'local');
     await remoteGit.clone(remoteDir, localDir);
 
-    await createWorktree(
+    await createBranch(
       localDir,
-      path.join(tempDir, 'worktree-tag'),
+      path.join(tempDir, 'branch-tag'),
       'tag-branch',
       true,
       true,
@@ -739,14 +742,35 @@ describe('createWorktree', () => {
       'tag'
     );
 
-    expect(await isGitRepo(path.join(tempDir, 'worktree-tag'))).toBe(true);
-    const wtGit = simpleGit(path.join(tempDir, 'worktree-tag'));
+    expect(await isGitRepo(path.join(tempDir, 'branch-tag'))).toBe(true);
+    const wtGit = simpleGit(path.join(tempDir, 'branch-tag'));
     const tags = await wtGit.tags();
     expect(tags.all).toContain('v1.0.0');
   });
+
+  it('refuses to clobber a pre-existing target directory (parity with createBranchAsClone)', async () => {
+    // The daemon used to gate this synchronously before fire-and-forget'ing
+    // the executor. With the daemon→executor split (daemon = DB, executor
+    // = filesystem), the guard moved into the core helper so worktree-mode
+    // and clone-mode surface the same user-facing error.
+    await createTestRepo(repoDir);
+    await fs.mkdir(branchDir, { recursive: true });
+    await fs.writeFile(path.join(branchDir, 'preexisting.txt'), 'x', 'utf-8');
+
+    await expect(createBranch(repoDir, branchDir, 'some-branch', true, false)).rejects.toThrow(
+      /already exists on disk/
+    );
+
+    // The pre-existing content is untouched.
+    const preserved = await fs
+      .access(path.join(branchDir, 'preexisting.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(preserved).toBe(true);
+  });
 });
 
-describe('listWorktrees', () => {
+describe('listGitWorktrees', () => {
   let tempDir: string;
   let repoDir: string;
 
@@ -759,83 +783,83 @@ describe('listWorktrees', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it('should list main worktree', async () => {
+  it('should list main branch', async () => {
     await createTestRepo(repoDir);
-    const worktrees = await listWorktrees(repoDir);
+    const branches = await listGitWorktrees(repoDir);
 
-    expect(worktrees.length).toBeGreaterThan(0);
+    expect(branches.length).toBeGreaterThan(0);
     // Use realpath to resolve symlinks (macOS /var -> /private/var)
     const realRepoDir = await fs.realpath(repoDir);
-    expect(worktrees[0].path).toBe(realRepoDir);
-    expect(worktrees[0].name).toBe(path.basename(repoDir));
-    expect(worktrees[0].ref).toBe('main');
-    expect(worktrees[0].sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(branches[0].path).toBe(realRepoDir);
+    expect(branches[0].name).toBe(path.basename(repoDir));
+    expect(branches[0].ref).toBe('main');
+    expect(branches[0].sha).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  it('should list multiple worktrees', async () => {
+  it('should list multiple branches', async () => {
     await createTestRepoWithBranches(repoDir);
 
-    const worktree1 = path.join(tempDir, 'worktree1');
-    const worktree2 = path.join(tempDir, 'worktree2');
+    const branch1 = path.join(tempDir, 'branch1');
+    const branch2 = path.join(tempDir, 'branch2');
 
-    await createWorktree(repoDir, worktree1, 'branch1', true, false);
-    await createWorktree(repoDir, worktree2, 'branch2', true, false);
+    await createBranch(repoDir, branch1, 'branch1', true, false);
+    await createBranch(repoDir, branch2, 'branch2', true, false);
 
-    const worktrees = await listWorktrees(repoDir);
+    const branches = await listGitWorktrees(repoDir);
 
-    expect(worktrees.length).toBeGreaterThanOrEqual(3); // main + 2 worktrees
+    expect(branches.length).toBeGreaterThanOrEqual(3); // main + 2 branches
 
     // Use realpath to resolve symlinks
     const realRepoDir = await fs.realpath(repoDir);
-    const realWorktree1 = await fs.realpath(worktree1);
-    const realWorktree2 = await fs.realpath(worktree2);
+    const realBranch1 = await fs.realpath(branch1);
+    const realBranch2 = await fs.realpath(branch2);
 
-    const worktreePaths = worktrees.map((w) => w.path);
-    expect(worktreePaths).toContain(realRepoDir);
-    expect(worktreePaths).toContain(realWorktree1);
-    expect(worktreePaths).toContain(realWorktree2);
+    const branchPaths = branches.map((w) => w.path);
+    expect(branchPaths).toContain(realRepoDir);
+    expect(branchPaths).toContain(realBranch1);
+    expect(branchPaths).toContain(realBranch2);
   });
 
-  it('should include worktree metadata', async () => {
+  it('should include branch metadata', async () => {
     await createTestRepo(repoDir);
-    const worktreeDir = path.join(tempDir, 'worktree');
+    const branchDir = path.join(tempDir, 'branch');
 
-    await createWorktree(repoDir, worktreeDir, 'test-branch', true, false);
+    await createBranch(repoDir, branchDir, 'test-branch', true, false);
 
-    const worktrees = await listWorktrees(repoDir);
-    const realWorktreeDir = await fs.realpath(worktreeDir);
-    const testWorktree = worktrees.find((w) => w.path === realWorktreeDir);
+    const branches = await listGitWorktrees(repoDir);
+    const realBranchDir = await fs.realpath(branchDir);
+    const testBranch = branches.find((w) => w.path === realBranchDir);
 
-    expect(testWorktree).toBeDefined();
-    expect(testWorktree?.name).toBe('worktree');
-    expect(testWorktree?.ref).toBe('test-branch');
-    expect(testWorktree?.sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(testBranch).toBeDefined();
+    expect(testBranch?.name).toBe('branch');
+    expect(testBranch?.ref).toBe('test-branch');
+    expect(testBranch?.sha).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  it('should detect detached HEAD worktrees', async () => {
+  it('should detect detached HEAD branches', async () => {
     await createTestRepo(repoDir);
     const git = simpleGit(repoDir);
-    const worktreeDir = path.join(tempDir, 'worktree');
+    const branchDir = path.join(tempDir, 'branch');
 
     // Get commit SHA
     const log = await git.log({ maxCount: 1 });
     const sha = log.latest?.hash;
 
     if (sha) {
-      await createWorktree(repoDir, worktreeDir, sha, false, false);
+      await createBranch(repoDir, branchDir, sha, false, false);
 
-      const worktrees = await listWorktrees(repoDir);
-      const realWorktreeDir = await fs.realpath(worktreeDir);
-      const detachedWorktree = worktrees.find((w) => w.path === realWorktreeDir);
+      const branches = await listGitWorktrees(repoDir);
+      const realBranchDir = await fs.realpath(branchDir);
+      const detachedBranch = branches.find((w) => w.path === realBranchDir);
 
-      expect(detachedWorktree).toBeDefined();
-      expect(detachedWorktree?.sha).toBe(sha);
+      expect(detachedBranch).toBeDefined();
+      expect(detachedBranch?.sha).toBe(sha);
       // detached flag may not be set reliably in all cases
     }
   });
 });
 
-describe('removeWorktree', () => {
+describe('removeGitWorktree', () => {
   let tempDir: string;
   let repoDir: string;
 
@@ -848,28 +872,28 @@ describe('removeWorktree', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it('should remove worktree', async () => {
+  it('should remove branch', async () => {
     await createTestRepo(repoDir);
-    const worktreeDir = path.join(tempDir, 'worktree');
+    const branchDir = path.join(tempDir, 'branch');
 
-    await createWorktree(repoDir, worktreeDir, 'test-branch', true, false);
+    await createBranch(repoDir, branchDir, 'test-branch', true, false);
 
-    // Verify worktree exists
-    let worktrees = await listWorktrees(repoDir);
-    const initialCount = worktrees.length;
+    // Verify branch exists
+    let branches = await listGitWorktrees(repoDir);
+    const initialCount = branches.length;
     expect(initialCount).toBeGreaterThan(1);
 
-    // Remove worktree
-    await removeWorktree(repoDir, worktreeDir);
+    // Remove branch
+    await removeGitWorktree(repoDir, branchDir);
 
-    // Verify worktree removed
-    worktrees = await listWorktrees(repoDir);
-    expect(worktrees.length).toBe(initialCount - 1);
-    expect(worktrees.find((w) => w.path === worktreeDir)).toBeUndefined();
+    // Verify branch removed
+    branches = await listGitWorktrees(repoDir);
+    expect(branches.length).toBe(initialCount - 1);
+    expect(branches.find((w) => w.path === branchDir)).toBeUndefined();
   });
 });
 
-describe('pruneWorktrees', () => {
+describe('pruneGitWorktrees', () => {
   let tempDir: string;
   let repoDir: string;
 
@@ -886,20 +910,20 @@ describe('pruneWorktrees', () => {
     }
   });
 
-  it('should prune stale worktree metadata', async () => {
+  it('should prune stale branch metadata', async () => {
     await createTestRepo(repoDir);
-    const worktreeDir = path.join(tempDir, 'worktree');
+    const branchDir = path.join(tempDir, 'branch');
 
-    await createWorktree(repoDir, worktreeDir, 'test-branch', true, false);
+    await createBranch(repoDir, branchDir, 'test-branch', true, false);
 
-    // Manually delete worktree directory (simulates stale metadata)
-    await fs.rm(worktreeDir, { recursive: true, force: true });
+    // Manually delete branch directory (simulates stale metadata)
+    await fs.rm(branchDir, { recursive: true, force: true });
 
     // Prune should clean up stale metadata
     // Note: may fail if temp dir is cleaned up during async operation,
     // but that's acceptable for this test
     try {
-      await pruneWorktrees(repoDir);
+      await pruneGitWorktrees(repoDir);
     } catch {
       // Ignore errors from async git operations that race with cleanup
     }
@@ -907,7 +931,7 @@ describe('pruneWorktrees', () => {
     // Verify prune doesn't throw when called again
     expect(async () => {
       try {
-        await pruneWorktrees(repoDir);
+        await pruneGitWorktrees(repoDir);
       } catch {
         // Expected if directory is being cleaned up
       }
@@ -1062,6 +1086,22 @@ describe('cloneRepo', () => {
 
     expect(result.path).toBe(customTarget);
     expect(await isGitRepo(customTarget)).toBe(true);
+  });
+
+  it('should create parent directories for nested custom target paths', async () => {
+    await createBareRepo(remoteDir);
+
+    const tmpRepoDir = path.join(tempDir, 'tmp-for-push');
+    await createTestRepo(tmpRepoDir);
+    const git = simpleGit(tmpRepoDir);
+    await git.addRemote('origin', remoteDir);
+    await git.push('origin', 'main');
+
+    const nestedTarget = path.join(tempDir, 'nested', 'slug', 'custom-location');
+    const result = await cloneRepo({ url: remoteDir, targetDir: nestedTarget });
+
+    expect(result.path).toBe(nestedTarget);
+    expect(await isGitRepo(nestedTarget)).toBe(true);
   });
 
   it('should return existing repo if already cloned', async () => {
@@ -1231,5 +1271,308 @@ describe('cloneRepo', () => {
     await cloneRepo({ url: remoteDir });
 
     await expect(cloneRepo({ url: remoteDir, branch: 'does-not-exist' })).rejects.toThrow();
+  });
+});
+
+describe('createBranchAsClone', () => {
+  // Sibling to createBranch for the new `storage_mode='clone'` opt-in.
+  // Covers: happy-path clone of an existing branch, shallow-depth knob,
+  // collision with existing targetPath, and ref validation. We exercise the
+  // real `git clone` against a local bare repo (no network) — same pattern
+  // as the cloneRepo tests above.
+  let tempDir: string;
+  let remoteDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-git-test-clone-'));
+    remoteDir = path.join(tempDir, 'remote.git');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function seedRemoteWithBranches(): Promise<void> {
+    // Build a bare remote with `main` + `feature-x`, each with a marker
+    // file. Lets a test assert which branch was actually checked out.
+    await createBareRepo(remoteDir);
+    const sourceDir = path.join(tempDir, 'seed');
+    await createTestRepo(sourceDir);
+    const git = simpleGit(sourceDir);
+    await git.addRemote('origin', remoteDir);
+    await fs.writeFile(path.join(sourceDir, 'main-marker.txt'), 'main', 'utf-8');
+    await git.add('main-marker.txt');
+    await git.commit('main marker');
+    await git.push('origin', 'main');
+    await git.checkoutLocalBranch('feature-x');
+    await fs.writeFile(path.join(sourceDir, 'feature-marker.txt'), 'feature', 'utf-8');
+    await git.add('feature-marker.txt');
+    await git.commit('feature marker');
+    await git.push('origin', 'feature-x');
+  }
+
+  it('clones the requested branch into targetPath with a real .git/ directory', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt');
+
+    const result = await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'feature-x',
+    });
+
+    expect(result).toEqual({ path: targetPath, ref: 'feature-x' });
+
+    // Working tree is on feature-x — marker is materialised.
+    const featureMarker = await fs
+      .access(path.join(targetPath, 'feature-marker.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(featureMarker).toBe(true);
+
+    // The .git is a real directory (clone), not a `gitdir:` pointer file
+    // (branch). This is the whole point of storage_mode='clone'.
+    const gitStat = await fs.stat(path.join(targetPath, '.git'));
+    expect(gitStat.isDirectory()).toBe(true);
+
+    // Current branch matches the requested ref.
+    expect(await getCurrentBranch(targetPath)).toBe('feature-x');
+  });
+
+  it('supports --depth N for shallow clones', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-shallow');
+
+    // Use a `file://` URL — git silently drops `--depth` on bare-path local
+    // clones (it hard-links instead of going through the wire protocol);
+    // file:// forces the real network code path. The warning the helper
+    // would otherwise log here is exactly the symptom that bit this test.
+    await createBranchAsClone({
+      remoteUrl: `file://${remoteDir}`,
+      targetPath,
+      ref: 'feature-x',
+      depth: 1,
+    });
+
+    // shallow=true file in .git is the canonical signal that --depth took.
+    // Don't assert on log length — that's a less stable proxy across git versions.
+    const shallowMarkerExists = await fs
+      .access(path.join(targetPath, '.git', 'shallow'))
+      .then(() => true)
+      .catch(() => false);
+    expect(shallowMarkerExists).toBe(true);
+  });
+
+  it('refuses to clone over a pre-existing target directory', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-collision');
+    await fs.mkdir(targetPath, { recursive: true });
+    await fs.writeFile(path.join(targetPath, 'preexisting.txt'), 'x', 'utf-8');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'feature-x',
+      })
+    ).rejects.toThrow(/already exists/);
+
+    // The pre-existing content is untouched.
+    const preserved = await fs
+      .access(path.join(targetPath, 'preexisting.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(preserved).toBe(true);
+  });
+
+  it('rejects refs that start with `-` (option-injection guard)', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-bad-ref');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: '--upload-pack=/tmp/payload',
+      })
+    ).rejects.toThrow(/Invalid git ref/);
+  });
+
+  it('rejects non-positive depth values', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-bad-depth');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'feature-x',
+        depth: 0,
+      })
+    ).rejects.toThrow(/Invalid clone depth/);
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'feature-x',
+        depth: -5,
+      })
+    ).rejects.toThrow(/Invalid clone depth/);
+  });
+
+  it('surfaces git-side failures when the ref does not exist on the remote', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-missing-ref');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'does-not-exist',
+      })
+    ).rejects.toThrow();
+  });
+
+  it('with newBranchName, clones the base ref and checks out a fresh local branch', async () => {
+    // This is the typical "feature off main" create flow in clone-mode: the
+    // new branch doesn't exist on the remote yet, so the helper clones the
+    // base ref and `git checkout -b`s the new branch on top of the cloned
+    // tip. Pinning this here means the executor handler doesn't have to
+    // orchestrate post-clone git ops — the helper owns the full operation.
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-new-branch');
+
+    const result = await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'main',
+      newBranchName: 'my-new-feature',
+    });
+
+    expect(result).toEqual({ path: targetPath, ref: 'my-new-feature' });
+
+    // Working tree is on the new branch (created locally) with main's tip
+    // as parent — the main marker is present because we forked off main.
+    expect(await getCurrentBranch(targetPath)).toBe('my-new-feature');
+    const mainMarkerExists = await fs
+      .access(path.join(targetPath, 'main-marker.txt'))
+      .then(() => true)
+      .catch(() => false);
+    expect(mainMarkerExists).toBe(true);
+
+    // The new branch is NOT on the remote (we forked locally), so it must
+    // not be in the remote-tracking list. Catches a regression where the
+    // helper would accidentally push or set an upstream during the fork.
+    const cloned = simpleGit(targetPath);
+    const remoteBranches = await cloned.branch(['-r']);
+    expect(remoteBranches.all).not.toContain('origin/my-new-feature');
+  });
+
+  it('rejects newBranchName that fails ref validation', async () => {
+    // The same option-injection guard that protects `ref` must protect
+    // `newBranchName` — both feed into git command argv eventually.
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-bad-new-branch');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'main',
+        newBranchName: '--force',
+      })
+    ).rejects.toThrow(/Invalid git ref/);
+  });
+
+  it('uses --reference when referencePath exists on disk (alternates pointer)', async () => {
+    // The whole point of `--reference`: the new clone's .git/objects/ is
+    // empty and instead points at a base-cache via alternates. This is
+    // the design-doc §5 self-hosted default — drops per-branch .git size
+    // from ~repo.pack to ~few-MB. Test pins the alternates-file artifact
+    // so a regression that silently drops the flag fails loudly.
+    await seedRemoteWithBranches();
+
+    // Seed a base clone of the remote — this stands in for the per-repo
+    // base at `~/.agor/repos/<slug>/` that the daemon would manage.
+    const baseClone = path.join(tempDir, 'base-cache');
+    await simpleGit().clone(remoteDir, baseClone, ['--no-single-branch']);
+
+    const targetPath = path.join(tempDir, 'wt-with-reference');
+    await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'feature-x',
+      referencePath: baseClone,
+    });
+
+    // The alternates file is the canonical signal that --reference took.
+    // Its content points into the base clone's objects directory.
+    const alternatesPath = path.join(targetPath, '.git', 'objects', 'info', 'alternates');
+    const alternates = await fs.readFile(alternatesPath, 'utf-8');
+    expect(alternates).toContain(path.join(baseClone, '.git', 'objects'));
+
+    // Working tree is on the requested branch.
+    expect(await getCurrentBranch(targetPath)).toBe('feature-x');
+  });
+
+  it('falls back to a plain clone (no --reference) when referencePath is missing', async () => {
+    // Daemon/executor mount asymmetry: daemon hands the executor a hint
+    // that may or may not resolve on the executor's filesystem. Missing
+    // path must NOT fail the clone — it just costs more disk. Pinning
+    // this so a future "throw on missing reference" regression fails.
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-missing-reference');
+    const missingReference = path.join(tempDir, 'does-not-exist-on-this-filesystem');
+
+    const result = await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'main',
+      referencePath: missingReference,
+    });
+
+    expect(result.ref).toBe('main');
+
+    // No alternates file → no --reference was applied. Clone is
+    // self-standing and complete on its own.
+    const alternatesExists = await fs
+      .access(path.join(targetPath, '.git', 'objects', 'info', 'alternates'))
+      .then(() => true)
+      .catch(() => false);
+    expect(alternatesExists).toBe(false);
+  });
+});
+
+describe('categorizeGitError', () => {
+  // Issue #1126 / Bug B: clone failures need to bucket into categories so the
+  // UI / MCP can suggest the right next step. The auth_failed bucket is the
+  // important one — it's the path that points users at Settings → API Keys.
+  it('categorizes private-repo authentication failures as auth_failed', () => {
+    expect(
+      categorizeGitError('fatal: Authentication failed for https://github.com/foo/bar.git/')
+    ).toBe('auth_failed');
+    expect(categorizeGitError('remote: HTTP Basic: Access denied')).toBe('auth_failed');
+    expect(categorizeGitError('Permission denied (publickey).')).toBe('auth_failed');
+    expect(categorizeGitError('terminal prompts disabled')).toBe('auth_failed');
+  });
+
+  it('categorizes missing repos as not_found', () => {
+    expect(categorizeGitError('remote: Repository not found.')).toBe('not_found');
+    expect(categorizeGitError('error: 404 not found')).toBe('not_found');
+  });
+
+  it('categorizes connectivity issues as network', () => {
+    expect(categorizeGitError('fatal: unable to access: Could not resolve host: github.com')).toBe(
+      'network'
+    );
+    expect(
+      categorizeGitError('fatal: unable to connect to git.example.com: Connection refused')
+    ).toBe('network');
+  });
+
+  it('falls through to unknown for unrecognised stderr', () => {
+    expect(categorizeGitError('fatal: corrupted ref refs/heads/main')).toBe('unknown');
+    expect(categorizeGitError('')).toBe('unknown');
   });
 });

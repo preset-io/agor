@@ -132,8 +132,10 @@ export function checkAudioPermission(): Promise<boolean> {
 function meetsMinimumDuration(task: Task, minDurationSeconds: number): boolean {
   if (minDurationSeconds === 0) return true;
 
-  // Try to use duration_ms if available
-  if (task.duration_ms) {
+  // Null-check (not truthy-check) so an explicit `duration_ms: 0` is honored —
+  // a near-instant task should be gated against `minDurationSeconds`, not fall
+  // through to the timestamp fallback / optimistic allow.
+  if (task.duration_ms != null) {
     const durationSeconds = task.duration_ms / 1000;
     return durationSeconds >= minDurationSeconds;
   }

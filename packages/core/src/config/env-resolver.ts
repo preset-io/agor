@@ -93,6 +93,7 @@ export const ALLOWED_ENV_VARS = new Set([
   'OPENAI_BASE_URL',
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',
+  'CURSOR_API_KEY',
 
   // Vertex AI (Claude Code on GCP)
   'CLAUDE_CODE_USE_VERTEX',
@@ -148,7 +149,7 @@ export interface ResolveUserEnvOptions {
    * included). Global-scope vars are always included.
    *
    * If omitted, session-scope vars are EXCLUDED entirely (safe default for
-   * contexts without a session — e.g. worktree-level terminals).
+   * contexts without a session — e.g. branch-level terminals).
    */
   sessionId?: SessionID;
   /**
@@ -157,7 +158,7 @@ export interface ResolveUserEnvOptions {
    * Other tools' credentials are NEVER merged regardless of value.
    *
    * If omitted, NO per-tool credentials are merged — safe default for
-   * worktree-level terminals and other contexts that don't run an SDK.
+   * branch-level terminals and other contexts that don't run an SDK.
    */
   tool?: AgenticToolName;
 }
@@ -323,7 +324,7 @@ function buildAllowlistedEnv(): Record<string, string> {
 }
 
 /**
- * Create a clean environment for user processes (worktrees, terminals, etc.)
+ * Create a clean environment for user processes (branches, terminals, etc.)
  *
  * SECURITY: Uses an allowlist approach — starts with an empty environment and
  * only copies variables that are explicitly safe. This prevents leaking internal
@@ -343,18 +344,18 @@ function buildAllowlistedEnv(): Record<string, string> {
  * @returns Clean environment object ready for child process spawning
  *
  * @example
- * // For worktree environment startup (with user)
- * const env = await createUserProcessEnvironment(worktree.created_by, db);
+ * // For branch environment startup (with user)
+ * const env = await createUserProcessEnvironment(branch.created_by, db);
  * spawn(command, { cwd, shell: true, env });
  *
  * @example
  * // For user impersonation (strips HOME/USER/LOGNAME/SHELL)
- * const env = await createUserProcessEnvironment(worktree.created_by, db, undefined, true);
+ * const env = await createUserProcessEnvironment(branch.created_by, db, undefined, true);
  * buildSpawnArgs(command, [], { asUser: 'alice', env });
  *
  * @example
- * // For worktree environment with custom NODE_ENV
- * const env = await createUserProcessEnvironment(worktree.created_by, db, {
+ * // For branch environment with custom NODE_ENV
+ * const env = await createUserProcessEnvironment(branch.created_by, db, {
  *   NODE_ENV: 'development',
  * });
  *
@@ -384,7 +385,7 @@ export async function createUserProcessEnvironment(
   /**
    * If provided, the user's per-tool credentials for THIS tool are merged
    * into the environment (e.g. claude-code → ANTHROPIC_*). Other tools'
-   * credentials are NEVER merged. Omit for non-SDK contexts (worktree
+   * credentials are NEVER merged. Omit for non-SDK contexts (branch
    * terminals, generic background jobs).
    */
   tool?: AgenticToolName
@@ -449,6 +450,36 @@ export async function createUserProcessEnvironment(
         env[key] = value;
       }
     }
+  }
+
+  // If you set one half of GIT_AUTHOR_*/GIT_COMMITTER_* via env, mirror to the other.
+  // Env vars are the multi-tenant identity boundary; falling through to shared
+  // user.* config (or executor-host gitconfig) risks misattribution — see
+  // the 2026-04-20 / 2026-05-20 base-repo user.* leak audits.
+  // Note: if you have author/committer in non-env config AND set only one env var,
+  // this will override the config-derived counterpart with the env value. That's
+  // intentional — setting any identity env signals you mean the env pair to win.
+  if (env.GIT_AUTHOR_NAME && !env.GIT_COMMITTER_NAME) {
+    env.GIT_COMMITTER_NAME = env.GIT_AUTHOR_NAME;
+    console.debug(
+      `[env-resolver] Mirrored GIT_AUTHOR_NAME → GIT_COMMITTER_NAME${userId ? ` for user ${userId}` : ''}`
+    );
+  } else if (env.GIT_COMMITTER_NAME && !env.GIT_AUTHOR_NAME) {
+    env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME;
+    console.debug(
+      `[env-resolver] Mirrored GIT_COMMITTER_NAME → GIT_AUTHOR_NAME${userId ? ` for user ${userId}` : ''}`
+    );
+  }
+  if (env.GIT_AUTHOR_EMAIL && !env.GIT_COMMITTER_EMAIL) {
+    env.GIT_COMMITTER_EMAIL = env.GIT_AUTHOR_EMAIL;
+    console.debug(
+      `[env-resolver] Mirrored GIT_AUTHOR_EMAIL → GIT_COMMITTER_EMAIL${userId ? ` for user ${userId}` : ''}`
+    );
+  } else if (env.GIT_COMMITTER_EMAIL && !env.GIT_AUTHOR_EMAIL) {
+    env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL;
+    console.debug(
+      `[env-resolver] Mirrored GIT_COMMITTER_EMAIL → GIT_AUTHOR_EMAIL${userId ? ` for user ${userId}` : ''}`
+    );
   }
 
   // Set AGOR_USER_ENV_KEYS to communicate user-defined var keys to child processes

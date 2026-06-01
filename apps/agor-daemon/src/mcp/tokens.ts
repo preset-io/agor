@@ -23,7 +23,7 @@
  */
 
 import { MCP_TOKEN } from '@agor/core/config';
-import { type Database, generateId, SessionRepository } from '@agor/core/db';
+import { type Database, generateId, SessionRepository, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
   MCP_TOKEN_AUDIENCE,
@@ -158,7 +158,7 @@ export async function generateSessionToken(
   const token = jwt.sign(payload, jwtSecret, { algorithm: 'HS256' });
 
   console.log(
-    `🎫 MCP token issued: session=${sessionId.substring(0, 8)} jti=${jti.substring(0, 8)} exp=+${Math.floor(s.expirationMs / 1000)}s`
+    `🎫 MCP token issued: session=${shortId(sessionId)} jti=${jti.substring(0, 8)} exp=+${Math.floor(s.expirationMs / 1000)}s`
   );
 
   return token;
@@ -230,7 +230,7 @@ export async function validateSessionToken(
   // tokens outliving their session until `exp`.
   const sessionExists = await s.sessionRepo.exists(sessionId);
   if (!sessionExists) {
-    console.warn(`[mcp-tokens] token rejected: session ${sessionId.substring(0, 8)} not found`);
+    console.warn(`[mcp-tokens] token rejected: session ${shortId(sessionId)} not found`);
     return null;
   }
 

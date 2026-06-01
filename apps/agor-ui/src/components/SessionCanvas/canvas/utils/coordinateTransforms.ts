@@ -10,8 +10,8 @@
  * Hierarchy:
  * - Board (root, absolute space)
  *   - Zone (absolute position on board)
- *   - Worktree (absolute OR relative to zone)
- *   - Pin/Comment (absolute OR relative to zone/worktree)
+ *   - Branch (absolute OR relative to zone)
+ *   - Pin/Comment (absolute OR relative to zone/branch)
  */
 
 import type { Node } from 'reactflow';
@@ -99,7 +99,7 @@ export function relativeToAbsolute(relativePos: Position, parentPos: Position): 
  * @returns Position relative to newParent
  *
  * @example
- * // Moving worktree from Zone A to Zone B
+ * // Moving branch from Zone A to Zone B
  * const posInA = { x: 50, y: 50 };
  * const zoneA = { x: 100, y: 100 };
  * const zoneB = { x: 300, y: 200 };

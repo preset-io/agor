@@ -9,8 +9,9 @@
 
 import { execSync } from 'node:child_process';
 import type { UnixUserMode } from '../config/types.js';
-import { formatShortId } from '../lib/ids.js';
+import { toShortId } from '../lib/ids.js';
 import type { UserID, UUID } from '../types/index.js';
+import { UNIX_NAME_SHORT_ID_LENGTH } from './short-id-naming.js';
 
 /**
  * Default home directory base for Agor users
@@ -23,9 +24,14 @@ export const AGOR_HOME_BASE = '/home';
 export const AGOR_DEFAULT_SHELL = '/bin/bash';
 
 /**
- * Agor worktrees directory name within user home
+ * Per-user symlink directory for Agor branches, relative to the user's home.
+ *
+ * The on-disk path stays `agor/worktrees/` for backwards compatibility with
+ * existing installs (renaming would orphan every symlink in every Agor user's
+ * home dir). The conceptual name is "branches"; the dir name on disk is a
+ * legacy artifact.
  */
-export const AGOR_WORKTREES_DIR = 'agor/worktrees';
+export const AGOR_BRANCHES_DIR = 'agor/worktrees';
 
 /**
  * Generate a default Unix username for an Agor user
@@ -37,8 +43,7 @@ export const AGOR_WORKTREES_DIR = 'agor/worktrees';
  * @returns Unix username (e.g., 'agor_03b62447')
  */
 export function generateUnixUsername(userId: UserID): string {
-  const shortId = formatShortId(userId as UUID);
-  return `agor_${shortId}`;
+  return `agor_${toShortId(userId as UUID, UNIX_NAME_SHORT_ID_LENGTH)}`;
 }
 
 /**
@@ -119,14 +124,14 @@ export function getUserHomeDir(username: string, homeBase: string = AGOR_HOME_BA
 }
 
 /**
- * Get Agor worktrees directory path for a user
+ * Get Agor branches directory path for a user
  *
  * @param username - Unix username
  * @param homeBase - Base directory for homes (default: /home)
  * @returns Full path to ~/agor/worktrees
  */
-export function getUserWorktreesDir(username: string, homeBase: string = AGOR_HOME_BASE): string {
-  return `${homeBase}/${username}/${AGOR_WORKTREES_DIR}`;
+export function getUserBranchesDir(username: string, homeBase: string = AGOR_HOME_BASE): string {
+  return `${homeBase}/${username}/${AGOR_BRANCHES_DIR}`;
 }
 
 /**
@@ -300,7 +305,7 @@ export const UnixUserCommands = {
   },
 
   /**
-   * Setup Agor worktrees directory structure for a user
+   * Setup Agor branches directory structure for a user
    *
    * Creates ~/agor/worktrees with proper ownership.
    * Returns an array of commands to be executed sequentially.
@@ -309,10 +314,10 @@ export const UnixUserCommands = {
    * @param homeBase - Home directory base
    * @returns Array of command strings to execute sequentially
    */
-  setupWorktreesDir: (username: string, homeBase: string = AGOR_HOME_BASE): string[] => {
-    const worktreesDir = `${homeBase}/${username}/${AGOR_WORKTREES_DIR}`;
+  setupBranchesDir: (username: string, homeBase: string = AGOR_HOME_BASE): string[] => {
+    const branchesDir = `${homeBase}/${username}/${AGOR_BRANCHES_DIR}`;
     return [
-      `sudo -n mkdir -p "${worktreesDir}"`,
+      `sudo -n mkdir -p "${branchesDir}"`,
       `sudo -n chown -R "${username}:${username}" "${homeBase}/${username}/agor"`,
     ];
   },

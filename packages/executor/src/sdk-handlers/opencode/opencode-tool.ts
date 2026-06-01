@@ -10,11 +10,11 @@
  * - ✅ Get session metadata and messages
  * - ✅ Real-time streaming support via SSE
  * - ✅ Agor MCP tools (via client.mcp.add())
- * - ✅ Worktree directory isolation (via x-opencode-directory header)
+ * - ✅ Branch directory isolation (via x-opencode-directory header)
  * - ⏳ Session import (future: when OpenCode provides export API)
  */
 
-import { generateId } from '@agor/core';
+import { generateId, shortId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import type { Part as OpenCodePart } from '@opencode-ai/sdk';
@@ -28,6 +28,7 @@ import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-resp
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
   CreateSessionConfig,
+  MessagesService,
   SessionHandle,
   SessionMetadata,
   StreamingCallbacks,
@@ -49,24 +50,10 @@ interface SessionContext {
   opencodeSessionId: string;
   model?: string;
   provider?: string;
-  /** Worktree directory path for project-scoped operations */
-  worktreePath?: string;
+  /** Branch directory path for project-scoped operations */
+  branchPath?: string;
   /** MCP token for Agor MCP server injection */
   mcpToken?: string;
-}
-
-/**
- * Service interface for creating messages via FeathersJS
- */
-export interface MessagesService {
-  create(data: Partial<Message>): Promise<Message>;
-}
-
-/**
- * Service interface for updating tasks via FeathersJS
- */
-export interface TasksService {
-  patch(id: string, data: Partial<{ status: string }>): Promise<unknown>;
 }
 
 export class OpenCodeTool implements ITool {
@@ -75,7 +62,7 @@ export class OpenCodeTool implements ITool {
 
   /** Default client (no directory override) */
   private client: ReturnType<typeof createOpencodeClient> | null = null;
-  /** Directory-scoped clients keyed by worktree path */
+  /** Directory-scoped clients keyed by branch path */
   private directoryClients: Map<string, ReturnType<typeof createOpencodeClient>> = new Map();
   private config: OpenCodeConfig;
   private messagesService?: MessagesService;
@@ -85,6 +72,28 @@ export class OpenCodeTool implements ITool {
   /** MCP repository dependencies for resolving user-defined MCP servers */
   private sessionMCPRepo?: SessionMCPServerRepository;
   private mcpServerRepo?: MCPServerRepository;
+
+  /**
+   * Extract user-facing response text from OpenCode parts.
+   * Prefers explicit text parts and falls back to reasoning text when no text parts exist.
+   */
+  private extractDisplayTextFromParts(parts: Array<{ type: string; text?: string }>): string {
+    const textParts = parts
+      .filter((part) => part.type === 'text' && typeof part.text === 'string' && part.text.trim())
+      .map((part) => part.text as string);
+
+    if (textParts.length > 0) {
+      return textParts.join('\n');
+    }
+
+    const reasoningParts = parts
+      .filter(
+        (part) => part.type === 'reasoning' && typeof part.text === 'string' && part.text.trim()
+      )
+      .map((part) => part.text as string);
+
+    return reasoningParts.join('\n');
+  }
 
   constructor(
     config: OpenCodeConfig,
@@ -99,14 +108,14 @@ export class OpenCodeTool implements ITool {
   }
 
   /**
-   * Set session context (OpenCode session ID, model, provider, worktree path, and MCP token) for an Agor session
+   * Set session context (OpenCode session ID, model, provider, branch path, and MCP token) for an Agor session
    * Must be called before executeTask
    *
    * @param agorSessionId - Agor session ID
    * @param opencodeSessionId - OpenCode session ID
    * @param model - Model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-6')
    * @param provider - Provider ID (e.g., 'openai', 'opencode'). If omitted, uses legacy mapping.
-   * @param worktreePath - Worktree directory path for project-scoped operations
+   * @param branchPath - Branch directory path for project-scoped operations
    * @param mcpToken - MCP token for Agor MCP server injection
    */
   setSessionContext(
@@ -114,14 +123,14 @@ export class OpenCodeTool implements ITool {
     opencodeSessionId: string,
     model?: string,
     provider?: string,
-    worktreePath?: string,
+    branchPath?: string,
     mcpToken?: string
   ): void {
     this.sessionContexts.set(agorSessionId, {
       opencodeSessionId,
       model,
       provider,
-      worktreePath,
+      branchPath,
       mcpToken,
     });
   }
@@ -185,12 +194,12 @@ export class OpenCodeTool implements ITool {
     sessionId: string,
     client: ReturnType<typeof createOpencodeClient>,
     mcpToken?: string,
-    worktreePath?: string
+    branchPath?: string
   ): Promise<void> {
     if (mcpToken) {
       // Use session-specific MCP name to avoid conflicts with stale entries
-      const shortId = sessionId.substring(0, 8);
-      const mcpName = `agor_${shortId}`;
+      const sessionShort = shortId(sessionId);
+      const mcpName = `agor_${sessionShort}`;
 
       try {
         const daemonUrl = await getDaemonUrl();
@@ -206,7 +215,7 @@ export class OpenCodeTool implements ITool {
               headers: { Authorization: `Bearer ${mcpToken}` },
             },
           },
-          query: worktreePath ? { directory: worktreePath } : undefined,
+          query: branchPath ? { directory: branchPath } : undefined,
         });
         console.log(
           `[OpenCodeTool] Injected Agor MCP as "${mcpName}" for session ${shortId}`,
@@ -245,7 +254,7 @@ export class OpenCodeTool implements ITool {
                     enabled: true,
                   },
                 },
-                query: worktreePath ? { directory: worktreePath } : undefined,
+                query: branchPath ? { directory: branchPath } : undefined,
               });
             } else if (server.transport === 'http' || server.transport === 'sse') {
               const headers: Record<string, string> = {};
@@ -262,7 +271,7 @@ export class OpenCodeTool implements ITool {
                     headers: Object.keys(headers).length > 0 ? headers : undefined,
                   },
                 },
-                query: worktreePath ? { directory: worktreePath } : undefined,
+                query: branchPath ? { directory: branchPath } : undefined,
               });
             }
             console.log(`[OpenCodeTool] Injected MCP server: ${sanitizedName}`);
@@ -276,6 +285,81 @@ export class OpenCodeTool implements ITool {
     }
 
     this.injectedMcpHash.set(sessionId, configHash);
+  }
+
+  /**
+   * Build canonical Agor message content blocks from OpenCode parts.
+   *
+   * Behavior:
+   * - If OpenCode emitted regular text parts, keep reasoning as `thinking`.
+   * - If OpenCode emitted only reasoning text (no text parts), treat reasoning as user-visible `text`
+   *   to avoid rendering a "thought-only" assistant response.
+   */
+  private buildContentBlocksFromParts(
+    parts: Array<{
+      type: string;
+      text?: string;
+      tool?: string;
+      callID?: string;
+      id?: string;
+      state?: { input?: Record<string, unknown>; status?: string; output?: unknown };
+    }>
+  ): {
+    contentBlocks: Array<{
+      type: 'text' | 'thinking' | 'tool_use' | 'tool_result';
+      [key: string]: unknown;
+    }>;
+    toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+  } {
+    const contentBlocks: Array<{
+      type: 'text' | 'thinking' | 'tool_use' | 'tool_result';
+      [key: string]: unknown;
+    }> = [];
+    const toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
+    const hasRenderableText = parts.some(
+      (part) => part.type === 'text' && typeof part.text === 'string' && part.text.trim()
+    );
+
+    for (const part of parts) {
+      if (part.type === 'reasoning' && part.text) {
+        contentBlocks.push({
+          type: hasRenderableText ? 'thinking' : 'text',
+          text: part.text,
+        });
+      } else if (part.type === 'text' && part.text) {
+        contentBlocks.push({
+          type: 'text',
+          text: part.text,
+        });
+      } else if (part.type === 'tool') {
+        const toolName = part.tool || 'unknown';
+        const toolInput = part.state?.input || {};
+        const toolCallId = part.callID || part.id || generateId();
+
+        contentBlocks.push({
+          type: 'tool_use',
+          id: toolCallId,
+          name: toolName,
+          input: toolInput,
+        });
+
+        toolUses.push({
+          id: toolCallId,
+          name: toolName,
+          input: toolInput,
+        });
+
+        if (part.state?.status === 'completed' && part.state.output) {
+          contentBlocks.push({
+            type: 'tool_result',
+            tool_use_id: toolCallId,
+            content: part.state.output,
+          });
+        }
+      }
+    }
+
+    return { contentBlocks, toolUses };
   }
 
   /**
@@ -311,7 +395,7 @@ export class OpenCodeTool implements ITool {
    * Create a new OpenCode session
    */
   async createSession?(config: CreateSessionConfig): Promise<SessionHandle> {
-    // Use directory-scoped client if workingDirectory is provided (worktree path)
+    // Use directory-scoped client if workingDirectory is provided (branch path)
     const client = this.getClientForDirectory(config.workingDirectory);
 
     try {
@@ -322,7 +406,7 @@ export class OpenCodeTool implements ITool {
           title: String(config.title || 'Agor Session'),
         },
         // Explicitly pass directory as query param (in addition to SDK header)
-        // to ensure the session is created in the correct worktree directory
+        // to ensure the session is created in the correct branch directory
         query: config.workingDirectory ? { directory: config.workingDirectory } : undefined,
       });
 
@@ -374,7 +458,7 @@ export class OpenCodeTool implements ITool {
         promptLength: prompt.length,
         model: context?.model,
         provider: context?.provider,
-        worktreePath: context?.worktreePath,
+        branchPath: context?.branchPath,
         streaming: !!streamingCallbacks,
       });
 
@@ -393,11 +477,11 @@ export class OpenCodeTool implements ITool {
       }
 
       // Get the directory-scoped client
-      const worktreePath = context.worktreePath;
-      const client = this.getClientForDirectory(worktreePath);
+      const branchPath = context.branchPath;
+      const client = this.getClientForDirectory(branchPath);
 
       // Inject MCP servers (uses session-specific name to avoid stale entry conflicts)
-      await this.ensureMcpServers(sessionId, client, context.mcpToken, worktreePath);
+      await this.ensureMcpServers(sessionId, client, context.mcpToken, branchPath);
 
       // Prepare prompt options
       const promptOptions: {
@@ -412,8 +496,8 @@ export class OpenCodeTool implements ITool {
         body: {
           parts: [{ type: 'text', text: prompt }],
         },
-        // Explicitly pass directory as query param to ensure correct worktree scoping
-        query: worktreePath ? { directory: worktreePath } : undefined,
+        // Explicitly pass directory as query param to ensure correct branch scoping
+        query: branchPath ? { directory: branchPath } : undefined,
       };
 
       // Include model if provided
@@ -452,8 +536,8 @@ export class OpenCodeTool implements ITool {
       // Events are emitted in real-time as prompt executes
       console.log('[OpenCodeTool] Subscribing to event stream...');
       const eventStream = await client.event.subscribe({
-        // Pass directory to scope event stream to correct worktree
-        query: worktreePath ? { directory: worktreePath } : undefined,
+        // Pass directory to scope event stream to correct branch
+        query: branchPath ? { directory: branchPath } : undefined,
       });
       console.log('[OpenCodeTool] Event stream ready, sending prompt...');
 
@@ -511,7 +595,7 @@ export class OpenCodeTool implements ITool {
                     permissionID: permId,
                   },
                   body: { response: 'always' },
-                  query: worktreePath ? { directory: worktreePath } : undefined,
+                  query: branchPath ? { directory: branchPath } : undefined,
                 });
                 console.log(`[OpenCodeTool] Permission auto-granted (always): id=${permId}`);
               } catch (permErr) {
@@ -700,20 +784,13 @@ export class OpenCodeTool implements ITool {
 
       // Extract final text from parts (or use error message if error occurred)
       let responseText = '';
-      const textParts: string[] = [];
 
       if (hasError) {
         // Use the error message as the response text
         responseText = `❌ **OpenCode Error**\n\n${errorMessage}`;
       } else {
-        // Only extract text from parts if no error occurred
+        // Extract metadata from parts
         for (const part of response.data.parts || []) {
-          // Collect text from reasoning and text parts
-          // TextPart and ReasoningPart both have a .text property
-          if (part.type === 'reasoning' || part.type === 'text') {
-            textParts.push(part.text);
-          }
-
           // Extract metadata from step-finish part
           if (part.type === 'step-finish') {
             metadata.cost = part.cost;
@@ -729,7 +806,9 @@ export class OpenCodeTool implements ITool {
           }
         }
 
-        responseText = textParts.join('\n');
+        responseText = this.extractDisplayTextFromParts(
+          (response.data.parts || []) as Array<{ type: string; text?: string }>
+        );
         console.log('[OpenCodeTool] Final text length:', responseText.length);
 
         // Fallback: if no text found, return message
@@ -747,13 +826,6 @@ export class OpenCodeTool implements ITool {
       // Handler should create user message first with index N, then pass N+1 here
       const assistantIndex = messageIndex ?? 0;
 
-      // Build content blocks from all parts
-      const contentBlocks: Array<{
-        type: 'text' | 'thinking' | 'tool_use' | 'tool_result';
-        [key: string]: unknown;
-      }> = [];
-      const toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-
       // Process parts from final response (not from streaming cache)
       // The final response contains ALL parts, including ones that weren't streamed
       const finalParts = response.data.parts || [];
@@ -763,59 +835,16 @@ export class OpenCodeTool implements ITool {
         'parts in final response'
       );
       console.log('[OpenCodeTool] Part types:', finalParts.map((p) => p.type).join(', '));
-      for (const part of finalParts) {
-        console.log('[OpenCodeTool] Processing part type:', part.type);
-
-        if (part.type === 'reasoning' && part.text) {
-          console.log('[OpenCodeTool] Adding reasoning block, text length:', part.text.length);
-          contentBlocks.push({
-            type: 'thinking',
-            text: part.text,
-          });
-        } else if (part.type === 'reasoning') {
-          console.log('[OpenCodeTool] Skipping reasoning part - no text field or empty text');
-        }
-
-        if (part.type === 'text' && part.text) {
-          contentBlocks.push({
-            type: 'text',
-            text: part.text,
-          });
-        } else if (part.type === 'tool') {
-          // Tool use block - extract tool info
-          // OpenCode structure: { tool: string, callID: string, state: { input: {...}, output: "..." } }
-          console.log('[OpenCodeTool] Processing tool part:', JSON.stringify(part, null, 2));
-
-          const toolName = part.tool || 'unknown';
-          const toolInput = (part.state as { input?: Record<string, unknown> })?.input || {};
-          const toolCallId = part.callID || part.id;
-
-          // Add tool_use block
-          contentBlocks.push({
-            type: 'tool_use',
-            id: toolCallId,
-            name: toolName,
-            input: toolInput,
-          });
-
-          // Add to tool_uses array
-          toolUses.push({
-            id: toolCallId,
-            name: toolName,
-            input: toolInput,
-          });
-
-          // If tool has completed with output, add tool_result block
-          const toolState = part.state as { status?: string; output?: unknown } | undefined;
-          if (toolState?.status === 'completed' && toolState.output) {
-            contentBlocks.push({
-              type: 'tool_result',
-              tool_use_id: toolCallId,
-              content: toolState.output,
-            });
-          }
-        }
-      }
+      const { contentBlocks, toolUses } = this.buildContentBlocksFromParts(
+        finalParts as Array<{
+          type: string;
+          text?: string;
+          tool?: string;
+          callID?: string;
+          id?: string;
+          state?: { input?: Record<string, unknown>; status?: string; output?: unknown };
+        }>
+      );
 
       // If no content blocks were created (error case), add the error text
       if (contentBlocks.length === 0 && responseText) {
@@ -933,16 +962,10 @@ export class OpenCodeTool implements ITool {
 
     // Extract text and token/cost metadata from 'parts' array
     if (response.data.parts && Array.isArray(response.data.parts)) {
-      // Extract text from all parts that have text content (text, reasoning, etc.)
-      const textParts: string[] = [];
-      for (const part of response.data.parts) {
-        // TextPart and ReasoningPart both have a .text property
-        if (part.type === 'text' || part.type === 'reasoning') {
-          textParts.push(part.text);
-        }
-      }
-      responseText = textParts.join('\n');
-      console.log('[OpenCodeTool] Extracted', textParts.length, 'text parts');
+      responseText = this.extractDisplayTextFromParts(
+        response.data.parts as Array<{ type: string; text?: string }>
+      );
+      console.log('[OpenCodeTool] Extracted display text length:', responseText.length);
 
       // Extract metadata from step-finish part
       const stepFinish = response.data.parts.find((part) => part.type === 'step-finish');

@@ -14,6 +14,7 @@ import {
   seedInitialData,
 } from '@agor/core/db';
 import { extractDbFilePath } from '@agor/core/utils/path';
+import { logFirstRunAdminBootstrap, runFirstRunAdminBootstrap } from './first-run-admin.js';
 
 export interface DatabaseInitResult {
   /** Initialized database instance */
@@ -111,6 +112,14 @@ export async function initializeDatabase(dbPath: string): Promise<DatabaseInitRe
   // Seed initial data (idempotent - only creates if missing)
   console.log('🌱 Seeding initial data...');
   await seedInitialData(db);
+
+  // First-run admin bootstrap: create a default admin if no users exist, and
+  // re-attribute any legacy `created_by='anonymous'` rows to a real user. This
+  // is the upgrade path for installs that previously ran in (now-removed)
+  // anonymous mode — their data isn't orphaned, and they get clear credentials
+  // written to disk on first start.
+  const bootstrapResult = await runFirstRunAdminBootstrap(db);
+  logFirstRunAdminBootstrap(bootstrapResult);
 
   console.log('✅ Database ready');
 

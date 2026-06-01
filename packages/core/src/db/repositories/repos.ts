@@ -7,7 +7,7 @@
 import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import { type RepoInsert, type RepoRow, repos } from '../schema';
@@ -15,7 +15,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 import { deepMerge } from './merge-utils';
 
@@ -80,6 +82,8 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       ...data,
       environment,
       environment_config,
+      clone_status: data.clone_status,
+      clone_error: data.clone_error,
     };
   }
 
@@ -128,38 +132,28 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         default_branch: repo.default_branch,
         environment,
         environment_config,
+        clone_status: repo.clone_status,
+        // `|| undefined` (not `??`) — deepMerge writes explicit `null` to
+        // clear `clone_error` on the success patch from the executor; we
+        // coerce that to `undefined` here so the stored value matches the
+        // `clone_error?: RepoCloneError` invariant (set only when failed).
+        clone_error: repo.clone_error || undefined,
       },
     };
   }
 
   /**
-   * Resolve short ID to full ID
+   * Resolve short ID to full ID via the centralized helper.
    */
   private async resolveId(id: string): Promise<string> {
-    // If already a full UUID, return as-is
-    if (id.length === 36 && id.includes('-')) {
-      return id;
-    }
-
-    // Short ID - need to resolve
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
-
-    const results = await select(this.db).from(repos).where(like(repos.repo_id, pattern)).all();
-
-    if (results.length === 0) {
-      throw new EntityNotFoundError('Repo', id);
-    }
-
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'Repo',
-        id,
-        results.map((r: { repo_id: string }) => formatShortId(r.repo_id as UUID))
-      );
-    }
-
-    return results[0].repo_id as UUID;
+    return resolveByShortIdPrefix(id, 'Repo', async (pattern) => {
+      const rows = await select(this.db)
+        .from(repos)
+        .where(like(repos.repo_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { repo_id: string }) => r.repo_id);
+    });
   }
 
   /**
@@ -295,7 +289,12 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
           .where(eq(repos.repo_id, fullId))
           .run();
 
-        // Return merged repo with refreshed timestamp (no need to re-fetch)
+        // Sync re-derived fields back onto `merged` so the returned object
+        // matches what was actually persisted. `repoToInsert` coerces
+        // explicit-clear sentinels (e.g. `clone_error: null` from deepMerge)
+        // to `undefined`; without this sync the caller sees the un-coerced
+        // null and the type invariant lies.
+        merged.clone_error = insertData.data.clone_error;
         merged.last_updated = newUpdatedAt.toISOString();
         return merged;
       });
@@ -421,19 +420,19 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   }
 
   /**
-   * @deprecated Worktrees are now first-class entities in their own table.
-   * Use WorktreeRepository instead.
+   * @deprecated Branches are now first-class entities in their own table.
+   * Use BranchRepository instead.
    */
-  async addWorktree(): Promise<never> {
-    throw new Error('addWorktree is deprecated. Use WorktreeRepository.create() instead.');
+  async addBranch(): Promise<never> {
+    throw new Error('addBranch is deprecated. Use BranchRepository.create() instead.');
   }
 
   /**
-   * @deprecated Worktrees are now first-class entities in their own table.
-   * Use WorktreeRepository instead.
+   * @deprecated Branches are now first-class entities in their own table.
+   * Use BranchRepository instead.
    */
-  async removeWorktree(): Promise<never> {
-    throw new Error('removeWorktree is deprecated. Use WorktreeRepository.delete() instead.');
+  async removeBranch(): Promise<never> {
+    throw new Error('removeBranch is deprecated. Use BranchRepository.delete() instead.');
   }
 
   /**

@@ -1,7 +1,7 @@
 import Handlebars from 'handlebars';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  buildWorktreeContext,
+  buildBranchContext,
   registerHandlebarsHelpers,
   renderTemplate,
 } from './handlebars-helpers';
@@ -983,15 +983,15 @@ describe('handlebars-helpers', () => {
 
     it('should render complex template with multiple helpers', () => {
       const template = `
-PORT={{add 6000 worktree.unique_id}}
-NAME={{replace (uppercase worktree.name) "-" "_"}}
-{{#if (gt worktree.unique_id 5)}}HIGH{{else}}LOW{{/if}}
+PORT={{add 6000 branch.unique_id}}
+NAME={{replace (uppercase branch.name) "-" "_"}}
+{{#if (gt branch.unique_id 5)}}HIGH{{else}}LOW{{/if}}
       `.trim();
       const result = renderTemplate(template, {
-        worktree: { unique_id: 10, name: 'test-worktree' },
+        branch: { unique_id: 10, name: 'test-branch' },
       });
       expect(result).toContain('PORT=6010');
-      expect(result).toContain('NAME=TEST_WORKTREE');
+      expect(result).toContain('NAME=TEST_BRANCH');
       expect(result).toContain('HIGH');
     });
 
@@ -1041,23 +1041,26 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
     });
   });
 
-  describe('buildWorktreeContext', () => {
+  describe('buildBranchContext', () => {
     it('should build basic context with all fields', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 42,
-        name: 'my-worktree',
-        path: '/path/to/worktree',
+      const context = buildBranchContext({
+        branch_unique_id: 42,
+        name: 'my-branch',
+        path: '/path/to/branch',
         repo_slug: 'my-repo',
         custom_context: { foo: 'bar' },
       });
 
+      const expectedBranchEntity = {
+        unique_id: 42,
+        name: 'my-branch',
+        path: '/path/to/branch',
+        gid: undefined,
+      };
       expect(context).toEqual({
-        worktree: {
-          unique_id: 42,
-          name: 'my-worktree',
-          path: '/path/to/worktree',
-          gid: undefined,
-        },
+        branch: expectedBranchEntity,
+        // v0.19 backwards-compat alias — same object as `branch`.
+        worktree: expectedBranchEntity,
         repo: {
           slug: 'my-repo',
         },
@@ -1069,8 +1072,8 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
     });
 
     it('should expose host.ip_address when provided', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
+      const context = buildBranchContext({
+        branch_unique_id: 1,
         name: 'test',
         path: '/test',
         host_ip_address: '10.0.0.5',
@@ -1083,8 +1086,8 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
     });
 
     it('should render empty string for {{host.ip_address}} when unresolved', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
+      const context = buildBranchContext({
+        branch_unique_id: 1,
         name: 'test',
         path: '/test',
       });
@@ -1094,8 +1097,8 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
     });
 
     it('should handle missing repo_slug', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
+      const context = buildBranchContext({
+        branch_unique_id: 1,
         name: 'test',
         path: '/test',
       });
@@ -1104,8 +1107,8 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
     });
 
     it('should handle missing custom_context', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
+      const context = buildBranchContext({
+        branch_unique_id: 1,
         name: 'test',
         path: '/test',
         repo_slug: 'repo',
@@ -1115,8 +1118,8 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
     });
 
     it('should handle empty custom_context', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
+      const context = buildBranchContext({
+        branch_unique_id: 1,
         name: 'test',
         path: '/test',
         repo_slug: 'repo',
@@ -1127,8 +1130,8 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
     });
 
     it('should preserve nested custom context', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
+      const context = buildBranchContext({
+        branch_unique_id: 1,
         name: 'test',
         path: '/test',
         repo_slug: 'repo',
@@ -1149,8 +1152,8 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
     });
 
     it('should build context usable in templates', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 5,
+      const context = buildBranchContext({
+        branch_unique_id: 5,
         name: 'test-wt',
         path: '/path/to/test',
         repo_slug: 'test-repo',
@@ -1158,48 +1161,48 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
       });
 
       const result = renderTemplate(
-        'Port: {{add custom.port_base worktree.unique_id}}, Name: {{worktree.name}}, Repo: {{repo.slug}}',
+        'Port: {{add custom.port_base branch.unique_id}}, Name: {{branch.name}}, Repo: {{repo.slug}}',
         context
       );
       expect(result).toBe('Port: 3005, Name: test-wt, Repo: test-repo');
     });
 
     it('should handle zero unique_id', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 0,
+      const context = buildBranchContext({
+        branch_unique_id: 0,
         name: 'test',
         path: '/test',
         repo_slug: 'repo',
       });
 
-      expect((context.worktree as any).unique_id).toBe(0);
+      expect((context.branch as any).unique_id).toBe(0);
     });
 
     it('should handle special characters in name', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
-        name: 'test-worktree_123',
+      const context = buildBranchContext({
+        branch_unique_id: 1,
+        name: 'test-branch_123',
         path: '/test',
         repo_slug: 'repo',
       });
 
-      expect((context.worktree as any).name).toBe('test-worktree_123');
+      expect((context.branch as any).name).toBe('test-branch_123');
     });
 
     it('should handle absolute paths', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
+      const context = buildBranchContext({
+        branch_unique_id: 1,
         name: 'test',
-        path: '/absolute/path/to/worktree',
+        path: '/absolute/path/to/branch',
         repo_slug: 'repo',
       });
 
-      expect((context.worktree as any).path).toBe('/absolute/path/to/worktree');
+      expect((context.branch as any).path).toBe('/absolute/path/to/branch');
     });
 
     it('should handle custom context with various types', () => {
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
+      const context = buildBranchContext({
+        branch_unique_id: 1,
         name: 'test',
         path: '/test',
         repo_slug: 'repo',
@@ -1322,8 +1325,8 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
         vi.resetModules();
         const fresh = await import('./handlebars-helpers');
         const result = fresh.renderTemplate(
-          'Open issue #{{add 1000 worktree.unique_id}} for {{uppercase worktree.name}}',
-          { worktree: { unique_id: 90, name: 'feature-x' } }
+          'Open issue #{{add 1000 branch.unique_id}} for {{uppercase branch.name}}',
+          { branch: { unique_id: 90, name: 'feature-x' } }
         );
         expect(result).toBe('Open issue #1090 for FEATURE-X');
       } finally {
@@ -1342,12 +1345,12 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
       // Mirrors the context shape the ZoneTriggerModal builds in
       // apps/agor-ui/src/components/SessionCanvas/canvas/ZoneTriggerModal.tsx
       const template =
-        'Worktree: {{worktree.name}} ({{worktree.ref}})\n' +
-        'Issue: {{worktree.issue_url}}\n' +
-        'Notes: {{worktree.notes}}\n' +
+        'Branch: {{branch.name}} ({{branch.ref}})\n' +
+        'Issue: {{branch.issue_url}}\n' +
+        'Notes: {{branch.notes}}\n' +
         'Board: {{board.name}}';
       const context = {
-        worktree: {
+        branch: {
           name: 'fix-zone-trigger',
           ref: 'fix-zone-trigger',
           issue_url: 'https://example.com/issues/123',
@@ -1360,7 +1363,7 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
         session: { description: '', context: {} },
       };
       const result = renderTemplate(template, context);
-      expect(result).toContain('Worktree: fix-zone-trigger (fix-zone-trigger)');
+      expect(result).toContain('Branch: fix-zone-trigger (fix-zone-trigger)');
       expect(result).toContain('Issue: https://example.com/issues/123');
       expect(result).toContain('Notes: render the interpolated template');
       expect(result).toContain('Board: main');
@@ -1390,15 +1393,15 @@ NAME={{replace (uppercase worktree.name) "-" "_"}}
   describe('real-world scenarios', () => {
     it('should handle environment config template', () => {
       const template = `
-export PORT={{add 6000 worktree.unique_id}}
-export DB_NAME={{replace (lowercase worktree.name) "-" "_"}}_db
-export ENV={{#if (eq worktree.unique_id 1)}}production{{else}}development{{/if}}
+export PORT={{add 6000 branch.unique_id}}
+export DB_NAME={{replace (lowercase branch.name) "-" "_"}}_db
+export ENV={{#if (eq branch.unique_id 1)}}production{{else}}development{{/if}}
       `.trim();
 
-      const context = buildWorktreeContext({
-        worktree_unique_id: 1,
+      const context = buildBranchContext({
+        branch_unique_id: 1,
         name: 'Main-Branch',
-        path: '/path/to/worktree',
+        path: '/path/to/branch',
         repo_slug: 'my-repo',
       });
 
@@ -1409,10 +1412,10 @@ export ENV={{#if (eq worktree.unique_id 1)}}production{{else}}development{{/if}}
     });
 
     it('should handle zone trigger template', () => {
-      const template = 'docker run -p {{add 8080 worktree.unique_id}}:8080 {{repo.slug}}:latest';
+      const template = 'docker run -p {{add 8080 branch.unique_id}}:8080 {{repo.slug}}:latest';
 
-      const context = buildWorktreeContext({
-        worktree_unique_id: 5,
+      const context = buildBranchContext({
+        branch_unique_id: 5,
         name: 'feature-branch',
         path: '/path',
         repo_slug: 'my-app',
@@ -1424,25 +1427,25 @@ export ENV={{#if (eq worktree.unique_id 1)}}production{{else}}development{{/if}}
 
     it('should handle report template with custom context', () => {
       const template = `
-## Worktree Report: {{uppercase worktree.name}}
+## Branch Report: {{uppercase branch.name}}
 
-**Unique ID:** {{worktree.unique_id}}
-**Path:** {{worktree.path}}
+**Unique ID:** {{branch.unique_id}}
+**Path:** {{branch.path}}
 **Repository:** {{repo.slug}}
 **Custom Port:** {{default custom.port 3000}}
-**Status:** {{#if (gte worktree.unique_id 10)}}High Usage{{else}}Normal{{/if}}
+**Status:** {{#if (gte branch.unique_id 10)}}High Usage{{else}}Normal{{/if}}
       `.trim();
 
-      const context = buildWorktreeContext({
-        worktree_unique_id: 15,
-        name: 'test-worktree',
+      const context = buildBranchContext({
+        branch_unique_id: 15,
+        name: 'test-branch',
         path: '/workspace/test',
         repo_slug: 'test-repo',
         custom_context: { port: 4000 },
       });
 
       const result = renderTemplate(template, context);
-      expect(result).toContain('## Worktree Report: TEST-WORKTREE');
+      expect(result).toContain('## Branch Report: TEST-BRANCH');
       expect(result).toContain('**Unique ID:** 15');
       expect(result).toContain('**Path:** /workspace/test');
       expect(result).toContain('**Repository:** test-repo');
@@ -1451,10 +1454,10 @@ export ENV={{#if (eq worktree.unique_id 1)}}production{{else}}development{{/if}}
     });
 
     it('should handle complex arithmetic in templates', () => {
-      const template = '{{add (mul worktree.unique_id 100) (div custom.offset 2)}}';
+      const template = '{{add (mul branch.unique_id 100) (div custom.offset 2)}}';
 
-      const context = buildWorktreeContext({
-        worktree_unique_id: 5,
+      const context = buildBranchContext({
+        branch_unique_id: 5,
         name: 'test',
         path: '/test',
         custom_context: { offset: 10 },
@@ -1466,13 +1469,13 @@ export ENV={{#if (eq worktree.unique_id 1)}}production{{else}}development{{/if}}
 
     it('should handle conditional chains', () => {
       const template = `
-{{#if (gt worktree.unique_id 100)}}
+{{#if (gt branch.unique_id 100)}}
   Very High
 {{else}}
-  {{#if (gt worktree.unique_id 50)}}
+  {{#if (gt branch.unique_id 50)}}
     High
   {{else}}
-    {{#if (gt worktree.unique_id 10)}}
+    {{#if (gt branch.unique_id 10)}}
       Medium
     {{else}}
       Low
@@ -1481,8 +1484,8 @@ export ENV={{#if (eq worktree.unique_id 1)}}production{{else}}development{{/if}}
 {{/if}}
       `.trim();
 
-      const context = buildWorktreeContext({
-        worktree_unique_id: 25,
+      const context = buildBranchContext({
+        branch_unique_id: 25,
         name: 'test',
         path: '/test',
       });

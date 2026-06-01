@@ -3,7 +3,7 @@
  * `session_env_selections` mutations.
  *
  * Only the session's creator (or a global admin/superadmin) may modify these
- * selections. Worktree-level `all` permission does NOT grant access — the
+ * selections. Branch-level `all` permission does NOT grant access — the
  * selections expose the creator's private credentials.
  */
 
@@ -11,7 +11,7 @@ import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { ROLES } from '@agor/core/types';
 import type { HookContext } from '@feathersjs/feathers';
 import { describe, expect, it } from 'vitest';
-import { ensureSessionOwnerOrAdmin } from './worktree-authorization';
+import { ensureSessionOwnerOrAdmin } from './branch-authorization';
 
 function makeContext(opts: {
   provider?: string;
@@ -71,7 +71,7 @@ describe('ensureSessionOwnerOrAdmin', () => {
     expect(() => hook(ctx)).not.toThrow();
   });
 
-  it('denies a member who is not the creator (worktree access irrelevant)', () => {
+  it('denies a member who is not the creator (branch access irrelevant)', () => {
     const ctx = makeContext({
       provider: 'rest',
       user: { user_id: 'bob', role: ROLES.MEMBER },

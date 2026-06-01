@@ -1,6 +1,6 @@
 ---
 title: API Reference
-description: Interactive REST API documentation for agor daemon. Auto-generated Swagger UI with endpoints for sessions, worktrees, boards, and real-time WebSocket integration.
+description: Interactive REST API documentation for agor daemon. Auto-generated Swagger UI with endpoints for sessions, branches, boards, and real-time WebSocket integration.
 ---
 
 # API Reference
@@ -37,7 +37,7 @@ The Agor daemon serves **live, interactive API documentation** via Swagger UI:
   </p>
 </div>
 
-![Agor REST API interactive documentation with Swagger UI showing endpoints for sessions, worktrees, boards, and real-time collaboration](/swagger.png)
+![Agor REST API interactive documentation with Swagger UI showing endpoints for sessions, branches, boards, and real-time collaboration](/swagger.png)
 
 **Features:**
 
@@ -91,16 +91,16 @@ curl -X GET http://localhost:3030/sessions \
 4. Click **"Authorize"**
 5. Now all generated curl commands and "Try it out" buttons will automatically include your token
 
-**Anonymous Mode:** For local development, anonymous authentication is enabled by default (no token required).
+**Authentication is always required.** On first daemon start, an admin user is auto-created with a random password — credentials are written to `~/.agor/admin-credentials` (mode 0600) and printed once to the daemon log. Use those to log in and obtain a JWT.
 
 ### Core Services
 
 - **`/sessions`** - AI agent session management with genealogy (fork/spawn)
 - **`/tasks`** - Work units within sessions tracking prompts and execution
 - **`/messages`** - Conversation messages with streaming support
-- **`/repos`** - Git repository management and worktree operations
+- **`/repos`** - Git repository management and branch operations
 - **`/boards`** - Spatial organization of sessions with zones and triggers
-- **`/worktrees`** - Git worktree isolation for sessions
+- **`/branches`** - Git branch isolation for sessions
 - **`/users`** - User account management and authentication
 - **`/mcp-servers`** - Model Context Protocol server configurations
 
@@ -171,6 +171,30 @@ Possible response shapes:
 }
 ```
 
+## Task Run Endpoint
+
+`POST /sessions/:id/prompt` is the simplest way to drive a session — it creates the underlying task and starts execution in one round-trip. If you'd rather create the task as a separate step (e.g. so you have its `task_id` before triggering execution), `POST /tasks` followed by `POST /tasks/:id/run` does the same thing in two calls. This is the path pure-REST harnesses use to skip the MCP transport entirely.
+
+```bash
+# 1. Create a task (status will be 'created')
+curl -X POST http://localhost:3030/tasks \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-token>" \
+  -d '{
+    "session_id": "<session-id>",
+    "full_prompt": "Run the test suite and summarize failures",
+    "status": "created"
+  }'
+
+# 2. Trigger executor pickup
+curl -X POST http://localhost:3030/tasks/<task-id>/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-token>" \
+  -d '{ "stream": true }'
+```
+
+The response is the patched `Task` row with `status: 'running'`. The endpoint only accepts tasks in `created` state on an `idle` session — `queued` tasks drain automatically in queue-position order, and busy sessions should be prompted via `POST /sessions/:id/prompt` (which creates and queues the task atomically).
+
 ## Message Content Shape
 
 Message `content` supports both plain text and structured blocks:
@@ -222,6 +246,15 @@ const promptResult = await client.sessions.prompt(
 );
 
 console.log(promptResult);
+
+// Or create the task explicitly first, then trigger execution:
+const task = await client.service('tasks').create({
+  session_id: sessions[0].session_id,
+  full_prompt: 'Run the test suite and summarize failures',
+  status: 'created',
+});
+const runningTask = await client.tasks.run(task.task_id, { stream: true });
+console.log(runningTask);
 ```
 
 ## WebSocket Events

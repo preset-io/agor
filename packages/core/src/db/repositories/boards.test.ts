@@ -7,16 +7,19 @@
 
 import type { Board, BoardObject, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { generateId } from '../../lib/ids';
+import { generateId, shortId, toShortId } from '../../lib/ids';
+import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardRepository } from './boards';
+import { BranchRepository } from './branches';
+import { RepoRepository } from './repos';
 
 /**
  * Create test board data with defaults
  */
 function createBoardData(overrides?: Partial<Board>): Partial<Board> {
-  return {
+  const data: Partial<Board> = {
     board_id: overrides?.board_id ?? generateId(),
     name: overrides?.name ?? 'Test Board',
     slug: overrides?.slug,
@@ -29,6 +32,63 @@ function createBoardData(overrides?: Partial<Board>): Partial<Board> {
     created_at: overrides?.created_at,
     last_updated: overrides?.last_updated,
   };
+  if (Object.hasOwn(overrides ?? {}, 'primary_assistant_id')) {
+    data.primary_assistant_id = overrides?.primary_assistant_id;
+  }
+  return data;
+}
+
+function createRepoData(overrides?: { repo_id?: UUID; slug?: string }) {
+  const slug = overrides?.slug ?? 'test-repo';
+  return {
+    repo_id: overrides?.repo_id ?? generateId(),
+    slug,
+    name: slug,
+    repo_type: 'remote' as const,
+    remote_url: 'https://github.com/test/repo.git',
+    local_path: `/home/user/.agor/repos/${slug}`,
+    default_branch: 'main',
+  };
+}
+
+let branchUniqueId = 1_000;
+
+async function createBranchForBoard(
+  db: Database,
+  boardId: UUID,
+  overrides: {
+    name?: string;
+    assistant?: boolean;
+    archived?: boolean;
+    custom_context?: Record<string, unknown>;
+  } = {}
+) {
+  const repoRepo = new RepoRepository(db);
+  const branchRepo = new BranchRepository(db);
+  const repo = await repoRepo.create(createRepoData({ slug: `repo-${branchUniqueId}` }));
+  const name = overrides.name ?? `branch-${generateId().slice(0, 8)}`;
+
+  return branchRepo.create({
+    branch_id: generateId(),
+    repo_id: repo.repo_id,
+    name,
+    ref: name,
+    branch_unique_id: branchUniqueId++,
+    path: `/tmp/${name}`,
+    board_id: boardId,
+    archived: overrides.archived,
+    created_by: generateId(),
+    custom_context:
+      overrides.custom_context ??
+      (overrides.assistant
+        ? {
+            assistant: {
+              kind: 'assistant',
+              displayName: name,
+            },
+          }
+        : undefined),
+  });
 }
 
 // ============================================================================
@@ -75,14 +135,21 @@ describe('BoardRepository.create', () => {
     expect(created.name).toBe('Untitled Board');
   });
 
-  dbTest('should default to "anonymous" created_by if not provided', async ({ db }) => {
+  dbTest('should throw if created_by is not provided', async ({ db }) => {
     const repo = new BoardRepository(db);
     const data = createBoardData();
     delete (data as any).created_by;
 
-    const created = await repo.create(data);
+    await expect(repo.create(data)).rejects.toThrow(/created_by/);
+  });
 
-    expect(created.created_by).toBe('anonymous');
+  dbTest('should reject primary_assistant_id in generic create input', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const data = createBoardData({
+      primary_assistant_id: generateId(),
+    } as Partial<Board>);
+
+    await expect(repo.create(data)).rejects.toThrow(/setPrimaryAssistant/);
   });
 
   dbTest('should store all optional fields correctly', async ({ db }) => {
@@ -207,8 +274,8 @@ describe('BoardRepository.findById', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const shortId = data.board_id!.replace(/-/g, '').slice(0, 8);
-    const found = await repo.findById(shortId);
+    const idPrefix = toShortId(data.board_id!, 8);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.board_id).toBe(data.board_id);
@@ -219,8 +286,10 @@ describe('BoardRepository.findById', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const shortId = data.board_id!.slice(0, 8);
-    const found = await repo.findById(shortId);
+    // Legacy 8-char input: tests the resolver accepts shorter-than-canonical
+    // prefixes.
+    const idPrefix = toShortId(data.board_id!, 8);
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.board_id).toBe(data.board_id);
@@ -231,8 +300,8 @@ describe('BoardRepository.findById', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const shortId = data.board_id!.replace(/-/g, '').slice(0, 8).toUpperCase();
-    const found = await repo.findById(shortId);
+    const idPrefix = toShortId(data.board_id!, 8).toUpperCase();
+    const found = await repo.findById(idPrefix);
 
     expect(found).not.toBeNull();
     expect(found?.board_id).toBe(data.board_id);
@@ -431,8 +500,8 @@ describe('BoardRepository.update', () => {
     const data = createBoardData({ name: 'Original' });
     await repo.create(data);
 
-    const shortId = data.board_id!.replace(/-/g, '').slice(0, 8);
-    const updated = await repo.update(shortId, { description: 'New description' });
+    const idPrefix = toShortId(data.board_id!, 8);
+    const updated = await repo.update(idPrefix, { description: 'New description' });
 
     expect(updated.description).toBe('New description');
     expect(updated.board_id).toBe(data.board_id);
@@ -506,6 +575,17 @@ describe('BoardRepository.update', () => {
     await expect(repo.update('99999999', { name: 'Updated' })).rejects.toThrow(EntityNotFoundError);
   });
 
+  dbTest('should reject primary_assistant_id in generic update input', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData());
+
+    await expect(
+      repo.update(board.board_id, {
+        primary_assistant_id: generateId(),
+      } as Partial<Board>)
+    ).rejects.toThrow(/setPrimaryAssistant/);
+  });
+
   dbTest('should preserve unchanged fields', async ({ db }) => {
     const repo = new BoardRepository(db);
     const data = createBoardData({
@@ -540,6 +620,136 @@ describe('BoardRepository.update', () => {
 });
 
 // ============================================================================
+// Primary assistant
+// ============================================================================
+
+describe('BoardRepository primary assistant', () => {
+  dbTest('should set and fetch a valid primary assistant', async ({ db }) => {
+    const boardRepo = new BoardRepository(db);
+    const board = await boardRepo.create(createBoardData());
+    const assistant = await createBranchForBoard(db, board.board_id, {
+      assistant: true,
+      name: 'assistant-branch',
+    });
+
+    const updated = await boardRepo.setPrimaryAssistant(board.board_id, assistant.branch_id);
+
+    expect(updated.primary_assistant_id).toBe(assistant.branch_id);
+    await expect(boardRepo.getPrimaryAssistant(board.board_id)).resolves.toMatchObject({
+      branch_id: assistant.branch_id,
+      name: 'assistant-branch',
+      url: expect.any(String),
+    });
+  });
+
+  dbTest(
+    'should accept short branch IDs when setting and clearing primary assistant',
+    async ({ db }) => {
+      const boardRepo = new BoardRepository(db);
+      const board = await boardRepo.create(createBoardData());
+      const assistant = await createBranchForBoard(db, board.board_id, { assistant: true });
+      const assistantShortId = toShortId(assistant.branch_id, 8);
+
+      const updated = await boardRepo.setPrimaryAssistant(board.board_id, assistantShortId);
+
+      expect(updated.primary_assistant_id).toBe(assistant.branch_id);
+
+      const cleared = await boardRepo.clearPrimaryAssistantIfMatches(
+        board.board_id,
+        assistantShortId
+      );
+      expect(cleared?.primary_assistant_id).toBeUndefined();
+    }
+  );
+
+  dbTest('should reject non-assistant primary branches', async ({ db }) => {
+    const boardRepo = new BoardRepository(db);
+    const board = await boardRepo.create(createBoardData());
+    const branch = await createBranchForBoard(db, board.board_id);
+
+    await expect(boardRepo.setPrimaryAssistant(board.board_id, branch.branch_id)).rejects.toThrow(
+      /assistant branch/
+    );
+  });
+
+  dbTest('should reject archived assistant primary branches', async ({ db }) => {
+    const boardRepo = new BoardRepository(db);
+    const board = await boardRepo.create(createBoardData());
+    const assistant = await createBranchForBoard(db, board.board_id, {
+      assistant: true,
+      archived: true,
+    });
+
+    await expect(
+      boardRepo.setPrimaryAssistant(board.board_id, assistant.branch_id)
+    ).rejects.toThrow(/active/);
+  });
+
+  dbTest('should reject assistant branches from another board', async ({ db }) => {
+    const boardRepo = new BoardRepository(db);
+    const boardA = await boardRepo.create(createBoardData({ name: 'Board A' }));
+    const boardB = await boardRepo.create(createBoardData({ name: 'Board B' }));
+    const assistant = await createBranchForBoard(db, boardB.board_id, { assistant: true });
+
+    await expect(
+      boardRepo.setPrimaryAssistant(boardA.board_id, assistant.branch_id)
+    ).rejects.toThrow(/belong to the board/);
+  });
+
+  dbTest('should conditionally set primary assistant only when unset', async ({ db }) => {
+    const boardRepo = new BoardRepository(db);
+    const board = await boardRepo.create(createBoardData());
+    const firstAssistant = await createBranchForBoard(db, board.board_id, {
+      assistant: true,
+      name: 'first-assistant',
+    });
+    const secondAssistant = await createBranchForBoard(db, board.board_id, {
+      assistant: true,
+      name: 'second-assistant',
+    });
+
+    const firstUpdate = await boardRepo.setPrimaryAssistantIfUnset(
+      board.board_id,
+      firstAssistant.branch_id
+    );
+    const secondUpdate = await boardRepo.setPrimaryAssistantIfUnset(
+      board.board_id,
+      secondAssistant.branch_id
+    );
+
+    expect(firstUpdate?.primary_assistant_id).toBe(firstAssistant.branch_id);
+    expect(secondUpdate).toBeNull();
+    await expect(boardRepo.findById(board.board_id)).resolves.toMatchObject({
+      primary_assistant_id: firstAssistant.branch_id,
+    });
+  });
+
+  dbTest('should clear primary assistant only when it matches', async ({ db }) => {
+    const boardRepo = new BoardRepository(db);
+    const board = await boardRepo.create(createBoardData());
+    const assistant = await createBranchForBoard(db, board.board_id, { assistant: true });
+    const otherAssistant = await createBranchForBoard(db, board.board_id, { assistant: true });
+
+    await boardRepo.setPrimaryAssistant(board.board_id, assistant.branch_id);
+
+    const skipped = await boardRepo.clearPrimaryAssistantIfMatches(
+      board.board_id,
+      otherAssistant.branch_id
+    );
+    expect(skipped).toBeNull();
+    await expect(boardRepo.findById(board.board_id)).resolves.toMatchObject({
+      primary_assistant_id: assistant.branch_id,
+    });
+
+    const cleared = await boardRepo.clearPrimaryAssistantIfMatches(
+      board.board_id,
+      assistant.branch_id
+    );
+    expect(cleared?.primary_assistant_id).toBeUndefined();
+  });
+});
+
+// ============================================================================
 // Delete
 // ============================================================================
 
@@ -560,8 +770,8 @@ describe('BoardRepository.delete', () => {
     const data = createBoardData();
     await repo.create(data);
 
-    const shortId = data.board_id!.replace(/-/g, '').slice(0, 8);
-    await repo.delete(shortId);
+    const idPrefix = toShortId(data.board_id!, 8);
+    await repo.delete(idPrefix);
 
     const found = await repo.findById(data.board_id!);
     expect(found).toBeNull();
@@ -726,10 +936,10 @@ describe('BoardRepository.upsertBoardObject', () => {
     const repo = new BoardRepository(db);
     const board = await repo.create(createBoardData());
 
-    const shortId = board.board_id.replace(/-/g, '').slice(0, 8);
+    const idPrefix = shortId(board.board_id);
     const textObject: BoardObject = { type: 'text', x: 100, y: 200, content: 'Test' };
 
-    const updated = await repo.upsertBoardObject(shortId, 'text-1', textObject);
+    const updated = await repo.upsertBoardObject(idPrefix, 'text-1', textObject);
 
     expect(updated.objects).toEqual({ 'text-1': textObject });
   });
@@ -809,8 +1019,8 @@ describe('BoardRepository.removeBoardObject', () => {
       })
     );
 
-    const shortId = board.board_id.replace(/-/g, '').slice(0, 8);
-    const updated = await repo.removeBoardObject(shortId, 'text-1');
+    const idPrefix = shortId(board.board_id);
+    const updated = await repo.removeBoardObject(idPrefix, 'text-1');
 
     expect(updated.objects).toEqual({});
   });

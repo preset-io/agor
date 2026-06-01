@@ -4,7 +4,7 @@
  * Read-only queries against the OS for Unix user/group state.
  * These are shared between CLI admin commands and the daemon service.
  *
- * Also includes pure logic helpers for worktree directory decisions.
+ * Also includes pure logic helpers for branch directory decisions.
  *
  * @see context/guides/rbac-and-unix-isolation.md
  */
@@ -111,11 +111,11 @@ export function getGroupMembers(groupName: string): string[] {
 }
 
 /**
- * List all agor_wt_* (worktree) groups on the system
+ * List all agor_wt_* (branch) groups on the system
  *
  * @returns Array of matching group names
  */
-export function listWorktreeGroups(): string[] {
+export function listBranchGroups(): string[] {
   try {
     const output = execSync("getent group | grep '^agor_wt_' | cut -d: -f1", {
       encoding: 'utf-8',
@@ -155,19 +155,19 @@ export function listRepoGroups(): string[] {
 // ============================================================
 
 /**
- * Determine what action to take for a worktree directory based on archive state.
+ * Determine what action to take for a branch directory based on archive state.
  *
  * @param dirExists - Whether the directory currently exists on disk
- * @param archived - Whether the worktree is archived
- * @param filesystemStatus - The worktree's filesystem_status field
+ * @param archived - Whether the branch is archived
+ * @param filesystemStatus - The branch's filesystem_status field
  * @returns Action to take:
  *   - 'sync': Directory exists, apply permissions
- *   - 'create': Directory missing, non-archived — create it (as proper git worktree)
- *   - 'restore': Non-archived worktree with failed status — attempt git worktree restoration
+ *   - 'create': Directory missing, non-archived — create it (as proper git branch)
+ *   - 'restore': Non-archived branch with failed status — attempt git branch restoration
  *   - 'cleanup': Archived+deleted — remove Unix group cruft
- *   - 'skip': Skip this worktree (creating, archived without deletion, etc.)
+ *   - 'skip': Skip this branch (creating, archived without deletion, etc.)
  */
-export function getWorktreeDirectoryAction(
+export function getBranchDirectoryAction(
   dirExists: boolean,
   archived: boolean,
   filesystemStatus: string | null | undefined
@@ -182,7 +182,7 @@ export function getWorktreeDirectoryAction(
     return 'restore';
   }
 
-  // Archived + deleted — dead worktree, clean up Unix group
+  // Archived + deleted — dead branch, clean up Unix group
   if (archived && filesystemStatus === 'deleted') {
     return 'cleanup';
   }

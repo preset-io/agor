@@ -18,8 +18,8 @@
     "@agor/core": "workspace:*",
     "@agor/daemon": "workspace:*",
     "@agor-live/client": "workspace:*",
-    "@oclif/core": "^4.8.3",
-    "@oclif/plugin-help": "^6.2.37",
+    "@oclif/core": "^4.11.4",
+    "@oclif/plugin-help": "^6.2.49",
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",
     "inquirer": "^12.10.0"
@@ -27,11 +27,11 @@
   "devDependencies": {
     "@types/node": "^24.6.0",
     "glob": "^11.1.0",
-    "oclif": "^4.23.0",
+    "oclif": "^4.23.8",
     "tsup": "^8.5.1",
-    "tsx": "^4.21.0",
+    "tsx": "^4.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.7"
   },
   "oclif": {
     "bin": "agor",

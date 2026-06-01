@@ -1,4 +1,4 @@
-import type { Board, Worktree } from '@agor-live/client';
+import type { Board, Branch } from '@agor-live/client';
 import { DownOutlined, SearchOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Badge, Button, Divider, Dropdown, Input, Space, Typography, theme } from 'antd';
@@ -14,14 +14,14 @@ interface BoardSwitcherProps {
   boards: Board[];
   currentBoardId: string;
   onBoardChange: (boardId: string) => void;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
 }
 
 export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   boards,
   currentBoardId,
   onBoardChange,
-  worktreeById,
+  branchById,
 }) => {
   const { token } = useToken();
   const [filterText, setFilterText] = useState('');
@@ -30,8 +30,8 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   // Get current board
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
 
-  // Count worktrees per board
-  const worktreeCountByBoard = useMemo(() => {
+  // Count branches per board
+  const branchCountByBoard = useMemo(() => {
     const counts = new Map<string, number>();
 
     // Initialize all boards with 0
@@ -39,15 +39,15 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       counts.set(board.board_id, 0);
     });
 
-    // Count worktrees for each board
-    for (const worktree of worktreeById.values()) {
-      if (worktree.board_id) {
-        counts.set(worktree.board_id, (counts.get(worktree.board_id) || 0) + 1);
+    // Count branches for each board
+    for (const branch of branchById.values()) {
+      if (branch.board_id) {
+        counts.set(branch.board_id, (counts.get(branch.board_id) || 0) + 1);
       }
     }
 
     return counts;
-  }, [boards, worktreeById]);
+  }, [boards, branchById]);
 
   const showFilter = boards.length >= FILTER_THRESHOLD;
 
@@ -87,7 +87,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     }
 
     return filteredBoards.map((board) => {
-      const worktreeCount = worktreeCountByBoard.get(board.board_id) || 0;
+      const branchCount = branchCountByBoard.get(board.board_id) || 0;
       const isActive = board.board_id === currentBoardId;
 
       return {
@@ -107,7 +107,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
               <Text strong={isActive}>{board.name}</Text>
             </Space>
             <Badge
-              count={worktreeCount}
+              count={branchCount}
               showZero
               style={{
                 backgroundColor: isActive ? token.colorPrimary : token.colorBgTextHover,
@@ -118,15 +118,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
         onClick: () => handleBoardClick(board.board_id),
       };
     });
-  }, [
-    boards,
-    currentBoardId,
-    worktreeCountByBoard,
-    handleBoardClick,
-    token,
-    filterText,
-    showFilter,
-  ]);
+  }, [boards, currentBoardId, branchCountByBoard, handleBoardClick, token, filterText, showFilter]);
 
   return (
     <Dropdown

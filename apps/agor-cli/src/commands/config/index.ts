@@ -39,10 +39,6 @@ export default class ConfigIndex extends Command {
           `  color output:  ${chalk.gray(config.display.colorOutput ? 'enabled' : 'disabled')}`
         );
       }
-      if (config.display?.shortIdLength) {
-        this.log(`  short ID len:  ${chalk.gray(String(config.display.shortIdLength))}`);
-      }
-
       // Credentials (only show keys that are set)
       if (config.credentials && Object.keys(config.credentials).length > 0) {
         this.log(chalk.bold('\nCredentials:'));
@@ -91,16 +87,6 @@ export default class ConfigIndex extends Command {
             `  JWT secret:    ${chalk.gray(`***${daemonConfig.jwtSecret.slice(-8)}`)} ${chalk.dim('(saved)')}`
           );
         }
-        if (daemonConfig.allowAnonymous !== undefined) {
-          this.log(
-            `  allow anon:    ${chalk.gray(daemonConfig.allowAnonymous ? 'enabled' : 'disabled')}`
-          );
-        }
-        if (daemonConfig.requireAuth !== undefined) {
-          this.log(
-            `  require auth:  ${chalk.gray(daemonConfig.requireAuth ? 'enabled' : 'disabled')}`
-          );
-        }
       }
 
       // Config File Path
@@ -115,7 +101,7 @@ export default class ConfigIndex extends Command {
       this.log('    defaults.board, defaults.agent');
       this.log('');
       this.log(chalk.cyan('  Display:'));
-      this.log('    display.tableStyle, display.colorOutput, display.shortIdLength');
+      this.log('    display.tableStyle, display.colorOutput');
       this.log('');
       this.log(chalk.cyan('  Credentials:'));
       this.log('    credentials.ANTHROPIC_API_KEY');
@@ -125,7 +111,6 @@ export default class ConfigIndex extends Command {
       this.log(chalk.cyan('  Daemon:'));
       this.log('    daemon.port, daemon.host');
       this.log('    daemon.jwtSecret (auto-generated if not set)');
-      this.log('    daemon.allowAnonymous, daemon.requireAuth');
 
       this.log('');
     } catch (error) {

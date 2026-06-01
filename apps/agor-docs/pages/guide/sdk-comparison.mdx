@@ -14,7 +14,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 | **Streaming responses**     | ✅ Text + tools     | ⚠️ Tools only             | ✅ Text + tools     | ✅ Text + tools           | ✅ Text + tools           | Claude, Gemini, Copilot & OpenCode stream text token-by-token; Codex streams tool events only |
 | **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | ⚠️ Limited                | ⚠️ Limited                | Claude has `interrupt()`, others may lose partial work                                      |
 | **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | ❌ No                     | ❌ No                     | Only Claude Code stores sessions as JSONL transcripts                                       |
-| **Session forkable**        | ✅ Yes (via replay) | ✅ Yes (via replay)       | ✅ Yes (via replay) | ✅ Yes (via replay)       | ❌ Not yet                | Agor emulates forking by replaying messages to new session                                  |
+| **Session forkable**        | ✅ SDK-native       | ✅ App Server fork        | ❌ Not yet          | ❌ Not yet                | ❌ Not yet                | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar  |
 | **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | ✅ Native                 | ✅ Native                 | All agents support MCP with Agor's built-in self-access server                              |
 | **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Interactive             | ⚠️ Auto-granted          | OpenCode permissions auto-granted by Agor to prevent session hangs                          |
 | **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | ⚠️ Manual                 | ✅ opencode.json          | OpenCode reads project config from `opencode.json`; Claude auto-loads CLAUDE.md             |
@@ -151,15 +151,25 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 
 ### 4. Session Forking
 
-**All agents support forking via Agor's replay mechanism:**
+Forking creates a sibling session that inherits the parent's full conversation history at the fork point, then diverges. The mechanism is SDK-native where the agent supports it.
 
-1. User requests fork at specific message
-2. Agor creates new session
-3. Replays messages up to fork point
-4. New prompts diverge from original
-5. Full genealogy tracking in database
+**Claude Code:** ✅ **SDK-native fork**
 
-**Note:** This is an Agor feature, not SDK-native. Works identically across all agents.
+- On the fork's first prompt, Agor sets `resume: <parent_sdk_session_id>` and `forkSession: true` on the Agent SDK query
+- The SDK assigns a fresh session id derived from the parent's history; subsequent prompts resume that id normally
+- Atomic with the first prompt — no separate replay step
+
+**Codex:** ✅ **App Server `thread/fork`**
+
+- The public `@openai/codex-sdk` does not expose `fork()`, but the local `codex app-server` does via the `thread/fork` JSON-RPC method
+- On the fork's first prompt, Agor spawns `codex app-server` as a short-lived sidecar, calls `thread/fork` with the parent's thread id, and persists the returned thread id on the child session
+- All subsequent prompts go through the normal SDK `resumeThread(...).runStreamed(...)` path — the sidecar is only touched once
+
+**Gemini, Copilot, OpenCode:** ❌ **Not supported yet**
+
+- These SDKs don't expose a fork primitive. Use **spawn subsession** to delegate a fresh-context child instead.
+
+In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_message_index` in its own database so the UI can render the parent ↔ child relationship. The "Ask a side question" (`btw`) action is built on the same fork primitive and therefore lights up wherever fork is supported.
 
 ---
 
@@ -176,7 +186,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 
 - MCP servers configured via per-session `config.toml` under `[mcp_servers.<name>]`
 - Supports both STDIO (`command` + `args`) and streamable HTTP (`url` + `bearer_token_env_var`) transports
-- Agor's built-in MCP server auto-configured for self-awareness (sessions, worktrees, boards, etc.)
+- Agor's built-in MCP server auto-configured for self-awareness (sessions, branches, boards, etc.)
 - Session-level MCP selection via Agor UI, same as Claude and Gemini
 
 **Gemini:** ✅ **Native support**
@@ -260,10 +270,10 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - No manual injection needed
 - Agor sessions inherit project instructions automatically
 
-**Codex:** ✅ **AGENTS.md auto-loading**
+**Codex:** ✅ **Native instructions injection**
 
-- Codex automatically loads `AGENTS.md` from the working directory
-- Agor generates a per-session `AGENTS.md` with project context at the worktree's `CODEX_HOME`
+- Codex automatically loads `AGENTS.md` from the working directory and the user's `~/.codex/`
+- Agor renders per-session project context to a temp file and passes it via the SDK's `model_instructions_file` config — never mutates the user's `~/.codex/` directory
 - No manual injection needed
 
 **Gemini:** ⚠️ **Manual injection**
@@ -283,7 +293,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Reads project configuration from `opencode.json` in the working directory
 - Supports custom instructions, model defaults, and provider configuration
 - Directory-scoped operations ensure the correct project config is loaded
-- Agor passes the worktree path to scope OpenCode to the correct project
+- Agor passes the branch path to scope OpenCode to the correct project
 
 **Recommendation:** Use Claude Code or Codex for projects with rich context requirements. OpenCode is ideal for teams using multiple LLM providers. For Gemini and Copilot, manage instructions in Agor session config.
 
@@ -733,7 +743,7 @@ When expanded:
 
 - First-class MCP server support across Claude Code, Codex, Gemini, and Copilot
 - Session-level MCP server selection via Agor UI
-- Agor's built-in MCP server for self-awareness (sessions, worktrees, boards)
+- Agor's built-in MCP server for self-awareness (sessions, branches, boards)
 - Supports both STDIO and HTTP transports
 
 ---
@@ -821,7 +831,7 @@ OpenCode uses a **client-server model** unlike other agents:
 
 - **Server:** `opencode serve` runs as a standalone process (user-managed, not started by Agor)
 - **SDK:** `@opencode-ai/sdk` provides a REST client that communicates with the server
-- **Directory Scoping:** Agor passes the worktree path via the `x-opencode-directory` header and `directory` query parameter to scope all operations
+- **Directory Scoping:** Agor passes the branch path via the `x-opencode-directory` header and `directory` query parameter to scope all operations
 
 ### Provider Configuration
 
@@ -841,7 +851,7 @@ OpenCode supports MCP servers via its REST API:
 - **Local (STDIO):** Agor injects `command` + `args` configurations
 - **Remote (Streamable HTTP):** Agor injects its built-in MCP server URL with session token
 - OpenCode tries Streamable HTTP first, then falls back to SSE for remote connections
-- MCP servers are added per-session and scoped to the worktree directory
+- MCP servers are added per-session and scoped to the branch directory
 
 ### Limitations
 

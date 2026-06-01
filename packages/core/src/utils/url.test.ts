@@ -1,5 +1,61 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowedHealthCheckUrl, normalizeOptionalHttpUrl } from './url';
+import type { ArtifactID, BoardID, BranchID, SessionID } from '../types/id';
+import {
+  getArtifactUrl,
+  getBoardUrl,
+  getBranchUrl,
+  getSessionUrl,
+  isAllowedHealthCheckUrl,
+  normalizeOptionalHttpUrl,
+} from './url';
+
+// Minimal UUIDv7-shaped IDs for URL builder tests.
+const SESSION_ID = '01927f9d-0000-7000-8000-000000000001' as SessionID;
+const BRANCH_ID = '01927f9d-0000-7000-8000-000000000002' as BranchID;
+const BOARD_ID = '01927f9d-0000-7000-8000-000000000003' as BoardID;
+const ARTIFACT_ID = '01927f9d-0000-7000-8000-000000000004' as ArtifactID;
+
+describe('entity URL builders — fullUrl double-prefix regression', () => {
+  it('produces correct session URL when baseUrl has no /ui suffix', () => {
+    const url = getSessionUrl(SESSION_ID, 'https://agor.example.com');
+    expect(url).toMatch(/^https:\/\/agor\.example\.com\/ui\/s\//);
+    expect(url).not.toContain('/ui/ui/');
+  });
+
+  it('strips /ui suffix from baseUrl to prevent double /ui/ui/ prefix in session URLs', () => {
+    const url = getSessionUrl(SESSION_ID, 'https://agor.example.com/ui');
+    expect(url).toMatch(/^https:\/\/agor\.example\.com\/ui\/s\//);
+    expect(url).not.toContain('/ui/ui/');
+  });
+
+  it('strips trailing slash then /ui suffix (e.g. https://host/ui/)', () => {
+    const url = getSessionUrl(SESSION_ID, 'https://agor.example.com/ui/');
+    expect(url).toMatch(/^https:\/\/agor\.example\.com\/ui\/s\//);
+    expect(url).not.toContain('/ui/ui/');
+  });
+
+  it('produces correct branch URL when baseUrl has /ui suffix', () => {
+    const url = getBranchUrl(BRANCH_ID, 'https://agor.example.com/ui');
+    expect(url).toMatch(/^https:\/\/agor\.example\.com\/ui\/w\//);
+    expect(url).not.toContain('/ui/ui/');
+  });
+
+  it('produces correct board URL when baseUrl has /ui suffix', () => {
+    const url = getBoardUrl(BOARD_ID, 'my-board', 'https://agor.example.com/ui');
+    expect(url).toBe('https://agor.example.com/ui/b/my-board/');
+  });
+
+  it('produces correct artifact URL when baseUrl has /ui suffix', () => {
+    const url = getArtifactUrl(ARTIFACT_ID, 'https://agor.example.com/ui');
+    expect(url).toMatch(/^https:\/\/agor\.example\.com\/ui\/a\//);
+    expect(url).not.toContain('/ui/ui/');
+  });
+
+  it('does not strip /ui from a path-prefixed base (e.g. https://host/myapp)', () => {
+    const url = getSessionUrl(SESSION_ID, 'https://agor.example.com/myapp');
+    expect(url).toMatch(/^https:\/\/agor\.example\.com\/myapp\/ui\/s\//);
+  });
+});
 
 describe('normalizeOptionalHttpUrl', () => {
   it('returns undefined for undefined input', () => {

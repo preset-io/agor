@@ -65,6 +65,7 @@ export const ThemeSwitcher: React.FC<ThemeSwitcherProps> = ({ onOpenThemeEditor 
         type="text"
         icon={<BgColorsOutlined style={{ fontSize: token.fontSizeLG }} />}
         title="Change theme"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       />
     </Dropdown>
   );

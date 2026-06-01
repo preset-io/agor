@@ -11,7 +11,7 @@
  * - Don't split into Client/Session unless runtime separation is clear
  */
 
-import type { Message } from '@agor/core/types';
+import type { AuthCheckResult, Message } from '@agor/core/types';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type {
   CreateSessionConfig,
@@ -197,20 +197,54 @@ export interface ITool {
    */
   normalizedSdkResponse(rawResponse: RawSdkResponse): NormalizedSdkResponse;
 
+  // ============================================================
+  // Auth Check (optional — implement for pre-session validation)
+  // ============================================================
+
   /**
-   * Compute cumulative context window usage for a session
+   * Check whether the tool's credentials are valid without spawning a session.
    *
-   * Each agentic tool implements its own strategy for tracking context:
-   * - **Claude Code**: Sums input/output tokens across tasks, resets on compaction events
-   * - **Codex**: May use SDK's cumulative reporting (if available)
-   * - **Gemini**: May use different tracking approach
-   * - **Others**: Can return current context from latest task's SDK response
+   * Implementations should use the cheapest available mechanism:
+   * - API-key tools: lightweight models-list HTTP call against the provider
+   * - OAuth/CLI tools: CLI auth status check (e.g. `claude auth status`)
+   * - Server-based tools (OpenCode): connectivity check
    *
-   * The computed value is stored in `Task.computed_context_window` for efficient access.
+   * Optional — tools that don't implement this return undefined.
+   *
+   * @param apiKey - Raw API key to validate. When omitted the implementation
+   *   should use credentials already available in its environment.
+   */
+  isAuthenticated?(apiKey?: string): Promise<AuthCheckResult>;
+
+  /**
+   * Compute current context-window occupancy for a session.
+   *
+   * This is the **fallback** path. The authoritative path is the
+   * `rawContextUsage` snapshot returned by `executePromptWithStreaming` —
+   * when that snapshot is present, `base-executor` writes it straight to
+   * `Task.computed_context_window` and never calls this method. Implement
+   * this for tools that don't surface a per-turn authoritative snapshot, or
+   * to provide a best-effort estimate when the snapshot is missing.
+   *
+   * Per-tool strategies:
+   * - **Claude Code**: Sums input/output tokens across tasks, resets on
+   *   compaction events.
+   * - **Codex**: Returns `last_token_usage.total_tokens` if `currentRawSdkResponse`
+   *   happens to be a token_count event, else per-turn `input_tokens` as an
+   *   approximate proxy (under-counts on tool-heavy turns).
+   * - **Gemini**: Cumulative from finished events.
    *
    * @param sessionId - Session ID to compute context for
    * @param currentTaskId - Current task ID (to exclude from computation, as it's not complete yet)
-   * @returns Promise resolving to computed context window usage in tokens
+   * @param currentRawSdkResponse - Raw SDK response from the current turn,
+   *   passed by base-executor during task completion. Required to avoid a
+   *   DB read-after-write deadlock; implementations must NOT query the
+   *   tasks table for the current task when this argument is provided.
+   * @returns Promise resolving to context-window occupancy in tokens
    */
-  computeContextWindow?(sessionId: string, currentTaskId?: string): Promise<number>;
+  computeContextWindow?(
+    sessionId: string,
+    currentTaskId?: string,
+    currentRawSdkResponse?: unknown
+  ): Promise<number>;
 }

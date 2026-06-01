@@ -5,7 +5,7 @@
  * Why this hook exists
  * --------------------
  * Multiple session-creation paths (MCP `agor_sessions_create`, MCP
- * `agor_worktrees_set_zone`, gateway, the UI drag-into-zone handler, raw
+ * `agor_branches_set_zone`, gateway, the UI drag-into-zone handler, raw
  * REST) used to each carry their own copy of the "fetch user → read tool
  * defaults → resolve permission mode → build permission_config" dance. The UI
  * drag handler shipped without it (issue #1064), so dragged sessions were

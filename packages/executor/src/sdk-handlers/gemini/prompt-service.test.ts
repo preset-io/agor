@@ -1,8 +1,8 @@
+import type { BranchRepository } from '@agor/core/db/repositories/branches';
 import type { MCPServerRepository } from '@agor/core/db/repositories/mcp-servers';
 import type { MessagesRepository } from '@agor/core/db/repositories/messages';
 import type { SessionMCPServerRepository } from '@agor/core/db/repositories/session-mcp-servers';
 import type { SessionRepository } from '@agor/core/db/repositories/sessions';
-import type { WorktreeRepository } from '@agor/core/db/repositories/worktrees';
 import type { SessionID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeminiPromptService } from './prompt-service.js';
@@ -11,7 +11,7 @@ describe('GeminiPromptService', () => {
   let service: GeminiPromptService;
   let mockMessagesRepo: MessagesRepository;
   let mockSessionsRepo: SessionRepository;
-  let mockWorktreesRepo: WorktreeRepository;
+  let mockBranchesRepo: BranchRepository;
   let mockMCPServerRepo: MCPServerRepository;
   let mockSessionMCPRepo: SessionMCPServerRepository;
   let originalEnv: NodeJS.ProcessEnv;
@@ -26,9 +26,9 @@ describe('GeminiPromptService', () => {
       findById: vi.fn(),
     } as unknown as SessionRepository;
 
-    mockWorktreesRepo = {
+    mockBranchesRepo = {
       findById: vi.fn(),
-    } as unknown as WorktreeRepository;
+    } as unknown as BranchRepository;
 
     mockMCPServerRepo = {
       findAll: vi.fn().mockResolvedValue([]),
@@ -42,7 +42,7 @@ describe('GeminiPromptService', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       undefined,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined, // reposRepo
       mockMCPServerRepo,
       mockSessionMCPRepo,
@@ -79,7 +79,7 @@ describe('GeminiPromptService', () => {
         mockMessagesRepo,
         mockSessionsRepo,
         undefined,
-        mockWorktreesRepo,
+        mockBranchesRepo,
         undefined, // reposRepo
         mockMCPServerRepo,
         mockSessionMCPRepo,

@@ -2,13 +2,17 @@
 
 **Multiplayer canvas for orchestrating AI coding sessions**
 
-Agor is a real-time collaborative platform for managing Claude Code, Codex, and Gemini AI coding sessions. Visualize work on spatial boards, track git worktrees, and collaborate with your team.
+Agor is a real-time collaborative platform for managing Claude Code, Codex, and Gemini AI coding sessions. Visualize work on spatial boards, track git branches, and collaborate with your team.
 
 ## Installation
+
+Requires Node.js ≥ 22.12.
 
 ```bash
 npm install -g agor-live
 ```
+
+Prefer Homebrew on macOS or Linux? See the main docs for the brew install path.
 
 ## Quick Start
 
@@ -20,13 +24,13 @@ agor init
 agor daemon start
 
 # 3. Open UI in browser
-agor ui open
+agor open
 ```
 
 ## Features
 
 - **Multi-Agent Support**: Claude Code, OpenAI Codex, Google Gemini
-- **Git Integration**: Worktree-based workflows with branch management
+- **Git Integration**: Branch-based workflows with branch management
 - **Spatial Boards**: Visual canvas for organizing sessions and tasks
 - **Real-time Collaboration**: WebSocket-powered multiplayer features
 - **Task Tracking**: First-class task primitives with genealogy

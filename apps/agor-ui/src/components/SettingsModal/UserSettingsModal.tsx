@@ -7,7 +7,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -75,10 +75,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   // Separate forms for each agentic tool tab
   const [claudeForm] = Form.useForm();
+  const [claudeCliForm] = Form.useForm();
   const [codexForm] = Form.useForm();
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
   const [copilotForm] = Form.useForm();
+  const [cursorForm] = Form.useForm();
   const [audioForm] = Form.useForm();
 
   // Per-tool credential presence state, keyed `${tool}.${field}` for spinner
@@ -86,10 +88,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // each time the modal opens.
   const [agenticToolStatus, setAgenticToolStatus] = useState<Record<AgenticToolName, FieldStatus>>({
     'claude-code': {},
+    'claude-code-cli': {},
     codex: {},
     gemini: {},
     opencode: {},
     copilot: {},
+    cursor: {},
   });
   const [savingToolField, setSavingToolField] = useState<Record<string, boolean>>({});
 
@@ -100,10 +104,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Saving state for agentic tool tabs
   const [savingAgenticConfig, setSavingAgenticConfig] = useState<Record<AgenticToolName, boolean>>({
     'claude-code': false,
+    'claude-code-cli': false,
     codex: false,
     gemini: false,
     opencode: false,
     copilot: false,
+    cursor: false,
   });
 
   // Initialize forms when user changes or modal opens
@@ -126,6 +132,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       claudeForm.setFieldsValue(getFormValuesFromConfig('claude-code', defaults?.['claude-code']));
       codexForm.setFieldsValue(getFormValuesFromConfig('codex', defaults?.codex));
       geminiForm.setFieldsValue(getFormValuesFromConfig('gemini', defaults?.gemini));
+      opencodeForm.setFieldsValue(getFormValuesFromConfig('opencode', defaults?.opencode));
+      copilotForm.setFieldsValue(getFormValuesFromConfig('copilot', defaults?.copilot));
+      cursorForm.setFieldsValue(getFormValuesFromConfig('cursor', defaults?.cursor));
 
       // Initialize audio form with user's preferences
       const audioPrefs = userData.preferences?.audio;
@@ -137,7 +146,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
       });
     },
-    [form, claudeForm, codexForm, geminiForm, audioForm]
+    [form, claudeForm, codexForm, geminiForm, opencodeForm, copilotForm, cursorForm, audioForm]
   );
 
   // Initialize when modal opens with user data
@@ -154,10 +163,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     const next: Record<AgenticToolName, FieldStatus> = {
       'claude-code': {},
+      'claude-code-cli': {},
       codex: {},
       gemini: {},
       opencode: {},
       copilot: {},
+      cursor: {},
     };
     const stored = user?.agentic_tools;
     if (stored) {
@@ -183,6 +194,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     claudeForm.resetFields();
     codexForm.resetFields();
     geminiForm.resetFields();
+    opencodeForm.resetFields();
+    copilotForm.resetFields();
+    cursorForm.resetFields();
     setActiveTab('general');
     onClose();
   };
@@ -348,18 +362,22 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const handleAgenticConfigSave = async (tool: AgenticToolName) => {
     if (!user) return;
 
-    const formMap = {
+    const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
       'claude-code': claudeForm,
+      'claude-code-cli': claudeCliForm,
       codex: codexForm,
       gemini: geminiForm,
       opencode: opencodeForm,
       copilot: copilotForm,
+      cursor: cursorForm,
     };
 
     try {
       setSavingAgenticConfig((prev) => ({ ...prev, [tool]: true }));
 
-      const values = formMap[tool].getFieldsValue();
+      const values = formMap[tool].getFieldsValue() as Parameters<
+        typeof buildConfigFromFormValues
+      >[1];
       const newConfig = {
         ...user.default_agentic_config,
         [tool]: buildConfigFromFormValues(tool, values),
@@ -380,12 +398,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   // Handle agentic tool config clear
   const handleAgenticConfigClear = (tool: AgenticToolName) => {
-    const formMap = {
+    const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
       'claude-code': claudeForm,
+      'claude-code-cli': claudeCliForm,
       codex: codexForm,
       gemini: geminiForm,
       opencode: opencodeForm,
       copilot: copilotForm,
+      cursor: cursorForm,
     };
 
     formMap[tool].setFieldsValue(getClearedFormValues(tool));
@@ -499,6 +519,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           icon: <RobotOutlined />,
         },
         {
+          key: 'cursor',
+          label: 'Cursor SDK',
+          icon: <RobotOutlined />,
+        },
+        {
           key: 'copilot',
           label: 'GitHub Copilot',
           icon: <RobotOutlined />,
@@ -588,12 +613,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   : undefined
               }
             >
-              <Select disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}>
-                {/* <Select.Option value="owner">Owner</Select.Option> */}
-                <Select.Option value="admin">Admin</Select.Option>
-                <Select.Option value="member">Member</Select.Option>
-                <Select.Option value="viewer">Viewer</Select.Option>
-              </Select>
+              <Select
+                disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}
+                options={ROLE_OPTIONS.map((opt) => ({
+                  value: opt.value,
+                  label: opt.label,
+                  title: opt.description,
+                }))}
+              />
             </Form.Item>
 
             {/* Only show for admins editing other users */}
@@ -641,25 +668,31 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'personal-api-keys':
         return <PersonalApiKeysTab client={client} />;
       case 'claude-code':
+      case 'claude-code-cli':
       case 'codex':
       case 'gemini':
       case 'opencode':
-      case 'copilot': {
+      case 'copilot':
+      case 'cursor': {
         const toolName = activeTab as AgenticToolName;
-        const formMap = {
+        const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
           'claude-code': claudeForm,
+          'claude-code-cli': claudeCliForm,
           codex: codexForm,
           gemini: geminiForm,
           opencode: opencodeForm,
           copilot: copilotForm,
+          cursor: cursorForm,
         };
         const currentForm = formMap[toolName];
         const displayNames: Record<AgenticToolName, string> = {
           'claude-code': 'Claude Code',
+          'claude-code-cli': 'Claude Code CLI',
           codex: 'Codex',
           gemini: 'Gemini',
           opencode: 'OpenCode',
           copilot: 'Copilot',
+          cursor: 'Cursor SDK',
         };
         // Field set is owned by ApiKeyFields' `TOOL_FIELD_CONFIGS`. Per-field
         // saving spinners are tracked in `savingToolField` keyed by `${tool}.${field}`.
@@ -737,6 +770,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       codex: 'Codex',
       gemini: 'Gemini',
       opencode: 'OpenCode',
+      cursor: 'Cursor SDK',
       copilot: 'GitHub Copilot',
     };
     return titles[activeTab] || 'User Settings';

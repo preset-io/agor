@@ -1,8 +1,12 @@
-import type { SessionID, TaskID, WorktreeID } from '@agor/core/types';
+import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock minimal dependencies
-vi.mock('@agor/core', () => ({ validateDirectory: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@agor/core', () => ({
+  validateDirectory: vi.fn().mockResolvedValue(undefined),
+  // shortId is used in log lines inside query-builder; passthrough mock.
+  shortId: vi.fn((id: string) => id),
+}));
 vi.mock('@agor/core/sdk', () => ({ Claude: { query: vi.fn() } }));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
@@ -13,6 +17,7 @@ vi.mock('../../config.js', () => ({
 }));
 
 import { Claude } from '@agor/core/sdk';
+import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { type QuerySetupDeps, setupQuery } from './query-builder.js';
 
 describe('setupQuery - Local Settings Support', () => {
@@ -29,10 +34,10 @@ describe('setupQuery - Local Settings Support', () => {
       sessionsRepo: {
         findById: vi.fn().mockResolvedValue({
           session_id: 'test-session' as SessionID,
-          worktree_id: 'test-worktree' as WorktreeID,
+          branch_id: 'test-branch' as BranchID,
         }),
       } as any,
-      worktreesRepo: {
+      branchesRepo: {
         findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
       } as any,
       permissionLocks: new Map(),
@@ -53,6 +58,31 @@ describe('setupQuery - Local Settings Support', () => {
       expect.arrayContaining(['user', 'project', 'local'])
     );
   });
+
+  // Pin the literal disallow list so a stray edit to the constant
+  // (e.g. dropping `ExitBranch`) trips this test, not just the plumbing one.
+  // See `constants.ts` for why each name is on the list — #1177 covers
+  // AskUserQuestion; the rest were operator-approved at the same time.
+  // `ScheduleWakeup` added in #1253 (Agor schedules supersede /loop).
+  it('locks the disallowed-tools list to the operator-approved names', () => {
+    expect(CLAUDE_CODE_DISALLOWED_TOOLS).toEqual([
+      'AskUserQuestion',
+      'ExitPlanMode',
+      'EnterBranch',
+      'ExitBranch',
+      'ScheduleWakeup',
+    ]);
+  });
+
+  // Plumbing: whatever's in the constant must reach the SDK.
+  it('passes the Claude Code disallowed-tools list to the SDK', async () => {
+    const deps = createMockDeps();
+
+    await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options.disallowedTools).toEqual([...CLAUDE_CODE_DISALLOWED_TOOLS]);
+  });
 });
 
 describe('setupQuery - canUseTool registration', () => {
@@ -69,10 +99,10 @@ describe('setupQuery - canUseTool registration', () => {
       sessionsRepo: {
         findById: vi.fn().mockResolvedValue({
           session_id: 'test-session' as SessionID,
-          worktree_id: 'test-worktree' as WorktreeID,
+          branch_id: 'test-branch' as BranchID,
         }),
       } as any,
-      worktreesRepo: {
+      branchesRepo: {
         findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
       } as any,
       messagesRepo: {} as any,
@@ -82,17 +112,15 @@ describe('setupQuery - canUseTool registration', () => {
       tasksService: {} as any,
       messagesService: {} as any,
       sessionsService: {} as any,
-      inputRequestService: {} as any,
       permissionLocks: new Map(),
     };
   }
 
-  // Regression guard for the AskUserQuestion widget bug: the SDK's
-  // `requiresUserInteraction` short-circuit forces AskUserQuestion through
-  // canUseTool even in `bypassPermissions` mode. If we don't register the
-  // callback, the SDK falls back to its default deny and surfaces
-  // "Answer questions?" to the model instead of routing to Agor's UI.
-  it('registers canUseTool when permissionMode is "bypassPermissions"', async () => {
+  // With AskUserQuestion now disallowed (#1177), the SDK no longer needs
+  // canUseTool registered in bypass mode — the previous workaround that
+  // forced registration to intercept AskUserQuestion is gone. Bypass mode
+  // should now skip canUseTool entirely, matching SDK semantics.
+  it('does not register canUseTool when permissionMode is "bypassPermissions"', async () => {
     const deps = createPermissionDeps();
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps, {
@@ -101,7 +129,7 @@ describe('setupQuery - canUseTool registration', () => {
     });
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
-    expect(callArgs.options.canUseTool).toBeTypeOf('function');
+    expect(callArgs.options.canUseTool).toBeUndefined();
     expect(callArgs.options.permissionMode).toBe('bypassPermissions');
   });
 

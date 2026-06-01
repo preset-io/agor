@@ -1,5 +1,5 @@
-import Ansi from 'ansi-to-react';
 import type React from 'react';
+import { Ansi } from './ansiImport';
 
 export interface AnsiTextProps {
   children: string;

@@ -3,7 +3,7 @@
  *
  * Builds rich context for Handlebars templates including:
  * - Session information (ID, agent type, permissions)
- * - Worktree details (path, branch, notes)
+ * - Branch details (path, branch, notes)
  * - Repository information (name, slug, path)
  *
  * Used by all SDKs (Claude Code, Gemini, Codex) for dynamic system prompts.
@@ -11,7 +11,8 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { Repo, Session, SessionID, User, UUID, Worktree, WorktreeID } from '../types';
+import { shortId } from '../lib/ids';
+import type { Branch, BranchID, Repo, Session, SessionID, User, UUID } from '../types';
 import { renderTemplate } from './handlebars-helpers';
 
 /**
@@ -22,8 +23,8 @@ interface SessionRepositoryLike {
   findById(id: SessionID): Promise<Session | null>;
 }
 
-interface WorktreeRepositoryLike {
-  findById(id: WorktreeID): Promise<Worktree | null>;
+interface BranchRepositoryLike {
+  findById(id: BranchID): Promise<Branch | null>;
 }
 
 interface RepoRepositoryLike {
@@ -45,18 +46,18 @@ export async function loadAgorSystemPromptTemplate(): Promise<string> {
 /**
  * Build comprehensive session context for template rendering
  *
- * Fetches session, worktree, and repo data to provide rich context
+ * Fetches session, branch, and repo data to provide rich context
  * to agents about their Agor environment.
  *
  * @param sessionId - Current session ID
  * @param repos - Repository instances for data fetching
- * @returns Template context with session/worktree/repo data
+ * @returns Template context with session/branch/repo data
  */
 export async function buildSessionContext(
   sessionId: SessionID,
   repos: {
     sessions: SessionRepositoryLike;
-    worktrees?: WorktreeRepositoryLike;
+    branches?: BranchRepositoryLike;
     repos?: RepoRepositoryLike;
     users?: UserRepositoryLike;
   }
@@ -88,27 +89,27 @@ export async function buildSessionContext(
         }
       } catch (err) {
         console.warn(
-          `[SessionContext] Failed to fetch owner for session ${sessionId.substring(0, 8)}:`,
+          `[SessionContext] Failed to fetch owner for session ${shortId(sessionId)}:`,
           err
         );
       }
     }
 
-    // Fetch worktree data if session has one
-    if (session.worktree_id && repos.worktrees) {
-      const worktree = await repos.worktrees.findById(session.worktree_id);
-      if (worktree) {
-        context.worktree = {
-          worktree_id: worktree.worktree_id,
-          name: worktree.name,
-          path: worktree.path,
-          ref: worktree.ref, // Git ref (branch/tag/commit)
-          notes: worktree.notes,
+    // Fetch branch data if session has one
+    if (session.branch_id && repos.branches) {
+      const branch = await repos.branches.findById(session.branch_id);
+      if (branch) {
+        context.branch = {
+          branch_id: branch.branch_id,
+          name: branch.name,
+          path: branch.path,
+          ref: branch.ref, // Git ref (branch/tag/commit)
+          notes: branch.notes,
         };
 
-        // Fetch repo data if worktree has one
-        if (worktree.repo_id && repos.repos) {
-          const repo = await repos.repos.findById(worktree.repo_id);
+        // Fetch repo data if branch has one
+        if (branch.repo_id && repos.repos) {
+          const repo = await repos.repos.findById(branch.repo_id);
           if (repo) {
             context.repo = {
               repo_id: repo.repo_id,
@@ -132,13 +133,13 @@ export async function buildSessionContext(
  *
  * @param sessionId - Current session ID
  * @param repos - Repository instances for data fetching
- * @returns Rendered system prompt with session/worktree/repo information
+ * @returns Rendered system prompt with session/branch/repo information
  */
 export async function renderAgorSystemPrompt(
   sessionId: SessionID,
   repos: {
     sessions: SessionRepositoryLike;
-    worktrees?: WorktreeRepositoryLike;
+    branches?: BranchRepositoryLike;
     repos?: RepoRepositoryLike;
     users?: UserRepositoryLike;
   }

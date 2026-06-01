@@ -8,35 +8,35 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildSymlinkInfo, getWorktreeSymlinkPath, SymlinkCommands } from './symlink-manager.js';
+import { buildSymlinkInfo, getBranchSymlinkPath, SymlinkCommands } from './symlink-manager.js';
 
 describe('symlink-manager', () => {
   // =========================================================================
   // Path Generation
   // =========================================================================
 
-  describe('getWorktreeSymlinkPath', () => {
+  describe('getBranchSymlinkPath', () => {
     it('generates symlink path in user home', () => {
-      const path = getWorktreeSymlinkPath('alice', 'my-feature');
+      const path = getBranchSymlinkPath('alice', 'my-feature');
       expect(path).toBe('/home/alice/agor/worktrees/my-feature');
     });
 
-    it('handles various worktree names', () => {
-      expect(getWorktreeSymlinkPath('alice', 'feature-123')).toBe(
+    it('handles various branch names', () => {
+      expect(getBranchSymlinkPath('alice', 'feature-123')).toBe(
         '/home/alice/agor/worktrees/feature-123'
       );
-      expect(getWorktreeSymlinkPath('alice', 'bugfix_urgent')).toBe(
+      expect(getBranchSymlinkPath('alice', 'bugfix_urgent')).toBe(
         '/home/alice/agor/worktrees/bugfix_urgent'
       );
     });
 
     it('uses custom home base', () => {
-      const path = getWorktreeSymlinkPath('alice', 'my-feature', '/users');
+      const path = getBranchSymlinkPath('alice', 'my-feature', '/users');
       expect(path).toBe('/users/alice/agor/worktrees/my-feature');
     });
 
     it('handles agor-generated usernames', () => {
-      const path = getWorktreeSymlinkPath('agor_01234567', 'my-feature');
+      const path = getBranchSymlinkPath('agor_01234567', 'my-feature');
       expect(path).toBe('/home/agor_01234567/agor/worktrees/my-feature');
     });
   });
@@ -56,15 +56,15 @@ describe('symlink-manager', () => {
       expect(info).toEqual({
         linkPath: '/home/alice/agor/worktrees/my-feature',
         targetPath: '/home/agor/.agor/worktrees/org/repo/my-feature',
-        worktreeName: 'my-feature',
+        branchName: 'my-feature',
       });
     });
 
     it('uses custom home base', () => {
-      const info = buildSymlinkInfo('alice', 'my-feature', '/data/worktrees/my-feature', '/users');
+      const info = buildSymlinkInfo('alice', 'my-feature', '/data/branches/my-feature', '/users');
 
       expect(info.linkPath).toBe('/users/alice/agor/worktrees/my-feature');
-      expect(info.targetPath).toBe('/data/worktrees/my-feature');
+      expect(info.targetPath).toBe('/data/branches/my-feature');
     });
   });
 
@@ -89,15 +89,15 @@ describe('symlink-manager', () => {
 
     describe('createSymlink', () => {
       it('generates ln -s command', () => {
-        const cmd = SymlinkCommands.createSymlink('/data/worktree', '/home/alice/link');
-        expect(cmd).toBe('ln -s "/data/worktree" "/home/alice/link"');
+        const cmd = SymlinkCommands.createSymlink('/data/branch', '/home/alice/link');
+        expect(cmd).toBe('ln -s "/data/branch" "/home/alice/link"');
       });
     });
 
     describe('createOrReplaceSymlink', () => {
       it('generates ln -sfn command', () => {
-        const cmd = SymlinkCommands.createOrReplaceSymlink('/data/worktree', '/home/alice/link');
-        expect(cmd).toBe('ln -sfn "/data/worktree" "/home/alice/link"');
+        const cmd = SymlinkCommands.createOrReplaceSymlink('/data/branch', '/home/alice/link');
+        expect(cmd).toBe('ln -sfn "/data/branch" "/home/alice/link"');
       });
     });
 
@@ -124,7 +124,7 @@ describe('symlink-manager', () => {
     describe('createSymlinkWithOwnership', () => {
       it('returns array of mkdir + chown + ln + chown -h commands', () => {
         const cmds = SymlinkCommands.createSymlinkWithOwnership(
-          '/data/worktree',
+          '/data/branch',
           '/home/alice/agor/worktrees/my-feature',
           'alice'
         );
@@ -132,7 +132,7 @@ describe('symlink-manager', () => {
         expect(cmds).toEqual([
           'mkdir -p "/home/alice/agor/worktrees"',
           'chown "alice:alice" "/home/alice/agor/worktrees"',
-          'ln -sfn "/data/worktree" "/home/alice/agor/worktrees/my-feature"',
+          'ln -sfn "/data/branch" "/home/alice/agor/worktrees/my-feature"',
           'chown -h "alice:alice" "/home/alice/agor/worktrees/my-feature"',
         ]);
       });
@@ -175,15 +175,15 @@ describe('symlink-manager', () => {
   describe('edge cases', () => {
     it('handles paths with spaces when quoted', () => {
       const cmd = SymlinkCommands.createSymlink(
-        '/data/my worktree',
+        '/data/my branch',
         '/home/alice/agor/worktrees/my feature'
       );
-      expect(cmd).toBe('ln -s "/data/my worktree" "/home/alice/agor/worktrees/my feature"');
+      expect(cmd).toBe('ln -s "/data/my branch" "/home/alice/agor/worktrees/my feature"');
     });
 
-    it('handles empty worktree name gracefully', () => {
+    it('handles empty branch name gracefully', () => {
       // This shouldn't happen in practice, but the function handles it
-      const path = getWorktreeSymlinkPath('alice', '');
+      const path = getBranchSymlinkPath('alice', '');
       expect(path).toBe('/home/alice/agor/worktrees/');
     });
   });

@@ -11,11 +11,14 @@ function buildTurnCompletedEvent(overrides: Partial<CodexSdkResponse> = {}): Cod
 }
 
 function buildUsage(overrides: Record<string, number | undefined> = {}): CodexSdkResponse['usage'] {
+  // Mirror the real @openai/codex-sdk Usage shape (input/cached_input/output/
+  // reasoning_output). The SDK does NOT include total_tokens — normalizer
+  // derives it as input + output.
   return {
     input_tokens: overrides.input_tokens,
-    output_tokens: overrides.output_tokens,
     cached_input_tokens: overrides.cached_input_tokens,
-    total_tokens: overrides.total_tokens,
+    output_tokens: overrides.output_tokens,
+    reasoning_output_tokens: overrides.reasoning_output_tokens,
   } as CodexSdkResponse['usage'];
 }
 
@@ -40,7 +43,7 @@ describe('CodexNormalizer', () => {
     expect(result.contextWindowLimit).toBe(
       models.getCodexContextWindowLimit(models.DEFAULT_CODEX_MODEL)
     );
-    expect(result.primaryModel).toBe(models.DEFAULT_CODEX_MODEL);
+    expect(result.primaryModel).toBeUndefined();
     expect(result.durationMs).toBeUndefined();
   });
 
@@ -63,7 +66,28 @@ describe('CodexNormalizer', () => {
       cacheReadTokens: 300,
       cacheCreationTokens: 0,
     });
-    expect(result.primaryModel).toBe(models.DEFAULT_CODEX_MODEL);
+    expect(result.primaryModel).toBeUndefined();
+  });
+
+  it('does not double-count reasoning_output_tokens against totals', () => {
+    // reasoning_output_tokens is a subset of output_tokens per the Responses API
+    // shape Codex inherits — totalTokens must remain input + output.
+    const normalizer = new CodexNormalizer();
+    const event = buildTurnCompletedEvent({
+      usage: buildUsage({
+        input_tokens: 1_000,
+        output_tokens: 600,
+        cached_input_tokens: 100,
+        reasoning_output_tokens: 250,
+      }),
+    });
+
+    const result = normalizer.normalize(event);
+
+    expect(result.tokenUsage.inputTokens).toBe(1_000);
+    expect(result.tokenUsage.outputTokens).toBe(600);
+    expect(result.tokenUsage.totalTokens).toBe(1_600);
+    expect(result.tokenUsage.cacheReadTokens).toBe(100);
   });
 
   it('defaults missing usage fields to zero', () => {
@@ -83,7 +107,7 @@ describe('CodexNormalizer', () => {
     });
   });
 
-  it('uses context window limit lookup for the default model', () => {
+  it('uses context window limit lookup for the default model when no hint is given', () => {
     const contextWindowLimit = 123_456;
     const lookupSpy = vi
       .spyOn(models, 'getCodexContextWindowLimit')
@@ -103,5 +127,26 @@ describe('CodexNormalizer', () => {
     expect(lookupSpy).toHaveBeenCalledWith(models.DEFAULT_CODEX_MODEL);
     expect(result.contextWindowLimit).toBe(contextWindowLimit);
     expect(result.tokenUsage.totalTokens).toBe(30);
+  });
+
+  it('uses modelHint for context-window-limit lookup but not for primaryModel', () => {
+    const lookupSpy = vi.spyOn(models, 'getCodexContextWindowLimit');
+    const normalizer = new CodexNormalizer();
+
+    const result = normalizer.normalize(buildTurnCompletedEvent({ usage: buildUsage({}) }), {
+      modelHint: 'gpt-5.5',
+    });
+
+    expect(lookupSpy).toHaveBeenCalledWith('gpt-5.5');
+    expect(result.primaryModel).toBeUndefined();
+  });
+
+  it('falls back to DEFAULT_CODEX_MODEL when modelHint is empty', () => {
+    const lookupSpy = vi.spyOn(models, 'getCodexContextWindowLimit');
+    const normalizer = new CodexNormalizer();
+
+    normalizer.normalize(buildTurnCompletedEvent({ usage: buildUsage({}) }), { modelHint: '' });
+
+    expect(lookupSpy).toHaveBeenCalledWith(models.DEFAULT_CODEX_MODEL);
   });
 });

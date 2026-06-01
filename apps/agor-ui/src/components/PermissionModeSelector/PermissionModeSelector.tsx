@@ -1,4 +1,5 @@
 import type { CodexApprovalPolicy, CodexSandboxMode, PermissionMode } from '@agor-live/client';
+import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import {
   EditOutlined,
   ExperimentOutlined,
@@ -19,7 +20,14 @@ interface ModeOption {
 export interface PermissionModeSelectorProps {
   value?: PermissionMode;
   onChange?: (value: PermissionMode) => void;
-  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+  agentic_tool?:
+    | 'claude-code'
+    | 'claude-code-cli'
+    | 'codex'
+    | 'gemini'
+    | 'opencode'
+    | 'copilot'
+    | 'cursor';
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
   /**
@@ -129,7 +137,7 @@ const GEMINI_MODES: ModeOption[] = [
   },
 ];
 
-// Copilot permission modes (GitHub Copilot SDK - same semantics as Claude Code)
+// Copilot autonomous permission modes.
 const COPILOT_MODES: ModeOption[] = [
   {
     mode: 'default',
@@ -151,6 +159,19 @@ const COPILOT_MODES: ModeOption[] = [
     description: 'Auto-approve all operations without prompting',
     icon: <UnlockOutlined />,
     color: '#faad14', // Orange/yellow
+  },
+];
+
+// Cursor SDK is currently autonomous in Agor: @cursor/sdk does not expose a
+// blocking permission callback that we can proxy to the Agor UI. Keep the UI
+// honest by showing only the effective mode instead of borrowed Copilot modes.
+const CURSOR_MODES: ModeOption[] = [
+  {
+    mode: 'bypassPermissions',
+    label: 'Autonomous',
+    description: 'Cursor SDK runs autonomously; Agor cannot intercept permission requests yet',
+    icon: <UnlockOutlined />,
+    color: '#faad14',
   },
 ];
 
@@ -233,21 +254,10 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
       return OPENCODE_MODES;
     case 'copilot':
       return COPILOT_MODES;
+    case 'cursor':
+      return CURSOR_MODES;
     default:
       return CLAUDE_CODE_MODES;
-  }
-};
-
-/** Get the default permission mode for a given agentic tool */
-const getDefaultMode = (tool: PermissionModeSelectorProps['agentic_tool']): PermissionMode => {
-  switch (tool) {
-    case 'codex':
-      return 'auto';
-    case 'gemini':
-    case 'opencode':
-      return 'autoEdit';
-    default:
-      return 'acceptEdits';
   }
 };
 
@@ -258,13 +268,22 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   compact = false,
   iconOnly = false,
   size = 'middle',
-  codexSandboxMode = 'workspace-write',
-  codexApprovalPolicy = 'on-request',
+  codexSandboxMode,
+  codexApprovalPolicy,
   onCodexChange,
 }) => {
   const { token } = theme.useToken();
   const modes = getModesForTool(agentic_tool);
-  const effectiveValue = value || getDefaultMode(agentic_tool);
+  const effectiveValue =
+    agentic_tool === 'cursor'
+      ? 'bypassPermissions'
+      : value || getDefaultPermissionMode(agentic_tool);
+  // Fill Codex prop defaults from the resolved mode so the dropdown shows
+  // the same values the executor will actually run with for a session
+  // missing explicit sub-config.
+  const codexDefaults = mapToCodexPermissionConfig(effectiveValue);
+  const effectiveCodexSandboxMode = codexSandboxMode ?? codexDefaults.sandboxMode;
+  const effectiveCodexApprovalPolicy = codexApprovalPolicy ?? codexDefaults.approvalPolicy;
 
   // Compact mode: render as Select dropdown(s)
   if (compact) {
@@ -274,8 +293,8 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
       return (
         <Space size={4}>
           <Select
-            value={codexSandboxMode}
-            onChange={(val) => onCodexChange(val, codexApprovalPolicy)}
+            value={effectiveCodexSandboxMode}
+            onChange={(val) => onCodexChange(val, effectiveCodexApprovalPolicy)}
             size={size}
             placeholder="Sandbox"
             popupMatchSelectWidth={false}
@@ -296,8 +315,8 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             )}
           />
           <Select
-            value={codexApprovalPolicy}
-            onChange={(val) => onCodexChange(codexSandboxMode, val)}
+            value={effectiveCodexApprovalPolicy}
+            onChange={(val) => onCodexChange(effectiveCodexSandboxMode, val)}
             size={size}
             placeholder="Approval"
             popupMatchSelectWidth={false}

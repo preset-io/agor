@@ -2,22 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { buildZoneTriggerContext } from './zone-trigger-context';
 
 describe('buildZoneTriggerContext', () => {
-  it('exposes worktree custom_context as both `context` and `custom_context` (BC alias)', () => {
+  it('exposes branch custom_context as both `context` and `custom_context` (BC alias)', () => {
     const ctx = buildZoneTriggerContext({
-      worktree: {
+      branch: {
         name: 'wt',
         ref: 'main',
         custom_context: { issue: 'PROJ-42' },
       },
     });
-    expect(ctx.worktree).toMatchObject({
+    expect(ctx.branch).toMatchObject({
       name: 'wt',
       ref: 'main',
       context: { issue: 'PROJ-42' },
       custom_context: { issue: 'PROJ-42' },
     });
     // Both keys reference the same object (templates can use either path).
-    const w = ctx.worktree as Record<string, unknown>;
+    const w = ctx.branch as Record<string, unknown>;
     expect(w.context).toBe(w.custom_context);
   });
 
@@ -51,9 +51,34 @@ describe('buildZoneTriggerContext', () => {
     expect(ctx.zone).toEqual({ label: 'In Review', status: 'active' });
   });
 
+  it('exposes `worktree` as a v0.19 backwards-compat alias of `branch`', () => {
+    // Legacy zone-trigger templates authored before the Worktree → Branch
+    // rename reference `{{worktree.name}}` / `{{worktree.context.foo}}`. The
+    // alias must render identical output to `{{branch.*}}` so those templates
+    // keep working unchanged.
+    const ctx = buildZoneTriggerContext({
+      branch: {
+        name: 'feat-auth',
+        ref: 'feat-auth',
+        issue_url: 'https://github.com/org/repo/issues/42',
+        notes: 'wip',
+        custom_context: { issue: 'PROJ-42' },
+      },
+    });
+    expect(ctx.worktree).toBe(ctx.branch);
+    expect(ctx.worktree).toMatchObject({
+      name: 'feat-auth',
+      ref: 'feat-auth',
+      issue_url: 'https://github.com/org/repo/issues/42',
+      notes: 'wip',
+      context: { issue: 'PROJ-42' },
+      custom_context: { issue: 'PROJ-42' },
+    });
+  });
+
   it('defaults all fields to safe empties when inputs are absent', () => {
     const ctx = buildZoneTriggerContext({});
-    expect(ctx.worktree).toEqual({
+    expect(ctx.branch).toEqual({
       name: '',
       ref: '',
       issue_url: '',

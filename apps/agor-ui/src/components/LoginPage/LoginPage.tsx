@@ -16,11 +16,21 @@ interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<boolean>;
   loading?: boolean;
   error?: string | null;
+  externalLaunchLoginRedirectUrl?: string;
 }
 
-export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
+export function LoginPage({
+  onLogin,
+  loading = false,
+  error,
+  externalLaunchLoginRedirectUrl,
+}: LoginPageProps) {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const [showLocalLogin, setShowLocalLogin] = useState(false);
+  const useExternalLaunch = !!externalLaunchLoginRedirectUrl;
+  const showLoginForm = !useExternalLaunch || showLocalLogin;
+  const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;
 
   const handleSubmit = async (values: { email: string; password: string }) => {
     setSubmitting(true);
@@ -115,23 +125,25 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
         {error && (
           <Alert
             type="error"
-            title="Login Failed"
+            title={isLaunchError ? 'Launch sign-in failed' : 'Login Failed'}
             description={
               <Space orientation="vertical" size="small" style={{ width: '100%' }}>
                 <div>{error}</div>
-                <div
-                  style={{
-                    marginTop: 8,
-                    paddingTop: 8,
-                    borderTop: '1px solid rgba(255,255,255,0.1)',
-                  }}
-                >
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    💡 First time setting up? Create an admin user:
-                  </Text>
-                  <br />
-                  <code style={{ fontSize: 11 }}>agor user create-admin</code>
-                </div>
+                {!isLaunchError && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      paddingTop: 8,
+                      borderTop: '1px solid rgba(255,255,255,0.1)',
+                    }}
+                  >
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      💡 First time setting up? Create an admin user:
+                    </Text>
+                    <br />
+                    <code style={{ fontSize: 11 }}>agor user create-admin</code>
+                  </div>
+                )}
               </Space>
             }
             showIcon
@@ -140,48 +152,87 @@ export function LoginPage({ onLogin, loading = false, error }: LoginPageProps) {
           />
         )}
 
-        {/* Login Form */}
-        <Form form={form} name="login" layout="vertical" onFinish={handleSubmit} autoComplete="off">
-          <Form.Item
-            name="email"
-            rules={[
-              { required: true, message: 'Please enter your email' },
-              { type: 'email', message: 'Please enter a valid email' },
-            ]}
-          >
-            <Input
-              prefix={<MailOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
-              placeholder="Email address"
-              autoComplete="email"
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="password"
-            rules={[{ required: true, message: 'Please enter your password' }]}
-          >
-            <Input.Password
-              prefix={<LockOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
-              placeholder="Password"
-              autoComplete="current-password"
-            />
-          </Form.Item>
-
-          <Form.Item style={{ marginBottom: 8 }}>
-            <Button type="primary" htmlType="submit" loading={submitting || loading} block>
-              Sign In
+        {useExternalLaunch && (
+          <Space orientation="vertical" size="middle" style={{ width: '100%', marginBottom: 24 }}>
+            {!error && (
+              <Alert
+                type="info"
+                title="Open from your workspace"
+                description="This runtime is configured for external launch sign-in. Return to your workspace to open a fresh launch link."
+                showIcon
+              />
+            )}
+            <Button
+              type="primary"
+              href={externalLaunchLoginRedirectUrl}
+              block
+              data-testid="external-launch-return"
+            >
+              Return to workspace
             </Button>
-          </Form.Item>
-        </Form>
+            {!showLocalLogin && (
+              <Button type="link" block onClick={() => setShowLocalLogin(true)}>
+                Use local login instead
+              </Button>
+            )}
+          </Space>
+        )}
+
+        {/* Login Form */}
+        {showLoginForm && (
+          <>
+            {useExternalLaunch && <Divider style={{ margin: '0 0 24px 0' }}>Local login</Divider>}
+            <Form
+              form={form}
+              name="login"
+              layout="vertical"
+              onFinish={handleSubmit}
+              autoComplete="off"
+            >
+              <Form.Item
+                name="email"
+                rules={[
+                  { required: true, message: 'Please enter your email' },
+                  { type: 'email', message: 'Please enter a valid email' },
+                ]}
+              >
+                <Input
+                  prefix={<MailOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
+                  placeholder="Email address"
+                  autoComplete="email"
+                />
+              </Form.Item>
+
+              <Form.Item
+                name="password"
+                rules={[{ required: true, message: 'Please enter your password' }]}
+              >
+                <Input.Password
+                  prefix={<LockOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
+                  placeholder="Password"
+                  autoComplete="current-password"
+                />
+              </Form.Item>
+
+              <Form.Item style={{ marginBottom: 8 }}>
+                <Button type="primary" htmlType="submit" loading={submitting || loading} block>
+                  Sign In
+                </Button>
+              </Form.Item>
+            </Form>
+          </>
+        )}
 
         {/* Footer */}
-        <div style={{ textAlign: 'center', marginTop: 24 }}>
-          <Space orientation="vertical" size={4}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              New user? <code>agor user create-admin</code>
-            </Text>
-          </Space>
-        </div>
+        {showLoginForm && (
+          <div style={{ textAlign: 'center', marginTop: 24 }}>
+            <Space orientation="vertical" size={4}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                New user? <code>agor user create-admin</code>
+              </Text>
+            </Space>
+          </div>
+        )}
       </Card>
     </div>
   );

@@ -10,6 +10,10 @@
 import type { ExpressApplication, Service } from '@agor/core/feathers';
 import type {
   Board,
+  Branch,
+  BranchID,
+  BranchPermissionLevel,
+  CloneRepositoryResult,
   AuthenticatedParams as CoreAuthenticatedParams,
   AuthenticatedUser as CoreAuthenticatedUser,
   CreateHookContext as CoreCreateHookContext,
@@ -19,9 +23,6 @@ import type {
   Repo,
   Session,
   Task,
-  Worktree,
-  WorktreeID,
-  WorktreePermissionLevel,
 } from '@agor/core/types';
 import type { ExecuteTaskData } from './services/sessions.js';
 
@@ -109,6 +110,12 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   ): Promise<Task>;
   fail(id: string, data: { error?: string }, params?: FeathersParams): Promise<Task>;
   getOrphaned(params?: FeathersParams): Promise<Task[]>;
+  getActiveWithExecutorHeartbeat(params?: FeathersParams): Promise<Task[]>;
+  failForLostHeartbeat(
+    id: string,
+    data: { completed_at?: string; error_message: string },
+    params?: FeathersParams
+  ): Promise<Task>;
 }
 
 /**
@@ -117,10 +124,21 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
 export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersParams> {
   addLocalRepository(data: { path: string; slug?: string }, params?: FeathersParams): Promise<Repo>;
   cloneRepository(
-    data: { url: string; name?: string; slug?: string; destination?: string },
+    data: { url: string; name?: string; slug?: string; default_branch?: string },
+    params?: FeathersParams
+  ): Promise<CloneRepositoryResult>;
+  updateMetadata(
+    id: string,
+    patch: {
+      name?: string;
+      slug?: string;
+      repo_type?: 'remote' | 'local';
+      remote_url?: string;
+      default_branch?: string;
+    },
     params?: FeathersParams
   ): Promise<Repo>;
-  createWorktree(
+  createBranch(
     id: string,
     data: {
       name: string;
@@ -133,20 +151,20 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
       pull_request_url?: string;
       boardId?: string;
       zoneId?: string;
-      others_can?: WorktreePermissionLevel;
+      others_can?: BranchPermissionLevel;
       others_fs_access?: 'none' | 'read' | 'write';
     },
     params?: FeathersParams
-  ): Promise<Worktree>;
-  removeWorktree(id: string, name: string, params?: FeathersParams): Promise<Repo>;
+  ): Promise<Branch>;
+  removeBranch(id: string, name: string, params?: FeathersParams): Promise<Repo>;
   importFromAgorYml(
     id: string,
-    data: { worktree_id: string },
+    data: { branch_id: string },
     params?: FeathersParams
   ): Promise<Repo>;
   exportToAgorYml(
     id: string,
-    data: { worktree_id: string },
+    data: { branch_id: string },
     params?: FeathersParams
   ): Promise<{ path: string }>;
 }
@@ -187,6 +205,11 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
   toYaml(boardId: string, params?: FeathersParams): Promise<string>;
   fromYaml(yamlContent: string, params?: FeathersParams): Promise<Board>;
   clone(boardId: string, newName: string, params?: FeathersParams): Promise<Board>;
+  setPrimaryAssistant(
+    data: { id?: string; boardId?: string; branchId: string },
+    params?: FeathersParams
+  ): Promise<Board>;
+  clearPrimaryAssistant(boardId: string, params?: FeathersParams): Promise<Board>;
   archive(id: string, params?: FeathersParams): Promise<Board>;
   unarchive(id: string, params?: FeathersParams): Promise<Board>;
 }
@@ -199,21 +222,21 @@ export interface MessagesServiceImpl extends Service<Message, Partial<Message>, 
 }
 
 /**
- * Worktrees service with custom methods (server-side implementation)
+ * Branches service with custom methods (server-side implementation)
  */
-export interface WorktreesServiceImpl extends Service<Worktree, Partial<Worktree>, FeathersParams> {
-  startEnvironment(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
-  stopEnvironment(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
-  restartEnvironment(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
-  nukeEnvironment(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
+export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, FeathersParams> {
+  startEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  stopEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  restartEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  nukeEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   renderEnvironment(
-    id: WorktreeID,
+    id: BranchID,
     data: { variant?: string } | undefined,
     params?: FeathersParams
-  ): Promise<Worktree>;
-  checkHealth(id: WorktreeID, params?: FeathersParams): Promise<Worktree>;
+  ): Promise<Branch>;
+  checkHealth(id: BranchID, params?: FeathersParams): Promise<Branch>;
   getLogs(
-    id: WorktreeID,
+    id: BranchID,
     params?: FeathersParams
   ): Promise<{
     logs: string;
@@ -222,16 +245,16 @@ export interface WorktreesServiceImpl extends Service<Worktree, Partial<Worktree
     truncated?: boolean;
   }>;
   archiveOrDelete(
-    id: WorktreeID,
+    id: BranchID,
     options: {
       metadataAction: 'archive' | 'delete';
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     },
     params?: FeathersParams
-  ): Promise<Worktree | { deleted: true; worktree_id: WorktreeID }>;
+  ): Promise<Branch | { deleted: true; branch_id: BranchID }>;
   unarchive(
-    id: WorktreeID,
+    id: BranchID,
     options?: { boardId?: import('@agor/core/types').BoardID },
     params?: FeathersParams
-  ): Promise<Worktree>;
+  ): Promise<Branch>;
 }

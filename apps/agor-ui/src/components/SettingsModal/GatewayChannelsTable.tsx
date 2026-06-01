@@ -1,6 +1,7 @@
 import type {
   AgenticToolName,
   AgorClient,
+  Branch,
   ChannelType,
   GatewayAgenticConfig,
   GatewayChannel,
@@ -9,7 +10,6 @@ import type {
   PermissionMode,
   User,
   UUID,
-  Worktree,
 } from '@agor-live/client';
 import {
   CopyOutlined,
@@ -29,7 +29,6 @@ import {
 } from '@ant-design/icons';
 import {
   Alert,
-  message as antdMessage,
   Badge,
   Button,
   Checkbox,
@@ -63,12 +62,12 @@ import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { JSONEditor, validateJSON } from '../JSONEditor';
-import { WorktreeSelect } from './WorktreeSelect';
+import { BranchSelect } from './BranchSelect';
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
   gatewayChannelById: Map<string, GatewayChannel>;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
@@ -269,7 +268,7 @@ const ChannelFormFields: React.FC<{
   mode: 'create' | 'edit';
   channelType: ChannelType;
   onChannelTypeChange: (type: ChannelType) => void;
-  worktreeById: Map<string, Worktree>;
+  branchById: Map<string, Branch>;
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
   selectedAgent: string;
@@ -287,7 +286,7 @@ const ChannelFormFields: React.FC<{
   mode,
   channelType,
   onChannelTypeChange,
-  worktreeById,
+  branchById,
   userById,
   mcpServerById,
   selectedAgent,
@@ -300,6 +299,8 @@ const ChannelFormFields: React.FC<{
   githubLoading,
   githubError,
 }) => {
+  const { showError } = useThemedMessage();
+
   // Watch message source settings for showing warnings/scope requirements
   const enableChannels = Form.useWatch('enable_channels', form) ?? false;
   const enableGroups = Form.useWatch('enable_groups', form) ?? false;
@@ -340,16 +341,16 @@ const ChannelFormFields: React.FC<{
       </Form.Item>
 
       <Form.Item
-        label="Target Worktree"
-        name="target_worktree_id"
-        rules={[{ required: true, message: 'Please select a target worktree' }]}
+        label="Target Branch"
+        name="target_branch_id"
+        rules={[{ required: true, message: 'Please select a target branch' }]}
         tooltip={
           mode === 'create'
-            ? 'New sessions from this channel will be created in this worktree'
+            ? 'New sessions from this channel will be created in this branch'
             : undefined
         }
       >
-        <WorktreeSelect worktreeById={worktreeById} />
+        <BranchSelect branchById={branchById} />
       </Form.Item>
 
       {/* For GitHub channels, "Post messages as" lives in the User Alignment section */}
@@ -461,9 +462,7 @@ const ChannelFormFields: React.FC<{
                   try {
                     const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
                     if (!accessToken) {
-                      antdMessage.error(
-                        'You must be logged in as an admin to install the GitHub App.'
-                      );
+                      showError('You must be logged in as an admin to install the GitHub App.');
                       return;
                     }
                     const stateRes = await fetch(`${daemonUrl}/api/github/setup/state`, {
@@ -481,18 +480,18 @@ const ChannelFormFields: React.FC<{
                         typeof body?.error === 'string'
                           ? body.error
                           : `Failed to start GitHub App install (HTTP ${stateRes.status})`;
-                      antdMessage.error(err);
+                      showError(err);
                       return;
                     }
                     const { state } = (await stateRes.json()) as { state?: string };
                     if (!state) {
-                      antdMessage.error('Daemon did not return an install state token.');
+                      showError('Daemon did not return an install state token.');
                       return;
                     }
                     params.set('state', state);
                     window.open(`${daemonUrl}/api/github/setup/new?${params.toString()}`, '_blank');
                   } catch (err) {
-                    antdMessage.error(
+                    showError(
                       err instanceof Error ? err.message : 'Failed to initiate GitHub App install'
                     );
                   }
@@ -1164,7 +1163,7 @@ const ChannelFormFields: React.FC<{
 export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   client,
   gatewayChannelById,
-  worktreeById,
+  branchById,
   userById,
   mcpServerById,
   currentUser,
@@ -1183,11 +1182,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [createdChannelType, setCreatedChannelType] = useState<ChannelType | null>(null);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
-  const [referencedWorktreesById, setReferencedWorktreesById] = useState<Map<string, Worktree>>(
+  const [referencedBranchesById, setReferencedBranchesById] = useState<Map<string, Branch>>(
     () => new Map()
   );
-  const loadingReferencedWorktreeIds = useRef<Set<string>>(new Set());
-  const referencedWorktreesByIdRef = useRef<Map<string, Worktree>>(new Map());
+  const loadingReferencedBranchIds = useRef<Set<string>>(new Set());
+  const referencedBranchesByIdRef = useRef<Map<string, Branch>>(new Map());
 
   // ── GitHub App Setup State (lifted from ChannelFormFields) ──
   const [githubStep, setGithubStep] = useState(0);
@@ -1213,50 +1212,50 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
   }, [location.search, navigate]);
 
-  // Keep referenced target worktrees resolvable in CRUD even when archived worktrees
+  // Keep referenced target branches resolvable in CRUD even when archived branches
   // are excluded from the core store.
   useEffect(() => {
-    referencedWorktreesByIdRef.current = referencedWorktreesById;
-  }, [referencedWorktreesById]);
+    referencedBranchesByIdRef.current = referencedBranchesById;
+  }, [referencedBranchesById]);
 
   useEffect(() => {
     if (!client) return;
 
     const targetIds = new Set<string>();
     for (const channel of gatewayChannelById.values()) {
-      if (channel.target_worktree_id) {
-        targetIds.add(channel.target_worktree_id);
+      if (channel.target_branch_id) {
+        targetIds.add(channel.target_branch_id);
       }
     }
 
     const missingIds = Array.from(targetIds).filter(
-      (id) => !worktreeById.has(id) && !referencedWorktreesByIdRef.current.has(id)
+      (id) => !branchById.has(id) && !referencedBranchesByIdRef.current.has(id)
     );
     if (missingIds.length === 0) return;
 
     let cancelled = false;
     void Promise.all(
       missingIds.map(async (id) => {
-        if (loadingReferencedWorktreeIds.current.has(id)) return null;
-        loadingReferencedWorktreeIds.current.add(id);
+        if (loadingReferencedBranchIds.current.has(id)) return null;
+        loadingReferencedBranchIds.current.add(id);
         try {
-          const worktree = (await client.service('worktrees').get(id)) as Worktree;
-          return worktree;
+          const branch = (await client.service('branches').get(id)) as Branch;
+          return branch;
         } catch {
           return null;
         } finally {
-          loadingReferencedWorktreeIds.current.delete(id);
+          loadingReferencedBranchIds.current.delete(id);
         }
       })
     ).then((results) => {
       if (cancelled) return;
-      const resolved = results.filter((wt): wt is Worktree => wt !== null);
+      const resolved = results.filter((wt): wt is Branch => wt !== null);
       if (resolved.length === 0) return;
 
-      setReferencedWorktreesById((prev) => {
+      setReferencedBranchesById((prev) => {
         const next = new Map(prev);
         for (const wt of resolved) {
-          next.set(wt.worktree_id, wt);
+          next.set(wt.branch_id, wt);
         }
         return next;
       });
@@ -1265,20 +1264,20 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [client, gatewayChannelById, worktreeById]);
+  }, [client, gatewayChannelById, branchById]);
 
-  const worktreeOptionsById = useMemo(() => {
-    const merged = new Map<string, Worktree>();
-    for (const wt of worktreeById.values()) {
-      merged.set(wt.worktree_id, wt);
+  const branchOptionsById = useMemo(() => {
+    const merged = new Map<string, Branch>();
+    for (const wt of branchById.values()) {
+      merged.set(wt.branch_id, wt);
     }
-    for (const wt of referencedWorktreesById.values()) {
-      if (!merged.has(wt.worktree_id)) {
-        merged.set(wt.worktree_id, wt);
+    for (const wt of referencedBranchesById.values()) {
+      if (!merged.has(wt.branch_id)) {
+        merged.set(wt.branch_id, wt);
       }
     }
     return merged;
-  }, [referencedWorktreesById, worktreeById]);
+  }, [referencedBranchesById, branchById]);
 
   // No automatic credential fetch — user provides App ID and PEM manually
 
@@ -1393,7 +1392,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     return {
       name: values.name as string,
       channel_type: values.channel_type as ChannelType,
-      target_worktree_id: values.target_worktree_id as UUID,
+      target_branch_id: values.target_branch_id as UUID,
       agor_user_id: values.agor_user_id as UUID,
       config,
       agentic_config: agenticConfig,
@@ -1444,7 +1443,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     const formValues: Record<string, unknown> = {
       name: channel.name,
       channel_type: channel.channel_type,
-      target_worktree_id: channel.target_worktree_id,
+      target_branch_id: channel.target_branch_id,
       agor_user_id: channel.agor_user_id,
       enabled: channel.enabled,
       // Agentic config fields
@@ -1559,17 +1558,15 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       ),
     },
     {
-      title: 'Target Worktree',
-      dataIndex: 'target_worktree_id',
-      key: 'target_worktree_id',
+      title: 'Target Branch',
+      dataIndex: 'target_branch_id',
+      key: 'target_branch_id',
       width: 180,
-      render: (worktreeId: string) => {
-        const wt = worktreeOptionsById.get(worktreeId);
+      render: (branchId: string) => {
+        const wt = branchOptionsById.get(branchId);
         return (
           <Typography.Text type="secondary">
-            {wt
-              ? `${wt.name || wt.ref || worktreeId}${wt.archived ? ' (archived)' : ''}`
-              : worktreeId}
+            {wt ? `${wt.name || wt.ref || branchId}${wt.archived ? ' (archived)' : ''}` : branchId}
           </Typography.Text>
         );
       },
@@ -1655,7 +1652,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           <>
             The Message Gateway is a <strong>beta feature</strong>. Connecting external messaging
             platforms grants anyone who can message your bot potential access to Agor sessions and
-            the underlying worktree environment.{' '}
+            the underlying branch environment.{' '}
             <Typography.Link
               href="https://docs.agor.live/guide/message-gateway"
               target="_blank"
@@ -1720,7 +1717,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             mode="create"
             channelType={channelType}
             onChannelTypeChange={setChannelType}
-            worktreeById={worktreeOptionsById}
+            branchById={branchOptionsById}
             userById={userById}
             mcpServerById={mcpServerById}
             selectedAgent={selectedAgent}
@@ -1755,7 +1752,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             mode="edit"
             channelType={channelType}
             onChannelTypeChange={setChannelType}
-            worktreeById={worktreeOptionsById}
+            branchById={branchOptionsById}
             userById={userById}
             mcpServerById={mcpServerById}
             selectedAgent={selectedAgent}

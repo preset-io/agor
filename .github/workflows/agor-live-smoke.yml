@@ -35,6 +35,10 @@ on:
       - 'pnpm-lock.yaml'
       - '.github/workflows/agor-live-smoke.yml'
   workflow_dispatch:
+  # Allow `heavy-checks.yml` (nightly + push-to-main) to invoke this
+  # unconditionally — bypasses the path filter so we catch regressions
+  # that slip in via paths the filter doesn't cover.
+  workflow_call:
 
 env:
   PNPM_VERSION: '9.15.1'
@@ -46,9 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 
@@ -211,7 +215,7 @@ jobs:
 
       - name: Upload daemon log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: daemon-log
           path: ${{ runner.temp }}/smoke-home/.agor/logs/

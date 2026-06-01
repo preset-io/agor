@@ -7,6 +7,7 @@ import {
   ToolOutlined,
 } from '@ant-design/icons';
 import { Space, Tooltip, Typography, theme } from 'antd';
+import { parseGitStateSha } from '../../utils/gitState';
 import { Tag } from '../Tag';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 
@@ -31,10 +32,9 @@ const TaskListItem = ({ task, onClick, compact = false }: TaskListItemProps) => 
   const shaAtEnd = task.git_state.sha_at_end;
   const hasTransition = shaAtEnd && shaAtEnd !== 'unknown' && shaAtEnd !== shaAtStart;
 
-  // Check if end state is dirty (or start state if no end)
+  // Prefer end-state SHA when available, fall back to start
   const displaySha = shaAtEnd && shaAtEnd !== 'unknown' ? shaAtEnd : shaAtStart;
-  const isDirty = displaySha?.endsWith('-dirty');
-  const cleanSha = displaySha?.replace('-dirty', '');
+  const { cleanSha, isDirty } = parseGitStateSha(displaySha);
 
   // Truncate prompt if too long
   const description = task.full_prompt || 'Untitled task';

@@ -17,18 +17,18 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
+    "@cursor/sdk": "^1.0.15",
     "@github/copilot-sdk": "^0.2.2",
-    "@iarna/toml": "^2.2.5",
     "@opencode-ai/sdk": "^1.2.20",
     "diff": "^7.0.0",
     "node-pty": "^1.2.0-beta.12",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/diff": "^6.0.0",
     "@types/node": "^24.6.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.7"
   },
   "files": [
     "dist",

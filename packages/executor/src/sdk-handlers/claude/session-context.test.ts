@@ -20,12 +20,13 @@ describe('generateSessionContext', () => {
     expect(context).toContain('https://agor.live');
   });
 
-  it('should extract correct 8-char short ID', () => {
+  it('should extract canonical short ID via shortId()', () => {
     const sessionId = 'abcd1234-5678-7c35-a8f3-9d2e1c4b5a6f' as SessionID;
     const context = generateSessionContext(sessionId);
 
+    // Canonical short form is SHORT_ID_LENGTH chars (24) with hyphens stripped.
     expect(context).toContain('abcd1234');
-    expect(context).toContain('short: `abcd1234`');
+    expect(context).toContain('short: `abcd123456787c35a8f39d2e`');
   });
 
   it('should include markdown formatting', () => {

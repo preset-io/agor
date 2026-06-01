@@ -29,25 +29,26 @@
 export type UUID = string & { readonly __brand: 'UUID' };
 
 /**
- * Short ID prefix (8-16 characters, no hyphens)
+ * Short ID prefix (hex, no hyphens, length `SHORT_ID_LENGTH`).
  *
- * Used for display in UI/CLI and user input.
- * Maps to full UUID via prefix matching.
+ * Used everywhere a user sees an ID — URLs, notifications, pills, logs, CLI.
+ * Maps back to full UUID via prefix matching (`findByShortIdPrefix`).
  *
- * Collision behavior for UUIDv7-based IDs:
- * - The first 48 bits of every ID are a millisecond Unix timestamp, so any
- *   prefix of 12 hex chars or fewer carries zero random bits and collides
- *   deterministically for IDs created in the same time bucket (e.g. 8 chars
- *   collide within ~65.5 s, 10 chars within ~256 ms, 12 chars within 1 ms).
- * - 16 hex chars covers the full timestamp plus the 12 random bits of
- *   `rand_a`, giving ~4,096 random slots per millisecond — safe for URLs.
- *   See `URL_SHORT_ID_LENGTH`.
- * - Display contexts (compact pills, tables) tolerate collisions because
- *   hover/tooltips reveal the full UUID; URL contexts do not.
+ * Collision behavior for our UUIDv7-based IDs (same-millisecond, e.g. during
+ * parent fan-out spawning):
+ * - Chars 0–11 are the Unix-ms timestamp (deterministic per ms).
+ * - Char 12 is the version nibble "7" (deterministic).
+ * - Chars 13–31 are derived from per-call random bytes — `generateId()`
+ *   passes fresh `randomBytes(16)` to `uuid.v7()`, bypassing the library's
+ *   monotonic-counter `seq` state. Only the 2 variant bits at char 16 are
+ *   fixed; everything else is truly random per call.
+ *
+ * Canonical display length is **24 chars**: 11 hex chars of per-call random
+ * entropy = ~42 random bits per ms ≈ 4.4T slots → 50% birthday collision
+ * at ~2.5M same-ms IDs. Past any realistic Agor workload. See `SHORT_ID_LENGTH`.
  *
  * @example
- * const display: ShortID = "01933e4a";                  // 8 chars (pills/tables)
- * const url: ShortID = "01933e4a7b897c35";              // 16 chars (URL routing)
+ * const display: ShortID = "01933e4a7b897c35a8f39d2e"; // 24 chars (canonical)
  */
 export type ShortID = string;
 
@@ -83,25 +84,106 @@ export type IdInput = string;
 export type AnyShortId = UUID | ShortID | string;
 
 /**
- * Length of short IDs used in URLs (e.g. `/b/<board>/<session>/`).
+ * Canonical length of short IDs displayed to users (URLs, notifications,
+ * pills, logs, CLI). One number, used consistently.
  *
- * UUIDv7's first 48 bits are a millisecond timestamp, so an 8-char prefix
- * carries zero random bits and collides deterministically for any two IDs
- * created within the same ~65.5s window. 16 hex chars covers the full 48-bit
- * timestamp plus the 12 random bits of `rand_a`, giving ~4,096 random slots
- * per millisecond — safe against realistic spawn bursts. Display contexts
- * (pills, tables) keep the compact 8-char default via `toShortId`.
+ * Why 24:
+ * - UUIDv7's first 48 bits are a millisecond timestamp (chars 0–11), and
+ *   char 12 is the fixed version nibble "7" — both deterministic for IDs
+ *   born in the same ms.
+ * - Our `generateId()` passes fresh `randomBytes(16)` to `uuid.v7()`,
+ *   bypassing the library's per-ms `seq` counter (RFC 9562 method 3).
+ *   That makes chars 13–31 per-call random (minus 2 fixed variant bits
+ *   at char 16) — 74 random bits per call total.
+ * - At 24 chars we get 11 random hex chars after the deterministic prefix,
+ *   ≈ 42 random bits per ms (≈ 4.4T slots) — 50% birthday collision at
+ *   ~2.5M same-ms IDs, 1% at ~290K. Past any realistic Agor workload by
+ *   orders of magnitude.
+ *
+ * Inputs from users can be shorter — the centralized resolver
+ * (`resolveByShortIdPrefix`) handles "too short to be unique" by throwing
+ * `AmbiguousIdError` rather than guessing.
  */
-export const URL_SHORT_ID_LENGTH = 16;
+export const SHORT_ID_LENGTH = 24;
 
 /**
- * Extract short ID prefix from a UUID-like string.
+ * @deprecated Use `SHORT_ID_LENGTH` — kept temporarily for any external
+ * imports during the migration. Will be removed.
+ */
+export const URL_SHORT_ID_LENGTH = SHORT_ID_LENGTH;
+
+/**
+ * Extract a short-ID prefix of `length` hex chars from a UUID-like string.
+ *
+ * **Lower-level primitive.** Most code should call `shortId(id)` (canonical
+ * `SHORT_ID_LENGTH`-char display form). Use this only when you have a
+ * documented reason to pick a non-canonical length — e.g.
+ * `findMinimumPrefixLength` searching for the shortest disambiguating prefix
+ * in a fixed set, or the Unix-name carve-out in `unix/group-manager.ts`.
  *
  * Removes hyphens and truncates to the requested length (max 32).
- * Shared by core and client surfaces to keep short-ID behavior consistent.
  */
-export function toShortId(id: AnyShortId, length: number = 8): ShortID {
+export function toShortId(id: AnyShortId, length: number = SHORT_ID_LENGTH): ShortID {
   return id.replace(/-/g, '').slice(0, Math.min(length, 32));
+}
+
+/**
+ * Render a UUID as the canonical short ID for display.
+ *
+ * Always returns `SHORT_ID_LENGTH` hex chars (24). Use this everywhere a
+ * user sees an ID — URLs, notifications, pills, logs, CLI — so every site
+ * agrees on one collision-safe shape. No length parameter, by design: if
+ * every site picks its own length, we get back the "Child session
+ * 019e372a has completed" same-millisecond-collision bug this helper was
+ * created to prevent. See `SHORT_ID_LENGTH` for collision math.
+ *
+ * Lives here (rather than `lib/ids.ts`) so it's available from the
+ * browser-safe `@agor/core/client` surface for the React UI.
+ *
+ * @example
+ * shortId("01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f") // => "01933e4a7b897c35a8f3"
+ */
+export function shortId(id: AnyShortId): ShortID {
+  return toShortId(id, SHORT_ID_LENGTH);
+}
+
+/**
+ * Convert a (possibly-hyphenated) short-ID prefix into a SQL `LIKE`-friendly
+ * pattern that matches the canonical hyphenated UUID storage format.
+ *
+ * Repositories store IDs as full hyphenated UUIDs (e.g. `019e0eca-0d2d-7…`).
+ * Users pass prefixes in mixed forms — bare hex (`019e0eca0d2d`), partial
+ * hyphenated (`019e0eca-0d2d`), or copy-pasted from `AmbiguousIdError`
+ * (which prints the full hyphenated UUID, so a prefix-truncation often
+ * lands on a hyphen boundary). Without normalization, `LIKE '019e0eca0d2d%'`
+ * can never match a row whose ID is `019e0eca-0d2d-7XXX-…` because of the
+ * hyphen at position 8.
+ *
+ * This strips any hyphens from the input and re-inserts them at the
+ * canonical UUID positions (8, 12, 16, 20 hex chars) so the resulting
+ * pattern matches the stored format. Non-hex / empty inputs pass through
+ * to a pattern that will naturally not match any UUID column.
+ *
+ * @example
+ *   prefixToLikePattern('019e0eca')        === '019e0eca%'
+ *   prefixToLikePattern('019e0eca0d2d')    === '019e0eca-0d2d%'
+ *   prefixToLikePattern('019e0eca-0d2d')   === '019e0eca-0d2d%'
+ *   prefixToLikePattern('019E0ECA')        === '019e0eca%' // lowercased
+ */
+export function prefixToLikePattern(prefix: string): string {
+  const clean = prefix.replace(/-/g, '').toLowerCase();
+  // Hyphens land at hex positions 8, 12, 16, 20 in a canonical UUID.
+  const breaks = [8, 12, 16, 20];
+  let out = '';
+  let cursor = 0;
+  for (const b of breaks) {
+    if (b >= clean.length) {
+      return `${out}${clean.slice(cursor)}%`;
+    }
+    out += `${clean.slice(cursor, b)}-`;
+    cursor = b;
+  }
+  return `${out}${clean.slice(cursor)}%`;
 }
 
 /**
@@ -205,14 +287,14 @@ export type MessageID = UUID;
 export type UserID = UUID;
 
 /**
- * Worktree identifier
+ * Branch identifier
  *
- * Uniquely identifies a git worktree (isolated work context).
+ * Uniquely identifies a git branch (isolated work context).
  *
  * @example
- * const worktreeId: WorktreeID = "0193g1h2-3i4j-7k5l-a8f3-9d2e1c4b5a6f";
+ * const branchId: BranchID = "0193g1h2-3i4j-7k5l-a8f3-9d2e1c4b5a6f";
  */
-export type WorktreeID = UUID;
+export type BranchID = UUID;
 
 /**
  * Repository identifier
@@ -228,7 +310,7 @@ export type RepoID = UUID;
  * Comment identifier
  *
  * Uniquely identifies a board comment (human-to-human conversation).
- * Comments can be attached to boards, sessions, tasks, messages, or worktrees.
+ * Comments can be attached to boards, sessions, tasks, messages, or branches.
  *
  * @example
  * const commentId: CommentID = "0193h1i2-3j4k-7l5m-a8f3-9d2e1c4b5a6f";

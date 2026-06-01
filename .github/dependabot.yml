@@ -68,6 +68,13 @@ updates:
       # agor-live-only deps are managed manually when packaging/releasing
       - dependency-name: 'md-to-slack'
       - dependency-name: 'uuidv7'
+      # Hold Next major bumps: agor-docs is on Nextra 3 (pages router) which
+      # calls removed-in-Next-16 internals (`pkg.init()` on
+      # `next/dist/compiled/webpack/webpack.js`). Lifting requires migrating
+      # docs to Nextra 4 + the app router. Until then, stay on 15.x — security
+      # advisories are backported to the 15 line (see Next `backport` dist-tag).
+      - dependency-name: 'next'
+        update-types: ['version-update:semver-major']
 
   # GitHub Actions workflow dependencies
   - package-ecosystem: 'github-actions'

@@ -1,4 +1,13 @@
-import type { ActiveUser, Board, BoardID, User, Worktree } from '@agor-live/client';
+import type {
+  AgorClient,
+  Artifact,
+  Board,
+  BoardID,
+  Branch,
+  MCPServer,
+  Session,
+  User,
+} from '@agor-live/client';
 import {
   ApiOutlined,
   CommentOutlined,
@@ -27,15 +36,17 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
-import { Facepile } from '../Facepile';
+import { GlobalSearch } from '../GlobalSearch';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ThemeSwitcher } from '../ThemeSwitcher';
+import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
 
 const { Header } = Layout;
 
 export interface AppHeaderProps {
   user?: User | null;
-  activeUsers?: ActiveUser[];
+  presenceClient?: AgorClient | null;
+  presenceUsers?: User[];
   currentUserId?: string;
   connected?: boolean;
   connecting?: boolean;
@@ -55,8 +66,8 @@ export interface AppHeaderProps {
   boards?: Board[];
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
-  worktreeById?: Map<string, Worktree>;
-  boardById?: Map<string, Board>; // For looking up board names
+  branchById: Map<string, Branch>;
+  boardById: Map<string, Board>; // For looking up board names; required because GlobalSearch hands it to useAppNavigation for slug-aware path building
   onUserClick?: (
     userId: string,
     boardId?: BoardID,
@@ -68,6 +79,12 @@ export interface AppHeaderProps {
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
+  /** Live entity maps for the global-search dropdown. Passed through from App.tsx.
+   * GlobalSearch calls useAppNavigation directly, so it needs boardById (for
+   * slug-aware path building) on top of the entity maps. */
+  sessionById: Map<string, Session>;
+  artifactById: Map<string, Artifact>;
+  mcpServerById: Map<string, MCPServer>;
 }
 
 const RecentBoardPills: React.FC<{
@@ -110,7 +127,8 @@ const RecentBoardPills: React.FC<{
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
   user,
-  activeUsers = [],
+  presenceClient = null,
+  presenceUsers = [],
   currentUserId,
   connected = false,
   connecting = false,
@@ -130,12 +148,15 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   boards = [],
   currentBoardId,
   onBoardChange,
-  worktreeById = new Map(),
+  branchById,
   boardById,
   onUserClick,
   recentBoards = [],
   instanceLabel,
   instanceDescription,
+  sessionById,
+  artifactById,
+  mcpServerById,
 }) => {
   const { token } = theme.useToken();
   // Single source of truth for "is the daemon usable right now?". Captures
@@ -145,6 +166,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const userEmoji = user?.emoji || '👤';
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
+  const headerIconButtonStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  } as const;
   // Check if audio notifications are enabled
   const audioEnabled = user?.preferences?.audio?.enabled ?? false;
 
@@ -248,12 +274,23 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             See docs/disconnected-state-design.md. */}
         {currentBoardId && boards.length > 0 && (
           <>
+            {currentBoardName && (
+              <Tooltip title="Toggle board panel" placement="bottom">
+                <Button
+                  type="text"
+                  icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
+                  style={headerIconButtonStyle}
+                  onClick={onMenuClick}
+                  disabled={mutationDisabled}
+                />
+              </Tooltip>
+            )}
             <div style={{ minWidth: 200 }}>
               <BoardSwitcher
                 boards={boards}
                 currentBoardId={currentBoardId}
                 onBoardChange={onBoardChange || (() => {})}
-                worktreeById={worktreeById}
+                branchById={branchById}
               />
             </div>
             <RecentBoardPills
@@ -264,27 +301,19 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           </>
         )}
         {currentBoardName && (
-          <Tooltip title="Toggle session drawer" placement="bottom">
-            <Button
-              type="text"
-              icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
-              onClick={onMenuClick}
-              disabled={mutationDisabled}
-            />
-          </Tooltip>
-        )}
-        {currentBoardName && (
           <Badge
             count={unreadCommentsCount}
             offset={[-2, 2]}
             style={{
               backgroundColor: hasUserMentions ? token.colorError : token.colorPrimaryBgHover,
             }}
+            className="app-header-icon-badge"
           >
-            <Tooltip title="Toggle comments panel" placement="bottom">
+            <Tooltip title="Show comments tab" placement="bottom">
               <Button
                 type="text"
                 icon={<CommentOutlined style={{ fontSize: token.fontSizeLG }} />}
+                style={headerIconButtonStyle}
                 onClick={onCommentsClick}
                 disabled={mutationDisabled}
               />
@@ -299,26 +328,30 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           connecting={connecting}
           onRetry={onRetryConnection}
         />
-        {activeUsers.length > 0 && (
-          <>
-            <Facepile
-              activeUsers={activeUsers}
-              currentUserId={currentUserId}
-              maxVisible={5}
-              boardById={boardById}
-              onUserClick={onUserClick}
-              style={{
-                marginRight: 8,
-              }}
-            />
-            <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
-          </>
-        )}
+        <GlobalPresenceFacepile
+          client={presenceClient}
+          currentBoardId={(currentBoardId as BoardID | undefined) ?? null}
+          users={presenceUsers}
+          currentUser={user}
+          boardById={boardById}
+          onUserClick={onUserClick}
+        />
+        <GlobalSearch
+          currentUserId={currentUserId}
+          sessionById={sessionById}
+          branchById={branchById}
+          artifactById={artifactById}
+          boardById={boardById}
+          mcpServerById={mcpServerById}
+          onSettingsClick={onSettingsClick}
+        />
+        <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         {eventStreamEnabled && (
           <Tooltip title="Live Event Stream" placement="bottom">
             <Button
               type="text"
               icon={<ApiOutlined style={{ fontSize: token.fontSizeLG }} />}
+              style={headerIconButtonStyle}
               onClick={onEventStreamClick}
               disabled={mutationDisabled}
             />
@@ -328,6 +361,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <Button
             type="text"
             icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+            style={headerIconButtonStyle}
             href="https://agor.live/guide/getting-started"
             target="_blank"
             rel="noopener noreferrer"
@@ -338,6 +372,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <Button
             type="text"
             icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
+            style={headerIconButtonStyle}
             onClick={onSettingsClick}
             disabled={mutationDisabled}
           />
@@ -354,6 +389,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <Button
               type="text"
               icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />}
+              style={headerIconButtonStyle}
               disabled={mutationDisabled}
             />
           </Tooltip>

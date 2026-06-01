@@ -6,6 +6,7 @@
  */
 
 import type { UserApiKeysRepository } from '@agor/core/db';
+import { shortId } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams } from '@agor/core/types';
 
@@ -34,9 +35,7 @@ export function createUserApiKeysService(apiKeysRepo: UserApiKeysRepository) {
       }
 
       const result = await apiKeysRepo.create(user.user_id, name);
-      console.log(
-        `[API Keys] Created: ${result.key.prefix}... for user ${user.user_id.substring(0, 8)}`
-      );
+      console.log(`[API Keys] Created: ${result.key.prefix}... for user ${shortId(user.user_id)}`);
       return result;
     },
 
@@ -61,9 +60,7 @@ export function createUserApiKeysService(apiKeysRepo: UserApiKeysRepository) {
       if (!user) throw new NotAuthenticated('Authentication required');
 
       await apiKeysRepo.delete(id, user.user_id);
-      console.log(
-        `[API Keys] Deleted: ${id.substring(0, 8)} for user ${user.user_id.substring(0, 8)}`
-      );
+      console.log(`[API Keys] Deleted: ${shortId(id)} for user ${shortId(user.user_id)}`);
       return { id };
     },
   };

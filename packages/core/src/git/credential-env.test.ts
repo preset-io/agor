@@ -18,7 +18,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildAuthHeaderEnv,
   buildGitConfigEnv,
+  buildGitConfigParameters,
   createGit,
+  ensureGitRemoteUrl,
   parseHostFromGitUrl,
   redactGitEnv,
 } from './index';
@@ -317,6 +319,244 @@ describe('createGit() end-to-end env propagation', () => {
       // set globally; confirm it's invisible here.
       const value = (await git.raw(['config', '--global', '--get', 'user.email'])).trim();
       expect(value).toBe('');
+    });
+  });
+});
+
+describe('buildGitConfigParameters', () => {
+  it('returns an empty string for an empty list (caller treats as "do not set")', () => {
+    expect(buildGitConfigParameters([])).toBe('');
+  });
+
+  it('single-quotes a single pair', () => {
+    expect(buildGitConfigParameters(['transfer.credentialsInUrl=die'])).toBe(
+      "'transfer.credentialsInUrl=die'"
+    );
+  });
+
+  it('space-joins multiple pairs', () => {
+    expect(buildGitConfigParameters(['a=1', 'b=2', 'c=3'])).toBe("'a=1' 'b=2' 'c=3'");
+  });
+
+  it('strips empty / whitespace-only entries', () => {
+    expect(buildGitConfigParameters(['a=1', '', '   ', 'b=2'])).toBe("'a=1' 'b=2'");
+  });
+
+  it('escapes embedded single quotes via close-escape-reopen', () => {
+    expect(buildGitConfigParameters([`http.proxy=it's-fine`])).toBe(`'http.proxy=it'\\''s-fine'`);
+  });
+});
+
+describe('GIT_CONFIG_PARAMETERS end-to-end', () => {
+  function withTempRepoSync<T>(fn: (repoPath: string) => T): T {
+    const repoPath = mkdtempSync(join(tmpdir(), 'agor-git-params-it-'));
+    const init = spawnSync('git', ['init', '-q', repoPath], { stdio: 'pipe' });
+    if (init.status !== 0) {
+      rmSync(repoPath, { recursive: true, force: true });
+      throw new Error(`git init failed: ${init.stderr?.toString()}`);
+    }
+    try {
+      return fn(repoPath);
+    } finally {
+      rmSync(repoPath, { recursive: true, force: true });
+    }
+  }
+
+  function gitVersion(): [number, number] {
+    const out = spawnSync('git', ['--version'], { stdio: 'pipe' });
+    const match = out.stdout.toString().match(/git version (\d+)\.(\d+)/);
+    if (!match) return [0, 0];
+    return [Number.parseInt(match[1], 10), Number.parseInt(match[2], 10)];
+  }
+  function gitAtLeast(major: number, minor: number): boolean {
+    const [m, n] = gitVersion();
+    return m > major || (m === major && n >= minor);
+  }
+
+  it('git reads the configured pair back via `git config --get`', () => {
+    withTempRepoSync((repoPath) => {
+      const result = spawnSync(
+        'git',
+        ['-C', repoPath, 'config', '--get', 'transfer.credentialsInUrl'],
+        {
+          stdio: 'pipe',
+          env: {
+            ...process.env,
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_PARAMETERS: buildGitConfigParameters(['transfer.credentialsInUrl=die']),
+          },
+        }
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout.toString().trim()).toBe('die');
+    });
+  });
+
+  it('git reads multiple pairs back when GIT_CONFIG_PARAMETERS carries several', () => {
+    withTempRepoSync((repoPath) => {
+      const params = buildGitConfigParameters([
+        'protocol.ext.allow=never',
+        'protocol.file.allow=user',
+        'transfer.credentialsInUrl=die',
+      ]);
+      const askOne = (key: string) =>
+        spawnSync('git', ['-C', repoPath, 'config', '--get', key], {
+          stdio: 'pipe',
+          env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_PARAMETERS: params },
+        });
+
+      expect(askOne('transfer.credentialsInUrl').stdout.toString().trim()).toBe('die');
+      expect(askOne('protocol.file.allow').stdout.toString().trim()).toBe('user');
+      expect(askOne('protocol.ext.allow').stdout.toString().trim()).toBe('never');
+    });
+  });
+
+  it('without the env var, the setting is absent (rules out ambient /etc/gitconfig)', () => {
+    withTempRepoSync((repoPath) => {
+      const result = spawnSync(
+        'git',
+        ['-C', repoPath, 'config', '--get', 'transfer.credentialsInUrl'],
+        {
+          stdio: 'pipe',
+          env: {
+            ...process.env,
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_PARAMETERS: '',
+          },
+        }
+      );
+      // `git config --get` exits 1 with empty stdout when the key is unset.
+      expect(result.status).not.toBe(0);
+      expect(result.stdout.toString().trim()).toBe('');
+    });
+  });
+
+  // transfer.credentialsInUrl is scoped to configured `remote.<name>.url`
+  // (not pushurl, not argv) — so we configure the remote with creds, then
+  // run a transfer op against the remote name.
+  it.skipIf(!gitAtLeast(2, 41))(
+    'transfer.credentialsInUrl=die refuses a creds-bearing remote.<name>.url (git 2.41+)',
+    () => {
+      withTempRepoSync((repoPath) => {
+        const taintedUrl = 'https://USER:tok@example.invalid/foo.git';
+        const addRemote = spawnSync(
+          'git',
+          ['-C', repoPath, 'remote', 'add', 'origin', taintedUrl],
+          { stdio: 'pipe' }
+        );
+        expect(addRemote.status).toBe(0);
+
+        const result = spawnSync('git', ['-C', repoPath, 'ls-remote', 'origin'], {
+          stdio: 'pipe',
+          env: {
+            ...process.env,
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_PARAMETERS: buildGitConfigParameters(['transfer.credentialsInUrl=die']),
+            GIT_TERMINAL_PROMPT: '0',
+          },
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr.toString()).toMatch(/credential|refus/i);
+      });
+    }
+  );
+});
+
+describe('ensureGitRemoteUrl', () => {
+  function withInitedRepo<T>(fn: (repoPath: string) => Promise<T>): Promise<T> {
+    const repoPath = mkdtempSync(join(tmpdir(), 'agor-ensure-url-it-'));
+    const init = spawnSync('git', ['init', '-q', repoPath], { stdio: 'pipe' });
+    if (init.status !== 0) {
+      rmSync(repoPath, { recursive: true, force: true });
+      throw new Error(`git init failed: ${init.stderr?.toString()}`);
+    }
+    return fn(repoPath).finally(() => {
+      rmSync(repoPath, { recursive: true, force: true });
+    });
+  }
+
+  it('returns {changed: false, previousUrl: undefined} when the remote does not exist', async () => {
+    await withInitedRepo(async (repoPath) => {
+      // Fresh repo, no origin yet. Helper must NOT create the remote.
+      const result = await ensureGitRemoteUrl(repoPath, 'origin', 'https://github.com/foo/bar.git');
+      expect(result).toEqual({ changed: false, previousUrl: undefined });
+
+      // And confirm origin was NOT created as a side effect.
+      const remotes = spawnSync('git', ['-C', repoPath, 'remote'], { stdio: 'pipe' });
+      expect(remotes.stdout.toString().trim()).toBe('');
+    });
+  });
+
+  it('returns {changed: false} when the remote URL already matches', async () => {
+    await withInitedRepo(async (repoPath) => {
+      const url = 'https://github.com/foo/bar.git';
+      spawnSync('git', ['-C', repoPath, 'remote', 'add', 'origin', url], { stdio: 'pipe' });
+
+      const result = await ensureGitRemoteUrl(repoPath, 'origin', url);
+      expect(result).toEqual({ changed: false, previousUrl: url });
+    });
+  });
+
+  it('realigns and reports the previous URL when it has drifted', async () => {
+    await withInitedRepo(async (repoPath) => {
+      const taintedUrl =
+        'https://x-access-token:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAA@github.com/foo/bar.git';
+      const canonicalUrl = 'https://github.com/foo/bar.git';
+
+      // Simulate the leak: a tool baked a token into origin's URL.
+      spawnSync('git', ['-C', repoPath, 'remote', 'add', 'origin', taintedUrl], { stdio: 'pipe' });
+
+      const result = await ensureGitRemoteUrl(repoPath, 'origin', canonicalUrl);
+      expect(result.changed).toBe(true);
+      expect(result.previousUrl).toBe(taintedUrl);
+
+      // And the on-disk config is now clean.
+      const current = spawnSync('git', ['-C', repoPath, 'config', '--get', 'remote.origin.url'], {
+        stdio: 'pipe',
+      });
+      expect(current.stdout.toString().trim()).toBe(canonicalUrl);
+    });
+  });
+
+  it('leaves user-added remotes alone', async () => {
+    await withInitedRepo(async (repoPath) => {
+      const origin = 'https://github.com/foo/bar.git';
+      const upstream = 'https://github.com/upstream/bar.git';
+      spawnSync('git', ['-C', repoPath, 'remote', 'add', 'origin', origin], { stdio: 'pipe' });
+      spawnSync('git', ['-C', repoPath, 'remote', 'add', 'upstream', upstream], { stdio: 'pipe' });
+
+      // Realign only origin. Upstream must not be touched.
+      await ensureGitRemoteUrl(repoPath, 'origin', 'https://github.com/foo/REPLACED.git');
+      const current = spawnSync('git', ['-C', repoPath, 'config', '--get', 'remote.upstream.url'], {
+        stdio: 'pipe',
+      });
+      expect(current.stdout.toString().trim()).toBe(upstream);
+    });
+  });
+
+  it('collapses a multi-valued remote.origin.url to one canonical value', async () => {
+    // git config --add semantics: same key, multiple values. Both
+    // simple-git getRemotes() and `git remote set-url` mishandle this.
+    await withInitedRepo(async (repoPath) => {
+      const canonicalUrl = 'https://github.com/foo/bar.git';
+      const taintedUrl =
+        'https://x-access-token:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAA@evil.example/foo/bar.git';
+      spawnSync('git', ['-C', repoPath, 'remote', 'add', 'origin', canonicalUrl], {
+        stdio: 'pipe',
+      });
+      spawnSync('git', ['-C', repoPath, 'config', '--add', 'remote.origin.url', taintedUrl], {
+        stdio: 'pipe',
+      });
+
+      const result = await ensureGitRemoteUrl(repoPath, 'origin', canonicalUrl);
+      expect(result.changed).toBe(true);
+      expect(result.previousUrl?.split('\n').sort()).toEqual([canonicalUrl, taintedUrl].sort());
+
+      const after = spawnSync('git', ['-C', repoPath, 'config', '--get-all', 'remote.origin.url'], {
+        stdio: 'pipe',
+      });
+      const afterValues = after.stdout.toString().trim().split('\n').filter(Boolean);
+      expect(afterValues).toEqual([canonicalUrl]);
     });
   });
 });

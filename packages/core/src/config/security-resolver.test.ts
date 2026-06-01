@@ -15,6 +15,11 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import {
+  getDefaultGitConfigParameters,
+  gitConfigParameterLooksSecret,
+  redactUrlUserinfo,
+  renderGitConfigParametersForLog,
+  resolveGitConfigParameters,
   resolveSecurity,
   SANDPACK_CSP_FRAME_SRC,
   SANDPACK_CSP_WORKER_SRC,
@@ -322,5 +327,242 @@ describe('resolveSecurity — headerValue serialization', () => {
     // `name` or `name src1 src2`. An empty-array override yields just `script-src`.
     const segments = csp.headerValue.split('; ');
     expect(segments).toContain('script-src');
+  });
+});
+
+// ============================================================================
+// security.git_config_parameters
+// ============================================================================
+
+describe('getDefaultGitConfigParameters', () => {
+  it('returns a fresh mutable copy each call (callers must not mutate the shared default)', () => {
+    const a = getDefaultGitConfigParameters();
+    const b = getDefaultGitConfigParameters();
+    expect(a).toEqual(b);
+    expect(a).not.toBe(b); // distinct array references
+    // And mutating one must not affect the next call's result.
+    a.push('mutation.canary=true');
+    expect(getDefaultGitConfigParameters()).not.toContain('mutation.canary=true');
+  });
+
+  it('includes all the documented defense pairs (regression for accidental removal)', () => {
+    const defaults = getDefaultGitConfigParameters();
+    expect(defaults).toContain('transfer.credentialsInUrl=die');
+    expect(defaults).toContain('protocol.file.allow=user');
+    expect(defaults).toContain('protocol.ext.allow=never');
+    expect(defaults).toContain('core.protectHFS=true');
+    expect(defaults).toContain('core.protectNTFS=true');
+  });
+
+  // fsckObjects deliberately not defaulted — pinned so a future "tighten the
+  // defaults" pass has to make a conscious decision.
+  it('does NOT include fsckObjects', () => {
+    const defaults = getDefaultGitConfigParameters();
+    expect(defaults).not.toContain('fetch.fsckObjects=true');
+    expect(defaults).not.toContain('transfer.fsckObjects=true');
+  });
+});
+
+describe('resolveGitConfigParameters', () => {
+  it('returns the defaults when configured value is undefined', () => {
+    const out = resolveGitConfigParameters(undefined);
+    expect(out).toEqual(getDefaultGitConfigParameters());
+    expect(out).toContain('transfer.credentialsInUrl=die');
+  });
+
+  it('returns the defaults for an empty object (both extras and override unset)', () => {
+    expect(resolveGitConfigParameters({})).toEqual(getDefaultGitConfigParameters());
+  });
+
+  it('extras: empty array == no extras (defaults remain)', () => {
+    expect(resolveGitConfigParameters({ extras: [] })).toEqual(getDefaultGitConfigParameters());
+  });
+
+  it('extras: appends new keys to the defaults', () => {
+    const out = resolveGitConfigParameters({
+      extras: ['fetch.fsckObjects=true', 'http.proxy=http://corp:3128'],
+    });
+    expect(out).toContain('transfer.credentialsInUrl=die');
+    expect(out).toContain('protocol.file.allow=user');
+    expect(out).toContain('fetch.fsckObjects=true');
+    expect(out).toContain('http.proxy=http://corp:3128');
+  });
+
+  it('extras: same key as a default overrides the default value (extras win)', () => {
+    const out = resolveGitConfigParameters({ extras: ['transfer.credentialsInUrl=warn'] });
+    expect(out).toContain('transfer.credentialsInUrl=warn');
+    expect(out).not.toContain('transfer.credentialsInUrl=die');
+    expect(out).toContain('protocol.file.allow=user');
+  });
+
+  it('extras: emits at most one entry per key (default + extras collision)', () => {
+    const out = resolveGitConfigParameters({ extras: ['transfer.credentialsInUrl=warn'] });
+    const credKeyEntries = out.filter((p) => p.startsWith('transfer.credentialsInUrl='));
+    expect(credKeyEntries).toEqual(['transfer.credentialsInUrl=warn']);
+  });
+
+  it('extras: same-key duplicates within extras collapse to the last one (last write wins)', () => {
+    const out = resolveGitConfigParameters({
+      extras: ['transfer.credentialsInUrl=warn', 'transfer.credentialsInUrl=die'],
+    });
+    const credKeyEntries = out.filter((p) => p.startsWith('transfer.credentialsInUrl='));
+    expect(credKeyEntries).toEqual(['transfer.credentialsInUrl=die']);
+  });
+
+  it('extras: whitespace around pairs is trimmed before keying (no spurious split)', () => {
+    const out = resolveGitConfigParameters({ extras: ['  transfer.credentialsInUrl=warn  '] });
+    expect(out).toContain('transfer.credentialsInUrl=warn');
+    expect(out).not.toContain('transfer.credentialsInUrl=die'); // default got replaced
+  });
+
+  it('extras: blank / whitespace-only entries are dropped', () => {
+    const out = resolveGitConfigParameters({ extras: ['', '   ', 'http.proxy=http://corp:3128'] });
+    expect(out).toContain('http.proxy=http://corp:3128');
+    expect(out).not.toContain('');
+  });
+
+  it('override: REPLACES defaults verbatim', () => {
+    const out = resolveGitConfigParameters({ override: ['transfer.credentialsInUrl=warn'] });
+    expect(out).toEqual(['transfer.credentialsInUrl=warn']);
+    expect(out).not.toContain('protocol.file.allow=user');
+  });
+
+  it('override: empty array disables ALL defaults (debug escape hatch)', () => {
+    expect(resolveGitConfigParameters({ override: [] })).toEqual([]);
+  });
+
+  it('throws when both extras AND override are set (ambiguous — config typo)', () => {
+    expect(() => resolveGitConfigParameters({ extras: ['a=1'], override: ['b=2'] })).toThrow(
+      /cannot set both/i
+    );
+  });
+
+  // Runtime validation — YAML can produce shapes the TS type doesn't catch.
+  describe('runtime validation', () => {
+    it('treats null like unset (returns defaults)', () => {
+      expect(resolveGitConfigParameters(null as never)).toEqual(getDefaultGitConfigParameters());
+    });
+
+    it('throws a migration hint when given a flat array (the v1 shape on this branch)', () => {
+      expect(() => resolveGitConfigParameters(['a=1', 'b=2'] as never)).toThrow(
+        /not a flat array.*extras.*override/is
+      );
+    });
+
+    it('throws when configured value is a primitive (string, number)', () => {
+      expect(() => resolveGitConfigParameters('a=1' as never)).toThrow(/must be an object/i);
+      expect(() => resolveGitConfigParameters(42 as never)).toThrow(/must be an object/i);
+    });
+
+    it('throws when extras is a bare string instead of an array', () => {
+      expect(() =>
+        resolveGitConfigParameters({ extras: 'fetch.fsckObjects=true' as never })
+      ).toThrow(/extras must be an array of strings/);
+    });
+
+    it('throws when extras contains a non-string item', () => {
+      expect(() => resolveGitConfigParameters({ extras: ['a=1', 42 as never] })).toThrow(
+        /extras must be an array of strings.*number/
+      );
+    });
+
+    it('throws when override is a bare string instead of an array', () => {
+      expect(() => resolveGitConfigParameters({ override: 'a=1' as never })).toThrow(
+        /override must be an array of strings/
+      );
+    });
+
+    it('throws when override contains a non-string item', () => {
+      expect(() => resolveGitConfigParameters({ override: [{} as never] })).toThrow(
+        /override must be an array of strings.*object/
+      );
+    });
+
+    it('treats extras: null and override: null as unset (returns defaults)', () => {
+      expect(
+        resolveGitConfigParameters({ extras: null as never, override: null as never })
+      ).toEqual(getDefaultGitConfigParameters());
+    });
+  });
+});
+
+describe('redactUrlUserinfo', () => {
+  it('replaces user:pass in https URLs', () => {
+    expect(redactUrlUserinfo('http.proxy=https://USER:TOK@corp:3128')).toBe(
+      'http.proxy=https://<redacted>@corp:3128'
+    );
+  });
+
+  it('replaces user-only userinfo (no password)', () => {
+    expect(redactUrlUserinfo('https://USER@host/repo.git')).toBe(
+      'https://<redacted>@host/repo.git'
+    );
+  });
+
+  it('redacts userinfo embedded in a config KEY (the Codex-found case)', () => {
+    expect(
+      redactUrlUserinfo('url.https://USER:TOK@github.com/.insteadOf=https://github.com/')
+    ).toBe('url.https://<redacted>@github.com/.insteadOf=https://github.com/');
+  });
+
+  it('leaves SCP-form URLs alone (no `://` anchor)', () => {
+    expect(redactUrlUserinfo('git@github.com:foo/bar.git')).toBe('git@github.com:foo/bar.git');
+  });
+
+  it('passes plain URLs through unchanged', () => {
+    expect(redactUrlUserinfo('https://corp-proxy.example:3128')).toBe(
+      'https://corp-proxy.example:3128'
+    );
+  });
+});
+
+describe('gitConfigParameterLooksSecret', () => {
+  it('detects HTTP Authorization headers, case-insensitive', () => {
+    expect(
+      gitConfigParameterLooksSecret('http.https://github.com/.extraheader=Authorization: Basic abc')
+    ).toBe(true);
+    expect(gitConfigParameterLooksSecret('http.x.extraheader=authorization: bearer xyz')).toBe(
+      true
+    );
+  });
+
+  it('does NOT flag the defaults', () => {
+    for (const pair of getDefaultGitConfigParameters()) {
+      expect(gitConfigParameterLooksSecret(pair)).toBe(false);
+    }
+  });
+});
+
+describe('renderGitConfigParametersForLog', () => {
+  it('passes non-secret pairs through verbatim', () => {
+    expect(renderGitConfigParametersForLog(['transfer.credentialsInUrl=die', 'a=b'])).toBe(
+      'transfer.credentialsInUrl=die a=b'
+    );
+  });
+
+  it('scrubs URL userinfo in values', () => {
+    const out = renderGitConfigParametersForLog(['http.proxy=http://user:pass@corp:3128']);
+    expect(out).toBe('http.proxy=http://<redacted>@corp:3128');
+    expect(out).not.toContain('user:pass');
+  });
+
+  it('scrubs URL userinfo in KEYS (creds-in-key regression)', () => {
+    const out = renderGitConfigParametersForLog([
+      'url.https://USER:TOK@github.com/.insteadOf=https://github.com/',
+    ]);
+    expect(out).toBe('url.https://<redacted>@github.com/.insteadOf=https://github.com/');
+    expect(out).not.toContain('USER:TOK');
+  });
+
+  it('masks values still matching Authorization after URL scrub', () => {
+    const out = renderGitConfigParametersForLog([
+      'http.https://x/.extraheader=Authorization: Basic abc',
+    ]);
+    expect(out).toContain('http.https://x/.extraheader=<redacted>');
+    expect(out).not.toContain('Basic abc');
+  });
+
+  it('skips empty / whitespace entries', () => {
+    expect(renderGitConfigParametersForLog(['a=1', '', '   ', 'b=2'])).toBe('a=1 b=2');
   });
 });

@@ -6,7 +6,7 @@
 
 import type { CardType, UUID } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type CardTypeInsert, type CardTypeRow, cardTypes } from '../schema';
@@ -14,7 +14,9 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 
 export class CardTypeRepository implements BaseRepository<CardType, Partial<CardType>> {
@@ -34,24 +36,14 @@ export class CardTypeRepository implements BaseRepository<CardType, Partial<Card
   }
 
   private async resolveId(id: string): Promise<string> {
-    if (id.length === 36 && id.includes('-')) return id;
-
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
-    const results = await select(this.db)
-      .from(cardTypes)
-      .where(like(cardTypes.card_type_id, pattern))
-      .all();
-
-    if (results.length === 0) throw new EntityNotFoundError('CardType', id);
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'CardType',
-        id,
-        results.map((r: { card_type_id: string }) => formatShortId(r.card_type_id as UUID))
-      );
-    }
-    return results[0].card_type_id;
+    return resolveByShortIdPrefix(id, 'CardType', async (pattern) => {
+      const rows = await select(this.db)
+        .from(cardTypes)
+        .where(like(cardTypes.card_type_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { card_type_id: string }) => r.card_type_id);
+    });
   }
 
   async create(data: Partial<CardType>): Promise<CardType> {

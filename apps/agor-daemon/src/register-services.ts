@@ -7,12 +7,12 @@
 
 import {
   type AgorConfig,
-  getBaseUrl,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
 } from '@agor/core/config';
 import {
   and,
+  BranchRepository,
   type Database,
   eq,
   inArray,
@@ -20,14 +20,15 @@ import {
   type SessionMCPServerRow,
   select,
   sessionMcpServers,
+  shortId,
   UserMCPOAuthTokenRepository,
-  WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   HookContext,
+  MCPAuth,
   MCPServerID,
   MessageSource,
   SessionID,
@@ -49,15 +50,19 @@ import {
   oauth21TokenCache,
   persistOAuthToken,
 } from './oauth-cache.js';
-import type { ArtifactsService } from './services/artifacts.js';
 import { createArtifactsService } from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { createBoardsService } from './services/boards.js';
+import { setupBranchOwnersService } from './services/branch-owners.js';
+import { createBranchesService } from './services/branches.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
+import { createCheckAuthService } from './services/check-auth.js';
 import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
+import { createCopilotModelsService } from './services/copilot-models.js';
+import { createCursorModelsService } from './services/cursor-models.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
@@ -68,6 +73,7 @@ import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
+import { createSchedulesService } from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionsService } from './services/sessions.js';
@@ -76,9 +82,8 @@ import { createTemplatesService } from './services/templates.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
-import { setupWorktreeOwnersService } from './services/worktree-owners.js';
-import { createWorktreesService } from './services/worktrees.js';
 import { userRoomName } from './setup/socketio.js';
+import { appendSystemMessage } from './utils/append-system-message.js';
 import { escapeHtml } from './utils/html.js';
 import {
   computeFileHash,
@@ -87,6 +92,7 @@ import {
   getSessionFilePath,
 } from './utils/session-state.js';
 import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
+import { spawnExecutor } from './utils/spawn-executor.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -98,10 +104,11 @@ export interface RegisterServicesContext {
   svcEnabled: (group: string) => boolean;
   jwtSecret: string;
   daemonUrl: string;
-  isProduction: boolean;
+  /** True when the daemon is serving the bundled UI itself at /ui (installed agor-live). */
+  bundledUiAvailable: boolean;
   DAEMON_PORT: number;
   UI_PORT: number;
-  worktreeRbacEnabled: boolean;
+  branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
 }
@@ -113,7 +120,7 @@ export interface RegisteredServices {
   sessionsService: SessionsServiceImpl;
   messagesService: MessagesServiceImpl;
   boardsService: BoardsServiceImpl | undefined;
-  worktreeRepository: WorktreeRepository;
+  branchRepository: BranchRepository;
   usersRepository: import('@agor/core/db').UsersRepository;
   sessionsRepository: import('@agor/core/db').SessionRepository;
   sessionMCPServersService: ReturnType<typeof createSessionMCPServersService>;
@@ -127,16 +134,8 @@ export interface RegisteredServices {
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const {
-    db,
-    app,
-    config,
-    svcEnabled,
-    jwtSecret,
-    daemonUrl,
-    worktreeRbacEnabled,
-    allowSuperadmin,
-  } = ctx;
+  const { db, app, config, svcEnabled, jwtSecret, daemonUrl, branchRbacEnabled, allowSuperadmin } =
+    ctx;
 
   const _superadminOpts = { allowSuperadmin };
 
@@ -222,7 +221,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'thinking:chunk',
       'thinking:end',
       'permission_resolved',
-      'input_resolved',
     ],
     docs: {
       description: 'Conversation messages within AI agent sessions',
@@ -265,6 +263,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         'toYaml',
         'fromYaml',
         'clone',
+        'setPrimaryAssistant',
+        'clearPrimaryAssistant',
       ],
     });
     app.use('/board-objects', createBoardObjectsService(db));
@@ -278,25 +278,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   if (svcEnabled('artifacts')) {
-    app.use('/artifacts', createArtifactsService(db, app));
-
-    // Detect self-hosted Sandpack bundler
-    {
-      const pathMod = await import('node:path');
-      const { fileURLToPath: toPath } = await import('node:url');
-      const { existsSync: exists } = await import('node:fs');
-      const dir =
-        typeof __dirname !== 'undefined' ? __dirname : pathMod.dirname(toPath(import.meta.url));
-      const sandpackPath = pathMod.resolve(dir, '../static/sandpack');
-      if (exists(sandpackPath)) {
-        const baseUrl = await getBaseUrl();
-        const origin = new URL(baseUrl).origin;
-        const bundlerURL = `${origin}/static/sandpack/`;
-        const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
-        artifactsService.selfHostedBundlerURL = bundlerURL;
-        console.log(`🧩 Self-hosted Sandpack bundler detected: ${bundlerURL}`);
-      }
-    }
+    // `agor-query` is the runtime-introspection fan-out event (daemon →
+    // viewer's browser tab). Feathers' default `serviceEvents` is just
+    // ['created','updated','patched','removed'], so without this it
+    // fires locally on the server's EventEmitter and never reaches any
+    // socket. See queryArtifactRuntime in services/artifacts.ts.
+    app.use('/artifacts', createArtifactsService(db, app), { events: ['agor-query'] });
   }
 
   if (svcEnabled('boards')) {
@@ -304,30 +291,30 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   // ============================================================================
-  // Worktrees, repos
+  // Branches, repos
   // ============================================================================
 
-  app.use('/worktrees', createWorktreesService(db, app), {
+  app.use('/branches', createBranchesService(db, app), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'initializeUnixGroup'],
   });
 
-  console.log(`[RBAC] Worktree RBAC ${worktreeRbacEnabled ? 'Enabled' : 'Disabled'}`);
+  console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
 
   if (
-    worktreeRbacEnabled &&
-    !app.services['worktrees/:id/owners'] &&
-    !app.services['worktrees/:id/owners/:userId']
+    branchRbacEnabled &&
+    !app.services['branches/:id/owners'] &&
+    !app.services['branches/:id/owners/:userId']
   ) {
-    const worktreeRepo = new WorktreeRepository(db);
-    setupWorktreeOwnersService(app, worktreeRepo, {
+    const branchRepo = new BranchRepository(db);
+    setupBranchOwnersService(app, branchRepo, {
       jwtSecret,
       daemonUser: config.daemon?.unix_user,
       allowSuperadmin,
     });
   }
 
-  if (worktreeRbacEnabled) {
+  if (branchRbacEnabled) {
     const daemonUser = config.daemon?.unix_user || 'agor';
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
@@ -335,6 +322,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/repos', createReposService(db, app), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'initializeUnixGroup'],
   });
+
+  // First-class schedules. RBAC hooks wired in register-hooks.ts.
+  // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
+  app.use('/schedules', createSchedulesService(db));
 
   // ============================================================================
   // MCP Servers (conditionally registered)
@@ -359,8 +350,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       methods: ['create', 'routeMessage'],
     });
 
-    const isProduction = ctx.isProduction;
-    const uiUrl = isProduction ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
+    const uiUrl = ctx.bundledUiAvailable ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
     registerGitHubAppSetupRoutes(app, { uiUrl, daemonUrl, db });
   }
 
@@ -379,15 +369,31 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
   });
 
-  const worktreeRepository = new WorktreeRepository(db);
+  app.use('/check-auth', createCheckAuthService(db));
+  app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // Copilot dynamic model discovery via @github/copilot-sdk's listModels().
+  // Resolves the GitHub token per-user (with config.yaml + env fallback)
+  // and falls back to the static list at @agor/core/models/copilot if no
+  // token is configured or the SDK call fails.
+  app.use('/copilot-models', createCopilotModelsService(db));
+  app.service('/copilot-models').hooks({ before: { find: [ctx.requireAuth] } });
+
+  // Cursor dynamic model discovery via @cursor/sdk's Cursor.models.list().
+  // Resolves CURSOR_API_KEY per-user (with config.yaml + env fallback) and
+  // falls back to composer-latest if no key is configured or the SDK call fails.
+  app.use('/cursor-models', createCursorModelsService(db));
+  app.service('/cursor-models').hooks({ before: { find: [ctx.requireAuth] } });
+
+  const branchRepository = new BranchRepository(db);
   const { UsersRepository, SessionRepository } = await import('@agor/core/db');
   const usersRepository = new UsersRepository(db);
   const sessionsRepository = new SessionRepository(db);
 
   if (svcEnabled('file_browser')) {
-    app.use('/context', createContextService(worktreeRepository));
-    app.use('/file', createFileService(worktreeRepository));
-    app.use('/files', createFilesService(db));
+    app.use('/context', createContextService(branchRepository));
+    app.use('/file', createFileService(branchRepository));
+    app.use('/files', createFilesService(db, app));
   }
 
   // Server-side Handlebars renderer. UI calls POST /templates so the browser
@@ -414,7 +420,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Unlike /session-mcp-servers, selection NAMES are a confidentiality
   // concern (they reveal which of the session creator's private env vars
   // are wired into a session), so we deliberately do NOT surface a
-  // queryable read here — a worktree collaborator with `view`/`prompt`
+  // queryable read here — a branch collaborator with `view`/`prompt`
   // must not see another user's selection names.
   //
   // Reads go exclusively through `/sessions/:id/env-selections`, which
@@ -500,7 +506,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     sessionsService,
     messagesService,
     boardsService,
-    worktreeRepository,
+    branchRepository,
     usersRepository,
     sessionsRepository,
     sessionMCPServersService,
@@ -534,10 +540,6 @@ function createExecuteHandler(
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
   ) => {
-    const { spawn } = await import('node:child_process');
-    const path = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-
     const session = await sessionsService.get(sessionId, params);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
@@ -566,50 +568,31 @@ function createExecuteHandler(
     if (!appWithExecutor.sessionTokenService) {
       throw new Error('Session token service not initialized');
     }
+    // Hook chain enforces auth before we get here.
     const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
       sessionId,
-      (params as AuthenticatedParams).user?.user_id || 'anonymous'
+      (params as AuthenticatedParams).user!.user_id
     );
 
     const taskId = data.taskId;
 
-    // Get worktree path
+    // Get branch path
     let cwd = process.cwd();
-    if (session.worktree_id) {
+    if (session.branch_id) {
       try {
-        const worktree = await app.service('worktrees').get(session.worktree_id, params);
-        cwd = worktree.path;
+        const branch = await app.service('branches').get(session.branch_id, params);
+        cwd = branch.path;
       } catch (error) {
-        console.warn(`Could not get worktree path for ${session.worktree_id}:`, error);
+        console.warn(`Could not get branch path for ${session.branch_id}:`, error);
       }
     }
-
-    // Find executor binary
-    const dirname =
-      typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
-    const { existsSync } = await import('node:fs');
-    const possiblePaths = [
-      path.join(dirname, '../executor/cli.js'),
-      path.join(dirname, '../../../packages/executor/bin/agor-executor'),
-      path.join(dirname, '../../../packages/executor/dist/cli.js'),
-    ];
-    const executorPath = possiblePaths.find((p) => existsSync(p));
-    if (!executorPath) {
-      throw new Error(
-        `Executor binary not found. Tried:\n${possiblePaths.map((p) => `  - ${p}`).join('\n')}`
-      );
-    }
-    console.log(`[Daemon] Using executor at: ${executorPath}`);
 
     // Determine Unix user for executor
     const {
       resolveUnixUserForImpersonation,
       validateResolvedUnixUser,
       UnixUserNotFoundError,
-      buildSpawnArgs,
       getHomedirFromUsername,
-      prepareImpersonationEnv,
-      attachEnvFileCleanup,
     } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
@@ -617,7 +600,7 @@ function createExecuteHandler(
     const sessionUnixUser = session.unix_username;
 
     console.log('[Daemon] Determining executor Unix user:', {
-      sessionId: session.session_id.slice(0, 8),
+      sessionId: shortId(session.session_id),
       unixUserMode,
       sessionUnixUser,
       configExecutorUser,
@@ -695,15 +678,10 @@ function createExecuteHandler(
     );
 
     // Validate required user environment variables
-    const { SessionRepository: SessRepo, MessagesRepository: _MsgRepo } = await import(
-      '@agor/core/db'
-    );
-    const sessionsRepository = new SessRepo(db);
     const requiredUserEnvVars = config.execution?.required_user_env_vars;
     if (requiredUserEnvVars && requiredUserEnvVars.length > 0) {
       const missingVars = requiredUserEnvVars.filter((v: string) => !executorEnv[v]);
       if (missingVars.length > 0) {
-        const { generateId } = await import('@agor/core/db');
         const missingList = missingVars.map((v: string) => `\`${v}\``).join(', ');
         const errorContent = [
           `**Missing required environment variables:** ${missingList}`,
@@ -714,19 +692,14 @@ function createExecuteHandler(
           '',
           'This is a one-time setup — once configured, this message will not appear again.',
         ].join('\n');
-        const messagesService = app.service('messages') as unknown as MessagesServiceImpl;
-        const systemMessage = {
-          message_id: generateId() as import('@agor/core/types').Message['message_id'],
-          session_id: sessionId as import('@agor/core/types').Message['session_id'],
-          task_id: data.taskId as import('@agor/core/types').Message['task_id'],
-          type: 'system' as const,
-          role: 'system' as import('@agor/core/types').Message['role'],
+        await appendSystemMessage({
+          app,
+          db,
+          sessionId,
+          taskId: data.taskId,
           content: errorContent,
-          content_preview: `Missing required env vars: ${missingVars.join(', ')}`,
-          index: await sessionsRepository.countMessages(sessionId),
-          timestamp: new Date().toISOString(),
-        };
-        await messagesService.create(systemMessage);
+          contentPreview: `Missing required env vars: ${missingVars.join(', ')}`,
+        });
         throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
       }
     }
@@ -743,34 +716,18 @@ function createExecuteHandler(
         sessionId,
         taskId,
         prompt: data.prompt,
-        tool: session.agentic_tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot',
+        tool: session.agentic_tool as
+          | 'claude-code'
+          | 'gemini'
+          | 'codex'
+          | 'opencode'
+          | 'copilot'
+          | 'cursor',
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
       },
     };
-
-    // Route secret-looking env vars through an on-disk env file owned by the
-    // target user (mode 0600) so API keys/tokens never appear in argv.
-    const prepared = executorUnixUser
-      ? prepareImpersonationEnv({ asUser: executorUnixUser, env: executorEnv })
-      : { inlineEnv: undefined, envFilePath: undefined };
-
-    const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
-      asUser: executorUnixUser || undefined,
-      env: executorUnixUser ? prepared.inlineEnv : undefined,
-      envFilePath: prepared.envFilePath,
-    });
-
-    if (executorUnixUser) {
-      console.log(
-        `[Daemon] Spawning executor as user=${executorUnixUser}${
-          prepared.envFilePath ? ' (secrets in env-file)' : ''
-        }`
-      );
-    } else {
-      console.log(`[Daemon] Spawning executor as current user (no impersonation)`);
-    }
 
     // Stateless FS mode: resolve executor home dir for session file path
     const executorHomeDir = executorUnixUser ? getHomedirFromUsername(executorUnixUser) : undefined;
@@ -782,7 +739,7 @@ function createExecuteHandler(
           db,
           sessionId,
           sdkSessionId: session.sdk_session_id,
-          worktreePath: cwd,
+          branchPath: cwd,
           tool: session.agentic_tool,
           executorHomeDir,
         });
@@ -795,153 +752,149 @@ function createExecuteHandler(
       }
     }
 
-    const executorProcess = spawn(cmd, args, {
+    const logPrefix = `[Executor ${shortId(sessionId)}]`;
+
+    spawnExecutor(executorPayload, {
       cwd,
-      env: executorUnixUser ? undefined : executorEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    // Safety-net cleanup for the env file. The inner bash script `rm -f`s
-    // the file before exec in the normal path, so this only fires if sudo
-    // or bash failed to launch at all, or `set -eu` aborted the source
-    // step. Uses sudo when asUser is set so it works under sticky /tmp.
-    attachEnvFileCleanup(executorProcess, {
-      envFilePath: prepared.envFilePath,
       asUser: executorUnixUser || undefined,
-    });
+      preparedEnv: executorEnv,
+      logPrefix,
+      templateVariables: {
+        session_id: sessionId,
+        task_id: taskId,
+        unix_user: executorUnixUser || undefined,
+      },
+      onSpawn: (child) => {
+        if (child.pid) {
+          trackExecutorProcess(sessionId, child.pid);
+          console.log(`${logPrefix} PID: ${child.pid}`);
+        }
+      },
+      onExit: async (code) => {
+        console.log(`${logPrefix} Exited with code ${code}`);
+        untrackExecutorProcess(sessionId);
 
-    if (executorProcess.pid) {
-      trackExecutorProcess(sessionId, executorProcess.pid);
-      console.log(`[Executor ${sessionId.slice(0, 8)}] PID: ${executorProcess.pid}`);
-    }
+        // Safety net: check if task is still running
+        try {
+          const currentSession = await app.service('sessions').get(sessionId, params);
+          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
 
-    executorProcess.stdin?.write(JSON.stringify(executorPayload));
-    executorProcess.stdin?.end();
+          if (latestTaskId && latestTaskId !== taskId) {
+            console.log(
+              `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
+            );
+          } else if (
+            currentSession.status === SessionStatus.RUNNING ||
+            currentSession.status === SessionStatus.AWAITING_PERMISSION ||
+            currentSession.status === SessionStatus.AWAITING_INPUT ||
+            currentSession.status === SessionStatus.STOPPING ||
+            currentSession.status === SessionStatus.TIMED_OUT
+          ) {
+            try {
+              const currentTask = await app.service('tasks').get(taskId, params);
+              const isTaskStillActive =
+                currentTask.status === TaskStatus.RUNNING ||
+                currentTask.status === 'awaiting_permission' ||
+                currentTask.status === 'awaiting_input' ||
+                currentTask.status === 'stopping' ||
+                currentTask.status === 'timed_out';
 
-    executorProcess.stdout?.on('data', (data) => {
-      console.log(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
-    });
-    executorProcess.stderr?.on('data', (data) => {
-      console.error(`[Executor ${sessionId.slice(0, 8)}] ${data.toString().trim()}`);
-    });
-
-    executorProcess.on('exit', async (code) => {
-      console.log(`[Executor ${sessionId.slice(0, 8)}] Exited with code ${code}`);
-      untrackExecutorProcess(sessionId);
-
-      // Safety net: check if task is still running
-      try {
-        const currentSession = await app.service('sessions').get(sessionId, params);
-        const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
-
-        if (latestTaskId && latestTaskId !== taskId) {
-          console.log(
-            `⏭️ [Executor] Task ${taskId.slice(0, 8)} is not the latest (latest: ${latestTaskId.slice(0, 8)}), skipping safety net`
-          );
-        } else if (
-          currentSession.status === SessionStatus.RUNNING ||
-          currentSession.status === SessionStatus.AWAITING_PERMISSION ||
-          currentSession.status === SessionStatus.AWAITING_INPUT ||
-          currentSession.status === SessionStatus.STOPPING ||
-          currentSession.status === SessionStatus.TIMED_OUT
-        ) {
-          try {
-            const currentTask = await app.service('tasks').get(taskId, params);
-            const isTaskStillActive =
-              currentTask.status === TaskStatus.RUNNING ||
-              currentTask.status === 'awaiting_permission' ||
-              currentTask.status === 'awaiting_input' ||
-              currentTask.status === 'stopping' ||
-              currentTask.status === 'timed_out';
-
-            if (isTaskStillActive) {
-              await app.service('tasks').patch(taskId, { status: TaskStatus.FAILED }, params);
-              console.log(
-                `✅ [Executor] Task ${taskId.slice(0, 8)} marked as FAILED after executor exit (code: ${code})`
-              );
-            } else {
-              console.log(
-                `⚠️  [Executor] Task ${taskId.slice(0, 8)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
+              if (isTaskStillActive) {
+                await app.service('tasks').patch(
+                  taskId,
+                  {
+                    status: TaskStatus.FAILED,
+                    error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+                  },
+                  params
+                );
+                console.log(
+                  `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
+                );
+              } else {
+                console.log(
+                  `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
+                );
+                await app
+                  .service('sessions')
+                  .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
+              }
+            } catch (taskError) {
+              console.error(
+                `⚠️  [Executor] Failed to mark task ${shortId(taskId)} as FAILED, falling back to session IDLE update:`,
+                taskError
               );
               await app
                 .service('sessions')
                 .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
-            }
-          } catch (taskError) {
-            console.error(
-              `⚠️  [Executor] Failed to mark task ${taskId.slice(0, 8)} as FAILED, falling back to session IDLE update:`,
-              taskError
-            );
-            await app
-              .service('sessions')
-              .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
-            console.log(
-              `✅ [Executor] Session ${sessionId.slice(0, 8)} status updated to IDLE after executor exit (was: ${currentSession.status})`
-            );
-          }
-        } else {
-          console.log(
-            `ℹ️  [Executor] Session ${sessionId.slice(0, 8)} already in ${currentSession.status} state, skipping IDLE update`
-          );
-        }
-      } catch (error) {
-        console.error(`❌ [Executor] Failed to handle executor exit:`, error);
-      }
-
-      // Stateless FS mode: serialize session file to DB after executor exits
-      if (config.execution?.stateless_fs_mode) {
-        try {
-          // Re-fetch session to get sdk_session_id (may have been set during execution)
-          const freshSession = await app.service('sessions').get(sessionId, params);
-          if (freshSession.sdk_session_id) {
-            pushAsync({
-              db,
-              sessionId,
-              worktreeId: freshSession.worktree_id,
-              taskId,
-              sdkSessionId: freshSession.sdk_session_id,
-              worktreePath: cwd,
-              tool: freshSession.agentic_tool,
-              executorHomeDir,
-            });
-
-            // Also compute and write session_md5 to the task record
-            try {
-              let filePath: string;
-              if (freshSession.agentic_tool === 'codex') {
-                const codexHome = getCodexHome(sessionId);
-                const found = await findCodexSessionFile(codexHome, freshSession.sdk_session_id);
-                filePath = found || '';
-              } else {
-                filePath = getSessionFilePath(
-                  freshSession.agentic_tool,
-                  cwd,
-                  freshSession.sdk_session_id,
-                  executorHomeDir
-                );
-              }
-              if (filePath) {
-                const md5 = await computeFileHash(filePath);
-                if (md5) {
-                  await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
-                }
-              }
-            } catch (md5Err) {
-              console.error(
-                '[stateless-fs] Failed to write session_md5 to task:',
-                md5Err instanceof Error ? md5Err.message : md5Err
+              console.log(
+                `✅ [Executor] Session ${shortId(sessionId)} status updated to IDLE after executor exit (was: ${currentSession.status})`
               );
             }
+          } else {
+            console.log(
+              `ℹ️  [Executor] Session ${shortId(sessionId)} already in ${currentSession.status} state, skipping IDLE update`
+            );
           }
-        } catch (pushErr) {
-          console.error(
-            '[stateless-fs] pushAsync setup failed:',
-            pushErr instanceof Error ? pushErr.message : pushErr
-          );
+        } catch (error) {
+          console.error(`❌ [Executor] Failed to handle executor exit:`, error);
         }
-      }
 
-      appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+        // Stateless FS mode: serialize session file to DB after executor exits
+        if (config.execution?.stateless_fs_mode) {
+          try {
+            // Re-fetch session to get sdk_session_id (may have been set during execution)
+            const freshSession = await app.service('sessions').get(sessionId, params);
+            if (freshSession.sdk_session_id) {
+              pushAsync({
+                db,
+                sessionId,
+                branchId: freshSession.branch_id,
+                taskId,
+                sdkSessionId: freshSession.sdk_session_id,
+                branchPath: cwd,
+                tool: freshSession.agentic_tool,
+                executorHomeDir,
+              });
+
+              // Also compute and write session_md5 to the task record
+              try {
+                let filePath: string;
+                if (freshSession.agentic_tool === 'codex') {
+                  const codexHome = getCodexHome(executorHomeDir);
+                  const found = await findCodexSessionFile(codexHome, freshSession.sdk_session_id);
+                  filePath = found || '';
+                } else {
+                  filePath = getSessionFilePath(
+                    freshSession.agentic_tool,
+                    cwd,
+                    freshSession.sdk_session_id,
+                    executorHomeDir
+                  );
+                }
+                if (filePath) {
+                  const md5 = await computeFileHash(filePath);
+                  if (md5) {
+                    await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
+                  }
+                }
+              } catch (md5Err) {
+                console.error(
+                  '[stateless-fs] Failed to write session_md5 to task:',
+                  md5Err instanceof Error ? md5Err.message : md5Err
+                );
+              }
+            }
+          } catch (pushErr) {
+            console.error(
+              '[stateless-fs] pushAsync setup failed:',
+              pushErr instanceof Error ? pushErr.message : pushErr
+            );
+          }
+        }
+
+        appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+      },
     });
 
     return {
@@ -2155,11 +2108,21 @@ async function registerMCPServices(
           }
         };
 
+        // Skip pre-resolution URL validation for templated URLs — `new URL()`
+        // rejects whitespace inside `{{ user.env.X }}` (and full-URL templates
+        // like `{{ user.env.MCP_URL }}` have no scheme yet), so validating
+        // pre-resolution would block legitimate templates from ever reaching
+        // the resolver. The resolved URL is re-validated below before use.
+        const isTemplated = (url: string): boolean => url.includes('{{');
+
         const hasInlineConfig = !!data.url;
+        // `auth` is typed as the canonical MCPAuth (rather than narrowing to
+        // `typeof data.auth`) so the resolved auth from
+        // `resolveProbeServerTemplates` flows back in without casts.
         let serverConfig: {
           url: string;
           transport: 'http' | 'sse' | 'stdio';
-          auth?: typeof data.auth;
+          auth?: MCPAuth;
           name?: string;
           scope?: string;
           owner_user_id?: string;
@@ -2167,8 +2130,10 @@ async function registerMCPServices(
         let serverId: string | undefined;
 
         if (hasInlineConfig) {
-          const urlValidation = validateUrl(data.url!);
-          if (!urlValidation.valid) return { success: false, error: urlValidation.error };
+          if (!isTemplated(data.url!)) {
+            const urlValidation = validateUrl(data.url!);
+            if (!urlValidation.valid) return { success: false, error: urlValidation.error };
+          }
           serverConfig = {
             url: data.url!,
             transport: data.transport || 'http',
@@ -2215,7 +2180,7 @@ async function registerMCPServices(
                 error: 'Access denied: admin role required to discover session-scoped MCP servers',
               };
           }
-          if (server.url) {
+          if (server.url && !isTemplated(server.url)) {
             const urlValidation = validateUrl(server.url);
             if (!urlValidation.valid) return { success: false, error: urlValidation.error };
           }
@@ -2237,6 +2202,54 @@ async function registerMCPServices(
             success: false,
             error: `Connection test not supported for stdio servers (requires active session)`,
           };
+        }
+
+        // Resolve {{ user.env.X }} templates in url/auth using the caller's
+        // user env vars. The executor does this at session runtime via
+        // process.env + AGOR_USER_ENV_KEYS, but the daemon's process.env
+        // never holds user secrets — so we pull them from the DB here. Without
+        // this, Test Connection sends the literal `Bearer {{ user.env.X }}`
+        // string and the MCP server returns 401, even though the server works
+        // fine in real sessions.
+        //
+        // The endpoint is gated by `requireAuth` (see hook registration
+        // below), so a missing user_id here means the auth contract was
+        // bypassed somewhere upstream — fail loud rather than silently
+        // skip resolution and ship literal templates upstream.
+        const userId = params?.user?.user_id as UserID | undefined;
+        if (!userId) {
+          throw new NotAuthenticated('MCP discover requires an authenticated user');
+        }
+
+        const { resolveUserEnvironment } = await import('@agor/core/config');
+        const { resolveProbeServerTemplates } = await import('./utils/mcp-probe-templates.js');
+
+        const userEnv = await resolveUserEnvironment(userId, db);
+        const resolution = resolveProbeServerTemplates(
+          {
+            url: serverConfig.url,
+            transport: serverConfig.transport,
+            auth: serverConfig.auth,
+            name: serverConfig.name,
+            mcpServerId: serverId,
+          },
+          userEnv
+        );
+
+        if (!resolution.ok) {
+          return { success: false, error: resolution.error };
+        }
+
+        serverConfig.auth = resolution.resolved.auth;
+        // Re-validate whenever the input URL was templated, even if the
+        // resolved string happens to match the input (e.g., a user env
+        // value that itself looks like the template). Pre-resolution
+        // validation is skipped for templated URLs, so this is the only
+        // gate that runs for them.
+        if (resolution.resolved.url !== serverConfig.url || isTemplated(serverConfig.url)) {
+          const recheck = validateUrl(resolution.resolved.url);
+          if (!recheck.valid) return { success: false, error: recheck.error };
+          serverConfig.url = resolution.resolved.url;
         }
 
         console.log('[MCP Discovery] Starting test for:', serverConfig.name || 'inline-config');
@@ -2531,11 +2544,11 @@ async function bootstrapSuperadminUsers(
       await usersService.patch(userId as any, { role: ROLES.SUPERADMIN });
       promotedCount++;
       console.log(
-        `[RBAC] Bootstrap promoted user ${userId.substring(0, 8)} (${user.email}) to superadmin`
+        `[RBAC] Bootstrap promoted user ${shortId(userId)} (${user.email}) to superadmin`
       );
     } catch (error) {
       console.warn(
-        `[RBAC] Failed to bootstrap superadmin for user ${userId.substring(0, 8)}: ${error instanceof Error ? error.message : String(error)}`
+        `[RBAC] Failed to bootstrap superadmin for user ${shortId(userId)}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

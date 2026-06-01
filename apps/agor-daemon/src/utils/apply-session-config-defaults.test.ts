@@ -212,13 +212,13 @@ describe('applySessionConfigDefaults', () => {
   describe('regression: issue #1064', () => {
     it('UI-shaped payload (no permission_config) gets bypassPermissions when user default is bypassPermissions', async () => {
       // Mirrors the exact UI drag-into-zone payload from
-      // SessionCanvas.tsx: just {worktree_id, description, status, agentic_tool}.
+      // SessionCanvas.tsx: just {branch_id, description, status, agentic_tool}.
       const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
       const ctx = makeContext({
         provider: 'rest',
         user: { user_id: ALICE },
         data: {
-          worktree_id: 'wt-1',
+          branch_id: 'wt-1',
           description: 'Session from zone "Yolo refactor"',
           status: 'idle',
           agentic_tool: 'claude-code',

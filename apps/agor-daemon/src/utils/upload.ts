@@ -2,7 +2,7 @@
  * Upload middleware using multer for file upload handling
  *
  * Supports uploading files to:
- * - Worktree (.agor/uploads/) - Default, agent-accessible
+ * - Branch (.agor/uploads/) - Default, agent-accessible
  * - Temp folder - Ephemeral uploads
  * - Global (~/.agor/uploads/) - Shared across sessions
  */
@@ -10,7 +10,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { SessionRepository, WorktreeRepository } from '@agor/core/db';
+import type { BranchRepository, SessionRepository } from '@agor/core/db';
+import { shortId } from '@agor/core/db';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
@@ -19,7 +20,7 @@ import multer from 'multer';
  *
  * Kept narrow on purpose: anything HTML-like, executable, or shell-like is
  * rejected so that an uploaded file cannot be coerced into XSS / drive-by
- * download territory if it is ever served back out of the worktree.
+ * download territory if it is ever served back out of the branch.
  *
  * If you need to add a new type, prefer the most specific MIME possible.
  */
@@ -58,32 +59,29 @@ const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 /**
  * Destination types for file uploads
  */
-export type UploadDestination = 'worktree' | 'temp' | 'global';
+export type UploadDestination = 'branch' | 'temp' | 'global';
 
 /**
  * Create multer storage configuration
  */
-export function createUploadStorage(
-  sessionRepo: SessionRepository,
-  worktreeRepo: WorktreeRepository
-) {
+export function createUploadStorage(sessionRepo: SessionRepository, branchRepo: BranchRepository) {
   const storage = multer.diskStorage({
     destination: async (req: Request, _file, cb) => {
       try {
         const { sessionId } = req.params;
         // NOTE: req.body is NOT available yet during multer's destination callback
         // because multer hasn't parsed the body fields yet. We read from query params instead.
-        const destination = (req.query.destination as UploadDestination) || 'worktree';
+        const destination = (req.query.destination as UploadDestination) || 'branch';
 
         // Validate destination
-        if (!['worktree', 'temp', 'global'].includes(destination)) {
+        if (!['branch', 'temp', 'global'].includes(destination)) {
           console.error(`❌ [Upload Storage] Invalid destination: ${destination}`);
           return cb(new Error(`Invalid destination: ${destination}`), '');
         }
 
         if (DEBUG_UPLOAD) {
           console.log(
-            `📂 [Upload Storage] Processing upload for session ${sessionId?.substring(0, 8)}`
+            `📂 [Upload Storage] Processing upload for session ${sessionId ? shortId(sessionId) : 'unknown'}`
           );
           console.log(`   Destination type: ${destination}`);
         }
@@ -93,34 +91,32 @@ export function createUploadStorage(
           return cb(new Error('Session ID required'), '');
         }
 
-        // Get session to find associated worktree
+        // Get session to find associated branch
         const session = await sessionRepo.findById(sessionId);
         if (!session) {
-          console.error(`❌ [Upload Storage] Session not found: ${sessionId.substring(0, 8)}`);
+          console.error(`❌ [Upload Storage] Session not found: ${shortId(sessionId)}`);
           return cb(new Error(`Session not found: ${sessionId}`), '');
         }
 
-        if (!session.worktree_id) {
-          console.error(`❌ [Upload Storage] Session ${sessionId.substring(0, 8)} has no worktree`);
-          return cb(new Error(`Session ${sessionId} has no associated worktree`), '');
+        if (!session.branch_id) {
+          console.error(`❌ [Upload Storage] Session ${shortId(sessionId)} has no branch`);
+          return cb(new Error(`Session ${sessionId} has no associated branch`), '');
         }
 
-        const worktree = await worktreeRepo.findById(session.worktree_id);
-        if (!worktree) {
-          console.error(
-            `❌ [Upload Storage] Worktree not found: ${session.worktree_id.substring(0, 8)}`
-          );
-          return cb(new Error(`Worktree not found: ${session.worktree_id}`), '');
+        const branch = await branchRepo.findById(session.branch_id);
+        if (!branch) {
+          console.error(`❌ [Upload Storage] Branch not found: ${shortId(session.branch_id)}`);
+          return cb(new Error(`Branch not found: ${session.branch_id}`), '');
         }
 
         // Map destination to actual path
         const paths: Record<UploadDestination, string> = {
-          worktree: path.join(worktree.path, '.agor', 'uploads'),
+          branch: path.join(branch.path, '.agor', 'uploads'),
           temp: path.join(os.tmpdir(), 'agor-uploads'),
           global: path.join(os.homedir(), '.agor', 'uploads'),
         };
 
-        const dest = paths[destination] || paths.worktree;
+        const dest = paths[destination] || paths.branch;
 
         if (DEBUG_UPLOAD) console.log(`📁 [Upload Storage] Target directory: ${dest}`);
 
@@ -171,9 +167,9 @@ export function createUploadStorage(
  */
 export function createUploadMiddleware(
   sessionRepo: SessionRepository,
-  worktreeRepo: WorktreeRepository
+  branchRepo: BranchRepository
 ) {
-  const storage = createUploadStorage(sessionRepo, worktreeRepo);
+  const storage = createUploadStorage(sessionRepo, branchRepo);
 
   return multer({
     storage,

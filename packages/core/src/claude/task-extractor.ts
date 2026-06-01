@@ -24,7 +24,7 @@ export interface ExtractedTask {
     ref_at_start: string;
     sha_at_start: string;
   };
-  model: string;
+  model?: string;
   tool_use_count: number;
   created_at: string;
   completed_at?: string;
@@ -83,6 +83,10 @@ export function extractTasksFromMessages(
     const endMessage = messages[endIndex];
     const endTimestamp = endMessage?.timestamp;
 
+    // First message in range that recorded a model — assistant/system
+    // messages are more reliable than user.
+    const model = messagesInRange.find((msg) => msg.metadata?.model)?.metadata?.model;
+
     // Create task
     tasks.push({
       task_id: generateId() as UUID,
@@ -99,7 +103,7 @@ export function extractTasksFromMessages(
         ref_at_start: 'unknown', // No git tracking in Claude Code transcripts
         sha_at_start: 'unknown', // No git tracking in Claude Code transcripts
       },
-      model: userMessage.metadata?.model || 'claude-sonnet-4-6',
+      ...(model ? { model } : {}),
       tool_use_count: toolUseCount,
       created_at: startTimestamp,
       completed_at: endTimestamp,

@@ -53,24 +53,30 @@ Each proxy forwards requests from /proxies/<vendor>/X to <upstream>/X so Sandpac
 
 EVERY request to a proxy needs TWO credentials, in the same headers object:
 
-  1. Authorization: Bearer <agor.token>     ← daemon JWT, protects the proxy from being an open relay
+  1. Authorization: Bearer <AGOR_TOKEN>     ← daemon JWT (15-min TTL), protects the proxy from being an open relay
   2. <Vendor's auth header>                  ← whatever the upstream API actually wants
 
-Both render via Handlebars in /agor.config.js — the daemon mints {{ agor.token }} per-user at view time (15-min TTL). Vendor secrets come from {{ user.env.NAME }} (configured by the user in Settings → Environment Variables).
+Both come from the synthesized .env. Declare what your artifact needs at publish time:
+  agor_artifacts_publish(..., agorGrants={ agor_token: true, agor_proxies: ["shortcut"] },
+                          requiredEnvVars=["SHORTCUT_API_TOKEN"])
 
-# Canonical example
+The daemon resolves consent (TOFU) and writes a per-viewer .env with the prefixed names:
+  VITE_AGOR_TOKEN, VITE_AGOR_PROXY_SHORTCUT, VITE_SHORTCUT_API_TOKEN  (Vite templates)
+  REACT_APP_AGOR_TOKEN, REACT_APP_AGOR_PROXY_SHORTCUT, ...            (CRA templates)
 
-  // /agor.config.js
-  export const shortcutUrl = "{{ agor.proxies.shortcut.url }}";
-  export const agorToken   = "{{ agor.token }}";
-  export const scToken     = "{{ user.env.SHORTCUT_API_TOKEN }}";
+# Canonical example (react / react-ts — sandpack-react v2 CRA)
 
-  // App.js
-  import { shortcutUrl, agorToken, scToken } from "./agor.config.js";
+  // App.jsx
+  const shortcutUrl = process.env.REACT_APP_AGOR_PROXY_SHORTCUT;
+  const agorToken   = process.env.REACT_APP_AGOR_TOKEN;
+  const scToken     = process.env.REACT_APP_SHORTCUT_API_TOKEN;
+
+  // Best-effort inherited mapping for vue3 / svelte / solid (not yet
+  // verified end-to-end against the bundler they actually ship with):
+  //   const x = import.meta.env.VITE_AGOR_PROXY_SHORTCUT;
 
   if (!scToken) {
-    // Render a "configure SHORTCUT_API_TOKEN in Settings" prompt — missing
-    // env vars render as empty string, not undefined.
+    // Empty string when the user hasn't configured it — show a prompt.
     return <ConfigurePrompt name="SHORTCUT_API_TOKEN" />;
   }
 
@@ -90,7 +96,7 @@ Both render via Handlebars in /agor.config.js — the daemon mints {{ agor.token
 
 # Error envelope to handle in fetch wrappers
 
-  401 {error:"unauthorized"}          ← missing/expired agor.token (refresh by reloading the artifact)
+  401 {error:"unauthorized"}          ← missing/expired AGOR_TOKEN (refresh by reloading the artifact)
   404 {error:"unknown_vendor"}        ← vendor not configured on this daemon
   405 {error:"method_not_allowed"}    ← method not in allowed_methods
   413 {error:"request_too_large"}     ← request body > 5 MB
@@ -102,7 +108,7 @@ Always check r.ok before JSON.parse, and surface the error JSON to the user — 
 
 # What the proxy does NOT do
 
-  - No auth injection: the daemon does not read {{ user.env.X }} for you and does not add vendor headers. You forward them yourself on every request.
+  - No auth injection: the daemon doesn't add vendor headers automatically. You forward them yourself from .env on every request.
   - No transformation: bytes pass through unchanged. No JSON re-encoding, no schema validation.
   - No caching, no retries.
   - No 'pageThrough' helper for pagination.
@@ -115,9 +121,9 @@ Always check r.ok before JSON.parse, and surface the error JSON to the user — 
 # Discovery flow for an agent building an artifact
 
   1. Call agor_proxies_list to see what vendors are configured.
-  2. For each vendor you'll use, write its url, the daemon Authorization header, and the vendor-specific auth header into /agor.config.js as Handlebars references (never hardcode secrets).
-  3. Wire up a fetch wrapper that includes both headers on every call and renders the error envelope above on !r.ok.
-  4. If the user hasn't configured the env var, the secret renders as "" — detect this and prompt them, don't make the API call.`,
+  2. Declare the vendors you'll use in agor_artifacts_publish via agorGrants={ agor_token: true, agor_proxies: ["..."] } and the user-side secrets via requiredEnvVars=["VENDOR_API_TOKEN", ...].
+  3. Wire a fetch wrapper that reads the three env vars. The verified mapping today is react/react-ts → process.env.REACT_APP_*. Other templates (vue3/svelte/solid/vue/angular) carry best-effort prefixes inherited from the original artifact-format proposal and may need audit the first time you ship one — see apps/agor-docs/pages/guide/artifacts.mdx for the current status table.
+  4. If a user hasn't configured the env var, the value renders as "" — detect this and prompt them, don't make the API call.`,
       annotations: { readOnlyHint: true },
       inputSchema: z.object({}),
     },

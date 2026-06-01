@@ -11,6 +11,11 @@
  * - Yield structured events for database persistence
  */
 
+import {
+  SUPPRESSED_CLAUDE_STATUSES,
+  SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES,
+} from '@agor/core/client/claude-system-suppression';
+import { shortId } from '@agor/core/db';
 import type {
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
@@ -351,7 +356,7 @@ export class SDKMessageProcessor {
   private handleUser(msg: SDKUserMessage | SDKUserMessageReplay): ProcessedEvent[] {
     // Check if this is a replay message (already processed)
     if ('isReplay' in msg && msg.isReplay) {
-      console.debug(`🔄 User message replay (uuid: ${msg.uuid?.substring(0, 8)})`);
+      console.debug(`🔄 User message replay (uuid: ${msg.uuid ? shortId(msg.uuid) : 'unknown'})`);
       return []; // Skip replays - already in our database
     }
 
@@ -386,7 +391,9 @@ export class SDKMessageProcessor {
     } else if (hasText) {
       const textBlocks = content.filter((b) => b.type === 'text');
       const textPreview = textBlocks[0]?.text?.substring(0, 100) || '';
-      console.log(`👤 SDK user message (uuid: ${uuid?.substring(0, 8)}): "${textPreview}"`);
+      console.log(
+        `👤 SDK user message (uuid: ${uuid ? shortId(uuid) : 'unknown'}): "${textPreview}"`
+      );
 
       // Regular user text messages - also save for completeness
       return [
@@ -401,7 +408,7 @@ export class SDKMessageProcessor {
         },
       ];
     } else {
-      console.log(`👤 SDK user message (uuid: ${uuid?.substring(0, 8)})`);
+      console.log(`👤 SDK user message (uuid: ${uuid ? shortId(uuid) : 'unknown'})`);
       console.log(
         `   Content types:`,
         Array.isArray(content) ? content.map((b) => b.type) : 'no content'
@@ -683,10 +690,14 @@ export class SDKMessageProcessor {
       ];
     }
 
-    // Suppress status='requesting' — pure API-call lifecycle telemetry, fires on every request.
-    // Other status subtype variants (null, permissionMode change, compact_result/error) still flow
-    // through and get surfaced as generic sdk_event messages below.
-    if ('status' in msg && msg.status === 'requesting') {
+    // Suppress noisy status values (e.g. 'requesting' — fires on every API call).
+    // Other status variants (null, permissionMode change, compact_result/error) still
+    // flow through and get surfaced as generic sdk_event messages below.
+    if (
+      'status' in msg &&
+      typeof msg.status === 'string' &&
+      (SUPPRESSED_CLAUDE_STATUSES as ReadonlySet<string>).has(msg.status)
+    ) {
       return [];
     }
 
@@ -733,7 +744,7 @@ export class SDKMessageProcessor {
     const subtype =
       ('subtype' in msg ? (msg as { subtype?: string }).subtype : undefined) || 'unknown';
 
-    if (SDKMessageProcessor.SUPPRESSED_SYSTEM_SUBTYPES.has(subtype)) {
+    if ((SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES as ReadonlySet<string>).has(subtype)) {
       console.debug(`🔇 Suppressed system subtype: ${subtype}`);
       return [];
     }
@@ -811,18 +822,6 @@ export class SDKMessageProcessor {
   private static readonly SUPPRESSED_MESSAGE_TYPES = new Set([
     'tool_progress', // Fires constantly during tool execution — extremely noisy
     'prompt_suggestion', // End-of-conversation suggestions, not relevant in Agor
-  ]);
-
-  /**
-   * System message subtypes to suppress (log-only, don't surface to users).
-   * Everything NOT in this set (and not already handled) is surfaced by default.
-   */
-  private static readonly SUPPRESSED_SYSTEM_SUBTYPES = new Set([
-    'files_persisted', // Internal SDK bookkeeping
-    'session_state_changed', // Internal SDK state transitions
-    'task_started', // SDK task lifecycle — no user-facing value
-    'task_progress', // SDK task lifecycle — fires repeatedly, very noisy
-    'task_notification', // SDK task lifecycle notification
   ]);
 
   /**

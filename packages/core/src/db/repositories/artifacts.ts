@@ -1,20 +1,25 @@
 /**
  * Artifact Repository
  *
- * Type-safe CRUD operations for artifacts with short ID support.
- * Artifacts are live web applications rendered via Sandpack on board canvases.
+ * Type-safe CRUD for artifacts. Artifacts are live web applications rendered
+ * via Sandpack on board canvases. JSON columns use the schema-level `t.json<T>`
+ * helper, so drizzle handles serialization at the column boundary on both
+ * dialects (SQLite `text` with `mode: 'json'`, Postgres native `jsonb`).
  */
 
 import type {
   Artifact,
   ArtifactBuildStatus,
+  ArtifactID,
   BoardID,
+  BranchID,
   SandpackTemplate,
   UUID,
-  WorktreeID,
 } from '@agor/core/types';
 import { and, eq, like, or } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { getBaseUrl } from '../../config/config-manager';
+import { generateId } from '../../lib/ids';
+import { getArtifactUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type ArtifactInsert, type ArtifactRow, artifacts } from '../schema';
@@ -22,56 +27,62 @@ import {
   AmbiguousIdError,
   type BaseRepository,
   EntityNotFoundError,
+  RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
+  resolveByShortIdPrefix,
 } from './base';
 
 export class ArtifactRepository implements BaseRepository<Artifact, Partial<Artifact>> {
   constructor(private db: Database) {}
 
-  private rowToArtifact(row: ArtifactRow): Artifact {
+  /**
+   * Convert database row to Artifact type.
+   *
+   * `baseUrl` is needed to compute the share-link `url` field. Omitted →
+   * `url` is `null`. Also `null` when the artifact isn't placed on a
+   * board (the `/a/<short>/` URL would resolve the artifact but have
+   * nowhere to switch the canvas to).
+   */
+  private rowToArtifact(row: ArtifactRow, baseUrl?: string): Artifact {
+    const artifactId = row.artifact_id as ArtifactID;
+    const url = baseUrl && row.board_id ? getArtifactUrl(artifactId, baseUrl) : null;
     return {
-      artifact_id: row.artifact_id as UUID,
-      worktree_id: (row.worktree_id as WorktreeID) ?? null,
+      artifact_id: artifactId as UUID,
+      branch_id: (row.branch_id as BranchID) ?? null,
       board_id: row.board_id as BoardID,
       name: row.name,
       description: row.description ?? undefined,
       path: row.path ?? null,
       template: (row.template ?? 'react') as SandpackTemplate,
       build_status: (row.build_status ?? 'unknown') as ArtifactBuildStatus,
-      build_errors: row.build_errors ? JSON.parse(row.build_errors) : undefined,
+      build_errors: row.build_errors ?? undefined,
       content_hash: row.content_hash ?? undefined,
-      files: row.files ? JSON.parse(row.files as string) : undefined,
-      dependencies: row.dependencies ? JSON.parse(row.dependencies as string) : undefined,
+      files: row.files ?? undefined,
+      dependencies: row.dependencies ?? undefined,
       entry: row.entry ?? undefined,
-      use_local_bundler: Boolean(row.use_local_bundler),
+      sandpack_config: row.sandpack_config ?? undefined,
+      required_env_vars: row.required_env_vars ?? undefined,
+      agor_grants: row.agor_grants ?? undefined,
+      agor_runtime: row.agor_runtime ?? undefined,
       public: row.public !== undefined ? Boolean(row.public) : true,
       created_by: row.created_by ?? undefined,
       created_at: new Date(row.created_at).toISOString(),
       updated_at: new Date(row.updated_at).toISOString(),
       archived: Boolean(row.archived),
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+      url,
     };
   }
 
   async resolveId(id: string): Promise<string> {
-    if (id.length === 36 && id.includes('-')) return id;
-
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
-    const results = await select(this.db)
-      .from(artifacts)
-      .where(like(artifacts.artifact_id, pattern))
-      .all();
-
-    if (results.length === 0) throw new EntityNotFoundError('Artifact', id);
-    if (results.length > 1) {
-      throw new AmbiguousIdError(
-        'Artifact',
-        id,
-        results.map((r: { artifact_id: string }) => formatShortId(r.artifact_id as UUID))
-      );
-    }
-    return results[0].artifact_id;
+    return resolveByShortIdPrefix(id, 'Artifact', async (pattern) => {
+      const rows = await select(this.db)
+        .from(artifacts)
+        .where(like(artifacts.artifact_id, pattern))
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((r: { artifact_id: string }) => r.artifact_id);
+    });
   }
 
   async create(data: Partial<Artifact>): Promise<Artifact> {
@@ -81,19 +92,22 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
 
       const insertData: ArtifactInsert = {
         artifact_id: artifactId,
-        worktree_id: data.worktree_id ?? null,
+        branch_id: data.branch_id ?? null,
         board_id: data.board_id ?? '',
         name: data.name ?? 'Untitled Artifact',
         description: data.description ?? null,
         path: data.path ?? null,
         template: data.template ?? 'react',
         build_status: data.build_status ?? 'unknown',
-        build_errors: data.build_errors ? JSON.stringify(data.build_errors) : null,
+        build_errors: data.build_errors ?? null,
         content_hash: data.content_hash ?? null,
-        files: data.files ? JSON.stringify(data.files) : null,
-        dependencies: data.dependencies ? JSON.stringify(data.dependencies) : null,
+        files: data.files ?? null,
+        dependencies: data.dependencies ?? null,
         entry: data.entry ?? null,
-        use_local_bundler: data.use_local_bundler ?? false,
+        sandpack_config: data.sandpack_config ?? null,
+        required_env_vars: data.required_env_vars ?? null,
+        agor_grants: data.agor_grants ?? null,
+        agor_runtime: data.agor_runtime ?? null,
         public: data.public ?? true,
         created_by: data.created_by ?? null,
         created_at: now,
@@ -110,7 +124,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .one();
 
       if (!row) throw new RepositoryError('Failed to retrieve created artifact');
-      return this.rowToArtifact(row);
+      const baseUrl = await getBaseUrl();
+      return this.rowToArtifact(row, baseUrl);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
@@ -127,7 +142,9 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .from(artifacts)
         .where(eq(artifacts.artifact_id, fullId))
         .one();
-      return row ? this.rowToArtifact(row) : null;
+      if (!row) return null;
+      const baseUrl = await getBaseUrl();
+      return this.rowToArtifact(row, baseUrl);
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       if (error instanceof AmbiguousIdError) throw error;
@@ -141,7 +158,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
   async findAll(): Promise<Artifact[]> {
     try {
       const rows = await select(this.db).from(artifacts).all();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row));
+      const baseUrl = await getBaseUrl();
+      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all artifacts: ${error instanceof Error ? error.message : String(error)}`,
@@ -164,7 +182,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       }
 
       const rows = await query.all();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row));
+      const baseUrl = await getBaseUrl();
+      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find visible artifacts: ${error instanceof Error ? error.message : String(error)}`,
@@ -173,16 +192,17 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
     }
   }
 
-  async findByWorktreeId(worktreeId: WorktreeID): Promise<Artifact[]> {
+  async findByBranchId(branchId: BranchID): Promise<Artifact[]> {
     try {
       const rows = await select(this.db)
         .from(artifacts)
-        .where(eq(artifacts.worktree_id, worktreeId))
+        .where(eq(artifacts.branch_id, branchId))
         .all();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row));
+      const baseUrl = await getBaseUrl();
+      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
-        `Failed to find artifacts by worktree: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to find artifacts by branch: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -212,7 +232,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       }
 
       const rows = await query.all();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row));
+      const baseUrl = await getBaseUrl();
+      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find artifacts by board: ${error instanceof Error ? error.message : String(error)}`,
@@ -235,22 +256,38 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       if (updates.template !== undefined) setData.template = updates.template;
       if (updates.build_status !== undefined) setData.build_status = updates.build_status;
       if (updates.build_errors !== undefined) {
-        setData.build_errors = updates.build_errors ? JSON.stringify(updates.build_errors) : null;
+        setData.build_errors = updates.build_errors ?? null;
       }
       if (updates.content_hash !== undefined) setData.content_hash = updates.content_hash ?? null;
       if (updates.files !== undefined) {
-        setData.files = updates.files ? JSON.stringify(updates.files) : null;
+        setData.files = updates.files ?? null;
       }
       if (updates.dependencies !== undefined) {
-        setData.dependencies = updates.dependencies ? JSON.stringify(updates.dependencies) : null;
+        setData.dependencies = updates.dependencies ?? null;
       }
       if (updates.entry !== undefined) setData.entry = updates.entry ?? null;
-      if (updates.use_local_bundler !== undefined)
-        setData.use_local_bundler = updates.use_local_bundler;
+      if (updates.sandpack_config !== undefined) {
+        setData.sandpack_config = updates.sandpack_config ?? null;
+      }
+      if (updates.required_env_vars !== undefined) {
+        setData.required_env_vars = updates.required_env_vars ?? null;
+      }
+      if (updates.agor_runtime !== undefined) {
+        setData.agor_runtime = updates.agor_runtime ?? null;
+      }
+      if (updates.agor_grants !== undefined) {
+        setData.agor_grants = updates.agor_grants ?? null;
+      }
       if (updates.public !== undefined) setData.public = updates.public;
       if (updates.archived !== undefined) setData.archived = updates.archived;
       if (updates.archived_at !== undefined) {
         setData.archived_at = updates.archived_at ? new Date(updates.archived_at) : null;
+      }
+      // branch_id: passing null clears the FK; passing undefined leaves it
+      // alone. Required so a republish from a branch path backfills the FK
+      // for artifacts that were created before the column was populated.
+      if (updates.branch_id !== undefined) {
+        setData.branch_id = updates.branch_id ?? null;
       }
 
       await update(this.db, artifacts).set(setData).where(eq(artifacts.artifact_id, fullId)).run();
@@ -261,7 +298,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .one();
 
       if (!row) throw new EntityNotFoundError('Artifact', id);
-      return this.rowToArtifact(row);
+      const baseUrl = await getBaseUrl();
+      return this.rowToArtifact(row, baseUrl);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(

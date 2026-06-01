@@ -8,22 +8,24 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ensureCodexHome,
+  __resetConfigCacheForTests,
+  ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
+  getBranchesDir,
+  getBranchPath,
   getConfigPath,
   getConfigValue,
   getDaemonUrl,
   getDataHome,
   getDefaultConfig,
   getReposDir,
-  getWorktreePath,
-  getWorktreesDir,
   initConfig,
   loadConfig,
+  loadConfigSync,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
-  resolveCodexHome,
+  resolveBranchStorageConfig,
   saveConfig,
   setConfigValue,
   unsetConfigValue,
@@ -42,13 +44,10 @@ function createConfigData(overrides?: Partial<AgorConfig>): AgorConfig {
     display: {
       tableStyle: 'ascii',
       colorOutput: false,
-      shortIdLength: 12,
     },
     daemon: {
       port: 4000,
       host: '0.0.0.0',
-      allowAnonymous: false,
-      requireAuth: true,
     },
     ui: {
       port: 8080,
@@ -93,13 +92,11 @@ describe('getDefaultConfig', () => {
     expect(defaults.defaults?.agent).toBe('claude-code');
     expect(defaults.display?.tableStyle).toBe('unicode');
     expect(defaults.display?.colorOutput).toBe(true);
-    expect(defaults.display?.shortIdLength).toBe(8);
     expect(defaults.daemon?.port).toBe(3030);
     expect(defaults.daemon?.host).toBe('localhost');
-    expect(defaults.daemon?.allowAnonymous).toBe(true);
-    expect(defaults.daemon?.requireAuth).toBe(false);
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
+    expect(defaults.analytics?.enabled).toBe(false);
   });
 });
 
@@ -189,6 +186,187 @@ describe('loadConfig', () => {
     expect(loaded.defaults).toBeUndefined();
     expect(loaded.display).toBeUndefined();
   });
+
+  it('does not configure an external launch login redirect by default', async () => {
+    const loaded = await loadConfig();
+    expect(loaded.external_launch?.login_redirect_url).toBeUndefined();
+  });
+
+  it('accepts an HTTP(S) external launch login redirect URL', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: {
+          enabled: true,
+          login_redirect_url: ' https://workspace.example.com/open ',
+        },
+      }),
+      'utf-8'
+    );
+
+    const loaded = await loadConfig();
+    expect(loaded.external_launch?.login_redirect_url).toBe('https://workspace.example.com/open');
+  });
+
+  it('rejects a non-HTTP(S) external launch login redirect URL', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: {
+          enabled: true,
+          login_redirect_url: 'javascript:alert(1)',
+        },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/external_launch\.login_redirect_url.*http/i);
+  });
+});
+
+describe('loadConfig cache', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-cache-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    __resetConfigCacheForTests();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    __resetConfigCacheForTests();
+  });
+
+  async function writeConfigFile(data: AgorConfig | string): Promise<string> {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    const body = typeof data === 'string' ? data : yaml.dump(data);
+    await fs.writeFile(configPath, body, 'utf-8');
+    return configPath;
+  }
+
+  it('serves repeated reads from the cache without re-parsing YAML', async () => {
+    await writeConfigFile({ daemon: { port: 4000 } });
+
+    // First call hits the disk and parses; subsequent calls hit the cache.
+    // We prove cache behavior by spying on the YAML parser rather than
+    // relying on object identity (the cache hands out clones, not the
+    // shared object — see "isolated from caller mutation").
+    const yamlLoadSpy = vi.spyOn(yaml, 'load');
+    const first = await loadConfig();
+    const callsAfterFirst = yamlLoadSpy.mock.calls.length;
+    const second = await loadConfig();
+    const third = await loadConfig();
+
+    expect(first.daemon?.port).toBe(4000);
+    expect(second.daemon?.port).toBe(4000);
+    expect(third.daemon?.port).toBe(4000);
+    // No additional yaml.load() invocations after the first.
+    expect(yamlLoadSpy.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  it('loadConfigSync shares the same cache as loadConfig', async () => {
+    await writeConfigFile({ daemon: { port: 5555 } });
+
+    const yamlLoadSpy = vi.spyOn(yaml, 'load');
+    const fromAsync = await loadConfig();
+    const callsAfterAsync = yamlLoadSpy.mock.calls.length;
+    const fromSync = loadConfigSync();
+
+    expect(fromAsync.daemon?.port).toBe(5555);
+    expect(fromSync.daemon?.port).toBe(5555);
+    // Sync read also served from cache — no second yaml.load.
+    expect(yamlLoadSpy.mock.calls.length).toBe(callsAfterAsync);
+  });
+
+  it('isolates callers from each other: mutating a returned config does not affect later reads', async () => {
+    await writeConfigFile({ daemon: { port: 4000 } });
+
+    const first = await loadConfig();
+    // Caller mutates the returned object (mimicking setConfigValue style).
+    first.daemon ??= {};
+    first.daemon.port = 9999;
+
+    const second = await loadConfig();
+    // The cache returned a clone, so the mutation didn't leak.
+    expect(second.daemon?.port).toBe(4000);
+  });
+
+  it('saveConfig invalidates the cache so the next read returns the new value', async () => {
+    await saveConfig({ daemon: { port: 4000 } } as AgorConfig);
+    const before = await loadConfig();
+    expect(before.daemon?.port).toBe(4000);
+
+    await saveConfig({ daemon: { port: 9999 } } as AgorConfig);
+    const after = await loadConfig();
+    expect(after.daemon?.port).toBe(9999);
+  });
+
+  it('picks up external file mutations via mtime change', async () => {
+    const configPath = await writeConfigFile({ daemon: { port: 4000 } });
+    expect((await loadConfig()).daemon?.port).toBe(4000);
+
+    // Force a distinct mtime — on filesystems with millisecond resolution,
+    // back-to-back writes can collide.
+    await new Promise((r) => setTimeout(r, 20));
+    await fs.writeFile(configPath, yaml.dump({ daemon: { port: 7777 } }), 'utf-8');
+
+    expect((await loadConfig()).daemon?.port).toBe(7777);
+  });
+
+  it('returns defaults when the file is missing, then re-reads after the file is created', async () => {
+    // No file yet → defaults are cached under the NO_FILE sentinel.
+    const before = await loadConfig();
+    expect(before).toEqual(getDefaultConfig());
+
+    // Create the file. The cached NO_FILE sentinel no longer matches stat,
+    // so the next load re-reads.
+    await writeConfigFile({ daemon: { port: 6666 } });
+    const after = await loadConfig();
+    expect(after.daemon?.port).toBe(6666);
+  });
+
+  it('does not poison the cache on parse error', async () => {
+    await writeConfigFile('invalid: yaml: [content');
+
+    await expect(loadConfig()).rejects.toThrow('Failed to load config');
+
+    // After fixing the file, the next call should succeed (we never cached
+    // a partial / broken value).
+    await new Promise((r) => setTimeout(r, 20));
+    await writeConfigFile({ daemon: { port: 8888 } });
+    const recovered = await loadConfig();
+    expect(recovered.daemon?.port).toBe(8888);
+  });
+
+  it('validates on every load path: loadConfigSync rejects deprecated values too', async () => {
+    // Regression guard for the shared-cache bug: if loadConfigSync had a
+    // separate (un-validated) code path, calling it first could populate
+    // the cache with an invalid config that a later loadConfig() would
+    // silently return.
+    //
+    // YAML written as a raw string because `unix_user_mode: 'opportunistic'`
+    // is intentionally not assignable to `AgorConfig.execution.unix_user_mode`
+    // (the value was deprecated and removed from the type) — that's what
+    // validateConfig() catches at runtime for users who still have the value
+    // in their config.yaml.
+    await writeConfigFile('execution:\n  unix_user_mode: opportunistic\n');
+
+    expect(() => loadConfigSync()).toThrow(/opportunistic.*deprecated/s);
+    // And async path stays consistent.
+    await expect(loadConfig()).rejects.toThrow(/opportunistic.*deprecated/s);
+  });
 });
 
 describe('requirePublicBaseUrl', () => {
@@ -260,61 +438,6 @@ describe('requirePublicBaseUrl', () => {
   });
 });
 
-describe('resolveCodexHome & ensureCodexHome', () => {
-  let tempDir: string;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-config-'));
-    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it('should resolve to default Codex home when not configured', async () => {
-    const home = await resolveCodexHome();
-    expect(home).toBe(path.join(tempDir, '.agor', 'codex'));
-  });
-
-  it('should resolve a configured tilde path', async () => {
-    const agorDir = path.join(tempDir, '.agor');
-    await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(
-      path.join(agorDir, 'config.yaml'),
-      yaml.dump({ codex: { home: '~/.custom-codex' } }),
-      'utf-8'
-    );
-
-    const home = await resolveCodexHome();
-    expect(home).toBe(path.join(tempDir, '.custom-codex'));
-  });
-
-  it('should create the default Codex home directory when ensuring', async () => {
-    const codexHome = await ensureCodexHome();
-    expect(codexHome).toBe(path.join(tempDir, '.agor', 'codex'));
-    const stats = await fs.stat(codexHome);
-    expect(stats.isDirectory()).toBe(true);
-  });
-
-  it('should create a configured Codex home directory if missing', async () => {
-    const customHome = path.join(tempDir, 'codex-data');
-    const agorDir = path.join(tempDir, '.agor');
-    await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(
-      path.join(agorDir, 'config.yaml'),
-      yaml.dump({ codex: { home: customHome } }),
-      'utf-8'
-    );
-
-    const codexHome = await ensureCodexHome();
-    expect(codexHome).toBe(customHome);
-    const stats = await fs.stat(customHome);
-    expect(stats.isDirectory()).toBe(true);
-  });
-});
-
 describe('saveConfig', () => {
   let tempDir: string;
 
@@ -364,6 +487,17 @@ describe('saveConfig', () => {
 
     const loaded = await loadConfig();
     expect(loaded).toEqual({});
+  });
+
+  it('validates external launch login redirect before saving', async () => {
+    await expect(
+      saveConfig({
+        external_launch: {
+          enabled: true,
+          login_redirect_url: 'javascript:alert(1)',
+        },
+      })
+    ).rejects.toThrow(/external_launch\.login_redirect_url.*http/i);
   });
 
   it('should format YAML with proper indentation', async () => {
@@ -494,11 +628,13 @@ describe('getConfigValue', () => {
   });
 
   it('should handle number values', async () => {
-    const config = createConfigData();
+    const config = createConfigData({
+      ui: { port: 9090, host: 'localhost' },
+    });
     await saveConfig(config);
 
-    const shortIdLength = await getConfigValue('display.shortIdLength');
-    expect(shortIdLength).toBe(12);
+    const port = await getConfigValue('ui.port');
+    expect(port).toBe(9090);
   });
 });
 
@@ -551,18 +687,18 @@ describe('setConfigValue', () => {
 
   it('should handle boolean values', async () => {
     await saveConfig({});
-    await setConfigValue('daemon.allowAnonymous', false);
+    await setConfigValue('daemon.mcpEnabled', false);
 
-    const value = await getConfigValue('daemon.allowAnonymous');
+    const value = await getConfigValue('daemon.mcpEnabled');
     expect(value).toBe(false);
   });
 
   it('should handle number values', async () => {
     await saveConfig({});
-    await setConfigValue('display.shortIdLength', 16);
+    await setConfigValue('ui.port', 9090);
 
-    const value = await getConfigValue('display.shortIdLength');
-    expect(value).toBe(16);
+    const value = await getConfigValue('ui.port');
+    expect(value).toBe(9090);
   });
 
   it('should throw error for top-level keys', async () => {
@@ -892,7 +1028,7 @@ describe('getReposDir', () => {
   });
 });
 
-describe('getWorktreesDir', () => {
+describe('getBranchesDir', () => {
   let tempDir: string;
   let originalEnv: NodeJS.ProcessEnv;
 
@@ -909,12 +1045,12 @@ describe('getWorktreesDir', () => {
     process.env = originalEnv;
   });
 
-  it('should return worktrees path under data home', () => {
-    const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe(path.join(tempDir, '.agor', 'worktrees'));
+  it('should return branches path under data home', () => {
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toBe(path.join(tempDir, '.agor', 'worktrees'));
   });
 
-  it('should use custom data_home for worktrees path', async () => {
+  it('should use custom data_home for branches path', async () => {
     const config: AgorConfig = {
       paths: { data_home: '/custom/data' },
     };
@@ -922,19 +1058,19 @@ describe('getWorktreesDir', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
 
-    const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe('/custom/data/worktrees');
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toBe('/custom/data/worktrees');
   });
 
-  it('should use AGOR_DATA_HOME env var for worktrees path', () => {
+  it('should use AGOR_DATA_HOME env var for branches path', () => {
     process.env.AGOR_DATA_HOME = '/env/data';
 
-    const worktreesDir = getWorktreesDir();
-    expect(worktreesDir).toBe('/env/data/worktrees');
+    const branchesDir = getBranchesDir();
+    expect(branchesDir).toBe('/env/data/worktrees');
   });
 });
 
-describe('getWorktreePath', () => {
+describe('getBranchPath', () => {
   let tempDir: string;
   let originalEnv: NodeJS.ProcessEnv;
 
@@ -951,14 +1087,12 @@ describe('getWorktreePath', () => {
     process.env = originalEnv;
   });
 
-  it('should construct worktree path from repo slug and name', () => {
-    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
-    expect(worktreePath).toBe(
-      path.join(tempDir, '.agor', 'worktrees', 'org/repo', 'feature-branch')
-    );
+  it('should construct branch path from repo slug and name', () => {
+    const branchPath = getBranchPath('org/repo', 'feature-branch');
+    expect(branchPath).toBe(path.join(tempDir, '.agor', 'worktrees', 'org/repo', 'feature-branch'));
   });
 
-  it('should use custom data_home for worktree path', async () => {
+  it('should use custom data_home for branch path', async () => {
     const config: AgorConfig = {
       paths: { data_home: '/custom/data' },
     };
@@ -966,14 +1100,122 @@ describe('getWorktreePath', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
 
-    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
-    expect(worktreePath).toBe('/custom/data/worktrees/org/repo/feature-branch');
+    const branchPath = getBranchPath('org/repo', 'feature-branch');
+    expect(branchPath).toBe('/custom/data/worktrees/org/repo/feature-branch');
   });
 
-  it('should use AGOR_DATA_HOME env var for worktree path', () => {
+  it('should use AGOR_DATA_HOME env var for branch path', () => {
     process.env.AGOR_DATA_HOME = '/env/data';
 
-    const worktreePath = getWorktreePath('org/repo', 'feature-branch');
-    expect(worktreePath).toBe('/env/data/worktrees/org/repo/feature-branch');
+    const branchPath = getBranchPath('org/repo', 'feature-branch');
+    expect(branchPath).toBe('/env/data/worktrees/org/repo/feature-branch');
+  });
+});
+
+describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-branch-storage-test-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    __resetConfigCacheForTests();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    __resetConfigCacheForTests();
+  });
+
+  async function writeConfig(config: AgorConfig): Promise<void> {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
+    __resetConfigCacheForTests();
+  }
+
+  it('defaults to both modes allowed with worktree as default when execution.branch_storage is not configured', () => {
+    // No config file present. v0.20+ default exposes both modes in the UI /
+    // MCP create tool while keeping `default_mode='worktree'` so callers that
+    // don't pick a mode keep landing on the legacy path.
+    const resolved = resolveBranchStorageConfig();
+    expect(resolved).toEqual({
+      defaultMode: 'worktree',
+      allowedModes: ['worktree', 'clone'],
+    });
+  });
+
+  it('lets operators disable clone mode by pinning allowed_modes to ["worktree"]', async () => {
+    // Security-gradient deployments opt out of clone-mode entirely.
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          allowed_modes: ['worktree'],
+        },
+      },
+    });
+
+    const resolved = resolveBranchStorageConfig();
+    expect(resolved.allowedModes).toEqual(['worktree']);
+    expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(/not enabled/);
+  });
+
+  it('honours operator-configured allowed_modes + default_mode', async () => {
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['worktree', 'clone'],
+        },
+      },
+    });
+
+    const resolved = resolveBranchStorageConfig();
+    expect(resolved.defaultMode).toBe('clone');
+    expect(resolved.allowedModes).toEqual(['worktree', 'clone']);
+  });
+
+  it('falls back default_mode into allowed_modes when operator misconfigures them', async () => {
+    // Operator set default_mode: clone but forgot to add 'clone' to
+    // allowed_modes. Resolver must not hand out a default that the gate
+    // would immediately reject.
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['worktree'],
+        },
+      },
+    });
+
+    const resolved = resolveBranchStorageConfig();
+    expect(resolved.defaultMode).toBe('worktree');
+    expect(resolved.allowedModes).toEqual(['worktree']);
+  });
+
+  it('ensureBranchStorageModeAllowed throws a clear message for disallowed modes', async () => {
+    // Pin allowed_modes to worktree-only to exercise the disallowed-clone path.
+    await writeConfig({
+      daemon: { port: 3030 },
+      execution: {
+        branch_storage: {
+          allowed_modes: ['worktree'],
+        },
+      },
+    });
+    expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
+    expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(/not enabled/);
+    expect(() => ensureBranchStorageModeAllowed('clone')).toThrow(
+      /execution\.branch_storage\.allowed_modes/
+    );
+  });
+
+  it('ensureBranchStorageModeAllowed accepts both modes under the default config', () => {
+    // v0.20+ default allows both — operators have to opt out to forbid clone.
+    expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
+    expect(() => ensureBranchStorageModeAllowed('clone')).not.toThrow();
   });
 });

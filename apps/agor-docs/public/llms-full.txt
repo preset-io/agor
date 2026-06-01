@@ -1,6 +1,6 @@
 # Agor
 
-> Agor is a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini). It manages git worktrees, tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding assistants.
+> Agor is a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini). It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding assistants.
 
 Agor is open-source software licensed under BSL 1.1, created by Maxime Beauchemin.
 
@@ -22,20 +22,20 @@ agor open
 
 Agor is built around 5 core primitives:
 
-### Worktrees
-A worktree is an isolated git working directory where agentic coding sessions take place. Agor uses git worktrees under the hood. Best practice: 1 worktree = 1 issue = 1 PR = 1 feature. Each worktree contains a tree of sessions — as you work, you can fork and spawn sessions creating genealogy trees.
+### Branches
+A branch is an isolated workspace where agentic coding sessions take place. Each branch is backed by either a native git worktree (shared base `.git/`) or a self-standing clone (its own `.git/`), selected via `storage_mode`. Best practice: 1 branch = 1 issue = 1 PR = 1 feature. Each branch contains a tree of sessions — as you work, you can fork and spawn sessions creating genealogy trees.
 
 ### Boards
-Boards are spatial canvases for organizing worktrees — like Figma for AI coding work. Instead of linear lists, boards use a 2D layout with real-time multiplayer cursors and presence.
+Boards are spatial canvases for organizing branches — like Figma for AI coding work. Instead of linear lists, boards use a 2D layout with real-time multiplayer cursors and presence.
 
 ### Sessions
 Sessions are AI conversations that can fork and spawn, creating genealogy trees. Fork creates a sibling session with a copy of the conversation context. Spawn creates a child session with a fresh context window.
 
 ### Zones
-Zones are spatial regions on boards that trigger templated prompts (using Handlebars) when you drop a worktree into them. Build kanban-style workflows: analyze → develop → review → deploy.
+Zones are spatial regions on boards that trigger templated prompts (using Handlebars) when you drop a branch into them. Build kanban-style workflows: analyze → develop → review → deploy.
 
 ### Environments
-Environments are runtime instances (dev servers, Docker containers, etc.) for worktrees. Each worktree gets unique ports via templates, preventing conflicts when running multiple worktrees simultaneously.
+Environments are runtime instances (dev servers, Docker containers, etc.) for branches. Each branch gets unique ports via templates, preventing conflicts when running multiple branches simultaneously.
 
 ### Assistants
 Assistants are persistent AI companions with memory (MEMORY.md, SOUL.md), orchestration capabilities, and scheduled heartbeats. They coordinate work across your workspace.
@@ -46,7 +46,7 @@ Assistants are persistent AI companions with memory (MEMORY.md, SOUL.md), orches
 - **Multiplayer Spatial Canvas**: Figma-like board layout with real-time cursors and facepiles
 - **Session Trees**: Fork and spawn sessions for parallel exploration
 - **Zone Triggers**: Automated workflows via templated prompts
-- **Isolated Environments**: Per-worktree dev servers with auto-managed ports
+- **Isolated Environments**: Per-branch dev servers with auto-managed ports
 - **Mobile-Friendly**: Send prompts and monitor progress from your phone
 - **MCP Server**: Built-in Model Context Protocol server for self-aware agents
 - **Message Gateway**: Route Slack/Discord messages into Agor sessions
@@ -85,7 +85,7 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 
 - [Getting Started](https://agor.live/guide/getting-started): Install and set up Agor in under 5 minutes
 - [Extended Installation](https://agor.live/guide/extended-install): Docker, source builds, optional Zellij
-- [Worktrees](https://agor.live/guide/worktrees): Isolated git working directories — primary unit of work
+- [Branches](https://agor.live/guide/branches): Isolated workspaces backed by git worktrees or self-standing clones — primary unit of work
 - [Sessions & Trees](https://agor.live/guide/sessions): Conversations that fork, spawn subsessions, ask side questions
 - [Boards & Zones](https://agor.live/guide/boards): 2D spatial canvases with templated zone triggers
 - [Features Overview](https://agor.live/guide/features-overview): Map of all features
@@ -93,7 +93,7 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 - [Agor MCP Server](https://agor.live/guide/internal-mcp): Anything a user can do, an agent can do too
 - [Rich Chat UX](https://agor.live/guide/rich-chat-ux): Token/$ accounting, context viz, tool blocks, queueing, Streamdown
 - [Multiplayer & Social](https://agor.live/guide/multiplayer-social): Cursors, facepile, comments, attention pulse, shared terminals
-- [Environments](https://agor.live/guide/environment-configuration): Per-worktree dev environments with unique ports
+- [Environments](https://agor.live/guide/environment-configuration): Per-branch dev environments with unique ports
 - [Scheduler](https://agor.live/guide/scheduler): Cron-driven agent automation, powers assistant heartbeats
 - [Cards](https://agor.live/guide/cards): Generic workflow entities on boards (beta)
 - [Artifacts](https://agor.live/guide/artifacts): Live, interactive Sandpack apps on the canvas

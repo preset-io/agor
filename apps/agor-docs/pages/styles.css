@@ -73,3 +73,45 @@ main {
   position: relative;
   z-index: 1;
 }
+
+/* ─── Navbar CTA position ────────────────────────────────────────────────
+ *
+ * The Agor Cloud CTA (components/NavbarCloudCTA) is mounted into Nextra's
+ * `navbar.extraContent` slot, which renders at the END of the nav by
+ * default (after the GitHub/Discord icons). We want it just to the LEFT
+ * of the search box so it reads as a nav destination, not a utility
+ * icon.
+ *
+ * Default flex `order` on every nav child is 0. The CTA itself gets
+ * `order: 2` in its module CSS; the rules below reorder the remaining
+ * children so the visible left-to-right order becomes:
+ *
+ *   [Logo]  [Page items]  [Agor Cloud CTA]  [Search]  [GitHub]  [Discord]  [Hamburger]
+ *
+ * nextra-theme-docs@3.3.x renders these direct children of
+ * `.nextra-nav-container nav` in this source order (when project.link,
+ * chat.link, and navbar.extraContent are all set):
+ *
+ *   1. <a>     logo                  (mr-auto pushes it to the far left)
+ *   2. <div>   page items wrapper
+ *   3. <div>   search box wrapper
+ *   4. <a>     project (GitHub) icon
+ *   5. <a>     chat (Discord) icon
+ *   6. <a>     extraContent — the CTA
+ *   7. <button> hamburger menu
+ *
+ * If a Nextra upgrade changes that DOM shape, this block + the CTA's
+ * own `order: 2` are the only places that need to be revisited.
+ */
+.nextra-nav-container nav > div:nth-of-type(2) {
+  order: 3;
+}
+.nextra-nav-container nav > a:nth-of-type(2) {
+  order: 4;
+}
+.nextra-nav-container nav > a:nth-of-type(3) {
+  order: 5;
+}
+.nextra-nav-container nav > button {
+  order: 6;
+}

@@ -9,8 +9,7 @@
  * register-services.ts and operate on the daemon's DB + filesystem directly.
  */
 
-import type { Database } from '@agor/core/db';
-import { SerializedSessionRepository } from '@agor/core/db';
+import { type Database, SerializedSessionRepository, shortId } from '@agor/core/db';
 import type { AgenticToolName } from '@agor/core/types';
 import {
   computeFileHash,
@@ -27,7 +26,7 @@ interface PullContext {
   db: Database;
   sessionId: string;
   sdkSessionId: string;
-  worktreePath: string;
+  branchPath: string;
   tool: AgenticToolName;
   /** Override for the executor user's home directory (insulated/strict modes) */
   executorHomeDir?: string;
@@ -36,10 +35,10 @@ interface PullContext {
 interface PushContext {
   db: Database;
   sessionId: string;
-  worktreeId: string;
+  branchId: string;
   taskId: string;
   sdkSessionId: string;
-  worktreePath: string;
+  branchPath: string;
   tool: AgenticToolName;
   lastKnownMd5?: string;
   /** Override for the executor user's home directory (insulated/strict modes) */
@@ -61,10 +60,15 @@ interface PushContext {
 export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   const repo = new SerializedSessionRepository(ctx.db);
 
-  // For Codex, pass the per-session CODEX_HOME as homeOverride
-  const homeOverride = ctx.tool === 'codex' ? getCodexHome(ctx.sessionId) : ctx.executorHomeDir;
-
-  const filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId, homeOverride);
+  // Both claude-code and codex now resolve transcripts under the executor
+  // user's HOME (~/.claude or ~/.codex). For simple mode executorHomeDir is
+  // undefined and the helpers fall back to os.homedir().
+  const filePath = getSessionFilePath(
+    ctx.tool,
+    ctx.branchPath,
+    ctx.sdkSessionId,
+    ctx.executorHomeDir
+  );
 
   // Check latest row (any status)
   let latest = await repo.findLatest(ctx.sessionId);
@@ -79,7 +83,7 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
     const age = Date.now() - latest.created_at;
     if (age > STALE_PROCESSING_THRESHOLD_MS) {
       console.log(
-        `[session-state] Cleaning stale 'processing' row ${latest.id.substring(0, 8)} (age: ${Math.round(age / 1000)}s)`
+        `[session-state] Cleaning stale 'processing' row ${shortId(latest.id)} (age: ${Math.round(age / 1000)}s)`
       );
       await repo.deleteById(latest.id);
       // Fall through: check if there's a 'done' row behind it
@@ -113,13 +117,13 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   // Case 4: MD5 differs → restore from DB
   if (!latest.payload) {
     console.warn(
-      `[session-state] 'done' row ${latest.id.substring(0, 8)} has no payload, skipping restore`
+      `[session-state] 'done' row ${shortId(latest.id)} has no payload, skipping restore`
     );
     return;
   }
 
   console.log(
-    `[session-state] Restoring session file from DB (row ${latest.id.substring(0, 8)}, turn ${latest.turn_index})`
+    `[session-state] Restoring session file from DB (row ${shortId(latest.id)}, turn ${latest.turn_index})`
   );
   await restoreFile(filePath, latest.payload);
 }
@@ -141,7 +145,7 @@ async function doPush(ctx: PushContext): Promise<void> {
   // For Codex, find the actual session file (may be in a date-based subdirectory)
   let filePath: string;
   if (ctx.tool === 'codex') {
-    const codexHome = getCodexHome(ctx.sessionId);
+    const codexHome = getCodexHome(ctx.executorHomeDir);
     const found = await findCodexSessionFile(codexHome, ctx.sdkSessionId);
     if (!found) {
       // No session file found — Codex may not have written one (e.g. error before first turn)
@@ -149,8 +153,7 @@ async function doPush(ctx: PushContext): Promise<void> {
     }
     filePath = found;
   } else {
-    const homeOverride = ctx.executorHomeDir;
-    filePath = getSessionFilePath(ctx.tool, ctx.worktreePath, ctx.sdkSessionId, homeOverride);
+    filePath = getSessionFilePath(ctx.tool, ctx.branchPath, ctx.sdkSessionId, ctx.executorHomeDir);
   }
 
   // Compute current hash
@@ -173,7 +176,7 @@ async function doPush(ctx: PushContext): Promise<void> {
   // Insert processing row (fast — no payload yet)
   const row = await repo.insertProcessing({
     sessionId: ctx.sessionId,
-    worktreeId: ctx.worktreeId,
+    branchId: ctx.branchId,
     taskId: ctx.taskId,
     turnIndex,
     md5: currentMd5,

@@ -2,9 +2,37 @@
  * CodexPromptService Tests
  *
  * Focused test: Verify SDK instance caching to prevent memory leak (issue #133)
+ *
+ * KNOWN GAP: the `MockCodexClient` below only captures `apiKey` + `baseUrl`,
+ * not `config` (model_instructions_file, mcp_servers) or `env` (subscription-
+ * mode scrubbing). The streaming tests stub out `ensureCodexInstructionsFile`,
+ * `buildMcpServersConfig`, and `ensureCodexClient` outright. So the
+ * load-bearing behaviors of the per-session-CODEX_HOME removal —
+ * `model_instructions_file` injection, MCP server flattening, subscription-
+ * mode env scrubbing, fingerprint-based cache invalidation on token rotation
+ * — are NOT exercised here. End-to-end coverage for those lives in the
+ * manual test matrix in PR #1136. A proper SDK-call-shape assertion suite
+ * is queued as a follow-up.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const appServerMocks = vi.hoisted(() => ({
+  forkCodexThreadViaAppServer: vi.fn(),
+}));
+
+const mcpScopingMocks = vi.hoisted(() => ({
+  getMcpServersForSession: vi.fn(),
+}));
+
+const mcpAuthMocks = vi.hoisted(() => ({
+  resolveMCPAuthHeaders: vi.fn(),
+}));
+
+const configMocks = vi.hoisted(() => ({
+  getDaemonUrl: vi.fn(),
+}));
+
 import { CodexPromptService } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
@@ -21,6 +49,11 @@ async function* streamMockEvents() {
 }
 
 // Mock @agor/core/sdk to avoid spawning real Codex CLI processes
+vi.mock('./app-server-client.js', () => appServerMocks);
+vi.mock('../base/mcp-scoping.js', () => mcpScopingMocks);
+vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
+vi.mock('../../config.js', () => configMocks);
+
 vi.mock('@agor/core/sdk', () => {
   class MockCodexClient {
     apiKey: string;
@@ -62,11 +95,12 @@ vi.mock('@agor/core/sdk', () => {
 const mockMessagesRepo = {} as any;
 const mockSessionsRepo = {
   findById: vi.fn(),
+  update: vi.fn(),
 } as any;
 const mockSessionMCPServerRepo = {
   listServers: vi.fn().mockResolvedValue([]),
 } as any;
-const mockWorktreesRepo = {
+const mockBranchesRepo = {
   findById: vi.fn(),
 } as any;
 const mockDb = {} as any;
@@ -78,6 +112,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockStreamEvents = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
+    appServerMocks.forkCodexThreadViaAppServer.mockReset();
   });
 
   it('should create exactly one Codex instance on initialization', () => {
@@ -87,7 +122,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined, // reposRepo
       'test-api-key',
       mockDb
@@ -101,7 +136,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined, // reposRepo
       'test-api-key',
       mockDb
@@ -125,7 +160,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined, // reposRepo
       'initial-key',
       mockDb
@@ -152,7 +187,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined, // reposRepo
       undefined,
       mockDb
@@ -188,7 +223,7 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       apiKey,
       mockDb
@@ -233,13 +268,101 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
   });
 });
 
+describe('CodexPromptService - forked sessions', () => {
+  beforeEach(() => {
+    mockInstanceCount = 0;
+    mockInstanceBaseUrls = [];
+    mockStreamEvents = [];
+    delete process.env.OPENAI_BASE_URL;
+    vi.clearAllMocks();
+    appServerMocks.forkCodexThreadViaAppServer.mockReset();
+  });
+
+  it('forks the parent Codex thread via app-server before resuming the child thread', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-child.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    const childSession = {
+      session_id: 'child-session',
+      branch_id: 'branch-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: null,
+      genealogy: { forked_from_session_id: 'parent-session' },
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    };
+    const parentSession = {
+      session_id: 'parent-session',
+      branch_id: 'branch-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: 'parent-thread-id',
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    };
+
+    mockSessionsRepo.findById.mockImplementation(async (id: string) => {
+      if (id === 'child-session') return childSession;
+      if (id === 'parent-session') return parentSession;
+      return null;
+    });
+    mockSessionsRepo.update.mockResolvedValue(undefined);
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
+      path: process.cwd(),
+    });
+    appServerMocks.forkCodexThreadViaAppServer.mockResolvedValue('forked-thread-id');
+
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('child-session' as any, 'continue')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
+      'parent-thread-id',
+      expect.objectContaining({ env: expect.any(Object) })
+    );
+    expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
+      sdk_session_id: 'forked-thread-id',
+    });
+    expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
+      threadId: 'forked-thread-id',
+    });
+  });
+});
+
 describe('CodexPromptService - Todo normalization', () => {
   it('maps codex todo_list to TodoWrite-compatible payload with inferred in_progress', () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -288,7 +411,7 @@ describe('CodexPromptService - Todo normalization', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -311,7 +434,7 @@ describe('CodexPromptService - Todo normalization', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -319,21 +442,26 @@ describe('CodexPromptService - Todo normalization', () => {
 
     // Avoid filesystem/config setup noise in this focused stream test
     const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
-    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 
     mockSessionsRepo.findById.mockResolvedValue({
       session_id: 'session-1',
-      worktree_id: 'worktree-1',
+      branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
       permission_config: { codex: {} },
       model_config: {},
       mcp_token: 'test-token',
     });
-    mockWorktreesRepo.findById.mockResolvedValue({
-      worktree_id: 'worktree-1',
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
       path: process.cwd(),
     });
 
@@ -383,28 +511,33 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
     );
 
     const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
-    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 
     mockSessionsRepo.findById.mockResolvedValue({
       session_id: 'session-ctx',
-      worktree_id: 'worktree-1',
+      branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
       permission_config: { codex: {} },
       model_config: {},
       mcp_token: 'test-token',
     });
-    mockWorktreesRepo.findById.mockResolvedValue({
-      worktree_id: 'worktree-1',
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
       path: process.cwd(),
     });
 
@@ -442,10 +575,14 @@ describe('CodexPromptService - tool payload mapping', () => {
 
     const completeEvent = emitted.find((event) => event.type === 'complete');
     expect(completeEvent).toBeTruthy();
+    // Snapshot must use last_token_usage (current occupancy = 12_000), NOT
+    // total_token_usage (lifetime cumulative = 210_000). Percentage applies
+    // Codex CLI's baseline subtraction (12_000 baseline on a 272_000 window):
+    // used = max(0, 12_000 - 12_000) = 0  →  0% used.
     expect(completeEvent?.rawContextUsage).toEqual({
-      totalTokens: 210000,
+      totalTokens: 12000,
       maxTokens: 272000,
-      percentage: 77,
+      percentage: 0,
     });
   });
 
@@ -454,7 +591,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -466,7 +603,7 @@ describe('CodexPromptService - tool payload mapping', () => {
         type: 'mcp_tool_call',
         server: 'agor',
         tool: 'agor_execute_tool',
-        arguments: { tool_name: 'agor_worktrees_list' },
+        arguments: { tool_name: 'agor_branches_list' },
         result: {
           content: [{ type: 'text', text: 'ok' }],
           structured_content: { success: true },
@@ -479,7 +616,7 @@ describe('CodexPromptService - tool payload mapping', () => {
     expect(toolUse).toEqual({
       id: 'mcp-1',
       name: 'agor.agor_execute_tool',
-      input: { tool_name: 'agor_worktrees_list' },
+      input: { tool_name: 'agor_branches_list' },
       output: [{ type: 'text', text: 'ok' }],
       status: 'completed',
     });
@@ -490,7 +627,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -525,7 +662,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -561,7 +698,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
@@ -589,28 +726,33 @@ describe('CodexPromptService - tool payload mapping', () => {
       mockMessagesRepo,
       mockSessionsRepo,
       mockSessionMCPServerRepo,
-      mockWorktreesRepo,
+      mockBranchesRepo,
       undefined,
       'test-api-key',
       mockDb
     );
 
     const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexSessionContext = vi.fn().mockResolvedValue('/tmp');
-    serviceWithPrivates.ensureCodexConfig = vi.fn().mockResolvedValue(0);
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 
     mockSessionsRepo.findById.mockResolvedValue({
       session_id: 'session-1',
-      worktree_id: 'worktree-1',
+      branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
       permission_config: { codex: {} },
       model_config: {},
       mcp_token: 'test-token',
     });
-    mockWorktreesRepo.findById.mockResolvedValue({
-      worktree_id: 'worktree-1',
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
       path: process.cwd(),
     });
 
@@ -623,5 +765,140 @@ describe('CodexPromptService - tool payload mapping', () => {
         }
       })()
     ).rejects.toThrow('Codex stream error: stream exploded');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP server config builder
+//
+// Regression coverage for the fix in this PR: every Codex MCP server config
+// Agor emits must carry `default_tools_approval_mode: "approve"`. Without it,
+// Codex's elicitation layer prompts for every MCP tool call, and in headless
+// `exec --json` mode (what @openai/codex-sdk uses) those prompts resolve to
+// "user cancelled MCP tool call". See
+// codex-rs/codex-mcp/src/mcp/mod.rs::mcp_permission_prompt_is_auto_approved.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('CodexPromptService - buildMcpServersConfig', () => {
+  const mockMcpServerRepo = {
+    findById: vi.fn(),
+  } as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([]);
+    mcpAuthMocks.resolveMCPAuthHeaders.mockResolvedValue(null);
+    configMocks.getDaemonUrl.mockResolvedValue('http://localhost:3030');
+  });
+
+  const makeService = () =>
+    new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockMcpServerRepo
+    );
+
+  it('emits default_tools_approval_mode=approve on the built-in agor server', async () => {
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      'agor-bearer-token',
+      undefined
+    );
+
+    expect(total).toBe(1);
+    expect(servers.agor).toMatchObject({
+      url: 'http://localhost:3030/mcp',
+      default_tools_approval_mode: 'approve',
+    });
+  });
+
+  it('emits default_tools_approval_mode=approve on a stdio server', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'github',
+          transport: 'stdio',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+          env: { GITHUB_TOKEN: 'xxx' },
+        },
+      },
+    ]);
+
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      undefined
+    );
+
+    expect(total).toBe(1);
+    expect(servers.github).toMatchObject({
+      command: 'npx',
+      default_tools_approval_mode: 'approve',
+    });
+  });
+
+  it('emits default_tools_approval_mode=approve on an http/sse server', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'remote',
+          transport: 'http',
+          url: 'https://example.com/mcp',
+        },
+      },
+    ]);
+
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      undefined
+    );
+
+    expect(total).toBe(1);
+    expect(servers.remote).toMatchObject({
+      url: 'https://example.com/mcp',
+      default_tools_approval_mode: 'approve',
+    });
+  });
+
+  it('applies default_tools_approval_mode=approve to ALL servers in a mixed config', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'github',
+          transport: 'stdio',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+        },
+      },
+      {
+        server: {
+          name: 'linear',
+          transport: 'http',
+          url: 'https://mcp.linear.app/sse',
+        },
+      },
+    ]);
+
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      'agor-bearer-token',
+      undefined
+    );
+
+    expect(total).toBe(3);
+    for (const name of ['agor', 'github', 'linear']) {
+      expect(servers[name], `server "${name}" missing approval mode`).toMatchObject({
+        default_tools_approval_mode: 'approve',
+      });
+    }
   });
 });

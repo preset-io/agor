@@ -6,6 +6,7 @@
  */
 
 import type { Session } from '@agor-live/client';
+import { shortId } from '@agor-live/client';
 import type { CSSProperties } from 'react';
 
 export interface FormatSessionTitleOptions {
@@ -74,7 +75,7 @@ export function getSessionDisplayTitle(
 
   // 4. Final fallback to short session ID if enabled
   if (includeIdFallback) {
-    return `Session ${session.session_id.substring(0, 8)}`;
+    return `Session ${shortId(session.session_id)}`;
   }
 
   // Default fallback (shouldn't happen, but defensive)

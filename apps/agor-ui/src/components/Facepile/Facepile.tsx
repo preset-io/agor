@@ -38,7 +38,8 @@ export const Facepile: React.FC<FacepileProps> = ({
 }) => {
   // Show first N users, with overflow count
   const visibleUsers = activeUsers.slice(0, maxVisible);
-  const overflowCount = Math.max(0, activeUsers.length - maxVisible);
+  const overflowUsers = activeUsers.slice(maxVisible);
+  const overflowCount = overflowUsers.length;
 
   if (activeUsers.length === 0) {
     return null;
@@ -90,9 +91,22 @@ export const Facepile: React.FC<FacepileProps> = ({
       })}
 
       {overflowCount > 0 && (
-        <Tooltip title={`+${overflowCount} more active users`}>
+        <Tooltip
+          title={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {overflowUsers.map(({ user }) => (
+                <div key={user.user_id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 16 }}>{user.emoji || '👤'}</span>
+                  <span>{user.name || user.email}</span>
+                </div>
+              ))}
+            </div>
+          }
+        >
           <span>
-            <AgorAvatar>+{overflowCount}</AgorAvatar>
+            <AgorAvatar fontSize="12px" style={{ fontWeight: 'bold' }}>
+              +{overflowCount}
+            </AgorAvatar>
           </span>
         </Tooltip>
       )}

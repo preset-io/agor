@@ -74,10 +74,10 @@ export default class EnsureUser extends Command {
 
       // Ensure ~/agor/worktrees directory exists
       try {
-        await executor.execAll(UnixUserCommands.setupWorktreesDir(username, homeBase));
+        await executor.execAll(UnixUserCommands.setupBranchesDir(username, homeBase));
         this.log(`✅ Ensured ~/agor/worktrees directory for ${username}`);
       } catch (error) {
-        this.warn(`Failed to setup worktrees directory: ${error}`);
+        this.warn(`Failed to setup branches directory: ${error}`);
       }
 
       return;
@@ -90,7 +90,7 @@ export default class EnsureUser extends Command {
       this.log(`✅ Created Unix user: ${username}`);
 
       // Setup ~/agor/worktrees directory
-      await executor.execAll(UnixUserCommands.setupWorktreesDir(username, homeBase));
+      await executor.execAll(UnixUserCommands.setupBranchesDir(username, homeBase));
       this.log(`✅ Created ~/agor/worktrees directory for ${username}`);
     } catch (error) {
       this.error(`Failed to create user ${username}: ${error}`);

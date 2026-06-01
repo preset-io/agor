@@ -31,6 +31,10 @@
 # IMPORTANT: Code must ALWAYS use `sudo -n` to prevent freezes if this fails.
 Defaults:agor !requiretty
 
+# Preserve the git-hardening env var across `sudo -u <user>`.
+# See docs/internal/credential-leak-defenses-2026-05-11.md.
+Defaults:agor env_keep += "GIT_CONFIG_PARAMETERS"
+
 # ============================================================================
 # USER IMPERSONATION - Agent Process Execution
 # ============================================================================

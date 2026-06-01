@@ -24,6 +24,7 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
+import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Typography } from 'antd';
@@ -31,8 +32,11 @@ import React from 'react';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { CallbackConfigForm } from '../CallbackConfigForm';
+import { CallbackTargetDisplay } from '../CallbackToggleButton';
 import { CodexSettingsForm } from '../CodexSettingsForm';
+import { ErrorBoundary } from '../ErrorBoundary';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
+import { SessionIdsList } from '../SessionIds';
 import { SessionMetadataForm } from '../SessionMetadataForm';
 
 export interface SessionSettingsModalProps {
@@ -72,21 +76,20 @@ interface FormValues {
 }
 
 function buildInitialValues(session: Session, sessionMcpServerIds: string[]): FormValues {
-  const defaultPermissionMode: PermissionMode =
-    session.agentic_tool === 'codex'
-      ? 'auto'
-      : session.agentic_tool === 'gemini' || session.agentic_tool === 'opencode'
-        ? 'autoEdit'
-        : 'acceptEdits';
+  const permissionMode: PermissionMode =
+    session.permission_config?.mode ?? getDefaultPermissionMode(session.agentic_tool);
+  const codexDefaults = mapToCodexPermissionConfig(permissionMode);
 
   return {
     title: session.title || '',
     mcpServerIds: sessionMcpServerIds,
     modelConfig: session.model_config,
-    permissionMode: session.permission_config?.mode || defaultPermissionMode,
-    codexSandboxMode: session.permission_config?.codex?.sandboxMode || 'workspace-write',
-    codexApprovalPolicy: session.permission_config?.codex?.approvalPolicy || 'on-request',
-    codexNetworkAccess: session.permission_config?.codex?.networkAccess ?? false,
+    permissionMode,
+    codexSandboxMode: session.permission_config?.codex?.sandboxMode ?? codexDefaults.sandboxMode,
+    codexApprovalPolicy:
+      session.permission_config?.codex?.approvalPolicy ?? codexDefaults.approvalPolicy,
+    codexNetworkAccess:
+      session.permission_config?.codex?.networkAccess ?? codexDefaults.networkAccess,
     custom_context: session.custom_context ? JSON.stringify(session.custom_context, null, 2) : '',
     callbackConfig: {
       enabled: session.callback_config?.enabled ?? true,
@@ -179,7 +182,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   const prevSessionIdRef = React.useRef(session.session_id);
 
   // Only the session's creator or a global admin can edit env selections.
-  // Worktree `all` permission does NOT grant access.
+  // Branch `all` permission does NOT grant access.
   const canEditEnvSelections = React.useMemo(() => {
     if (!currentUser) return false;
     if (currentUser.user_id === session.created_by) return true;
@@ -308,7 +311,12 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         Callbacks
       </Typography.Text>
     ),
-    children: <CallbackConfigForm showHelpText />,
+    children: (
+      <>
+        <CallbackTargetDisplay session={session} onNavigate={onClose} />
+        <CallbackConfigForm showHelpText />
+      </>
+    ),
   });
 
   secondaryItems.push({
@@ -319,7 +327,14 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         Advanced
       </Typography.Text>
     ),
-    children: <AdvancedSettingsForm showHelpText />,
+    children: (
+      <ErrorBoundary
+        fallbackTitle="Failed to load Advanced settings."
+        resetKey={session.session_id}
+      >
+        <AdvancedSettingsForm showHelpText />
+      </ErrorBoundary>
+    ),
   });
 
   return (
@@ -335,11 +350,15 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       <Form form={form} layout="vertical" initialValues={initialValues}>
         {/* PRIMARY ZONE — essential settings, always visible */}
         <SessionMetadataForm showHelpText={false} titleRequired={false} titleLabel="Title" />
+        <Form.Item label="Session IDs">
+          <SessionIdsList session={session} />
+        </Form.Item>
         <AgenticToolConfigForm
           agenticTool={session.agentic_tool}
           mcpServerById={mcpServerById}
           showHelpText={false}
           compact
+          client={client}
         />
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}

@@ -40,7 +40,7 @@ describe('getCommentAttachmentType', () => {
         message_id: 'msg_123' as any,
         task_id: 'task_123' as any,
         session_id: 'session_123' as any,
-        worktree_id: 'worktree_123' as any,
+        branch_id: 'branch_123' as any,
         position: { absolute: { x: 100, y: 200 } },
       });
       expect(getCommentAttachmentType(comment)).toBe(CommentAttachmentType.MESSAGE);
@@ -50,7 +50,7 @@ describe('getCommentAttachmentType', () => {
       const comment = createComment({
         task_id: 'task_123' as any,
         session_id: 'session_123' as any,
-        worktree_id: 'worktree_123' as any,
+        branch_id: 'branch_123' as any,
         position: { absolute: { x: 100, y: 200 } },
       });
       expect(getCommentAttachmentType(comment)).toBe(CommentAttachmentType.TASK);
@@ -67,7 +67,7 @@ describe('getCommentAttachmentType', () => {
             offset_y: 20,
           },
         },
-        worktree_id: 'worktree_123' as any,
+        branch_id: 'branch_123' as any,
       });
       expect(getCommentAttachmentType(comment)).toBe(CommentAttachmentType.SESSION_SPATIAL);
     });
@@ -75,18 +75,18 @@ describe('getCommentAttachmentType', () => {
     it('should return SESSION when session_id only (4th priority)', () => {
       const comment = createComment({
         session_id: 'session_123' as any,
-        worktree_id: 'worktree_123' as any,
+        branch_id: 'branch_123' as any,
         position: { absolute: { x: 100, y: 200 } },
       });
       expect(getCommentAttachmentType(comment)).toBe(CommentAttachmentType.SESSION);
     });
 
-    it('should return WORKTREE when worktree_id is present (5th priority)', () => {
+    it('should return BRANCH when branch_id is present (5th priority)', () => {
       const comment = createComment({
-        worktree_id: 'worktree_123' as any,
+        branch_id: 'branch_123' as any,
         position: { absolute: { x: 100, y: 200 } },
       });
-      expect(getCommentAttachmentType(comment)).toBe(CommentAttachmentType.WORKTREE);
+      expect(getCommentAttachmentType(comment)).toBe(CommentAttachmentType.BRANCH);
     });
 
     it('should return BOARD_SPATIAL when position.absolute only (6th priority)', () => {

@@ -13,8 +13,9 @@ import type {
   ThreadStatus,
   UUID,
 } from '@agor/core/types';
+import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, like, lt } from 'drizzle-orm';
-import { formatShortId, generateId } from '../../lib/ids';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type ThreadSessionMapInsert, type ThreadSessionMapRow, threadSessionMap } from '../schema';
@@ -42,7 +43,7 @@ export class ThreadSessionMapRepository
       channel_id: row.channel_id as GatewayChannelID,
       thread_id: row.thread_id,
       session_id: row.session_id as SessionID,
-      worktree_id: row.worktree_id as UUID,
+      branch_id: row.branch_id as UUID,
       created_at: new Date(row.created_at).toISOString(),
       last_message_at: new Date(row.last_message_at).toISOString(),
       status: row.status as ThreadStatus,
@@ -64,7 +65,7 @@ export class ThreadSessionMapRepository
       channel_id: data.channel_id ?? '',
       thread_id: data.thread_id ?? '',
       session_id: data.session_id ?? '',
-      worktree_id: data.worktree_id ?? '',
+      branch_id: data.branch_id ?? '',
       status: data.status ?? 'active',
       metadata: data.metadata ?? null,
     };
@@ -78,8 +79,7 @@ export class ThreadSessionMapRepository
       return id;
     }
 
-    const normalized = id.replace(/-/g, '').toLowerCase();
-    const pattern = `${normalized}%`;
+    const pattern = prefixToLikePattern(id);
 
     const results = await select(this.db)
       .from(threadSessionMap)
@@ -94,7 +94,7 @@ export class ThreadSessionMapRepository
       throw new AmbiguousIdError(
         'ThreadSessionMap',
         id,
-        results.map((r: { id: string }) => formatShortId(r.id as UUID))
+        results.map((r: { id: string }) => r.id)
       );
     }
 
@@ -380,19 +380,19 @@ export class ThreadSessionMapRepository
   }
 
   /**
-   * Find all mappings for a worktree (for UI filtering gateway sessions)
+   * Find all mappings for a branch (for UI filtering gateway sessions)
    */
-  async findByWorktree(worktreeId: string): Promise<ThreadSessionMap[]> {
+  async findByBranch(branchId: string): Promise<ThreadSessionMap[]> {
     try {
       const rows = await select(this.db)
         .from(threadSessionMap)
-        .where(eq(threadSessionMap.worktree_id, worktreeId))
+        .where(eq(threadSessionMap.branch_id, branchId))
         .all();
 
       return rows.map((row: ThreadSessionMapRow) => this.rowToMapping(row));
     } catch (error) {
       throw new RepositoryError(
-        `Failed to find mappings by worktree: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to find mappings by branch: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

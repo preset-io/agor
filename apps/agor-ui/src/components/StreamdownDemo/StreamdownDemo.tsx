@@ -26,7 +26,7 @@ graph TD
     A[User] -->|Prompts| B[Agor UI]
     B -->|WebSocket| C[Agor Daemon]
     C -->|Manages| D[Sessions]
-    C -->|Creates| E[Worktrees]
+    C -->|Creates| E[Branches]
     D -->|Contains| F[Tasks]
     E -->|Tracks| G[Git Repos]
 
@@ -90,7 +90,7 @@ interface Session {
   title: string;
   status: 'idle' | 'running' | 'completed' | 'failed';
   agenticTool: 'claude-code' | 'codex' | 'gemini';
-  worktreeId: WorktreeId;
+  branchId: BranchId;
   createdAt: Date;
 }
 

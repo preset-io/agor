@@ -8,19 +8,20 @@
  */
 
 import { execSync } from 'node:child_process';
-import { generateId } from '@agor/core/db';
+import { generateId, shortId } from '@agor/core/db';
 import type {
+  BranchRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
   SessionMCPServerRepository,
   SessionRepository,
   UsersRepository,
-  WorktreeRepository,
 } from '../../db/feathers-repositories.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import {
+  type ContextUsageSnapshot,
   type Message,
   type MessageID,
   MessageRole,
@@ -34,16 +35,18 @@ import {
   enrichContentBlocks,
   registerToolInvocationStart,
 } from '../base/diff-enrichment.js';
-import type { ITool, StreamingCallbacks, ToolCapabilities } from '../base/index.js';
 import type {
+  ITool,
   MessagesService,
+  StreamingCallbacks,
   TasksService,
   TasksStreamingService,
-} from '../claude/claude-tool.js';
+  ToolCapabilities,
+} from '../base/index.js';
+import { buildAssistantMessageMetadata, patchTaskModelIfKnown } from '../base/model-recording.js';
 import { createUserMessage } from '../claude/message-builder.js';
-import { DEFAULT_CODEX_MODEL } from './models.js';
 import { CodexPromptService } from './prompt-service.js';
-import { extractCodexContextWindowUsage } from './usage.js';
+import { extractCodexContextSnapshotFromEvent, extractCodexContextWindowUsage } from './usage.js';
 
 interface CodexExecutionResult {
   userMessageId: MessageID;
@@ -53,11 +56,7 @@ interface CodexExecutionResult {
   contextWindowLimit?: number;
   model?: string;
   rawSdkResponse?: unknown; // Raw SDK event from Codex
-  rawContextUsage?: {
-    totalTokens: number;
-    maxTokens: number;
-    percentage: number;
-  };
+  rawContextUsage?: ContextUsageSnapshot;
   wasStopped?: boolean; // True if execution was stopped early via stopTask()
 }
 
@@ -68,7 +67,7 @@ export class CodexTool implements ITool {
   private promptService?: CodexPromptService;
   private messagesRepo?: MessagesRepository;
   private sessionsRepo?: SessionRepository;
-  private worktreesRepo?: WorktreeRepository;
+  private branchesRepo?: BranchRepository;
   private messagesService?: MessagesService;
   private tasksService?: TasksService;
   private tasksStreamingService?: TasksStreamingService;
@@ -77,19 +76,19 @@ export class CodexTool implements ITool {
     messagesRepo?: MessagesRepository,
     sessionsRepo?: SessionRepository,
     sessionMCPServerRepo?: SessionMCPServerRepository,
-    worktreesRepo?: WorktreeRepository,
+    branchesRepo?: BranchRepository,
     reposRepo?: RepoRepository,
     apiKey?: string,
     messagesService?: MessagesService,
     tasksService?: TasksService,
     tasksStreamingService?: TasksStreamingService,
-    _useNativeAuth?: boolean, // Codex doesn't have OAuth fallback, but accept for interface consistency
+    useNativeAuth?: boolean,
     mcpServerRepo?: MCPServerRepository,
     usersRepo?: UsersRepository
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
-    this.worktreesRepo = worktreesRepo;
+    this.branchesRepo = branchesRepo;
     this.messagesService = messagesService;
     this.tasksService = tasksService;
     this.tasksStreamingService = tasksStreamingService;
@@ -99,11 +98,12 @@ export class CodexTool implements ITool {
         messagesRepo,
         sessionsRepo,
         sessionMCPServerRepo,
-        worktreesRepo,
+        branchesRepo,
         reposRepo,
         apiKey,
         mcpServerRepo,
-        usersRepo
+        usersRepo,
+        useNativeAuth ?? false
       );
     }
   }
@@ -113,7 +113,7 @@ export class CodexTool implements ITool {
       supportsSessionImport: false, // ❌ Deferred until we have real JSONL format
       supportsSessionCreate: false, // ❌ Not exposed (handled via executeTask)
       supportsLiveExecution: true, // ✅ Via Codex SDK
-      supportsSessionFork: false,
+      supportsSessionFork: true,
       supportsChildSpawn: false,
       supportsGitState: false, // Agor manages git state
       supportsStreaming: true, // ✅ Via runStreamed()
@@ -196,13 +196,7 @@ export class CodexTool implements ITool {
     let resolvedModel: string | undefined;
     let currentMessageId: MessageID | null = null;
     let tokenUsage: TokenUsage | undefined;
-    let rawContextUsage:
-      | {
-          totalTokens: number;
-          maxTokens: number;
-          percentage: number;
-        }
-      | undefined;
+    let rawContextUsage: ContextUsageSnapshot | undefined;
     let _streamStartTime = Date.now();
     let _firstTokenTime: number | null = null;
     let rawSdkResponse: unknown;
@@ -213,11 +207,11 @@ export class CodexTool implements ITool {
     const pendingSnapshotToolIds = new Set<string>();
     const snapshotContext = { snapshotScope: sessionId };
 
-    if (this.sessionsRepo && this.worktreesRepo) {
+    if (this.sessionsRepo && this.branchesRepo) {
       const session = await this.sessionsRepo.findById(sessionId);
       if (session) {
-        const worktree = await this.worktreesRepo.findById(session.worktree_id);
-        workingDirectory = worktree?.path;
+        const branch = await this.branchesRepo.findById(session.branch_id);
+        workingDirectory = branch?.path;
       }
     }
 
@@ -549,7 +543,7 @@ export class CodexTool implements ITool {
       // Codex SDK doesn't provide contextWindow/contextWindowLimit
       contextWindow: undefined,
       contextWindowLimit: undefined,
-      model: resolvedModel || DEFAULT_CODEX_MODEL,
+      model: resolvedModel,
       rawSdkResponse,
       rawContextUsage,
       wasStopped,
@@ -570,8 +564,8 @@ export class CodexTool implements ITool {
       if (existingSession?.sdk_session_id) {
         if (existingSession.sdk_session_id !== threadId) {
           const msg =
-            `Codex thread lost: asked to resume ${existingSession.sdk_session_id.substring(0, 8)} ` +
-            `but Codex started a new thread ${threadId.substring(0, 8)}. ` +
+            `Codex thread lost: asked to resume ${shortId(existingSession.sdk_session_id)} ` +
+            `but Codex started a new thread ${shortId(threadId)}. ` +
             `The previous conversation history is no longer available (the thread file was likely deleted when the environment was rebuilt). ` +
             `Please start a new session to continue.`;
           console.error(`❌ ${msg}`);
@@ -624,21 +618,11 @@ export class CodexTool implements ITool {
       content: content as Message['content'],
       tool_uses: toolUses,
       task_id: taskId,
-      metadata: {
-        model: resolvedModel || DEFAULT_CODEX_MODEL,
-        tokens: {
-          input: tokenUsage?.input_tokens ?? 0,
-          output: tokenUsage?.output_tokens ?? 0,
-        },
-      },
+      metadata: buildAssistantMessageMetadata({ model: resolvedModel, tokenUsage }),
     };
 
     await this.messagesService?.create(message);
-
-    // If task exists, update it with resolved model
-    if (taskId && resolvedModel && this.tasksService) {
-      await this.tasksService.patch(taskId, { model: resolvedModel });
-    }
+    await patchTaskModelIfKnown(this.tasksService, taskId, resolvedModel);
 
     return message;
   }
@@ -693,13 +677,7 @@ export class CodexTool implements ITool {
     let _contextWindow: number | undefined;
     let _contextWindowLimit: number | undefined;
     let rawSdkResponse: unknown;
-    let rawContextUsage:
-      | {
-          totalTokens: number;
-          maxTokens: number;
-          percentage: number;
-        }
-      | undefined;
+    let rawContextUsage: ContextUsageSnapshot | undefined;
     let wasStopped = false;
 
     for await (const event of this.promptService.promptSessionStreaming(
@@ -777,7 +755,7 @@ export class CodexTool implements ITool {
       // Codex SDK doesn't provide contextWindow/contextWindowLimit
       contextWindow: undefined,
       contextWindowLimit: undefined,
-      model: resolvedModel || DEFAULT_CODEX_MODEL,
+      model: resolvedModel,
       rawSdkResponse,
       rawContextUsage,
       wasStopped,
@@ -840,49 +818,67 @@ export class CodexTool implements ITool {
   }
 
   /**
-   * Compute context window usage for a Codex session
+   * Last-resort context-window computation for Codex.
    *
-   * Codex SDK usage is reported per turn (not cumulative across tasks).
-   * For context occupancy, use input-side tokens only:
-   * - usage.input_tokens
-   * - usage.cached_input_tokens
+   * The authoritative path is `rawContextUsage` (extracted from Codex CLI's
+   * `event_msg/token_count.last_token_usage` during the turn — see
+   * extractCodexContextSnapshotFromEvent). When that snapshot is present,
+   * base-executor uses it directly and this method is never called.
    *
-   * Output tokens are excluded because they are generated during the turn and
-   * are not prompt-side context occupancy.
+   * This method only runs when no token_count events were captured (rare —
+   * legacy Codex CLI versions, very short turns, or stream errors). In that
+   * case we try two things in order:
+   *
+   *   1) If the rawSdkResponse happens to be the token_count event itself,
+   *      pull last_token_usage.total_tokens straight out of it.
+   *   2) Otherwise fall back to turn.completed.usage.input_tokens — a per-turn
+   *      proxy that approximates occupancy for a single-step turn but
+   *      under-counts for tool-heavy turns where each internal API call sees
+   *      more context. Better than nothing; we log a warning.
    *
    * @param sessionId - Session ID to compute context for
-   * @param currentTaskId - Optional current task ID (not used for Codex, kept for interface consistency)
-   * @param currentRawSdkResponse - Optional raw SDK response from current task (if available in memory)
-   * @returns Promise resolving to context usage in tokens
+   * @param currentTaskId - Unused; kept for interface consistency
+   * @param currentRawSdkResponse - Raw SDK response (turn.completed event)
+   * @returns Context usage in tokens; 0 if no usable signal
    */
   async computeContextWindow(
     sessionId: string,
     _currentTaskId?: string,
     currentRawSdkResponse?: unknown
   ): Promise<number> {
-    if (currentRawSdkResponse) {
-      const contextWindow = extractCodexContextWindowUsage(currentRawSdkResponse);
-      if (contextWindow !== undefined) {
-        console.log(
-          `✅ Computed context window for Codex session ${sessionId}: ${contextWindow} tokens`
-        );
-        return contextWindow;
-      }
-
+    if (!currentRawSdkResponse) {
+      // Caller must always pass the current turn's raw response — querying the
+      // DB here can deadlock the pending task UPDATE on Postgres.
       console.warn(
-        `⚠️  Could not extract Codex context window usage from rawSdkResponse for session ${sessionId}, returning 0`
+        `⚠️  computeContextWindow called without currentRawSdkResponse for session ${sessionId}. ` +
+          'This should not happen during task completion. Returning 0 to avoid database deadlock.'
       );
       return 0;
     }
 
-    // IMPORTANT: Do NOT query database when currentRawSdkResponse is not provided
-    // This method is called during task UPDATE operations, and querying the database
-    // during a pending UPDATE causes deadlocks in PostgreSQL due to read-while-write
-    // in the same transaction. The caller should ALWAYS provide currentRawSdkResponse
-    // during task completion.
+    // Best effort: if the raw response is a token_count event, lift the
+    // authoritative last_token_usage figure straight out of it.
+    const snapshot = extractCodexContextSnapshotFromEvent(currentRawSdkResponse);
+    if (snapshot) {
+      console.log(
+        `✅ Codex context window for session ${sessionId}: ${snapshot.totalTokens}/${snapshot.maxTokens} tokens (${snapshot.percentage}% used)`
+      );
+      return snapshot.totalTokens;
+    }
+
+    // Fallback: per-turn input_tokens. Approximate for single-step turns,
+    // under-counts on multi-step tool loops.
+    const contextWindow = extractCodexContextWindowUsage(currentRawSdkResponse);
+    if (contextWindow !== undefined) {
+      console.warn(
+        `⚠️  Codex context window for session ${sessionId} estimated from per-turn input_tokens (${contextWindow}). ` +
+          'No token_count event_msg was captured; value will under-count tool-heavy turns.'
+      );
+      return contextWindow;
+    }
+
     console.warn(
-      `⚠️  computeContextWindow called without currentRawSdkResponse for session ${sessionId}. ` +
-        'This should not happen during task completion. Returning 0 to avoid database deadlock.'
+      `⚠️  Could not derive Codex context window for session ${sessionId} from rawSdkResponse; returning 0`
     );
     return 0;
   }

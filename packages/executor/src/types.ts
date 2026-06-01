@@ -5,6 +5,7 @@
 
 // Re-export commonly used types from @agor/core for convenience
 export type {
+  ContextUsageSnapshot,
   MCPServersConfig,
   Message,
   MessageCreate,
@@ -80,7 +81,7 @@ export interface ExecutePromptParams {
   session_token: string;
   session_id: string;
   task_id: string;
-  agentic_tool: string; // 'claude-code' | 'codex' | 'gemini' | 'opencode'
+  agentic_tool: string; // 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor'
   prompt: string;
   cwd: string;
   tools: string[];

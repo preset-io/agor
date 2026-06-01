@@ -10,26 +10,26 @@ import { createUserProcessEnvironment } from '../config/index.js';
 import type { Database } from '../db/index.js';
 import { UsersRepository } from '../db/repositories/index.js';
 import { getCurrentSha } from '../git/index.js';
-import type { Worktree } from '../types/index.js';
+import type { Branch } from '../types/index.js';
 import { assertEnvCommandAllowed } from './environment-command-deny-list.js';
 import { buildSpawnArgs } from './run-as-user.js';
 import { attachEnvFileCleanup, prepareImpersonationEnv } from './user-env-file.js';
 import { resolveUnixUserForImpersonation, validateResolvedUnixUser } from './user-manager.js';
 
 /**
- * Capture the worktree's current HEAD SHA on the host, where git can resolve
+ * Capture the branch's current HEAD SHA on the host, where git can resolve
  * the gitdir. Useful for env commands that spawn into containers (docker
  * compose, kubectl etc.) — those containers usually can't run git themselves
- * because Agor worktrees use a /app/.git file pointing to a host-only
+ * because Agor branches use a /app/.git file pointing to a host-only
  * gitdir. Daemon process here has full host access, so we capture once and
  * forward via env. Best-effort: returns undefined on any failure (detached
- * worktree, corrupted .git, etc.). Never blocks env spawning.
+ * branch, corrupted .git, etc.). Never blocks env spawning.
  *
  * Exported for testability.
  */
-export async function captureWorktreeBuildSha(worktreePath: string): Promise<string | undefined> {
+export async function captureBranchBuildSha(branchPath: string): Promise<string | undefined> {
   try {
-    const sha = await getCurrentSha(worktreePath);
+    const sha = await getCurrentSha(branchPath);
     return sha ? sha.slice(0, 7) : undefined;
   } catch {
     return undefined;
@@ -44,8 +44,8 @@ export type EnvironmentCommandType = 'start' | 'stop' | 'nuke' | 'logs' | 'healt
 export interface SpawnEnvironmentCommandOptions {
   /** The shell command to execute */
   command: string;
-  /** The worktree this command is running for */
-  worktree: Worktree;
+  /** The branch this command is running for */
+  branch: Branch;
   /** Database instance (for user lookup and config) */
   db: Database;
   /** Command type for logging */
@@ -68,8 +68,8 @@ export interface SpawnEnvironmentCommandOptions {
 export interface EnvCommandAuditEntry {
   event: 'agor.env_command.spawn';
   timestamp: string;
-  worktree_id: string;
-  worktree_name: string;
+  branch_id: string;
+  branch_name: string;
   command_type: EnvironmentCommandType;
   /**
    * Command string as spawned, after secret redaction and length truncation.
@@ -132,9 +132,9 @@ export function redactCommandForAudit(command: string): string {
 export async function spawnEnvironmentCommand(
   options: SpawnEnvironmentCommandOptions
 ): Promise<ChildProcess> {
-  const { command, worktree, db, commandType, stdio = 'inherit', triggeredBy } = options;
+  const { command, branch, db, commandType, stdio = 'inherit', triggeredBy } = options;
 
-  const logPrefix = `[Environment.${commandType} ${worktree.name}]`;
+  const logPrefix = `[Environment.${commandType} ${branch.name}]`;
 
   // Defence-in-depth: refuse obviously-dangerous commands even if an admin
   // authored them. Runs on every spawn path (REST, MCP, WebSocket).
@@ -151,7 +151,7 @@ export async function spawnEnvironmentCommand(
   if (unixUserMode !== 'simple') {
     // Look up user's unix_username
     const usersRepo = new UsersRepository(db);
-    const user = await usersRepo.findById(worktree.created_by);
+    const user = await usersRepo.findById(branch.created_by);
 
     const impersonationResult = resolveUnixUserForImpersonation({
       mode: unixUserMode,
@@ -174,18 +174,18 @@ export async function spawnEnvironmentCommand(
   }
 
   // Capture current HEAD SHA on the host so downstream containers (which
-  // typically can't run git inside themselves — see captureWorktreeBuildSha)
+  // typically can't run git inside themselves — see captureBranchBuildSha)
   // can read AGOR_BUILD_SHA / AGOR_BUILT_AT from their environment. The
   // version-sync banner is the first consumer; future deploy markers,
   // notification webhooks, etc. can use it without per-project plumbing.
-  const buildSha = await captureWorktreeBuildSha(worktree.path);
+  const buildSha = await captureBranchBuildSha(branch.path);
   const additionalEnv: Record<string, string> | undefined = buildSha
     ? { AGOR_BUILD_SHA: buildSha, AGOR_BUILT_AT: new Date().toISOString() }
     : undefined;
 
   // Create clean environment for user process
   // If impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them properly
-  const env = await createUserProcessEnvironment(worktree.created_by, db, additionalEnv, !!asUser);
+  const env = await createUserProcessEnvironment(branch.created_by, db, additionalEnv, !!asUser);
 
   // Route secret-looking env vars through an on-disk env file owned by the
   // target user (mode 0600) so user-scoped API keys/tokens never appear in
@@ -214,8 +214,8 @@ export async function spawnEnvironmentCommand(
   const auditEntry: EnvCommandAuditEntry = {
     event: 'agor.env_command.spawn',
     timestamp: new Date().toISOString(),
-    worktree_id: worktree.worktree_id,
-    worktree_name: worktree.name,
+    branch_id: branch.branch_id,
+    branch_name: branch.name,
     command_type: commandType,
     command: redactCommandForAudit(command),
     triggered_by_user_id: triggeredBy?.user_id,
@@ -229,7 +229,7 @@ export async function spawnEnvironmentCommand(
   // When not impersonating (simple mode), buildSpawnArgs returns the raw command string,
   // so we need shell: true to handle multi-word commands like "docker compose up -d"
   const child = spawn(cmd, args, {
-    cwd: worktree.path,
+    cwd: branch.path,
     env: asUser ? undefined : env, // Use process env if not impersonating
     stdio,
     shell: !asUser, // Use shell for simple mode, buildSpawnArgs wraps sudo in bash -c

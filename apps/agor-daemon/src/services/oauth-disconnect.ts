@@ -5,6 +5,7 @@
  * and removing shared OAuth tokens from server config.
  */
 
+import { shortId } from '@agor/core/db';
 import type { MCPAuth } from '@agor/core/types';
 
 export interface OAuthDisconnectDeps {
@@ -55,7 +56,7 @@ export async function performOAuthDisconnect(
   }
 
   console.log(
-    `[OAuth Disconnect] Deleting token for user ${userId.substring(0, 8)}, server ${mcpServerId.substring(0, 8)}`
+    `[OAuth Disconnect] Deleting token for user ${shortId(userId)}, server ${shortId(mcpServerId)}`
   );
 
   try {

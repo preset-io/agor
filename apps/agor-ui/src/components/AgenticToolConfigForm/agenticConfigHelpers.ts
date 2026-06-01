@@ -14,6 +14,7 @@ import type {
   DefaultAgenticToolConfig,
   DefaultModelConfig,
   EffortLevel,
+  ScheduleAgenticToolConfig,
 } from '@agor-live/client';
 import { getDefaultPermissionMode } from '@agor-live/client';
 
@@ -87,6 +88,47 @@ export function buildConfigFromFormValues(
         values.codexApprovalPolicy as DefaultAgenticToolConfig['codexApprovalPolicy'],
       codexNetworkAccess: values.codexNetworkAccess,
     }),
+  };
+}
+
+/**
+ * Convert a schedule's snake_case `agentic_tool_config` blob into the
+ * camelCase shape `getFormValuesFromConfig` expects. Now that
+ * `ScheduleAgenticToolConfig.model_config` is `DefaultModelConfig`, the
+ * structural conversion is one-to-one and TS-checks cleanly without
+ * any unknown-casts.
+ */
+export function scheduleConfigToDefaultConfig(
+  cfg?: ScheduleAgenticToolConfig
+): DefaultAgenticToolConfig | undefined {
+  if (!cfg) return undefined;
+  return {
+    modelConfig: cfg.model_config,
+    permissionMode: cfg.permission_mode,
+    mcpServerIds: cfg.mcp_server_ids,
+    // Codex fields aren't surfaced in ScheduleAgenticToolConfig today;
+    // promote them here if/when schedules grow codex sandbox controls.
+  };
+}
+
+/**
+ * Inverse: pack form values into a schedule's snake_case
+ * `agentic_tool_config`, preserving caller-provided fields we don't
+ * surface in the form (e.g. `context_files`).
+ */
+export function buildScheduleConfigFromFormValues(
+  tool: AgenticToolName,
+  values: AgenticFormValues,
+  previous?: ScheduleAgenticToolConfig
+): ScheduleAgenticToolConfig {
+  const builtDefault = buildConfigFromFormValues(tool, values);
+  return {
+    ...previous,
+    agentic_tool: tool,
+    permission_mode: builtDefault.permissionMode,
+    model_config: builtDefault.modelConfig,
+    mcp_server_ids: builtDefault.mcpServerIds,
+    context_files: previous?.context_files,
   };
 }
 

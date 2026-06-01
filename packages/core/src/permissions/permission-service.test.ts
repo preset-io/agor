@@ -543,7 +543,7 @@ describe('PermissionService.resolvePermission', () => {
   });
 
   it('should handle different decidedBy values', async () => {
-    const users = ['user-1', 'user-2', 'admin', 'anonymous'];
+    const users = ['user-1', 'user-2', 'admin', 'unknown'];
 
     for (const userId of users) {
       const requestId = `req-${userId}`;

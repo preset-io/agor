@@ -1,54 +1,39 @@
-import type { Board, Repo } from '@agor-live/client';
-import { InfoCircleOutlined, LoadingOutlined, SettingOutlined } from '@ant-design/icons';
+import type { Repo } from '@agor-live/client';
+import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
-import { Alert, Collapse, Form, Input, Select, Space, Typography } from 'antd';
-import { CREATE_NEW_BOARD } from '@/utils/assistantConstants';
+import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
-
-export { CREATE_NEW_BOARD };
 
 export interface AssistantFormFieldsProps {
   form: FormInstance;
   repos: Repo[];
-  boards: Board[];
   frameworkRepo: Repo | undefined;
   isCloning?: boolean;
   onDisplayNameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   customRepoSelected: boolean;
   onCustomRepoChange: (selected: boolean) => void;
+  /** Optional section inserted before the repo/branch advanced settings collapse. */
+  extraBeforeAdvanced?: React.ReactNode;
 }
 
 /**
  * Shared assistant form fields used in both the CreateDialog AssistantTab
  * and the SettingsModal AssistantsTable create modal.
  *
- * Renders: Display Name, Icon, Board, board advice Alert, Advanced collapse
- * (Framework Repository, Worktree Name, Source Branch).
+ * Renders: Name + icon, assistant board advice Alert, Advanced collapse
+ * (Framework Repository, Branch Name, Source Branch).
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */
 export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
   form,
   repos,
-  boards,
   frameworkRepo,
   isCloning,
   onDisplayNameChange,
   customRepoSelected,
   onCustomRepoChange,
+  extraBeforeAdvanced,
 }) => {
-  const boardOptions = [
-    {
-      value: CREATE_NEW_BOARD,
-      label: '+ Create a new board for this assistant (Recommended)',
-    },
-    ...[...boards]
-      .sort((a: Board, b: Board) => a.name.localeCompare(b.name))
-      .map((board: Board) => ({
-        value: board.board_id,
-        label: `${board.icon || '\u{1F4CB}'} ${board.name}`,
-      })),
-  ];
-
   const repoPlaceholder = frameworkRepo
     ? `${frameworkRepo.name || frameworkRepo.slug} (default)`
     : isCloning
@@ -57,21 +42,22 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
 
   return (
     <>
-      <Form.Item
-        name="displayName"
-        label="Display Name"
-        rules={[{ required: true, message: 'Please enter a display name' }]}
-        tooltip="Human-friendly name for this assistant"
-      >
-        <Input
-          placeholder="e.g. PR Reviewer, Command Center"
-          autoFocus
-          onChange={onDisplayNameChange}
-        />
-      </Form.Item>
-
-      <Form.Item name="emoji" label="Icon">
-        <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
+      <Form.Item label="Name" required tooltip="Human-friendly name and icon for this assistant">
+        <Space.Compact style={{ display: 'flex' }}>
+          <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
+          <Form.Item
+            name="displayName"
+            noStyle
+            rules={[{ required: true, message: 'Please enter a name' }]}
+          >
+            <Input
+              placeholder="e.g. PR Reviewer, Command Center"
+              autoFocus
+              onChange={onDisplayNameChange}
+              style={{ flex: 1 }}
+            />
+          </Form.Item>
+        </Space.Compact>
       </Form.Item>
 
       <Form.Item
@@ -85,29 +71,18 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
         />
       </Form.Item>
 
-      <Form.Item name="boardChoice" label="Board">
-        <Select
-          showSearch
-          filterOption={(input, option) =>
-            String(option?.label ?? '')
-              .toLowerCase()
-              .includes(input.toLowerCase())
-          }
-          options={boardOptions}
-        />
-      </Form.Item>
-
       <Alert
         type="info"
         showIcon={false}
         style={{ marginBottom: 16 }}
         title={
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            While assistants can act across boards, we recommend giving each assistant its own
-            board.
+            Each assistant gets a fresh board and becomes that board&apos;s primary assistant.
           </Typography.Text>
         }
       />
+
+      {extraBeforeAdvanced}
 
       {isCloning && !frameworkRepo && (
         <Alert
@@ -128,13 +103,16 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
         ghost
         size="small"
         destroyOnHidden={false}
+        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
         items={[
           {
             key: 'advanced',
             label: (
-              <Space>
-                <SettingOutlined />
-                <Typography.Text type="secondary">Advanced</Typography.Text>
+              <Space size={6}>
+                <Typography.Text type="secondary">Advanced Assistant Settings</Typography.Text>
+                <Tooltip title="Assistants live in an Agor branch. These settings control the framework repository, branch name, and source branch used to create that assistant branch.">
+                  <InfoCircleOutlined style={{ color: 'var(--ant-color-text-tertiary)' }} />
+                </Tooltip>
               </Space>
             ),
             children: (
@@ -182,7 +160,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
 
                 <Form.Item
                   name="name"
-                  label="Worktree Name"
+                  label="Branch Name"
                   rules={[
                     {
                       pattern: /^[a-z0-9-]+$/,

@@ -3,7 +3,7 @@
  *
  * Visual hierarchy:
  * - Colored left border from CardType (or override)
- * - Zone border color when pinned to a zone (matching WorktreeCard pattern)
+ * - Zone border color when pinned to a zone (matching BranchCard pattern)
  * - CardType emoji + title (with optional URL link)
  * - Pin icon when in a zone (click to unpin)
  * - Description (collapsed after ~100 chars)
@@ -46,7 +46,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
   const borderColor = card.effective_color || token.colorBorder;
   const emoji = card.effective_emoji;
 
-  // Match WorktreeCard pattern: ensure pin icon color is visible
+  // Match BranchCard pattern: ensure pin icon color is visible
   const isDarkMode = token.colorBgContainer !== '#ffffff';
   const visiblePinColor = useMemo(() => {
     if (!zoneColor) return undefined;

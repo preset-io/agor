@@ -16,21 +16,15 @@ export function getDefaultConfig(): AgorConfig {
     display: {
       tableStyle: 'unicode',
       colorOutput: true,
-      shortIdLength: 8,
     },
     daemon: {
       port: DEFAULT_DAEMON_PORT,
       host: DEFAULT_DAEMON_HOST,
-      allowAnonymous: true,
-      requireAuth: false,
       mcpEnabled: true,
     },
     ui: {
       port: 5173,
       host: 'localhost',
-    },
-    codex: {
-      home: '~/.agor/codex',
     },
     execution: {
       session_token_expiration_ms: 86400000,

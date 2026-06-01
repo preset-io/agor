@@ -5,10 +5,12 @@
  * Optionally wraps in Popover for rich metadata display
  */
 
+import { shortId } from '@agor-live/client';
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
-import { message, Popover } from 'antd';
+import { Popover } from 'antd';
 import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
+import { useThemedMessage } from '../../utils/message';
 import { Tag } from '../Tag';
 
 export interface EventStreamPillProps {
@@ -26,25 +28,6 @@ export interface EventStreamPillProps {
   metadataCard?: React.ReactNode;
 }
 
-/**
- * Extract short ID (first 8 chars without hyphens)
- */
-const toShortId = (id: string): string => {
-  return id.replace(/-/g, '').slice(0, 8);
-};
-
-/**
- * Copy text to clipboard with notification
- */
-const copyToClipboardWithNotification = async (text: string, label: string) => {
-  const success = await copyToClipboard(text);
-  if (success) {
-    message.success(`${label} copied: ${text}`);
-  } else {
-    message.error('Failed to copy to clipboard');
-  }
-};
-
 export const EventStreamPill = ({
   id,
   label,
@@ -53,11 +36,20 @@ export const EventStreamPill = ({
   copyLabel,
   metadataCard,
 }: EventStreamPillProps): React.JSX.Element => {
+  const { showSuccess, showError } = useThemedMessage();
+
   // If metadata card provided, don't copy on click - just show popover
   // Otherwise, copy to clipboard on click
   const handleClick = metadataCard
     ? undefined
-    : () => copyToClipboardWithNotification(id, copyLabel);
+    : async () => {
+        const ok = await copyToClipboard(id);
+        if (ok) {
+          showSuccess(`${copyLabel} copied: ${id}`);
+        } else {
+          showError('Failed to copy to clipboard');
+        }
+      };
 
   const pill = (
     <Tag
@@ -71,7 +63,7 @@ export const EventStreamPill = ({
       }}
       onClick={handleClick}
     >
-      {label ?? toShortId(id)}
+      {label ?? shortId(id)}
     </Tag>
   );
 
