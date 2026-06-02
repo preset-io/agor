@@ -456,8 +456,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       app.use(
         UI_MOUNT_PATH,
         expressStaticGzip(uiPath, {
-          enableBrotli: true,
-          orderPreference: ['br', 'gz'],
+          enableBrotli: false,
+          orderPreference: ['gz'],
           serveStatic: {
             etag: true,
             setHeaders: setBundledUiStaticHeaders,
