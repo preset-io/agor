@@ -142,21 +142,22 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
             onChange={(e) => setInputValue(e.target.value)}
             allowClear
           />
-          {searchQuery.trim() ? (
-            <Tooltip
-              title="Matched by: exact title > title prefix > keywords > description. Active and recently used sessions rank higher."
-              placement="topRight"
-            >
-              <Button
-                type="text"
-                size="small"
-                icon={<InfoCircleOutlined style={{ color: token.colorTextTertiary }} />}
-                style={{ flexShrink: 0, padding: '0 6px', color: token.colorTextTertiary }}
+          <div style={{ flexShrink: 0, minWidth: 96, display: 'flex', justifyContent: 'flex-end' }}>
+            {searchQuery.trim() ? (
+              <Tooltip
+                title="Matched by: exact title > title prefix > keywords > description. Active and recently used sessions rank higher."
+                placement="topRight"
               >
-                Relevance
-              </Button>
-            </Tooltip>
-          ) : (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<InfoCircleOutlined style={{ color: token.colorTextTertiary }} />}
+                  style={{ padding: '0 6px', color: token.colorTextTertiary }}
+                >
+                  Relevance
+                </Button>
+              </Tooltip>
+            ) : (
             <Dropdown
               menu={{
                 items: [
@@ -200,7 +201,8 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
                 {sort === 'recent' ? 'Recent' : sort === 'oldest' ? 'Oldest' : 'A–Z'}
               </Button>
             </Dropdown>
-          )}
+            )}
+          </div>
         </div>
       </div>
 

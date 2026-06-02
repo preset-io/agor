@@ -609,21 +609,23 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             onChange={(e) => setSearchInput(e.target.value)}
             allowClear
           />
-          {searchQuery.trim() ? (
-            <Tooltip
-              title="Matched by: exact title > title prefix > keywords > description. Active and recently used sessions rank higher."
-              placement="topRight"
-            >
-              <Button
-                type="text"
-                size="small"
-                icon={<InfoCircleOutlined style={{ color: token.colorTextTertiary }} />}
-                style={{ flexShrink: 0, padding: '0 6px', color: token.colorTextTertiary }}
+          <div style={{ flexShrink: 0, minWidth: 96, display: 'flex', justifyContent: 'flex-end' }}>
+            {searchQuery.trim() ? (
+              <Tooltip
+                title="Matched by: exact title > title prefix > keywords > description. Active and recently used sessions rank higher."
+                placement="topRight"
               >
-                Relevance
-              </Button>
-            </Tooltip>
-          ) : sortButton}
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<InfoCircleOutlined style={{ color: token.colorTextTertiary }} />}
+                  style={{ padding: '0 6px', color: token.colorTextTertiary }}
+                >
+                  Relevance
+                </Button>
+              </Tooltip>
+            ) : sortButton}
+          </div>
         </div>
       </div>
     ) : null;
