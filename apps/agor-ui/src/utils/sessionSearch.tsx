@@ -146,10 +146,11 @@ export function HighlightMatch({ text, query }: { text: string; query: string })
             // biome-ignore lint/suspicious/noArrayIndexKey: positional marks in a static string split
             key={i}
             style={{
-              background: token.colorWarningBg,
-              color: 'inherit',
+              background: token.colorWarning,
+              color: 'rgba(0, 0, 0, 0.88)',
               padding: `0 ${token.paddingXXS}px`,
               borderRadius: token.borderRadiusSM,
+              fontWeight: 600,
             }}
           >
             {part}
