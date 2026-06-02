@@ -1,6 +1,6 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
 import { CheckOutlined, SearchOutlined, SortDescendingOutlined } from '@ant-design/icons';
-import { Badge, Button, Drawer, Dropdown, Empty, Input, Tooltip, Typography, theme } from 'antd';
+import { Badge, Button, Drawer, Dropdown, Input, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
@@ -196,15 +196,22 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
       {/* Session List */}
       <div style={{ padding: '8px 0' }}>
         {displaySessions.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={
-              searchQuery.trim()
-                ? `No sessions match "${searchQuery}"`
-                : 'No sessions in this board'
-            }
-            style={{ padding: '24px 0' }}
-          />
+          searchQuery.trim() ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '28px 16px', gap: 6 }}>
+              <div style={{ width: 36, height: 36, borderRadius: '50%', background: token.colorFillTertiary, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 2 }}>
+                <SearchOutlined style={{ fontSize: 16, color: token.colorTextTertiary }} />
+              </div>
+              <Typography.Text strong style={{ fontSize: 13 }}>No results</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.5, maxWidth: 200 }}>
+                Nothing matched{' '}
+                <Typography.Text code style={{ fontSize: 11 }}>{searchQuery.trim()}</Typography.Text>
+              </Typography.Text>
+            </div>
+          ) : (
+            <Typography.Text type="secondary" style={{ display: 'block', textAlign: 'center', padding: '24px 0', fontSize: 12 }}>
+              No sessions in this board
+            </Typography.Text>
+          )
         ) : (
           displaySessions.map((session) => {
             const branch = session.branch_id ? branchById.get(session.branch_id) : undefined;

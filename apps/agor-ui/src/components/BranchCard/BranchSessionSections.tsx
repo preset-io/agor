@@ -20,7 +20,6 @@ import {
   Collapse,
   ConfigProvider,
   Dropdown,
-  Empty,
   Input,
   Space,
   Spin,
@@ -634,11 +633,16 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       <>
         {sessionSearchBar}
         {results.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={`No sessions match "${searchQuery}"`}
-            style={{ padding: '16px 0' }}
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '24px 16px', gap: 6 }}>
+            <div style={{ width: 36, height: 36, borderRadius: '50%', background: token.colorFillTertiary, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 2 }}>
+              <SearchOutlined style={{ fontSize: 16, color: token.colorTextTertiary }} />
+            </div>
+            <Typography.Text strong style={{ fontSize: 13 }}>No results</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.5, maxWidth: 180 }}>
+              Nothing matched{' '}
+              <Typography.Text code style={{ fontSize: 11 }}>{searchQuery.trim()}</Typography.Text>
+            </Typography.Text>
+          </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {results.map(({ session }) => {
