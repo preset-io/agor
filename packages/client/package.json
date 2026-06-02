@@ -35,7 +35,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup && node scripts/patch-dts.mjs",
+    "build": "tsup && node scripts/build-dts.mjs && node scripts/patch-dts.mjs",
     "check:pack": "node scripts/validate-pack-artifact.mjs",
     "dev": "tsup --watch",
     "prepublishOnly": "pnpm build && pnpm check:pack",

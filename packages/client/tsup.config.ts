@@ -8,7 +8,7 @@ export default defineConfig({
     jwt: 'src/jwt.ts',
   },
   format: ['cjs', 'esm'],
-  dts: true,
+  dts: false,
   clean: true,
   splitting: false,
   // Keep FeathersJS + socket.io as runtime dependencies (not bundled)

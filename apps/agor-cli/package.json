@@ -7,7 +7,7 @@
     "agor": "./bin/run.js"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && tsc --emitDeclarationOnly --declaration --declarationMap --noEmit false --incremental false",
     "dev": "NODE_NO_WARNINGS=1 tsx bin/dev.ts",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
@@ -28,10 +28,10 @@
     "@types/node": "^24.6.0",
     "glob": "^11.1.0",
     "oclif": "^4.23.8",
-    "tsup": "^8.5.1",
     "tsx": "^4.22.3",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.7",
+    "tsup": "^8.5.1"
   },
   "oclif": {
     "bin": "agor",

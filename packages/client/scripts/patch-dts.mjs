@@ -10,7 +10,7 @@
  * We strip the import and rewrite $1 references to point to the local declarations.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,6 +19,10 @@ const distDir = join(__dirname, '..', 'dist');
 
 for (const file of ['index.d.ts', 'index.d.cts']) {
   const path = join(distDir, file);
+  if (!existsSync(path)) {
+    continue;
+  }
+
   let content = readFileSync(path, 'utf8');
 
   if (content.includes("from '@agor/core/types'")) {

@@ -12,7 +12,7 @@ const entries = Object.fromEntries(
 export default defineConfig({
   entry: entries,
   format: ['esm'],
-  dts: true,
+  dts: false,
   clean: true,
   splitting: false,
   outDir: 'dist',

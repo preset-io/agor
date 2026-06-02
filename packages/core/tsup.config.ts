@@ -53,7 +53,7 @@ export default defineConfig({
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
   },
   format: ['cjs', 'esm'],
-  dts: true,
+  dts: false,
   clean: true,
   splitting: false,
   shims: true, // Enable shims for import.meta.url in CJS builds
