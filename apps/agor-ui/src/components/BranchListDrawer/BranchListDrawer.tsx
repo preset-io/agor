@@ -1,5 +1,5 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
-import { CheckOutlined, SearchOutlined, SortDescendingOutlined } from '@ant-design/icons';
+import { CheckOutlined, SearchOutlined, SortAscendingOutlined, SortDescendingOutlined } from '@ant-design/icons';
 import { Badge, Button, Drawer, Dropdown, Input, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
@@ -174,20 +174,19 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
               }}
               trigger={['click']}
             >
-              <Tooltip
-                title={sort !== 'recent' ? `Sort: ${sort === 'oldest' ? 'Oldest first' : 'A–Z'}` : 'Sort'}
-                placement="topRight"
-              >
+              <Tooltip title="Sort" placement="topRight" open={sort !== 'recent' ? false : undefined}>
                 <Button
                   type="text"
                   size="small"
                   icon={
-                    <SortDescendingOutlined
-                      style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
-                    />
+                    sort === 'oldest'
+                      ? <SortAscendingOutlined style={{ color: token.colorPrimary }} />
+                      : <SortDescendingOutlined style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }} />
                   }
-                  style={{ flexShrink: 0, padding: '0 6px' }}
-                />
+                  style={{ flexShrink: 0, padding: '0 6px', color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
+                >
+                  {sort === 'oldest' ? 'Oldest' : sort === 'alpha' ? 'A–Z' : null}
+                </Button>
               </Tooltip>
             </Dropdown>
           </div>

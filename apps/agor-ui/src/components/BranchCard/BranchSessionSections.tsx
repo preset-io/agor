@@ -11,6 +11,7 @@ import {
   PlusOutlined,
   SearchOutlined,
   SettingOutlined,
+  SortAscendingOutlined,
   SortDescendingOutlined,
 } from '@ant-design/icons';
 import {
@@ -383,21 +384,20 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       }}
       trigger={['click']}
     >
-      <Tooltip
-        title={sort !== 'recent' ? `Sort: ${sort === 'oldest' ? 'Oldest first' : 'A–Z'}` : 'Sort'}
-        placement="topRight"
-      >
+      <Tooltip title="Sort" placement="topRight" open={sort !== 'recent' ? false : undefined}>
         <Button
           type="text"
           size="small"
           icon={
-            <SortDescendingOutlined
-              style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
-            />
+            sort === 'oldest'
+              ? <SortAscendingOutlined style={{ color: token.colorPrimary }} />
+              : <SortDescendingOutlined style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }} />
           }
-          style={{ flexShrink: 0, padding: '0 6px' }}
+          style={{ flexShrink: 0, padding: '0 6px', color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
           onClick={(e) => e.stopPropagation()}
-        />
+        >
+          {sort === 'oldest' ? 'Oldest' : sort === 'alpha' ? 'A–Z' : null}
+        </Button>
       </Tooltip>
     </Dropdown>
   );
@@ -601,7 +601,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       <div style={{ paddingBottom: 12, paddingTop: 4 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <Input
-            size="small"
             style={{ flex: 1 }}
             placeholder="Search sessions..."
             prefix={<SearchOutlined />}
