@@ -189,7 +189,13 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
                     ? <SortAscendingOutlined />
                     : <SortDescendingOutlined />
                 }
-                style={{ flexShrink: 0, padding: '0 6px', color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
+                style={{
+                  flexShrink: 0,
+                  padding: '0 6px',
+                  color: token.colorTextSecondary,
+                  background: sort !== 'recent' ? token.colorFillSecondary : undefined,
+                  borderRadius: token.borderRadiusSM,
+                }}
               >
                 {sort === 'recent' ? 'Recent' : sort === 'oldest' ? 'Oldest' : 'A–Z'}
               </Button>

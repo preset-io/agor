@@ -389,7 +389,13 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         type="text"
         size="small"
         icon={sort === 'oldest' ? <SortAscendingOutlined /> : <SortDescendingOutlined />}
-        style={{ flexShrink: 0, padding: '0 6px', color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
+        style={{
+          flexShrink: 0,
+          padding: '0 6px',
+          color: token.colorTextSecondary,
+          background: sort !== 'recent' ? token.colorFillSecondary : undefined,
+          borderRadius: token.borderRadiusSM,
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {sort === 'recent' ? 'Recent' : sort === 'oldest' ? 'Oldest' : 'A–Z'}
