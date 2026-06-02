@@ -637,6 +637,12 @@ describe('createUserProcessEnvironment — session.custom_context credential ove
         'ANTHROPIC_API_KEY',
         'ANTHROPIC_AUTH_TOKEN',
         'ANTHROPIC_BASE_URL',
+        // Claude Code's three baked-in tier defaults (Sonnet/Haiku/Opus) —
+        // required to redirect tier calls when ANTHROPIC_BASE_URL points at a
+        // proxy (e.g. OpenRouter) with a different model-naming convention.
+        'ANTHROPIC_DEFAULT_SONNET_MODEL',
+        'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+        'ANTHROPIC_DEFAULT_OPUS_MODEL',
         'OPENAI_API_KEY',
         'OPENAI_BASE_URL',
         'GEMINI_API_KEY',
