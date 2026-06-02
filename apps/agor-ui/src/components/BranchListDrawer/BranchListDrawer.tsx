@@ -1,12 +1,12 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
-import { SearchOutlined } from '@ant-design/icons';
-import { Badge, Drawer, Empty, Input, Select, Tooltip, Typography, theme } from 'antd';
+import { CheckOutlined, SearchOutlined, SortDescendingOutlined } from '@ant-design/icons';
+import { Badge, Button, Drawer, Dropdown, Empty, Input, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
-import { HighlightMatch, SESSION_SORT_OPTIONS, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
+import { HighlightMatch, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
 import { RepoPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
@@ -132,7 +132,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
           borderBottom: `1px solid ${token.colorBorder}`,
         }}
       >
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <Input
             style={{ flex: 1 }}
             placeholder="Search sessions..."
@@ -141,14 +141,55 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
             onChange={(e) => setInputValue(e.target.value)}
             allowClear
           />
-          <Select
-            value={sort}
-            onChange={setSort}
-            size="small"
-            style={{ width: 96, flexShrink: 0 }}
-            disabled={!!searchQuery.trim()}
-            options={SESSION_SORT_OPTIONS}
-          />
+          <div
+            style={{
+              opacity: searchQuery.trim() ? 0 : 1,
+              pointerEvents: searchQuery.trim() ? 'none' : 'auto',
+              transition: 'opacity 0.15s ease',
+              display: 'flex',
+            }}
+          >
+            <Dropdown
+              menu={{
+                items: [
+                  {
+                    key: 'recent',
+                    label: 'Most recent',
+                    icon: sort === 'recent' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
+                  },
+                  {
+                    key: 'oldest',
+                    label: 'Oldest first',
+                    icon: sort === 'oldest' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
+                  },
+                  {
+                    key: 'alpha',
+                    label: 'A–Z',
+                    icon: sort === 'alpha' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
+                  },
+                ],
+                onClick: ({ key }) => setSort(key as SessionSort),
+                selectedKeys: [sort],
+              }}
+              trigger={['click']}
+            >
+              <Tooltip
+                title={sort !== 'recent' ? `Sort: ${sort === 'oldest' ? 'Oldest first' : 'A–Z'}` : 'Sort'}
+                placement="topRight"
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  icon={
+                    <SortDescendingOutlined
+                      style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
+                    />
+                  }
+                  style={{ flexShrink: 0, padding: '0 6px' }}
+                />
+              </Tooltip>
+            </Dropdown>
+          </div>
         </div>
       </div>
 
@@ -310,8 +351,8 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
         >
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {searchQuery.trim()
-              ? `${displaySessions.length} result${displaySessions.length !== 1 ? 's' : ''} · sorted by relevance`
-              : `${displaySessions.length} session${displaySessions.length !== 1 ? 's' : ''}${sort !== 'recent' ? ` · ${sort === 'alpha' ? 'A–Z' : 'oldest first'}` : ''}`
+              ? `${displaySessions.length} result${displaySessions.length !== 1 ? 's' : ''} · by relevance`
+              : `${displaySessions.length} session${displaySessions.length !== 1 ? 's' : ''}`
             }
             {board.description && ` • ${board.description}`}
           </Typography.Text>

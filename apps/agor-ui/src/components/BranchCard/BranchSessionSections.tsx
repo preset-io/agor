@@ -4,12 +4,14 @@ import {
   isGatewaySession as isGatewaySessionCore,
 } from '@agor-live/client';
 import {
+  CheckOutlined,
   ClockCircleOutlined,
   InboxOutlined,
   MessageOutlined,
   PlusOutlined,
   SearchOutlined,
   SettingOutlined,
+  SortDescendingOutlined,
 } from '@ant-design/icons';
 import {
   App,
@@ -17,9 +19,9 @@ import {
   Button,
   Collapse,
   ConfigProvider,
+  Dropdown,
   Empty,
   Input,
-  Select,
   Space,
   Spin,
   Tooltip,
@@ -34,7 +36,7 @@ import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
-import { HighlightMatch, SESSION_SORT_OPTIONS, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
+import { HighlightMatch, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { ChannelPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
@@ -370,18 +372,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           showZero
           style={{ backgroundColor: token.colorPrimaryBgHover }}
         />
+        {!isPanel && sortButton}
       </Space>
       <Space size={4}>
-        {!isPanel && (
-          <Select
-            value={sort}
-            onChange={setSort}
-            size="small"
-            style={{ width: 88 }}
-            options={SESSION_SORT_OPTIONS}
-            onClick={(e) => e.stopPropagation()}
-          />
-        )}
         {onCreateSession && (
           <div className="nodrag">
             <Button
@@ -557,27 +550,75 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </div>
   );
 
+  const sortDropdownItems = [
+    {
+      key: 'recent',
+      label: 'Most recent',
+      icon: sort === 'recent' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
+    },
+    {
+      key: 'oldest',
+      label: 'Oldest first',
+      icon: sort === 'oldest' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
+    },
+    {
+      key: 'alpha',
+      label: 'A–Z',
+      icon: sort === 'alpha' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
+    },
+  ];
+
+  const sortButton = (
+    <Dropdown
+      menu={{
+        items: sortDropdownItems,
+        onClick: ({ key }) => setSort(key as SessionSort),
+        selectedKeys: [sort],
+      }}
+      trigger={['click']}
+    >
+      <Tooltip
+        title={sort !== 'recent' ? `Sort: ${sort === 'oldest' ? 'Oldest first' : 'A–Z'}` : 'Sort'}
+        placement="topRight"
+      >
+        <Button
+          type="text"
+          size="small"
+          icon={
+            <SortDescendingOutlined
+              style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
+            />
+          }
+          style={{ flexShrink: 0, padding: '0 6px' }}
+          onClick={(e) => e.stopPropagation()}
+        />
+      </Tooltip>
+    </Dropdown>
+  );
+
   const sessionSearchBar =
     isPanel && activeSessions.length > 0 ? (
       <div style={{ paddingBottom: 12, paddingTop: 4 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <Input
+            size="small"
             style={{ flex: 1 }}
             placeholder="Search sessions..."
             prefix={<SearchOutlined />}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             allowClear
-            size="small"
           />
-          <Select
-            value={sort}
-            onChange={setSort}
-            size="small"
-            style={{ width: 96, flexShrink: 0 }}
-            disabled={!!searchQuery.trim()}
-            options={SESSION_SORT_OPTIONS}
-          />
+          <div
+            style={{
+              opacity: searchQuery.trim() ? 0 : 1,
+              pointerEvents: searchQuery.trim() ? 'none' : 'auto',
+              transition: 'opacity 0.15s ease',
+              display: 'flex',
+            }}
+          >
+            {sortButton}
+          </div>
         </div>
       </div>
     ) : null;
