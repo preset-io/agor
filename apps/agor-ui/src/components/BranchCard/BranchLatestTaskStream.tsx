@@ -1,11 +1,10 @@
 import type { AgorClient, Message, Session, User } from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
-import { Alert, Button, Empty, Spin, Typography, theme } from 'antd';
+import { Alert, Button, Empty, Spin, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
-import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { TaskBlock } from '../TaskBlock';
 import { useLatestBranchTask } from './useLatestBranchTask';
 
@@ -16,14 +15,13 @@ interface BranchLatestTaskStreamProps {
   currentUserId?: string;
   branchName?: string;
   enabled: boolean;
-  onSessionClick?: (sessionId: string) => void;
 }
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_STREAMING_MESSAGES = new Map();
 
 export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
-  ({ client, sessions, userById, currentUserId, branchName, enabled, onSessionClick }) => {
+  ({ client, sessions, userById, currentUserId, branchName, enabled }) => {
     const { token } = theme.useToken();
     const { onPermissionDecision } = useAppActions();
     const containerRef = useRef<HTMLDivElement>(null);
@@ -147,52 +145,7 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
     const isTerminalError = !!currentReactiveState?.terminal;
 
     return (
-      <div
-        className="nodrag nopan nowheel"
-        style={{
-          border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: token.borderRadiusLG,
-          background: token.colorBgContainer,
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: `${token.sizeUnit * 1.5}px ${token.sizeUnit * 2}px`,
-            borderBottom: `1px solid ${token.colorBorderSecondary}`,
-            gap: token.sizeUnit * 2,
-          }}
-        >
-          <div style={{ minWidth: 0 }}>
-            <Typography.Text strong>Latest task stream</Typography.Text>
-            {session && (
-              <Typography.Text
-                type="secondary"
-                style={{ display: 'block', fontSize: 12 }}
-                ellipsis={{
-                  tooltip: getSessionDisplayTitle(session, { includeAgentFallback: true }),
-                }}
-              >
-                {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-              </Typography.Text>
-            )}
-          </div>
-          {session && onSessionClick && (
-            <Button
-              size="small"
-              onClick={(event) => {
-                event.stopPropagation();
-                onSessionClick(session.session_id);
-              }}
-            >
-              Open
-            </Button>
-          )}
-        </div>
-
+      <div className="nodrag nopan nowheel">
         <div
           ref={containerRef}
           style={{
@@ -200,6 +153,7 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
             overflowY: 'auto',
             padding: `${token.sizeUnit}px ${token.sizeUnit * 2}px`,
             background: token.colorBgLayout,
+            borderRadius: token.borderRadiusLG,
           }}
         >
           {error ? (
