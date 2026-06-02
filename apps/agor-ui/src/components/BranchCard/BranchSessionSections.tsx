@@ -8,6 +8,7 @@ import {
   InboxOutlined,
   MessageOutlined,
   PlusOutlined,
+  SearchOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
 import {
@@ -16,6 +17,8 @@ import {
   Button,
   Collapse,
   ConfigProvider,
+  Empty,
+  Input,
   Space,
   Spin,
   Tooltip,
@@ -30,6 +33,7 @@ import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import { HighlightMatch, getMatchSnippet, scoreSession } from '../../utils/sessionSearch';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { ChannelPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
@@ -157,6 +161,13 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   });
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    const id = setTimeout(() => setSearchQuery(searchInput), 150);
+    return () => clearTimeout(id);
+  }, [searchInput]);
 
   const isPanel = mode === 'panel';
 
@@ -528,8 +539,111 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </div>
   );
 
+  const sessionSearchBar =
+    isPanel && activeSessions.length > 0 ? (
+      <div style={{ paddingBottom: 12, paddingTop: 4 }}>
+        <Input
+          placeholder="Search sessions..."
+          prefix={<SearchOutlined />}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          allowClear
+          size="small"
+        />
+      </div>
+    ) : null;
+
+  // Search results mode — flat list sorted by relevance (panel only)
+  if (isPanel && searchQuery.trim() && activeSessions.length > 0) {
+    const results = activeSessions
+      .map((s) => ({ session: s, score: scoreSession(s, searchQuery) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    return (
+      <>
+        {sessionSearchBar}
+        {results.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={`No sessions match "${searchQuery}"`}
+            style={{ padding: '16px 0' }}
+          />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {results.map(({ session }) => {
+              const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
+              const titleLower = titleText.toLowerCase();
+              const qLower = searchQuery.trim().toLowerCase();
+              const titleMatches = titleLower.includes(qLower);
+              const descSnippet =
+                !titleMatches && session.description
+                  ? getMatchSnippet(session.description, searchQuery)
+                  : null;
+              const isActive = session.status === 'running' || session.status === 'stopping';
+
+              return (
+                <SessionItemWithActions
+                  key={session.session_id}
+                  sessionId={session.session_id}
+                  isArchiving={archivingSessionIds.has(session.session_id)}
+                  onArchive={handleArchiveSession}
+                  onSettings={
+                    onOpenSessionSettings
+                      ? (id, e) => {
+                          e.stopPropagation();
+                          onOpenSessionSettings(id);
+                        }
+                      : undefined
+                  }
+                >
+                  <div
+                    style={sessionRowStyle(session)}
+                    onClick={() => onSessionClick?.(session.session_id)}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}>
+                      {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
+                      <SessionRelationshipIcon session={session} size={10} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <Typography.Text
+                          strong
+                          style={{ fontSize: 13, display: 'block', ...getSessionTitleStyles(2) }}
+                        >
+                          <HighlightMatch text={titleText} query={searchQuery} />
+                        </Typography.Text>
+                        {descSnippet && (
+                          <Typography.Text
+                            type="secondary"
+                            style={{ fontSize: 11, fontStyle: 'italic', lineHeight: 1.4, display: 'block', marginTop: 2 }}
+                          >
+                            <HighlightMatch text={descSnippet} query={searchQuery} />
+                          </Typography.Text>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </SessionItemWithActions>
+              );
+            })}
+          </div>
+        )}
+        <ForkSpawnModal
+          open={forkSpawnModal.open}
+          action={forkSpawnModal.action}
+          session={forkSpawnModal.session}
+          currentUser={currentUserId ? userById.get(currentUserId) : undefined}
+          onConfirm={handleForkSpawnConfirm}
+          onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
+          client={client}
+          userById={userById}
+        />
+      </>
+    );
+  }
+
   return (
     <>
+      {sessionSearchBar}
       {activeSessions.length === 0 ? (
         <div
           style={{
