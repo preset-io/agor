@@ -319,7 +319,7 @@
   },
   "scripts": {
     "build": "NODE_OPTIONS='--max-old-space-size=4096' tsup && tsc -p tsconfig.build.json --emitDeclarationOnly --noEmit false --incremental false",
-    "dev": "NODE_OPTIONS='--max-old-space-size=4096' tsup --watch",
+    "dev": "concurrently -k -n js,dts -c cyan,magenta \"TSUP_CLEAN=false NODE_OPTIONS='--max-old-space-size=4096' tsup --watch\" \"tsc -p tsconfig.build.json --emitDeclarationOnly --noEmit false --watch --preserveWatchOutput\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -377,6 +377,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",
     "@vitest/coverage-v8": "^4.1.7",
+    "concurrently": "^9.2.1",
     "drizzle-kit": "^0.31.10",
     "handlebars": "^4.7.8",
     "tsup": "^8.5.1",
