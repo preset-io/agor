@@ -132,7 +132,7 @@ export function sortSessions(sessions: Session[], sort: SessionSort): Session[] 
 
 export function HighlightMatch({ text, query }: { text: string; query: string }) {
   const { token } = theme.useToken();
-  if (!query.trim() || !text) return <>{text}</>;
+  if (!query.trim() || query.trim().length < 3 || !text) return <>{text}</>;
 
   const escaped = query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`(${escaped})`, 'gi');
