@@ -3,6 +3,7 @@ import { CheckOutlined, SearchOutlined, SortDescendingOutlined } from '@ant-desi
 import { Badge, Button, Drawer, Dropdown, Input, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
@@ -94,7 +95,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
   const { token } = theme.useToken();
   const [inputValue, setInputValue] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sort, setSort] = useState<SessionSort>('recent');
+  const [sort, setSort] = useLocalStorage<SessionSort>('agor:session-sort', 'recent');
 
   // Debounce input → searchQuery by 150 ms
   useEffect(() => {

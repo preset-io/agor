@@ -31,6 +31,7 @@ import {
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useThemedMessage } from '../../utils/message';
@@ -165,7 +166,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sort, setSort] = useState<SessionSort>('recent');
+  const [sort, setSort] = useLocalStorage<SessionSort>('agor:session-sort', 'recent');
 
   useEffect(() => {
     const id = setTimeout(() => setSearchQuery(searchInput), 150);
