@@ -356,6 +356,52 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </ConfigProvider>
   );
 
+  const sortDropdownItems = [
+    {
+      key: 'recent',
+      label: 'Most recent',
+      icon: sort === 'recent' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
+    },
+    {
+      key: 'oldest',
+      label: 'Oldest first',
+      icon: sort === 'oldest' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
+    },
+    {
+      key: 'alpha',
+      label: 'A–Z',
+      icon: sort === 'alpha' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
+    },
+  ];
+
+  const sortButton = (
+    <Dropdown
+      menu={{
+        items: sortDropdownItems,
+        onClick: ({ key }) => setSort(key as SessionSort),
+        selectedKeys: [sort],
+      }}
+      trigger={['click']}
+    >
+      <Tooltip
+        title={sort !== 'recent' ? `Sort: ${sort === 'oldest' ? 'Oldest first' : 'A–Z'}` : 'Sort'}
+        placement="topRight"
+      >
+        <Button
+          type="text"
+          size="small"
+          icon={
+            <SortDescendingOutlined
+              style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
+            />
+          }
+          style={{ flexShrink: 0, padding: '0 6px' }}
+          onClick={(e) => e.stopPropagation()}
+        />
+      </Tooltip>
+    </Dropdown>
+  );
+
   const sessionListHeader = (
     <div
       style={{
@@ -548,52 +594,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         );
       })}
     </div>
-  );
-
-  const sortDropdownItems = [
-    {
-      key: 'recent',
-      label: 'Most recent',
-      icon: sort === 'recent' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
-    },
-    {
-      key: 'oldest',
-      label: 'Oldest first',
-      icon: sort === 'oldest' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
-    },
-    {
-      key: 'alpha',
-      label: 'A–Z',
-      icon: sort === 'alpha' ? <CheckOutlined /> : <span style={{ width: 12, display: 'inline-block' }} />,
-    },
-  ];
-
-  const sortButton = (
-    <Dropdown
-      menu={{
-        items: sortDropdownItems,
-        onClick: ({ key }) => setSort(key as SessionSort),
-        selectedKeys: [sort],
-      }}
-      trigger={['click']}
-    >
-      <Tooltip
-        title={sort !== 'recent' ? `Sort: ${sort === 'oldest' ? 'Oldest first' : 'A–Z'}` : 'Sort'}
-        placement="topRight"
-      >
-        <Button
-          type="text"
-          size="small"
-          icon={
-            <SortDescendingOutlined
-              style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
-            />
-          }
-          style={{ flexShrink: 0, padding: '0 6px' }}
-          onClick={(e) => e.stopPropagation()}
-        />
-      </Tooltip>
-    </Dropdown>
   );
 
   const sessionSearchBar =
