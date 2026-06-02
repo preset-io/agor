@@ -108,9 +108,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         if (Array.isArray(result)) {
           return textResult(result.filter((b: Record<string, unknown>) => b.zone_id === zoneId));
         } else {
-          const filtered = (result as { data: Record<string, unknown>[]; total: number; limit: number; skip: number }).data.filter(
-            (b) => b.zone_id === zoneId
-          );
+          const filtered = (
+            result as {
+              data: Record<string, unknown>[];
+              total: number;
+              limit: number;
+              skip: number;
+            }
+          ).data.filter((b) => b.zone_id === zoneId);
           return textResult({ ...result, data: filtered, total: filtered.length });
         }
       }
