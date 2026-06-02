@@ -1,6 +1,7 @@
 import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
+  ArrowsAltOutlined,
   BranchesOutlined,
   CodeOutlined,
   DeleteOutlined,
@@ -8,6 +9,7 @@ import {
   EditOutlined,
   PushpinFilled,
   RobotOutlined,
+  ShrinkOutlined,
 } from '@ant-design/icons';
 import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
@@ -19,6 +21,7 @@ import { EnvironmentPill } from '../EnvironmentPill';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
+import { BranchLatestTaskStream } from './BranchLatestTaskStream';
 import { BranchSessionSections } from './BranchSessionSections';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
@@ -104,6 +107,9 @@ const BranchCardComponent = ({
 
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
+
+  // Local board-only prototype state: make the card larger and show a live latest-task stream.
+  const [taskStreamExpanded, setTaskStreamExpanded] = useState(false);
 
   // Filter out archived sessions from board card display
   const activeSessions = useMemo(() => sessions.filter((s) => !s.archived), [sessions]);
@@ -232,7 +238,7 @@ const BranchCardComponent = ({
   return (
     <Card
       style={{
-        width: panelMode ? '100%' : 500,
+        width: panelMode ? '100%' : taskStreamExpanded ? 880 : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
           'box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
@@ -360,6 +366,19 @@ const BranchCardComponent = ({
             <Button
               type="text"
               size="small"
+              icon={taskStreamExpanded ? <ShrinkOutlined /> : <ArrowsAltOutlined />}
+              className="nodrag"
+              title={taskStreamExpanded ? 'Collapse task stream' : 'Expand latest task stream'}
+              onClick={(e) => {
+                e.stopPropagation();
+                setTaskStreamExpanded((expanded) => !expanded);
+              }}
+            />
+          )}
+          {!inPopover && !panelMode && (
+            <Button
+              type="text"
+              size="small"
               icon={<DragOutlined />}
               className="drag-handle"
               title="Drag to reposition"
@@ -482,6 +501,18 @@ const BranchCardComponent = ({
         </div>
       )}
 
+      {taskStreamExpanded && !inPopover && !panelMode && (
+        <BranchLatestTaskStream
+          client={client}
+          sessions={sessions}
+          userById={userById}
+          currentUserId={currentUserId}
+          branchName={branch.name}
+          enabled={taskStreamExpanded}
+          onSessionClick={onSessionClick}
+        />
+      )}
+
       {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
       <div className="nodrag">
         <BranchSessionSections
@@ -495,7 +526,7 @@ const BranchCardComponent = ({
           onForkSession={onForkSession}
           onSpawnSession={onSpawnSession}
           onOpenSessionSettings={onOpenSessionSettings}
-          defaultExpanded={defaultExpanded}
+          defaultExpanded={taskStreamExpanded ? false : defaultExpanded}
           mode="card"
           client={client}
         />

@@ -213,6 +213,7 @@ interface BranchNodeData {
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;
   onViewLogs?: (branchId: string) => void;
+  onNukeEnvironment?: (branchId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
   onUnpin?: (branchId: string) => void;
   compact?: boolean;
@@ -270,6 +271,7 @@ const BranchNode = React.memo(
           onStartEnvironment={data.onStartEnvironment}
           onStopEnvironment={data.onStopEnvironment}
           onViewLogs={data.onViewLogs}
+          onNukeEnvironment={data.onNukeEnvironment}
           onExecuteScheduleNow={data.onExecuteScheduleNow}
           onUnpin={data.onUnpin}
           isPinned={data.isPinned}
@@ -313,6 +315,7 @@ const BranchNode = React.memo(
       p.onStartEnvironment === n.onStartEnvironment &&
       p.onStopEnvironment === n.onStopEnvironment &&
       p.onViewLogs === n.onViewLogs &&
+      p.onNukeEnvironment === n.onNukeEnvironment &&
       p.onExecuteScheduleNow === n.onExecuteScheduleNow &&
       p.onUnpin === n.onUnpin
     );
