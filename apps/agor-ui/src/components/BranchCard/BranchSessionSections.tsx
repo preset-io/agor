@@ -633,6 +633,14 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     return (
       <>
         {sessionSearchBar}
+        {results.length > 0 && (
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 11, padding: '2px 8px 4px', display: 'block' }}
+          >
+            {results.length} of {activeSessions.length} · by relevance
+          </Typography.Text>
+        )}
         {results.length === 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '24px 16px', gap: 6 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', background: token.colorFillTertiary, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 2 }}>
@@ -648,13 +656,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {results.map(({ session }) => {
               const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
-              const titleLower = titleText.toLowerCase();
-              const qLower = searchQuery.trim().toLowerCase();
-              const titleMatches = titleLower.includes(qLower);
-              const descSnippet =
-                !titleMatches && session.description
-                  ? getMatchSnippet(session.description, searchQuery)
-                  : null;
+              const descSnippet = session.description
+                ? (getMatchSnippet(session.description, searchQuery) ??
+                    (session.description.length > 80
+                      ? `${session.description.slice(0, 80).trimEnd()}…`
+                      : session.description))
+                : null;
               const isActive = session.status === 'running' || session.status === 'stopping';
 
               return (

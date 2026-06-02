@@ -239,13 +239,12 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
               >
                 {(() => {
                   const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
-                  const titleLower = titleText.toLowerCase();
-                  const qLower = searchQuery.trim().toLowerCase();
-                  const titleMatches = searchQuery.trim() && titleLower.includes(qLower);
-                  const descSnippet =
-                    searchQuery.trim() && !titleMatches && session.description
-                      ? getMatchSnippet(session.description, searchQuery)
-                      : null;
+                  const descSnippet = searchQuery.trim() && session.description
+                    ? (getMatchSnippet(session.description, searchQuery) ??
+                        (session.description.length > 80
+                          ? `${session.description.slice(0, 80).trimEnd()}…`
+                          : session.description))
+                    : null;
 
                   return (
                     <>
@@ -359,8 +358,8 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
         >
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {searchQuery.trim()
-              ? `${displaySessions.length} result${displaySessions.length !== 1 ? 's' : ''} · by relevance`
-              : `${displaySessions.length} session${displaySessions.length !== 1 ? 's' : ''}`
+              ? `${displaySessions.length} of ${boardSessions.length} · by relevance`
+              : `${boardSessions.length} session${boardSessions.length !== 1 ? 's' : ''}`
             }
             {board.description && ` • ${board.description}`}
           </Typography.Text>
