@@ -1,7 +1,8 @@
 import type { Session } from '@agor-live/client';
 import { theme } from 'antd';
-import type React from 'react';
 import { getSessionDisplayTitle } from './sessionTitle';
+
+export const SESSION_SORT_STORAGE_KEY = 'agor:session-sort';
 
 const SCORE_WEIGHTS = {
   TITLE_EXACT: 1000,
@@ -129,7 +130,7 @@ export function sortSessions(sessions: Session[], sort: SessionSort): Session[] 
   }
 }
 
-export const HighlightMatch: React.FC<{ text: string; query: string }> = ({ text, query }) => {
+export function HighlightMatch({ text, query }: { text: string; query: string }) {
   const { token } = theme.useToken();
   if (!query.trim() || !text) return <>{text}</>;
 
@@ -147,8 +148,8 @@ export const HighlightMatch: React.FC<{ text: string; query: string }> = ({ text
             style={{
               background: token.colorWarningBg,
               color: 'inherit',
-              padding: '0 1px',
-              borderRadius: 2,
+              padding: `0 ${token.paddingXXS}px`,
+              borderRadius: token.borderRadiusSM,
             }}
           >
             {part}
@@ -160,4 +161,4 @@ export const HighlightMatch: React.FC<{ text: string; query: string }> = ({ text
       )}
     </>
   );
-};
+}

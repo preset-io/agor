@@ -36,7 +36,7 @@ import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
-import { HighlightMatch, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
+import { HighlightMatch, SESSION_SORT_STORAGE_KEY, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { ChannelPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
@@ -166,7 +166,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sort, setSort] = useLocalStorage<SessionSort>('agor:session-sort', 'recent');
+  const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
   useEffect(() => {
     const id = setTimeout(() => setSearchQuery(searchInput), 150);

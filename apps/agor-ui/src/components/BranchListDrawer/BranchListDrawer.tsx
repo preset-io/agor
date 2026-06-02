@@ -7,7 +7,7 @@ import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
-import { HighlightMatch, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
+import { HighlightMatch, SESSION_SORT_STORAGE_KEY, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
 import { RepoPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
@@ -95,7 +95,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
   const { token } = theme.useToken();
   const [inputValue, setInputValue] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sort, setSort] = useLocalStorage<SessionSort>('agor:session-sort', 'recent');
+  const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
   // Debounce input → searchQuery by 150 ms
   useEffect(() => {
