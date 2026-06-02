@@ -150,6 +150,8 @@ export function HighlightMatch({ text, query }: { text: string; query: string })
               color: 'inherit',
               padding: `0 ${token.paddingXXS}px`,
               borderRadius: token.borderRadiusSM,
+              borderBottom: `2px solid ${token.colorWarning}`,
+              fontWeight: 500,
             }}
           >
             {part}

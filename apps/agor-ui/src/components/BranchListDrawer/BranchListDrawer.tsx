@@ -1,5 +1,5 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
-import { CheckOutlined, SearchOutlined, SortAscendingOutlined, SortDescendingOutlined } from '@ant-design/icons';
+import { CheckOutlined, InfoCircleOutlined, SearchOutlined, SortAscendingOutlined, SortDescendingOutlined } from '@ant-design/icons';
 import { Badge, Button, Drawer, Dropdown, Input, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
@@ -142,14 +142,21 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
             onChange={(e) => setInputValue(e.target.value)}
             allowClear
           />
-          <div
-            style={{
-              opacity: searchQuery.trim() ? 0 : 1,
-              pointerEvents: searchQuery.trim() ? 'none' : 'auto',
-              transition: 'opacity 0.15s ease',
-              display: 'flex',
-            }}
-          >
+          {searchQuery.trim() ? (
+            <Tooltip
+              title="Matched by: exact title > title prefix > keywords > description. Active and recently used sessions rank higher."
+              placement="topRight"
+            >
+              <Button
+                type="text"
+                size="small"
+                icon={<InfoCircleOutlined style={{ color: token.colorTextTertiary }} />}
+                style={{ flexShrink: 0, padding: '0 6px', color: token.colorTextTertiary }}
+              >
+                Relevance
+              </Button>
+            </Tooltip>
+          ) : (
             <Dropdown
               menu={{
                 items: [
@@ -174,22 +181,20 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
               }}
               trigger={['click']}
             >
-              <Tooltip title="Sort" placement="topRight" open={sort !== 'recent' ? false : undefined}>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={
-                    sort === 'oldest'
-                      ? <SortAscendingOutlined style={{ color: token.colorPrimary }} />
-                      : <SortDescendingOutlined style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }} />
-                  }
-                  style={{ flexShrink: 0, padding: '0 6px', color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
-                >
-                  {sort === 'oldest' ? 'Oldest' : sort === 'alpha' ? 'A–Z' : null}
-                </Button>
-              </Tooltip>
+              <Button
+                type="text"
+                size="small"
+                icon={
+                  sort === 'oldest'
+                    ? <SortAscendingOutlined />
+                    : <SortDescendingOutlined />
+                }
+                style={{ flexShrink: 0, padding: '0 6px', color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
+              >
+                {sort === 'recent' ? 'Recent' : sort === 'oldest' ? 'Oldest' : 'A–Z'}
+              </Button>
             </Dropdown>
-          </div>
+          )}
         </div>
       </div>
 
@@ -356,11 +361,19 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
           }}
         >
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {searchQuery.trim()
-              ? `${displaySessions.length} of ${boardSessions.length} · by relevance`
-              : `${boardSessions.length} session${boardSessions.length !== 1 ? 's' : ''}`
-            }
-            {board.description && ` • ${board.description}`}
+            {searchQuery.trim() ? (
+              <>
+                {displaySessions.length} of {boardSessions.length}{' · '}
+                <Tooltip title="Matched by: exact title > title prefix > keywords > description. Active and recently used sessions rank higher.">
+                  <span style={{ borderBottom: `1px dashed ${token.colorTextTertiary}`, cursor: 'help' }}>
+                    by relevance
+                  </span>
+                </Tooltip>
+                {board.description && ` • ${board.description}`}
+              </>
+            ) : (
+              `${boardSessions.length} session${boardSessions.length !== 1 ? 's' : ''}${board.description ? ` • ${board.description}` : ''}`
+            )}
           </Typography.Text>
         </div>
       )}

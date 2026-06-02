@@ -6,6 +6,7 @@ import {
 import {
   CheckOutlined,
   ClockCircleOutlined,
+  InfoCircleOutlined,
   InboxOutlined,
   MessageOutlined,
   PlusOutlined,
@@ -384,21 +385,15 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       }}
       trigger={['click']}
     >
-      <Tooltip title="Sort" placement="topRight" open={sort !== 'recent' ? false : undefined}>
-        <Button
-          type="text"
-          size="small"
-          icon={
-            sort === 'oldest'
-              ? <SortAscendingOutlined style={{ color: token.colorPrimary }} />
-              : <SortDescendingOutlined style={{ color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }} />
-          }
-          style={{ flexShrink: 0, padding: '0 6px', color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {sort === 'oldest' ? 'Oldest' : sort === 'alpha' ? 'A–Z' : null}
-        </Button>
-      </Tooltip>
+      <Button
+        type="text"
+        size="small"
+        icon={sort === 'oldest' ? <SortAscendingOutlined /> : <SortDescendingOutlined />}
+        style={{ flexShrink: 0, padding: '0 6px', color: sort !== 'recent' ? token.colorPrimary : token.colorTextTertiary }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {sort === 'recent' ? 'Recent' : sort === 'oldest' ? 'Oldest' : 'A–Z'}
+      </Button>
     </Dropdown>
   );
 
@@ -608,16 +603,21 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             onChange={(e) => setSearchInput(e.target.value)}
             allowClear
           />
-          <div
-            style={{
-              opacity: searchQuery.trim() ? 0 : 1,
-              pointerEvents: searchQuery.trim() ? 'none' : 'auto',
-              transition: 'opacity 0.15s ease',
-              display: 'flex',
-            }}
-          >
-            {sortButton}
-          </div>
+          {searchQuery.trim() ? (
+            <Tooltip
+              title="Matched by: exact title > title prefix > keywords > description. Active and recently used sessions rank higher."
+              placement="topRight"
+            >
+              <Button
+                type="text"
+                size="small"
+                icon={<InfoCircleOutlined style={{ color: token.colorTextTertiary }} />}
+                style={{ flexShrink: 0, padding: '0 6px', color: token.colorTextTertiary }}
+              >
+                Relevance
+              </Button>
+            </Tooltip>
+          ) : sortButton}
         </div>
       </div>
     ) : null;
@@ -637,7 +637,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             type="secondary"
             style={{ fontSize: 11, padding: '2px 8px 4px', display: 'block' }}
           >
-            {results.length} of {activeSessions.length} · by relevance
+            {results.length} of {activeSessions.length}{' · '}
+            <Tooltip title="Matched by: exact title > title prefix > keywords > description. Active and recently used sessions rank higher.">
+              <span style={{ borderBottom: `1px dashed ${token.colorTextTertiary}`, cursor: 'help' }}>
+                by relevance
+              </span>
+            </Tooltip>
           </Typography.Text>
         )}
         {results.length === 0 ? (
