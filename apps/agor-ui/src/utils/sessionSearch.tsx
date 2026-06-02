@@ -100,6 +100,35 @@ export function getMatchSnippet(text: string, query: string, contextLen = 60): s
   return snippet;
 }
 
+export type SessionSort = 'recent' | 'oldest' | 'alpha';
+
+export const SESSION_SORT_OPTIONS: { value: SessionSort; label: string }[] = [
+  { value: 'recent', label: 'Recent' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'alpha', label: 'A–Z' },
+];
+
+export function sortSessions(sessions: Session[], sort: SessionSort): Session[] {
+  const copy = [...sessions];
+  switch (sort) {
+    case 'oldest':
+      return copy.sort(
+        (a, b) => new Date(a.last_updated).getTime() - new Date(b.last_updated).getTime()
+      );
+    case 'alpha':
+      return copy.sort((a, b) =>
+        getSessionDisplayTitle(a, { includeAgentFallback: true }).localeCompare(
+          getSessionDisplayTitle(b, { includeAgentFallback: true })
+        )
+      );
+    case 'recent':
+    default:
+      return copy.sort(
+        (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
+      );
+  }
+}
+
 export const HighlightMatch: React.FC<{ text: string; query: string }> = ({ text, query }) => {
   const { token } = theme.useToken();
   if (!query.trim() || !text) return <>{text}</>;

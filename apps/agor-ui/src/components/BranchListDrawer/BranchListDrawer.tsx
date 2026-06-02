@@ -1,12 +1,12 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
 import { SearchOutlined } from '@ant-design/icons';
-import { Badge, Drawer, Empty, Input, Tooltip, Typography, theme } from 'antd';
+import { Badge, Drawer, Empty, Input, Select, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
-import { HighlightMatch, getMatchSnippet, scoreSession } from '../../utils/sessionSearch';
+import { HighlightMatch, SESSION_SORT_OPTIONS, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
 import { RepoPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
@@ -94,6 +94,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
   const { token } = theme.useToken();
   const [inputValue, setInputValue] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sort, setSort] = useState<SessionSort>('recent');
 
   // Debounce input → searchQuery by 150 ms
   useEffect(() => {
@@ -101,48 +102,54 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
     return () => clearTimeout(id);
   }, [inputValue]);
 
-  // Filter sessions by current board (branch-centric model)
+  // Collect sessions for current board (unsorted — sort applied separately)
   const boardSessions = useMemo(() => {
-    // Get branch IDs for this board by iterating the Map
     const boardBranchIds: string[] = [];
     for (const branch of branchById.values()) {
       if (branch.board_id === currentBoardId) {
         boardBranchIds.push(branch.branch_id);
       }
     }
-
-    // Get sessions for these branches using O(1) Map lookups, sorted by last_updated desc
-    return boardBranchIds
-      .flatMap((branchId) => sessionsByBranch.get(branchId) || [])
-      .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
+    return boardBranchIds.flatMap((branchId) => sessionsByBranch.get(branchId) || []);
   }, [sessionsByBranch, branchById, currentBoardId]);
 
   const displaySessions = useMemo(() => {
-    if (!searchQuery.trim()) return boardSessions; // recency order, no filter
+    if (!searchQuery.trim()) return sortSessions(boardSessions, sort);
 
     return boardSessions
       .map((s) => ({ session: s, score: scoreSession(s, searchQuery) }))
       .filter(({ score }) => score > 0)
       .sort((a, b) => b.score - a.score)
       .map(({ session }) => session);
-  }, [boardSessions, searchQuery]);
+  }, [boardSessions, searchQuery, sort]);
 
   return (
     <div style={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
-      {/* Search Bar */}
+      {/* Search Bar + Sort */}
       <div
         style={{
           padding: '16px 24px',
           borderBottom: `1px solid ${token.colorBorder}`,
         }}
       >
-        <Input
-          placeholder="Search sessions..."
-          prefix={<SearchOutlined />}
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          allowClear
-        />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Input
+            style={{ flex: 1 }}
+            placeholder="Search sessions..."
+            prefix={<SearchOutlined />}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            allowClear
+          />
+          <Select
+            value={sort}
+            onChange={setSort}
+            size="small"
+            style={{ width: 96, flexShrink: 0 }}
+            disabled={!!searchQuery.trim()}
+            options={SESSION_SORT_OPTIONS}
+          />
+        </div>
       </div>
 
       {/* Session List */}
@@ -304,7 +311,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {searchQuery.trim()
               ? `${displaySessions.length} result${displaySessions.length !== 1 ? 's' : ''} · sorted by relevance`
-              : `${boardSessions.length} session${boardSessions.length !== 1 ? 's' : ''}`
+              : `${displaySessions.length} session${displaySessions.length !== 1 ? 's' : ''}${sort !== 'recent' ? ` · ${sort === 'alpha' ? 'A–Z' : 'oldest first'}` : ''}`
             }
             {board.description && ` • ${board.description}`}
           </Typography.Text>

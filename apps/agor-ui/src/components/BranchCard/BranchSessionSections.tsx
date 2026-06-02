@@ -19,6 +19,7 @@ import {
   ConfigProvider,
   Empty,
   Input,
+  Select,
   Space,
   Spin,
   Tooltip,
@@ -33,7 +34,7 @@ import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
-import { HighlightMatch, getMatchSnippet, scoreSession } from '../../utils/sessionSearch';
+import { HighlightMatch, SESSION_SORT_OPTIONS, type SessionSort, getMatchSnippet, scoreSession, sortSessions } from '../../utils/sessionSearch';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { ChannelPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
@@ -163,6 +164,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sort, setSort] = useState<SessionSort>('recent');
 
   useEffect(() => {
     const id = setTimeout(() => setSearchQuery(searchInput), 150);
@@ -238,7 +240,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     () => activeSessions.filter((s) => isGatewaySession(s)),
     [activeSessions, isGatewaySession]
   );
-  const sessionTreeData = useMemo(() => buildSessionTree(manualSessions), [manualSessions]);
+  const sortedManualSessions = useMemo(
+    () => sortSessions(manualSessions, sort),
+    [manualSessions, sort]
+  );
+  const sessionTreeData = useMemo(() => buildSessionTree(sortedManualSessions), [sortedManualSessions]);
 
   const hasRunningScheduledSession = useMemo(
     () => scheduledSessions.some((s) => s.status === 'running' || s.status === 'stopping'),
@@ -365,23 +371,35 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           style={{ backgroundColor: token.colorPrimaryBgHover }}
         />
       </Space>
-      {onCreateSession && (
-        <div className="nodrag">
-          <Button
-            type="default"
+      <Space size={4}>
+        {!isPanel && (
+          <Select
+            value={sort}
+            onChange={setSort}
             size="small"
-            icon={<PlusOutlined />}
-            disabled={connectionDisabled || isCreating}
-            onClick={(e) => {
-              e.stopPropagation();
-              onCreateSession(branch.branch_id);
-            }}
-            title={isCreating ? 'Branch is being created...' : undefined}
-          >
-            New Session
-          </Button>
-        </div>
-      )}
+            style={{ width: 88 }}
+            options={SESSION_SORT_OPTIONS}
+            onClick={(e) => e.stopPropagation()}
+          />
+        )}
+        {onCreateSession && (
+          <div className="nodrag">
+            <Button
+              type="default"
+              size="small"
+              icon={<PlusOutlined />}
+              disabled={connectionDisabled || isCreating}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateSession(branch.branch_id);
+              }}
+              title={isCreating ? 'Branch is being created...' : undefined}
+            >
+              New Session
+            </Button>
+          </div>
+        )}
+      </Space>
     </div>
   );
 
@@ -542,14 +560,25 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const sessionSearchBar =
     isPanel && activeSessions.length > 0 ? (
       <div style={{ paddingBottom: 12, paddingTop: 4 }}>
-        <Input
-          placeholder="Search sessions..."
-          prefix={<SearchOutlined />}
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          allowClear
-          size="small"
-        />
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Input
+            style={{ flex: 1 }}
+            placeholder="Search sessions..."
+            prefix={<SearchOutlined />}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            allowClear
+            size="small"
+          />
+          <Select
+            value={sort}
+            onChange={setSort}
+            size="small"
+            style={{ width: 96, flexShrink: 0 }}
+            disabled={!!searchQuery.trim()}
+            options={SESSION_SORT_OPTIONS}
+          />
+        </div>
       </div>
     ) : null;
 
