@@ -150,7 +150,6 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
       <div
         className="nodrag nopan nowheel"
         style={{
-          marginTop: token.sizeUnit * 2,
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
           background: token.colorBgContainer,

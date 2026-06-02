@@ -1,7 +1,6 @@
 import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
-  ArrowsAltOutlined,
   BranchesOutlined,
   CodeOutlined,
   DeleteOutlined,
@@ -9,9 +8,8 @@ import {
   EditOutlined,
   PushpinFilled,
   RobotOutlined,
-  ShrinkOutlined,
 } from '@ant-design/icons';
-import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { Button, Card, Collapse, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
@@ -108,7 +106,8 @@ const BranchCardComponent = ({
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
 
-  // Local board-only prototype state: make the card larger and show a live latest-task stream.
+  // Local board-only prototype state: make the card larger only when the
+  // optional latest-task section is open.
   const [taskStreamExpanded, setTaskStreamExpanded] = useState(false);
 
   // Filter out archived sessions from board card display
@@ -366,19 +365,6 @@ const BranchCardComponent = ({
             <Button
               type="text"
               size="small"
-              icon={taskStreamExpanded ? <ShrinkOutlined /> : <ArrowsAltOutlined />}
-              className="nodrag"
-              title={taskStreamExpanded ? 'Collapse task stream' : 'Expand latest task stream'}
-              onClick={(e) => {
-                e.stopPropagation();
-                setTaskStreamExpanded((expanded) => !expanded);
-              }}
-            />
-          )}
-          {!inPopover && !panelMode && (
-            <Button
-              type="text"
-              size="small"
               icon={<DragOutlined />}
               className="drag-handle"
               title="Drag to reposition"
@@ -501,18 +487,6 @@ const BranchCardComponent = ({
         </div>
       )}
 
-      {taskStreamExpanded && !inPopover && !panelMode && (
-        <BranchLatestTaskStream
-          client={client}
-          sessions={sessions}
-          userById={userById}
-          currentUserId={currentUserId}
-          branchName={branch.name}
-          enabled={taskStreamExpanded}
-          onSessionClick={onSessionClick}
-        />
-      )}
-
       {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
       <div className="nodrag">
         <BranchSessionSections
@@ -526,11 +500,49 @@ const BranchCardComponent = ({
           onForkSession={onForkSession}
           onSpawnSession={onSpawnSession}
           onOpenSessionSettings={onOpenSessionSettings}
-          defaultExpanded={taskStreamExpanded ? false : defaultExpanded}
+          defaultExpanded={defaultExpanded}
           mode="card"
           client={client}
         />
       </div>
+
+      {!inPopover && !panelMode && (
+        <div className="nodrag nopan nowheel">
+          <Collapse
+            activeKey={taskStreamExpanded ? ['latest-task'] : []}
+            onChange={(keys) => setTaskStreamExpanded(keys.length > 0)}
+            ghost
+            style={{ marginTop: 0 }}
+            items={[
+              {
+                key: 'latest-task',
+                label: (
+                  <Space size={6} align="baseline">
+                    <Typography.Text strong>Most recent prompt</Typography.Text>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      live task output
+                    </Typography.Text>
+                  </Space>
+                ),
+                styles: {
+                  body: { background: 'transparent', paddingInline: 0 },
+                },
+                children: taskStreamExpanded ? (
+                  <BranchLatestTaskStream
+                    client={client}
+                    sessions={sessions}
+                    userById={userById}
+                    currentUserId={currentUserId}
+                    branchName={branch.name}
+                    enabled={taskStreamExpanded}
+                    onSessionClick={onSessionClick}
+                  />
+                ) : null,
+              },
+            ]}
+          />
+        </div>
+      )}
 
       {/* Archive/Delete Modal */}
       <ArchiveDeleteBranchModal
