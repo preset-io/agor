@@ -1,8 +1,9 @@
 import type { AgorClient, Message, Session, User } from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
-import { Alert, Button, Empty, Spin, theme } from 'antd';
+import { Alert, Button, Empty, Input, Spin, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
+import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { TaskBlock } from '../TaskBlock';
@@ -23,11 +24,13 @@ const EMPTY_STREAMING_MESSAGES = new Map();
 export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
   ({ client, sessions, userById, currentUserId, branchName, enabled }) => {
     const { token } = theme.useToken();
-    const { onPermissionDecision } = useAppActions();
+    const { onPermissionDecision, onSendPrompt } = useAppActions();
+    const connectionDisabled = useConnectionDisabled();
     const containerRef = useRef<HTMLDivElement>(null);
     const userScrolledUpRef = useRef(false);
     const userScrollIntentRef = useRef(false);
     const [isReloading, setIsReloading] = useState(false);
+    const [prompt, setPrompt] = useState('');
 
     const {
       task: discoveredTask,
@@ -143,6 +146,21 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
     const loading = latestTaskLoading || (!!sessionId && currentReactiveState?.loading && !task);
     const error = latestTaskError || currentReactiveState?.error || null;
     const isTerminalError = !!currentReactiveState?.terminal;
+    const trimmedPrompt = prompt.trim();
+    const canPrompt = !!session && !!onSendPrompt && !connectionDisabled;
+    const promptPlaceholder =
+      session?.status === 'running' ? 'Queue a prompt for this session…' : 'Prompt this session…';
+
+    // biome-ignore lint/correctness/useExhaustiveDependencies: clear the draft when the target session changes
+    useEffect(() => {
+      setPrompt('');
+    }, [sessionId]);
+
+    const handlePromptSubmit = useCallback(() => {
+      if (!session || !onSendPrompt || !trimmedPrompt || connectionDisabled) return;
+      onSendPrompt(session.session_id, trimmedPrompt);
+      setPrompt('');
+    }, [connectionDisabled, onSendPrompt, session, trimmedPrompt]);
 
     return (
       <div className="nodrag nopan nowheel">
@@ -224,6 +242,35 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
               client={client}
             />
           )}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            gap: token.sizeUnit,
+            alignItems: 'flex-end',
+            marginTop: token.sizeUnit,
+          }}
+        >
+          <Input.TextArea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                handlePromptSubmit();
+              }
+            }}
+            disabled={!canPrompt}
+            placeholder={canPrompt ? promptPlaceholder : 'No promptable session selected…'}
+            autoSize={{ minRows: 1, maxRows: 4 }}
+          />
+          <Button
+            type="primary"
+            onClick={handlePromptSubmit}
+            disabled={!canPrompt || !trimmedPrompt}
+          >
+            Prompt
+          </Button>
         </div>
       </div>
     );
