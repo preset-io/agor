@@ -59,7 +59,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_branches_list',
     {
-      description: 'List all branches in a repository',
+      description:
+        'List all branches in a repository. Each branch includes zone_id and zone_label when ' +
+        'the branch is assigned to a board zone — use these fields directly to identify which ' +
+        'zone a branch is in without extra agor_branches_get calls. Also includes ' +
+        'pull_request_url, issue_url, board_object_id, and position when set.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: z.string().optional().describe('Repository ID to filter by'),
@@ -76,6 +80,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Filter to show ONLY archived branches. When true, returns only archived branches. Overrides includeArchived.'
           ),
+        zoneId: z
+          .string()
+          .optional()
+          .describe(
+            'Filter results to branches in a specific board zone (e.g. "zone-1776863814461"). ' +
+              'Avoids the need to call agor_branches_get on each branch to check zone membership.'
+          ),
       }),
     },
     async (args) => {
@@ -87,8 +98,24 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       } else if (!args.includeArchived) {
         query.archived = false;
       }
-      const branches = await ctx.app.service('branches').find({ query, ...ctx.baseServiceParams });
-      return textResult(branches);
+      const result = await ctx.app.service('branches').find({ query, ...ctx.baseServiceParams });
+
+      // Post-enrichment zone filter: zone_id is added by the service's find() via
+      // enrichManyWithZoneInfo (LEFT JOIN on board_objects). Filter here after enrichment
+      // so the caller doesn't have to fan out with individual get() calls.
+      if (args.zoneId) {
+        const zoneId = coerceString(args.zoneId);
+        if (Array.isArray(result)) {
+          return textResult(result.filter((b: Record<string, unknown>) => b.zone_id === zoneId));
+        } else {
+          const filtered = (result as { data: Record<string, unknown>[]; total: number; limit: number; skip: number }).data.filter(
+            (b) => b.zone_id === zoneId
+          );
+          return textResult({ ...result, data: filtered, total: filtered.length });
+        }
+      }
+
+      return textResult(result);
     }
   );
 
