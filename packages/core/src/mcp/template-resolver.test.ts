@@ -372,4 +372,40 @@ describe('resolveMcpServerTemplates with session.custom_context', () => {
     expect(result.isValid).toBe(true);
     expect(result.server.auth?.token).toBe('deep_value');
   });
+
+  it('error hint for a missing session.custom_context url points at the payload, not user env', () => {
+    const server = createTestServer({
+      name: 'session-url-server',
+      transport: 'http',
+      url: '{{ session.custom_context.missing_base_url }}',
+    });
+
+    const result = resolveMcpServerTemplates(server, context);
+
+    expect(result.isValid).toBe(false);
+    // The remediation must mention the custom_context payload and NOT send the
+    // operator to "user settings" (which only applies to {{user.env.*}}).
+    expect(result.errorMessage).toContain('custom_context');
+    expect(result.errorMessage).not.toContain('user settings');
+  });
+
+  it('error hint covers both namespaces when a server mixes user.env and session.custom_context misses', () => {
+    const server = createTestServer({
+      name: 'mixed-miss-server',
+      transport: 'http',
+      // url is the only required field; make it a user.env miss so the server is invalid,
+      // and reference a session.custom_context miss in an optional field too.
+      url: '{{ user.env.MISSING_URL }}',
+      auth: { type: 'bearer', token: '{{ session.custom_context.missing_token }}' },
+    });
+
+    const result = resolveMcpServerTemplates(server, {
+      user: { env: {} },
+      session: { custom_context: {} },
+    });
+
+    expect(result.isValid).toBe(false);
+    expect(result.errorMessage).toContain('user settings'); // user.env hint
+    expect(result.errorMessage).toContain('custom_context'); // session hint
+  });
 });

@@ -188,11 +188,21 @@ export function buildMCPTemplateContext(opts: {
   const base = buildMCPTemplateContextFromEnv(opts.env);
   const cc = opts.sessionCustomContext;
   if (cc && typeof cc === 'object' && !Array.isArray(cc)) {
+    // Mirror the `buildMCPTemplateContextFromEnv` log so operators can tell from
+    // executor logs whether `{{session.custom_context.*}}` resolution had data to
+    // work with. Without this, a missing template looks identical whether the
+    // blob was empty, the key was absent, or the caller never wired `sessionRepo`.
+    const keyCount = Object.keys(cc).length;
+    console.log(`   🔐 session.custom_context: ${keyCount} key(s) available for templates`);
     return {
       ...base,
       session: { custom_context: cc },
     };
   }
+  // `cc === undefined` is the common "caller didn't pass sessionRepo / no session
+  // context wired" case; `null` is "session row had no custom_context". Either way
+  // `{{session.custom_context.*}}` will resolve empty — say so once, here.
+  console.log('   🔐 session.custom_context: not available (no session context provided)');
   return base;
 }
 
@@ -427,23 +437,44 @@ export function resolveMcpServerTemplates(
   let errorMessage: string | undefined;
 
   if (!isValid) {
-    const missingVars = unresolvedFields
-      .map((f) => {
-        // Extract the template variable name for better error messages
-        let originalValue: string | undefined;
-        if (f === 'url') {
-          originalValue = server.url;
-        } else if (f.startsWith('env.')) {
-          originalValue = server.env?.[f.slice(4)];
-        } else if (f.startsWith('auth.') && server.auth) {
-          const authKey = f.slice(5) as keyof MCPAuth;
-          const authValue = server.auth[authKey];
-          originalValue = typeof authValue === 'string' ? authValue : undefined;
-        }
-        return originalValue || f;
-      })
-      .join(', ');
-    errorMessage = `MCP server "${server.name}" has unresolved required templates: ${missingVars}. Set the corresponding environment variables in your user settings.`;
+    const originalValues = unresolvedFields.map((f) => {
+      // Extract the template variable name for better error messages
+      let originalValue: string | undefined;
+      if (f === 'url') {
+        originalValue = server.url;
+      } else if (f.startsWith('env.')) {
+        originalValue = server.env?.[f.slice(4)];
+      } else if (f.startsWith('auth.') && server.auth) {
+        const authKey = f.slice(5) as keyof MCPAuth;
+        const authValue = server.auth[authKey];
+        originalValue = typeof authValue === 'string' ? authValue : undefined;
+      }
+      return originalValue || f;
+    });
+    const missingVars = originalValues.join(', ');
+
+    // Tailor the remediation hint to the namespace(s) that actually failed.
+    // `{{user.env.*}}` misses are a user-settings problem; `{{session.custom_context.*}}`
+    // misses mean the session was created without the expected payload — pointing the
+    // operator at "user settings" for the latter sends them down the wrong path.
+    const refsUserEnv = originalValues.some((v) => v.includes('user.env'));
+    const refsSessionContext = originalValues.some((v) => v.includes('session.custom_context'));
+    const hints: string[] = [];
+    if (refsUserEnv) {
+      hints.push(
+        'For `user.env.*` fields, set the corresponding environment variables in your user settings.'
+      );
+    }
+    if (refsSessionContext) {
+      hints.push(
+        'For `session.custom_context.*` fields, ensure the session was created with the expected `custom_context` payload.'
+      );
+    }
+    if (hints.length === 0) {
+      // No recognised namespace (e.g. a malformed template) — keep the generic guidance.
+      hints.push('Set the corresponding environment variables in your user settings.');
+    }
+    errorMessage = `MCP server "${server.name}" has unresolved required templates: ${missingVars}. ${hints.join(' ')}`;
   }
 
   return {
