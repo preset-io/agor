@@ -1094,10 +1094,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const repo = await this.get(id, params);
     const cleanup = params?.query?.cleanup === true;
 
-    // Get ALL branches for this repo (needed for both filesystem and database cleanup)
-    // CRITICAL: Use internal call (no provider) to avoid RBAC hooks that bypass repo_id filter.
-    // Spreading external params with provider causes scopeBranchQuery to return ALL accessible
-    // branches instead of filtering by repo_id, leading to cross-repo deletion.
+    // Get ALL branches for this repo (needed for both filesystem and database cleanup).
+    // CRITICAL: Use an internal call (no provider) so repo deletion owns the
+    // full branch inventory for this repo, independent of caller RBAC scope.
     const branchesService = this.app.service('branches');
     const branchesResult = await branchesService.find({
       query: { repo_id: repo.repo_id },

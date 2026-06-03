@@ -525,9 +525,10 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * Uses LEFT JOIN to check ownership in one query instead of N+1.
    * Returns branches where user is an owner OR others_can allows at least 'view' access.
    *
-   * NOTE: This method should only be called when RBAC is enabled. When RBAC is disabled,
-   * the scopeBranchQuery hook is not registered, so default Feathers query is used
-   * (which returns all branches without filtering).
+   * NOTE: This method should only be called when RBAC is enabled. The branch
+   * find RBAC hook uses it to resolve accessible branch IDs and compose them
+   * into the service query; when RBAC is disabled, default Feathers query
+   * handling returns all branches without access filtering.
    *
    * @param userId - User ID to check access for
    * @param filter - Optional filters
