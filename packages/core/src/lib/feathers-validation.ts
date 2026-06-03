@@ -150,6 +150,7 @@ export const branchQuerySchema = createQuerySchema(
     branch_id: Type.Optional(CommonSchemas.uuid),
     repo_id: Type.Optional(CommonSchemas.uuid),
     board_id: Type.Optional(CommonSchemas.uuid),
+    zone_id: Type.Optional(Type.String({ maxLength: 255 })),
     name: Type.Optional(Type.String({ maxLength: 255 })),
     archived: Type.Optional(CommonSchemas.boolean),
     created_at: Type.Optional(CommonSchemas.timestamp),

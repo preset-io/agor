@@ -77,7 +77,6 @@ import {
   loadSessionBranch,
   PERMISSION_RANK,
   resolveSessionContext,
-  scopeBranchQuery,
   scopeFindToAccessibleBoards,
   scopeFindToAccessibleBranches,
   scopeFindToAccessibleSessions,
@@ -714,8 +713,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireMinimumRole(ROLES.MEMBER, 'access branches'),
       ],
       find: [
-        // RBAC: Optimized SQL-based filtering (single query with JOIN, no N+1)
-        ...(branchRbacEnabled ? [scopeBranchQuery(branchRepository, superadminOpts)] : []),
+        // RBAC: compose an accessible branch_id filter and let BranchesService.find()
+        // handle service-level filters/enrichment (including virtual zone_id).
+        ...(branchRbacEnabled
+          ? [scopeFindToAccessibleBranches(branchRepository, superadminOpts)]
+          : []),
       ],
       get: [
         ...(branchRbacEnabled
