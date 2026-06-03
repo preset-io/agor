@@ -82,7 +82,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
-    findByBranchId: (branchId: BranchID) => Promise<{ object_id: string; zone_id?: string } | null>;
+    findByBranchId: (
+      branchId: BranchID
+    ) => Promise<{ object_id: string; zone_id?: string } | null>;
     create: (data: unknown) => Promise<unknown>;
     remove: (id: string) => Promise<unknown>;
     patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
@@ -139,7 +141,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!this.boardObjectsService) {
       this.boardObjectsService = this.app.service('board-objects') as unknown as {
         find: (params?: unknown) => Promise<unknown>;
-        findByBranchId: (branchId: BranchID) => Promise<{ object_id: string; zone_id?: string } | null>;
+        findByBranchId: (
+          branchId: BranchID
+        ) => Promise<{ object_id: string; zone_id?: string } | null>;
         create: (data: unknown) => Promise<unknown>;
         remove: (id: string) => Promise<unknown>;
         patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
