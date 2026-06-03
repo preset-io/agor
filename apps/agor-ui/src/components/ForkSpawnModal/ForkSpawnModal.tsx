@@ -16,7 +16,7 @@ import type {
 import { getDefaultPermissionMode } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Checkbox, Collapse, Form, Modal, Radio, Typography } from 'antd';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
@@ -58,6 +58,31 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   );
   const [envVarNames, setEnvVarNames] = useState<string[]>([]);
 
+  const getCustomConfigDefaults = useCallback(
+    (agentTool: AgenticToolName) => {
+      const userDefaults = currentUser?.default_agentic_config?.[agentTool];
+      const sameToolAsParent = agentTool === session?.agentic_tool;
+      return {
+        agent: agentTool,
+        permissionMode:
+          userDefaults?.permissionMode ||
+          (sameToolAsParent ? session?.permission_config?.mode : undefined) ||
+          getDefaultPermissionMode(agentTool),
+        // Existing user defaults are sent as explicit form values. If the user
+        // has no saved model default and the child keeps the same tool, leaving
+        // this undefined would inherit the parent model in resolveChildSessionConfig;
+        // initialize that effective value so the picker doesn't imply a different default.
+        modelConfig:
+          userDefaults?.modelConfig ?? (sameToolAsParent ? session?.model_config : undefined),
+        codexSandboxMode: userDefaults?.codexSandboxMode,
+        codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
+        codexNetworkAccess: userDefaults?.codexNetworkAccess,
+        mcpServerIds: userDefaults?.mcpServerIds || [],
+      };
+    },
+    [currentUser, session]
+  );
+
   // Reset form and preset when modal opens
   useEffect(() => {
     if (open && session) {
@@ -74,22 +99,14 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
     }
   }, [open, session, form, initialPrompt]);
 
-  // When switching to "Custom config", load user defaults for non-prompt fields
+  // When switching to "Custom config", load the values that will be
+  // effective if the user submits without touching individual fields.
   useEffect(() => {
     if (!open || !session || configPreset !== 'custom') return;
     const agentTool = session.agentic_tool || 'claude-code';
-    const userDefaults = currentUser?.default_agentic_config?.[agentTool];
-    form.setFieldsValue({
-      agent: agentTool,
-      permissionMode: userDefaults?.permissionMode || getDefaultPermissionMode(agentTool),
-      modelConfig: userDefaults?.modelConfig,
-      codexSandboxMode: userDefaults?.codexSandboxMode,
-      codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
-      codexNetworkAccess: userDefaults?.codexNetworkAccess,
-      mcpServerIds: userDefaults?.mcpServerIds || [],
-    });
+    form.setFieldsValue(getCustomConfigDefaults(agentTool));
     setSelectedAgent(agentTool);
-  }, [open, session, configPreset, form, currentUser]);
+  }, [open, session, configPreset, form, getCustomConfigDefaults]);
 
   const handleOk = async () => {
     // Validate fields first. If validation fails, bail out WITHOUT clearing
@@ -243,8 +260,9 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                     agents={AVAILABLE_AGENTS}
                     selectedAgentId={selectedAgent}
                     onSelect={(agentId) => {
-                      setSelectedAgent(agentId as AgenticToolName);
-                      form.setFieldValue('agent', agentId);
+                      const agentTool = agentId as AgenticToolName;
+                      setSelectedAgent(agentTool);
+                      form.setFieldsValue(getCustomConfigDefaults(agentTool));
                     }}
                     columns={2}
                   />

@@ -67,7 +67,7 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
     if (!data) return context;
 
     const hasPermission = data.permission_config != null;
-    const hasModel = data.model_config != null;
+    const hasModel = !!data.model_config?.model;
     if (hasPermission && hasModel) return context; // nothing to fill
 
     const agenticTool = data.agentic_tool as AgenticToolName | undefined;
@@ -96,7 +96,11 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
       user = null;
     }
 
-    const resolved = resolveSessionDefaults({ agenticTool, user });
+    const resolved = resolveSessionDefaults({
+      agenticTool,
+      user,
+      overrides: { modelConfig: data.model_config ?? undefined },
+    });
 
     if (!hasPermission) {
       data.permission_config = resolved.permission_config;

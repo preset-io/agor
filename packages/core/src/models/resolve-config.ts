@@ -115,18 +115,49 @@ export function getDefaultModelForTool(tool: AgenticToolName): string | undefine
   }
 }
 
+/** Internal predicate for partial configs such as `{ effort }`. */
+function hasModelConfigAncillaryFields(input: ModelConfigInput | undefined | null): boolean {
+  return (
+    !!input &&
+    (input.mode !== undefined || input.effort !== undefined || input.provider !== undefined)
+  );
+}
+
 /**
- * `resolveModelConfigPrecedence` plus a final fallback to the tool's static
- * default. Use this at the session-create boundary.
+ * Resolve model config at a session-create boundary.
+ *
+ * Full model configs remain first-wins and are not merged with lower-priority
+ * sources. However, a higher-priority source that only carries ancillary
+ * fields (today most commonly `{ effort }` from the UI's separate effort
+ * selector) is merged onto the next source that supplies the actual model, or
+ * onto the tool fallback. This prevents partial persisted model_config objects
+ * while preserving the user's explicit effort choice.
  */
 export function resolveModelConfigWithFallback(
   tool: AgenticToolName,
   sources: Array<ModelConfigInput | undefined | null>,
   opts?: { now?: Date }
 ): ResolvedModelConfig | undefined {
-  const fromSources = resolveModelConfigPrecedence(sources, opts);
-  if (fromSources) return fromSources;
+  let pendingAncillary: ModelConfigInput | undefined;
+
+  for (const source of sources) {
+    if (source?.model) {
+      return resolveModelConfig(
+        pendingAncillary ? { ...source, ...pendingAncillary, model: source.model } : source,
+        opts
+      );
+    }
+    if (!pendingAncillary && hasModelConfigAncillaryFields(source)) {
+      pendingAncillary = source ?? undefined;
+    }
+  }
+
   const toolDefault = getDefaultModelForTool(tool);
   if (!toolDefault) return undefined;
-  return resolveModelConfig({ mode: 'alias', model: toolDefault }, opts);
+  return resolveModelConfig(
+    pendingAncillary
+      ? { mode: 'alias', ...pendingAncillary, model: toolDefault }
+      : { mode: 'alias', model: toolDefault },
+    opts
+  );
 }

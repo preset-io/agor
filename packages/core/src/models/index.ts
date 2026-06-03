@@ -13,6 +13,7 @@ export * from './codex.js';
 
 // Copilot models
 export * from './copilot.js';
+export * from './cursor.js';
 
 // Gemini models
 export * from './gemini.js';

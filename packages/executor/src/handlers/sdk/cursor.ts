@@ -9,6 +9,7 @@
  */
 
 import { generateId, shortId } from '@agor/core/db';
+import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type {
   ContentBlock,
@@ -51,7 +52,7 @@ function stringifyForPreview(value: unknown): string {
 }
 
 function toCursorModel(model: string | undefined): { id: string } {
-  return { id: model?.trim() || 'composer-latest' };
+  return { id: model?.trim() || DEFAULT_CURSOR_MODEL };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

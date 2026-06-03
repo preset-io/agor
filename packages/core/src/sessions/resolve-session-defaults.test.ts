@@ -175,6 +175,35 @@ describe('resolveSessionDefaults', () => {
       expect(r.model_config?.updated_at).toBe(now.toISOString());
     });
 
+    it('merges an effort-only override onto the tool default model', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'claude-code',
+        overrides: { modelConfig: { effort: 'max' } },
+        now,
+      });
+      expect(r.model_config).toEqual({
+        mode: 'alias',
+        model: 'claude-sonnet-4-6',
+        effort: 'max',
+        updated_at: now.toISOString(),
+      });
+    });
+
+    it('merges an effort-only override onto the user default model', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'claude-code',
+        user: makeUser({ 'claude-code': { modelConfig: { model: 'claude-opus-4-6' } } }),
+        overrides: { modelConfig: { effort: 'max' } },
+        now,
+      });
+      expect(r.model_config).toEqual({
+        mode: 'alias',
+        model: 'claude-opus-4-6',
+        effort: 'max',
+        updated_at: now.toISOString(),
+      });
+    });
+
     it('explicit override wins over user default (no field merging)', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',

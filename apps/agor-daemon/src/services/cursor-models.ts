@@ -9,6 +9,7 @@
 
 import { resolveApiKey } from '@agor/core/config';
 import { type Database, shortId } from '@agor/core/db';
+import { CURSOR_MODEL_METADATA, DEFAULT_CURSOR_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import { Cursor, type SDKModel } from '@cursor/sdk';
 
@@ -25,7 +26,6 @@ export interface CursorModelsResult {
   source: 'dynamic' | 'static';
 }
 
-const DEFAULT_CURSOR_MODEL = 'composer-latest';
 const CURSOR_MODELS_TIMEOUT_MS = 8_000;
 
 const STATIC_RESULT: CursorModelsResult = {
@@ -33,8 +33,8 @@ const STATIC_RESULT: CursorModelsResult = {
   models: [
     {
       id: DEFAULT_CURSOR_MODEL,
-      displayName: 'Composer Latest',
-      description: 'Cursor SDK default model alias (beta)',
+      displayName: CURSOR_MODEL_METADATA[DEFAULT_CURSOR_MODEL].displayName,
+      description: CURSOR_MODEL_METADATA[DEFAULT_CURSOR_MODEL].description,
       source: 'static',
     },
   ],

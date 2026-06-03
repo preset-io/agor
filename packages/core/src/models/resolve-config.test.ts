@@ -128,6 +128,30 @@ describe('resolveModelConfigWithFallback', () => {
     });
   });
 
+  it('merges effort-only high-priority input onto the next model source', () => {
+    const result = resolveModelConfigWithFallback(
+      'claude-code',
+      [{ effort: 'max' }, { model: 'claude-opus-4-6', effort: 'high' }],
+      { now }
+    );
+    expect(result).toEqual({
+      mode: 'alias',
+      model: 'claude-opus-4-6',
+      effort: 'max',
+      updated_at: '2026-04-23T00:00:00.000Z',
+    });
+  });
+
+  it('merges effort-only input onto the tool fallback when no source has a model', () => {
+    const result = resolveModelConfigWithFallback('claude-code', [{ effort: 'max' }], { now });
+    expect(result).toEqual({
+      mode: 'alias',
+      model: 'claude-sonnet-4-6',
+      effort: 'max',
+      updated_at: '2026-04-23T00:00:00.000Z',
+    });
+  });
+
   it('returns undefined for cursor / opencode when sources are empty', () => {
     expect(resolveModelConfigWithFallback('cursor', [undefined], { now })).toBeUndefined();
     expect(resolveModelConfigWithFallback('opencode', [undefined], { now })).toBeUndefined();

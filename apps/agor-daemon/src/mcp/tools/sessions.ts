@@ -3,9 +3,11 @@ import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
   COPILOT_MODEL_METADATA,
+  CURSOR_MODEL_METADATA,
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_CODEX_MODEL,
   DEFAULT_COPILOT_MODEL,
+  DEFAULT_CURSOR_MODEL,
   DEFAULT_GEMINI_MODEL,
   GEMINI_MODELS,
 } from '@agor/core/models';
@@ -1423,12 +1425,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           note: 'Gemini models are normally fetched live from the Google API per-user. This is the static fallback list — newer models may exist.',
         },
         cursor: {
-          default: 'composer-latest',
+          default: DEFAULT_CURSOR_MODEL,
           models: [
             {
-              id: 'composer-latest',
-              displayName: 'Composer Latest',
-              description: 'Cursor SDK default model alias (beta).',
+              id: DEFAULT_CURSOR_MODEL,
+              displayName: CURSOR_MODEL_METADATA[DEFAULT_CURSOR_MODEL].displayName,
+              description: CURSOR_MODEL_METADATA[DEFAULT_CURSOR_MODEL].description,
             },
           ],
           note: "Cursor models are also fetched live via /cursor-models (uses @cursor/sdk's Cursor.models.list()). This is the static fallback — account-specific models may not appear here.",

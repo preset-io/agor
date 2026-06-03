@@ -59,6 +59,7 @@ import {
   txAsDb,
   UsersRepository,
 } from '@agor/core/db';
+import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   Branch,
   MCPServerID,
@@ -604,6 +605,14 @@ export class SchedulerService {
       const { creator, unixUsername } = await this.resolveCreatorUnixUsername(schedule);
 
       const cfg = schedule.agentic_tool_config;
+      const scheduleModelConfig = cfg.model_config
+        ? resolveSessionDefaults({
+            agenticTool: cfg.agentic_tool,
+            user: creator,
+            overrides: { modelConfig: cfg.model_config },
+            now: new Date(now),
+          }).model_config
+        : undefined;
 
       // 6. Create session with schedule metadata + FK back to schedule.
       const session: Partial<Session> = {
@@ -625,17 +634,10 @@ export class SchedulerService {
         permission_config: cfg.permission_mode
           ? { mode: cfg.permission_mode as PermissionMode }
           : undefined,
-        // DefaultModelConfig → Session.model_config. When the schedule
-        // has no `model` set we leave model_config undefined so the
-        // session inherits the agent's defaults.
-        model_config: cfg.model_config?.model
-          ? {
-              mode: cfg.model_config.mode ?? 'alias',
-              model: cfg.model_config.model,
-              effort: cfg.model_config.effort,
-              updated_at: new Date(now).toISOString(),
-            }
-          : undefined,
+        // DefaultModelConfig → Session.model_config. If the schedule
+        // only sets ancillary fields (e.g. Claude effort), resolve them
+        // against the same model defaults used by fresh sessions.
+        model_config: scheduleModelConfig,
         custom_context: {
           scheduled_run: {
             rendered_prompt: renderedPrompt,

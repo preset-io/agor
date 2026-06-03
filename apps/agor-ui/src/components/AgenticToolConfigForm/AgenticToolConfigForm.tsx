@@ -16,6 +16,7 @@
  */
 
 import type { AgenticToolName, AgorClient, MCPServer } from '@agor-live/client';
+import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';
@@ -83,7 +84,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         label={modelLabel}
         help={
           showHelpText && agenticTool === 'claude-code'
-            ? 'Choose which Claude model to use (defaults to claude-sonnet-4-6)'
+            ? `Choose which Claude model to use (defaults to ${DEFAULT_CLAUDE_MODEL})`
             : undefined
         }
       >

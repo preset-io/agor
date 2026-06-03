@@ -3,6 +3,7 @@ import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
   COPILOT_MODEL_METADATA,
+  CURSOR_MODEL_METADATA,
   DEFAULT_CODEX_MODEL,
   DEFAULT_COPILOT_MODEL,
   GEMINI_MODELS,
@@ -11,6 +12,11 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Input, Radio, Select, Space, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
+import {
+  DEFAULT_CURSOR_MODEL,
+  ensureDefaultModelOption,
+  getModelSelectorFallbackModel,
+} from './modelDefaults';
 import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
 
 export interface ModelConfig {
@@ -88,13 +94,11 @@ const COPILOT_STATIC_MODEL_OPTIONS = Object.entries(COPILOT_MODEL_METADATA).map(
 
 const CURSOR_MODEL_OPTIONS = [
   {
-    id: 'composer-latest',
-    label: 'Composer Latest',
-    description: 'Cursor SDK default model alias (experimental)',
+    id: DEFAULT_CURSOR_MODEL,
+    label: CURSOR_MODEL_METADATA[DEFAULT_CURSOR_MODEL].displayName,
+    description: CURSOR_MODEL_METADATA[DEFAULT_CURSOR_MODEL].description,
   },
 ];
-const DEFAULT_CURSOR_MODEL = 'composer-latest';
-
 function preferDefaultModel<T extends { id: string }>(models: T[], defaultModel: string): T[] {
   const defaultIndex = models.findIndex((model) => model.id === defaultModel);
   if (defaultIndex <= 0) return models;
@@ -142,6 +146,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     description?: string;
   }> | null>(null);
   const [cursorSource, setCursorSource] = useState<'dynamic' | 'static' | null>(null);
+  const [copilotDefaultModel, setCopilotDefaultModel] = useState(DEFAULT_COPILOT_MODEL);
   const [cursorDefaultModel, setCursorDefaultModel] = useState(DEFAULT_CURSOR_MODEL);
 
   useEffect(() => {
@@ -152,13 +157,23 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         const raw = await client.service('copilot-models').find();
         const response = raw as unknown as DynamicModelsResponse;
         if (cancelled || !response?.models?.length) return;
+        const defaultModel = response.default || DEFAULT_COPILOT_MODEL;
+        const models = response.models.map((m) => ({
+          id: m.id,
+          label: m.displayName,
+          description: m.description,
+        }));
         setCopilotServerOptions(
-          response.models.map((m) => ({
-            id: m.id,
-            label: m.displayName,
-            description: m.description,
-          }))
+          preferDefaultModel(
+            ensureDefaultModelOption(models, defaultModel, (id) => ({
+              id,
+              label: id,
+              description: 'Default model',
+            })),
+            defaultModel
+          )
         );
+        setCopilotDefaultModel(defaultModel);
         setCopilotSource(response.source);
       } catch {
         // Silent fallback to local static — best-effort.
@@ -178,12 +193,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         const response = raw as unknown as DynamicModelsResponse;
         if (cancelled || !response?.models?.length) return;
         const defaultModel = response.default || DEFAULT_CURSOR_MODEL;
+        const models = response.models.map((m) => ({
+          id: m.id,
+          label: m.displayName,
+          description: m.description,
+        }));
         setCursorServerOptions(
           preferDefaultModel(
-            response.models.map((m) => ({
-              id: m.id,
-              label: m.displayName,
-              description: m.description,
+            ensureDefaultModelOption(models, defaultModel, (id) => ({
+              id,
+              label: id,
+              description: 'Default model',
             })),
             defaultModel
           )
@@ -245,28 +265,19 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   }
 
+  const fallbackModel = getModelSelectorFallbackModel(effectiveTool, modelList, {
+    copilotDefaultModel,
+    cursorDefaultModel,
+  });
+
   const handleModeChange = (newMode: 'alias' | 'exact') => {
     setMode(newMode);
     if (onChange) {
-      // When switching modes, provide a default model
-      let defaultModel: string;
-      if (newMode === 'alias') {
-        defaultModel = modelList[0].id;
-      } else if (effectiveTool === 'codex') {
-        defaultModel = DEFAULT_CODEX_MODEL;
-      } else if (effectiveTool === 'gemini') {
-        defaultModel = 'gemini-2.5-flash';
-      } else if (effectiveTool === 'copilot') {
-        defaultModel = DEFAULT_COPILOT_MODEL;
-      } else if (effectiveTool === 'cursor') {
-        defaultModel = cursorDefaultModel;
-      } else {
-        // claude-code (opencode is handled earlier in the component)
-        defaultModel = 'claude-sonnet-4-6';
-      }
+      // When switching modes, provide the same effective default the daemon
+      // applies if the form is submitted without a model_config.
       onChange({
         mode: newMode,
-        model: value?.model || defaultModel,
+        model: value?.model || fallbackModel,
       });
     }
   };
@@ -296,10 +307,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           {mode === 'alias' && (
             <div style={{ marginLeft: 24, marginTop: 8 }}>
               <Select
-                value={
-                  value?.model ||
-                  (effectiveTool === 'cursor' ? cursorDefaultModel : modelList[0].id)
-                }
+                value={value?.model || fallbackModel}
                 onChange={handleModelChange}
                 style={{ width: '100%', minWidth: 400 }}
                 options={modelList.map((m) => ({
@@ -361,7 +369,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       : effectiveTool === 'copilot'
                         ? 'e.g., gpt-4o or claude-3.5-sonnet'
                         : effectiveTool === 'cursor'
-                          ? 'e.g., composer-latest'
+                          ? `e.g., ${DEFAULT_CURSOR_MODEL}`
                           : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
                 }
                 style={{ width: '100%', minWidth: 400 }}
