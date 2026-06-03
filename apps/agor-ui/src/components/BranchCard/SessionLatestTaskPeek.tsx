@@ -7,7 +7,7 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { TaskBlock } from '../TaskBlock';
-import { chooseLatestSessionTask } from './latestBranchTask';
+import { chooseLatestSessionTask } from './latestSessionTask';
 
 interface SessionLatestTaskPeekProps {
   client: AgorClient | null;
