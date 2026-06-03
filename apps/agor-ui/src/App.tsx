@@ -1479,10 +1479,19 @@ function AppContent() {
           <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
 
           {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
-          <Route path="/knowledge" element={<KnowledgePage client={client} />} />
-          <Route path="/knowledge/:namespaceSlug/*" element={<KnowledgePage client={client} />} />
-          <Route path="/kb" element={<KnowledgePage client={client} />} />
-          <Route path="/kb/:namespaceSlug/*" element={<KnowledgePage client={client} />} />
+          <Route
+            path="/knowledge"
+            element={<KnowledgePage client={client} currentUser={currentUser} />}
+          />
+          <Route
+            path="/knowledge/:namespaceSlug/*"
+            element={<KnowledgePage client={client} currentUser={currentUser} />}
+          />
+          <Route path="/kb" element={<KnowledgePage client={client} currentUser={currentUser} />} />
+          <Route
+            path="/kb/:namespaceSlug/*"
+            element={<KnowledgePage client={client} currentUser={currentUser} />}
+          />
 
           {/* Mobile routes */}
           <Route

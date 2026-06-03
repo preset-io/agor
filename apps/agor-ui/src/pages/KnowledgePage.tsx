@@ -5,11 +5,13 @@ import type {
   KnowledgeDocumentKind,
 } from '@agor/core/types';
 import {
+  hasMinimumRole,
   normalizeKnowledgeFolderPath,
+  ROLES,
   titleFromKnowledgeContent,
   validateKnowledgePath as validateSharedKnowledgePath,
 } from '@agor/core/types';
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import {
   ArrowLeftOutlined,
   DeleteOutlined,
@@ -90,6 +92,7 @@ interface KnowledgeSearchResult {
 
 interface KnowledgePageProps {
   client: AgorClient | null;
+  currentUser?: User | null;
 }
 
 const DEFAULT_MARKDOWN = `# New Knowledge Page\n\nWrite markdown here.\n`;
@@ -257,7 +260,7 @@ interface FolderSection {
   docs: KnowledgeDocument[];
 }
 
-export function KnowledgePage({ client }: KnowledgePageProps) {
+export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps) {
   const { token } = theme.useToken();
   const { confirm } = useThemedModal();
   const navigate = useNavigate();
@@ -282,6 +285,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     ...DEFAULT_FOLDERS.map((folder) => `folder:${folder}`),
   ]);
   const [titleDraft, setTitleDraft] = useState('');
+  const [visibilityDraft, setVisibilityDraft] = useState<KnowledgeDocument['visibility']>('public');
   const [titleFromContent, setTitleFromContent] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState(DEFAULT_MARKDOWN);
   const [searchQuery, setSearchQuery] = useState(() => routeSearchParams.get('q') ?? '');
@@ -484,8 +488,16 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
         (activeDoc &&
           (markdownDraft !== savedMarkdown ||
             titleDraft !== activeDoc.title ||
+            visibilityDraft !== activeDoc.visibility ||
             titleFromContent !== (activeDoc.metadata?.title_from_content === true) ||
             renamePathOnTitleChange))
+    );
+  const canManageActiveVisibility =
+    isDraftDocument ||
+    Boolean(
+      activeDoc &&
+        (hasMinimumRole(currentUser?.role, ROLES.ADMIN) ||
+          (currentUser?.user_id && activeDoc.created_by === currentUser.user_id))
     );
 
   const loadNamespaces = useCallback(async () => {
@@ -628,6 +640,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     if (activeDoc) {
       setSelectedFolder(parentFolderForPath(activeDoc.path));
       setTitleDraft(activeDoc.title);
+      setVisibilityDraft(activeDoc.visibility);
       setTitleFromContent(activeDoc.metadata?.title_from_content === true);
       setRenamePathOnTitleChange(false);
       setIsEditing(pendingEditModeRef.current ?? routeSearchParams.get('mode') === 'edit');
@@ -764,6 +777,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     setActiveDocId(DRAFT_DOCUMENT_ID);
     setSelectedFolder(ROOT_FOLDER);
     setTitleDraft(title);
+    setVisibilityDraft(draft.visibility);
     setTitleFromContent(true);
     setRenamePathOnTitleChange(false);
     setMarkdownDraft(`# ${title}\n\nWrite markdown here.\n`);
@@ -870,15 +884,13 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       if (isDraftDocument) {
         const namespaceSlug =
           draftNamespaceSlug ?? (activeSpace === 'all' ? 'global' : activeSpace);
-        const namespace =
-          namespaces.find((ns) => ns.slug === namespaceSlug) ?? selectedNamespace ?? namespaces[0];
         const path = ensureUniquePath(slugifyFileName(nextTitle), documents);
         const created = (await client.service('kb/documents').create({
           namespace_slug: namespaceSlug,
           path,
           title: nextTitle,
           kind: 'doc',
-          visibility: namespace?.visibility_default ?? 'public',
+          visibility: visibilityDraft,
           metadata: {
             ...(activeDoc.metadata ?? {}),
             title_from_content: titleFromContent,
@@ -912,6 +924,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
           : undefined;
       const updated = (await client.service('kb/documents').patch(activeDoc.document_id, {
         title: nextTitle,
+        visibility: visibilityDraft,
         ...(nextPath ? { path: nextPath } : {}),
         content_text: markdownDraft,
         metadata: {
@@ -983,6 +996,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       activeDocIdRef.current = null;
       setActiveDocId(null);
       setTitleDraft('');
+      setVisibilityDraft('public');
       setTitleFromContent(false);
       setRenamePathOnTitleChange(false);
       setMarkdownDraft(DEFAULT_MARKDOWN);
@@ -991,6 +1005,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       return;
     }
     setTitleDraft(activeDoc.title);
+    setVisibilityDraft(activeDoc.visibility);
     setTitleFromContent(activeDoc.metadata?.title_from_content === true);
     setRenamePathOnTitleChange(false);
     setMarkdownDraft(versions[0]?.content_text ?? DEFAULT_MARKDOWN);
@@ -1481,9 +1496,23 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
                       </Title>
                     )}
                     <Space wrap>
-                      <Tag color={activeDoc.visibility === 'public' ? 'green' : 'default'}>
-                        {activeDoc.visibility}
-                      </Tag>
+                      {isEditing ? (
+                        <Select
+                          size="small"
+                          value={visibilityDraft}
+                          disabled={!canManageActiveVisibility}
+                          onChange={setVisibilityDraft}
+                          style={{ width: 104 }}
+                          options={[
+                            { label: 'Public', value: 'public' },
+                            { label: 'Private', value: 'private' },
+                          ]}
+                        />
+                      ) : (
+                        <Tag color={activeDoc.visibility === 'public' ? 'green' : 'default'}>
+                          {activeDoc.visibility}
+                        </Tag>
+                      )}
                       <Tag>{kindLabels[activeDoc.kind] ?? activeDoc.kind}</Tag>
                       <Text type="secondary">{activeDoc.path}</Text>
                     </Space>

@@ -129,6 +129,21 @@ export class KnowledgeDocumentsService extends DrizzleService<
     );
   }
 
+  private canManageVisibility(document: KnowledgeDocument, user?: User): boolean {
+    return this.isAdmin(user) || Boolean(user?.user_id && document.created_by === user.user_id);
+  }
+
+  private assertCanChangeVisibility(
+    existing: KnowledgeDocument,
+    data: Partial<KnowledgeDocument>,
+    user?: User
+  ): void {
+    if (data.visibility === undefined || data.visibility === existing.visibility) return;
+    if (!this.canManageVisibility(existing, user)) {
+      throw new Forbidden('Only the owner or an admin can change knowledge document visibility');
+    }
+  }
+
   private attributionUserId(params?: KnowledgeDocumentParams, requestedUserId?: UserID | null) {
     const user = params?.user as User | undefined;
     if (this.isAdmin(user) && requestedUserId) return requestedUserId;
@@ -308,6 +323,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
 
     if (existing) {
       await this.assertActiveDocument(existing);
+      this.assertCanChangeVisibility(existing, data, params?.user as User | undefined);
       if (!this.canWrite(existing, params?.user as User | undefined)) {
         throw new Forbidden('You do not have permission to update this knowledge document');
       }
@@ -404,6 +420,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
     await this.assertActiveDocument(existing);
+    this.assertCanChangeVisibility(existing, data, params?.user as User | undefined);
     if (!this.canWrite(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
@@ -424,6 +441,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
     await this.assertActiveDocument(existing);
+    this.assertCanChangeVisibility(existing, data, params?.user as User | undefined);
     if (!this.canWrite(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
