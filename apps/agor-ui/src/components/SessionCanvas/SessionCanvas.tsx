@@ -1559,7 +1559,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 const existingBoardObject = boardObjectByCard.get(cardId);
                 if (existingBoardObject) {
                   // zone_id: null clears zone membership; string sets it
-                  const updateData: { position: { x: number; y: number }; zone_id?: string | null } = {
+                  const updateData: {
+                    position: { x: number; y: number };
+                    zone_id?: string | null;
+                  } = {
                     position: positionToStore,
                     zone_id: droppedZoneId ?? null,
                   };
@@ -1672,7 +1675,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 if (existingBoardObject) {
                   // Update existing board_object (position and zone_id)
                   // zone_id: null clears zone membership; string sets it
-                  const updateData: { position: { x: number; y: number }; zone_id?: string | null } = {
+                  const updateData: {
+                    position: { x: number; y: number };
+                    zone_id?: string | null;
+                  } = {
                     position,
                     zone_id,
                   };
