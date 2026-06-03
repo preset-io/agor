@@ -21,6 +21,7 @@ import type { HookContext, Schedule, ScheduleID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ensureCurrentScheduleLoaded,
+  ensureScheduleRunsAsCaller,
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './schedule-hooks';
@@ -55,12 +56,18 @@ function makeContext(opts: {
   id?: string;
   data: Partial<Schedule>;
   cachedSchedule?: Schedule;
+  provider?: string;
+  user?: { user_id?: string; role?: string; _isServiceAccount?: boolean };
 }): HookContext {
   return {
     method: opts.method,
     id: opts.id,
     data: opts.data,
-    params: opts.cachedSchedule ? { schedule: opts.cachedSchedule } : {},
+    params: {
+      provider: opts.provider,
+      user: opts.user,
+      ...(opts.cachedSchedule ? { schedule: opts.cachedSchedule } : {}),
+    },
   } as unknown as HookContext;
 }
 
@@ -188,6 +195,90 @@ describe('validateScheduleConfig', () => {
       cachedSchedule: makeSchedule(),
     });
     await expect(validateScheduleConfig()(ctx)).rejects.toThrow(/Schedule prompt cannot be empty/);
+  });
+});
+
+describe('ensureScheduleRunsAsCaller', () => {
+  it('allows the schedule creator to patch their own schedule', () => {
+    const current = makeSchedule({ created_by: 'user-alice' as Schedule['created_by'] });
+    const ctx = makeContext({
+      method: 'patch',
+      id: 'sched-test-0001',
+      data: { name: 'renamed' },
+      cachedSchedule: current,
+      provider: 'rest',
+      user: { user_id: 'user-alice', role: 'member' },
+    });
+
+    expect(() => ensureScheduleRunsAsCaller()(ctx)).not.toThrow();
+  });
+
+  it('rejects external patch attempts against schedules created by another user', () => {
+    const current = makeSchedule({ created_by: 'user-alice' as Schedule['created_by'] });
+    const ctx = makeContext({
+      method: 'patch',
+      id: 'sched-test-0001',
+      data: { prompt: 'do something else' },
+      cachedSchedule: current,
+      provider: 'rest',
+      user: { user_id: 'user-bob', role: 'member' },
+    });
+
+    expect(() => ensureScheduleRunsAsCaller()(ctx)).toThrow(/only modify or run schedules/);
+  });
+
+  it('allows superadmins to patch schedules created by another user', () => {
+    const current = makeSchedule({ created_by: 'user-alice' as Schedule['created_by'] });
+    const ctx = makeContext({
+      method: 'patch',
+      id: 'sched-test-0001',
+      data: { prompt: 'ops fix' },
+      cachedSchedule: current,
+      provider: 'rest',
+      user: { user_id: 'user-admin', role: 'superadmin' },
+    });
+
+    expect(() => ensureScheduleRunsAsCaller()(ctx)).not.toThrow();
+  });
+
+  it('rejects attempts to change created_by/run-as even by the creator', () => {
+    const current = makeSchedule({ created_by: 'user-alice' as Schedule['created_by'] });
+    const ctx = makeContext({
+      method: 'patch',
+      id: 'sched-test-0001',
+      data: { created_by: 'user-bob' as Schedule['created_by'] },
+      cachedSchedule: current,
+      provider: 'rest',
+      user: { user_id: 'user-alice', role: 'member' },
+    });
+
+    expect(() => ensureScheduleRunsAsCaller()(ctx)).toThrow(/Cannot change/);
+  });
+
+  it('rejects attempts to change created_by/run-as even by a superadmin', () => {
+    const current = makeSchedule({ created_by: 'user-alice' as Schedule['created_by'] });
+    const ctx = makeContext({
+      method: 'patch',
+      id: 'sched-test-0001',
+      data: { created_by: 'user-bob' as Schedule['created_by'] },
+      cachedSchedule: current,
+      provider: 'rest',
+      user: { user_id: 'user-admin', role: 'superadmin' },
+    });
+
+    expect(() => ensureScheduleRunsAsCaller()(ctx)).toThrow(/Cannot change/);
+  });
+
+  it('allows internal scheduler/service calls', () => {
+    const current = makeSchedule({ created_by: 'user-alice' as Schedule['created_by'] });
+    const ctx = makeContext({
+      method: 'patch',
+      id: 'sched-test-0001',
+      data: { created_by: 'user-bob' as Schedule['created_by'] },
+      cachedSchedule: current,
+    });
+
+    expect(() => ensureScheduleRunsAsCaller()(ctx)).not.toThrow();
   });
 });
 

@@ -29,8 +29,9 @@
  */
 
 import type { ScheduleRepository } from '@agor/core/db';
-import { BadRequest } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { HookContext, Schedule } from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 
 /**
  * Lazy-load the current schedule into `context.params.schedule` on
@@ -92,6 +93,54 @@ export function validateScheduleConfig() {
 
     if (data.prompt !== undefined && data.prompt.trim() === '') {
       throw new BadRequest('Schedule prompt cannot be empty.');
+    }
+
+    return context;
+  };
+}
+
+/**
+ * Enforce the schedule run-as contract for external callers.
+ *
+ * Today `schedules.created_by` is both audit attribution ("scheduled by")
+ * and execution identity ("run as"). That makes it security-sensitive:
+ * patching or manually triggering another user's schedule means controlling
+ * an agent that will execute with that user's Agor MCP token / Unix identity.
+ *
+ * External callers may therefore only modify/run schedules they created.
+ * Superadmins remain an ops escape hatch for modifying schedule definitions,
+ * but the run-as field itself is immutable for everyone. Internal scheduler
+ * ticks bypass this hook.
+ */
+export function ensureScheduleRunsAsCaller(options?: { allowSuperadmin?: boolean }) {
+  return (context: HookContext): HookContext => {
+    if (!context.params.provider) return context;
+    if (context.params.user?._isServiceAccount) return context;
+
+    const user = context.params.user;
+    if (!user?.user_id) {
+      throw new NotAuthenticated('Authentication required');
+    }
+
+    const schedule = context.params.schedule as Schedule | undefined;
+    if (!schedule) {
+      throw new Error('ensureScheduleRunsAsCaller requires params.schedule');
+    }
+
+    const data = context.data as Partial<Schedule> | undefined;
+    if (data?.created_by !== undefined && data.created_by !== schedule.created_by) {
+      throw new Forbidden('Cannot change the user a schedule runs as.');
+    }
+
+    const allowSuperadmin = options?.allowSuperadmin ?? true;
+    if (allowSuperadmin && hasMinimumRole(user.role, ROLES.SUPERADMIN)) {
+      return context;
+    }
+
+    if (schedule.created_by !== user.user_id) {
+      throw new Forbidden(
+        'Schedules run as the user who created them. You can only modify or run schedules you created.'
+      );
     }
 
     return context;

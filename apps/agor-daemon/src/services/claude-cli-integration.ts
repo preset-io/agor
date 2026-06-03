@@ -37,6 +37,7 @@
 import { spawn as spawnProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import {
   type AssistantUsage,
   buildClaudeCliSpawn,
@@ -68,6 +69,8 @@ import {
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { buildInitialUserMessage } from '../utils/build-initial-user-message.js';
+import { canReceiveMcpTokenForSession } from '../utils/mcp-token-authorization.js';
+import { getDaemonUrl } from '../utils/spawn-executor.js';
 import {
   ClaudeCliWatcherRegistry,
   type CliWatcherEventSink,
@@ -1008,7 +1011,8 @@ export function getCliWatcherRegistry(app: Application): ClaudeCliWatcherRegistr
  */
 export function buildSpawnConfigForSession(
   session: Session,
-  branchCwd: string
+  branchCwd: string,
+  opts: { mcpConfigPath?: string } = {}
 ): ClaudeCliSpawnConfig {
   // If the JSONL transcript for this session id already exists on disk,
   // `claude --session-id <X>` errors out with "Session ID is already in
@@ -1027,9 +1031,128 @@ export function buildSpawnConfigForSession(
     effort: session.model_config?.effort as ClaudeCliSpawnConfig['effort'] | undefined,
     permissionMode: permissionModeForCli(session.permission_config?.mode),
     addDirs: [branchCwd],
-    // mcpConfigPath: lands once MCP scoping is plumbed for the CLI adapter.
+    mcpConfigPath: opts.mcpConfigPath,
     // appendSystemPromptFile: lands once session-context rendering is wired.
   };
+}
+
+export interface ClaudeCliAgorMcpConfig {
+  mcpServers: {
+    agor: {
+      type: 'http';
+      url: string;
+      headers: { Authorization: string };
+    };
+  };
+}
+
+/**
+ * Build the Claude CLI `--mcp-config` payload for Agor's built-in MCP server.
+ *
+ * This mirrors the Agent SDK path in
+ * `packages/executor/src/sdk-handlers/claude/query-builder.ts`, but writes the
+ * shape the Claude Code CLI expects in an mcp config file. The Authorization
+ * header carries a session-scoped MCP token, so Claude CLI `/schedule`
+ * RemoteTrigger runs inherit the same Agor board/session tools as normal Agor
+ * sessions instead of falling back to unauthenticated REST.
+ */
+export function buildClaudeCliAgorMcpConfig(params: {
+  daemonUrl: string;
+  mcpToken: string;
+}): ClaudeCliAgorMcpConfig {
+  const daemonUrl = params.daemonUrl.replace(/\/+$/, '');
+  return {
+    mcpServers: {
+      agor: {
+        type: 'http',
+        url: `${daemonUrl}/mcp`,
+        headers: {
+          Authorization: `Bearer ${params.mcpToken}`,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Write a per-session Claude CLI MCP config file and return its path.
+ *
+ * Best-effort by design: failing to write this file should not block opening a
+ * CLI session, but it must be loud in logs because missing this file removes
+ * all `agor_*` MCP tools (boards/cards/sessions/etc.) from Claude CLI and
+ * RemoteTrigger scheduled runs.
+ */
+export async function writeClaudeCliMcpConfigForSession(
+  app: Application,
+  session: Session,
+  opts: {
+    /**
+     * External actor requesting this config. When omitted, the call is an
+     * internal trusted spawn path (session create hook / service account).
+     */
+    actor?: { user_id?: string; role?: string } | null;
+  } = {}
+): Promise<string | undefined> {
+  const config = app.get('config') as { daemon?: { mcpEnabled?: boolean } } | undefined;
+  if (config?.daemon?.mcpEnabled === false) return undefined;
+
+  if (
+    opts.actor &&
+    !canReceiveMcpTokenForSession({
+      callerUserId: opts.actor.user_id,
+      callerRole: opts.actor.role,
+      sessionCreatedBy: session.created_by,
+    })
+  ) {
+    console.warn(
+      `[claude-cli-integration] not writing owner-scoped MCP config for session ${shortId(session.session_id)}: caller ${opts.actor.user_id ?? 'anonymous'} cannot receive session creator token`
+    );
+    return undefined;
+  }
+
+  try {
+    const { generateSessionToken } = await import('../mcp/tokens.js');
+    const mcpToken = await generateSessionToken(
+      app,
+      session.session_id,
+      session.created_by as import('@agor/core/types').UserID
+    );
+    const mcpConfig = buildClaudeCliAgorMcpConfig({
+      daemonUrl: getDaemonUrl(),
+      mcpToken,
+    });
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `agor-mcp-${shortId(session.session_id)}-`));
+    const filePath = path.join(dir, 'mcp.json');
+    fs.writeFileSync(filePath, `${JSON.stringify(mcpConfig, null, 2)}\n`, { mode: 0o600 });
+
+    // In strict Unix-user mode the CLI process may run as the session's Unix
+    // user. If the daemon is privileged, hand ownership of the temp config to
+    // that user so we can keep 0600 instead of making bearer tokens world-
+    // readable in /tmp. Non-root deployments where chown is unavailable still
+    // work in simple mode (same Unix user); otherwise the warning below tells
+    // operators why MCP is missing.
+    if (session.unix_username && typeof process.getuid === 'function' && process.getuid() === 0) {
+      try {
+        const homeStat = fs.statSync(`/home/${session.unix_username}`);
+        fs.chownSync(dir, homeStat.uid, homeStat.gid);
+        fs.chownSync(filePath, homeStat.uid, homeStat.gid);
+      } catch (err) {
+        console.warn(
+          `[claude-cli-integration] failed to chown MCP config for ${session.unix_username}:`,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
+    return filePath;
+  } catch (err) {
+    console.warn(
+      `[claude-cli-integration] failed to write MCP config for session ${shortId(session.session_id)}; Agor MCP tools will be unavailable in Claude CLI/RemoteTrigger:`,
+      err instanceof Error ? err.message : String(err)
+    );
+    return undefined;
+  }
 }
 
 /**
@@ -1090,7 +1213,8 @@ export async function onCliSessionCreated(
   const homeDir = resolveHomeDirForCliSession(session);
   const slug = slugForCwd(branchCwd);
   const jsonlPath = claudeSessionJsonlPath(homeDir, branchCwd, session.session_id);
-  const spawnCfg = buildSpawnConfigForSession(session, branchCwd);
+  const mcpConfigPath = await writeClaudeCliMcpConfigForSession(app, session);
+  const spawnCfg = buildSpawnConfigForSession(session, branchCwd, { mcpConfigPath });
   const built = buildClaudeCliSpawn(spawnCfg);
   const tabName = spawnCfg.displayName ?? `cli-${shortId(session.session_id)}`;
 

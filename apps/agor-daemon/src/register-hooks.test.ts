@@ -19,11 +19,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-  canReceiveMcpTokenForSession,
-  isPromptFlowPatchOnly,
-  PROMPT_FLOW_PATCH_FIELDS,
-} from './register-hooks';
+import { isPromptFlowPatchOnly, PROMPT_FLOW_PATCH_FIELDS } from './register-hooks';
+import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
 
 describe('isPromptFlowPatchOnly', () => {
   describe('accepts whitelisted-only patches', () => {

@@ -5,8 +5,8 @@
  * schedules with create / edit / delete / run-now / runs-drawer.
  */
 
-import type { AgorClient, Branch, MCPServer, Schedule } from '@agor-live/client';
-import { humanizeCron } from '@agor-live/client';
+import type { AgorClient, Branch, MCPServer, Schedule, User } from '@agor-live/client';
+import { humanizeCron, shortId } from '@agor-live/client';
 import {
   DeleteOutlined,
   EditOutlined,
@@ -17,6 +17,7 @@ import {
 import { Button, Empty, Popconfirm, Space, Spin, Switch, Table, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
+import { UserAvatar } from '../../metadata/UserAvatar';
 import { ScheduleModal } from '../../ScheduleModal';
 import { ScheduleRunsPanel } from '../../ScheduleRunsPanel';
 
@@ -26,6 +27,8 @@ interface ScheduleTabProps {
   branch: Branch;
   client: AgorClient | null;
   mcpServerById?: Map<string, MCPServer>;
+  currentUser?: User | null;
+  userById?: Map<string, User>;
   onOpenSession?: (sessionId: string) => void;
 }
 
@@ -44,6 +47,8 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   branch,
   client,
   mcpServerById = new Map(),
+  currentUser,
+  userById = new Map(),
   onOpenSession,
 }) => {
   const { showError, showSuccess } = useThemedMessage();
@@ -168,6 +173,22 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       title: 'When',
       key: 'cron',
       render: (s: Schedule) => <Text>{formatHumanizedCron(s.cron_expression)}</Text>,
+    },
+    {
+      title: 'Scheduled by / run as',
+      key: 'created_by',
+      render: (s: Schedule) => {
+        const user = userById.get(s.created_by);
+        if (user) {
+          return (
+            <Space size={4}>
+              <UserAvatar user={user} showName size="small" />
+              {currentUser?.user_id === s.created_by && <Text type="secondary">(you)</Text>}
+            </Space>
+          );
+        }
+        return <Text type="secondary">{s.created_by ? shortId(s.created_by) : '—'}</Text>;
+      },
     },
     {
       title: 'Last run',

@@ -89,6 +89,10 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     currentUser,
     open,
   });
+  const userById = useMemo(
+    () => new Map(form.allUsers.map((user) => [user.user_id, user])),
+    [form.allUsers]
+  );
 
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
   useEffect(() => {
@@ -233,6 +237,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
           branch={branch}
           client={client}
           mcpServerById={mcpServerById}
+          currentUser={currentUser}
+          userById={userById}
           onOpenSession={(sessionId) => {
             onSessionClick?.(sessionId);
             onClose();

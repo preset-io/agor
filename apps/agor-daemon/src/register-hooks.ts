@@ -89,9 +89,11 @@ import {
 import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
+import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
   ensureCurrentScheduleLoaded,
+  ensureScheduleRunsAsCaller,
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
@@ -145,41 +147,6 @@ export function isPromptFlowPatchOnly(data: unknown): boolean {
   const keys = Object.keys(data);
   if (keys.length === 0) return false;
   return keys.every((key) => PROMPT_FLOW_PATCH_FIELDS.includes(key));
-}
-
-/**
- * Authorization predicate for emitting an MCP token on `GET /sessions/:id`.
- *
- * The token binds `uid = session.created_by` and lets the bearer act AS the
- * creator on the MCP channel. It must therefore only be handed to callers
- * who are ALREADY allowed to act as that creator:
- *
- *   - the creator themselves, provided they are still `member+` (viewers
- *     never receive a token — see docs: "Viewers never receive an
- *     mcp_token")
- *   - a superadmin (ops access)
- *   - the executor's service identity (spawns the child that uses the
- *     token; see `createServiceToken` in utils/spawn-executor.ts)
- *
- * A plain `member+` with `view` permission on the branch is NOT enough —
- * giving them the token would let them impersonate the creator, sidestepping
- * the `session`-tier "own sessions only" rule enforced elsewhere.
- *
- * Note: `service` is not part of the user-facing role hierarchy (see
- * `ROLE_RANK` in `@agor/core/types/user.ts`), so `hasMinimumRole('service',
- * ...)` returns false — we check for it by exact-string match instead.
- */
-export function canReceiveMcpTokenForSession(params: {
-  callerUserId: string | undefined;
-  callerRole: string | undefined;
-  sessionCreatedBy: string | null | undefined;
-}): boolean {
-  const { callerUserId, callerRole, sessionCreatedBy } = params;
-  const isSuperadmin = hasMinimumRole(callerRole, ROLES.SUPERADMIN);
-  const isServiceExecutor = callerRole === 'service';
-  const isCreatorMember =
-    !!callerUserId && callerUserId === sessionCreatedBy && hasMinimumRole(callerRole, ROLES.MEMBER);
-  return isCreatorMember || isSuperadmin || isServiceExecutor;
 }
 
 /**
@@ -2131,6 +2098,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // need the merged current+patch shape to do their work
         // correctly, and they have to run on every install.
         ensureCurrentScheduleLoaded(scheduleRepository),
+        ensureScheduleRunsAsCaller(superadminOpts),
         validateScheduleConfig(),
         recomputeNextRunAt(),
       ],

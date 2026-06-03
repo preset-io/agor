@@ -59,6 +59,7 @@ import {
   txAsDb,
   UsersRepository,
 } from '@agor/core/db';
+import { Forbidden } from '@agor/core/feathers';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   Branch,
@@ -421,6 +422,11 @@ export class SchedulerService {
       throw new ScheduleNotReadyError(
         'schedule_disabled',
         'Schedule is disabled. Enable it before running manually.'
+      );
+    }
+    if (schedule.created_by !== triggeredBy) {
+      throw new Forbidden(
+        'Schedules run as the user who created them. You can only manually run schedules you created.'
       );
     }
 
