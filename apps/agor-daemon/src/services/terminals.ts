@@ -45,6 +45,7 @@ import {
   validateResolvedUnixUser,
 } from '@agor/core/unix';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
+import { canControlCliSession } from '../utils/mcp-token-authorization.js';
 import { generateSessionToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 import {
   buildSpawnConfigForSession,
@@ -410,6 +411,16 @@ export class TerminalsService {
             );
           }
         }
+      }
+      if (
+        params?.provider &&
+        !canControlCliSession({
+          callerUserId: params.user?.user_id,
+          callerRole: params.user?.role,
+          sessionCreatedBy: session.created_by,
+        })
+      ) {
+        throw new Forbidden('You can only ensure CLI tabs for Claude CLI sessions you created.');
       }
       const branchRepo = new BranchRepository(this.db);
       const branch = await branchRepo.findById(session.branch_id);

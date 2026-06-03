@@ -106,6 +106,7 @@ import {
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
+import { canControlCliSession } from './utils/mcp-token-authorization.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
@@ -745,6 +746,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         const targetUserId = session.created_by;
         if (!targetUserId) throw new Error('Session has no created_by — cannot route restart');
+        if (
+          params.provider &&
+          !canControlCliSession({
+            callerUserId: params.user?.user_id,
+            callerRole: params.user?.role,
+            sessionCreatedBy: session.created_by,
+          })
+        ) {
+          throw new Forbidden('You can only restart Claude CLI sessions you created.');
+        }
 
         const tabName = `cli-${shortId(session.session_id)}`;
         const channel = `user/${targetUserId}/terminal`;

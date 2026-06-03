@@ -1052,9 +1052,10 @@ export interface ClaudeCliAgorMcpConfig {
  * This mirrors the Agent SDK path in
  * `packages/executor/src/sdk-handlers/claude/query-builder.ts`, but writes the
  * shape the Claude Code CLI expects in an mcp config file. The Authorization
- * header carries a session-scoped MCP token, so Claude CLI `/schedule`
- * RemoteTrigger runs inherit the same Agor board/session tools as normal Agor
- * sessions instead of falling back to unauthenticated REST.
+ * header carries a session-scoped MCP token, so Claude CLI sessions (including
+ * `/schedule` setup flows that read this config at CLI start time) see the same
+ * Agor board/session tools as normal Agor sessions instead of falling back to
+ * unauthenticated REST.
  */
 export function buildClaudeCliAgorMcpConfig(params: {
   daemonUrl: string;
@@ -1081,6 +1082,12 @@ export function buildClaudeCliAgorMcpConfig(params: {
  * CLI session, but it must be loud in logs because missing this file removes
  * all `agor_*` MCP tools (boards/cards/sessions/etc.) from Claude CLI and
  * RemoteTrigger scheduled runs.
+ *
+ * Token lifetime follows `execution.mcp_token_expiration_ms` via the shared MCP
+ * session-token issuer. This writer does not mint a separate durable
+ * RemoteTrigger credential; if a third-party scheduler snapshots headers for
+ * longer than that TTL, it must refresh this config or use an explicit
+ * future schedule-token design.
  */
 export async function writeClaudeCliMcpConfigForSession(
   app: Application,
