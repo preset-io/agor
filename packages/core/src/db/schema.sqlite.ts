@@ -1572,6 +1572,336 @@ export const sessionEnvSelections = sqliteTable(
 );
 
 /**
+ * Knowledge namespaces - first-class scopes for DB-backed knowledge documents.
+ * URI shape: agor://kb/<namespace.slug>/<document.path>
+ */
+export const kbNamespaces = sqliteTable(
+  'kb_namespaces',
+  {
+    namespace_id: text('namespace_id', { length: 36 }).primaryKey(),
+    slug: text('slug').notNull(),
+    display_name: text('display_name').notNull(),
+    description: text('description'),
+    kind: text('kind', { enum: ['system', 'global', 'user', 'repo', 'branch', 'team'] })
+      .notNull()
+      .default('global'),
+    owner_user_id: text('owner_user_id', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    repo_id: text('repo_id', { length: 36 }).references(() => repos.repo_id, {
+      onDelete: 'set null',
+    }),
+    branch_id: text('branch_id', { length: 36 }).references(() => branches.branch_id, {
+      onDelete: 'set null',
+    }),
+    visibility_default: text('visibility_default', { enum: ['public', 'private'] })
+      .notNull()
+      .default('public'),
+    metadata: t.json<Record<string, unknown>>('metadata'),
+    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+    archived: t.bool('archived').notNull().default(false),
+    archived_at: t.timestamp('archived_at'),
+  },
+  (table) => ({
+    slugIdx: uniqueIndex('kb_namespaces_slug_idx').on(table.slug),
+    kindIdx: index('kb_namespaces_kind_idx').on(table.kind),
+    ownerIdx: index('kb_namespaces_owner_idx').on(table.owner_user_id),
+    repoIdx: index('kb_namespaces_repo_idx').on(table.repo_id),
+    branchIdx: index('kb_namespaces_branch_idx').on(table.branch_id),
+    archivedIdx: index('kb_namespaces_archived_idx').on(table.archived),
+  })
+);
+
+/**
+ * Knowledge documents - stable namespace/path identity and current-version state.
+ */
+export const kbDocuments = sqliteTable(
+  'kb_documents',
+  {
+    document_id: text('document_id', { length: 36 }).primaryKey(),
+    namespace_id: text('namespace_id', { length: 36 })
+      .notNull()
+      .references(() => kbNamespaces.namespace_id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    uri: text('uri').notNull(),
+    title: text('title').notNull(),
+    kind: text('kind', {
+      enum: ['doc', 'memory', 'skill', 'prompt', 'guide', 'decision', 'bundle', 'external'],
+    })
+      .notNull()
+      .default('doc'),
+    visibility: text('visibility', { enum: ['public', 'private'] })
+      .notNull()
+      .default('public'),
+    edit_policy: text('edit_policy', { enum: ['owner', 'public', 'admins'] })
+      .notNull()
+      .default('owner'),
+    // Application-maintained pointer. Avoids a circular FK with versions.
+    current_version_id: text('current_version_id', { length: 36 }),
+    metadata: t.json<Record<string, unknown>>('metadata'),
+    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_by: text('updated_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    updated_at: t.timestamp('updated_at'),
+    archived: t.bool('archived').notNull().default(false),
+    archived_at: t.timestamp('archived_at'),
+  },
+  (table) => ({
+    namespacePathIdx: uniqueIndex('kb_documents_namespace_path_idx').on(
+      table.namespace_id,
+      table.path
+    ),
+    uriIdx: uniqueIndex('kb_documents_uri_idx').on(table.uri),
+    namespaceIdx: index('kb_documents_namespace_idx').on(table.namespace_id),
+    kindIdx: index('kb_documents_kind_idx').on(table.kind),
+    visibilityIdx: index('kb_documents_visibility_idx').on(table.visibility),
+    createdByIdx: index('kb_documents_created_by_idx').on(table.created_by),
+    updatedAtIdx: index('kb_documents_updated_at_idx').on(table.updated_at),
+    archivedIdx: index('kb_documents_archived_idx').on(table.archived),
+  })
+);
+
+/**
+ * Immutable document content snapshots.
+ */
+export const kbDocumentVersions = sqliteTable(
+  'kb_document_versions',
+  {
+    version_id: text('version_id', { length: 36 }).primaryKey(),
+    document_id: text('document_id', { length: 36 })
+      .notNull()
+      .references(() => kbDocuments.document_id, { onDelete: 'cascade' }),
+    version_number: integer('version_number').notNull(),
+    content_text: text('content_text'),
+    content_blob: blob('content_blob'),
+    mime_type: text('mime_type').notNull().default('text/markdown'),
+    content_md5: text('content_md5'),
+    content_sha256: text('content_sha256'),
+    byte_length: integer('byte_length'),
+    char_length: integer('char_length'),
+    frontmatter: t.json<Record<string, unknown>>('frontmatter'),
+    metadata: t.json<Record<string, unknown>>('metadata'),
+    change_summary: text('change_summary'),
+    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    documentVersionIdx: uniqueIndex('kb_document_versions_document_version_idx').on(
+      table.document_id,
+      table.version_number
+    ),
+    documentIdx: index('kb_document_versions_document_idx').on(table.document_id),
+    createdIdx: index('kb_document_versions_created_idx').on(table.created_at),
+    md5Idx: index('kb_document_versions_md5_idx').on(table.content_md5),
+  })
+);
+
+/**
+ * Internal search units. V1 can create one unit per document version; later
+ * versions may create heading/file units without exposing arbitrary chunks.
+ */
+export const kbDocumentUnits = sqliteTable(
+  'kb_document_units',
+  {
+    unit_id: text('unit_id', { length: 36 }).primaryKey(),
+    document_id: text('document_id', { length: 36 })
+      .notNull()
+      .references(() => kbDocuments.document_id, { onDelete: 'cascade' }),
+    version_id: text('version_id', { length: 36 })
+      .notNull()
+      .references(() => kbDocumentVersions.version_id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['document', 'section', 'file', 'auto_split'] })
+      .notNull()
+      .default('document'),
+    ordinal: integer('ordinal').notNull().default(0),
+    path_anchor: text('path_anchor'),
+    heading_path: text('heading_path'),
+    source_path: text('source_path'),
+    content_text: text('content_text'),
+    content_md5: text('content_md5'),
+    start_offset: integer('start_offset'),
+    end_offset: integer('end_offset'),
+    embedding_status: text('embedding_status', {
+      enum: ['not_configured', 'pending', 'ready', 'stale', 'error'],
+    })
+      .notNull()
+      .default('not_configured'),
+    embedding_model: text('embedding_model'),
+    embedding_dimensions: integer('embedding_dimensions'),
+    embedding_hash: text('embedding_hash'),
+    embedding_error: text('embedding_error'),
+    metadata: t.json<Record<string, unknown>>('metadata'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+  },
+  (table) => ({
+    documentIdx: index('kb_document_units_document_idx').on(table.document_id),
+    versionIdx: index('kb_document_units_version_idx').on(table.version_id),
+    versionOrdinalIdx: index('kb_document_units_version_ordinal_idx').on(
+      table.version_id,
+      table.ordinal
+    ),
+    contentHashIdx: index('kb_document_units_content_hash_idx').on(table.content_md5),
+    embeddingStatusIdx: index('kb_document_units_embedding_status_idx').on(table.embedding_status),
+  })
+);
+
+/**
+ * Graph nodes for knowledge documents, document units, core Agor objects, tags,
+ * and external references.
+ */
+export const kbGraphNodes = sqliteTable(
+  'kb_graph_nodes',
+  {
+    node_id: text('node_id', { length: 36 }).primaryKey(),
+    node_type: text('node_type', {
+      enum: [
+        'namespace',
+        'document',
+        'document_unit',
+        'branch',
+        'session',
+        'task',
+        'message',
+        'artifact',
+        'repo',
+        'board',
+        'user',
+        'tag',
+        'external',
+      ],
+    }).notNull(),
+    uri: text('uri').notNull(),
+    label: text('label'),
+    namespace_id: text('namespace_id', { length: 36 }).references(() => kbNamespaces.namespace_id, {
+      onDelete: 'cascade',
+    }),
+    document_id: text('document_id', { length: 36 }).references(() => kbDocuments.document_id, {
+      onDelete: 'cascade',
+    }),
+    unit_id: text('unit_id', { length: 36 }).references(() => kbDocumentUnits.unit_id, {
+      onDelete: 'cascade',
+    }),
+    branch_id: text('branch_id', { length: 36 }).references(() => branches.branch_id, {
+      onDelete: 'cascade',
+    }),
+    session_id: text('session_id', { length: 36 }).references(() => sessions.session_id, {
+      onDelete: 'cascade',
+    }),
+    task_id: text('task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'cascade',
+    }),
+    message_id: text('message_id', { length: 36 }).references(() => messages.message_id, {
+      onDelete: 'cascade',
+    }),
+    artifact_id: text('artifact_id', { length: 36 }).references(() => artifacts.artifact_id, {
+      onDelete: 'cascade',
+    }),
+    repo_id: text('repo_id', { length: 36 }).references(() => repos.repo_id, {
+      onDelete: 'cascade',
+    }),
+    board_id: text('board_id', { length: 36 }).references(() => boards.board_id, {
+      onDelete: 'cascade',
+    }),
+    user_id: text('user_id', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'cascade',
+    }),
+    external_uri: text('external_uri'),
+    metadata: t.json<Record<string, unknown>>('metadata'),
+    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+    archived: t.bool('archived').notNull().default(false),
+    archived_at: t.timestamp('archived_at'),
+  },
+  (table) => ({
+    uriIdx: uniqueIndex('kb_graph_nodes_uri_idx').on(table.uri),
+    typeIdx: index('kb_graph_nodes_type_idx').on(table.node_type),
+    namespaceIdx: index('kb_graph_nodes_namespace_idx').on(table.namespace_id),
+    documentIdx: index('kb_graph_nodes_document_idx').on(table.document_id),
+    unitIdx: index('kb_graph_nodes_unit_idx').on(table.unit_id),
+    branchIdx: index('kb_graph_nodes_branch_idx').on(table.branch_id),
+    sessionIdx: index('kb_graph_nodes_session_idx').on(table.session_id),
+    taskIdx: index('kb_graph_nodes_task_idx').on(table.task_id),
+    messageIdx: index('kb_graph_nodes_message_idx').on(table.message_id),
+    artifactIdx: index('kb_graph_nodes_artifact_idx').on(table.artifact_id),
+    repoIdx: index('kb_graph_nodes_repo_idx').on(table.repo_id),
+    boardIdx: index('kb_graph_nodes_board_idx').on(table.board_id),
+    userIdx: index('kb_graph_nodes_user_idx').on(table.user_id),
+    externalUriIdx: index('kb_graph_nodes_external_uri_idx').on(table.external_uri),
+    archivedIdx: index('kb_graph_nodes_archived_idx').on(table.archived),
+  })
+);
+
+/** Directed relationships between knowledge graph nodes. */
+export const kbGraphEdges = sqliteTable(
+  'kb_graph_edges',
+  {
+    edge_id: text('edge_id', { length: 36 }).primaryKey(),
+    source_node_id: text('source_node_id', { length: 36 })
+      .notNull()
+      .references(() => kbGraphNodes.node_id, { onDelete: 'cascade' }),
+    target_node_id: text('target_node_id', { length: 36 })
+      .notNull()
+      .references(() => kbGraphNodes.node_id, { onDelete: 'cascade' }),
+    edge_type: text('edge_type', {
+      enum: [
+        'contains',
+        'references',
+        'mentions',
+        'implements',
+        'depends_on',
+        'supersedes',
+        'derived_from',
+        'tagged_with',
+        'about',
+        'parent_of',
+        'related_to',
+      ],
+    }).notNull(),
+    confidence: integer('confidence'),
+    properties: t.json<Record<string, unknown>>('properties'),
+    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    archived: t.bool('archived').notNull().default(false),
+    archived_at: t.timestamp('archived_at'),
+  },
+  (table) => ({
+    sourceIdx: index('kb_graph_edges_source_idx').on(table.source_node_id),
+    targetIdx: index('kb_graph_edges_target_idx').on(table.target_node_id),
+    typeIdx: index('kb_graph_edges_type_idx').on(table.edge_type),
+    sourceTypeIdx: index('kb_graph_edges_source_type_idx').on(
+      table.source_node_id,
+      table.edge_type
+    ),
+    targetTypeIdx: index('kb_graph_edges_target_type_idx').on(
+      table.target_node_id,
+      table.edge_type
+    ),
+    sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_source_target_type_idx').on(
+      table.source_node_id,
+      table.target_node_id,
+      table.edge_type
+    ),
+    archivedIdx: index('kb_graph_edges_archived_idx').on(table.archived),
+  })
+);
+
+/**
  * Type exports for use with Drizzle ORM
  */
 export type SessionRow = typeof sessions.$inferSelect;
@@ -1612,6 +1942,18 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type SerializedSessionRow = typeof serializedSessions.$inferSelect;
 export type SerializedSessionInsert = typeof serializedSessions.$inferInsert;
+export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;
+export type KBNamespaceInsert = typeof kbNamespaces.$inferInsert;
+export type KBDocumentRow = typeof kbDocuments.$inferSelect;
+export type KBDocumentInsert = typeof kbDocuments.$inferInsert;
+export type KBDocumentVersionRow = typeof kbDocumentVersions.$inferSelect;
+export type KBDocumentVersionInsert = typeof kbDocumentVersions.$inferInsert;
+export type KBDocumentUnitRow = typeof kbDocumentUnits.$inferSelect;
+export type KBDocumentUnitInsert = typeof kbDocumentUnits.$inferInsert;
+export type KBGraphNodeRow = typeof kbGraphNodes.$inferSelect;
+export type KBGraphNodeInsert = typeof kbGraphNodes.$inferInsert;
+export type KBGraphEdgeRow = typeof kbGraphEdges.$inferSelect;
+export type KBGraphEdgeInsert = typeof kbGraphEdges.$inferInsert;
 
 /**
  * Drizzle Relations for Relational Queries

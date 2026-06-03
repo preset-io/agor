@@ -12,6 +12,7 @@ export * from './branches';
 export * from './card-types';
 export * from './cards';
 export * from './gateway-channels';
+export * from './knowledge';
 export * from './mcp-servers';
 export * from './messages';
 export * from './repos';

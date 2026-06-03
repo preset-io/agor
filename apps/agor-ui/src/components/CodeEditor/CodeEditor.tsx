@@ -13,36 +13,56 @@ import type React from 'react';
 import { lazy, Suspense } from 'react';
 import type { CodeEditorInnerProps, CodeEditorLanguage } from './CodeEditor.inner';
 
-const CodeEditorInner = lazy(() => import('./CodeEditor.inner'));
-
 export type { CodeEditorLanguage };
 export type CodeEditorProps = CodeEditorInnerProps;
 
-const Fallback: React.FC<Pick<CodeEditorProps, 'value' | 'rows' | 'minHeight'>> = ({
+const PlainTextEditor: React.FC<CodeEditorProps> = ({
   value,
+  onChange,
+  readOnly = false,
+  placeholder,
   rows = 14,
+  height,
   minHeight,
+  maxHeight,
 }) => (
-  <pre
+  <textarea
+    value={value}
+    onChange={(event) => onChange?.(event.target.value)}
+    readOnly={readOnly}
+    placeholder={placeholder}
+    rows={rows}
     style={{
+      width: '100%',
+      boxSizing: 'border-box',
       fontFamily: 'monospace',
       fontSize: 12,
+      height,
       minHeight: minHeight ?? `${rows * 20}px`,
+      maxHeight,
       padding: 8,
       margin: 0,
       border: '1px solid var(--ant-color-border, #424242)',
       borderRadius: 6,
       background: 'var(--ant-color-fill-alter, transparent)',
-      whiteSpace: 'pre',
+      color: 'var(--ant-color-text)',
       overflow: 'auto',
+      resize: maxHeight ? 'none' : 'vertical',
     }}
-  >
-    {value}
-  </pre>
+  />
 );
 
+const CodeEditorInner = lazy(async () => {
+  try {
+    return await import('./CodeEditor.inner');
+  } catch (error) {
+    console.error('Failed to load CodeMirror editor; falling back to plain text editor.', error);
+    return { default: PlainTextEditor };
+  }
+});
+
 export const CodeEditor: React.FC<CodeEditorProps> = (props) => (
-  <Suspense fallback={<Fallback {...props} />}>
+  <Suspense fallback={<PlainTextEditor {...props} readOnly />}>
     <CodeEditorInner {...props} />
   </Suspense>
 );

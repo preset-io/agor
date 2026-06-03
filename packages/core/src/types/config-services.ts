@@ -21,7 +21,7 @@ export const SERVICE_TIER_RANK: Record<ServiceTier, number> = {
 };
 
 /**
- * The 13 service groups configurable in config.yaml under `services:`.
+ * The 15 service groups configurable in config.yaml under `services:`.
  * All default to 'on' for backward compatibility.
  */
 export interface DaemonServicesConfig {
@@ -51,6 +51,8 @@ export interface DaemonServicesConfig {
   mcp_servers?: ServiceTier;
   /** usage analytics */
   leaderboard?: ServiceTier;
+  /** DB-backed Knowledge documents, search, history, and graph links */
+  knowledge?: ServiceTier;
   /** Serve UI bundle and static assets (default: on). Set to 'off' for headless/executor pods. */
   static_files?: 'on' | 'off';
 }
@@ -75,6 +77,7 @@ export const SERVICE_GROUP_NAMES: ServiceGroupName[] = [
   'file_browser',
   'mcp_servers',
   'leaderboard',
+  'knowledge',
 ];
 
 /**
@@ -96,6 +99,7 @@ export const ALLOWED_SERVICE_TIERS: Record<ServiceGroupName, readonly ServiceTie
   file_browser: ['on', 'readonly', 'internal', 'off'],
   mcp_servers: ['on', 'readonly', 'internal', 'off'],
   leaderboard: ['on', 'readonly', 'internal', 'off'],
+  knowledge: ['on', 'readonly', 'internal', 'off'],
 };
 
 /**
@@ -130,6 +134,7 @@ export const SERVICE_GROUP_TO_MCP_DOMAINS: Partial<Record<ServiceGroupName, stri
   mcp_servers: ['mcp-servers'],
   leaderboard: ['analytics'],
   scheduler: ['schedules'],
+  knowledge: ['knowledge'],
 };
 
 /**

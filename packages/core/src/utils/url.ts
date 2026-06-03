@@ -61,6 +61,7 @@ export const ENTITY_PATH_SEGMENTS = {
   session: 's',
   branch: 'w',
   artifact: 'a',
+  knowledge: 'kb',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -91,6 +92,26 @@ export function branchPath(branchId: BranchID): string {
 /** `/a/<artifactShort>/` — artifact deep link. Same shape as branch. */
 export function artifactPath(artifactId: ArtifactID): string {
   return `/${ENTITY_PATH_SEGMENTS.artifact}/${shortId(artifactId)}/`;
+}
+
+function encodePathSegments(path: string): string {
+  return path
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
+/** `/kb/<namespace>/<document/path.md>` — Knowledge page deep link.
+ *  Documents are addressed by their stable namespace + path key rather
+ *  than an opaque document ID so links mirror `agor://kb/...` URIs and
+ *  future import/export layouts. */
+export function knowledgePath(namespaceSlug?: string | null, documentPath?: string | null): string {
+  const base = `/${ENTITY_PATH_SEGMENTS.knowledge}`;
+  if (!namespaceSlug) return base;
+  const namespacePath = `${base}/${encodeURIComponent(namespaceSlug)}`;
+  if (!documentPath) return `${namespacePath}/`;
+  return `${namespacePath}/${encodePathSegments(documentPath)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +163,15 @@ export function getBranchUrl(branchId: BranchID, baseUrl: string): string {
  *  resolves to its board at click time. */
 export function getArtifactUrl(artifactId: ArtifactID, baseUrl: string): string {
   return fullUrl(artifactPath(artifactId), baseUrl);
+}
+
+/** Generate a Knowledge URL from namespace + optional document path. */
+export function getKnowledgeUrl(
+  namespaceSlug: string | null | undefined,
+  documentPath: string | null | undefined,
+  baseUrl: string
+): string {
+  return fullUrl(knowledgePath(namespaceSlug, documentPath), baseUrl);
 }
 
 // ---------------------------------------------------------------------------

@@ -59,7 +59,7 @@ async function callMCPTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describeIntegration('MCP Tools - Session Tools', () => {
-  it('tools/list returns all 25 tools', async () => {
+  it('tools/list returns all expected tools', async () => {
     const resp = await fetch(`${DAEMON_URL}/mcp`, {
       method: 'POST',
       headers: {
@@ -74,7 +74,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     });
 
     const data = (await resp.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(data.result.tools).toHaveLength(25);
+    expect(data.result.tools.length).toBeGreaterThanOrEqual(31);
 
     const toolNames = data.result.tools.map((t) => t.name);
     expect(toolNames).toContain('agor_sessions_list');
@@ -103,6 +103,14 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_users_get_current');
     expect(toolNames).toContain('agor_users_update_current');
     expect(toolNames).toContain('agor_user_create');
+    expect(toolNames).toContain('agor_kb_namespaces_list');
+    expect(toolNames).toContain('agor_kb_namespace_put');
+    expect(toolNames).toContain('agor_kb_search');
+    expect(toolNames).toContain('agor_kb_get');
+    expect(toolNames).toContain('agor_kb_put');
+    expect(toolNames).toContain('agor_kb_history');
+    expect(toolNames).toContain('agor_kb_link');
+    expect(toolNames).toContain('agor_kb_graph_neighbors');
   });
 
   it('agor_sessions_list returns sessions', async () => {

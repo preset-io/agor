@@ -51,6 +51,7 @@ import {
   useServerVersion,
   useSessionActions,
 } from './hooks';
+import { KnowledgePage } from './pages/KnowledgePage';
 import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
@@ -1476,6 +1477,12 @@ function AppContent() {
         <Routes>
           {/* Demo route */}
           <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
+
+          {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
+          <Route path="/knowledge" element={<KnowledgePage client={client} />} />
+          <Route path="/knowledge/:namespaceSlug/*" element={<KnowledgePage client={client} />} />
+          <Route path="/kb" element={<KnowledgePage client={client} />} />
+          <Route path="/kb/:namespaceSlug/*" element={<KnowledgePage client={client} />} />
 
           {/* Mobile routes */}
           <Route

@@ -54,6 +54,7 @@ const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   proxies: 'Configured HTTP proxies for third-party APIs (Shortcut, Linear, Jira, etc.)',
   widgets:
     'In-conversation interactive widgets — agents render small forms/buttons inline in the transcript to capture user input that never enters the LLM context',
+  knowledge: 'DB-backed markdown knowledge documents, version history, search, and graph links',
 };
 
 /** Tools always visible in `tools/list` even when search mode is enabled. */

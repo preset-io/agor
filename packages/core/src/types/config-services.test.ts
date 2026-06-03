@@ -151,7 +151,14 @@ describe('ALLOWED_SERVICE_TIERS', () => {
   });
 
   it('optional services can be off', () => {
-    for (const group of ['boards', 'cards', 'artifacts', 'gateway', 'scheduler'] as const) {
+    for (const group of [
+      'boards',
+      'cards',
+      'artifacts',
+      'gateway',
+      'scheduler',
+      'knowledge',
+    ] as const) {
       expect(ALLOWED_SERVICE_TIERS[group]).toContain('off');
     }
   });
@@ -202,6 +209,7 @@ describe('validateAllowedTiers', () => {
       cards: 'off',
       gateway: 'off',
       scheduler: 'off',
+      knowledge: 'off',
     };
     expect(validateAllowedTiers(config)).toEqual([]);
   });
@@ -227,6 +235,7 @@ describe('validateServiceDependencies', () => {
     const config: DaemonServicesConfig = {
       gateway: 'off',
       scheduler: 'off',
+      knowledge: 'off',
     };
     expect(validateServiceDependencies(config)).toEqual([]);
   });
@@ -266,6 +275,7 @@ describe('autoPromoteDependencies', () => {
     const config: DaemonServicesConfig = {
       gateway: 'off',
       scheduler: 'off',
+      knowledge: 'off',
     };
     const { promotions } = autoPromoteDependencies(config);
     expect(promotions).toHaveLength(0);
@@ -303,8 +313,8 @@ describe('autoPromoteDependencies', () => {
 // ============================================================================
 
 describe('SERVICE_GROUP_NAMES', () => {
-  it('contains all 13 service groups', () => {
-    expect(SERVICE_GROUP_NAMES).toHaveLength(13);
+  it('contains all 14 service groups', () => {
+    expect(SERVICE_GROUP_NAMES).toHaveLength(14);
   });
 
   it('includes the expected groups', () => {
@@ -322,6 +332,7 @@ describe('SERVICE_GROUP_NAMES', () => {
       'file_browser',
       'mcp_servers',
       'leaderboard',
+      'knowledge',
     ];
     for (const group of expected) {
       expect(SERVICE_GROUP_NAMES).toContain(group);
@@ -360,6 +371,10 @@ describe('SERVICE_GROUP_TO_MCP_DOMAINS', () => {
     expect(SERVICE_GROUP_TO_MCP_DOMAINS.branches).toContain('branches');
     expect(SERVICE_GROUP_TO_MCP_DOMAINS.branches).toContain('environment');
   });
+
+  it('maps knowledge to knowledge domain', () => {
+    expect(SERVICE_GROUP_TO_MCP_DOMAINS.knowledge).toContain('knowledge');
+  });
 });
 
 // ============================================================================
@@ -381,6 +396,7 @@ describe('executor pod config scenario', () => {
     terminals: 'off',
     file_browser: 'on',
     leaderboard: 'off',
+    knowledge: 'off',
   };
 
   it('passes allowed-tiers validation', () => {
@@ -410,5 +426,6 @@ describe('executor pod config scenario', () => {
     expect(isServiceEnabled(executorConfig, 'boards')).toBe(false);
     expect(isServiceEnabled(executorConfig, 'gateway')).toBe(false);
     expect(isServiceEnabled(executorConfig, 'scheduler')).toBe(false);
+    expect(isServiceEnabled(executorConfig, 'knowledge')).toBe(false);
   });
 });

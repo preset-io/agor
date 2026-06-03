@@ -330,6 +330,13 @@
       "when": 1780500000000,
       "tag": "0048_executor_heartbeat",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1780600000000,
+      "tag": "0049_knowledge_tables",
+      "breakpoints": true
     }
   ]
 }

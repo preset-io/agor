@@ -36,6 +36,7 @@ import { registerBranchTools } from './tools/branches.js';
 import { registerCardTypeTools } from './tools/card-types.js';
 import { registerCardTools } from './tools/cards.js';
 import { registerEnvironmentTools } from './tools/environment.js';
+import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
 import { registerMessageTools } from './tools/messages.js';
 import { registerProxyTools } from './tools/proxies.js';
@@ -128,6 +129,7 @@ Domains:
 - mcp-servers: External MCP server configuration and OAuth management
 - schedules: First-class CRUD for branch schedules — cron-based prompts that spawn sessions
 - widgets: In-conversation interactive widgets (forms/buttons rendered inline; values never enter your context)
+- knowledge: DB-backed markdown knowledge documents, version history, and graph links
 
 Common workflows:
 
@@ -293,6 +295,11 @@ function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
     registerMcpServerTools(tempServer, dummyCtx);
   }
 
+  if (isDomainEnabled('knowledge', servicesConfig)) {
+    registry.setCurrentDomain('knowledge');
+    registerKnowledgeTools(tempServer, dummyCtx);
+  }
+
   if (isDomainEnabled('schedules', servicesConfig)) {
     registry.setCurrentDomain('schedules');
     registerScheduleTools(tempServer, dummyCtx);
@@ -426,6 +433,7 @@ function createMcpServer(
   domainRegister('users', registerUserTools);
   domainRegister('analytics', registerAnalyticsTools);
   domainRegister('mcp-servers', registerMcpServerTools);
+  domainRegister('knowledge', registerKnowledgeTools);
   domainRegister('schedules', registerScheduleTools);
 
   if (toolSearchEnabled) {

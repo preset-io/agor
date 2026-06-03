@@ -15,6 +15,7 @@ export * from './feathers';
 export * from './file';
 export * from './gateway';
 export * from './id';
+export * from './knowledge';
 export * from './mcp';
 export * from './message';
 export * from './presence';

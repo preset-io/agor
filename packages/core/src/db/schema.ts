@@ -43,6 +43,12 @@ export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;
 export const userApiKeys = schema.userApiKeys;
 export const serializedSessions = schema.serializedSessions;
+export const kbNamespaces = schema.kbNamespaces;
+export const kbDocuments = schema.kbDocuments;
+export const kbDocumentVersions = schema.kbDocumentVersions;
+export const kbDocumentUnits = schema.kbDocumentUnits;
+export const kbGraphNodes = schema.kbGraphNodes;
+export const kbGraphEdges = schema.kbGraphEdges;
 
 // Re-export all types
 export type * from './schema.sqlite';

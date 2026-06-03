@@ -10,6 +10,7 @@ import type {
 } from '@agor-live/client';
 import {
   ApiOutlined,
+  BookOutlined,
   CommentOutlined,
   LogoutOutlined,
   QuestionCircleOutlined,
@@ -32,6 +33,7 @@ import {
   theme,
 } from 'antd';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
@@ -159,6 +161,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   mcpServerById,
 }) => {
   const { token } = theme.useToken();
+  const navigate = useNavigate();
   // Single source of truth for "is the daemon usable right now?". Captures
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.
@@ -357,6 +360,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             />
           </Tooltip>
         )}
+        <Tooltip title="Knowledge" placement="bottom">
+          <Button
+            type="text"
+            icon={<BookOutlined style={{ fontSize: token.fontSizeLG }} />}
+            style={headerIconButtonStyle}
+            onClick={() => navigate('/knowledge')}
+          />
+        </Tooltip>
         <Tooltip title="Documentation" placement="bottom">
           <Button
             type="text"

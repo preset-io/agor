@@ -894,6 +894,50 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   });
 
   // ============================================================================
+  // Knowledge hooks
+  // ============================================================================
+
+  safeService('kb/namespaces')?.hooks({
+    before: {
+      all: [requireAuth],
+      create: [requireMinimumRole(ROLES.MEMBER, 'create knowledge namespaces')],
+      patch: [requireMinimumRole(ROLES.MEMBER, 'update knowledge namespaces')],
+      update: [requireMinimumRole(ROLES.MEMBER, 'update knowledge namespaces')],
+      remove: [requireMinimumRole(ROLES.MEMBER, 'delete knowledge namespaces')],
+    },
+  });
+
+  safeService('kb/documents')?.hooks({
+    before: {
+      all: [requireAuth],
+      create: [requireMinimumRole(ROLES.MEMBER, 'create knowledge documents')],
+      patch: [requireMinimumRole(ROLES.MEMBER, 'update knowledge documents')],
+      update: [requireMinimumRole(ROLES.MEMBER, 'update knowledge documents')],
+      remove: [requireMinimumRole(ROLES.MEMBER, 'delete knowledge documents')],
+    },
+  });
+
+  safeService('kb/versions')?.hooks({
+    before: {
+      all: [requireAuth],
+    },
+  });
+
+  safeService('kb/search')?.hooks({
+    before: {
+      all: [requireAuth],
+    },
+  });
+
+  (safeService('kb/graph') as { hooks?: (options: unknown) => void } | undefined)?.hooks?.({
+    before: {
+      all: [requireAuth],
+      create: [requireMinimumRole(ROLES.MEMBER, 'link knowledge graph nodes')],
+      link: [requireMinimumRole(ROLES.MEMBER, 'link knowledge graph nodes')],
+    },
+  });
+
+  // ============================================================================
   // MCP servers hooks (with per-user OAuth token injection)
   // ============================================================================
 

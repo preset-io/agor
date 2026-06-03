@@ -87,7 +87,9 @@ export {
   getArtifactUrl,
   getBoardUrl,
   getBranchUrl,
+  getKnowledgeUrl,
   getSessionUrl,
+  knowledgePath,
   sessionPath,
   UI_MOUNT_PATH,
 } from '../utils/url.js';

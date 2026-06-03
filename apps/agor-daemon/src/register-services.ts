@@ -68,6 +68,11 @@ import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
+import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
+import { createKnowledgeGraphService } from './services/knowledge-graph.js';
+import { createKnowledgeNamespacesService } from './services/knowledge-namespaces.js';
+import { createKnowledgeSearchService } from './services/knowledge-search.js';
+import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
@@ -326,6 +331,22 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // First-class schedules. RBAC hooks wired in register-hooks.ts.
   // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
   app.use('/schedules', createSchedulesService(db));
+
+  // ============================================================================
+  // Knowledge (backend/data foundations)
+  // ============================================================================
+
+  app.use('/kb/namespaces', createKnowledgeNamespacesService(db));
+  app.use('/kb/documents', createKnowledgeDocumentsService(db), {
+    methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'getDocument', 'putDocument'],
+  });
+  app.use('/kb/versions', createKnowledgeVersionsService(db));
+  app.use('/kb/search', createKnowledgeSearchService(db), {
+    methods: ['find', 'create'],
+  });
+  app.use('/kb/graph', createKnowledgeGraphService(db), {
+    methods: ['find', 'create', 'link', 'neighbors'],
+  });
 
   // ============================================================================
   // MCP Servers (conditionally registered)
