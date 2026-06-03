@@ -1,9 +1,25 @@
-import type { Board } from '@agor/core/types';
+import type { Board, BoardEntityType, BoardObject, BoardObjectType } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+
+const BOARD_OBJECT_TYPES = ['zone', 'text', 'markdown', 'app', 'artifact'] as const;
+const BOARD_ENTITY_TYPES = ['branch', 'card'] as const;
+
+function filterBoardCanvasObjects(board: Board, objectTypes?: BoardObjectType[]): Board {
+  if (!objectTypes) return board;
+
+  const allowedTypes = new Set<BoardObjectType>(objectTypes);
+  const objects = Object.fromEntries(
+    Object.entries(board.objects ?? {}).filter(([, object]) =>
+      allowedTypes.has((object as BoardObject).type)
+    )
+  );
+
+  return { ...board, objects };
+}
 
 export function registerBoardTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_boards_get
@@ -11,34 +27,85 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     'agor_boards_get',
     {
       description:
-        'Get information about a board, including zones, layout, and positioned entities (branches, cards). ' +
+        'Get information about a board, including zones, canvas objects, and optionally positioned entities (branches, cards). ' +
         'The response includes a `url` field with a clickable link to view the board in the UI. ' +
-        'Set includeEntities=true to include positioned branch/card entities with their coordinates.',
+        'By default, returns board metadata and canvas objects only (no positioned branch/card entities). ' +
+        'Use objectTypes=["zone"] for a lean board definition with just zones. ' +
+        'Set includeEntities=true to include positioned branch/card entities, optionally filtered by entityZoneId/entityType and paginated with entitiesLimit/entitiesSkip.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         boardId: z.string().describe('Board ID (UUIDv7 or short ID)'),
+        objectTypes: z
+          .array(z.enum(BOARD_OBJECT_TYPES))
+          .optional()
+          .describe(
+            'Filter board.objects canvas annotations by type. Use ["zone"] to retrieve zone definitions without heavier text/markdown/app/artifact objects. Omit for backward-compatible behavior returning all board.objects.'
+          ),
         includeEntities: z
           .boolean()
           .optional()
           .describe(
             'Include positioned entities (branches, cards) with their x/y coordinates and zone assignments (default: false). Enable when you need to know where branches are placed on the canvas.'
           ),
+        entityZoneId: z
+          .string()
+          .optional()
+          .describe(
+            'When includeEntities=true, only return positioned entities pinned to this board zone ID.'
+          ),
+        entityType: z
+          .enum(BOARD_ENTITY_TYPES)
+          .optional()
+          .describe(
+            'When includeEntities=true, only return positioned entities of this type ("branch" or "card").'
+          ),
+        entitiesLimit: z
+          .number()
+          .optional()
+          .describe(
+            'When includeEntities=true, maximum number of positioned entities to return. Omit to preserve legacy behavior returning all matched entities.'
+          ),
+        entitiesSkip: z
+          .number()
+          .optional()
+          .describe(
+            'When includeEntities=true, number of matched positioned entities to skip for pagination (default: 0).'
+          ),
       }),
     },
     async (args) => {
       const boardId = coerceString(args.boardId);
       if (!boardId) throw new Error('boardId is required');
-      const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
+      const board = filterBoardCanvasObjects(
+        await ctx.app.service('boards').get(boardId, ctx.baseServiceParams),
+        args.objectTypes as BoardObjectType[] | undefined
+      );
 
       const includeEntities = args.includeEntities === true; // default false, opt-in
       if (includeEntities) {
+        const entityQuery: Record<string, unknown> = { board_id: board.board_id };
+        const entityZoneId = coerceString(args.entityZoneId);
+        if (entityZoneId) entityQuery.zone_id = entityZoneId;
+        if (args.entityType) entityQuery.entity_type = args.entityType as BoardEntityType;
+        if (args.entitiesLimit !== undefined) entityQuery.$limit = args.entitiesLimit;
+        if (args.entitiesSkip !== undefined) entityQuery.$skip = args.entitiesSkip;
+
         const boardObjectsResult = await ctx.app
           .service('board-objects')
-          .find({ query: { board_id: board.board_id }, ...ctx.baseServiceParams });
+          .find({ query: entityQuery, ...ctx.baseServiceParams });
         const entities = (
           boardObjectsResult as { data: import('@agor/core/types').BoardEntityObject[] }
         ).data;
-        return textResult({ ...board, entities });
+        const { total, limit, skip } = boardObjectsResult as {
+          total?: number;
+          limit?: number;
+          skip?: number;
+        };
+        return textResult({
+          ...board,
+          entities,
+          entities_pagination: { total, limit, skip },
+        });
       }
 
       return textResult(board);

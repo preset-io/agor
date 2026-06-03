@@ -6,7 +6,14 @@
  */
 
 import { BoardObjectRepository, type Database } from '@agor/core/db';
-import type { BoardEntityObject, BoardID, BranchID, QueryParams } from '@agor/core/types';
+import type {
+  BoardEntityObject,
+  BoardEntityType,
+  BoardID,
+  BranchID,
+  CardID,
+  QueryParams,
+} from '@agor/core/types';
 
 /**
  * Board object service params
@@ -14,6 +21,9 @@ import type { BoardEntityObject, BoardID, BranchID, QueryParams } from '@agor/co
 export type BoardObjectParams = QueryParams<{
   board_id?: BoardID;
   branch_id?: BranchID;
+  card_id?: CardID;
+  zone_id?: string;
+  entity_type?: BoardEntityType;
 }>;
 
 /**
@@ -67,28 +77,47 @@ export class BoardObjectsService {
    * Find board objects
    */
   async find(params?: BoardObjectParams) {
-    const { board_id } = params?.query || {};
+    const { board_id, branch_id, card_id, zone_id, entity_type } = params?.query || {};
+
+    let objects: BoardEntityObject[];
 
     // If board_id filter is provided, use repository method
     if (board_id) {
-      const objects = await this.boardObjectRepo.findByBoardId(board_id);
-
-      return {
-        total: objects.length,
-        limit: params?.query?.$limit || 100,
-        skip: params?.query?.$skip || 0,
-        data: objects,
-      };
+      objects = await this.boardObjectRepo.findByBoardId(board_id);
+    } else {
+      // No board_id - return ALL board objects
+      objects = await this.boardObjectRepo.findAll();
     }
 
-    // No board_id - return ALL board objects
-    const allObjects = await this.boardObjectRepo.findAll();
+    if (branch_id) {
+      objects = objects.filter((object) => object.branch_id === branch_id);
+    }
+    if (card_id) {
+      objects = objects.filter((object) => object.card_id === card_id);
+    }
+    if (zone_id) {
+      objects = objects.filter((object) => object.zone_id === zone_id);
+    }
+    if (entity_type) {
+      objects = objects.filter((object) => object.entity_type === entity_type);
+    }
+
+    const total = objects.length;
+    const requestedSkip = params?.query?.$skip ?? 0;
+    const requestedLimit = params?.query?.$limit;
+    const data =
+      requestedLimit !== undefined || requestedSkip > 0
+        ? objects.slice(
+            requestedSkip,
+            requestedLimit === undefined ? undefined : requestedSkip + requestedLimit
+          )
+        : objects;
 
     return {
-      total: allObjects.length,
-      limit: params?.query?.$limit || 100,
-      skip: params?.query?.$skip || 0,
-      data: allObjects,
+      total,
+      limit: requestedLimit ?? 100,
+      skip: requestedSkip,
+      data,
     };
   }
 
