@@ -82,9 +82,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
-    findByBranchId: (branchId: BranchID) => Promise<unknown>;
+    findByBranchId: (branchId: BranchID) => Promise<{ object_id: string; zone_id?: string } | null>;
     create: (data: unknown) => Promise<unknown>;
     remove: (id: string) => Promise<unknown>;
+    patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
   };
 
   constructor(db: Database, app: Application) {
@@ -138,9 +139,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!this.boardObjectsService) {
       this.boardObjectsService = this.app.service('board-objects') as unknown as {
         find: (params?: unknown) => Promise<unknown>;
-        findByBranchId: (branchId: BranchID) => Promise<unknown>;
+        findByBranchId: (branchId: BranchID) => Promise<{ object_id: string; zone_id?: string } | null>;
         create: (data: unknown) => Promise<unknown>;
         remove: (id: string) => Promise<unknown>;
+        patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
       };
     }
     return this.boardObjectsService;
@@ -780,6 +782,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
 
       console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
+
+      // Clear zone_id on the board entity so archived branches don't move with zones
+      const boardObjectsService = this.getBoardObjectsService();
+      const boardEntity = await boardObjectsService.findByBranchId(id);
+      if (boardEntity?.zone_id) {
+        await boardObjectsService.patch(boardEntity.object_id, { zone_id: null });
+      }
+
       return archivedBranch;
     } else {
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
