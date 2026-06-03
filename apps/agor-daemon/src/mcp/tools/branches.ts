@@ -155,10 +155,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_list',
     {
       description:
-        'List all branches in a repository. Each branch includes zone_id and zone_label when ' +
-        'the branch is assigned to a board zone — use these fields directly to identify which ' +
-        'zone a branch is in without extra agor_branches_get calls. Also includes ' +
-        'pull_request_url, issue_url, board_object_id, and position when set.',
+        'List branches with rich metadata in one call. Each branch includes zone_id, zone_label, ' +
+        'pull_request_url, issue_url, board_object_id, and position when set. ' +
+        'Use zoneId to get only branches in a specific board zone — no fan-out needed. ' +
+        'Use includeSessions=true to also get recent session activity for each branch — ' +
+        'eliminates the need to call agor_branches_get individually for name/PR/session data.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: z.string().optional().describe('Repository ID to filter by'),
@@ -180,7 +181,15 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe(
             'Filter results to branches in a specific board zone (e.g. "zone-1776863814461"). ' +
-              'Avoids the need to call agor_branches_get on each branch to check zone membership.'
+              'Filtering is pagination-correct: all branches in the zone are considered, not just the first page.'
+          ),
+        includeSessions: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include recent session activity (status, last message, agentic_tool) for each branch. ' +
+              'Default: false. Enable to get the full picture in one call instead of fanning out ' +
+              'with individual agor_branches_get calls.'
           ),
       }),
     },
@@ -198,6 +207,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // first, then fetches only those branches, ensuring the zone filter is
       // pagination-correct regardless of how many total branches exist.
       if (args.zoneId) query.zone_id = coerceString(args.zoneId);
+      if (args.includeSessions) query.include_sessions = true;
 
       const result = await ctx.app.service('branches').find({ query, ...ctx.baseServiceParams });
       return textResult(result);

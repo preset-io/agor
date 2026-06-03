@@ -535,17 +535,30 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
-   * Override find to enrich with zone information only
+   * Override find to enrich with zone information and optionally session activity.
    *
-   * Note: Session activity is NOT included in list operations - only on single GET
-   *
-   * zone_id filtering is handled here before calling super.find() so that pagination
+   * zone_id filtering is handled before calling super.find() so that pagination
    * is applied to the zone-filtered set. Without this, super.find() would paginate
-   * first (default 50) and the post-enrichment zone filter would miss branches
-   * beyond the first page, always returning 0 for large branch sets.
+   * first (default 50) and any zone filter would miss branches beyond the first page.
+   *
+   * include_sessions is opt-in: when true, each branch in the result is enriched
+   * with its recent session activity (same data as single GET with include_sessions).
+   * Uses batch enrichment to avoid N+1 queries.
    */
   async find(params?: BranchParams) {
     const zoneId = params?.query?.zone_id;
+    const includeSessions =
+      params?.query?.include_sessions === true || params?.query?.include_sessions === 'true';
+    const truncationLength = parseLastMessageTruncationLength(
+      params?.query?.last_message_truncation_length
+    );
+
+    // Helper: enrich a page of branches with zone info (and optionally sessions)
+    const enrichPage = async (branches: Branch[]) => {
+      const withZone = await this.branchRepo.enrichManyWithZoneInfo(branches);
+      if (!includeSessions) return withZone;
+      return this.branchRepo.enrichManyWithSessionActivity(withZone, truncationLength);
+    };
 
     if (zoneId) {
       // Resolve branch IDs in the zone before pagination
@@ -569,25 +582,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       const result = await super.find(filteredParams);
       if (Array.isArray(result)) {
-        return this.branchRepo.enrichManyWithZoneInfo(result as Branch[]);
+        return enrichPage(result as Branch[]);
       }
-      const enriched = await this.branchRepo.enrichManyWithZoneInfo(result.data as Branch[]);
+      const enriched = await enrichPage(result.data as Branch[]);
       return { ...result, data: enriched };
     }
 
     // Normal code path — no zone filter
     const result = await super.find(params);
 
-    // Handle both paginated and non-paginated results
     if (Array.isArray(result)) {
-      return this.branchRepo.enrichManyWithZoneInfo(result as Branch[]);
-    } else {
-      const enriched = await this.branchRepo.enrichManyWithZoneInfo(result.data as Branch[]);
-      return {
-        ...result,
-        data: enriched,
-      };
+      return enrichPage(result as Branch[]);
     }
+    const enriched = await enrichPage(result.data as Branch[]);
+    return { ...result, data: enriched };
   }
 
   /**

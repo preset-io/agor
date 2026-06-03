@@ -268,6 +268,41 @@ describe('agor_branches_list', () => {
     expect(parsed.data).toHaveLength(0);
     expect(parsed.total).toBe(0);
   });
+
+  it('passes include_sessions to service query when includeSessions=true', async () => {
+    const findFn = vi.fn(async () => ({
+      data: [
+        {
+          branch_id: 'branch-1',
+          name: 'feature-a',
+          sessions: [{ session_id: 's-1', status: 'idle' }],
+        },
+      ],
+      total: 1,
+      limit: 50,
+      skip: 0,
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { find: findFn };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const list = registerAndCaptureHandler('agor_branches_list', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await list({ includeSessions: true });
+
+    expect(findFn).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ include_sessions: true }) })
+    );
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.data[0].sessions).toHaveLength(1);
+  });
 });
 
 describe('agor_branches_cleanup_candidates', () => {
