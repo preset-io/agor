@@ -23,9 +23,9 @@ name: Bump Homebrew formula
 
 on:
   schedule:
-    # Daily at 14:00 UTC — a few hours after the typical npm publish window
-    # and well past the 24h `--min-release-age` cooldown for yesterday's
-    # release, so a PR opened now is immediately installable.
+    # Daily at 14:00 UTC — a few hours after the typical npm publish window.
+    # A newly opened PR may still need the 24h `--min-release-age` cooldown
+    # to lapse before the bumped formula is installable.
     - cron: '0 14 * * *'
   workflow_dispatch:
 
@@ -37,13 +37,18 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Compute desired formula state
         id: bump
         run: |
           set -euo pipefail
-          LATEST=$(npm view agor-live version)
+          LATEST=$(npm view agor-live version | tr -d '[:space:]')
+          if [[ ! "$LATEST" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected npm latest dist-tag for agor-live to be stable semver x.y.z, got '$LATEST'"
+            exit 1
+          fi
+
           CURRENT=$(grep -oE 'agor-live-[0-9]+\.[0-9]+\.[0-9]+\.tgz' Formula/agor-live.rb \
             | sed -E 's/agor-live-(.*)\.tgz/\1/')
 
@@ -80,6 +85,7 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           branch: chore/brew-bump-${{ steps.bump.outputs.version }}
+          add-paths: Formula/agor-live.rb
           commit-message: |
             chore(brew): bump formula to ${{ steps.bump.outputs.version }}
           title: 'chore(brew): bump Homebrew formula to ${{ steps.bump.outputs.version }}'
@@ -98,5 +104,4 @@ jobs:
             merge early, the next install attempt within that window will
             surface the npm error verbatim (no harm done — re-run succeeds).
           labels: |
-            chore
-            homebrew
+            dependencies
