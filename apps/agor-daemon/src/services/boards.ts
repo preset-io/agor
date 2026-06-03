@@ -10,13 +10,16 @@ import { BoardObjectRepository, BoardRepository, type Database } from '@agor/cor
 import type {
   AuthenticatedParams,
   Board,
-  BoardEntityObject,
   BoardExportBlob,
   BoardObject,
   QueryParams,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { DrizzleService } from '../adapters/drizzle';
+import {
+  type BoardObjectPatchedEventPayload,
+  toBoardObjectPatchedEventPayload,
+} from './board-objects.js';
 
 /**
  * Board service params
@@ -35,9 +38,12 @@ export interface BoardParams
 export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardParams> {
   private boardRepo: BoardRepository;
   private boardObjectRepo: BoardObjectRepository;
-  private emitBoardObjectPatched?: (boardObject: BoardEntityObject) => void;
+  private emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void;
 
-  constructor(db: Database, emitBoardObjectPatched?: (boardObject: BoardEntityObject) => void) {
+  constructor(
+    db: Database,
+    emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void
+  ) {
     const boardRepo = new BoardRepository(db);
     super(boardRepo, {
       id: 'board_id',
@@ -118,10 +124,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       });
 
       for (const boardObject of cleared) {
-        this.emitBoardObjectPatched?.({
-          ...boardObject,
-          ...(boardObject.zone_id === undefined ? { zone_id: null } : {}),
-        } as BoardEntityObject);
+        this.emitBoardObjectPatched?.(toBoardObjectPatchedEventPayload(boardObject));
       }
     }
 
@@ -372,7 +375,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
  */
 export function createBoardsService(
   db: Database,
-  emitBoardObjectPatched?: (boardObject: BoardEntityObject) => void
+  emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void
 ): BoardsService {
   return new BoardsService(db, emitBoardObjectPatched);
 }
