@@ -573,7 +573,12 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       routeSearchParams.get('mode') === 'edit' &&
       (Boolean(routeDocumentPath) || routeSearchParams.get('draft') === 'page');
 
-    if (!routeDocumentPath && activeDocId && !draftDocument) {
+    if (
+      !routeDocumentPath &&
+      activeDocId &&
+      !draftDocument &&
+      activeDocIdRef.current !== DRAFT_DOCUMENT_ID
+    ) {
       activeDocIdRef.current = null;
       setActiveDocId(null);
     }
@@ -599,6 +604,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   ]);
 
   useEffect(() => {
+    if (activeDocIdRef.current === DRAFT_DOCUMENT_ID) return;
     if (!routeNamespaceSlug || !routeDocumentPath) return;
     const routedDocument = documents.find(
       (doc) =>
@@ -611,6 +617,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   }, [activeDocId, documents, namespaceSlugForDocument, routeDocumentPath, routeNamespaceSlug]);
 
   useEffect(() => {
+    if (activeDocIdRef.current === DRAFT_DOCUMENT_ID) return;
     if (activeDocId && !activeDoc && !loading) {
       activeDocIdRef.current = null;
       setActiveDocId(null);
