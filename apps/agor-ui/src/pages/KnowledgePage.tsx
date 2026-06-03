@@ -867,9 +867,10 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
         setDraftNamespaceSlug(null);
         setActiveSpace(namespaceSlug);
         setActiveDocId(created.document_id);
-        setSelectedFolder(ROOT_FOLDER);
-        await loadVersions();
-        setKnowledgeEditMode(false);
+        setSelectedFolder(parentFolderForPath(created.path));
+        setVersions([]);
+        pendingEditModeRef.current = false;
+        setIsEditing(false);
         navigate(
           `${buildKnowledgeRoutePath(
             routeBasePath,
