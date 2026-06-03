@@ -14,7 +14,7 @@ export const HighlightMatch: React.FC<HighlightMatchProps> = ({
   text,
   query = '',
   terms,
-  minTermLength = 3,
+  minTermLength = 2,
   markStyle,
 }) => {
   const { token } = theme.useToken();

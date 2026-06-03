@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   getHighlightTerms,
   getMatchSnippet,
+  isSessionSearchActive,
   scoreSession,
   searchSessions,
+  sessionToolMatches,
   sortSessions,
 } from './sessionSearch';
 
@@ -52,6 +54,24 @@ describe('sessionSearch', () => {
     ]);
   });
 
+  it('uses canonical AND-of-tokens eligibility before scoring', () => {
+    const fullMatch = session({ title: 'Billing cache cleanup' });
+    const partialMatch = session({ title: 'Billing-only cleanup' });
+
+    const results = searchSessions([partialMatch, fullMatch], 'billing cache', { now: NOW });
+
+    expect(results.map(({ session }) => session.session_id)).toEqual([fullMatch.session_id]);
+  });
+
+  it('supports canonical tool matches that callers can render visibly', () => {
+    const codexSession = session({ agentic_tool: 'codex', title: 'Unrelated' });
+
+    expect(sessionToolMatches(codexSession, 'codex')).toBe(true);
+    expect(searchSessions([codexSession], 'codex', { now: NOW })[0].session.session_id).toBe(
+      codexSession.session_id
+    );
+  });
+
   it('uses recency only as a tie-breaker within actual matches', () => {
     const oldMatch = session({ title: 'Billing report', last_updated: '2026-05-01T00:00:00Z' });
     const newMatch = session({ title: 'Billing report', last_updated: '2026-06-03T11:00:00Z' });
@@ -79,8 +99,16 @@ describe('sessionSearch', () => {
     expect(getMatchSnippet('alpha beta gamma', 'missing')).toBeNull();
   });
 
-  it('derives highlight terms from phrase and words while ignoring short noise', () => {
-    expect(getHighlightTerms('AI billing cache')).toEqual(['billing', 'cache']);
+  it('derives highlight terms from phrase and words while ignoring one-character noise', () => {
+    expect(isSessionSearchActive('A')).toBe(false);
+    expect(isSessionSearchActive('AI')).toBe(true);
+    expect(getHighlightTerms('AI billing cache')).toEqual([
+      'AI billing cache'.toLowerCase(),
+      'billing',
+      'cache',
+      'ai',
+    ]);
+    expect(getHighlightTerms('a billing cache')).toEqual(['billing', 'cache']);
     expect(getHighlightTerms('billing cache')).toEqual(['billing cache', 'billing', 'cache']);
   });
 });

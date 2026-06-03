@@ -32,9 +32,11 @@ import { useSessionActions } from '../../hooks/useSessionActions';
 import { useThemedMessage } from '../../utils/message';
 import {
   getMatchSnippet,
+  isSessionSearchActive,
   SESSION_SORT_STORAGE_KEY,
   type SessionSort,
   searchSessions,
+  sessionToolMatches,
   sortSessions,
 } from '../../utils/sessionSearch';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
@@ -176,6 +178,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   const isPanel = mode === 'panel';
   const trimmedSearchQuery = searchQuery.trim();
+  const searchActive = isSessionSearchActive(trimmedSearchQuery);
 
   const handleForkSpawnConfirm = async (config: string | Partial<SpawnConfig>) => {
     if (!forkSpawnModal.session) return;
@@ -244,6 +247,14 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     () => activeSessions.filter((s) => isGatewaySession(s)),
     [activeSessions, isGatewaySession]
   );
+  const searchablePanelSessions = useMemo(
+    () => [
+      ...manualSessions,
+      ...(schedulerEnabled ? scheduledSessions : []),
+      ...(gatewayEnabled ? gatewaySessions : []),
+    ],
+    [gatewayEnabled, gatewaySessions, manualSessions, scheduledSessions, schedulerEnabled]
+  );
   const sortedManualSessions = useMemo(
     () => sortSessions(manualSessions, sort),
     [manualSessions, sort]
@@ -254,10 +265,10 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   );
   const searchResults = useMemo(
     () =>
-      isPanel && trimmedSearchQuery
-        ? searchSessions(activeSessions, trimmedSearchQuery).map(({ session }) => session)
+      isPanel && searchActive
+        ? searchSessions(searchablePanelSessions, trimmedSearchQuery).map(({ session }) => session)
         : [],
-    [activeSessions, isPanel, trimmedSearchQuery]
+    [isPanel, searchActive, searchablePanelSessions, trimmedSearchQuery]
   );
 
   const hasRunningScheduledSession = useMemo(
@@ -333,7 +344,15 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     const isActive = session.status === 'running' || session.status === 'stopping';
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
     const descriptionSnippet =
-      query && session.description ? getMatchSnippet(session.description, query) : null;
+      query && session.title && session.description
+        ? getMatchSnippet(session.description, query)
+        : null;
+    const toolMatches = query ? sessionToolMatches(session, query) : false;
+    const sourceLabel = session.scheduled_from_branch
+      ? 'Scheduled'
+      : isGatewaySession(session)
+        ? 'Gateway'
+        : null;
 
     return (
       <SessionItemWithActions
@@ -356,6 +375,20 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             <SessionRelationshipIcon session={session} size={10} />
             <div style={{ flex: 1, minWidth: 0 }}>
               {renderSessionTitle(session, { strong: true, query })}
+              {(sourceLabel || toolMatches) && (
+                <Typography.Text
+                  type="secondary"
+                  style={{ fontSize: 11, display: 'block', marginTop: 2 }}
+                >
+                  {sourceLabel}
+                  {sourceLabel && toolMatches ? ' · ' : ''}
+                  {toolMatches && (
+                    <>
+                      Agent: <HighlightMatch text={session.agentic_tool} query={query} />
+                    </>
+                  )}
+                </Typography.Text>
+              )}
               {descriptionSnippet && descriptionSnippet !== titleText && (
                 <Typography.Text
                   type="secondary"
@@ -617,12 +650,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           onChange={setSearchQuery}
           sort={sort}
           onSortChange={setSort}
-          searching={Boolean(trimmedSearchQuery)}
+          searching={searchActive}
         />
       </div>
     ) : null;
 
-  if (isPanel && trimmedSearchQuery && activeSessions.length > 0) {
+  if (isPanel && searchActive && searchablePanelSessions.length > 0) {
     return (
       <>
         {sessionSearchBar}
@@ -631,7 +664,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             type="secondary"
             style={{ fontSize: 11, padding: '2px 8px 4px', display: 'block' }}
           >
-            {searchResults.length} of {activeSessions.length} · <SessionRelevanceLabel />
+            {searchResults.length} of {searchablePanelSessions.length} · <SessionRelevanceLabel />
           </Typography.Text>
         )}
         {searchResults.length === 0 ? (

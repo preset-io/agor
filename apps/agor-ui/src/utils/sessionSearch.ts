@@ -1,7 +1,13 @@
-import type { Session } from '@agor-live/client';
+import {
+  matchSearchTokens,
+  SEARCHABLE_FIELDS,
+  type Session,
+  tokenizeSearchQuery,
+} from '@agor-live/client';
 import { getSessionDisplayTitle } from './sessionTitle';
 
 export const SESSION_SORT_STORAGE_KEY = 'agor:session-sort';
+export const SESSION_SEARCH_MIN_QUERY_LENGTH = 2;
 
 export type SessionSort = 'recent' | 'oldest' | 'alpha';
 
@@ -36,21 +42,13 @@ export function normalizeSessionQuery(query: string): string {
 }
 
 export function getSearchTerms(query: string, minLength = 1): string[] {
-  const seen = new Set<string>();
-  const terms: string[] = [];
-  const normalized = normalizeSessionQuery(query);
-
-  for (const term of normalized.split(/\s+/).filter((part) => part.length >= minLength)) {
-    if (!seen.has(term)) {
-      seen.add(term);
-      terms.push(term);
-    }
-  }
-
-  return terms;
+  return uniqueTerms(tokenizeSearchQuery(query).filter((part) => part.length >= minLength));
 }
 
-export function getHighlightTerms(query: string, minLength = 3): string[] {
+export function getHighlightTerms(
+  query: string,
+  minLength = SESSION_SEARCH_MIN_QUERY_LENGTH
+): string[] {
   const normalized = normalizeSessionQuery(query);
   const terms = getSearchTerms(query, minLength);
   const allWords = normalized.split(/\s+/).filter(Boolean);
@@ -132,12 +130,25 @@ export function searchSessions(
   options: { now?: number } = {}
 ): SearchSessionResult[] {
   const q = normalizeSessionQuery(query);
-  if (!q) return [];
+  if (!isSessionSearchActive(q)) return [];
+  const tokens = tokenizeSearchQuery(q);
 
   return sessions
+    .filter((session) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(session)))
     .map((session) => ({ session, score: scoreSession(session, q, options.now) }))
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score || compareByRecent(a.session, b.session));
+}
+
+export function isSessionSearchActive(query: string): boolean {
+  return normalizeSessionQuery(query).length >= SESSION_SEARCH_MIN_QUERY_LENGTH;
+}
+
+export function sessionToolMatches(session: Session, query: string): boolean {
+  const terms = getSearchTerms(query);
+  if (terms.length === 0) return false;
+  const tool = session.agentic_tool.toLowerCase();
+  return terms.some((term) => tool.includes(term));
 }
 
 export function getMatchSnippet(text: string, query: string, contextLen = 60): string | null {
@@ -194,4 +205,16 @@ function compareByTitle(a: Session, b: Session): number {
     undefined,
     { sensitivity: 'base' }
   );
+}
+
+function uniqueTerms(terms: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const term of terms) {
+    if (!seen.has(term)) {
+      seen.add(term);
+      unique.push(term);
+    }
+  }
+  return unique;
 }

@@ -103,7 +103,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
           </Text>
           {tag && (
             <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
-              {tag}
+              <HighlightMatch text={tag} terms={tokens} markStyle={markStyle} />
             </Text>
           )}
           {time && (

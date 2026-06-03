@@ -6,9 +6,11 @@ import { useMemo, useState } from 'react';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import {
   getMatchSnippet,
+  isSessionSearchActive,
   SESSION_SORT_STORAGE_KEY,
   type SessionSort,
   searchSessions,
+  sessionToolMatches,
   sortSessions,
 } from '../../utils/sessionSearch';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
@@ -118,12 +120,13 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
   }, [sessionsByBranch, branchById, currentBoardId]);
 
   const trimmedQuery = searchQuery.trim();
+  const searchActive = isSessionSearchActive(trimmedQuery);
   const displaySessions = useMemo(
     () =>
-      trimmedQuery
+      searchActive
         ? searchSessions(boardSessions, trimmedQuery).map(({ session }) => session)
         : sortSessions(boardSessions, sort),
-    [boardSessions, trimmedQuery, sort]
+    [boardSessions, searchActive, trimmedQuery, sort]
   );
 
   return (
@@ -140,14 +143,14 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
           onChange={setSearchQuery}
           sort={sort}
           onSortChange={setSort}
-          searching={Boolean(trimmedQuery)}
+          searching={searchActive}
         />
       </div>
 
       {/* Session List */}
       <div style={{ padding: '8px 0' }}>
         {displaySessions.length === 0 ? (
-          trimmedQuery ? (
+          searchActive ? (
             <div
               style={{
                 display: 'flex',
@@ -197,9 +200,10 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
               includeAgentFallback: true,
             });
             const descriptionSnippet =
-              trimmedQuery && session.description
+              searchActive && session.title && session.description
                 ? getMatchSnippet(session.description, trimmedQuery)
                 : null;
+            const toolMatches = searchActive && sessionToolMatches(session, trimmedQuery);
 
             return (
               <div
@@ -250,6 +254,20 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
                   </Typography.Text>
                   <SessionRelationshipIcon session={session} />
                 </div>
+
+                {toolMatches && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{
+                      display: 'block',
+                      fontSize: 11,
+                      marginTop: 3,
+                      marginLeft: 26,
+                    }}
+                  >
+                    Agent: <HighlightMatch text={session.agentic_tool} query={trimmedQuery} />
+                  </Typography.Text>
+                )}
 
                 {descriptionSnippet && descriptionSnippet !== titleText && (
                   <Typography.Text
@@ -321,7 +339,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
           }}
         >
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {trimmedQuery ? (
+            {searchActive ? (
               <>
                 {displaySessions.length} of {boardSessions.length} · <SessionRelevanceLabel />
                 {board.description && ` • ${board.description}`}
