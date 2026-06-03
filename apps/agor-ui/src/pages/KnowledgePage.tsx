@@ -302,6 +302,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   const [newFolderName, setNewFolderName] = useState('');
   const [isEditing, setIsEditing] = useState(() => routeSearchParams.get('mode') === 'edit');
   const pendingEditModeRef = useRef<boolean | null>(null);
+  const activeDocIdRef = useRef<string | null>(activeDocId);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
   const [relocateModalOpen, setRelocateModalOpen] = useState(false);
   const [relocateFolder, setRelocateFolder] = useState(ROOT_FOLDER);
@@ -314,6 +315,10 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   useEffect(() => {
     document.title = 'Knowledge · Agor';
   }, []);
+
+  useEffect(() => {
+    activeDocIdRef.current = activeDocId;
+  }, [activeDocId]);
 
   const activeDoc = useMemo(
     () =>
@@ -568,7 +573,10 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       routeSearchParams.get('mode') === 'edit' &&
       (Boolean(routeDocumentPath) || routeSearchParams.get('draft') === 'page');
 
-    if (!routeDocumentPath && activeDocId && !draftDocument) setActiveDocId(null);
+    if (!routeDocumentPath && activeDocId && !draftDocument) {
+      activeDocIdRef.current = null;
+      setActiveDocId(null);
+    }
     if (routeNamespaceSlug && nextSpace !== activeSpace) setActiveSpace(nextSpace);
     setSearchQuery((current) => (current === nextQuery ? current : nextQuery));
     if (nextKind !== kindFilter) setKindFilter(nextKind);
@@ -597,12 +605,16 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
         doc.path === routeDocumentPath && namespaceSlugForDocument(doc) === routeNamespaceSlug
     );
     if (routedDocument && routedDocument.document_id !== activeDocId) {
+      activeDocIdRef.current = routedDocument.document_id;
       setActiveDocId(routedDocument.document_id);
     }
   }, [activeDocId, documents, namespaceSlugForDocument, routeDocumentPath, routeNamespaceSlug]);
 
   useEffect(() => {
-    if (activeDocId && !activeDoc && !loading) setActiveDocId(null);
+    if (activeDocId && !activeDoc && !loading) {
+      activeDocIdRef.current = null;
+      setActiveDocId(null);
+    }
   }, [activeDoc, activeDocId, loading]);
 
   useEffect(() => {
@@ -686,10 +698,12 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       setVersions([]);
       return;
     }
+    const documentId = activeDoc.document_id;
     try {
       const result = await client.service('kb/versions').find({
-        query: { document_id: activeDoc.document_id, include_content: true },
+        query: { document_id: documentId, include_content: true },
       });
+      if (activeDocIdRef.current !== documentId) return;
       const rows = normalizeFindResult<KnowledgeVersion>(result as KnowledgeVersion[]);
       setVersions(rows);
       setSelectedVersionId((current) =>
@@ -699,6 +713,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       );
       setMarkdownDraft(rows[0]?.content_text ?? DEFAULT_MARKDOWN);
     } catch (err) {
+      if (activeDocIdRef.current !== documentId) return;
       console.error('Failed to load Knowledge versions:', err);
       setVersions([]);
       setMarkdownDraft(DEFAULT_MARKDOWN);
@@ -738,6 +753,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     };
     setDraftDocument(draft);
     setDraftNamespaceSlug(namespaceSlug);
+    activeDocIdRef.current = DRAFT_DOCUMENT_ID;
     setActiveDocId(DRAFT_DOCUMENT_ID);
     setSelectedFolder(ROOT_FOLDER);
     setTitleDraft(title);
@@ -822,6 +838,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       })) as KnowledgeDocument;
       setDocuments((prev) => [created, ...prev]);
       setActiveSpace(namespaceSlug);
+      activeDocIdRef.current = created.document_id;
       setActiveDocId(created.document_id);
       setSelectedFolder(parentFolderForPath(created.path));
       setMarkdownDraft(`# ${title}\n\nWrite markdown here.\n`);
@@ -866,6 +883,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
         setDraftDocument(null);
         setDraftNamespaceSlug(null);
         setActiveSpace(namespaceSlug);
+        activeDocIdRef.current = created.document_id;
         setActiveDocId(created.document_id);
         setSelectedFolder(parentFolderForPath(created.path));
         setVersions([]);
@@ -938,6 +956,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       setDocuments((prev) =>
         prev.map((item) => (item.document_id === updated.document_id ? updated : item))
       );
+      activeDocIdRef.current = updated.document_id;
       setActiveDocId(updated.document_id);
       setSelectedFolder(targetFolder);
       setExpandedTreeKeys((prev) => [...new Set([...prev, `folder:${targetFolder}`])]);
@@ -954,6 +973,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     if (isDraftDocument) {
       setDraftDocument(null);
       setDraftNamespaceSlug(null);
+      activeDocIdRef.current = null;
       setActiveDocId(null);
       setTitleDraft('');
       setTitleFromContent(false);
@@ -1025,6 +1045,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
         try {
           await client.service('kb/documents').remove(activeDoc.document_id);
           setDocuments((prev) => prev.filter((doc) => doc.document_id !== activeDoc.document_id));
+          activeDocIdRef.current = null;
           setActiveDocId(null);
           setVersions([]);
           setSelectedVersionId(null);
@@ -1059,6 +1080,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   const selectKnowledgeDocument = async (doc: KnowledgeDocument) => {
     if (!(await confirmDiscardUnsavedChanges())) return;
     clearDraftDocument();
+    activeDocIdRef.current = doc.document_id;
     setActiveDocId(doc.document_id);
     pendingEditModeRef.current = false;
     setIsEditing(false);
@@ -1072,6 +1094,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   const selectKnowledgeFolder = async (folderPath: string) => {
     if (!(await confirmDiscardUnsavedChanges())) return;
     clearDraftDocument();
+    activeDocIdRef.current = null;
     setActiveDocId(null);
     setSelectedFolder(folderPath);
     pendingEditModeRef.current = false;
@@ -1085,6 +1108,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     if (!(await confirmDiscardUnsavedChanges())) return;
     clearDraftDocument();
     setActiveSpace(space);
+    activeDocIdRef.current = null;
     setActiveDocId(null);
     setSelectedFolder(ROOT_FOLDER);
     pendingEditModeRef.current = false;
