@@ -37,16 +37,6 @@ export const SearchResult: React.FC<SearchResultProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { title, tag, secondary, time, icon } = renderResult(result);
-  // Token highlighting style: warning-bg accent so matches stand out without
-  // looking like links or status pills. Inherits text color from parent so
-  // the secondary (muted) line still highlights legibly.
-  const markStyle: React.CSSProperties = {
-    backgroundColor: token.colorWarningBg,
-    color: 'inherit',
-    padding: 0,
-    borderRadius: 0,
-    fontWeight: 'inherit',
-  };
 
   return (
     <button
@@ -99,11 +89,11 @@ export const SearchResult: React.FC<SearchResultProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            <HighlightMatch text={title} terms={tokens} markStyle={markStyle} />
+            <HighlightMatch text={title} terms={tokens} />
           </Text>
           {tag && (
             <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
-              <HighlightMatch text={tag} terms={tokens} markStyle={markStyle} />
+              <HighlightMatch text={tag} terms={tokens} />
             </Text>
           )}
           {time && (
@@ -123,7 +113,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            <HighlightMatch text={secondary} terms={tokens} markStyle={markStyle} />
+            <HighlightMatch text={secondary} terms={tokens} />
           </Text>
         )}
       </div>

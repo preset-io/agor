@@ -7,7 +7,6 @@ interface HighlightMatchProps {
   query?: string;
   terms?: string[];
   minTermLength?: number;
-  markStyle?: React.CSSProperties;
 }
 
 export const HighlightMatch: React.FC<HighlightMatchProps> = ({
@@ -15,7 +14,6 @@ export const HighlightMatch: React.FC<HighlightMatchProps> = ({
   query = '',
   terms,
   minTermLength = 2,
-  markStyle,
 }) => {
   const { token } = theme.useToken();
   const highlightTerms = terms ?? getHighlightTerms(query, minTermLength);
@@ -44,7 +42,6 @@ export const HighlightMatch: React.FC<HighlightMatchProps> = ({
               padding: `0 ${token.paddingXXS}px`,
               borderRadius: token.borderRadiusSM,
               fontWeight: 600,
-              ...markStyle,
             }}
           >
             {part}
