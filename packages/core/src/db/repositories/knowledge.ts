@@ -35,7 +35,9 @@ import {
   titleFromKnowledgePath,
 } from '@agor/core/types';
 import { and, desc, eq, like, or, sql } from 'drizzle-orm';
+import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
+import { getKnowledgeUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import {
@@ -500,12 +502,20 @@ export class KnowledgeDocumentRepository
 {
   constructor(private db: Database) {}
 
-  rowToDocument(row: KBDocumentRow): KnowledgeDocument {
+  rowToDocument(
+    row: KBDocumentRow,
+    options: { baseUrl?: string; namespaceSlug?: string | null } = {}
+  ): KnowledgeDocument {
+    const url =
+      options.baseUrl && options.namespaceSlug
+        ? getKnowledgeUrl(options.namespaceSlug, row.path, options.baseUrl)
+        : null;
     return {
       document_id: row.document_id as KnowledgeDocumentID,
       namespace_id: row.namespace_id as KnowledgeNamespaceID,
       path: row.path,
       uri: row.uri,
+      url,
       title: row.title,
       kind: row.kind as KnowledgeDocumentKind,
       visibility: row.visibility as KnowledgeVisibility,
@@ -519,6 +529,14 @@ export class KnowledgeDocumentRepository
       archived: Boolean(row.archived),
       archived_at: row.archived_at ? new Date(row.archived_at) : null,
     };
+  }
+
+  private async rowToDocumentWithUrl(row: KBDocumentRow): Promise<KnowledgeDocument> {
+    const [baseUrl, namespace] = await Promise.all([
+      getBaseUrl(),
+      new KnowledgeNamespaceRepository(this.db).findById(row.namespace_id as KnowledgeNamespaceID),
+    ]);
+    return this.rowToDocument(row, { baseUrl, namespaceSlug: namespace?.slug });
   }
 
   private async namespaceByIdOrSlug(data: {
@@ -619,6 +637,7 @@ export class KnowledgeDocumentRepository
     const versionId = generateId() as KnowledgeDocumentVersionID;
     const content = data.content_text;
     const hashes = hashContent(content);
+    const baseUrl = await getBaseUrl();
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
@@ -672,7 +691,7 @@ export class KnowledgeDocumentRepository
         .returning()
         .one();
 
-      return this.rowToDocument(row);
+      return this.rowToDocument(row, { baseUrl, namespaceSlug: namespace.slug });
     });
   }
 
@@ -683,7 +702,7 @@ export class KnowledgeDocumentRepository
         .from(kbDocuments)
         .where(eq(kbDocuments.document_id, fullId))
         .one();
-      return row ? this.rowToDocument(row) : null;
+      return row ? this.rowToDocumentWithUrl(row) : null;
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       throw error;
@@ -704,7 +723,7 @@ export class KnowledgeDocumentRepository
         )
       )
       .one();
-    return row ? this.rowToDocument(row) : null;
+    return row ? this.rowToDocumentWithUrl(row) : null;
   }
 
   async findByUnitId(unitId: string): Promise<KnowledgeDocument | null> {
@@ -744,7 +763,19 @@ export class KnowledgeDocumentRepository
       .where(and(...conditions))
       .orderBy(desc(kbDocuments.updated_at))
       .all();
-    return rows.map((row: KBDocumentRow) => this.rowToDocument(row));
+    const [baseUrl, namespaceRows] = await Promise.all([
+      getBaseUrl(),
+      select(this.db).from(kbNamespaces).all(),
+    ]);
+    const namespaceSlugById = new Map<string, string>(
+      namespaceRows.map((row: KBNamespaceRow) => [row.namespace_id, row.slug])
+    );
+    return rows.map((row: KBDocumentRow) =>
+      this.rowToDocument(row, {
+        baseUrl,
+        namespaceSlug: namespaceSlugById.get(row.namespace_id),
+      })
+    );
   }
 
   async update(id: string, updates: KnowledgeDocumentWriteInput): Promise<KnowledgeDocument> {
@@ -752,6 +783,7 @@ export class KnowledgeDocumentRepository
     if (updates.mime_type && updates.mime_type !== MARKDOWN_MIME_TYPE) {
       throw new RepositoryError('Knowledge V1 only supports text/markdown documents');
     }
+    const baseUrl = await getBaseUrl();
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
@@ -832,7 +864,7 @@ export class KnowledgeDocumentRepository
         .where(eq(kbDocuments.document_id, fullId))
         .returning()
         .one();
-      return this.rowToDocument(row);
+      return this.rowToDocument(row, { baseUrl, namespaceSlug: namespace.slug });
     });
   }
 
@@ -913,10 +945,14 @@ export class KnowledgeSearchRepository {
     }
 
     const rows = await dbQuery.orderBy(desc(kbDocuments.updated_at)).limit(limit).all();
+    const baseUrl = await getBaseUrl();
 
     return rows.map((row: Record<string, unknown>) => {
-      const document = this.documents.rowToDocument(row.kb_documents as KBDocumentRow);
       const namespace = this.namespaces.rowToNamespace(row.kb_namespaces as KBNamespaceRow);
+      const document = this.documents.rowToDocument(row.kb_documents as KBDocumentRow, {
+        baseUrl,
+        namespaceSlug: namespace.slug,
+      });
       const version = row.kb_document_versions
         ? this.versions.rowToVersion(row.kb_document_versions as KBDocumentVersionRow)
         : null;

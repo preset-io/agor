@@ -213,6 +213,12 @@ export interface KnowledgeDocument {
   namespace_id: KnowledgeNamespaceID;
   path: string;
   uri: string;
+  /**
+   * Computed browser deep link added by the repository layer.
+   * Format: `{baseUrl}/ui/kb/{namespaceSlug}/{documentPath}`.
+   * `null` when the namespace slug/base URL is unavailable.
+   */
+  url?: string | null;
   title: string;
   kind: KnowledgeDocumentKind;
   visibility: KnowledgeVisibility;
