@@ -23,6 +23,10 @@ interface SessionLatestTaskPeekProps {
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_STREAMING_MESSAGES: Map<string, StreamingMessageState> = new Map();
 
+function isDisposedReactiveSessionError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(' is disposed');
+}
+
 export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
   ({ client, session, userById, currentUserId, branchName, enabled }) => {
     const { token } = theme.useToken();
@@ -139,25 +143,36 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
     const handleLoadTaskMessages = useCallback(
       (taskId: string) => {
         if (!reactiveSession) return;
-        return reactiveSession.loadTaskMessages(taskId).then(() => undefined);
+        return reactiveSession
+          .loadTaskMessages(taskId)
+          .then(() => undefined)
+          .catch((error) => {
+            if (isDisposedReactiveSessionError(error)) return;
+            throw error;
+          });
       },
       [reactiveSession]
     );
 
-    const handleUnloadTaskMessages = useCallback(
+    const safeUnloadTaskMessages = useCallback(
       (taskId: string) => {
         if (!reactiveSession) return;
-        reactiveSession.unloadTaskMessages(taskId);
+        try {
+          reactiveSession.unloadTaskMessages(taskId);
+        } catch (error) {
+          if (isDisposedReactiveSessionError(error)) return;
+          throw error;
+        }
       },
       [reactiveSession]
     );
 
     useEffect(() => {
-      if (!reactiveSession || !taskId) return;
+      if (!taskId) return;
       return () => {
-        reactiveSession.unloadTaskMessages(taskId);
+        safeUnloadTaskMessages(taskId);
       };
-    }, [reactiveSession, taskId]);
+    }, [safeUnloadTaskMessages, taskId]);
 
     const loading = enabled && (!currentReactiveState || (currentReactiveState.loading && !task));
     const error = currentReactiveState?.error || null;
@@ -253,7 +268,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               }
               taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
               onLoadTaskMessages={handleLoadTaskMessages}
-              onUnloadTaskMessages={handleUnloadTaskMessages}
+              onUnloadTaskMessages={safeUnloadTaskMessages}
               assistantEmoji={undefined}
               isLatestTask={true}
               client={client}
