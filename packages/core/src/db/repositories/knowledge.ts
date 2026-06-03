@@ -31,6 +31,7 @@ import type {
 import {
   buildKnowledgeUri,
   normalizeKnowledgePath,
+  parseKnowledgeUri,
   titleFromKnowledgePath,
 } from '@agor/core/types';
 import { and, desc, eq, like, or, sql } from 'drizzle-orm';
@@ -1072,9 +1073,14 @@ export class KnowledgeGraphRepository {
   private deriveNodeType(ref: KnowledgeNodeRef): KnowledgeGraphNodeType {
     if (ref.node_type) return ref.node_type;
     if (ref.namespace_id) return 'namespace';
-    if (ref.document_id || (ref.namespace && ref.path) || ref.uri?.startsWith('agor://kb/'))
+    if (ref.unit_id || ref.uri?.startsWith('agor://kb/unit/')) return 'document_unit';
+    if (
+      ref.document_id ||
+      (ref.namespace && ref.path) ||
+      ref.uri?.startsWith('agor://kb/document/') ||
+      parseKnowledgeUri(ref.uri)
+    )
       return 'document';
-    if (ref.unit_id) return 'document_unit';
     if (ref.branch_id) return 'branch';
     if (ref.session_id) return 'session';
     if (ref.task_id) return 'task';

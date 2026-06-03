@@ -24,6 +24,9 @@ import { hasMinimumRole, parseKnowledgeUri, ROLES } from '@agor/core/types';
 
 export type KnowledgeGraphParams = QueryParams<KnowledgeGraphNeighborsQuery> & AuthenticatedParams;
 
+const KB_DOCUMENT_URI_PREFIX = 'agor://kb/document/';
+const KB_UNIT_URI_PREFIX = 'agor://kb/unit/';
+
 export class KnowledgeGraphService {
   private graph: KnowledgeGraphRepository;
   private documents: KnowledgeDocumentRepository;
@@ -74,18 +77,33 @@ export class KnowledgeGraphService {
     return document;
   }
 
+  private documentIdFromRef(ref: KnowledgeNodeRef): string | undefined {
+    const documentId = ref.document_id ?? ref.documentId;
+    if (documentId) return documentId;
+    if (ref.uri?.startsWith(KB_DOCUMENT_URI_PREFIX)) {
+      return ref.uri.slice(KB_DOCUMENT_URI_PREFIX.length);
+    }
+    return undefined;
+  }
+
+  private documentIdFromNode(node: KnowledgeGraphNode): string | undefined {
+    if (node.document_id) return node.document_id;
+    if (node.uri.startsWith(KB_DOCUMENT_URI_PREFIX)) {
+      return node.uri.slice(KB_DOCUMENT_URI_PREFIX.length);
+    }
+    return undefined;
+  }
+
   private unitIdFromRef(ref: KnowledgeNodeRef): string | undefined {
     const unitId = ref.unit_id ?? ref.unitId;
     if (unitId) return unitId;
-    const unitPrefix = 'agor://kb/unit/';
-    if (ref.uri?.startsWith(unitPrefix)) return ref.uri.slice(unitPrefix.length);
+    if (ref.uri?.startsWith(KB_UNIT_URI_PREFIX)) return ref.uri.slice(KB_UNIT_URI_PREFIX.length);
     return undefined;
   }
 
   private unitIdFromNode(node: KnowledgeGraphNode): string | undefined {
     if (node.unit_id) return node.unit_id;
-    const unitPrefix = 'agor://kb/unit/';
-    if (node.uri.startsWith(unitPrefix)) return node.uri.slice(unitPrefix.length);
+    if (node.uri.startsWith(KB_UNIT_URI_PREFIX)) return node.uri.slice(KB_UNIT_URI_PREFIX.length);
     return undefined;
   }
 
@@ -93,11 +111,11 @@ export class KnowledgeGraphService {
     return Boolean(
       ref.document_id ??
         ref.documentId ??
+        this.documentIdFromRef(ref) ??
         this.unitIdFromRef(ref) ??
         ref.namespace ??
         ref.path ??
-        parseKnowledgeUri(ref.uri) ??
-        ref.uri?.startsWith('agor://kb/document/')
+        parseKnowledgeUri(ref.uri)
     );
   }
 
@@ -106,14 +124,14 @@ export class KnowledgeGraphService {
       node.node_type === 'document' ||
         node.node_type === 'document_unit' ||
         node.document_id ||
+        this.documentIdFromNode(node) ||
         this.unitIdFromNode(node) ||
-        parseKnowledgeUri(node.uri) ||
-        node.uri.startsWith('agor://kb/document/')
+        parseKnowledgeUri(node.uri)
     );
   }
 
   private async documentForRef(ref: KnowledgeNodeRef): Promise<KnowledgeDocument | null> {
-    const documentId = ref.document_id ?? ref.documentId;
+    const documentId = this.documentIdFromRef(ref);
     if (documentId) return this.activeDocument(await this.documents.findById(documentId));
 
     const unitId = this.unitIdFromRef(ref);
@@ -141,8 +159,9 @@ export class KnowledgeGraphService {
   }
 
   private async documentForNode(node: KnowledgeGraphNode): Promise<KnowledgeDocument | null> {
-    if (node.document_id) {
-      return this.activeDocument(await this.documents.findById(node.document_id));
+    const documentId = this.documentIdFromNode(node);
+    if (documentId) {
+      return this.activeDocument(await this.documents.findById(documentId));
     }
     const unitId = this.unitIdFromNode(node);
     if (unitId) return this.activeDocument(await this.documents.findByUnitId(unitId));
