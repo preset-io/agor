@@ -521,7 +521,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
 
     if (!routeDocumentPath && activeDocId) setActiveDocId(null);
     if (routeNamespaceSlug && nextSpace !== activeSpace) setActiveSpace(nextSpace);
-    if (nextQuery !== searchQuery) setSearchQuery(nextQuery);
+    setSearchQuery((current) => (current === nextQuery ? current : nextQuery));
     if (nextKind !== kindFilter) setKindFilter(nextKind);
     const pendingEditMode = pendingEditModeRef.current;
     if (pendingEditMode === null) {
@@ -538,7 +538,6 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     routeDocumentPath,
     routeNamespaceSlug,
     routeSearchParams,
-    searchQuery,
   ]);
 
   useEffect(() => {
