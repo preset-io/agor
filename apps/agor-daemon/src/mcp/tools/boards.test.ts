@@ -128,6 +128,15 @@ describe('agor_boards_get', () => {
     const boardObjectsFind = vi.fn(async () => ({
       data: [
         {
+          object_id: 'obj-branch-0',
+          board_id: 'board-1',
+          branch_id: 'branch-0',
+          entity_type: 'branch',
+          position: { x: 0, y: 0 },
+          zone_id: 'zone-review',
+          created_at: '2026-06-01T00:00:00.000Z',
+        },
+        {
           object_id: 'obj-branch-1',
           board_id: 'board-1',
           branch_id: 'branch-1',
@@ -136,10 +145,19 @@ describe('agor_boards_get', () => {
           zone_id: 'zone-review',
           created_at: '2026-06-01T00:00:00.000Z',
         },
+        {
+          object_id: 'obj-branch-2',
+          board_id: 'board-1',
+          branch_id: 'branch-2',
+          entity_type: 'branch',
+          position: { x: 30, y: 40 },
+          zone_id: 'zone-review',
+          created_at: '2026-06-01T00:00:00.000Z',
+        },
       ],
       total: 3,
-      limit: 1,
-      skip: 1,
+      limit: 100,
+      skip: 0,
     }));
     const { app } = makeApp({ boardObjectsFind });
     const getBoard = registerAndCaptureHandler('agor_boards_get', {
@@ -163,8 +181,6 @@ describe('agor_boards_get', () => {
         board_id: 'board-1',
         zone_id: 'zone-review',
         entity_type: 'branch',
-        $limit: 1,
-        $skip: 1,
       },
       ...baseServiceParams,
     });

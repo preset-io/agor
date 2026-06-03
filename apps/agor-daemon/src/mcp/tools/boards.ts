@@ -5,8 +5,14 @@ import type { BoardsServiceImpl } from '../../declarations.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
-const BOARD_OBJECT_TYPES = ['zone', 'text', 'markdown', 'app', 'artifact'] as const;
-const BOARD_ENTITY_TYPES = ['branch', 'card'] as const;
+const BOARD_OBJECT_TYPES = [
+  'zone',
+  'text',
+  'markdown',
+  'app',
+  'artifact',
+] as const satisfies readonly BoardObjectType[];
+const BOARD_ENTITY_TYPES = ['branch', 'card'] as const satisfies readonly BoardEntityType[];
 
 function filterBoardCanvasObjects(board: Board, objectTypes?: BoardObjectType[]): Board {
   if (!objectTypes) return board;
@@ -61,12 +67,18 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           ),
         entitiesLimit: z
           .number()
+          .int()
+          .min(0)
+          .max(10000)
           .optional()
           .describe(
             'When includeEntities=true, maximum number of positioned entities to return. Omit to preserve legacy behavior returning all matched entities.'
           ),
         entitiesSkip: z
           .number()
+          .int()
+          .min(0)
+          .max(10000)
           .optional()
           .describe(
             'When includeEntities=true, number of matched positioned entities to skip for pagination (default: 0).'
@@ -87,20 +99,21 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         const entityZoneId = coerceString(args.entityZoneId);
         if (entityZoneId) entityQuery.zone_id = entityZoneId;
         if (args.entityType) entityQuery.entity_type = args.entityType as BoardEntityType;
-        if (args.entitiesLimit !== undefined) entityQuery.$limit = args.entitiesLimit;
-        if (args.entitiesSkip !== undefined) entityQuery.$skip = args.entitiesSkip;
 
         const boardObjectsResult = await ctx.app
           .service('board-objects')
           .find({ query: entityQuery, ...ctx.baseServiceParams });
-        const entities = (
+        const matchedEntities = (
           boardObjectsResult as { data: import('@agor/core/types').BoardEntityObject[] }
         ).data;
-        const { total, limit, skip } = boardObjectsResult as {
-          total?: number;
-          limit?: number;
-          skip?: number;
-        };
+        const total = matchedEntities.length;
+        const skip = args.entitiesSkip ?? 0;
+        const limit = args.entitiesLimit ?? total;
+        const entities =
+          args.entitiesLimit !== undefined || args.entitiesSkip !== undefined
+            ? matchedEntities.slice(skip, skip + limit)
+            : matchedEntities;
+
         return textResult({
           ...board,
           entities,

@@ -199,6 +199,9 @@ export const boardObjectQuerySchema = createQuerySchema(
   Type.Object({
     board_id: Type.Optional(CommonSchemas.uuid),
     branch_id: Type.Optional(CommonSchemas.uuid),
+    card_id: Type.Optional(CommonSchemas.uuid),
+    zone_id: Type.Optional(Type.String()),
+    entity_type: Type.Optional(Type.Union([Type.Literal('branch'), Type.Literal('card')])),
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );
