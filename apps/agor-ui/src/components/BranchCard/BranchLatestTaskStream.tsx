@@ -1,12 +1,15 @@
-import type { AgorClient, Message, Session, User } from '@agor-live/client';
-import { TaskStatus } from '@agor-live/client';
-import { Alert, Button, Empty, Input, Spin, theme } from 'antd';
+import type { AgorClient, Message, Session, StreamingMessageState, User } from '@agor-live/client';
+import { shortId, TaskStatus } from '@agor-live/client';
+import { Alert, Button, Empty, Input, Space, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
+import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { TaskBlock } from '../TaskBlock';
+import { ToolIcon } from '../ToolIcon';
+import { chooseBranchPromptTargetSession } from './latestBranchTask';
 import { useLatestBranchTask } from './useLatestBranchTask';
 
 interface BranchLatestTaskStreamProps {
@@ -16,19 +19,21 @@ interface BranchLatestTaskStreamProps {
   currentUserId?: string;
   branchName?: string;
   enabled: boolean;
+  selectedSessionId?: string | null;
 }
 
 const EMPTY_MESSAGES: Message[] = [];
-const EMPTY_STREAMING_MESSAGES = new Map();
+const EMPTY_STREAMING_MESSAGES: Map<string, StreamingMessageState> = new Map();
 
 export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
-  ({ client, sessions, userById, currentUserId, branchName, enabled }) => {
+  ({ client, sessions, userById, currentUserId, branchName, enabled, selectedSessionId }) => {
     const { token } = theme.useToken();
     const { onPermissionDecision, onSendPrompt } = useAppActions();
     const connectionDisabled = useConnectionDisabled();
     const containerRef = useRef<HTMLDivElement>(null);
     const userScrolledUpRef = useRef(false);
     const userScrollIntentRef = useRef(false);
+    const initialMessagesScrollDoneForTaskRef = useRef<string | null>(null);
     const [isReloading, setIsReloading] = useState(false);
     const [prompt, setPrompt] = useState('');
 
@@ -62,6 +67,8 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
     const allStreamingMessages =
       currentReactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
     const streamingMessagesByTask = useStreamingMessagesByTask(allStreamingMessages);
+    const taskId = task?.task_id ?? null;
+    const taskMessagesLoaded = !!taskId && !!currentReactiveState?.loadedTaskIds.has(taskId);
 
     const isNearBottom = useCallback(() => {
       if (!containerRef.current) return true;
@@ -82,14 +89,25 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
     useEffect(() => {
       userScrolledUpRef.current = false;
       userScrollIntentRef.current = false;
+      initialMessagesScrollDoneForTaskRef.current = null;
       scheduleAutoScroll();
-    }, [scheduleAutoScroll, task?.task_id]);
+    }, [scheduleAutoScroll, taskId]);
 
     // biome-ignore lint/correctness/useExhaustiveDependencies: follow streaming/task status changes unless the user scrolls away
     useEffect(() => {
       if (!enabled || userScrolledUpRef.current) return;
       scheduleAutoScroll();
     }, [allStreamingMessages, enabled, scheduleAutoScroll, task?.status]);
+
+    useEffect(() => {
+      if (!enabled || !taskId || !taskMessagesLoaded) return;
+      if (initialMessagesScrollDoneForTaskRef.current === taskId) return;
+
+      initialMessagesScrollDoneForTaskRef.current = taskId;
+      if (!userScrolledUpRef.current) {
+        scheduleAutoScroll();
+      }
+    }, [enabled, scheduleAutoScroll, taskId, taskMessagesLoaded]);
 
     useEffect(() => {
       const container = containerRef.current;
@@ -143,24 +161,49 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
       [reactiveSession]
     );
 
+    useEffect(() => {
+      if (!reactiveSession || !taskId) return;
+      return () => {
+        reactiveSession.unloadTaskMessages(taskId);
+      };
+    }, [reactiveSession, taskId]);
+
     const loading = latestTaskLoading || (!!sessionId && currentReactiveState?.loading && !task);
     const error = latestTaskError || currentReactiveState?.error || null;
     const isTerminalError = !!currentReactiveState?.terminal;
+    const promptTargetSession = useMemo(
+      () =>
+        chooseBranchPromptTargetSession({
+          sessions,
+          latestTaskSession: session,
+          selectedSessionId,
+        }),
+      [selectedSessionId, session, sessions]
+    );
     const trimmedPrompt = prompt.trim();
-    const canPrompt = !!session && !!onSendPrompt && !connectionDisabled;
+    const canPrompt = !!promptTargetSession && !!onSendPrompt && !connectionDisabled;
+    const promptPermissionMode = promptTargetSession?.permission_config?.mode;
     const promptPlaceholder =
-      session?.status === 'running' ? 'Queue a prompt for this session…' : 'Prompt this session…';
+      promptTargetSession?.status === 'running'
+        ? 'Queue a prompt for this session…'
+        : 'Prompt this session…';
 
     // biome-ignore lint/correctness/useExhaustiveDependencies: clear the draft when the target session changes
     useEffect(() => {
       setPrompt('');
-    }, [sessionId]);
+    }, [promptTargetSession?.session_id]);
 
     const handlePromptSubmit = useCallback(() => {
-      if (!session || !onSendPrompt || !trimmedPrompt || connectionDisabled) return;
-      onSendPrompt(session.session_id, trimmedPrompt);
+      if (!promptTargetSession || !onSendPrompt || !trimmedPrompt || connectionDisabled) return;
+      onSendPrompt(promptTargetSession.session_id, trimmedPrompt, promptPermissionMode);
       setPrompt('');
-    }, [connectionDisabled, onSendPrompt, session, trimmedPrompt]);
+    }, [
+      connectionDisabled,
+      onSendPrompt,
+      promptPermissionMode,
+      promptTargetSession,
+      trimmedPrompt,
+    ]);
 
     return (
       <div className="nodrag nopan nowheel">
@@ -251,19 +294,31 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
             marginTop: token.sizeUnit,
           }}
         >
-          <Input.TextArea
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                handlePromptSubmit();
-              }
-            }}
-            disabled={!canPrompt}
-            placeholder={canPrompt ? promptPlaceholder : 'No promptable session selected…'}
-            autoSize={{ minRows: 1, maxRows: 4 }}
-          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {promptTargetSession && (
+              <Space size={4} align="center" style={{ marginBottom: token.sizeUnit / 2 }}>
+                <ToolIcon tool={promptTargetSession.agentic_tool} size={14} />
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Prompting{' '}
+                  {getSessionDisplayTitle(promptTargetSession, { includeAgentFallback: true })} ·{' '}
+                  {shortId(promptTargetSession.session_id)}
+                </Typography.Text>
+              </Space>
+            )}
+            <Input.TextArea
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  handlePromptSubmit();
+                }
+              }}
+              disabled={!canPrompt}
+              placeholder={canPrompt ? promptPlaceholder : 'No promptable session selected…'}
+              autoSize={{ minRows: 1, maxRows: 4 }}
+            />
+          </div>
           <Button
             type="primary"
             onClick={handlePromptSubmit}

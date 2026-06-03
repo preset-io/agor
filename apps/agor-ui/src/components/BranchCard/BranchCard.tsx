@@ -535,6 +535,7 @@ const BranchCardComponent = ({
                     currentUserId={currentUserId}
                     branchName={branch.name}
                     enabled={taskStreamExpanded}
+                    selectedSessionId={selectedSessionId}
                   />
                 ) : null,
               },

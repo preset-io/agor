@@ -12,7 +12,6 @@
 import type { AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
   type Message,
-  type MessageID,
   MessageRole,
   type PermissionRequestContent,
   type PermissionScope,
@@ -88,7 +87,7 @@ interface TaskBlockProps {
   branchName?: string;
   scheduledFromBranch?: boolean;
   scheduledRunAt?: number;
-  streamingMessages?: Map<MessageID, StreamingMessageState>;
+  streamingMessages?: Map<string, StreamingMessageState>;
   taskMessages: Message[];
   taskMessagesLoaded: boolean;
   onLoadTaskMessages: (taskId: string) => Promise<void> | void;

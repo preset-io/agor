@@ -1,4 +1,4 @@
-import type { MessageID, StreamingMessageState } from '@agor-live/client';
+import type { StreamingMessageState } from '@agor-live/client';
 import { useMemo, useRef } from 'react';
 
 /**
@@ -25,16 +25,16 @@ function mapsAreEqual<K, V>(map1: Map<K, V>, map2: Map<K, V>): boolean {
  * streaming chunk would invalidate every task block in a conversation/card.
  */
 export function useStreamingMessagesByTask(
-  streamingMessages: Map<MessageID, StreamingMessageState>
-): Map<string, Map<MessageID, StreamingMessageState>> {
-  const prevTaskMapsRef = useRef<Map<string, Map<MessageID, StreamingMessageState>>>(new Map());
+  streamingMessages: Map<string, StreamingMessageState>
+): Map<string, Map<string, StreamingMessageState>> {
+  const prevTaskMapsRef = useRef<Map<string, Map<string, StreamingMessageState>>>(new Map());
 
   return useMemo(() => {
-    const result = new Map<string, Map<MessageID, StreamingMessageState>>();
+    const result = new Map<string, Map<string, StreamingMessageState>>();
     const prevMaps = prevTaskMapsRef.current;
 
     // Group messages by task_id
-    const tempByTask = new Map<string, Map<MessageID, StreamingMessageState>>();
+    const tempByTask = new Map<string, Map<string, StreamingMessageState>>();
     for (const [msgId, streamingMsg] of streamingMessages.entries()) {
       if (streamingMsg.task_id) {
         if (!tempByTask.has(streamingMsg.task_id)) {

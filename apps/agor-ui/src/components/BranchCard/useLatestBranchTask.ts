@@ -1,55 +1,13 @@
 import type { AgorClient, Session, Task } from '@agor-live/client';
-import { TaskStatus } from '@agor-live/client';
 import { useEffect, useMemo, useState } from 'react';
 import type { FeathersEventHandler } from '../../hooks';
+import { chooseLatestBranchTask } from './latestBranchTask';
 
 interface LatestBranchTaskResult {
   task: Task | null;
   session: Session | null;
   loading: boolean;
   error: string | null;
-}
-
-const ACTIVE_TASK_STATUSES = new Set<Task['status']>([
-  TaskStatus.CREATED,
-  TaskStatus.RUNNING,
-  TaskStatus.STOPPING,
-  TaskStatus.AWAITING_PERMISSION,
-  TaskStatus.AWAITING_INPUT,
-]);
-
-function taskActivityTimestamp(task: Task): number {
-  const candidates = [
-    task.last_executor_heartbeat_at,
-    task.completed_at,
-    task.message_range?.end_timestamp,
-    task.started_at,
-    task.message_range?.start_timestamp,
-    task.created_at,
-  ];
-
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    const timestamp = Date.parse(candidate);
-    if (!Number.isNaN(timestamp)) return timestamp;
-  }
-
-  return 0;
-}
-
-function compareLatestTasks(a: Task, b: Task): number {
-  const aActive = ACTIVE_TASK_STATUSES.has(a.status);
-  const bActive = ACTIVE_TASK_STATUSES.has(b.status);
-  if (aActive !== bActive) return aActive ? 1 : -1;
-
-  const aQueued = a.status === TaskStatus.QUEUED;
-  const bQueued = b.status === TaskStatus.QUEUED;
-  if (aQueued !== bQueued) return aQueued ? -1 : 1;
-
-  const activityDiff = taskActivityTimestamp(a) - taskActivityTimestamp(b);
-  if (activityDiff !== 0) return activityDiff;
-
-  return a.created_at.localeCompare(b.created_at);
 }
 
 export function useLatestBranchTask(
@@ -162,11 +120,11 @@ export function useLatestBranchTask(
   }, [client, enabled, sessionIdsKey]);
 
   return useMemo(() => {
-    const latestTask = Array.from(tasksBySession.values()).flat().sort(compareLatestTasks).at(-1);
+    const { task, session } = chooseLatestBranchTask(tasksBySession, sessionById);
 
     return {
-      task: latestTask || null,
-      session: latestTask ? sessionById.get(latestTask.session_id) || null : null,
+      task,
+      session,
       loading,
       error,
     };
