@@ -23,7 +23,7 @@ export const BranchSessionPeekSection = React.memo<BranchSessionPeekSectionProps
     if (sessions.length === 0) return null;
 
     return (
-      <div className="nodrag nopan nowheel" style={{ marginTop: token.sizeSM }}>
+      <div className="nodrag" style={{ marginTop: token.sizeSM }}>
         <Space size={6} align="baseline" style={{ marginBottom: token.sizeXS }}>
           <Typography.Text strong>Peek</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -62,6 +62,7 @@ export const BranchSessionPeekSection = React.memo<BranchSessionPeekSectionProps
                   </Typography.Text>
                 </Space>
                 <Button
+                  className="nodrag nopan"
                   type="text"
                   size="small"
                   icon={<CloseOutlined />}

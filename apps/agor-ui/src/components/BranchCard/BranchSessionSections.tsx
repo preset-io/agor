@@ -77,7 +77,6 @@ const SessionItemWithActions: React.FC<{
 }) => {
   const [hovered, setHovered] = useState(false);
   const { token } = theme.useToken();
-  const showActions = hovered || isPeeked;
 
   const buttonStyle: React.CSSProperties = {
     background: `${token.colorBgContainer}cc`,
@@ -110,9 +109,9 @@ const SessionItemWithActions: React.FC<{
           right: 4,
           top: '50%',
           transform: 'translateY(-50%)',
-          opacity: showActions ? 1 : 0,
+          opacity: hovered ? 1 : 0,
           transition: 'opacity 0.15s ease-in-out',
-          pointerEvents: showActions ? 'auto' : 'none',
+          pointerEvents: hovered ? 'auto' : 'none',
           display: 'flex',
           gap: 2,
           width: 'fit-content',

@@ -198,7 +198,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
     ]);
 
     return (
-      <div className="nodrag nopan nowheel">
+      <div className="nodrag">
         <div
           ref={containerRef}
           style={{
@@ -276,6 +276,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
           )}
         </div>
         <div
+          className="nodrag nopan nowheel"
           style={{
             display: 'flex',
             gap: token.sizeUnit,
