@@ -13,7 +13,7 @@
 
 import {
   SUPPRESSED_CLAUDE_STATUSES,
-  SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES,
+  shouldSuppressClaudeSystemEvent,
 } from '@agor/core/client/claude-system-suppression';
 import { shortId } from '@agor/core/db';
 import type {
@@ -744,7 +744,7 @@ export class SDKMessageProcessor {
     const subtype =
       ('subtype' in msg ? (msg as { subtype?: string }).subtype : undefined) || 'unknown';
 
-    if ((SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES as ReadonlySet<string>).has(subtype)) {
+    if (shouldSuppressClaudeSystemEvent(msg as { subtype?: string; [key: string]: unknown })) {
       console.debug(`🔇 Suppressed system subtype: ${subtype}`);
       return [];
     }

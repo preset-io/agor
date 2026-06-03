@@ -4,7 +4,7 @@
  * Blacklist philosophy: surface unknown subtypes by default so newly added
  * SDK events (e.g. `mirror_error`, `notification`, `api_retry`, `memory_recall`,
  * `plugin_install`) reach users without code changes. Only entries we have
- * confirmed are pure lifecycle telemetry belong in the suppress set.
+ * confirmed are pure lifecycle/token telemetry belong in the suppress set.
  *
  * Two consumers:
  *   - executor (`message-processor.ts`): drops these before they ever become
@@ -48,14 +48,22 @@ export type ClaudeSystemStatus = Extract<
  * own `tool_result` block (with `is_error: true`) is the authoritative surface
  * for subagent task failures; the parallel `task_*` telemetry stream is
  * redundant. If that invariant ever breaks, revisit this set.
+ *
+ * Hook lifecycle events (`hook_started`, `hook_progress`) are emitted around
+ * Claude Code hook execution and are usually adjacent, repeated chrome-only
+ * rows. `hook_response` is handled conditionally below so failed hooks still
+ * have a diagnostic surface.
  */
 export const SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES: ReadonlySet<ClaudeSystemSubtype> = new Set([
   'files_persisted',
+  'hook_started',
+  'hook_progress',
   'session_state_changed',
   'task_started',
   'task_progress',
   'task_updated',
   'task_notification',
+  'thinking_tokens',
 ] as const);
 
 /**
@@ -82,6 +90,55 @@ interface PersistedSdkEventBlock {
   metadata?: unknown;
 }
 
+function getObject(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function isFailedHookResponse(metadata: unknown): boolean {
+  const event = getObject(metadata);
+  if (!event) return false;
+
+  if (event.outcome === 'error') return true;
+  return typeof event.exit_code === 'number' && event.exit_code !== 0;
+}
+
+/**
+ * Runtime filter for Claude SDK `type:'system'` events before they are
+ * converted into persisted Agor `sdk_event` blocks.
+ */
+export function shouldSuppressClaudeSystemEvent(event: {
+  subtype?: string;
+  [key: string]: unknown;
+}): boolean {
+  const subtype = event.subtype;
+  if (!subtype) return false;
+
+  if ((SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES as ReadonlySet<string>).has(subtype)) {
+    return true;
+  }
+
+  // Successful/cancelled hook responses are repeated lifecycle chrome. Keep
+  // failed hook responses visible because they may be the only clue that a
+  // configured hook is broken.
+  if (subtype === 'hook_response') {
+    return !isFailedHookResponse(event);
+  }
+
+  if (subtype === 'status') {
+    const status = event.status;
+    if (
+      typeof status === 'string' &&
+      (SUPPRESSED_CLAUDE_STATUSES as ReadonlySet<string>).has(status)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Defensive UI filter: returns true when an already-persisted `sdk_event`
  * block matches one of our suppression rules and should be hidden from the
@@ -92,22 +149,9 @@ export function shouldHidePersistedClaudeSdkEvent(block: PersistedSdkEventBlock)
   if (block.sdkType !== 'system') return false;
   if (!block.sdkSubtype) return false;
 
-  if ((SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES as ReadonlySet<string>).has(block.sdkSubtype)) {
-    return true;
-  }
-
-  if (block.sdkSubtype === 'status') {
-    const status =
-      typeof block.metadata === 'object' && block.metadata !== null
-        ? (block.metadata as { status?: unknown }).status
-        : undefined;
-    if (
-      typeof status === 'string' &&
-      (SUPPRESSED_CLAUDE_STATUSES as ReadonlySet<string>).has(status)
-    ) {
-      return true;
-    }
-  }
-
-  return false;
+  const metadata = getObject(block.metadata);
+  return shouldSuppressClaudeSystemEvent({
+    ...(metadata ?? {}),
+    subtype: block.sdkSubtype,
+  });
 }

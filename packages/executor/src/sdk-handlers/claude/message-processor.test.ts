@@ -39,6 +39,55 @@ describe('SDKMessageProcessor system event suppression', () => {
     expect(events.filter((e) => e.type === 'sdk_event')).toHaveLength(0);
   });
 
+  it('suppresses hook lifecycle telemetry', async () => {
+    const processor = createProcessor();
+
+    for (const subtype of ['hook_started', 'hook_progress', 'hook_response']) {
+      const events = await processor.process(
+        systemMsg({
+          subtype,
+          hook_event_name: 'PreToolUse',
+          session_id: 's',
+          uuid: `u-${subtype}`,
+        })
+      );
+      expect(events.filter((e) => e.type === 'sdk_event')).toHaveLength(0);
+    }
+  });
+
+  it('suppresses thinking token telemetry', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'thinking_tokens',
+        thinking_tokens: 1234,
+        session_id: 's',
+        uuid: 'u',
+      })
+    );
+    expect(events.filter((e) => e.type === 'sdk_event')).toHaveLength(0);
+  });
+
+  it('surfaces failed hook responses for diagnostics', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'hook_response',
+        hook_event: 'PreToolUse',
+        outcome: 'error',
+        stderr: 'hook failed',
+        exit_code: 1,
+        session_id: 's',
+        uuid: 'u',
+      })
+    );
+
+    const sdkEvents = events.filter((e) => e.type === 'sdk_event');
+    expect(sdkEvents).toHaveLength(1);
+    const event = sdkEvents[0] as Extract<ProcessedEvent, { type: 'sdk_event' }>;
+    expect(event.sdkSubtype).toBe('hook_response');
+  });
+
   it('surfaces user-meaningful system subtypes (e.g. mirror_error)', async () => {
     const processor = createProcessor();
     const events = await processor.process(

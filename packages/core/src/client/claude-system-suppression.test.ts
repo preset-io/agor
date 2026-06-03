@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { shouldHidePersistedClaudeSdkEvent } from './claude-system-suppression';
+import {
+  shouldHidePersistedClaudeSdkEvent,
+  shouldSuppressClaudeSystemEvent,
+} from './claude-system-suppression';
 
 describe('shouldHidePersistedClaudeSdkEvent', () => {
   it('hides task_updated rows (including ones with patch.error)', () => {
@@ -9,6 +12,50 @@ describe('shouldHidePersistedClaudeSdkEvent', () => {
         sdkType: 'system',
         sdkSubtype: 'task_updated',
         metadata: { subtype: 'task_updated', patch: { status: 'failed', error: 'boom' } },
+      })
+    ).toBe(true);
+  });
+
+  it('hides hook lifecycle rows that only describe hook plumbing', () => {
+    for (const sdkSubtype of ['hook_started', 'hook_progress', 'hook_response']) {
+      expect(
+        shouldHidePersistedClaudeSdkEvent({
+          type: 'sdk_event',
+          sdkType: 'system',
+          sdkSubtype,
+          metadata: { subtype: sdkSubtype, hook_event_name: 'PreToolUse' },
+        })
+      ).toBe(true);
+    }
+  });
+
+  it('keeps failed hook_response rows visible for diagnostics', () => {
+    expect(
+      shouldHidePersistedClaudeSdkEvent({
+        type: 'sdk_event',
+        sdkType: 'system',
+        sdkSubtype: 'hook_response',
+        metadata: { subtype: 'hook_response', outcome: 'error', stderr: 'hook failed' },
+      })
+    ).toBe(false);
+
+    expect(
+      shouldSuppressClaudeSystemEvent({
+        subtype: 'hook_response',
+        exit_code: 2,
+        stdout: '',
+        stderr: 'hook failed',
+      })
+    ).toBe(false);
+  });
+
+  it('hides thinking token telemetry rows', () => {
+    expect(
+      shouldHidePersistedClaudeSdkEvent({
+        type: 'sdk_event',
+        sdkType: 'system',
+        sdkSubtype: 'thinking_tokens',
+        metadata: { subtype: 'thinking_tokens', thinking_tokens: 1234 },
       })
     ).toBe(true);
   });
