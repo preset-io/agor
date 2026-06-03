@@ -3,7 +3,7 @@ import { Typography, theme } from 'antd';
 import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTimeSafe } from '../../utils/time';
-import { highlightTokens } from './highlight';
+import { HighlightMatch } from '../HighlightMatch';
 import type { SearchResultItem } from './types';
 
 const { Text } = Typography;
@@ -44,6 +44,8 @@ export const SearchResult: React.FC<SearchResultProps> = ({
     backgroundColor: token.colorWarningBg,
     color: 'inherit',
     padding: 0,
+    borderRadius: 0,
+    fontWeight: 'inherit',
   };
 
   return (
@@ -97,7 +99,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            {highlightTokens(title, tokens, markStyle)}
+            <HighlightMatch text={title} terms={tokens} markStyle={markStyle} />
           </Text>
           {tag && (
             <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', flexShrink: 0 }}>
@@ -121,7 +123,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            {highlightTokens(secondary, tokens, markStyle)}
+            <HighlightMatch text={secondary} terms={tokens} markStyle={markStyle} />
           </Text>
         )}
       </div>
