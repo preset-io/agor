@@ -50,6 +50,7 @@ export type BranchParams = QueryParams<{
   repo_id?: UUID;
   name?: string;
   ref?: string;
+  zone_id?: string; // Filter by board zone (handled pre-pagination in find())
   deleteFromFilesystem?: boolean;
   include_sessions?: boolean | 'true' | 'false'; // Opt-in session activity enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
@@ -537,9 +538,44 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Override find to enrich with zone information only
    *
    * Note: Session activity is NOT included in list operations - only on single GET
+   *
+   * zone_id filtering is handled here before calling super.find() so that pagination
+   * is applied to the zone-filtered set. Without this, super.find() would paginate
+   * first (default 50) and the post-enrichment zone filter would miss branches
+   * beyond the first page, always returning 0 for large branch sets.
    */
   async find(params?: BranchParams) {
-    // Use default find to ensure all hooks and scoping are applied (including repo_id filter)
+    const zoneId = params?.query?.zone_id;
+
+    if (zoneId) {
+      // Resolve branch IDs in the zone before pagination
+      const branchIdsInZone = await this.branchRepo.findBranchIdsByZone(zoneId);
+
+      if (branchIdsInZone.length === 0) {
+        const limit = params?.query?.$limit ?? this.paginate?.default ?? 50;
+        const skip = params?.query?.$skip ?? 0;
+        return { data: [], total: 0, limit, skip };
+      }
+
+      // Remove zone_id from query (not a real branch column; DrizzleService would skip it
+      // but keeping it avoids confusion), then filter by the resolved branch IDs.
+      // Cast needed: branch_id with $in operator is not in the typed query shape but
+      // DrizzleService.filterData() handles it correctly at runtime.
+      const { zone_id: _stripped, ...queryWithoutZone } = params?.query ?? {};
+      const filteredParams = {
+        ...params,
+        query: { ...queryWithoutZone, branch_id: { $in: branchIdsInZone } },
+      } as BranchParams;
+
+      const result = await super.find(filteredParams);
+      if (Array.isArray(result)) {
+        return this.branchRepo.enrichManyWithZoneInfo(result as Branch[]);
+      }
+      const enriched = await this.branchRepo.enrichManyWithZoneInfo(result.data as Branch[]);
+      return { ...result, data: enriched };
+    }
+
+    // Normal code path — no zone filter
     const result = await super.find(params);
 
     // Handle both paginated and non-paginated results

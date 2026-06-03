@@ -110,10 +110,27 @@ describe('agor_branches_list', () => {
     user: { user_id: 'user-1', role: 'member' },
   };
 
+  // Simulate service-level zone filtering: the real BranchesService.find() handles
+  // zone_id in the query before pagination, so the mock must do the same.
   function makeApp(findResult: unknown) {
     return {
       service(name: string) {
-        if (name === 'branches') return { find: vi.fn(async () => findResult) };
+        if (name === 'branches') {
+          return {
+            find: vi.fn(async (params?: { query?: Record<string, unknown> }) => {
+              const zoneId = params?.query?.zone_id as string | undefined;
+              if (!zoneId || Array.isArray(findResult)) return findResult;
+              const res = findResult as {
+                data: Record<string, unknown>[];
+                total: number;
+                limit: number;
+                skip: number;
+              };
+              const filtered = res.data.filter((b) => b.zone_id === zoneId);
+              return { ...res, data: filtered, total: filtered.length };
+            }),
+          };
+        }
         throw new Error(`Unexpected service call: ${name}`);
       },
     };
@@ -159,6 +176,35 @@ describe('agor_branches_list', () => {
 
     const branch2 = parsed.data[1];
     expect(branch2.zone_id).toBeUndefined();
+  });
+
+  it('passes zone_id to the service query so filtering is pagination-correct', async () => {
+    // The fix for the always-0 bug: zone filtering must happen inside the service
+    // (before pagination) rather than as a post-enrichment filter in the tool.
+    // Verify that zone_id is forwarded to service.find() via the query object.
+    const findFn = vi.fn(async () => ({
+      data: [{ branch_id: 'branch-1', zone_id: 'zone-review' }],
+      total: 1,
+      limit: 50,
+      skip: 0,
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { find: findFn };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const list = registerAndCaptureHandler('agor_branches_list', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await list({ zoneId: 'zone-review' });
+
+    expect(findFn).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ zone_id: 'zone-review' }) })
+    );
   });
 
   it('filters by zoneId when provided', async () => {
