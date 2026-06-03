@@ -305,6 +305,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [historyView, setHistoryView] = useState<'preview' | 'diff'>('preview');
   const [titleActionsVisible, setTitleActionsVisible] = useState(false);
+  const [renamePathOnTitleChange, setRenamePathOnTitleChange] = useState(false);
 
   useEffect(() => {
     document.title = 'Knowledge · Agor';
@@ -333,6 +334,24 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       'global',
     [activeSpace, namespaceSlugById, selectedNamespace?.slug]
   );
+
+  const nextDraftTitle = useMemo(() => {
+    if (!activeDoc) return 'Untitled';
+    return titleFromContent
+      ? inferTitleFromMarkdown(markdownDraft, activeDoc.title)
+      : titleDraft.trim() || activeDoc.title;
+  }, [activeDoc, markdownDraft, titleDraft, titleFromContent]);
+
+  const titleChanged = Boolean(activeDoc && nextDraftTitle.trim() !== activeDoc.title.trim());
+
+  const suggestedRenamePath = useMemo(() => {
+    if (!activeDoc) return '';
+    return ensureUniquePath(
+      joinKnowledgePath(parentFolderForPath(activeDoc.path), slugifyFileName(nextDraftTitle)),
+      documents,
+      activeDoc.document_id
+    );
+  }, [activeDoc, documents, nextDraftTitle]);
 
   const buildKnowledgeSearch = useCallback(
     (overrides: { query?: string; kind?: string; editing?: boolean } = {}) => {
@@ -542,9 +561,14 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       setSelectedFolder(parentFolderForPath(activeDoc.path));
       setTitleDraft(activeDoc.title);
       setTitleFromContent(activeDoc.metadata?.title_from_content === true);
+      setRenamePathOnTitleChange(false);
       setIsEditing(pendingEditModeRef.current ?? routeSearchParams.get('mode') === 'edit');
     }
   }, [activeDoc, routeSearchParams]);
+
+  useEffect(() => {
+    if (!titleChanged) setRenamePathOnTitleChange(false);
+  }, [titleChanged]);
 
   useEffect(() => {
     if (routeDocumentPath && !activeDoc) return;
@@ -718,17 +742,22 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     setSaving(true);
     setError(null);
     try {
-      const nextTitle = titleFromContent
-        ? inferTitleFromMarkdown(markdownDraft, activeDoc.title)
-        : titleDraft.trim() || activeDoc.title;
+      const nextTitle = nextDraftTitle;
+      const nextPath =
+        titleChanged && renamePathOnTitleChange && suggestedRenamePath !== activeDoc.path
+          ? suggestedRenamePath
+          : undefined;
       const updated = (await client.service('kb/documents').patch(activeDoc.document_id, {
         title: nextTitle,
+        ...(nextPath ? { path: nextPath } : {}),
         content_text: markdownDraft,
         metadata: {
           ...(activeDoc.metadata ?? {}),
           title_from_content: titleFromContent,
         },
-        change_summary: 'Edited from Knowledge UI',
+        change_summary: nextPath
+          ? `Edited and renamed from ${activeDoc.path} to ${nextPath}`
+          : 'Edited from Knowledge UI',
       })) as KnowledgeDocument;
       setDocuments((prev) =>
         prev.map((doc) => (doc.document_id === updated.document_id ? updated : doc))
@@ -786,6 +815,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     if (!activeDoc) return;
     setTitleDraft(activeDoc.title);
     setTitleFromContent(activeDoc.metadata?.title_from_content === true);
+    setRenamePathOnTitleChange(false);
     setMarkdownDraft(versions[0]?.content_text ?? DEFAULT_MARKDOWN);
     setKnowledgeEditMode(false);
   };
@@ -1258,12 +1288,27 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
                       <Text type="secondary">{activeDoc.path}</Text>
                     </Space>
                     {isEditing && (
-                      <Checkbox
-                        checked={titleFromContent}
-                        onChange={(event) => setTitleFromContent(event.target.checked)}
-                      >
-                        Use first heading as title
-                      </Checkbox>
+                      <Space orientation="vertical" size={4}>
+                        <Checkbox
+                          checked={titleFromContent}
+                          onChange={(event) => setTitleFromContent(event.target.checked)}
+                        >
+                          Use first heading as title
+                        </Checkbox>
+                        <Checkbox
+                          checked={renamePathOnTitleChange}
+                          disabled={!titleChanged}
+                          onChange={(event) => setRenamePathOnTitleChange(event.target.checked)}
+                        >
+                          Rename page path to match title
+                        </Checkbox>
+                        {titleChanged && (
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            Current path: {activeDoc.path}
+                            {renamePathOnTitleChange && ` → ${suggestedRenamePath}`}
+                          </Text>
+                        )}
+                      </Space>
                     )}
                   </Space>
 
