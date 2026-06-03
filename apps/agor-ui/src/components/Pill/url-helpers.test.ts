@@ -156,7 +156,7 @@ describe('getUrlDisplayLabel', () => {
       expect(getUrlDisplayLabel('https://example.com/project/tasks/42')).toBe('42');
     });
 
-    it('does not change non-GitHub URL labels when current repo slug is provided', () => {
+    it('does not change non-GitHub URL labels when current repo is provided', () => {
       expect(
         getUrlDisplayLabel('https://example.com/project/tasks/42', {
           currentRepo: githubRepo,
