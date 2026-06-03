@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
-import { getAssistantConfig, isAssistant } from '@agor-live/client';
+import { branchPath, getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   BranchesOutlined,
   CodeOutlined,
@@ -11,7 +11,8 @@ import {
 } from '@ant-design/icons';
 import { Button, Card, Collapse, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
@@ -24,6 +25,8 @@ import { BranchSessionSections } from './BranchSessionSections';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
+const TASK_STREAM_SECTION_PARAM = 'section';
+const TASK_STREAM_SECTION_VALUE = 'latest-prompt';
 
 interface BranchCardProps {
   branch: Branch;
@@ -99,6 +102,8 @@ const BranchCardComponent = ({
 }: BranchCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
@@ -106,9 +111,24 @@ const BranchCardComponent = ({
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
 
-  // Local board-only prototype state: make the card larger only when the
-  // optional latest-task section is open.
-  const [taskStreamExpanded, setTaskStreamExpanded] = useState(false);
+  const taskStreamRouteSelected =
+    new URLSearchParams(location.search).get(TASK_STREAM_SECTION_PARAM) ===
+    TASK_STREAM_SECTION_VALUE;
+  const taskStreamExpanded =
+    !inPopover && !panelMode && isActiveUrlTarget && taskStreamRouteSelected;
+
+  const handleTaskStreamCollapseChange = useCallback(
+    (keys: string | string[]) => {
+      const nextExpanded = Array.isArray(keys)
+        ? keys.includes('latest-task')
+        : keys === 'latest-task';
+      const path = branchPath(branch.branch_id);
+      navigate(
+        nextExpanded ? `${path}?${TASK_STREAM_SECTION_PARAM}=${TASK_STREAM_SECTION_VALUE}` : path
+      );
+    },
+    [branch.branch_id, navigate]
+  );
 
   // Filter out archived sessions from board card display
   const activeSessions = useMemo(() => sessions.filter((s) => !s.archived), [sessions]);
@@ -510,7 +530,7 @@ const BranchCardComponent = ({
         <div className="nodrag nopan nowheel">
           <Collapse
             activeKey={taskStreamExpanded ? ['latest-task'] : []}
-            onChange={(keys) => setTaskStreamExpanded(keys.length > 0)}
+            onChange={handleTaskStreamCollapseChange}
             ghost
             style={{ marginTop: 0 }}
             items={[

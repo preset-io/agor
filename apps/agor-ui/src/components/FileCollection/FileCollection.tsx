@@ -415,12 +415,13 @@ const FileCollectionInner: React.FC<FileCollectionProps> = ({
       </div>
 
       <Tree
+        className="agor-flat-tree"
         treeData={treeData}
         onSelect={handleSelect}
         showIcon={false}
         expandedKeys={expandedKeys}
         onExpand={handleExpand}
-        style={{ background: 'transparent' }}
+        style={{ background: 'transparent', borderRadius: 0, padding: 0 }}
         virtual
         height={600}
       />

@@ -380,3 +380,16 @@ html.dark .dark\:block {
 html.dark .dark\:hidden {
   display: none;
 }
+
+/* Ant Tree defaults render as a small "well" in dark mode
+   (rgba background, rounded corners, 4px padding). In embedded trees
+   like branch sessions and file/doc browsing, the surrounding card/modal
+   already provides the surface, so keep the tree chrome flat. */
+.agor-flat-tree.ant-tree,
+.agor-flat-tree.ant-tree .ant-tree-list,
+.agor-flat-tree.ant-tree .ant-tree-list-holder,
+.agor-flat-tree.ant-tree .ant-tree-list-holder-inner {
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+}
