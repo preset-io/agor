@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
-import { branchPath, getAssistantConfig, isAssistant, shortId } from '@agor-live/client';
+import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   BranchesOutlined,
   CodeOutlined,
@@ -12,7 +12,6 @@ import {
 import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
@@ -26,7 +25,6 @@ import { BranchSessionSections } from './BranchSessionSections';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
-const PEEK_SESSIONS_PARAM = 'peek';
 const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
 
 interface BranchCardProps {
@@ -103,8 +101,6 @@ const BranchCardComponent = ({
 }: BranchCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
-  const location = useLocation();
-  const navigate = useNavigate();
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
@@ -126,25 +122,17 @@ const BranchCardComponent = ({
     [peekableSessions]
   );
 
-  const routePeekParam = isActiveUrlTarget
-    ? new URLSearchParams(location.search).get(PEEK_SESSIONS_PARAM)
-    : null;
-
   const peekedSessionIds = useMemo(() => {
     if (inPopover || panelMode) return [];
 
-    const requestedSessionIds =
-      routePeekParam !== null ? routePeekParam.split(',') : storedPeekedSessionIds;
     const resolvedIds: string[] = [];
     const seen = new Set<string>();
 
-    for (const rawToken of requestedSessionIds) {
+    for (const rawToken of storedPeekedSessionIds) {
       const token = rawToken.trim();
       if (!token) continue;
 
-      const session = peekableSessions.find(
-        (candidate) => candidate.session_id === token || shortId(candidate.session_id) === token
-      );
+      const session = peekableSessions.find((candidate) => candidate.session_id === token);
       if (session && !seen.has(session.session_id)) {
         resolvedIds.push(session.session_id);
         seen.add(session.session_id);
@@ -152,7 +140,7 @@ const BranchCardComponent = ({
     }
 
     return resolvedIds;
-  }, [inPopover, panelMode, peekableSessions, routePeekParam, storedPeekedSessionIds]);
+  }, [inPopover, panelMode, peekableSessions, storedPeekedSessionIds]);
 
   const peekedSessionIdSet = useMemo(() => new Set(peekedSessionIds), [peekedSessionIds]);
   const peekedSessions = useMemo(
@@ -164,30 +152,8 @@ const BranchCardComponent = ({
   );
 
   const updatePeekedSessionIds = useCallback(
-    (nextSessionIds: string[]) => {
-      setStoredPeekedSessionIds(nextSessionIds);
-
-      const searchParams = new URLSearchParams(location.search);
-      searchParams.delete('section');
-
-      if (nextSessionIds.length > 0) {
-        searchParams.set(
-          PEEK_SESSIONS_PARAM,
-          nextSessionIds.map((sessionId) => shortId(sessionId)).join(',')
-        );
-      } else {
-        searchParams.delete(PEEK_SESSIONS_PARAM);
-      }
-
-      const query = searchParams.toString();
-      navigate(`${branchPath(branch.branch_id)}${query ? `?${query}` : ''}`);
-    },
-    [branch.branch_id, location.search, navigate, setStoredPeekedSessionIds]
-  );
-
-  const normalizedPeekParam = useMemo(
-    () => peekedSessionIds.map((sessionId) => shortId(sessionId)).join(','),
-    [peekedSessionIds]
+    (nextSessionIds: string[]) => setStoredPeekedSessionIds(nextSessionIds),
+    [setStoredPeekedSessionIds]
   );
 
   useEffect(() => {
@@ -195,29 +161,6 @@ const BranchCardComponent = ({
     if (storedPeekedSessionIds.join('|') === peekedSessionIds.join('|')) return;
     setStoredPeekedSessionIds(peekedSessionIds);
   }, [inPopover, panelMode, peekedSessionIds, setStoredPeekedSessionIds, storedPeekedSessionIds]);
-
-  useEffect(() => {
-    if (!isActiveUrlTarget || routePeekParam === null) return;
-    if (routePeekParam === normalizedPeekParam) return;
-
-    const searchParams = new URLSearchParams(location.search);
-    searchParams.delete('section');
-    if (normalizedPeekParam) {
-      searchParams.set(PEEK_SESSIONS_PARAM, normalizedPeekParam);
-    } else {
-      searchParams.delete(PEEK_SESSIONS_PARAM);
-    }
-
-    const query = searchParams.toString();
-    navigate(`${branchPath(branch.branch_id)}${query ? `?${query}` : ''}`, { replace: true });
-  }, [
-    branch.branch_id,
-    isActiveUrlTarget,
-    location.search,
-    navigate,
-    normalizedPeekParam,
-    routePeekParam,
-  ]);
 
   const handleTogglePeekSession = useCallback(
     (sessionId: string) => {

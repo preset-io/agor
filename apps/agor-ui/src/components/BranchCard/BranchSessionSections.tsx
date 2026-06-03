@@ -129,7 +129,7 @@ const SessionItemWithActions: React.FC<{
           </Tooltip>
         )}
         {onTogglePeek && (
-          <Tooltip title={isPeeked ? 'Stop peeking latest prompt' : 'Peek latest prompt'}>
+          <Tooltip title={isPeeked ? 'Stop peeking at latest prompt' : 'Peek at latest prompt'}>
             <Button
               type="text"
               size="small"
