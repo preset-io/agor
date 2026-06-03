@@ -32,7 +32,7 @@ const SCORE_WEIGHTS = {
   DESC_ALL_WORDS: 80,
   DESC_PARTIAL_WORDS: 40,
   TOOL_MATCH: 30,
-  STATUS_RUNNING: 20,
+  STATUS_ACTIVE: 20,
   STATUS_AWAITING: 15,
   RECENCY_MAX: 50,
 } as const;
@@ -43,26 +43,6 @@ export function normalizeSessionQuery(query: string): string {
 
 export function getSearchTerms(query: string, minLength = 1): string[] {
   return uniqueTerms(tokenizeSearchQuery(query).filter((part) => part.length >= minLength));
-}
-
-export function getHighlightTerms(
-  query: string,
-  minLength = SESSION_SEARCH_MIN_QUERY_LENGTH
-): string[] {
-  const normalized = normalizeSessionQuery(query);
-  const terms = getSearchTerms(query, minLength);
-  const allWords = normalized.split(/\s+/).filter(Boolean);
-
-  if (
-    normalized.length >= minLength &&
-    allWords.length > 0 &&
-    allWords.every((word) => word.length >= minLength) &&
-    !terms.includes(normalized)
-  ) {
-    terms.unshift(normalized);
-  }
-
-  return terms.sort((a, b) => b.length - a.length);
 }
 
 export function scoreSession(session: Session, query: string, now = Date.now()): number {
@@ -118,8 +98,11 @@ export function scoreSession(session: Session, query: string, now = Date.now()):
     score += Math.round(SCORE_WEIGHTS.RECENCY_MAX * Math.exp(-ageDays));
   }
 
-  if (session.status === 'running') score += SCORE_WEIGHTS.STATUS_RUNNING;
-  else if (session.status === 'awaiting_permission') score += SCORE_WEIGHTS.STATUS_AWAITING;
+  if (session.status === 'running' || session.status === 'stopping') {
+    score += SCORE_WEIGHTS.STATUS_ACTIVE;
+  } else if (session.status === 'awaiting_permission') {
+    score += SCORE_WEIGHTS.STATUS_AWAITING;
+  }
 
   return score;
 }

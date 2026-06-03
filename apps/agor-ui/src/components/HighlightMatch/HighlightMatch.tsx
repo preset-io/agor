@@ -1,6 +1,6 @@
 import { theme } from 'antd';
 import type React from 'react';
-import { getHighlightTerms } from '../../utils/sessionSearch';
+import { getHighlightTerms } from '../../utils/highlightTerms';
 
 interface HighlightMatchProps {
   text: string;

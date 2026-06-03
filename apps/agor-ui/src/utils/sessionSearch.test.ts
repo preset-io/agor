@@ -1,7 +1,7 @@
 import type { Session } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
+import { getHighlightTerms } from './highlightTerms';
 import {
-  getHighlightTerms,
   getMatchSnippet,
   isSessionSearchActive,
   scoreSession,
@@ -72,13 +72,22 @@ describe('sessionSearch', () => {
     );
   });
 
-  it('uses recency only as a tie-breaker within actual matches', () => {
+  it('uses recency as a relevance boost within actual matches', () => {
     const oldMatch = session({ title: 'Billing report', last_updated: '2026-05-01T00:00:00Z' });
     const newMatch = session({ title: 'Billing report', last_updated: '2026-06-03T11:00:00Z' });
 
     const results = searchSessions([oldMatch, newMatch], 'billing', { now: NOW });
 
     expect(results[0].session.session_id).toBe(newMatch.session_id);
+  });
+
+  it('boosts stopping sessions the same way as running sessions', () => {
+    const idle = session({ title: 'Billing report', status: 'idle' });
+    const stopping = session({ title: 'Billing report', status: 'stopping' });
+
+    expect(scoreSession(stopping, 'billing', NOW)).toBeGreaterThan(
+      scoreSession(idle, 'billing', NOW)
+    );
   });
 
   it('sorts sessions by recent, oldest, and alpha labels', () => {
