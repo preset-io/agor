@@ -9,34 +9,17 @@
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { DiffBlock } from './DiffBlock';
+import {
+  type FileChangeKind,
+  fileChangeKindLabel,
+  fileChangeKindToOperationType,
+} from './fileChangePresentation';
 import { extractErrorMessage, type ToolRendererProps } from './index';
 
 interface FileChange {
   path: string;
-  kind: 'add' | 'update' | 'delete';
+  kind: FileChangeKind;
 }
-
-const kindToOperationType = (kind: string): 'edit' | 'create' | 'delete' => {
-  switch (kind) {
-    case 'add':
-      return 'create';
-    case 'delete':
-      return 'delete';
-    default:
-      return 'edit';
-  }
-};
-
-const kindLabel = (kind: string): string => {
-  switch (kind) {
-    case 'add':
-      return 'Create';
-    case 'delete':
-      return 'Delete';
-    default:
-      return 'Update';
-  }
-};
 
 export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }) => {
   const { token } = theme.useToken();
@@ -57,7 +40,7 @@ export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }
             <DiffBlock
               key={change.path}
               filePath={change.path}
-              operationType={kindToOperationType(change.kind)}
+              operationType={fileChangeKindToOperationType(change.kind)}
               structuredPatch={fileDiff.structuredPatch}
               isError={result?.is_error}
               errorMessage={extractErrorMessage(result)}
@@ -82,7 +65,7 @@ export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }
             }}
           >
             <Typography.Text strong style={{ fontSize: token.fontSizeSM }}>
-              {kindLabel(change.kind)}
+              {fileChangeKindLabel(change.kind)}
             </Typography.Text>
             <Typography.Text code style={{ fontSize: token.fontSizeSM - 1 }}>
               {change.path}
