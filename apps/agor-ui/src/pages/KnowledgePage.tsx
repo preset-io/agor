@@ -1614,6 +1614,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
                       <Text strong>Markdown</Text>
                       <div style={{ flex: 1, minHeight: 0 }}>
                         <CodeEditor
+                          key={activeDoc.document_id}
                           value={markdownDraft}
                           onChange={setMarkdownDraft}
                           language="markdown"
