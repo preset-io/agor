@@ -1,5 +1,4 @@
 import type { AgorClient, Session, User } from '@agor-live/client';
-import { shortId } from '@agor-live/client';
 import { CloseOutlined } from '@ant-design/icons';
 import { Button, Space, Typography, theme } from 'antd';
 import React from 'react';
@@ -51,14 +50,8 @@ export const BranchSessionPeekSection = React.memo<BranchSessionPeekSectionProps
               >
                 <Space size={6} align="center" style={{ minWidth: 0 }}>
                   <ToolIcon tool={session.agentic_tool} size={16} />
-                  <Typography.Text strong style={{ fontSize: 12 }}>
-                    Session:
-                  </Typography.Text>
-                  <Typography.Text ellipsis style={{ maxWidth: 420, fontSize: 12 }}>
+                  <Typography.Text strong ellipsis style={{ maxWidth: 480, fontSize: 12 }}>
                     {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                  </Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    · {shortId(session.session_id)}
                   </Typography.Text>
                 </Space>
                 <Button

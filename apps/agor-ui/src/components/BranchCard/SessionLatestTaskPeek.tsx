@@ -1,14 +1,12 @@
 import type { AgorClient, Message, Session, StreamingMessageState, User } from '@agor-live/client';
-import { shortId, TaskStatus } from '@agor-live/client';
-import { Alert, Button, Empty, Input, Space, Spin, Typography, theme } from 'antd';
+import { TaskStatus } from '@agor-live/client';
+import { Alert, Button, Empty, Input, Spin, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
-import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { TaskBlock } from '../TaskBlock';
-import { ToolIcon } from '../ToolIcon';
 import { chooseLatestSessionTask } from './latestBranchTask';
 
 interface SessionLatestTaskPeekProps {
@@ -285,13 +283,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <Space size={4} align="center" style={{ marginBottom: token.sizeUnit / 2 }}>
-              <ToolIcon tool={currentSession.agentic_tool} size={14} />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Prompting {getSessionDisplayTitle(currentSession, { includeAgentFallback: true })} ·{' '}
-                {shortId(currentSession.session_id)}
-              </Typography.Text>
-            </Space>
             <Input.TextArea
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
