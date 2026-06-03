@@ -68,6 +68,12 @@ describe('diff enrichment', () => {
     fs.writeFileSync(filePath, 'const value = "old";\n', 'utf-8');
     execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
     execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+    registerToolInvocationStart(
+      'tool-codex-edit-files-1',
+      'edit_files',
+      { changes: [{ path: 'src/example.ts', kind: 'update' }] },
+      { workingDirectory: repoDir }
+    );
     fs.writeFileSync(filePath, 'const value = "new";\n', 'utf-8');
 
     const contentBlocks: TestContentBlock[] = [
@@ -112,6 +118,12 @@ describe('diff enrichment', () => {
     fs.writeFileSync(realFilePath, 'const value = "old";\n', 'utf-8');
     execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
     execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+    registerToolInvocationStart(
+      'tool-codex-edit-files-symlink-path-1',
+      'edit_files',
+      { changes: [{ path: aliasFilePath, kind: 'update' }] },
+      { workingDirectory: repoDir }
+    );
     fs.writeFileSync(aliasFilePath, 'const value = "new";\n', 'utf-8');
 
     const contentBlocks: TestContentBlock[] = [
@@ -149,6 +161,12 @@ describe('diff enrichment', () => {
     fs.writeFileSync(filePath, 'const removed = true;\n', 'utf-8');
     execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
     execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+    registerToolInvocationStart(
+      'tool-codex-edit-files-delete-1',
+      'edit_files',
+      { changes: [{ path: 'src/delete-me.ts', kind: 'delete' }] },
+      { workingDirectory: repoDir }
+    );
     fs.rmSync(filePath);
 
     const contentBlocks: TestContentBlock[] = [
@@ -174,6 +192,38 @@ describe('diff enrichment', () => {
     expect(toolResult.diff?.files?.[0]?.kind).toBe('delete');
     const lines = toolResult.diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
     expect(lines.some((line) => line.includes('-const removed = true;'))).toBe(true);
+  });
+
+  it('does not render dirty untracked edit_files updates as full-file additions without snapshots', () => {
+    const repoDir = createTempGitRepo();
+    fs.writeFileSync(path.join(repoDir, 'README.md'), '# test\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    const dirtyPath = path.join(repoDir, 'src', 'dirty.ts');
+    fs.mkdirSync(path.dirname(dirtyPath), { recursive: true });
+    fs.writeFileSync(dirtyPath, 'export const value = "pre";\n', 'utf-8');
+    fs.writeFileSync(dirtyPath, 'export const value = "post";\n', 'utf-8');
+
+    const contentBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-dirty-untracked-1',
+        name: 'edit_files',
+        input: {
+          changes: [{ path: 'src/dirty.ts', kind: 'update' }],
+        },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-dirty-untracked-1',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
+
+    expect(contentBlocks[1].diff).toBeUndefined();
   });
 
   it('enriches Codex edit_files add operations with relative paths', () => {
@@ -355,7 +405,7 @@ describe('diff enrichment', () => {
     expect(linesB.some((line) => line.includes('a-pre'))).toBe(false);
   });
 
-  it('falls back to git HEAD diff after explicit snapshot cleanup', () => {
+  it('does not synthesize edit_files update diffs from HEAD after snapshot cleanup', () => {
     const repoDir = createTempGitRepo();
     const filePath = path.join(repoDir, 'cleanup.ts');
 
@@ -391,22 +441,17 @@ describe('diff enrichment', () => {
 
     enrichContentBlocks(blocks, { workingDirectory: repoDir, snapshotScope: 'scope-cleanup' });
 
-    const lines = blocks[1].diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
-    expect(lines.some((line) => line.includes('-const value = "head";'))).toBe(true);
-    expect(lines.some((line) => line.includes('+const value = "post";'))).toBe(true);
-    expect(lines.some((line) => line.includes('-const value = "pre";'))).toBe(false);
+    expect(blocks[1].diff).toBeUndefined();
   });
 
-  it('skips unsafe relative paths when resolving git HEAD content', () => {
+  it('skips unsafe relative paths when rendering add fallbacks', () => {
     const repoDir = createTempGitRepo();
-    const srcDir = path.join(repoDir, 'src');
-    fs.mkdirSync(srcDir, { recursive: true });
-    const filePath = path.join(srcDir, 'safe.ts');
-
-    fs.writeFileSync(filePath, 'const value = 1;\n', 'utf-8');
+    fs.writeFileSync(path.join(repoDir, 'README.md'), '# test\n', 'utf-8');
     execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
     execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
-    fs.writeFileSync(filePath, 'const value = 2;\n', 'utf-8');
+
+    const outsidePath = path.join(path.dirname(repoDir), 'outside.ts');
+    fs.writeFileSync(outsidePath, 'export const outside = true;\n', 'utf-8');
 
     const contentBlocks: TestContentBlock[] = [
       {
@@ -414,7 +459,7 @@ describe('diff enrichment', () => {
         id: 'tool-codex-edit-files-unsafe-1',
         name: 'edit_files',
         input: {
-          changes: [{ path: '../outside.ts', kind: 'update' }],
+          changes: [{ path: '../outside.ts', kind: 'add' }],
         },
       },
       {

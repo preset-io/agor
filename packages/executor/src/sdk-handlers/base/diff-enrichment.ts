@@ -18,7 +18,7 @@
  *    to enrich adjacent tool_result blocks in one pass.
  */
 
-import { execFileSync, execSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { FileDiff, StructuredPatchHunk } from '@agor/core/types';
@@ -446,8 +446,10 @@ function enrichWriteResult(block: ContentBlock, input: Record<string, unknown>):
  * Compute structuredPatch for Codex edit_files tool results.
  *
  * Codex groups file changes as: { changes: [{ path, kind }] }.
- * No old/new content is provided — we reconstruct diffs by comparing
- * the current file (post-edit) against git HEAD.
+ * No old/new content is provided. Prefer pre-edit snapshots captured at
+ * tool-start. If no snapshot exists, only explicit add operations can be
+ * represented accurately; updates/deletes are left unenriched rather than
+ * guessed from git HEAD, which may be stale relative to a dirty worktree.
  */
 function enrichEditFilesResult(
   block: ContentBlock,
@@ -496,59 +498,31 @@ function enrichEditFilesResult(
     if (!change.path) continue;
 
     const kind = normalizeChangeKind(change.kind);
+
+    // Without a pre-edit snapshot, Codex SDK file_change items only tell us
+    // path + kind. Diffing updates/deletes against HEAD is misleading in dirty
+    // worktrees (e.g. files created or modified by earlier uncommitted tool
+    // calls can appear as whole-file additions). Only an explicit add has a
+    // trustworthy post-edit-only representation.
+    if (kind !== 'add') continue;
+
     const filePath = change.path;
     const resolvedPath = path.isAbsolute(filePath)
       ? filePath
       : path.resolve(workingDirectory || gitRoot, filePath);
 
     try {
-      if (kind === 'add') {
-        // New file — all additions
-        const stat = fs.statSync(resolvedPath);
-        if (stat.size > MAX_FILE_SIZE_BYTES) continue;
-        const content = fs.readFileSync(resolvedPath, 'utf-8');
-        const patch = structuredPatch(filePath, filePath, '', content, '', '', {
-          context: 0,
-        });
-        if (patch.hunks.length > 0) {
-          fileDiffs.push({ path: filePath, kind, structuredPatch: patch.hunks });
-        }
-      } else if (kind === 'delete') {
-        // Deleted file — get old content from git
-        const relativePath = resolveRepoRelativePath(gitRoot, resolvedPath);
-        if (!relativePath) continue;
-        const oldContent = gitShowHeadFile(gitRoot, relativePath);
-        if (oldContent === null) continue;
-        const patch = structuredPatch(filePath, filePath, oldContent, '', '', '', {
-          context: CONTEXT_LINES,
-        });
-        if (patch.hunks.length > 0) {
-          fileDiffs.push({ path: filePath, kind, structuredPatch: patch.hunks });
-        }
-      } else {
-        // Update — diff git HEAD vs current file
-        const stat = fs.statSync(resolvedPath);
-        if (stat.size > MAX_FILE_SIZE_BYTES) continue;
-        const currentContent = fs.readFileSync(resolvedPath, 'utf-8');
-        const relativePath = resolveRepoRelativePath(gitRoot, resolvedPath);
-        if (!relativePath) continue;
-        const oldContent = gitShowHeadFile(gitRoot, relativePath);
-        if (oldContent === null) {
-          // File may be new (not in HEAD) — treat as addition
-          const patch = structuredPatch(filePath, filePath, '', currentContent, '', '', {
-            context: 0,
-          });
-          if (patch.hunks.length > 0) {
-            fileDiffs.push({ path: filePath, kind: 'add', structuredPatch: patch.hunks });
-          }
-          continue;
-        }
-        const patch = structuredPatch(filePath, filePath, oldContent, currentContent, '', '', {
-          context: CONTEXT_LINES,
-        });
-        if (patch.hunks.length > 0) {
-          fileDiffs.push({ path: filePath, kind, structuredPatch: patch.hunks });
-        }
+      // Only render files inside the repo.
+      if (!resolveRepoRelativePath(gitRoot, resolvedPath)) continue;
+
+      const stat = fs.statSync(resolvedPath);
+      if (stat.size > MAX_FILE_SIZE_BYTES) continue;
+      const content = fs.readFileSync(resolvedPath, 'utf-8');
+      const patch = structuredPatch(filePath, filePath, '', content, '', '', {
+        context: 0,
+      });
+      if (patch.hunks.length > 0) {
+        fileDiffs.push({ path: filePath, kind, structuredPatch: patch.hunks });
       }
     } catch {
       // Best effort — skip files that fail
@@ -561,24 +535,6 @@ function enrichEditFilesResult(
       structuredPatch: fileDiffs[0].structuredPatch,
       files: fileDiffs,
     };
-  }
-}
-
-function gitShowHeadFile(gitRoot: string, relativePath: string): string | null {
-  // Ensure the ref path is safe and uses git's forward-slash separator.
-  const normalized = path.posix.normalize(relativePath.split(path.sep).join('/'));
-  if (!isSafeRepoRelativePath(normalized)) {
-    return null;
-  }
-
-  try {
-    return execFileSync('git', ['show', `HEAD:${normalized}`], {
-      encoding: 'utf-8',
-      timeout: 5000,
-      cwd: gitRoot,
-    });
-  } catch {
-    return null;
   }
 }
 
