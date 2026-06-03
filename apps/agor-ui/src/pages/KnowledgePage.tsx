@@ -1091,19 +1091,6 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     );
   };
 
-  const selectKnowledgeFolder = async (folderPath: string) => {
-    if (!(await confirmDiscardUnsavedChanges())) return;
-    clearDraftDocument();
-    activeDocIdRef.current = null;
-    setActiveDocId(null);
-    setSelectedFolder(folderPath);
-    pendingEditModeRef.current = false;
-    setIsEditing(false);
-    const targetPath =
-      activeSpace === 'all' ? routeBasePath : buildKnowledgeRoutePath(routeBasePath, activeSpace);
-    navigate(`${targetPath}${buildKnowledgeSearch({ editing: false })}`);
-  };
-
   const changeKnowledgeSpace = async (space: string) => {
     if (!(await confirmDiscardUnsavedChanges())) return;
     clearDraftDocument();
@@ -1180,7 +1167,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
         <button
           type="button"
           onClick={() => {
-            selectKnowledgeFolder(folder.path);
+            setSelectedFolder(folder.path);
             if (hasChildren) toggleFolderCollapsed(folder.path);
           }}
           style={{
