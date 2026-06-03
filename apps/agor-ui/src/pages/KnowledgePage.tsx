@@ -564,7 +564,9 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     const nextSpace = routeNamespaceSlug ?? 'global';
     const nextQuery = routeSearchParams.get('q') ?? '';
     const nextKind = kindFilterFromUrlParam(routeSearchParams.get('kind'));
-    const nextEditing = routeSearchParams.get('mode') === 'edit' && Boolean(routeDocumentPath);
+    const nextEditing =
+      routeSearchParams.get('mode') === 'edit' &&
+      (Boolean(routeDocumentPath) || routeSearchParams.get('draft') === 'page');
 
     if (!routeDocumentPath && activeDocId && !draftDocument) setActiveDocId(null);
     if (routeNamespaceSlug && nextSpace !== activeSpace) setActiveSpace(nextSpace);
@@ -745,6 +747,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     setVersions([]);
     pendingEditModeRef.current = true;
     setIsEditing(true);
+    navigate(`${buildKnowledgeRoutePath(routeBasePath, namespaceSlug)}?draft=page&mode=edit`);
   };
 
   const openCreateModal = async (kind: KnowledgeDocumentKind) => {
