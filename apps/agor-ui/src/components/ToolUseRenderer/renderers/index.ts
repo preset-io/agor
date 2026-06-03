@@ -27,7 +27,6 @@
 
 import type { DiffEnrichment } from '@agor-live/client';
 import type React from 'react';
-import { ApplyPatchRenderer } from './ApplyPatchRenderer';
 import { BashRenderer } from './BashRenderer';
 import { EditFilesRenderer } from './EditFilesRenderer';
 import { EditRenderer } from './EditRenderer';
@@ -94,7 +93,6 @@ export const TOOL_RENDERERS = new Map<string, ToolRenderer>([
   ['Write', WriteRenderer as unknown as ToolRenderer],
   // Codex tools
   ['edit_files', EditFilesRenderer as unknown as ToolRenderer],
-  ['apply_patch', ApplyPatchRenderer as unknown as ToolRenderer],
 ]);
 
 /**
