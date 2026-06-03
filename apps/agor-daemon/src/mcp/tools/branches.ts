@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { isBranchRbacEnabled } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
 import type {
@@ -29,6 +30,55 @@ import { assertValidVariant } from './_environment-helpers.js';
 
 const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+const CLEANUP_CANDIDATE_DEFAULT_OLDER_THAN_DAYS = 7;
+const CLEANUP_CANDIDATE_DEFAULT_FILESYSTEM_STATUSES = ['ready', 'preserved', 'cleaned'] as const;
+const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = [
+  'creating',
+  'ready',
+  'failed',
+  'preserved',
+  'cleaned',
+  'deleted',
+] as const;
+const CLEANUP_CANDIDATE_STORAGE_MODES = ['worktree', 'clone'] as const;
+
+function normalizeFilesystemStatus(
+  branch: Branch
+): (typeof CLEANUP_CANDIDATE_FILESYSTEM_STATUSES)[number] {
+  return branch.filesystem_status ?? 'ready';
+}
+
+function parseCleanupCutoff(args: { archivedBefore?: string; archivedOlderThanDays?: number }): {
+  cutoff: Date;
+  source: 'archivedBefore' | 'archivedOlderThanDays';
+  olderThanDays?: number;
+} {
+  const archivedBefore = coerceString(args.archivedBefore);
+  if (archivedBefore) {
+    const cutoff = new Date(archivedBefore);
+    if (Number.isNaN(cutoff.getTime())) {
+      throw new Error('archivedBefore must be a valid ISO-8601 date/time string');
+    }
+    return { cutoff, source: 'archivedBefore' };
+  }
+
+  const olderThanDays = args.archivedOlderThanDays ?? CLEANUP_CANDIDATE_DEFAULT_OLDER_THAN_DAYS;
+  if (!Number.isFinite(olderThanDays) || olderThanDays < 0) {
+    throw new Error('archivedOlderThanDays must be a non-negative number');
+  }
+  return {
+    cutoff: new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000),
+    source: 'archivedOlderThanDays',
+    olderThanDays,
+  };
+}
+
+function notesPreview(notes: string | undefined, maxLength = 200): string | null {
+  if (!notes) return null;
+  const singleLine = notes.replace(/\s+/g, ' ').trim();
+  if (singleLine.length <= maxLength) return singleLine;
+  return `${singleLine.slice(0, maxLength - 1)}…`;
+}
 
 export function registerBranchTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_branches_get
@@ -121,6 +171,189 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }
 
       return textResult(result);
+    }
+  );
+
+  // Tool 2b: agor_branches_cleanup_candidates
+  server.registerTool(
+    'agor_branches_cleanup_candidates',
+    {
+      description:
+        'Safely inventory archived branch worktrees that may be candidates for disk cleanup. ' +
+        'Read-only: never deletes or mutates anything. This tool ALWAYS restricts results to archived branches, ' +
+        'defaults to branches archived more than 7 days ago, excludes filesystem_status="deleted", ' +
+        'and excludes assistant/private branches by default. It returns repo metadata, archive timestamps, ' +
+        'filesystem/storage status, path, and a path_exists boolean computed from the recorded branch path only.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        repoId: z.string().optional().describe('Repository ID to filter by'),
+        archivedBefore: z
+          .string()
+          .optional()
+          .describe(
+            'Only include branches archived before this ISO-8601 date/time. Overrides the default archivedOlderThanDays=7 cutoff.'
+          ),
+        archivedOlderThanDays: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            'Only include branches archived more than this many days ago. Default: 7. Ignored when archivedBefore is provided.'
+          ),
+        filesystemStatus: z
+          .enum(CLEANUP_CANDIDATE_FILESYSTEM_STATUSES)
+          .optional()
+          .describe(
+            'Single filesystem_status to include. Undefined branch statuses are treated as "ready".'
+          ),
+        filesystemStatuses: z
+          .array(z.enum(CLEANUP_CANDIDATE_FILESYSTEM_STATUSES))
+          .optional()
+          .describe(
+            'Filesystem statuses to include. Default: ["ready","preserved","cleaned"], intentionally excluding "deleted". Undefined branch statuses are treated as "ready".'
+          ),
+        storageMode: z
+          .enum(CLEANUP_CANDIDATE_STORAGE_MODES)
+          .optional()
+          .describe('Filter by branch storage mode ("worktree" or "clone").'),
+        excludeAssistants: z
+          .boolean()
+          .optional()
+          .describe('Exclude long-lived assistant branches. Default: true.'),
+        excludePrivate: z
+          .boolean()
+          .optional()
+          .describe('Exclude branches with others_can="none" (private to owners). Default: true.'),
+        pathExists: z
+          .boolean()
+          .optional()
+          .describe(
+            'Filter by whether the recorded branch path currently exists. This checks the exact stored path; it does not scan the filesystem.'
+          ),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Maximum number of results (default: 50)'),
+        skip: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('Number of filtered candidates to skip (default: 0)'),
+      }),
+    },
+    async (args) => {
+      const cutoff = parseCleanupCutoff(args);
+      const statuses = new Set(
+        args.filesystemStatuses ??
+          (args.filesystemStatus
+            ? [args.filesystemStatus]
+            : [...CLEANUP_CANDIDATE_DEFAULT_FILESYSTEM_STATUSES])
+      );
+      const excludeAssistants = args.excludeAssistants ?? true;
+      const excludePrivate = args.excludePrivate ?? true;
+      const limit = args.limit ?? 50;
+      const skip = args.skip ?? 0;
+
+      const query: Record<string, unknown> = {
+        archived: true,
+        $limit: 10000,
+        $sort: { archived_at: 1 },
+      };
+      if (args.repoId) query.repo_id = await resolveRepoId(ctx, args.repoId);
+
+      const result = await ctx.app.service('branches').find({ query, ...ctx.baseServiceParams });
+      const branches: Branch[] = Array.isArray(result)
+        ? (result as Branch[])
+        : ((result as { data: Branch[] }).data ?? []);
+      const scannedArchivedBranches = Array.isArray(result)
+        ? branches.length
+        : ((result as { total?: number }).total ?? branches.length);
+
+      const repoIds = [...new Set(branches.map((branch) => branch.repo_id))];
+      const reposById = new Map<string, Repo>();
+      await Promise.all(
+        repoIds.map(async (repoId) => {
+          try {
+            const repo = await ctx.app.service('repos').get(repoId, ctx.baseServiceParams);
+            reposById.set(repoId, repo as Repo);
+          } catch {
+            // Keep the inventory useful even if a repo row is missing or inaccessible.
+          }
+        })
+      );
+
+      const filtered = branches
+        .map((branch) => {
+          const pathExists = branch.path ? existsSync(branch.path) : false;
+          return {
+            branch,
+            pathExists,
+            filesystemStatus: normalizeFilesystemStatus(branch),
+            repo: reposById.get(branch.repo_id),
+          };
+        })
+        .filter(({ branch, pathExists, filesystemStatus }) => {
+          if (!branch.archived) return false; // Defense in depth: this tool never returns active branches.
+          if (!branch.archived_at) return false;
+          if (new Date(branch.archived_at).getTime() >= cutoff.cutoff.getTime()) return false;
+          if (!statuses.has(filesystemStatus)) return false;
+          if (args.storageMode && (branch.storage_mode ?? 'worktree') !== args.storageMode) {
+            return false;
+          }
+          if (excludeAssistants && isAssistant(branch)) return false;
+          if (excludePrivate && branch.others_can === 'none') return false;
+          if (args.pathExists !== undefined && pathExists !== args.pathExists) return false;
+          return true;
+        });
+
+      const candidates = filtered.slice(skip, skip + limit).map(({ branch, pathExists, repo }) => ({
+        repo_id: branch.repo_id,
+        repo_slug: repo?.slug ?? null,
+        repo_name: repo?.name ?? null,
+        branch_id: branch.branch_id,
+        name: branch.name,
+        ref: branch.ref,
+        archived: true,
+        archived_at: branch.archived_at,
+        archived_by: branch.archived_by ?? null,
+        last_used: branch.last_used ?? null,
+        filesystem_status: normalizeFilesystemStatus(branch),
+        storage_mode: branch.storage_mode ?? 'worktree',
+        path: branch.path,
+        path_exists: pathExists,
+        pull_request_url: branch.pull_request_url ?? null,
+        issue_url: branch.issue_url ?? null,
+        notes_preview: notesPreview(branch.notes),
+        is_assistant: isAssistant(branch),
+        is_private: branch.others_can === 'none',
+      }));
+
+      return textResult({
+        total: filtered.length,
+        limit,
+        skip,
+        candidates,
+        safety: {
+          read_only: true,
+          archived_only: true,
+          cutoff: cutoff.cutoff.toISOString(),
+          cutoff_source: cutoff.source,
+          archived_older_than_days:
+            cutoff.source === 'archivedOlderThanDays' ? cutoff.olderThanDays : null,
+          filesystem_statuses: [...statuses],
+          exclude_assistants: excludeAssistants,
+          exclude_private: excludePrivate,
+          path_exists_filter: args.pathExists ?? null,
+        },
+        scanned: {
+          archived_branches: scannedArchivedBranches,
+          returned_page_source_count: branches.length,
+        },
+      });
     }
   );
 

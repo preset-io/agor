@@ -1,5 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerBranchTools } from './branches.js';
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -48,6 +48,10 @@ function registerAndCaptureUpdate(ctx: {
 }): ToolHandler {
   return registerAndCaptureHandler('agor_branches_update', ctx);
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('agor_branches_update', () => {
   it('uses authenticated service params when falling back to the current session branch', async () => {
@@ -217,5 +221,176 @@ describe('agor_branches_list', () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.data).toHaveLength(0);
     expect(parsed.total).toBe(0);
+  });
+});
+
+describe('agor_branches_cleanup_candidates', () => {
+  const baseServiceParams = {
+    authenticated: true,
+    provider: 'mcp',
+    user: { user_id: 'user-1', role: 'member' },
+  };
+
+  const repo = {
+    repo_id: 'repo-1',
+    slug: 'preset-io/agor',
+    name: 'Agor',
+  };
+
+  function makeBranch(overrides: Record<string, unknown>) {
+    return {
+      branch_id: overrides.branch_id ?? 'branch-1',
+      repo_id: overrides.repo_id ?? 'repo-1',
+      name: overrides.name ?? 'old-feature',
+      ref: overrides.ref ?? 'old-feature',
+      archived: true,
+      archived_at: overrides.archived_at ?? '2026-05-20T00:00:00.000Z',
+      archived_by: 'user-1',
+      last_used: '2026-05-19T00:00:00.000Z',
+      filesystem_status: overrides.filesystem_status,
+      storage_mode: overrides.storage_mode ?? 'worktree',
+      path: overrides.path ?? process.cwd(),
+      pull_request_url: overrides.pull_request_url,
+      issue_url: overrides.issue_url,
+      notes: overrides.notes,
+      others_can: overrides.others_can ?? 'session',
+      custom_context: overrides.custom_context,
+      ...overrides,
+    };
+  }
+
+  function makeCleanupApp(branches: unknown[]) {
+    const branchesFind = vi.fn(async () => ({
+      data: branches,
+      total: branches.length,
+      limit: 10000,
+      skip: 0,
+    }));
+    const reposGet = vi.fn(async () => repo);
+
+    return {
+      branchesFind,
+      reposGet,
+      app: {
+        service(name: string) {
+          if (name === 'branches') return { find: branchesFind };
+          if (name === 'repos') return { get: reposGet };
+          throw new Error(`Unexpected service call: ${name}`);
+        },
+      },
+    };
+  }
+
+  it('applies safe defaults: archived only, older than 7 days, not deleted, not assistant/private', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
+
+    const { app, branchesFind } = makeCleanupApp([
+      makeBranch({ branch_id: 'candidate-ready', filesystem_status: undefined }),
+      makeBranch({ branch_id: 'candidate-preserved', filesystem_status: 'preserved' }),
+      makeBranch({ branch_id: 'candidate-cleaned', filesystem_status: 'cleaned' }),
+      makeBranch({
+        branch_id: 'too-recent',
+        archived_at: '2026-05-30T00:00:00.000Z',
+        filesystem_status: 'ready',
+      }),
+      makeBranch({ branch_id: 'deleted', filesystem_status: 'deleted' }),
+      makeBranch({
+        branch_id: 'assistant',
+        filesystem_status: 'ready',
+        custom_context: { assistant: { kind: 'assistant', displayName: 'Helper' } },
+      }),
+      makeBranch({ branch_id: 'private', filesystem_status: 'ready', others_can: 'none' }),
+      makeBranch({ branch_id: 'active', archived: false, filesystem_status: 'ready' }),
+    ]);
+
+    const cleanupCandidates = registerAndCaptureHandler('agor_branches_cleanup_candidates', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await cleanupCandidates({});
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(branchesFind).toHaveBeenCalledWith({
+      query: { archived: true, $limit: 10000, $sort: { archived_at: 1 } },
+      ...baseServiceParams,
+    });
+    expect(
+      parsed.candidates.map((candidate: { branch_id: string }) => candidate.branch_id)
+    ).toEqual(['candidate-ready', 'candidate-preserved', 'candidate-cleaned']);
+    expect(parsed.safety).toMatchObject({
+      read_only: true,
+      archived_only: true,
+      archived_older_than_days: 7,
+      filesystem_statuses: ['ready', 'preserved', 'cleaned'],
+      exclude_assistants: true,
+      exclude_private: true,
+    });
+    expect(parsed.candidates[0]).toMatchObject({
+      repo_slug: 'preset-io/agor',
+      filesystem_status: 'ready',
+      path_exists: true,
+    });
+  });
+
+  it('supports explicit filters and pagination after safety filtering', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
+
+    const { app } = makeCleanupApp([
+      makeBranch({
+        branch_id: 'missing-clone-a',
+        storage_mode: 'clone',
+        filesystem_status: 'cleaned',
+        path: '/tmp/agor-definitely-missing-a',
+      }),
+      makeBranch({
+        branch_id: 'missing-clone-b',
+        storage_mode: 'clone',
+        filesystem_status: 'cleaned',
+        path: '/tmp/agor-definitely-missing-b',
+      }),
+      makeBranch({
+        branch_id: 'existing-clone',
+        storage_mode: 'clone',
+        filesystem_status: 'cleaned',
+        path: process.cwd(),
+      }),
+      makeBranch({
+        branch_id: 'missing-worktree',
+        storage_mode: 'worktree',
+        filesystem_status: 'cleaned',
+        path: '/tmp/agor-definitely-missing-c',
+      }),
+    ]);
+
+    const cleanupCandidates = registerAndCaptureHandler('agor_branches_cleanup_candidates', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await cleanupCandidates({
+      archivedOlderThanDays: 1,
+      filesystemStatuses: ['cleaned'],
+      storageMode: 'clone',
+      pathExists: false,
+      skip: 1,
+      limit: 1,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.total).toBe(2);
+    expect(parsed.skip).toBe(1);
+    expect(parsed.limit).toBe(1);
+    expect(parsed.candidates).toHaveLength(1);
+    expect(parsed.candidates[0]).toMatchObject({
+      branch_id: 'missing-clone-b',
+      storage_mode: 'clone',
+      filesystem_status: 'cleaned',
+      path_exists: false,
+    });
   });
 });
