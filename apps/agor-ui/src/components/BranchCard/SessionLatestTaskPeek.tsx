@@ -9,24 +9,22 @@ import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTa
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { TaskBlock } from '../TaskBlock';
 import { ToolIcon } from '../ToolIcon';
-import { chooseBranchPromptTargetSession } from './latestBranchTask';
-import { useLatestBranchTask } from './useLatestBranchTask';
+import { chooseLatestSessionTask } from './latestBranchTask';
 
-interface BranchLatestTaskStreamProps {
+interface SessionLatestTaskPeekProps {
   client: AgorClient | null;
-  sessions: Session[];
+  session: Session;
   userById: Map<string, User>;
   currentUserId?: string;
   branchName?: string;
   enabled: boolean;
-  selectedSessionId?: string | null;
 }
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_STREAMING_MESSAGES: Map<string, StreamingMessageState> = new Map();
 
-export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
-  ({ client, sessions, userById, currentUserId, branchName, enabled, selectedSessionId }) => {
+export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
+  ({ client, session, userById, currentUserId, branchName, enabled }) => {
     const { token } = theme.useToken();
     const { onPermissionDecision, onSendPrompt } = useAppActions();
     const connectionDisabled = useConnectionDisabled();
@@ -37,32 +35,25 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
     const [isReloading, setIsReloading] = useState(false);
     const [prompt, setPrompt] = useState('');
 
-    const {
-      task: discoveredTask,
-      session,
-      loading: latestTaskLoading,
-      error: latestTaskError,
-    } = useLatestBranchTask(client, sessions, enabled);
-
-    const sessionId = session?.session_id ?? null;
+    const sessionId = session.session_id;
     const { handle: reactiveSession, state: reactiveState } = useSharedReactiveSession(
       client,
       sessionId,
       {
-        enabled: enabled && !!sessionId,
+        enabled,
         reactiveOptions: { taskHydration: 'lazy' },
       }
     );
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
+    const currentSession = currentReactiveState?.session || session;
 
     const task = useMemo(() => {
-      if (!discoveredTask) return null;
-      return (
-        currentReactiveState?.tasks.find(
-          (candidate) => candidate.task_id === discoveredTask.task_id
-        ) || discoveredTask
-      );
-    }, [currentReactiveState?.tasks, discoveredTask]);
+      if (!currentReactiveState) return null;
+      return chooseLatestSessionTask([
+        ...currentReactiveState.tasks,
+        ...currentReactiveState.queuedTasks,
+      ]);
+    }, [currentReactiveState]);
 
     const allStreamingMessages =
       currentReactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
@@ -141,7 +132,7 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
     }, [enabled, isNearBottom]);
 
     const handleExpandChange = useCallback(() => {
-      // The branch-card stream intentionally shows exactly one expanded task.
+      // Peek panels intentionally show exactly one expanded latest task.
       // Keep it open even if the TaskBlock header is clicked.
     }, []);
 
@@ -168,40 +159,26 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
       };
     }, [reactiveSession, taskId]);
 
-    const loading = latestTaskLoading || (!!sessionId && currentReactiveState?.loading && !task);
-    const error = latestTaskError || currentReactiveState?.error || null;
+    const loading = enabled && (!currentReactiveState || (currentReactiveState.loading && !task));
+    const error = currentReactiveState?.error || null;
     const isTerminalError = !!currentReactiveState?.terminal;
-    const promptTargetSession = useMemo(
-      () =>
-        chooseBranchPromptTargetSession({
-          sessions,
-          latestTaskSession: session,
-          selectedSessionId,
-        }),
-      [selectedSessionId, session, sessions]
-    );
     const trimmedPrompt = prompt.trim();
-    const canPrompt = !!promptTargetSession && !!onSendPrompt && !connectionDisabled;
-    const promptPermissionMode = promptTargetSession?.permission_config?.mode;
+    const canPrompt = !!onSendPrompt && !connectionDisabled;
+    const promptPermissionMode = currentSession.permission_config?.mode;
     const promptPlaceholder =
-      promptTargetSession?.status === 'running'
+      currentSession.status === 'running'
         ? 'Queue a prompt for this session…'
         : 'Prompt this session…';
 
-    // biome-ignore lint/correctness/useExhaustiveDependencies: clear the draft when the target session changes
-    useEffect(() => {
-      setPrompt('');
-    }, [promptTargetSession?.session_id]);
-
     const handlePromptSubmit = useCallback(() => {
-      if (!promptTargetSession || !onSendPrompt || !trimmedPrompt || connectionDisabled) return;
-      onSendPrompt(promptTargetSession.session_id, trimmedPrompt, promptPermissionMode);
+      if (!onSendPrompt || !trimmedPrompt || connectionDisabled) return;
+      onSendPrompt(currentSession.session_id, trimmedPrompt, promptPermissionMode);
       setPrompt('');
     }, [
       connectionDisabled,
+      currentSession.session_id,
       onSendPrompt,
       promptPermissionMode,
-      promptTargetSession,
       trimmedPrompt,
     ]);
 
@@ -210,14 +187,14 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
         <div
           ref={containerRef}
           style={{
-            height: 520,
+            height: 360,
             overflowY: 'auto',
           }}
         >
           {error ? (
             <Alert
               type="error"
-              message="Failed to load latest task"
+              message="Failed to load session task"
               description={error}
               showIcon
               action={
@@ -243,10 +220,10 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
             <div style={{ display: 'flex', justifyContent: 'center', padding: token.sizeXL }}>
               <Spin />
             </div>
-          ) : !task || !session ? (
+          ) : !task ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="No task output yet for this branch"
+              description="No task output yet for this session"
               style={{ marginTop: token.sizeXL }}
             />
           ) : task.status === TaskStatus.QUEUED ? (
@@ -259,17 +236,17 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
           ) : (
             <TaskBlock
               task={task}
-              agentic_tool={session.agentic_tool}
-              sessionModel={session.model_config?.model}
+              agentic_tool={currentSession.agentic_tool}
+              sessionModel={currentSession.model_config?.model}
               userById={userById}
               currentUserId={currentUserId}
               isExpanded={true}
               onExpandChange={handleExpandChange}
-              sessionId={session.session_id}
+              sessionId={currentSession.session_id}
               onPermissionDecision={onPermissionDecision}
               branchName={branchName}
-              scheduledFromBranch={session.scheduled_from_branch}
-              scheduledRunAt={session.scheduled_run_at}
+              scheduledFromBranch={currentSession.scheduled_from_branch}
+              scheduledRunAt={currentSession.scheduled_run_at}
               streamingMessages={streamingMessagesByTask.get(task.task_id)}
               taskMessages={
                 currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
@@ -292,16 +269,13 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            {promptTargetSession && (
-              <Space size={4} align="center" style={{ marginBottom: token.sizeUnit / 2 }}>
-                <ToolIcon tool={promptTargetSession.agentic_tool} size={14} />
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Prompting{' '}
-                  {getSessionDisplayTitle(promptTargetSession, { includeAgentFallback: true })} ·{' '}
-                  {shortId(promptTargetSession.session_id)}
-                </Typography.Text>
-              </Space>
-            )}
+            <Space size={4} align="center" style={{ marginBottom: token.sizeUnit / 2 }}>
+              <ToolIcon tool={currentSession.agentic_tool} size={14} />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Prompting {getSessionDisplayTitle(currentSession, { includeAgentFallback: true })} ·{' '}
+                {shortId(currentSession.session_id)}
+              </Typography.Text>
+            </Space>
             <Input.TextArea
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
@@ -312,7 +286,7 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
                 }
               }}
               disabled={!canPrompt}
-              placeholder={canPrompt ? promptPlaceholder : 'No promptable session selected…'}
+              placeholder={canPrompt ? promptPlaceholder : 'Session prompting is unavailable…'}
               autoSize={{ minRows: 1, maxRows: 4 }}
             />
           </div>
@@ -329,4 +303,4 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
   }
 );
 
-BranchLatestTaskStream.displayName = 'BranchLatestTaskStream';
+SessionLatestTaskPeek.displayName = 'SessionLatestTaskPeek';

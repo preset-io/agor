@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
-import { branchPath, getAssistantConfig, isAssistant } from '@agor-live/client';
+import { branchPath, getAssistantConfig, isAssistant, shortId } from '@agor-live/client';
 import {
   BranchesOutlined,
   CodeOutlined,
@@ -9,7 +9,7 @@ import {
   PushpinFilled,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Button, Card, Collapse, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -20,13 +20,12 @@ import { EnvironmentPill } from '../EnvironmentPill';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
-import { BranchLatestTaskStream } from './BranchLatestTaskStream';
+import { BranchSessionPeekSection } from './BranchSessionPeekSection';
 import { BranchSessionSections } from './BranchSessionSections';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
-const TASK_STREAM_SECTION_PARAM = 'section';
-const TASK_STREAM_SECTION_VALUE = 'latest-prompt';
+const PEEK_SESSIONS_PARAM = 'peek';
 
 interface BranchCardProps {
   branch: Branch;
@@ -111,27 +110,82 @@ const BranchCardComponent = ({
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
 
-  const taskStreamRouteSelected =
-    new URLSearchParams(location.search).get(TASK_STREAM_SECTION_PARAM) ===
-    TASK_STREAM_SECTION_VALUE;
-  const taskStreamExpanded =
-    !inPopover && !panelMode && isActiveUrlTarget && taskStreamRouteSelected;
+  const peekableSessions = useMemo(
+    () => sessions.filter((session) => !session.archived),
+    [sessions]
+  );
+  const peekableSessionById = useMemo(
+    () =>
+      new Map<string, Session>(peekableSessions.map((session) => [session.session_id, session])),
+    [peekableSessions]
+  );
 
-  const handleTaskStreamCollapseChange = useCallback(
-    (keys: string | string[]) => {
-      const nextExpanded = Array.isArray(keys)
-        ? keys.includes('latest-task')
-        : keys === 'latest-task';
-      const path = branchPath(branch.branch_id);
-      navigate(
-        nextExpanded ? `${path}?${TASK_STREAM_SECTION_PARAM}=${TASK_STREAM_SECTION_VALUE}` : path
+  const peekedSessionIds = useMemo(() => {
+    if (inPopover || panelMode || !isActiveUrlTarget) return [];
+
+    const peekParam = new URLSearchParams(location.search).get(PEEK_SESSIONS_PARAM);
+    if (!peekParam) return [];
+
+    const resolvedIds: string[] = [];
+    const seen = new Set<string>();
+
+    for (const rawToken of peekParam.split(',')) {
+      const token = rawToken.trim();
+      if (!token) continue;
+
+      const session = peekableSessions.find(
+        (candidate) => candidate.session_id === token || shortId(candidate.session_id) === token
       );
+      if (session && !seen.has(session.session_id)) {
+        resolvedIds.push(session.session_id);
+        seen.add(session.session_id);
+      }
+    }
+
+    return resolvedIds;
+  }, [inPopover, isActiveUrlTarget, location.search, panelMode, peekableSessions]);
+
+  const peekedSessionIdSet = useMemo(() => new Set(peekedSessionIds), [peekedSessionIds]);
+  const peekedSessions = useMemo(
+    () =>
+      peekedSessionIds
+        .map((sessionId) => peekableSessionById.get(sessionId))
+        .filter((session): session is Session => !!session),
+    [peekableSessionById, peekedSessionIds]
+  );
+
+  const updatePeekedSessionIds = useCallback(
+    (nextSessionIds: string[]) => {
+      const searchParams = new URLSearchParams(location.search);
+      searchParams.delete('section');
+
+      if (nextSessionIds.length > 0) {
+        searchParams.set(
+          PEEK_SESSIONS_PARAM,
+          nextSessionIds.map((sessionId) => shortId(sessionId)).join(',')
+        );
+      } else {
+        searchParams.delete(PEEK_SESSIONS_PARAM);
+      }
+
+      const query = searchParams.toString();
+      navigate(`${branchPath(branch.branch_id)}${query ? `?${query}` : ''}`);
     },
-    [branch.branch_id, navigate]
+    [branch.branch_id, location.search, navigate]
+  );
+
+  const handleTogglePeekSession = useCallback(
+    (sessionId: string) => {
+      const next = peekedSessionIdSet.has(sessionId)
+        ? peekedSessionIds.filter((peekedSessionId) => peekedSessionId !== sessionId)
+        : [...peekedSessionIds, sessionId];
+      updatePeekedSessionIds(next);
+    },
+    [peekedSessionIdSet, peekedSessionIds, updatePeekedSessionIds]
   );
 
   // Filter out archived sessions from board card display
-  const activeSessions = useMemo(() => sessions.filter((s) => !s.archived), [sessions]);
+  const activeSessions = peekableSessions;
 
   // Check if any active (non-archived) session is running or stopping
   const hasRunningSession = useMemo(
@@ -257,7 +311,7 @@ const BranchCardComponent = ({
   return (
     <Card
       style={{
-        width: panelMode ? '100%' : taskStreamExpanded ? 880 : 500,
+        width: panelMode ? '100%' : peekedSessions.length > 0 ? 880 : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
           'box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
@@ -520,48 +574,23 @@ const BranchCardComponent = ({
           onForkSession={onForkSession}
           onSpawnSession={onSpawnSession}
           onOpenSessionSettings={onOpenSessionSettings}
+          peekedSessionIds={peekedSessionIdSet}
+          onTogglePeekSession={!inPopover && !panelMode ? handleTogglePeekSession : undefined}
           defaultExpanded={defaultExpanded}
           mode="card"
           client={client}
         />
       </div>
 
-      {!inPopover && !panelMode && (
-        <div className="nodrag nopan nowheel">
-          <Collapse
-            activeKey={taskStreamExpanded ? ['latest-task'] : []}
-            onChange={handleTaskStreamCollapseChange}
-            ghost
-            style={{ marginTop: 0 }}
-            items={[
-              {
-                key: 'latest-task',
-                label: (
-                  <Space size={6} align="baseline">
-                    <Typography.Text strong>Most recent prompt</Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      live task output
-                    </Typography.Text>
-                  </Space>
-                ),
-                styles: {
-                  body: { background: 'transparent', padding: 0 },
-                },
-                children: taskStreamExpanded ? (
-                  <BranchLatestTaskStream
-                    client={client}
-                    sessions={sessions}
-                    userById={userById}
-                    currentUserId={currentUserId}
-                    branchName={branch.name}
-                    enabled={taskStreamExpanded}
-                    selectedSessionId={selectedSessionId}
-                  />
-                ) : null,
-              },
-            ]}
-          />
-        </div>
+      {!inPopover && !panelMode && peekedSessions.length > 0 && (
+        <BranchSessionPeekSection
+          client={client}
+          sessions={peekedSessions}
+          userById={userById}
+          currentUserId={currentUserId}
+          branchName={branch.name}
+          onCloseSession={handleTogglePeekSession}
+        />
       )}
 
       {/* Archive/Delete Modal */}

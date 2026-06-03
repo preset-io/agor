@@ -1,6 +1,10 @@
 import type { Session, Task } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
-import { chooseBranchPromptTargetSession, chooseLatestBranchTask } from './latestBranchTask';
+import {
+  chooseBranchPromptTargetSession,
+  chooseLatestBranchTask,
+  chooseLatestSessionTask,
+} from './latestBranchTask';
 
 function task(overrides: Partial<Task> & Pick<Task, 'task_id' | 'session_id' | 'status'>): Task {
   const createdAt = overrides.created_at ?? '2026-01-01T00:00:00.000Z';
@@ -103,6 +107,39 @@ describe('chooseLatestBranchTask', () => {
     );
 
     expect(result.task?.task_id).toBe(completed.task_id);
+  });
+});
+
+describe('chooseLatestSessionTask', () => {
+  it('uses latest-task ranking within one session', () => {
+    const targetSessionId = 'session-a';
+    const running = task({
+      task_id: 'task-running',
+      session_id: targetSessionId,
+      status: 'running',
+      started_at: '2026-01-01T00:00:00.000Z',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    const completed = task({
+      task_id: 'task-completed',
+      session_id: targetSessionId,
+      status: 'completed',
+      completed_at: '2026-01-02T00:00:00.000Z',
+      created_at: '2026-01-02T00:00:00.000Z',
+    });
+
+    expect(chooseLatestSessionTask([completed, running])?.task_id).toBe(running.task_id);
+  });
+
+  it('deduplicates queued and task-list copies by task id', () => {
+    const queued = task({
+      task_id: 'task-queued',
+      session_id: 'session-a',
+      status: 'queued',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(chooseLatestSessionTask([queued, queued])?.task_id).toBe(queued.task_id);
   });
 });
 

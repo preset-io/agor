@@ -60,6 +60,14 @@ export function chooseLatestBranchTask(
   };
 }
 
+export function chooseLatestSessionTask(tasks: Task[]): Task | null {
+  const taskById = new Map<string, Task>();
+  for (const task of tasks) {
+    taskById.set(task.task_id, task);
+  }
+  return Array.from(taskById.values()).sort(compareLatestTasks).at(-1) || null;
+}
+
 function compareSessionsByActivity(a: Session, b: Session): number {
   const aActive = ACTIVE_SESSION_STATUSES.has(a.status);
   const bActive = ACTIVE_SESSION_STATUSES.has(b.status);
