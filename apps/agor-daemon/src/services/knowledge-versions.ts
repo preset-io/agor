@@ -30,6 +30,7 @@ export type KnowledgeVersionParams = QueryParams<{
   namespace?: string;
   path?: string;
   include_content?: boolean;
+  limit?: number;
 }> &
   AuthenticatedParams;
 
@@ -91,8 +92,11 @@ export class KnowledgeVersionsService extends DrizzleService<
     const versions = await this.versions.findAll({
       document_id: documentId as KnowledgeDocumentVersion['document_id'],
     });
-    if (query.include_content === true) return versions;
-    return versions.map((version) => ({ ...version, content_text: null, content_blob: null }));
+    const rawLimit = (query as { $limit?: unknown }).$limit ?? query.limit;
+    const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : undefined;
+    const capped = limit ? versions.slice(0, Math.min(Math.max(limit, 1), 100)) : versions;
+    if (query.include_content === true) return capped;
+    return capped.map((version) => ({ ...version, content_text: null, content_blob: null }));
   }
 
   async get(): Promise<never> {

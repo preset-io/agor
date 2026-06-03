@@ -63,8 +63,8 @@ export class KnowledgeGraphService {
     return (
       !document.archived &&
       (this.isAdmin(user) ||
-        document.edit_policy === 'public' ||
-        Boolean(user?.user_id && document.created_by === user.user_id))
+        Boolean(user?.user_id && document.created_by === user.user_id) ||
+        (document.visibility === 'public' && document.edit_policy === 'public'))
     );
   }
 

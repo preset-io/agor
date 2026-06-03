@@ -121,26 +121,32 @@ export class KnowledgeDocumentsService extends DrizzleService<
     );
   }
 
-  private canWrite(document: KnowledgeDocument, user?: User): boolean {
+  private canEdit(document: KnowledgeDocument, user?: User): boolean {
     return (
       this.isAdmin(user) ||
-      document.edit_policy === 'public' ||
-      Boolean(user?.user_id && document.created_by === user.user_id)
+      Boolean(user?.user_id && document.created_by === user.user_id) ||
+      (document.visibility === 'public' && document.edit_policy === 'public')
     );
   }
 
-  private canManageVisibility(document: KnowledgeDocument, user?: User): boolean {
+  private canManageDocument(document: KnowledgeDocument, user?: User): boolean {
     return this.isAdmin(user) || Boolean(user?.user_id && document.created_by === user.user_id);
   }
 
-  private assertCanChangeVisibility(
+  private assertCanChangeGovernance(
     existing: KnowledgeDocument,
     data: Partial<KnowledgeDocument>,
     user?: User
   ): void {
-    if (data.visibility === undefined || data.visibility === existing.visibility) return;
-    if (!this.canManageVisibility(existing, user)) {
-      throw new Forbidden('Only the owner or an admin can change knowledge document visibility');
+    const visibilityChanged =
+      data.visibility !== undefined && data.visibility !== existing.visibility;
+    const editPolicyChanged =
+      data.edit_policy !== undefined && data.edit_policy !== existing.edit_policy;
+    if (!visibilityChanged && !editPolicyChanged) return;
+    if (!this.canManageDocument(existing, user)) {
+      throw new Forbidden(
+        'Only the owner or an admin can change knowledge document visibility or edit policy'
+      );
     }
   }
 
@@ -256,6 +262,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
 
   async find(params?: KnowledgeDocumentParams): Promise<KnowledgeDocument[]> {
     const query = params?.query;
+    const user = params?.user as User | undefined;
+    const isAdmin = this.isAdmin(user);
     const filters: KnowledgeDocumentFilters | undefined = query
       ? {
           namespace_id: query.namespace_id,
@@ -263,11 +271,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
           path: query.path,
           kind: query.kind,
           visibility: query.visibility,
-          archived: query.archived,
+          archived: isAdmin ? query.archived : false,
         }
       : undefined;
     const rows = await this.repo.findAll(filters);
-    const readable = rows.filter((doc) => this.canRead(doc, params?.user as User | undefined));
+    const readable = rows.filter((doc) => this.canRead(doc, user));
     if (params?.query?.include_content !== true && params?.query?.include_links !== true) {
       return readable;
     }
@@ -323,8 +331,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
 
     if (existing) {
       await this.assertActiveDocument(existing);
-      this.assertCanChangeVisibility(existing, data, params?.user as User | undefined);
-      if (!this.canWrite(existing, params?.user as User | undefined)) {
+      this.assertCanChangeGovernance(existing, data, params?.user as User | undefined);
+      if (!this.canEdit(existing, params?.user as User | undefined)) {
         throw new Forbidden('You do not have permission to update this knowledge document');
       }
       await this.assertExpectedVersion(existing, data.expected_version);
@@ -420,8 +428,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
     await this.assertActiveDocument(existing);
-    this.assertCanChangeVisibility(existing, data, params?.user as User | undefined);
-    if (!this.canWrite(existing, params?.user as User | undefined)) {
+    this.assertCanChangeGovernance(existing, data, params?.user as User | undefined);
+    if (!this.canEdit(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
     const result = await this.repo.update(String(id), {
@@ -441,8 +449,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
     await this.assertActiveDocument(existing);
-    this.assertCanChangeVisibility(existing, data, params?.user as User | undefined);
-    if (!this.canWrite(existing, params?.user as User | undefined)) {
+    this.assertCanChangeGovernance(existing, data, params?.user as User | undefined);
+    if (!this.canEdit(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
     const result = await this.repo.update(String(id), {
@@ -459,7 +467,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
     await this.assertActiveDocument(existing);
-    if (!this.canWrite(existing, params?.user as User | undefined)) {
+    if (!this.canManageDocument(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to delete this knowledge document');
     }
     await this.repo.delete(String(id));

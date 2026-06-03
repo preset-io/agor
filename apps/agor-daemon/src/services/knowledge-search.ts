@@ -35,6 +35,7 @@ export class KnowledgeSearchService {
     const isAdmin = hasMinimumRole(user?.role, ROLES.ADMIN);
     return {
       ...(query ?? {}),
+      include_archived: isAdmin && query?.include_archived === true,
       readable_as_admin: isAdmin,
       readable_by_user_id: isAdmin ? undefined : user?.user_id,
     };
