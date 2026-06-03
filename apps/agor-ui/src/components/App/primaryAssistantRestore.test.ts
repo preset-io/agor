@@ -6,7 +6,7 @@ const base = {
   primaryAssistantBranchId: 'branch-1',
   effectiveSelectedSessionId: null,
   autoOpenedAssistantBoardId: null,
-  hasExplicitEntityTarget: false,
+  restoreAllowed: true,
   sessions: [
     { session_id: 'older', archived: false, last_updated: '2026-01-01T00:00:00.000Z' },
     { session_id: 'newer', archived: false, last_updated: '2026-01-02T00:00:00.000Z' },
@@ -18,11 +18,11 @@ describe('getPrimaryAssistantSessionToRestore', () => {
     expect(getPrimaryAssistantSessionToRestore(base)).toBe('newer');
   });
 
-  it('does not restore over an explicit entity URL target', () => {
+  it('does not restore when route policy disallows generic restore', () => {
     expect(
       getPrimaryAssistantSessionToRestore({
         ...base,
-        hasExplicitEntityTarget: true,
+        restoreAllowed: false,
       })
     ).toBeNull();
   });

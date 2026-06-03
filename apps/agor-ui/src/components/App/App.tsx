@@ -50,6 +50,7 @@ import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPro
 import { createAssistantBranch } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
+import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { AppHeader } from '../AppHeader';
 import type { BoardAssistantPanelTab } from '../BoardAssistantPanel';
@@ -284,9 +285,7 @@ export const App: React.FC<AppProps> = ({
     branchShortId?: string;
     artifactShortId?: string;
   }>();
-  const hasExplicitEntityTarget = Boolean(
-    routeParams.sessionShortId || routeParams.branchShortId || routeParams.artifactShortId
-  );
+  const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -357,6 +356,7 @@ export const App: React.FC<AppProps> = ({
   // Props take precedence for backward compatibility with onboarding flow
   const settingsOpen = settingsRouteOpen || !!openSettingsTab;
   const effectiveSettingsTab = openSettingsTab || settingsRouteSection;
+  const shouldAutoRestorePrimaryAssistant = !settingsRouteOpen && !hasExplicitEntityTarget;
 
   // Handle external user settings modal control (e.g., from onboarding "Configure API Keys")
   const effectiveUserSettingsOpen = userSettingsOpen || !!openUserSettings;
@@ -820,7 +820,7 @@ export const App: React.FC<AppProps> = ({
       primaryAssistantBranchId: primaryAssistantBranch?.branch_id,
       effectiveSelectedSessionId,
       autoOpenedAssistantBoardId: autoOpenedAssistantBoardRef.current,
-      hasExplicitEntityTarget,
+      restoreAllowed: shouldAutoRestorePrimaryAssistant,
       sessions: primaryAssistantBranch
         ? sessionsByBranch.get(primaryAssistantBranch.branch_id) || []
         : [],
@@ -834,7 +834,7 @@ export const App: React.FC<AppProps> = ({
     primaryAssistantBranch,
     sessionsByBranch,
     effectiveSelectedSessionId,
-    hasExplicitEntityTarget,
+    shouldAutoRestorePrimaryAssistant,
     navigation,
   ]);
 
