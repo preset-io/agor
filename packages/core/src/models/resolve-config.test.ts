@@ -152,6 +152,21 @@ describe('resolveModelConfigWithFallback', () => {
     });
   });
 
+  it('does not carry model-less mode/provider onto a fallback model', () => {
+    const result = resolveModelConfigWithFallback(
+      'claude-code',
+      [{ mode: 'exact', provider: 'anthropic', effort: 'max' }],
+      { now }
+    );
+    expect(result).toEqual({
+      mode: 'alias',
+      model: 'claude-sonnet-4-6',
+      effort: 'max',
+      updated_at: '2026-04-23T00:00:00.000Z',
+    });
+    expect(result).not.toHaveProperty('provider');
+  });
+
   it('returns undefined for cursor / opencode when sources are empty', () => {
     expect(resolveModelConfigWithFallback('cursor', [undefined], { now })).toBeUndefined();
     expect(resolveModelConfigWithFallback('opencode', [undefined], { now })).toBeUndefined();

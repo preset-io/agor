@@ -115,22 +115,23 @@ export function getDefaultModelForTool(tool: AgenticToolName): string | undefine
   }
 }
 
-/** Internal predicate for partial configs such as `{ effort }`. */
-function hasModelConfigAncillaryFields(input: ModelConfigInput | undefined | null): boolean {
-  return (
-    !!input &&
-    (input.mode !== undefined || input.effort !== undefined || input.provider !== undefined)
-  );
+/** Extract model-less overrides that are safe to carry onto a fallback model. */
+function getModelLessFallbackOverrides(
+  input: ModelConfigInput | undefined | null
+): ModelConfigInput | undefined {
+  if (input?.effort === undefined) return undefined;
+  return { effort: input.effort };
 }
 
 /**
  * Resolve model config at a session-create boundary.
  *
  * Full model configs remain first-wins and are not merged with lower-priority
- * sources. However, a higher-priority source that only carries ancillary
- * fields (today most commonly `{ effort }` from the UI's separate effort
- * selector) is merged onto the next source that supplies the actual model, or
- * onto the tool fallback. This prevents partial persisted model_config objects
+ * sources. However, a higher-priority source that only carries `effort` (from
+ * the UI's separate effort selector) is merged onto the next source that
+ * supplies the actual model, or onto the tool fallback. We intentionally do not
+ * carry model-less `mode` / `provider` because their meaning depends on the
+ * missing model value. This prevents partial persisted model_config objects
  * while preserving the user's explicit effort choice.
  */
 export function resolveModelConfigWithFallback(
@@ -138,25 +139,27 @@ export function resolveModelConfigWithFallback(
   sources: Array<ModelConfigInput | undefined | null>,
   opts?: { now?: Date }
 ): ResolvedModelConfig | undefined {
-  let pendingAncillary: ModelConfigInput | undefined;
+  let pendingModelLessOverrides: ModelConfigInput | undefined;
 
   for (const source of sources) {
     if (source?.model) {
       return resolveModelConfig(
-        pendingAncillary ? { ...source, ...pendingAncillary, model: source.model } : source,
+        pendingModelLessOverrides
+          ? { ...source, ...pendingModelLessOverrides, model: source.model }
+          : source,
         opts
       );
     }
-    if (!pendingAncillary && hasModelConfigAncillaryFields(source)) {
-      pendingAncillary = source ?? undefined;
+    if (!pendingModelLessOverrides) {
+      pendingModelLessOverrides = getModelLessFallbackOverrides(source);
     }
   }
 
   const toolDefault = getDefaultModelForTool(tool);
   if (!toolDefault) return undefined;
   return resolveModelConfig(
-    pendingAncillary
-      ? { mode: 'alias', ...pendingAncillary, model: toolDefault }
+    pendingModelLessOverrides
+      ? { mode: 'alias', ...pendingModelLessOverrides, model: toolDefault }
       : { mode: 'alias', model: toolDefault },
     opts
   );
