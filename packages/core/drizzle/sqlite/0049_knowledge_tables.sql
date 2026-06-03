@@ -27,7 +27,7 @@ CREATE TABLE `kb_namespaces` (
 	FOREIGN KEY (`branch_id`) REFERENCES `branches`(`branch_id`) ON UPDATE no action ON DELETE set null,
 	FOREIGN KEY (`created_by`) REFERENCES `users`(`user_id`) ON UPDATE no action ON DELETE set null
 );--> statement-breakpoint
-CREATE UNIQUE INDEX `kb_namespaces_slug_idx` ON `kb_namespaces` (`slug`);--> statement-breakpoint
+CREATE UNIQUE INDEX `kb_namespaces_slug_idx` ON `kb_namespaces` (`slug`) WHERE `archived` = false;--> statement-breakpoint
 CREATE INDEX `kb_namespaces_kind_idx` ON `kb_namespaces` (`kind`);--> statement-breakpoint
 CREATE INDEX `kb_namespaces_owner_idx` ON `kb_namespaces` (`owner_user_id`);--> statement-breakpoint
 CREATE INDEX `kb_namespaces_repo_idx` ON `kb_namespaces` (`repo_id`);--> statement-breakpoint
@@ -40,8 +40,7 @@ INSERT INTO `kb_namespaces` (
 )
 VALUES
 	('00000000-0000-7000-8000-000000000001', 'global', 'Global', 'Shared instance-wide Knowledge space.', 'global', 'public', NULL, NULL, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000, false),
-	('00000000-0000-7000-8000-000000000002', 'skills', 'Skills', 'Shared markdown skills for agents and teammates.', 'global', 'public', NULL, NULL, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000, false)
-ON CONFLICT(`slug`) DO NOTHING;--> statement-breakpoint
+	('00000000-0000-7000-8000-000000000002', 'skills', 'Skills', 'Shared markdown skills for agents and teammates.', 'global', 'public', NULL, NULL, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000, false);--> statement-breakpoint
 
 CREATE TABLE `kb_documents` (
 	`document_id` text(36) PRIMARY KEY NOT NULL,
@@ -64,8 +63,8 @@ CREATE TABLE `kb_documents` (
 	FOREIGN KEY (`created_by`) REFERENCES `users`(`user_id`) ON UPDATE no action ON DELETE set null,
 	FOREIGN KEY (`updated_by`) REFERENCES `users`(`user_id`) ON UPDATE no action ON DELETE set null
 );--> statement-breakpoint
-CREATE UNIQUE INDEX `kb_documents_namespace_path_idx` ON `kb_documents` (`namespace_id`,`path`);--> statement-breakpoint
-CREATE UNIQUE INDEX `kb_documents_uri_idx` ON `kb_documents` (`uri`);--> statement-breakpoint
+CREATE UNIQUE INDEX `kb_documents_namespace_path_idx` ON `kb_documents` (`namespace_id`,`path`) WHERE `archived` = false;--> statement-breakpoint
+CREATE UNIQUE INDEX `kb_documents_uri_idx` ON `kb_documents` (`uri`) WHERE `archived` = false;--> statement-breakpoint
 CREATE INDEX `kb_documents_namespace_idx` ON `kb_documents` (`namespace_id`);--> statement-breakpoint
 CREATE INDEX `kb_documents_kind_idx` ON `kb_documents` (`kind`);--> statement-breakpoint
 CREATE INDEX `kb_documents_visibility_idx` ON `kb_documents` (`visibility`);--> statement-breakpoint
@@ -163,7 +162,7 @@ CREATE TABLE `kb_graph_nodes` (
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`user_id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`created_by`) REFERENCES `users`(`user_id`) ON UPDATE no action ON DELETE set null
 );--> statement-breakpoint
-CREATE UNIQUE INDEX `kb_graph_nodes_uri_idx` ON `kb_graph_nodes` (`uri`);--> statement-breakpoint
+CREATE UNIQUE INDEX `kb_graph_nodes_uri_idx` ON `kb_graph_nodes` (`uri`) WHERE `archived` = false;--> statement-breakpoint
 CREATE INDEX `kb_graph_nodes_type_idx` ON `kb_graph_nodes` (`node_type`);--> statement-breakpoint
 CREATE INDEX `kb_graph_nodes_namespace_idx` ON `kb_graph_nodes` (`namespace_id`);--> statement-breakpoint
 CREATE INDEX `kb_graph_nodes_document_idx` ON `kb_graph_nodes` (`document_id`);--> statement-breakpoint
@@ -199,5 +198,5 @@ CREATE INDEX `kb_graph_edges_target_idx` ON `kb_graph_edges` (`target_node_id`);
 CREATE INDEX `kb_graph_edges_type_idx` ON `kb_graph_edges` (`edge_type`);--> statement-breakpoint
 CREATE INDEX `kb_graph_edges_source_type_idx` ON `kb_graph_edges` (`source_node_id`,`edge_type`);--> statement-breakpoint
 CREATE INDEX `kb_graph_edges_target_type_idx` ON `kb_graph_edges` (`target_node_id`,`edge_type`);--> statement-breakpoint
-CREATE UNIQUE INDEX `kb_graph_edges_source_target_type_idx` ON `kb_graph_edges` (`source_node_id`,`target_node_id`,`edge_type`);--> statement-breakpoint
+CREATE UNIQUE INDEX `kb_graph_edges_source_target_type_idx` ON `kb_graph_edges` (`source_node_id`,`target_node_id`,`edge_type`) WHERE `archived` = false;--> statement-breakpoint
 CREATE INDEX `kb_graph_edges_archived_idx` ON `kb_graph_edges` (`archived`);

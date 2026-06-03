@@ -1568,7 +1568,9 @@ export const kbNamespaces = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    slugIdx: uniqueIndex('kb_namespaces_slug_idx').on(table.slug),
+    slugIdx: uniqueIndex('kb_namespaces_slug_idx')
+      .on(table.slug)
+      .where(sql`${table.archived} = false`),
     kindIdx: index('kb_namespaces_kind_idx').on(table.kind),
     ownerIdx: index('kb_namespaces_owner_idx').on(table.owner_user_id),
     repoIdx: index('kb_namespaces_repo_idx').on(table.repo_id),
@@ -1616,11 +1618,10 @@ export const kbDocuments = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    namespacePathIdx: uniqueIndex('kb_documents_namespace_path_idx').on(
-      table.namespace_id,
-      table.path
-    ),
-    uriIdx: uniqueIndex('kb_documents_uri_idx').on(table.uri),
+    namespacePathIdx: uniqueIndex('kb_documents_namespace_path_idx')
+      .on(table.namespace_id, table.path)
+      .where(sql`${table.archived} = false`),
+    uriIdx: uniqueIndex('kb_documents_uri_idx').on(table.uri).where(sql`${table.archived} = false`),
     namespaceIdx: index('kb_documents_namespace_idx').on(table.namespace_id),
     kindIdx: index('kb_documents_kind_idx').on(table.kind),
     visibilityIdx: index('kb_documents_visibility_idx').on(table.visibility),
@@ -1789,7 +1790,9 @@ export const kbGraphNodes = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    uriIdx: uniqueIndex('kb_graph_nodes_uri_idx').on(table.uri),
+    uriIdx: uniqueIndex('kb_graph_nodes_uri_idx')
+      .on(table.uri)
+      .where(sql`${table.archived} = false`),
     typeIdx: index('kb_graph_nodes_type_idx').on(table.node_type),
     namespaceIdx: index('kb_graph_nodes_namespace_idx').on(table.namespace_id),
     documentIdx: index('kb_graph_nodes_document_idx').on(table.document_id),
@@ -1854,11 +1857,9 @@ export const kbGraphEdges = pgTable(
       table.target_node_id,
       table.edge_type
     ),
-    sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_source_target_type_idx').on(
-      table.source_node_id,
-      table.target_node_id,
-      table.edge_type
-    ),
+    sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_source_target_type_idx')
+      .on(table.source_node_id, table.target_node_id, table.edge_type)
+      .where(sql`${table.archived} = false`),
     archivedIdx: index('kb_graph_edges_archived_idx').on(table.archived),
   })
 );

@@ -4,12 +4,17 @@
 
 import { PAGINATION } from '@agor/core/config';
 import { type Database, KnowledgeNamespaceRepository } from '@agor/core/db';
+import { Forbidden, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  Id,
   KnowledgeNamespace,
+  NullableId,
   QueryParams,
+  User,
   UserID,
 } from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 export type KnowledgeNamespaceParams = QueryParams<{
@@ -46,6 +51,22 @@ export class KnowledgeNamespacesService extends DrizzleService<
     return this.repo.findAll(params?.query);
   }
 
+  private isAdmin(user?: User): boolean {
+    return hasMinimumRole(user?.role, ROLES.ADMIN);
+  }
+
+  private assertCanManage(params?: KnowledgeNamespaceParams): void {
+    if (!this.isAdmin(params?.user as User | undefined)) {
+      throw new Forbidden('Only admins can update or delete knowledge namespaces');
+    }
+  }
+
+  private attributionUserId(params?: KnowledgeNamespaceParams, requestedUserId?: UserID | null) {
+    const user = params?.user as User | undefined;
+    if (this.isAdmin(user) && requestedUserId) return requestedUserId;
+    return (user?.user_id as UserID | undefined) ?? null;
+  }
+
   private async createOne(
     data: Partial<KnowledgeNamespace>,
     params?: KnowledgeNamespaceParams
@@ -53,7 +74,8 @@ export class KnowledgeNamespacesService extends DrizzleService<
     const userId = params?.user?.user_id as UserID | undefined;
     const result = await this.repo.create({
       ...data,
-      created_by: data.created_by ?? userId ?? null,
+      created_by: this.attributionUserId(params, data.created_by),
+      owner_user_id: data.owner_user_id ?? userId ?? null,
     });
     this.emit?.('created', result, params);
     return result;
@@ -67,6 +89,54 @@ export class KnowledgeNamespacesService extends DrizzleService<
       return Promise.all(data.map((item) => this.createOne(item, params)));
     }
     return this.createOne(data, params);
+  }
+
+  async patch(
+    id: NullableId,
+    data: Partial<KnowledgeNamespace>,
+    params?: KnowledgeNamespaceParams
+  ): Promise<KnowledgeNamespace> {
+    if (id === null) throw new Error('Bulk patch is not supported for knowledge namespaces');
+    this.assertCanManage(params);
+    const existing = await this.repo.findById(String(id));
+    if (!existing) throw new NotFound(`Knowledge namespace not found: ${id}`);
+    const result = await this.repo.update(String(id), {
+      ...data,
+      namespace_id: existing.namespace_id,
+      slug: data.slug ?? existing.slug,
+      created_by: existing.created_by,
+      owner_user_id: data.owner_user_id ?? existing.owner_user_id,
+    });
+    this.emit?.('patched', result, params);
+    return result;
+  }
+
+  async update(
+    id: Id,
+    data: Partial<KnowledgeNamespace>,
+    params?: KnowledgeNamespaceParams
+  ): Promise<KnowledgeNamespace> {
+    this.assertCanManage(params);
+    const existing = await this.repo.findById(String(id));
+    if (!existing) throw new NotFound(`Knowledge namespace not found: ${id}`);
+    const result = await this.repo.update(String(id), {
+      ...data,
+      namespace_id: existing.namespace_id,
+      created_by: existing.created_by,
+      owner_user_id: data.owner_user_id ?? existing.owner_user_id,
+    });
+    this.emit?.('updated', result, params);
+    return result;
+  }
+
+  async remove(id: NullableId, params?: KnowledgeNamespaceParams): Promise<KnowledgeNamespace> {
+    if (id === null) throw new Error('Bulk remove is not supported for knowledge namespaces');
+    this.assertCanManage(params);
+    const existing = await this.repo.findById(String(id));
+    if (!existing) throw new NotFound(`Knowledge namespace not found: ${id}`);
+    await this.repo.delete(String(id));
+    this.emit?.('removed', existing, params);
+    return existing;
   }
 }
 

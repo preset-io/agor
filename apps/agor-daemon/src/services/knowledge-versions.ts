@@ -8,12 +8,13 @@ import {
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
 } from '@agor/core/db';
-import { Forbidden } from '@agor/core/feathers';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
   hasMinimumRole,
   type KnowledgeDocument,
   type KnowledgeDocumentVersion,
+  parseKnowledgeUri,
   type QueryParams,
   ROLES,
   type User,
@@ -53,14 +54,6 @@ export class KnowledgeVersionsService extends DrizzleService<
     this.documents = new KnowledgeDocumentRepository(db);
   }
 
-  private parseUri(uri?: string): { namespace_slug: string; path: string } | null {
-    if (!uri?.startsWith('agor://kb/')) return null;
-    const rest = uri.slice('agor://kb/'.length);
-    const slash = rest.indexOf('/');
-    if (slash <= 0 || slash === rest.length - 1) return null;
-    return { namespace_slug: rest.slice(0, slash), path: rest.slice(slash + 1) };
-  }
-
   private canRead(document: KnowledgeDocument, user?: User): boolean {
     return (
       document.visibility === 'public' ||
@@ -73,7 +66,7 @@ export class KnowledgeVersionsService extends DrizzleService<
     const query = params?.query ?? {};
     let documentId = query.document_id ?? query.documentId;
     if (!documentId) {
-      const parsed = this.parseUri(query.uri);
+      const parsed = parseKnowledgeUri(query.uri);
       const namespaceSlug = query.namespace_slug ?? query.namespace ?? parsed?.namespace_slug;
       const path = query.path ?? parsed?.path;
       if (namespaceSlug && path) {
@@ -94,6 +87,26 @@ export class KnowledgeVersionsService extends DrizzleService<
     });
     if (query.include_content === true) return versions;
     return versions.map((version) => ({ ...version, content_text: null, content_blob: null }));
+  }
+
+  async get(): Promise<never> {
+    throw new BadRequest('Knowledge document versions are only available through find()');
+  }
+
+  async create(): Promise<never> {
+    throw new BadRequest('Knowledge document versions are immutable');
+  }
+
+  async patch(): Promise<never> {
+    throw new BadRequest('Knowledge document versions are immutable');
+  }
+
+  async update(): Promise<never> {
+    throw new BadRequest('Knowledge document versions are immutable');
+  }
+
+  async remove(): Promise<never> {
+    throw new BadRequest('Knowledge document versions are immutable');
   }
 }
 

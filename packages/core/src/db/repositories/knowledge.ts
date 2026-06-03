@@ -28,6 +28,11 @@ import type {
   KnowledgeVisibility,
   UserID,
 } from '@agor/core/types';
+import {
+  buildKnowledgeUri,
+  normalizeKnowledgePath,
+  titleFromKnowledgePath,
+} from '@agor/core/types';
 import { and, desc, eq, like, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -61,12 +66,6 @@ import {
 import { deepMerge } from './merge-utils';
 
 const MARKDOWN_MIME_TYPE = 'text/markdown';
-const INVALID_PATH_CHARS = new Set(['<', '>', ':', '"', '\\', '|', '?', '*']);
-const RESERVED_WINDOWS_NAMES_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
-
-const hasInvalidPathChar = (segment: string) =>
-  [...segment].some((char) => INVALID_PATH_CHARS.has(char) || char.charCodeAt(0) < 32);
-
 export interface KnowledgeNamespaceFilters {
   slug?: string;
   kind?: KnowledgeNamespaceKind;
@@ -115,6 +114,8 @@ export interface KnowledgeSearchQuery {
   visibility?: KnowledgeVisibility;
   include_archived?: boolean;
   limit?: number;
+  readable_by_user_id?: UserID;
+  readable_as_admin?: boolean;
 }
 
 export interface KnowledgeNodeRef {
@@ -183,44 +184,6 @@ export interface KnowledgeSearchResult {
   namespace: KnowledgeNamespace;
   snippet?: string | null;
   score: number;
-}
-
-function normalizeKnowledgePath(path: string): string {
-  const normalized = path.trim().replace(/^\/+/, '').replace(/\/+/g, '/');
-  if (!normalized) throw new RepositoryError('Knowledge document path is required');
-
-  for (const segment of normalized.split('/')) {
-    if (!segment || segment === '.' || segment === '..') {
-      throw new RepositoryError(
-        'Knowledge document path must not contain empty, "." or ".." segments'
-      );
-    }
-    if (hasInvalidPathChar(segment)) {
-      throw new RepositoryError(
-        'Knowledge document path segments cannot contain < > : " \\\\ | ? * or control characters'
-      );
-    }
-    if (segment.endsWith(' ') || segment.endsWith('.')) {
-      throw new RepositoryError(
-        'Knowledge document path segments cannot end with a space or period'
-      );
-    }
-    if (RESERVED_WINDOWS_NAMES_RE.test(segment)) {
-      throw new RepositoryError(
-        `Knowledge document path segment "${segment}" is reserved on some filesystems`
-      );
-    }
-  }
-  return normalized;
-}
-
-function titleFromPath(path: string): string {
-  const leaf = path.split('/').pop() || path;
-  return leaf.replace(/\.(md|markdown)$/i, '').replace(/[-_]+/g, ' ') || path;
-}
-
-function buildKnowledgeUri(namespaceSlug: string, path: string): string {
-  return `agor://kb/${namespaceSlug}/${path}`;
 }
 
 function hashContent(content: string): {
@@ -343,7 +306,10 @@ export class KnowledgeNamespaceRepository
   }
 
   async findBySlug(slug: string): Promise<KnowledgeNamespace | null> {
-    const row = await select(this.db).from(kbNamespaces).where(eq(kbNamespaces.slug, slug)).one();
+    const row = await select(this.db)
+      .from(kbNamespaces)
+      .where(and(eq(kbNamespaces.slug, slug), eq(kbNamespaces.archived, false)))
+      .one();
     return row ? this.rowToNamespace(row) : null;
   }
 
@@ -388,11 +354,19 @@ export class KnowledgeNamespaceRepository
 
   async delete(id: string): Promise<void> {
     const fullId = await this.resolveId(id);
-    const result = await update(this.db, kbNamespaces)
-      .set({ archived: true, archived_at: new Date(), updated_at: new Date() })
-      .where(eq(kbNamespaces.namespace_id, fullId))
-      .run();
-    if (result.rowsAffected === 0) throw new EntityNotFoundError('KnowledgeNamespace', id);
+    await this.db.transaction(async (tx) => {
+      const txDb = txAsDb(tx);
+      const archivedAt = new Date();
+      const result = await update(txDb, kbNamespaces)
+        .set({ archived: true, archived_at: archivedAt, updated_at: archivedAt })
+        .where(eq(kbNamespaces.namespace_id, fullId))
+        .run();
+      if (result.rowsAffected === 0) throw new EntityNotFoundError('KnowledgeNamespace', id);
+      await update(txDb, kbDocuments)
+        .set({ archived: true, archived_at: archivedAt, updated_at: archivedAt })
+        .where(eq(kbDocuments.namespace_id, fullId))
+        .run();
+    });
   }
 }
 
@@ -556,7 +530,7 @@ export class KnowledgeDocumentRepository
       : data.namespace_slug
         ? await namespaceRepo.findBySlug(data.namespace_slug)
         : null;
-    if (!ns) throw new RepositoryError('Knowledge namespace not found');
+    if (!ns || ns.archived) throw new RepositoryError('Knowledge namespace not found');
     return ns;
   }
 
@@ -575,7 +549,7 @@ export class KnowledgeDocumentRepository
       namespace_id: data.namespace_id,
       path: normalizedPath,
       uri: data.uri ?? buildKnowledgeUri(namespaceSlug, normalizedPath),
-      title: data.title ?? titleFromPath(normalizedPath),
+      title: data.title ?? titleFromKnowledgePath(normalizedPath),
       kind: data.kind ?? 'doc',
       visibility: data.visibility ?? 'public',
       edit_policy: data.edit_policy ?? 'owner',
@@ -746,6 +720,13 @@ export class KnowledgeDocumentRepository
     if (filters?.kind) conditions.push(eq(kbDocuments.kind, filters.kind));
     if (filters?.visibility) conditions.push(eq(kbDocuments.visibility, filters.visibility));
     conditions.push(eq(kbDocuments.archived, filters?.archived ?? false));
+    if (filters?.archived !== true) {
+      conditions.push(sql`exists (
+        select 1 from ${kbNamespaces}
+        where ${kbNamespaces.namespace_id} = ${kbDocuments.namespace_id}
+          and ${kbNamespaces.archived} = false
+      )`);
+    }
 
     const rows = await select(this.db)
       .from(kbDocuments)
@@ -876,13 +857,27 @@ export class KnowledgeSearchRepository {
     }
 
     const conditions = [];
-    if (!query.include_archived) conditions.push(eq(kbDocuments.archived, false));
+    if (!query.include_archived) {
+      conditions.push(eq(kbDocuments.archived, false));
+      conditions.push(eq(kbNamespaces.archived, false));
+    }
     if (namespaceId) conditions.push(eq(kbDocuments.namespace_id, namespaceId));
     if (query.path_prefix) {
-      conditions.push(like(kbDocuments.path, `${normalizeKnowledgePath(query.path_prefix)}%`));
+      const prefix = normalizeKnowledgePath(query.path_prefix);
+      conditions.push(or(eq(kbDocuments.path, prefix), like(kbDocuments.path, `${prefix}/%`))!);
     }
     if (query.kind) conditions.push(eq(kbDocuments.kind, query.kind));
     if (query.visibility) conditions.push(eq(kbDocuments.visibility, query.visibility));
+    if (!query.readable_as_admin) {
+      conditions.push(
+        query.readable_by_user_id
+          ? or(
+              eq(kbDocuments.visibility, 'public'),
+              eq(kbDocuments.created_by, query.readable_by_user_id)
+            )!
+          : eq(kbDocuments.visibility, 'public')
+      );
+    }
 
     if (q) {
       const pattern = `%${q.toLowerCase()}%`;
@@ -1120,7 +1115,7 @@ export class KnowledgeGraphRepository {
     const uri = this.deriveNodeUri(ref);
     const existing = await select(this.db)
       .from(kbGraphNodes)
-      .where(eq(kbGraphNodes.uri, uri))
+      .where(and(eq(kbGraphNodes.uri, uri), eq(kbGraphNodes.archived, false)))
       .one();
     if (existing) return this.rowToNode(existing);
 
@@ -1157,7 +1152,8 @@ export class KnowledgeGraphRepository {
         and(
           eq(kbGraphEdges.source_node_id, source.node_id),
           eq(kbGraphEdges.target_node_id, target.node_id),
-          eq(kbGraphEdges.edge_type, input.edge_type)
+          eq(kbGraphEdges.edge_type, input.edge_type),
+          eq(kbGraphEdges.archived, false)
         )
       )
       .one();

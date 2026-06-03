@@ -336,11 +336,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Knowledge (backend/data foundations)
   // ============================================================================
 
-  app.use('/kb/namespaces', createKnowledgeNamespacesService(db));
+  app.use('/kb/namespaces', createKnowledgeNamespacesService(db), {
+    methods: ['find', 'get', 'create', 'update', 'patch', 'remove'],
+  });
   app.use('/kb/documents', createKnowledgeDocumentsService(db), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'getDocument', 'putDocument'],
   });
-  app.use('/kb/versions', createKnowledgeVersionsService(db));
+  app.use('/kb/versions', createKnowledgeVersionsService(db), {
+    methods: ['find'],
+  });
   app.use('/kb/search', createKnowledgeSearchService(db), {
     methods: ['find', 'create'],
   });

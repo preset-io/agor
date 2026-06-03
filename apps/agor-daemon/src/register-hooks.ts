@@ -901,9 +901,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create knowledge namespaces')],
-      patch: [requireMinimumRole(ROLES.MEMBER, 'update knowledge namespaces')],
-      update: [requireMinimumRole(ROLES.MEMBER, 'update knowledge namespaces')],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete knowledge namespaces')],
+      patch: [requireMinimumRole(ROLES.ADMIN, 'update knowledge namespaces')],
+      update: [requireMinimumRole(ROLES.ADMIN, 'update knowledge namespaces')],
+      remove: [requireMinimumRole(ROLES.ADMIN, 'delete knowledge namespaces')],
     },
   });
 

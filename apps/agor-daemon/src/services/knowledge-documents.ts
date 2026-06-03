@@ -9,6 +9,7 @@ import { PAGINATION } from '@agor/core/config';
 import {
   type CreateKnowledgeDocumentInput,
   type Database,
+  type KnowledgeDocumentFilters,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
   KnowledgeNamespaceRepository,
@@ -20,16 +21,22 @@ import type {
   Id,
   KnowledgeDocument,
   KnowledgeDocumentVersion,
+  KnowledgeNamespaceID,
   NullableId,
   QueryParams,
   User,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import {
+  hasMinimumRole,
+  parseKnowledgeUri,
+  ROLES,
+  titleFromKnowledgeContent,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 export type KnowledgeDocumentParams = QueryParams<{
-  namespace_id?: string;
+  namespace_id?: KnowledgeNamespaceID;
   namespace_slug?: string;
   path?: string;
   kind?: KnowledgeDocument['kind'];
@@ -72,29 +79,6 @@ type HydratedKnowledgeDocument = KnowledgeDocument & {
 };
 
 type HydrateOptions = Pick<KnowledgeDocumentRef, 'include_content' | 'include_links' | 'version'>;
-
-function parseKnowledgeUri(uri?: string | null): { namespace_slug: string; path: string } | null {
-  if (!uri?.startsWith('agor://kb/')) return null;
-  const rest = uri.slice('agor://kb/'.length);
-  const slash = rest.indexOf('/');
-  if (slash <= 0 || slash === rest.length - 1) return null;
-  return { namespace_slug: rest.slice(0, slash), path: rest.slice(slash + 1) };
-}
-
-function normalizeFirstLineTitle(content: string, fallback: string): string {
-  const first = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean);
-  if (!first) return fallback;
-  return (
-    first
-      .replace(/^#{1,6}\s+/, '')
-      .replace(/^\s*[-*+]\s+/, '')
-      .replace(/[*_`~]/g, '')
-      .trim() || fallback
-  );
-}
 
 function wantsFirstLineTitle(data: KnowledgeDocumentWriteData): boolean {
   if (typeof data.first_line_is_title === 'boolean') return data.first_line_is_title;
@@ -145,6 +129,19 @@ export class KnowledgeDocumentsService extends DrizzleService<
     );
   }
 
+  private attributionUserId(params?: KnowledgeDocumentParams, requestedUserId?: UserID | null) {
+    const user = params?.user as User | undefined;
+    if (this.isAdmin(user) && requestedUserId) return requestedUserId;
+    return (user?.user_id as UserID | undefined) ?? null;
+  }
+
+  private async assertActiveNamespace(document: KnowledgeDocument): Promise<void> {
+    const namespace = await this.namespaces.findById(document.namespace_id);
+    if (!namespace || namespace.archived) {
+      throw new NotFound('Knowledge document not found');
+    }
+  }
+
   private prepareWriteData(
     data: KnowledgeDocumentWriteData,
     existing?: KnowledgeDocument | null
@@ -158,7 +155,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     };
     const prepared: KnowledgeDocumentWriteData = { ...data, metadata };
     if (wantsFirstLineTitle(prepared) && typeof prepared.content_text === 'string') {
-      prepared.title = normalizeFirstLineTitle(
+      prepared.title = titleFromKnowledgeContent(
         prepared.content_text,
         prepared.title ?? existing?.title ?? 'Untitled'
       );
@@ -180,7 +177,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!namespaceSlug || !path) return null;
 
     const namespace = await this.namespaces.findBySlug(String(namespaceSlug));
-    if (!namespace) return null;
+    if (!namespace || namespace.archived) return null;
     return this.repo.findByNamespaceAndPath(namespace.namespace_id, String(path));
   }
 
@@ -240,9 +237,18 @@ export class KnowledgeDocumentsService extends DrizzleService<
   }
 
   async find(params?: KnowledgeDocumentParams): Promise<KnowledgeDocument[]> {
-    const rows = await this.repo.findAll(
-      params?.query as Parameters<KnowledgeDocumentRepository['findAll']>[0]
-    );
+    const query = params?.query;
+    const filters: KnowledgeDocumentFilters | undefined = query
+      ? {
+          namespace_id: query.namespace_id,
+          namespace_slug: query.namespace_slug,
+          path: query.path,
+          kind: query.kind,
+          visibility: query.visibility,
+          archived: query.archived,
+        }
+      : undefined;
+    const rows = await this.repo.findAll(filters);
     const readable = rows.filter((doc) => this.canRead(doc, params?.user as User | undefined));
     if (params?.query?.include_content !== true && params?.query?.include_links !== true) {
       return readable;
@@ -261,6 +267,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   async get(id: Id, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
     const doc = await this.repo.findById(String(id));
     if (!doc) throw new NotFound(`Knowledge document not found: ${id}`);
+    await this.assertActiveNamespace(doc);
     if (!this.canRead(doc, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
@@ -273,6 +280,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   ): Promise<KnowledgeDocument | HydratedKnowledgeDocument> {
     const doc = await this.resolveDocumentRef(data);
     if (!doc) throw new NotFound('Knowledge document not found');
+    await this.assertActiveNamespace(doc);
     if (!this.canRead(doc, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
@@ -283,7 +291,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: KnowledgeDocumentWriteData,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument> {
-    const userId = params?.user?.user_id as UserID | undefined;
+    const userId = this.attributionUserId(params, data.created_by);
 
     const parsed = parseKnowledgeUri(data.uri);
     const namespaceSlug = data.namespace_slug ?? parsed?.namespace_slug;
@@ -305,9 +313,10 @@ export class KnowledgeDocumentsService extends DrizzleService<
         this.prepareWriteData(
           {
             ...data,
+            created_by: existing.created_by,
             namespace_slug: undefined,
             path: path ?? existing.path,
-            updated_by: data.updated_by ?? userId ?? null,
+            updated_by: this.attributionUserId(params, data.updated_by),
           },
           existing
         )
@@ -329,10 +338,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
         display_name: data.namespace_display_name ?? namespaceSlug,
         kind: 'global',
         visibility_default: data.visibility ?? 'public',
-        created_by: userId ?? null,
+        created_by: userId,
       });
     }
     if (!namespace) throw new NotFound(`Knowledge namespace not found: ${namespaceSlug}`);
+    if (namespace.archived) throw new NotFound(`Knowledge namespace not found: ${namespaceSlug}`);
 
     const result = await this.repo.create(
       this.prepareWriteData({
@@ -340,8 +350,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
         namespace_id: namespace.namespace_id,
         namespace_slug: namespace.slug,
         path,
-        created_by: data.created_by ?? userId ?? null,
-        updated_by: data.updated_by ?? userId ?? null,
+        created_by: userId,
+        updated_by: this.attributionUserId(params, data.updated_by),
       })
     );
     this.emit?.('created', result, params);
@@ -352,12 +362,12 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument> {
-    const userId = params?.user?.user_id as UserID | undefined;
+    const userId = this.attributionUserId(params, data.created_by);
     const prepared = this.prepareWriteData(
       {
         ...data,
-        created_by: data.created_by ?? userId ?? null,
-        updated_by: data.updated_by ?? userId ?? null,
+        created_by: userId,
+        updated_by: this.attributionUserId(params, data.updated_by),
       },
       null
     );
@@ -387,15 +397,16 @@ export class KnowledgeDocumentsService extends DrizzleService<
     params?: KnowledgeDocumentParams
   ) {
     if (id === null) throw new Error('Bulk patch is not supported for knowledge documents');
-    const userId = params?.user?.user_id as UserID | undefined;
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
+    await this.assertActiveNamespace(existing);
     if (!this.canWrite(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
     const result = await this.repo.update(String(id), {
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
-      updated_by: data.updated_by ?? userId ?? null,
+      created_by: existing.created_by,
+      updated_by: this.attributionUserId(params, data.updated_by),
     });
     this.emit?.('patched', result, params);
     return result;
@@ -406,18 +417,32 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams
   ) {
-    const userId = params?.user?.user_id as UserID | undefined;
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
+    await this.assertActiveNamespace(existing);
     if (!this.canWrite(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
     const result = await this.repo.update(String(id), {
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
-      updated_by: data.updated_by ?? userId ?? null,
+      created_by: existing.created_by,
+      updated_by: this.attributionUserId(params, data.updated_by),
     });
     this.emit?.('updated', result, params);
     return result;
+  }
+
+  async remove(id: NullableId, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
+    if (id === null) throw new Error('Bulk remove is not supported for knowledge documents');
+    const existing = await this.repo.findById(String(id));
+    if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
+    await this.assertActiveNamespace(existing);
+    if (!this.canWrite(existing, params?.user as User | undefined)) {
+      throw new Forbidden('You do not have permission to delete this knowledge document');
+    }
+    await this.repo.delete(String(id));
+    this.emit?.('removed', existing, params);
+    return existing;
   }
 }
 

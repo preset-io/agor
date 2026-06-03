@@ -5,54 +5,24 @@ import type {
   KnowledgeGraphNodeType,
   KnowledgeVisibility,
 } from '@agor/core/types';
+import {
+  KNOWLEDGE_DOCUMENT_KINDS,
+  KNOWLEDGE_EDIT_POLICIES,
+  KNOWLEDGE_GRAPH_EDGE_TYPES,
+  KNOWLEDGE_GRAPH_NODE_TYPES,
+  KNOWLEDGE_VISIBILITIES,
+  parseKnowledgeUri,
+} from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { McpContext } from '../server.js';
 import { coerceJsonRecord, coerceString, textResult } from '../server.js';
 
-const KnowledgeDocumentKindSchema = z.enum([
-  'doc',
-  'memory',
-  'skill',
-  'prompt',
-  'guide',
-  'decision',
-  'bundle',
-  'external',
-]);
-
-const KnowledgeVisibilitySchema = z.enum(['public', 'private']);
-const KnowledgeEditPolicySchema = z.enum(['owner', 'public', 'admins']);
-
-const KnowledgeGraphNodeTypeSchema = z.enum([
-  'namespace',
-  'document',
-  'document_unit',
-  'branch',
-  'session',
-  'task',
-  'message',
-  'artifact',
-  'repo',
-  'board',
-  'user',
-  'tag',
-  'external',
-]);
-
-const KnowledgeGraphEdgeTypeSchema = z.enum([
-  'contains',
-  'references',
-  'mentions',
-  'implements',
-  'depends_on',
-  'supersedes',
-  'derived_from',
-  'tagged_with',
-  'about',
-  'parent_of',
-  'related_to',
-]);
+const KnowledgeDocumentKindSchema = z.enum(KNOWLEDGE_DOCUMENT_KINDS);
+const KnowledgeVisibilitySchema = z.enum(KNOWLEDGE_VISIBILITIES);
+const KnowledgeEditPolicySchema = z.enum(KNOWLEDGE_EDIT_POLICIES);
+const KnowledgeGraphNodeTypeSchema = z.enum(KNOWLEDGE_GRAPH_NODE_TYPES);
+const KnowledgeGraphEdgeTypeSchema = z.enum(KNOWLEDGE_GRAPH_EDGE_TYPES);
 
 const KnowledgeNodeRefSchema = z
   .object({
@@ -120,19 +90,6 @@ function knowledgeNotImplementedResult(toolName: string, servicePaths: string[])
 
 function mcpParams(ctx: McpContext, query?: Record<string, unknown>): Record<string, unknown> {
   return query ? { ...ctx.baseServiceParams, query } : { ...ctx.baseServiceParams };
-}
-
-function parseKnowledgeUri(
-  uri: string | undefined
-): { namespace: string; path: string } | undefined {
-  if (!uri?.startsWith('agor://kb/')) return undefined;
-  const rest = uri.slice('agor://kb/'.length);
-  const slashIndex = rest.indexOf('/');
-  if (slashIndex <= 0 || slashIndex === rest.length - 1) return undefined;
-  return {
-    namespace: rest.slice(0, slashIndex),
-    path: rest.slice(slashIndex + 1),
-  };
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -341,7 +298,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const uri = coerceString(args.uri);
       if (uri) query.uri = uri;
       const parsedUri = parseKnowledgeUri(uri);
-      const namespace = coerceString(args.namespace) ?? parsedUri?.namespace;
+      const namespace = coerceString(args.namespace) ?? parsedUri?.namespace_slug;
       const path = coerceString(args.path) ?? parsedUri?.path;
       if (namespace) query.namespace_slug = namespace;
       if (path) query.path = path;
@@ -449,7 +406,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const data = {
         document_id: coerceString(args.documentId),
         uri,
-        namespace_slug: coerceString(args.namespace) ?? parsedUri?.namespace,
+        namespace_slug: coerceString(args.namespace) ?? parsedUri?.namespace_slug,
         path: coerceString(args.path) ?? parsedUri?.path,
         title: coerceString(args.title),
         content_text: content,
@@ -515,7 +472,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const uri = coerceString(args.uri);
       if (uri) query.uri = uri;
       const parsedUri = parseKnowledgeUri(uri);
-      const namespace = coerceString(args.namespace) ?? parsedUri?.namespace;
+      const namespace = coerceString(args.namespace) ?? parsedUri?.namespace_slug;
       const path = coerceString(args.path) ?? parsedUri?.path;
       if (namespace) query.namespace_slug = namespace;
       if (path) query.path = path;

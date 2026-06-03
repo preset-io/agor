@@ -26,7 +26,7 @@ ALTER TABLE "kb_namespaces" ADD CONSTRAINT "kb_namespaces_owner_user_id_users_us
 ALTER TABLE "kb_namespaces" ADD CONSTRAINT "kb_namespaces_repo_id_repos_repo_id_fk" FOREIGN KEY ("repo_id") REFERENCES "repos"("repo_id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "kb_namespaces" ADD CONSTRAINT "kb_namespaces_branch_id_branches_branch_id_fk" FOREIGN KEY ("branch_id") REFERENCES "branches"("branch_id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "kb_namespaces" ADD CONSTRAINT "kb_namespaces_created_by_users_user_id_fk" FOREIGN KEY ("created_by") REFERENCES "users"("user_id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "kb_namespaces_slug_idx" ON "kb_namespaces" ("slug");--> statement-breakpoint
+CREATE UNIQUE INDEX "kb_namespaces_slug_idx" ON "kb_namespaces" ("slug") WHERE "archived" = false;--> statement-breakpoint
 CREATE INDEX "kb_namespaces_kind_idx" ON "kb_namespaces" ("kind");--> statement-breakpoint
 CREATE INDEX "kb_namespaces_owner_idx" ON "kb_namespaces" ("owner_user_id");--> statement-breakpoint
 CREATE INDEX "kb_namespaces_repo_idx" ON "kb_namespaces" ("repo_id");--> statement-breakpoint
@@ -39,8 +39,7 @@ INSERT INTO "kb_namespaces" (
 )
 VALUES
 	('00000000-0000-7000-8000-000000000001', 'global', 'Global', 'Shared instance-wide Knowledge space.', 'global', 'public', NULL, NULL, now(), now(), false),
-	('00000000-0000-7000-8000-000000000002', 'skills', 'Skills', 'Shared markdown skills for agents and teammates.', 'global', 'public', NULL, NULL, now(), now(), false)
-ON CONFLICT ("slug") DO NOTHING;--> statement-breakpoint
+	('00000000-0000-7000-8000-000000000002', 'skills', 'Skills', 'Shared markdown skills for agents and teammates.', 'global', 'public', NULL, NULL, now(), now(), false);--> statement-breakpoint
 
 CREATE TABLE "kb_documents" (
 	"document_id" varchar(36) PRIMARY KEY NOT NULL,
@@ -63,8 +62,8 @@ CREATE TABLE "kb_documents" (
 ALTER TABLE "kb_documents" ADD CONSTRAINT "kb_documents_namespace_id_kb_namespaces_namespace_id_fk" FOREIGN KEY ("namespace_id") REFERENCES "kb_namespaces"("namespace_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "kb_documents" ADD CONSTRAINT "kb_documents_created_by_users_user_id_fk" FOREIGN KEY ("created_by") REFERENCES "users"("user_id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "kb_documents" ADD CONSTRAINT "kb_documents_updated_by_users_user_id_fk" FOREIGN KEY ("updated_by") REFERENCES "users"("user_id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "kb_documents_namespace_path_idx" ON "kb_documents" ("namespace_id","path");--> statement-breakpoint
-CREATE UNIQUE INDEX "kb_documents_uri_idx" ON "kb_documents" ("uri");--> statement-breakpoint
+CREATE UNIQUE INDEX "kb_documents_namespace_path_idx" ON "kb_documents" ("namespace_id","path") WHERE "archived" = false;--> statement-breakpoint
+CREATE UNIQUE INDEX "kb_documents_uri_idx" ON "kb_documents" ("uri") WHERE "archived" = false;--> statement-breakpoint
 CREATE INDEX "kb_documents_namespace_idx" ON "kb_documents" ("namespace_id");--> statement-breakpoint
 CREATE INDEX "kb_documents_kind_idx" ON "kb_documents" ("kind");--> statement-breakpoint
 CREATE INDEX "kb_documents_visibility_idx" ON "kb_documents" ("visibility");--> statement-breakpoint
@@ -162,7 +161,7 @@ ALTER TABLE "kb_graph_nodes" ADD CONSTRAINT "kb_graph_nodes_repo_id_repos_repo_i
 ALTER TABLE "kb_graph_nodes" ADD CONSTRAINT "kb_graph_nodes_board_id_boards_board_id_fk" FOREIGN KEY ("board_id") REFERENCES "boards"("board_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "kb_graph_nodes" ADD CONSTRAINT "kb_graph_nodes_user_id_users_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "kb_graph_nodes" ADD CONSTRAINT "kb_graph_nodes_created_by_users_user_id_fk" FOREIGN KEY ("created_by") REFERENCES "users"("user_id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "kb_graph_nodes_uri_idx" ON "kb_graph_nodes" ("uri");--> statement-breakpoint
+CREATE UNIQUE INDEX "kb_graph_nodes_uri_idx" ON "kb_graph_nodes" ("uri") WHERE "archived" = false;--> statement-breakpoint
 CREATE INDEX "kb_graph_nodes_type_idx" ON "kb_graph_nodes" ("node_type");--> statement-breakpoint
 CREATE INDEX "kb_graph_nodes_namespace_idx" ON "kb_graph_nodes" ("namespace_id");--> statement-breakpoint
 CREATE INDEX "kb_graph_nodes_document_idx" ON "kb_graph_nodes" ("document_id");--> statement-breakpoint
@@ -198,5 +197,5 @@ CREATE INDEX "kb_graph_edges_target_idx" ON "kb_graph_edges" ("target_node_id");
 CREATE INDEX "kb_graph_edges_type_idx" ON "kb_graph_edges" ("edge_type");--> statement-breakpoint
 CREATE INDEX "kb_graph_edges_source_type_idx" ON "kb_graph_edges" ("source_node_id","edge_type");--> statement-breakpoint
 CREATE INDEX "kb_graph_edges_target_type_idx" ON "kb_graph_edges" ("target_node_id","edge_type");--> statement-breakpoint
-CREATE UNIQUE INDEX "kb_graph_edges_source_target_type_idx" ON "kb_graph_edges" ("source_node_id","target_node_id","edge_type");--> statement-breakpoint
+CREATE UNIQUE INDEX "kb_graph_edges_source_target_type_idx" ON "kb_graph_edges" ("source_node_id","target_node_id","edge_type") WHERE "archived" = false;--> statement-breakpoint
 CREATE INDEX "kb_graph_edges_archived_idx" ON "kb_graph_edges" ("archived");

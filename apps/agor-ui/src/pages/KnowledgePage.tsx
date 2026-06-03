@@ -1,3 +1,14 @@
+import type {
+  KnowledgeDocument as CoreKnowledgeDocument,
+  KnowledgeNamespace as CoreKnowledgeNamespace,
+  KnowledgeDocumentVersion as CoreKnowledgeVersion,
+  KnowledgeDocumentKind,
+} from '@agor/core/types';
+import {
+  normalizeKnowledgeFolderPath,
+  titleFromKnowledgeContent,
+  validateKnowledgePath as validateSharedKnowledgePath,
+} from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import {
   ArrowLeftOutlined,
@@ -50,46 +61,21 @@ import { useThemedModal } from '../utils/modal';
 const { Header, Content } = Layout;
 const { Text, Title } = Typography;
 
-type KnowledgeDocumentKind =
-  | 'doc'
-  | 'memory'
-  | 'skill'
-  | 'prompt'
-  | 'guide'
-  | 'decision'
-  | 'bundle'
-  | 'external';
-
-interface KnowledgeNamespace {
-  namespace_id: string;
-  slug: string;
-  display_name: string;
-  description?: string | null;
-  kind: string;
-  visibility_default: 'public' | 'private';
-}
-
-interface KnowledgeDocument {
-  document_id: string;
-  namespace_id: string;
-  path: string;
-  uri: string;
-  title: string;
-  kind: KnowledgeDocumentKind;
-  visibility: 'public' | 'private';
-  edit_policy: 'owner' | 'public' | 'admins';
-  current_version_id?: string | null;
-  metadata?: Record<string, unknown> | null;
-  created_by?: string | null;
+interface KnowledgeNamespace
+  extends Omit<CoreKnowledgeNamespace, 'created_at' | 'updated_at' | 'archived_at'> {
+  created_at?: string | Date | null;
   updated_at?: string | Date | null;
+  archived_at?: string | Date | null;
 }
 
-interface KnowledgeVersion {
-  version_id: string;
-  document_id: string;
-  version_number: number;
-  content_text?: string | null;
-  change_summary?: string | null;
+interface KnowledgeDocument
+  extends Omit<CoreKnowledgeDocument, 'created_at' | 'updated_at' | 'archived_at'> {
+  created_at?: string | Date | null;
+  updated_at?: string | Date | null;
+  archived_at?: string | Date | null;
+}
+
+interface KnowledgeVersion extends Omit<CoreKnowledgeVersion, 'created_at' | 'content_blob'> {
   created_at: string | Date;
 }
 
@@ -178,38 +164,19 @@ const buildKnowledgeRoutePath = (
 const normalizeFindResult = <T,>(result: T[] | { data?: T[] }): T[] =>
   Array.isArray(result) ? result : (result.data ?? []);
 
-const normalizeFolderPath = (folder?: string | null) =>
-  (folder ?? '')
-    .trim()
-    .replace(/^\/+|\/+$/g, '')
-    .split('/')
-    .filter((segment) => segment && segment !== '.' && segment !== '..')
-    .join('/');
-
-const INVALID_PATH_CHARS = new Set(['<', '>', ':', '"', '\\', '|', '?', '*']);
-const RESERVED_WINDOWS_NAMES_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
-
-const hasInvalidPathChar = (segment: string) =>
-  [...segment].some((char) => INVALID_PATH_CHARS.has(char) || char.charCodeAt(0) < 32);
-
-const validateKnowledgePath = (path: string, { allowEmpty = false } = {}): string | null => {
-  const normalized = normalizeFolderPath(path);
-  if (!normalized) return allowEmpty ? null : 'Folder path is required.';
-
-  for (const segment of normalized.split('/')) {
-    if (hasInvalidPathChar(segment)) {
-      return 'Folder names cannot contain < > : " \\\\ | ? * or control characters.';
-    }
-    if (segment.endsWith(' ') || segment.endsWith('.')) {
-      return 'Folder names cannot end with a space or period.';
-    }
-    if (RESERVED_WINDOWS_NAMES_RE.test(segment)) {
-      return `"${segment}" is reserved on some filesystems.`;
-    }
+const normalizeFolderPath = (folder?: string | null) => {
+  try {
+    return normalizeKnowledgeFolderPath(folder);
+  } catch {
+    return (folder ?? '')
+      .trim()
+      .replace(/^\/+|\/+$/g, '')
+      .replace(/\/+/g, '/');
   }
-
-  return null;
 };
+
+const validateKnowledgePath = (path: string, { allowEmpty = false } = {}): string | null =>
+  validateSharedKnowledgePath(path, { allowEmpty });
 
 const parentFolderForPath = (path: string) => {
   const parts = path.split('/').filter(Boolean);
@@ -229,20 +196,8 @@ const slugifyFileName = (value: string) => {
   return `${slug || 'untitled'}.md`;
 };
 
-const inferTitleFromMarkdown = (markdown: string, fallback = 'Untitled') => {
-  const firstLine = markdown
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean);
-  if (!firstLine) return fallback;
-
-  const withoutHeadingMarker = firstLine
-    .replace(/^#{1,6}\s+/, '')
-    .replace(/\s+#+\s*$/, '')
-    .trim();
-
-  return withoutHeadingMarker || fallback;
-};
+const inferTitleFromMarkdown = (markdown: string, fallback = 'Untitled') =>
+  titleFromKnowledgeContent(markdown, fallback);
 
 const stripFirstMarkdownTitleLine = (markdown: string) => {
   const lines = markdown.split(/\r?\n/);
@@ -569,11 +524,14 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
 
   useEffect(() => {
     if (!routeNamespaceSlug || !routeDocumentPath) return;
-    const routedDocument = documents.find((doc) => doc.path === routeDocumentPath);
+    const routedDocument = documents.find(
+      (doc) =>
+        doc.path === routeDocumentPath && namespaceSlugForDocument(doc) === routeNamespaceSlug
+    );
     if (routedDocument && routedDocument.document_id !== activeDocId) {
       setActiveDocId(routedDocument.document_id);
     }
-  }, [activeDocId, documents, routeDocumentPath, routeNamespaceSlug]);
+  }, [activeDocId, documents, namespaceSlugForDocument, routeDocumentPath, routeNamespaceSlug]);
 
   useEffect(() => {
     if (activeDocId && !activeDoc && !loading) setActiveDocId(null);
@@ -592,7 +550,11 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     if (routeDocumentPath && !activeDoc) return;
 
     const routedDocument = routeDocumentPath
-      ? documents.find((doc) => doc.path === routeDocumentPath)
+      ? documents.find(
+          (doc) =>
+            doc.path === routeDocumentPath &&
+            (!routeNamespaceSlug || namespaceSlugForDocument(doc) === routeNamespaceSlug)
+        )
       : null;
     if (routedDocument && routedDocument.document_id !== activeDocId) return;
     if (!routeDocumentPath && activeDoc) return;

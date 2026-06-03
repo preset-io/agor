@@ -17,57 +17,178 @@ export type KnowledgeDocumentUnitID = UUID;
 export type KnowledgeGraphNodeID = UUID;
 export type KnowledgeGraphEdgeID = UUID;
 
-export type KnowledgeNamespaceKind = 'system' | 'global' | 'user' | 'repo' | 'branch' | 'team';
+export const KNOWLEDGE_NAMESPACE_KINDS = [
+  'system',
+  'global',
+  'user',
+  'repo',
+  'branch',
+  'team',
+] as const;
 
-export type KnowledgeDocumentKind =
-  | 'doc'
-  | 'memory'
-  | 'skill'
-  | 'prompt'
-  | 'guide'
-  | 'decision'
-  | 'bundle'
-  | 'external';
+export type KnowledgeNamespaceKind = (typeof KNOWLEDGE_NAMESPACE_KINDS)[number];
 
-export type KnowledgeVisibility = 'public' | 'private';
-export type KnowledgeEditPolicy = 'owner' | 'public' | 'admins';
+export const KNOWLEDGE_DOCUMENT_KINDS = [
+  'doc',
+  'memory',
+  'skill',
+  'prompt',
+  'guide',
+  'decision',
+  'bundle',
+  'external',
+] as const;
+
+export type KnowledgeDocumentKind = (typeof KNOWLEDGE_DOCUMENT_KINDS)[number];
+
+export const KNOWLEDGE_VISIBILITIES = ['public', 'private'] as const;
+export type KnowledgeVisibility = (typeof KNOWLEDGE_VISIBILITIES)[number];
+
+export const KNOWLEDGE_EDIT_POLICIES = ['owner', 'public', 'admins'] as const;
+export type KnowledgeEditPolicy = (typeof KNOWLEDGE_EDIT_POLICIES)[number];
 
 /**
  * Internal search/indexing unit. Usually one per document version in V1; can
  * later become one per markdown heading section or skill-bundle file without
  * exposing arbitrary RAG "chunks" as a product concept.
  */
-export type KnowledgeDocumentUnitKind = 'document' | 'section' | 'file' | 'auto_split';
+export const KNOWLEDGE_DOCUMENT_UNIT_KINDS = ['document', 'section', 'file', 'auto_split'] as const;
 
-export type KnowledgeEmbeddingStatus = 'not_configured' | 'pending' | 'ready' | 'stale' | 'error';
+export type KnowledgeDocumentUnitKind = (typeof KNOWLEDGE_DOCUMENT_UNIT_KINDS)[number];
 
-export type KnowledgeGraphNodeType =
-  | 'namespace'
-  | 'document'
-  | 'document_unit'
-  | 'branch'
-  | 'session'
-  | 'task'
-  | 'message'
-  | 'artifact'
-  | 'repo'
-  | 'board'
-  | 'user'
-  | 'tag'
-  | 'external';
+export const KNOWLEDGE_EMBEDDING_STATUSES = [
+  'not_configured',
+  'pending',
+  'ready',
+  'stale',
+  'error',
+] as const;
 
-export type KnowledgeGraphEdgeType =
-  | 'contains'
-  | 'references'
-  | 'mentions'
-  | 'implements'
-  | 'depends_on'
-  | 'supersedes'
-  | 'derived_from'
-  | 'tagged_with'
-  | 'about'
-  | 'parent_of'
-  | 'related_to';
+export type KnowledgeEmbeddingStatus = (typeof KNOWLEDGE_EMBEDDING_STATUSES)[number];
+
+export const KNOWLEDGE_GRAPH_NODE_TYPES = [
+  'namespace',
+  'document',
+  'document_unit',
+  'branch',
+  'session',
+  'task',
+  'message',
+  'artifact',
+  'repo',
+  'board',
+  'user',
+  'tag',
+  'external',
+] as const;
+
+export type KnowledgeGraphNodeType = (typeof KNOWLEDGE_GRAPH_NODE_TYPES)[number];
+
+export const KNOWLEDGE_GRAPH_EDGE_TYPES = [
+  'contains',
+  'references',
+  'mentions',
+  'implements',
+  'depends_on',
+  'supersedes',
+  'derived_from',
+  'tagged_with',
+  'about',
+  'parent_of',
+  'related_to',
+] as const;
+
+export type KnowledgeGraphEdgeType = (typeof KNOWLEDGE_GRAPH_EDGE_TYPES)[number];
+
+export const KNOWLEDGE_URI_PREFIX = 'agor://kb/';
+
+const INVALID_KNOWLEDGE_PATH_CHARS = new Set(['<', '>', ':', '"', '\\', '|', '?', '*']);
+const RESERVED_WINDOWS_NAMES_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+const hasInvalidKnowledgePathChar = (segment: string) =>
+  [...segment].some((char) => INVALID_KNOWLEDGE_PATH_CHARS.has(char) || char.charCodeAt(0) < 32);
+
+export function normalizeKnowledgePath(path: string): string {
+  const normalized = path.trim().replace(/^\/+/, '').replace(/\/+/g, '/');
+  if (!normalized) throw new Error('Knowledge document path is required');
+
+  for (const segment of normalized.split('/')) {
+    if (!segment || segment === '.' || segment === '..') {
+      throw new Error('Knowledge document path must not contain empty, "." or ".." segments');
+    }
+    if (hasInvalidKnowledgePathChar(segment)) {
+      throw new Error(
+        'Knowledge document path segments cannot contain < > : " \\\\ | ? * or control characters'
+      );
+    }
+    if (segment.endsWith(' ') || segment.endsWith('.')) {
+      throw new Error('Knowledge document path segments cannot end with a space or period');
+    }
+    if (RESERVED_WINDOWS_NAMES_RE.test(segment)) {
+      throw new Error(
+        `Knowledge document path segment "${segment}" is reserved on some filesystems`
+      );
+    }
+  }
+  return normalized;
+}
+
+export function normalizeKnowledgeFolderPath(folder?: string | null): string {
+  const normalized = (folder ?? '')
+    .trim()
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\/+/g, '/');
+  if (!normalized) return '';
+  return normalizeKnowledgePath(normalized);
+}
+
+export function validateKnowledgePath(path: string, options: { allowEmpty?: boolean } = {}) {
+  try {
+    if (options.allowEmpty && !path.trim()) return null;
+    normalizeKnowledgePath(path);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+export function buildKnowledgeUri(namespaceSlug: string, path: string): string {
+  return `${KNOWLEDGE_URI_PREFIX}${namespaceSlug}/${normalizeKnowledgePath(path)}`;
+}
+
+export function parseKnowledgeUri(
+  uri?: string | null
+): { namespace_slug: string; path: string } | null {
+  if (!uri?.startsWith(KNOWLEDGE_URI_PREFIX)) return null;
+  const rest = uri.slice(KNOWLEDGE_URI_PREFIX.length);
+  const slash = rest.indexOf('/');
+  if (slash <= 0 || slash === rest.length - 1) return null;
+  return {
+    namespace_slug: rest.slice(0, slash),
+    path: normalizeKnowledgePath(rest.slice(slash + 1)),
+  };
+}
+
+export function titleFromKnowledgePath(path: string): string {
+  const leaf = normalizeKnowledgePath(path).split('/').pop() || path;
+  return leaf.replace(/\.(md|markdown)$/i, '').replace(/[-_]+/g, ' ') || path;
+}
+
+export function titleFromKnowledgeContent(content: string, fallback = 'Untitled'): string {
+  const first = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!first) return fallback;
+  return (
+    first
+      .replace(/^#{1,6}\s+/, '')
+      .replace(/\s+#+\s*$/, '')
+      .replace(/^\s*[-*+]\s+/, '')
+      .replace(/[*_`~]/g, '')
+      .trim() || fallback
+  );
+}
 
 export interface KnowledgeNamespace {
   namespace_id: KnowledgeNamespaceID;

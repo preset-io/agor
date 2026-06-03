@@ -31,13 +31,24 @@ export class KnowledgeSearchService {
     );
   }
 
+  private scopedQuery(query: KnowledgeSearchQuery | undefined, user?: User): KnowledgeSearchQuery {
+    const isAdmin = hasMinimumRole(user?.role, ROLES.ADMIN);
+    return {
+      ...(query ?? {}),
+      readable_as_admin: isAdmin,
+      readable_by_user_id: isAdmin ? undefined : user?.user_id,
+    };
+  }
+
   async find(params?: KnowledgeSearchParams) {
-    const results = await this.repo.search(params?.query ?? {});
+    const user = params?.user as User | undefined;
+    const results = await this.repo.search(this.scopedQuery(params?.query, user));
     return results.filter((result) => this.canRead(result, params?.user as User | undefined));
   }
 
   async create(data: KnowledgeSearchQuery, params?: KnowledgeSearchParams) {
-    const results = await this.repo.search(data ?? {});
+    const user = params?.user as User | undefined;
+    const results = await this.repo.search(this.scopedQuery(data, user));
     return results.filter((result) => this.canRead(result, params?.user as User | undefined));
   }
 }
