@@ -27,6 +27,7 @@ import { type UseUrlStateOptions, useUrlState } from './useUrlState';
 
 const SESSION_ID = '019e9999-0000-7000-8000-000000000001';
 const SESSION_SHORT = '019e99990000700080000000';
+const OTHER_SESSION_ID = '019eaaaa-0000-7000-8000-000000000001';
 const BRANCH_ID = '019e8888-0000-7000-8000-000000000001';
 const BOARD_ID = '019e7777-0000-7000-8000-000000000001';
 
@@ -135,5 +136,31 @@ describe('useUrlState — deferred session resolution', () => {
 
     expect(onSessionChange).toHaveBeenCalledWith(SESSION_ID);
     expect(pathRef.current).toBe(`/s/${SESSION_SHORT}/`);
+  });
+
+  it('explicit session URLs win over an already-selected/restored session', () => {
+    const onSessionChange = vi.fn();
+    const onBoardChange = vi.fn();
+
+    const requestedSession = { session_id: SESSION_ID, branch_id: BRANCH_ID } as Session;
+    const restoredSession = { session_id: OTHER_SESSION_ID, branch_id: BRANCH_ID } as Session;
+    const branch = { branch_id: BRANCH_ID, board_id: BOARD_ID } as Branch;
+
+    renderAt(
+      `/s/${SESSION_SHORT}/`,
+      baseOptions({
+        currentSessionId: OTHER_SESSION_ID,
+        sessionById: new Map([
+          [requestedSession.session_id, requestedSession],
+          [restoredSession.session_id, restoredSession],
+        ]),
+        branchById: new Map([[branch.branch_id, branch]]),
+        onSessionChange,
+        onBoardChange,
+      })
+    );
+
+    expect(onSessionChange).toHaveBeenCalledWith(SESSION_ID);
+    expect(onBoardChange).not.toHaveBeenCalled();
   });
 });
