@@ -27,13 +27,29 @@ import {
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useThemedMessage } from '../../utils/message';
+import {
+  getMatchSnippet,
+  isSessionSearchActive,
+  SESSION_SORT_STORAGE_KEY,
+  type SessionSort,
+  searchSessions,
+  sessionToolMatches,
+  sortSessions,
+} from '../../utils/sessionSearch';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
+import { HighlightMatch } from '../HighlightMatch';
 import { ChannelPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
+import {
+  SessionRelevanceLabel,
+  SessionSearchToolbar,
+  SessionSortButton,
+} from '../SessionSearchControls';
 import { ToolIcon } from '../ToolIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 
@@ -190,9 +206,13 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   });
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
   const isPanel = mode === 'panel';
   const peekedIds = peekedSessionIds ?? new Set<string>();
+  const trimmedSearchQuery = searchQuery.trim();
+  const searchActive = isSessionSearchActive(trimmedSearchQuery);
 
   const handleTogglePeekSession = useCallback(
     (sessionId: string, e: React.MouseEvent) => {
@@ -269,7 +289,29 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     () => activeSessions.filter((s) => isGatewaySession(s)),
     [activeSessions, isGatewaySession]
   );
-  const sessionTreeData = useMemo(() => buildSessionTree(manualSessions), [manualSessions]);
+  const searchablePanelSessions = useMemo(
+    () => [
+      ...manualSessions,
+      ...(schedulerEnabled ? scheduledSessions : []),
+      ...(gatewayEnabled ? gatewaySessions : []),
+    ],
+    [gatewayEnabled, gatewaySessions, manualSessions, scheduledSessions, schedulerEnabled]
+  );
+  const sortedManualSessions = useMemo(
+    () => sortSessions(manualSessions, sort),
+    [manualSessions, sort]
+  );
+  const sessionTreeData = useMemo(
+    () => buildSessionTree(sortedManualSessions),
+    [sortedManualSessions]
+  );
+  const searchResults = useMemo(
+    () =>
+      isPanel && searchActive
+        ? searchSessions(searchablePanelSessions, trimmedSearchQuery).map(({ session }) => session)
+        : [],
+    [isPanel, searchActive, searchablePanelSessions, trimmedSearchQuery]
+  );
 
   const hasRunningScheduledSession = useMemo(
     () => scheduledSessions.some((s) => s.status === 'running' || s.status === 'stopping'),
@@ -318,6 +360,98 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     };
   };
 
+  const renderSessionTitle = (
+    session: Session,
+    options: { strong?: boolean; secondary?: boolean; query?: string } = {}
+  ) => {
+    const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
+
+    return (
+      <Typography.Text
+        strong={options.strong}
+        type={options.secondary ? 'secondary' : undefined}
+        style={{
+          fontSize: isPanel ? 13 : 12,
+          flex: 1,
+          minWidth: 0,
+          ...getSessionTitleStyles(2),
+        }}
+      >
+        <HighlightMatch text={titleText} query={options.query ?? ''} />
+      </Typography.Text>
+    );
+  };
+
+  const renderFlatSessionRow = (session: Session, query = '') => {
+    const isActive = session.status === 'running' || session.status === 'stopping';
+    const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
+    const descriptionSnippet =
+      query && session.title && session.description
+        ? getMatchSnippet(session.description, query)
+        : null;
+    const toolMatches = query ? sessionToolMatches(session, query) : false;
+    const sourceLabel = session.scheduled_from_branch
+      ? 'Scheduled'
+      : isGatewaySession(session)
+        ? 'Gateway'
+        : null;
+
+    return (
+      <SessionItemWithActions
+        key={session.session_id}
+        sessionId={session.session_id}
+        isArchiving={archivingSessionIds.has(session.session_id)}
+        onArchive={handleArchiveSession}
+        onSettings={
+          onOpenSessionSettings
+            ? (id, e) => {
+                e.stopPropagation();
+                onOpenSessionSettings(id);
+              }
+            : undefined
+        }
+      >
+        <div style={sessionRowStyle(session)} onClick={() => onSessionClick?.(session.session_id)}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}>
+            {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
+            <SessionRelationshipIcon session={session} size={10} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {renderSessionTitle(session, { strong: true, query })}
+              {(sourceLabel || toolMatches) && (
+                <Typography.Text
+                  type="secondary"
+                  style={{ fontSize: 11, display: 'block', marginTop: 2 }}
+                >
+                  {sourceLabel}
+                  {sourceLabel && toolMatches ? ' · ' : ''}
+                  {toolMatches && (
+                    <>
+                      Agent: <HighlightMatch text={session.agentic_tool} query={query} />
+                    </>
+                  )}
+                </Typography.Text>
+              )}
+              {descriptionSnippet && descriptionSnippet !== titleText && (
+                <Typography.Text
+                  type="secondary"
+                  style={{
+                    fontSize: 11,
+                    fontStyle: 'italic',
+                    lineHeight: 1.4,
+                    display: 'block',
+                    marginTop: 2,
+                  }}
+                >
+                  <HighlightMatch text={descriptionSnippet} query={query} />
+                </Typography.Text>
+              )}
+            </div>
+          </div>
+        </div>
+      </SessionItemWithActions>
+    );
+  };
+
   const renderSessionNode = (node: SessionTreeNode) => {
     const session = node.session;
     const isActive = session.status === 'running' || session.status === 'stopping';
@@ -350,17 +484,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             <SessionRelationshipIcon session={session} size={10} />
-            <Typography.Text
-              strong
-              style={{
-                fontSize: isPanel ? 13 : 12,
-                flex: 1,
-                minWidth: 0,
-                ...getSessionTitleStyles(2),
-              }}
-            >
-              {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-            </Typography.Text>
+            {renderSessionTitle(session, { strong: true })}
           </div>
         </div>
       </SessionItemWithActions>
@@ -399,6 +523,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           showZero
           style={{ backgroundColor: token.colorPrimaryBgHover }}
         />
+        {!isPanel && (
+          <SessionSortButton sort={sort} onSortChange={setSort} compact stopPropagation />
+        )}
       </Space>
       {onCreateSession && (
         <div className="nodrag">
@@ -473,16 +600,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 ) : (
                   <ToolIcon tool={session.agentic_tool} size={20} />
                 )}
-                <Typography.Text
-                  style={{
-                    fontSize: isPanel ? 13 : 12,
-                    flex: 1,
-                    color: token.colorTextSecondary,
-                    ...getSessionTitleStyles(2),
-                  }}
-                >
-                  {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                </Typography.Text>
+                {renderSessionTitle(session, { secondary: true })}
               </Space>
             </div>
           </SessionItemWithActions>
@@ -549,11 +667,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 <div
                   style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}
                 >
-                  <Typography.Text
-                    style={{ fontSize: isPanel ? 13 : 12, ...getSessionTitleStyles(2) }}
-                  >
-                    {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                  </Typography.Text>
+                  {renderSessionTitle(session)}
                   <div style={{ alignSelf: 'flex-start' }}>
                     {gatewaySource ? (
                       <ChannelPill
@@ -578,8 +692,74 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </div>
   );
 
+  const sessionSearchBar =
+    isPanel && activeSessions.length > 0 ? (
+      <div style={{ paddingBottom: 12, paddingTop: 4 }}>
+        <SessionSearchToolbar
+          value={searchQuery}
+          onChange={setSearchQuery}
+          sort={sort}
+          onSortChange={setSort}
+          searching={searchActive}
+        />
+      </div>
+    ) : null;
+
+  if (isPanel && searchActive && searchablePanelSessions.length > 0) {
+    return (
+      <>
+        {sessionSearchBar}
+        {searchResults.length > 0 && (
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 11, padding: '2px 8px 4px', display: 'block' }}
+          >
+            {searchResults.length} of {searchablePanelSessions.length} · <SessionRelevanceLabel />
+          </Typography.Text>
+        )}
+        {searchResults.length === 0 ? (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              padding: '24px 16px',
+              gap: 6,
+            }}
+          >
+            <Typography.Text strong style={{ fontSize: 13 }}>
+              No results
+            </Typography.Text>
+            <Typography.Text
+              type="secondary"
+              style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.5, maxWidth: 180 }}
+            >
+              Nothing matched <Typography.Text code>{trimmedSearchQuery}</Typography.Text>
+            </Typography.Text>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {searchResults.map((session) => renderFlatSessionRow(session, trimmedSearchQuery))}
+          </div>
+        )}
+
+        <ForkSpawnModal
+          open={forkSpawnModal.open}
+          action={forkSpawnModal.action}
+          session={forkSpawnModal.session}
+          currentUser={currentUserId ? userById.get(currentUserId) : undefined}
+          onConfirm={handleForkSpawnConfirm}
+          onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
+          client={client}
+          userById={userById}
+        />
+      </>
+    );
+  }
+
   return (
     <>
+      {sessionSearchBar}
       {activeSessions.length === 0 ? (
         <div
           style={{

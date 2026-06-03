@@ -31,7 +31,7 @@ import type { Session } from '../types/session.js';
 export type SearchFieldExtractor<T> = (item: T) => Array<string | undefined | null>;
 
 export const SEARCHABLE_FIELDS = {
-  session: ((s) => [s.title, s.description]) as SearchFieldExtractor<Session>,
+  session: ((s) => [s.title, s.description, s.agentic_tool]) as SearchFieldExtractor<Session>,
   branch: ((b) => [
     b.name,
     b.ref,

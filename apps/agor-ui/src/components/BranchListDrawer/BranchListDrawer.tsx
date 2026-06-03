@@ -1,13 +1,25 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
 import { SearchOutlined } from '@ant-design/icons';
-import { Badge, Drawer, Empty, Input, Tooltip, Typography, theme } from 'antd';
+import { Badge, Drawer, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
+import {
+  getMatchSnippet,
+  isSessionSearchActive,
+  SESSION_SORT_STORAGE_KEY,
+  type SessionSort,
+  searchSessions,
+  sessionToolMatches,
+  sortSessions,
+} from '../../utils/sessionSearch';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
+import { HighlightMatch } from '../HighlightMatch';
 import { BranchPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
+import { SessionRelevanceLabel, SessionSearchToolbar } from '../SessionSearchControls';
 import { ToolIcon } from '../ToolIcon';
 
 interface BranchListDrawerProps {
@@ -92,6 +104,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
 }) => {
   const { token } = theme.useToken();
   const [searchQuery, setSearchQuery] = useState('');
+  const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
   // Filter sessions by current board (branch-centric model)
   const boardSessions = useMemo(() => {
@@ -103,18 +116,17 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
       }
     }
 
-    // Get sessions for these branches using O(1) Map lookups, sorted by last_updated desc
-    return boardBranchIds
-      .flatMap((branchId) => sessionsByBranch.get(branchId) || [])
-      .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
+    return boardBranchIds.flatMap((branchId) => sessionsByBranch.get(branchId) || []);
   }, [sessionsByBranch, branchById, currentBoardId]);
 
-  // Filter sessions by search query
-  const filteredSessions = boardSessions.filter(
-    (session) =>
-      session.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      session.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      session.agentic_tool.toLowerCase().includes(searchQuery.toLowerCase())
+  const trimmedQuery = searchQuery.trim();
+  const searchActive = isSessionSearchActive(trimmedQuery);
+  const displaySessions = useMemo(
+    () =>
+      searchActive
+        ? searchSessions(boardSessions, trimmedQuery).map(({ session }) => session)
+        : sortSessions(boardSessions, sort),
+    [boardSessions, searchActive, trimmedQuery, sort]
   );
 
   return (
@@ -126,27 +138,72 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
           borderBottom: `1px solid ${token.colorBorder}`,
         }}
       >
-        <Input
-          placeholder="Search sessions..."
-          prefix={<SearchOutlined />}
+        <SessionSearchToolbar
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          allowClear
+          onChange={setSearchQuery}
+          sort={sort}
+          onSortChange={setSort}
+          searching={searchActive}
         />
       </div>
 
       {/* Session List */}
       <div style={{ padding: '8px 0' }}>
-        {filteredSessions.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No sessions in this board"
-            style={{ padding: '24px 0' }}
-          />
+        {displaySessions.length === 0 ? (
+          searchActive ? (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                padding: '28px 16px',
+                gap: 6,
+              }}
+            >
+              <div
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: '50%',
+                  background: token.colorFillTertiary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: 2,
+                }}
+              >
+                <SearchOutlined style={{ fontSize: 16, color: token.colorTextTertiary }} />
+              </div>
+              <Typography.Text strong style={{ fontSize: 13 }}>
+                No results
+              </Typography.Text>
+              <Typography.Text
+                type="secondary"
+                style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.5, maxWidth: 200 }}
+              >
+                Nothing matched <Typography.Text code>{trimmedQuery}</Typography.Text>
+              </Typography.Text>
+            </div>
+          ) : (
+            <Typography.Text
+              type="secondary"
+              style={{ display: 'block', textAlign: 'center', padding: '24px 0', fontSize: 12 }}
+            >
+              No sessions in this board
+            </Typography.Text>
+          )
         ) : (
-          filteredSessions.map((session) => {
+          displaySessions.map((session) => {
             const branch = session.branch_id ? branchById.get(session.branch_id) : undefined;
             const repo = branch ? repoById.get(branch.repo_id) : undefined;
+            const titleText = getSessionDisplayTitle(session, {
+              includeAgentFallback: true,
+            });
+            const descriptionSnippet =
+              searchActive && session.title && session.description
+                ? getMatchSnippet(session.description, trimmedQuery)
+                : null;
+            const toolMatches = searchActive && sessionToolMatches(session, trimmedQuery);
 
             return (
               <div
@@ -189,21 +246,44 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
                       );
                     })()}
                   </span>
-                  {(() => {
-                    const titleText = getSessionDisplayTitle(session, {
-                      includeAgentFallback: true,
-                    });
-                    return (
-                      <Typography.Text
-                        ellipsis={{ tooltip: titleText }}
-                        style={{ flex: 1, minWidth: 0 }}
-                      >
-                        {titleText}
-                      </Typography.Text>
-                    );
-                  })()}
+                  <Typography.Text
+                    ellipsis={{ tooltip: titleText }}
+                    style={{ flex: 1, minWidth: 0 }}
+                  >
+                    <HighlightMatch text={titleText} query={trimmedQuery} />
+                  </Typography.Text>
                   <SessionRelationshipIcon session={session} />
                 </div>
+
+                {toolMatches && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{
+                      display: 'block',
+                      fontSize: 11,
+                      marginTop: 3,
+                      marginLeft: 26,
+                    }}
+                  >
+                    Agent: <HighlightMatch text={session.agentic_tool} query={trimmedQuery} />
+                  </Typography.Text>
+                )}
+
+                {descriptionSnippet && descriptionSnippet !== titleText && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{
+                      fontSize: 11,
+                      display: 'block',
+                      marginTop: 3,
+                      marginLeft: 26,
+                      lineHeight: 1.4,
+                      fontStyle: 'italic',
+                    }}
+                  >
+                    <HighlightMatch text={descriptionSnippet} query={trimmedQuery} />
+                  </Typography.Text>
+                )}
 
                 {/* Line 2: compact, non-interactive branch pill · relative timestamp */}
                 <div
@@ -259,8 +339,16 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
           }}
         >
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {filteredSessions.length} of {boardSessions.length} sessions
-            {board.description && ` • ${board.description}`}
+            {searchActive ? (
+              <>
+                {displaySessions.length} of {boardSessions.length} · <SessionRelevanceLabel />
+                {board.description && ` • ${board.description}`}
+              </>
+            ) : (
+              `${boardSessions.length} session${boardSessions.length === 1 ? '' : 's'}${
+                board.description ? ` • ${board.description}` : ''
+              }`
+            )}
           </Typography.Text>
         </div>
       )}
