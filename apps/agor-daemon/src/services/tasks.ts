@@ -72,6 +72,12 @@ export type TaskParams = QueryParams<{
   suppressTerminalQueueProcessing?: boolean;
 };
 
+interface CompletionCallbackDispatchResult {
+  callbackTask?: Task;
+  /** True only for the caller that actually evaluated/attempted dispatch under the lock. */
+  didAttemptDispatch: boolean;
+}
+
 /**
  * Extended tasks service with custom methods
  */
@@ -80,7 +86,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   private app: Application;
   private db: Database;
   private heartbeatCallbackRunner: ExecutorHeartbeatCallbackRunner;
-  private completionCallbackDispatches = new Map<string, Promise<void>>();
+  private completionCallbackDispatches = new Map<
+    string,
+    Promise<CompletionCallbackDispatchResult>
+  >();
 
   constructor(db: Database, app: Application) {
     const taskRepo = new TaskRepository(db);
@@ -648,14 +657,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const targetSessionId = this.resolveCompletionCallbackTarget(childSession);
     if (!targetSessionId) return;
 
-    const callbackTask = await this.dispatchCompletionCallbackOnce(
+    const dispatchResult = await this.dispatchCompletionCallbackOnce(
       task,
       childSession,
       targetSessionId,
       params
     );
 
-    if (callbackTask) {
+    if (dispatchResult.callbackTask) {
       // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.
       // The queue processor uses a promise-based lock that will:
       // - If target is busy: wait for current processing, then retry (self-healing)
@@ -688,7 +697,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // Default to "persistent" for backward compat — legacy sessions without
     // callback_mode should continue firing on every completion as they always have.
     const callbackMode = childSession.callback_config?.callback_mode ?? 'persistent';
-    if (callbackMode === 'once') {
+    if (dispatchResult.didAttemptDispatch && callbackMode === 'once') {
       try {
         await this.app.service('sessions').patch(childSession.session_id, {
           callback_config: {
@@ -759,48 +768,54 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     childSession: Session,
     targetSessionId: SessionID,
     params?: TaskParams
-  ): Promise<Task | undefined> {
+  ): Promise<CompletionCallbackDispatchResult> {
     const dispatchKey = `${task.task_id}:${this.callbackDispatchMetadataKey(targetSessionId)}`;
     const existingDispatch = this.completionCallbackDispatches.get(dispatchKey);
     if (existingDispatch) {
       await existingDispatch;
-      return undefined;
+      return { didAttemptDispatch: false };
     }
 
-    let queuedCallbackTask: Task | undefined;
-    const dispatch = (async () => {
+    const dispatch = (async (): Promise<CompletionCallbackDispatchResult> => {
       const latestTask = (await this.taskRepo.findById(task.task_id)) ?? task;
       if (this.hasCompletionCallbackDispatch(latestTask.metadata, targetSessionId)) {
         console.log(
           `⏭️  [TasksService] Completion callback for task ${shortId(task.task_id)} to ${shortId(targetSessionId)} already dispatched`
         );
-        return;
+        return { didAttemptDispatch: false };
       }
 
-      queuedCallbackTask = await this.queueCallbackToSession(
+      const queuedCallbackTask = await this.queueCallbackToSession(
         task,
         childSession,
         targetSessionId,
         params
       );
       if (queuedCallbackTask) {
-        await this.markCompletionCallbackDispatched(
-          task,
-          targetSessionId,
-          queuedCallbackTask.task_id,
-          params
-        );
+        try {
+          await this.markCompletionCallbackDispatched(
+            task,
+            targetSessionId,
+            queuedCallbackTask.task_id,
+            params
+          );
+        } catch (error) {
+          console.warn(
+            `⚠️  [TasksService] Failed to mark completion callback dispatched for task ${shortId(task.task_id)} to ${shortId(targetSessionId)} after queueing:`,
+            error
+          );
+        }
       }
+
+      return { callbackTask: queuedCallbackTask, didAttemptDispatch: true };
     })();
 
     this.completionCallbackDispatches.set(dispatchKey, dispatch);
     try {
-      await dispatch;
+      return await dispatch;
     } finally {
       this.completionCallbackDispatches.delete(dispatchKey);
     }
-
-    return queuedCallbackTask;
   }
 
   /**
