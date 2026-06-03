@@ -914,18 +914,43 @@ export const RepoPill: React.FC<RepoPillProps> = ({
   );
 };
 
+interface UrlDisplayLabelOptions {
+  /** Repo identity for the current branch/worktree, e.g. "preset-io/agor". */
+  currentRepoSlug?: string;
+}
+
+function normalizeRepoSlug(slug?: string): string | undefined {
+  const normalized = slug
+    ?.trim()
+    .replace(/\.git$/, '')
+    .replace(/^\/+|\/+$/g, '')
+    .toLowerCase();
+  return normalized || undefined;
+}
+
 /**
  * Extract a concise display label from a URL.
- * GitHub: org/repo#123, Shortcut: story/12345, Jira/Linear: ticket ID, etc.
+ * GitHub: org/repo#123 (or #123 when same as currentRepoSlug), Shortcut: story/12345,
+ * Jira/Linear: ticket ID, etc.
  */
-export function getUrlDisplayLabel(url: string): string {
+export function getUrlDisplayLabel(url: string, options: UrlDisplayLabelOptions = {}): string {
   try {
     const parsed = new URL(url);
     const pathParts = parsed.pathname.split('/').filter(Boolean);
 
     if (parsed.hostname === 'github.com' && pathParts.length >= 4) {
-      const [org, repo, , number] = pathParts;
-      return `${org}/${repo}#${number}`;
+      const [org, repo, kind, number] = pathParts;
+      const urlRepoSlug = `${org}/${repo}`;
+      const isIssueOrPr = kind === 'issues' || kind === 'pull';
+
+      if (
+        isIssueOrPr &&
+        normalizeRepoSlug(urlRepoSlug) === normalizeRepoSlug(options.currentRepoSlug)
+      ) {
+        return `#${number}`;
+      }
+
+      return `${urlRepoSlug}#${number}`;
     }
 
     if (parsed.hostname === 'app.shortcut.com' && pathParts.length >= 3) {
@@ -982,10 +1007,16 @@ const pillTextStyle: React.CSSProperties = {
 interface IssuePillProps extends BasePillProps {
   issueUrl: string;
   issueNumber?: string;
+  currentRepoSlug?: string;
 }
 
-export const IssuePill: React.FC<IssuePillProps> = ({ issueUrl, issueNumber, style }) => {
-  const displayText = issueNumber || getUrlDisplayLabel(issueUrl);
+export const IssuePill: React.FC<IssuePillProps> = ({
+  issueUrl,
+  issueNumber,
+  currentRepoSlug,
+  style,
+}) => {
+  const displayText = issueNumber || getUrlDisplayLabel(issueUrl, { currentRepoSlug });
 
   return (
     <Tooltip title={issueUrl}>
@@ -1004,10 +1035,16 @@ export const IssuePill: React.FC<IssuePillProps> = ({ issueUrl, issueNumber, sty
 interface PullRequestPillProps extends BasePillProps {
   prUrl: string;
   prNumber?: string;
+  currentRepoSlug?: string;
 }
 
-export const PullRequestPill: React.FC<PullRequestPillProps> = ({ prUrl, prNumber, style }) => {
-  const displayText = prNumber || getUrlDisplayLabel(prUrl);
+export const PullRequestPill: React.FC<PullRequestPillProps> = ({
+  prUrl,
+  prNumber,
+  currentRepoSlug,
+  style,
+}) => {
+  const displayText = prNumber || getUrlDisplayLabel(prUrl, { currentRepoSlug });
 
   return (
     <Tooltip title={prUrl}>

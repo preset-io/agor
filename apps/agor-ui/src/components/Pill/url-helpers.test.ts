@@ -15,6 +15,46 @@ describe('getUrlDisplayLabel', () => {
       );
     });
 
+    it('omits org/repo for issue URLs from the current repo', () => {
+      expect(
+        getUrlDisplayLabel('https://github.com/preset-io/agor/issues/714', {
+          currentRepoSlug: 'preset-io/agor',
+        })
+      ).toBe('#714');
+    });
+
+    it('omits org/repo for pull request URLs from the current repo', () => {
+      expect(
+        getUrlDisplayLabel('https://github.com/preset-io/agor/pull/42', {
+          currentRepoSlug: 'preset-io/agor',
+        })
+      ).toBe('#42');
+    });
+
+    it('preserves org/repo for issue URLs from a different repo', () => {
+      expect(
+        getUrlDisplayLabel('https://github.com/other-org/other-repo/issues/123', {
+          currentRepoSlug: 'preset-io/agor',
+        })
+      ).toBe('other-org/other-repo#123');
+    });
+
+    it('preserves org/repo for pull request URLs from a different repo', () => {
+      expect(
+        getUrlDisplayLabel('https://github.com/other-org/other-repo/pull/123', {
+          currentRepoSlug: 'preset-io/agor',
+        })
+      ).toBe('other-org/other-repo#123');
+    });
+
+    it('compares GitHub repo slugs case-insensitively', () => {
+      expect(
+        getUrlDisplayLabel('https://github.com/Preset-IO/Agor/issues/714', {
+          currentRepoSlug: 'preset-io/agor',
+        })
+      ).toBe('#714');
+    });
+
     it('falls back to last segment for short GitHub URLs', () => {
       expect(getUrlDisplayLabel('https://github.com/preset-io/agor')).toBe('agor');
     });
@@ -65,6 +105,14 @@ describe('getUrlDisplayLabel', () => {
   describe('unknown / generic URLs', () => {
     it('returns last path segment for unknown services', () => {
       expect(getUrlDisplayLabel('https://example.com/project/tasks/42')).toBe('42');
+    });
+
+    it('does not change non-GitHub URL labels when current repo slug is provided', () => {
+      expect(
+        getUrlDisplayLabel('https://example.com/project/tasks/42', {
+          currentRepoSlug: 'preset-io/agor',
+        })
+      ).toBe('42');
     });
 
     it('returns hostname when path is empty', () => {
