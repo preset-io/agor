@@ -633,7 +633,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         </div>
       ) : (
         <>
-          {manualSessions.length > 0 && (
+          {manualSessions.length > 0 ? (
             <Collapse
               defaultActiveKey={defaultExpanded ? ['sessions'] : []}
               items={[
@@ -649,7 +649,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
               ghost
               style={{ marginTop: 8 }}
             />
-          )}
+          ) : onCreateSession ? (
+            <div style={{ marginTop: 8 }}>{sessionListHeader}</div>
+          ) : null}
 
           {schedulerEnabled && scheduledSessions.length > 0 && (
             <Collapse
