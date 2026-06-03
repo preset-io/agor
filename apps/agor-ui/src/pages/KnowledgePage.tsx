@@ -44,6 +44,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tooltip,
   Tree,
   Typography,
   theme,
@@ -1115,6 +1116,21 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
           <Text strong style={{ fontSize: 15 }}>
             Knowledge
           </Text>
+          <Tooltip title="Knowledge is in beta — expect rough edges while the data model, MCP tools, and editor settle.">
+            <Tag
+              color="orange"
+              style={{
+                fontSize: 10,
+                lineHeight: '16px',
+                padding: '0 6px',
+                margin: 0,
+                cursor: 'help',
+                userSelect: 'none',
+              }}
+            >
+              BETA
+            </Tag>
+          </Tooltip>
         </Space>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={loadDocuments} loading={loading}>
