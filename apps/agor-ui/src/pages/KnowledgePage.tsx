@@ -93,6 +93,7 @@ interface KnowledgePageProps {
 }
 
 const DEFAULT_MARKDOWN = `# New Knowledge Page\n\nWrite markdown here.\n`;
+const DRAFT_DOCUMENT_ID = '__knowledge_draft__' as CoreKnowledgeDocument['document_id'];
 const ROOT_FOLDER = '';
 const DEFAULT_FOLDERS = ['pages', 'skills', 'memories'];
 
@@ -270,6 +271,8 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   const routeSearchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const [namespaces, setNamespaces] = useState<KnowledgeNamespace[]>([]);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [draftDocument, setDraftDocument] = useState<KnowledgeDocument | null>(null);
+  const [draftNamespaceSlug, setDraftNamespaceSlug] = useState<string | null>(null);
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
   const [activeSpace, setActiveSpace] = useState(() => routeNamespaceSlug ?? 'global');
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
@@ -313,9 +316,15 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   }, []);
 
   const activeDoc = useMemo(
-    () => (activeDocId ? (documents.find((doc) => doc.document_id === activeDocId) ?? null) : null),
-    [documents, activeDocId]
+    () =>
+      activeDocId === DRAFT_DOCUMENT_ID
+        ? draftDocument
+        : activeDocId
+          ? (documents.find((doc) => doc.document_id === activeDocId) ?? null)
+          : null,
+    [documents, draftDocument, activeDocId]
   );
+  const isDraftDocument = activeDoc?.document_id === DRAFT_DOCUMENT_ID;
 
   const selectedNamespace = useMemo(
     () => namespaces.find((ns) => ns.slug === activeSpace) ?? namespaces[0] ?? null,
@@ -462,6 +471,17 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     return index >= 0 ? (versions[index + 1] ?? null) : null;
   }, [selectedVersion, versions]);
   const editCount = Math.max(versions.length - 1, 0);
+  const savedMarkdown = versions[0]?.content_text ?? DEFAULT_MARKDOWN;
+  const hasUnsavedChanges =
+    isEditing &&
+    Boolean(
+      isDraftDocument ||
+        (activeDoc &&
+          (markdownDraft !== savedMarkdown ||
+            titleDraft !== activeDoc.title ||
+            titleFromContent !== (activeDoc.metadata?.title_from_content === true) ||
+            renamePathOnTitleChange))
+    );
 
   const loadNamespaces = useCallback(async () => {
     if (!client) return;
@@ -514,13 +534,39 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     loadDocuments();
   }, [loadDocuments]);
 
+  const confirmDiscardUnsavedChanges = useCallback(async (): Promise<boolean> => {
+    if (!hasUnsavedChanges) return true;
+    return new Promise((resolve) => {
+      confirm({
+        title: 'Discard unsaved changes?',
+        content:
+          'This page has unsaved changes. If you navigate away now, those edits will be lost.',
+        okText: 'Discard changes',
+        okButtonProps: { danger: true },
+        cancelText: 'Keep editing',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+  }, [confirm, hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
   useEffect(() => {
     const nextSpace = routeNamespaceSlug ?? 'global';
     const nextQuery = routeSearchParams.get('q') ?? '';
     const nextKind = kindFilterFromUrlParam(routeSearchParams.get('kind'));
     const nextEditing = routeSearchParams.get('mode') === 'edit' && Boolean(routeDocumentPath);
 
-    if (!routeDocumentPath && activeDocId) setActiveDocId(null);
+    if (!routeDocumentPath && activeDocId && !draftDocument) setActiveDocId(null);
     if (routeNamespaceSlug && nextSpace !== activeSpace) setActiveSpace(nextSpace);
     setSearchQuery((current) => (current === nextQuery ? current : nextQuery));
     if (nextKind !== kindFilter) setKindFilter(nextKind);
@@ -539,6 +585,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     routeDocumentPath,
     routeNamespaceSlug,
     routeSearchParams,
+    draftDocument,
   ]);
 
   useEffect(() => {
@@ -571,6 +618,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   }, [titleChanged]);
 
   useEffect(() => {
+    if (draftDocument) return;
     if (routeDocumentPath && !activeDoc) return;
 
     const routedDocument = routeDocumentPath
@@ -607,6 +655,7 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     activeSpace,
     buildKnowledgeSearch,
     documents,
+    draftDocument,
     location.pathname,
     location.search,
     namespaceSlugForDocument,
@@ -627,6 +676,10 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
   }, [activeSpace]);
 
   const loadVersions = useCallback(async () => {
+    if (isDraftDocument) {
+      setVersions([]);
+      return;
+    }
     if (!client || !activeDoc) {
       setVersions([]);
       return;
@@ -648,13 +701,57 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
       setVersions([]);
       setMarkdownDraft(DEFAULT_MARKDOWN);
     }
-  }, [client, activeDoc]);
+  }, [client, activeDoc, isDraftDocument]);
 
   useEffect(() => {
     loadVersions();
   }, [loadVersions]);
 
-  const openCreateModal = (kind: KnowledgeDocumentKind) => {
+  const startNewPageDraft = async () => {
+    if (!(await confirmDiscardUnsavedChanges())) return;
+    const namespaceSlug = activeSpace === 'all' ? 'global' : activeSpace;
+    const namespace =
+      namespaces.find((ns) => ns.slug === namespaceSlug) ?? selectedNamespace ?? namespaces[0];
+    const title = 'Untitled';
+    const path = ensureUniquePath(slugifyFileName(title), documents);
+    const draft: KnowledgeDocument = {
+      document_id: DRAFT_DOCUMENT_ID,
+      namespace_id:
+        namespace?.namespace_id ?? (DRAFT_DOCUMENT_ID as KnowledgeDocument['namespace_id']),
+      path,
+      uri: `agor://kb/${namespaceSlug}/${path}`,
+      url: null,
+      title,
+      kind: 'doc',
+      visibility: namespace?.visibility_default ?? 'public',
+      edit_policy: 'owner',
+      current_version_id: null,
+      metadata: { title_from_content: true },
+      created_by: null,
+      created_at: new Date(),
+      updated_by: null,
+      updated_at: null,
+      archived: false,
+      archived_at: null,
+    };
+    setDraftDocument(draft);
+    setDraftNamespaceSlug(namespaceSlug);
+    setActiveDocId(DRAFT_DOCUMENT_ID);
+    setSelectedFolder(ROOT_FOLDER);
+    setTitleDraft(title);
+    setTitleFromContent(true);
+    setRenamePathOnTitleChange(false);
+    setMarkdownDraft(`# ${title}\n\nWrite markdown here.\n`);
+    setVersions([]);
+    pendingEditModeRef.current = true;
+    setIsEditing(true);
+  };
+
+  const openCreateModal = async (kind: KnowledgeDocumentKind) => {
+    if (kind === 'doc') {
+      await startNewPageDraft();
+      return;
+    }
     const title = kind === 'skill' ? 'New Skill' : kind === 'memory' ? 'New Memory' : 'New Page';
     const defaultFolder =
       selectedFolder || (kind === 'skill' ? 'skills' : kind === 'memory' ? 'memories' : 'pages');
@@ -743,6 +840,43 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     setError(null);
     try {
       const nextTitle = nextDraftTitle;
+      if (isDraftDocument) {
+        const namespaceSlug =
+          draftNamespaceSlug ?? (activeSpace === 'all' ? 'global' : activeSpace);
+        const namespace =
+          namespaces.find((ns) => ns.slug === namespaceSlug) ?? selectedNamespace ?? namespaces[0];
+        const path = ensureUniquePath(slugifyFileName(nextTitle), documents);
+        const created = (await client.service('kb/documents').create({
+          namespace_slug: namespaceSlug,
+          path,
+          title: nextTitle,
+          kind: 'doc',
+          visibility: namespace?.visibility_default ?? 'public',
+          metadata: {
+            ...(activeDoc.metadata ?? {}),
+            title_from_content: titleFromContent,
+          },
+          content_text: markdownDraft,
+          change_summary: 'Initial version',
+        })) as KnowledgeDocument;
+        setDocuments((prev) => [created, ...prev]);
+        setDraftDocument(null);
+        setDraftNamespaceSlug(null);
+        setActiveSpace(namespaceSlug);
+        setActiveDocId(created.document_id);
+        setSelectedFolder(ROOT_FOLDER);
+        await loadVersions();
+        setKnowledgeEditMode(false);
+        navigate(
+          `${buildKnowledgeRoutePath(
+            routeBasePath,
+            namespaceSlugForDocument(created),
+            created.path
+          )}${buildKnowledgeSearch({ editing: false })}`,
+          { replace: true }
+        );
+        return;
+      }
       const nextPath =
         titleChanged && renamePathOnTitleChange && suggestedRenamePath !== activeDoc.path
           ? suggestedRenamePath
@@ -813,6 +947,18 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
 
   const cancelEdit = () => {
     if (!activeDoc) return;
+    if (isDraftDocument) {
+      setDraftDocument(null);
+      setDraftNamespaceSlug(null);
+      setActiveDocId(null);
+      setTitleDraft('');
+      setTitleFromContent(false);
+      setRenamePathOnTitleChange(false);
+      setMarkdownDraft(DEFAULT_MARKDOWN);
+      setVersions([]);
+      setKnowledgeEditMode(false);
+      return;
+    }
     setTitleDraft(activeDoc.title);
     setTitleFromContent(activeDoc.metadata?.title_from_content === true);
     setRenamePathOnTitleChange(false);
@@ -901,7 +1047,14 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     navigate(`${location.pathname}${buildKnowledgeSearch({ editing })}`, { replace: true });
   };
 
-  const selectKnowledgeDocument = (doc: KnowledgeDocument) => {
+  const clearDraftDocument = () => {
+    setDraftDocument(null);
+    setDraftNamespaceSlug(null);
+  };
+
+  const selectKnowledgeDocument = async (doc: KnowledgeDocument) => {
+    if (!(await confirmDiscardUnsavedChanges())) return;
+    clearDraftDocument();
     setActiveDocId(doc.document_id);
     pendingEditModeRef.current = false;
     setIsEditing(false);
@@ -912,7 +1065,9 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     );
   };
 
-  const selectKnowledgeFolder = (folderPath: string) => {
+  const selectKnowledgeFolder = async (folderPath: string) => {
+    if (!(await confirmDiscardUnsavedChanges())) return;
+    clearDraftDocument();
     setActiveDocId(null);
     setSelectedFolder(folderPath);
     pendingEditModeRef.current = false;
@@ -922,7 +1077,9 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
     navigate(`${targetPath}${buildKnowledgeSearch({ editing: false })}`);
   };
 
-  const changeKnowledgeSpace = (space: string) => {
+  const changeKnowledgeSpace = async (space: string) => {
+    if (!(await confirmDiscardUnsavedChanges())) return;
+    clearDraftDocument();
     setActiveSpace(space);
     setActiveDocId(null);
     setSelectedFolder(ROOT_FOLDER);
@@ -1111,7 +1268,13 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
         }}
       >
         <Space size={12}>
-          <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/')} />
+          <Button
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            onClick={async () => {
+              if (await confirmDiscardUnsavedChanges()) navigate('/');
+            }}
+          />
           <BrandLogo level={5} />
           <Text strong style={{ fontSize: 15 }}>
             Knowledge
