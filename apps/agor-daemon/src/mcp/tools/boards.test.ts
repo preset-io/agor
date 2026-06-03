@@ -7,6 +7,30 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
   isError?: boolean;
 }>;
 
+type ToolConfig = {
+  inputSchema?: {
+    safeParse: (value: unknown) => { success: boolean };
+  };
+};
+
+function makeMcpContext(ctx: {
+  app: unknown;
+  userId: string;
+  baseServiceParams?: Record<string, unknown>;
+}): Parameters<typeof registerBoardTools>[1] {
+  return {
+    app: ctx.app as Parameters<typeof registerBoardTools>[1]['app'],
+    db: {} as Parameters<typeof registerBoardTools>[1]['db'],
+    userId: ctx.userId as Parameters<typeof registerBoardTools>[1]['userId'],
+    authenticatedUser: { user_id: ctx.userId, role: 'member' } as Parameters<
+      typeof registerBoardTools
+    >[1]['authenticatedUser'],
+    baseServiceParams: (ctx.baseServiceParams ?? {}) as Parameters<
+      typeof registerBoardTools
+    >[1]['baseServiceParams'],
+  };
+}
+
 function registerAndCaptureHandler(
   toolName: string,
   ctx: {
@@ -22,20 +46,31 @@ function registerAndCaptureHandler(
     },
   } as unknown as McpServer;
 
-  registerBoardTools(fakeServer, {
-    app: ctx.app as Parameters<typeof registerBoardTools>[1]['app'],
-    db: {} as Parameters<typeof registerBoardTools>[1]['db'],
-    userId: ctx.userId as Parameters<typeof registerBoardTools>[1]['userId'],
-    authenticatedUser: { user_id: ctx.userId, role: 'member' } as Parameters<
-      typeof registerBoardTools
-    >[1]['authenticatedUser'],
-    baseServiceParams: (ctx.baseServiceParams ?? {}) as Parameters<
-      typeof registerBoardTools
-    >[1]['baseServiceParams'],
-  });
+  registerBoardTools(fakeServer, makeMcpContext(ctx));
 
   if (!handler) throw new Error(`${toolName} was not registered`);
   return handler;
+}
+
+function registerAndCaptureConfig(
+  toolName: string,
+  ctx: {
+    app: unknown;
+    userId: string;
+    baseServiceParams?: Record<string, unknown>;
+  }
+): ToolConfig {
+  let config: ToolConfig | undefined;
+  const fakeServer = {
+    registerTool: (name: string, cfg: ToolConfig, _cb: ToolHandler) => {
+      if (name === toolName) config = cfg;
+    },
+  } as unknown as McpServer;
+
+  registerBoardTools(fakeServer, makeMcpContext(ctx));
+
+  if (!config) throw new Error(`${toolName} was not registered`);
+  return config;
 }
 
 describe('agor_boards_get', () => {
@@ -220,5 +255,88 @@ describe('agor_boards_get', () => {
       ...baseServiceParams,
     });
     expect(parsed.entities).toHaveLength(1);
+    expect(parsed.entities_pagination).toEqual({ total: 1, limit: null, skip: 0 });
+  });
+
+  it('reports null pagination limit when only entitiesSkip is provided', async () => {
+    const boardObjectsFind = vi.fn(async () => ({
+      data: [
+        {
+          object_id: 'obj-branch-0',
+          board_id: 'board-1',
+          branch_id: 'branch-0',
+          entity_type: 'branch',
+          position: { x: 0, y: 0 },
+          created_at: '2026-06-01T00:00:00.000Z',
+        },
+        {
+          object_id: 'obj-branch-1',
+          board_id: 'board-1',
+          branch_id: 'branch-1',
+          entity_type: 'branch',
+          position: { x: 10, y: 20 },
+          created_at: '2026-06-01T00:00:00.000Z',
+        },
+      ],
+      total: 2,
+      limit: 100,
+      skip: 0,
+    }));
+    const { app } = makeApp({ boardObjectsFind });
+    const getBoard = registerAndCaptureHandler('agor_boards_get', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await getBoard({
+      boardId: 'board-1',
+      includeEntities: true,
+      entitiesSkip: 1,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.entities).toHaveLength(1);
+    expect(parsed.entities[0].branch_id).toBe('branch-1');
+    expect(parsed.entities_pagination).toEqual({ total: 2, limit: null, skip: 1 });
+  });
+
+  it('validates entity pagination input constraints in the MCP schema', () => {
+    const { app } = makeApp();
+    const config = registerAndCaptureConfig('agor_boards_get', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    expect(
+      config.inputSchema?.safeParse({
+        boardId: 'board-1',
+        includeEntities: true,
+        entitiesLimit: 25,
+        entitiesSkip: 5,
+      }).success
+    ).toBe(true);
+    expect(
+      config.inputSchema?.safeParse({
+        boardId: 'board-1',
+        includeEntities: true,
+        entitiesLimit: -1,
+      }).success
+    ).toBe(false);
+    expect(
+      config.inputSchema?.safeParse({
+        boardId: 'board-1',
+        includeEntities: true,
+        entitiesLimit: 1.5,
+      }).success
+    ).toBe(false);
+    expect(
+      config.inputSchema?.safeParse({
+        boardId: 'board-1',
+        includeEntities: true,
+        entitiesSkip: 10001,
+      }).success
+    ).toBe(false);
   });
 });

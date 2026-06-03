@@ -108,10 +108,13 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         ).data;
         const total = matchedEntities.length;
         const skip = args.entitiesSkip ?? 0;
-        const limit = args.entitiesLimit ?? total;
+        const limit = args.entitiesLimit ?? null;
         const entities =
           args.entitiesLimit !== undefined || args.entitiesSkip !== undefined
-            ? matchedEntities.slice(skip, skip + limit)
+            ? matchedEntities.slice(
+                skip,
+                args.entitiesLimit === undefined ? undefined : skip + args.entitiesLimit
+              )
             : matchedEntities;
 
         return textResult({
