@@ -212,9 +212,6 @@ export const BranchLatestTaskStream = React.memo<BranchLatestTaskStreamProps>(
           style={{
             height: 520,
             overflowY: 'auto',
-            padding: `${token.sizeUnit}px ${token.sizeUnit * 2}px`,
-            background: token.colorBgLayout,
-            borderRadius: token.borderRadiusLG,
           }}
         >
           {error ? (
