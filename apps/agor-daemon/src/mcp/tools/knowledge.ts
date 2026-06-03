@@ -547,6 +547,10 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .describe('Optional neighbor node types to include'),
         depth: z.number().optional().describe('Traversal depth (default: 1; V1 may cap at 2)'),
         limit: z.number().optional().describe('Maximum neighbors/edges to return (default: 50)'),
+        includeArchived: z
+          .boolean()
+          .optional()
+          .describe('Include archived graph nodes and edges (default: false)'),
       }),
     },
     async (args) => {
@@ -562,7 +566,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (edgeTypes) query.edge_types = edgeTypes;
       if (nodeTypes) query.node_types = nodeTypes;
       if (args.depth) query.depth = args.depth;
-      if (args.limit) query.$limit = args.limit;
+      if (args.limit) query.limit = args.limit;
+      if (args.includeArchived) query.include_archived = true;
 
       const customResult = await callCustomMethod(service, 'neighbors', query, mcpParams(ctx));
       if (customResult !== undefined) return textResult(customResult);

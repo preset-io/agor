@@ -4,7 +4,7 @@
 
 import { PAGINATION } from '@agor/core/config';
 import { type Database, KnowledgeNamespaceRepository } from '@agor/core/db';
-import { Forbidden, NotFound } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   Id,
@@ -67,6 +67,15 @@ export class KnowledgeNamespacesService extends DrizzleService<
     return (user?.user_id as UserID | undefined) ?? null;
   }
 
+  private assertSlugUnchanged(
+    existing: KnowledgeNamespace,
+    data: Partial<KnowledgeNamespace>
+  ): void {
+    if (data.slug !== undefined && data.slug !== existing.slug) {
+      throw new BadRequest('Knowledge namespace slug cannot be changed after creation');
+    }
+  }
+
   private async createOne(
     data: Partial<KnowledgeNamespace>,
     params?: KnowledgeNamespaceParams
@@ -100,6 +109,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
     this.assertCanManage(params);
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge namespace not found: ${id}`);
+    this.assertSlugUnchanged(existing, data);
     const result = await this.repo.update(String(id), {
       ...data,
       namespace_id: existing.namespace_id,
@@ -119,9 +129,11 @@ export class KnowledgeNamespacesService extends DrizzleService<
     this.assertCanManage(params);
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge namespace not found: ${id}`);
+    this.assertSlugUnchanged(existing, data);
     const result = await this.repo.update(String(id), {
       ...data,
       namespace_id: existing.namespace_id,
+      slug: existing.slug,
       created_by: existing.created_by,
       owner_user_id: data.owner_user_id ?? existing.owner_user_id,
     });

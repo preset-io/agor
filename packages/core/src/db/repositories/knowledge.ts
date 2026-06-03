@@ -705,6 +705,15 @@ export class KnowledgeDocumentRepository
     return row ? this.rowToDocument(row) : null;
   }
 
+  async findByUnitId(unitId: string): Promise<KnowledgeDocument | null> {
+    const unit = await select(this.db)
+      .from(kbDocumentUnits)
+      .where(eq(kbDocumentUnits.unit_id, unitId))
+      .one();
+    if (!unit) return null;
+    return this.findById(unit.document_id);
+  }
+
   async findAll(filters?: KnowledgeDocumentFilters): Promise<KnowledgeDocument[]> {
     const conditions = [];
     let namespaceId = filters?.namespace_id;
@@ -1126,12 +1135,18 @@ export class KnowledgeGraphRepository {
     return this.rowToNode(row);
   }
 
-  async findNode(refInput: KnowledgeNodeRef): Promise<KnowledgeGraphNode | null> {
+  async findNode(
+    refInput: KnowledgeNodeRef,
+    options?: { includeArchived?: boolean }
+  ): Promise<KnowledgeGraphNode | null> {
     const ref = canonicalNodeRef(refInput);
     const nodeId = firstPresent(ref, ['node_id']);
     if (nodeId) {
       try {
-        return await this.resolveNodeById(nodeId);
+        const node = await this.resolveNodeById(nodeId);
+        if (!node) return null;
+        if (node.archived && !options?.includeArchived) return null;
+        return node;
       } catch (error) {
         if (error instanceof EntityNotFoundError) return null;
         throw error;
@@ -1139,7 +1154,12 @@ export class KnowledgeGraphRepository {
     }
 
     const uri = this.deriveNodeUri(ref);
-    const row = await select(this.db).from(kbGraphNodes).where(eq(kbGraphNodes.uri, uri)).one();
+    const conditions = [eq(kbGraphNodes.uri, uri)];
+    if (!options?.includeArchived) conditions.push(eq(kbGraphNodes.archived, false));
+    const row = await select(this.db)
+      .from(kbGraphNodes)
+      .where(and(...conditions))
+      .one();
     return row ? this.rowToNode(row) : null;
   }
 
@@ -1178,7 +1198,7 @@ export class KnowledgeGraphRepository {
   }
 
   async neighbors(query: KnowledgeGraphNeighborsQuery): Promise<KnowledgeGraphNeighborsResult> {
-    const center = await this.findNode(query.node);
+    const center = await this.findNode(query.node, { includeArchived: query.include_archived });
     if (!center) throw new EntityNotFoundError('KnowledgeGraphNode', JSON.stringify(query.node));
     const direction = query.direction ?? 'both';
     const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
@@ -1219,6 +1239,7 @@ export class KnowledgeGraphRepository {
         .one();
       if (!row) continue;
       const node = this.rowToNode(row);
+      if (node.archived && !query.include_archived) continue;
       if (query.node_types?.length && !query.node_types.includes(node.node_type)) continue;
       nodes.push(node);
     }

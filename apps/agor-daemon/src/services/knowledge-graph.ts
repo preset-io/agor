@@ -60,9 +60,27 @@ export class KnowledgeGraphService {
     );
   }
 
+  private unitIdFromRef(ref: KnowledgeNodeRef): string | undefined {
+    const unitId = ref.unit_id ?? ref.unitId;
+    if (unitId) return unitId;
+    const unitPrefix = 'agor://kb/unit/';
+    if (ref.uri?.startsWith(unitPrefix)) return ref.uri.slice(unitPrefix.length);
+    return undefined;
+  }
+
+  private unitIdFromNode(node: KnowledgeGraphNode): string | undefined {
+    if (node.unit_id) return node.unit_id;
+    const unitPrefix = 'agor://kb/unit/';
+    if (node.uri.startsWith(unitPrefix)) return node.uri.slice(unitPrefix.length);
+    return undefined;
+  }
+
   private async documentForRef(ref: KnowledgeNodeRef): Promise<KnowledgeDocument | null> {
     const documentId = ref.document_id ?? ref.documentId;
     if (documentId) return this.documents.findById(documentId);
+
+    const unitId = this.unitIdFromRef(ref);
+    if (unitId) return this.documents.findByUnitId(unitId);
 
     const parsed = parseKnowledgeUri(ref.uri);
     const namespaceSlug = ref.namespace ?? parsed?.namespace_slug;
@@ -84,6 +102,8 @@ export class KnowledgeGraphService {
 
   private async documentForNode(node: KnowledgeGraphNode): Promise<KnowledgeDocument | null> {
     if (node.document_id) return this.documents.findById(node.document_id);
+    const unitId = this.unitIdFromNode(node);
+    if (unitId) return this.documents.findByUnitId(unitId);
     const parsed = parseKnowledgeUri(node.uri);
     if (!parsed) return null;
     const docs = await this.documents.findAll({
