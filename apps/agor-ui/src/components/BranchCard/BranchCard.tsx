@@ -525,7 +525,7 @@ const BranchCardComponent = ({
                   </Space>
                 ),
                 styles: {
-                  body: { background: 'transparent', paddingInline: 0 },
+                  body: { background: 'transparent', padding: 0 },
                 },
                 children: taskStreamExpanded ? (
                   <BranchLatestTaskStream
