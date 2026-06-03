@@ -31,6 +31,8 @@ const MAX_FILE_SIZE_BYTES = 1_048_576;
 
 /** Context lines around changes (same as Claude Code CLI) */
 const CONTEXT_LINES = 3;
+/** Maximum diff lines to persist per file in message JSON. */
+const MAX_STORED_DIFF_LINES_PER_FILE = 200;
 
 interface ToolUseInfo {
   name: string;
@@ -340,6 +342,48 @@ function enrichBlock(
   }
 }
 
+function countOldLines(lines: string[]): number {
+  return lines.filter((line) => !line.startsWith('+')).length;
+}
+
+function countNewLines(lines: string[]): number {
+  return lines.filter((line) => !line.startsWith('-')).length;
+}
+
+function truncateStructuredPatchHunks(hunks: StructuredPatchHunk[]): StructuredPatchHunk[] {
+  const totalLines = hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);
+  if (totalLines <= MAX_STORED_DIFF_LINES_PER_FILE) return hunks;
+
+  const truncated: StructuredPatchHunk[] = [];
+  let remaining = MAX_STORED_DIFF_LINES_PER_FILE;
+  let shownLines = 0;
+
+  for (const hunk of hunks) {
+    if (remaining <= 0) break;
+
+    const lines = hunk.lines.slice(0, remaining);
+    remaining -= lines.length;
+    shownLines += lines.length;
+
+    truncated.push({
+      ...hunk,
+      oldLines: countOldLines(lines),
+      newLines: countNewLines(lines),
+      lines,
+    });
+  }
+
+  const notice = ` [diff output was truncated: showing first ${shownLines} of ${totalLines} lines]`;
+  const lastHunk = truncated.at(-1);
+  if (lastHunk) {
+    lastHunk.lines = [...lastHunk.lines, notice];
+    lastHunk.oldLines = countOldLines(lastHunk.lines);
+    lastHunk.newLines = countNewLines(lastHunk.lines);
+  }
+
+  return truncated;
+}
+
 /**
  * Compute structuredPatch for an Edit tool result.
  *
@@ -413,6 +457,7 @@ function enrichEditResult(block: ContentBlock, input: Record<string, unknown>): 
   // Release current content
   currentContent = null;
 
+  hunks = truncateStructuredPatchHunks(hunks);
   if (hunks.length > 0) {
     block.diff = { structuredPatch: hunks };
   }
@@ -437,8 +482,9 @@ function enrichWriteResult(block: ContentBlock, input: Record<string, unknown>):
     context: 0,
   });
 
-  if (patch.hunks.length > 0) {
-    block.diff = { structuredPatch: patch.hunks };
+  const hunks = truncateStructuredPatchHunks(patch.hunks);
+  if (hunks.length > 0) {
+    block.diff = { structuredPatch: hunks };
   }
 }
 
@@ -521,8 +567,9 @@ function enrichEditFilesResult(
       const patch = structuredPatch(filePath, filePath, '', content, '', '', {
         context: 0,
       });
-      if (patch.hunks.length > 0) {
-        fileDiffs.push({ path: filePath, kind, structuredPatch: patch.hunks });
+      const hunks = truncateStructuredPatchHunks(patch.hunks);
+      if (hunks.length > 0) {
+        fileDiffs.push({ path: filePath, kind, structuredPatch: hunks });
       }
     } catch {
       // Best effort — skip files that fail
@@ -608,11 +655,12 @@ function enrichFromEditFilesSnapshots(snapshots: EditFilesSnapshot[]): FileDiff[
         }
       );
 
-      if (patch.hunks.length > 0) {
+      const hunks = truncateStructuredPatchHunks(patch.hunks);
+      if (hunks.length > 0) {
         fileDiffs.push({
           path: snapshot.path,
           kind: resultKind,
-          structuredPatch: patch.hunks,
+          structuredPatch: hunks,
         });
       }
     } catch {

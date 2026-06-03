@@ -263,6 +263,46 @@ describe('diff enrichment', () => {
     expect(lines.some((line) => line.includes('+export const added = true;'))).toBe(true);
   });
 
+  it('truncates large edit_files add diffs before storing them', () => {
+    const repoDir = createTempGitRepo();
+    const srcDir = path.join(repoDir, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+
+    fs.writeFileSync(path.join(repoDir, 'README.md'), '# test\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    const newFilePath = path.join(srcDir, 'large.ts');
+    const content = Array.from({ length: 250 }, (_, i) => `export const value${i} = ${i};`).join(
+      '\n'
+    );
+    fs.writeFileSync(newFilePath, `${content}\n`, 'utf-8');
+
+    const contentBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-large-add-1',
+        name: 'edit_files',
+        input: {
+          changes: [{ path: 'src/large.ts', kind: 'add' }],
+        },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-large-add-1',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
+
+    const lines = contentBlocks[1].diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(lines).toHaveLength(201);
+    expect(lines[0]).toBe('+export const value0 = 0;');
+    expect(lines[199]).toBe('+export const value199 = 199;');
+    expect(lines[200]).toBe(' [diff output was truncated: showing first 200 of 250 lines]');
+  });
+
   it('uses invocation snapshots so add then remove across calls both render correctly', () => {
     const repoDir = createTempGitRepo();
     const srcDir = path.join(repoDir, 'src');
