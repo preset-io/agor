@@ -20,8 +20,9 @@ import type {
   Session,
   SessionID,
   Task,
+  TaskID,
 } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { type TaskMetadata, TaskStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import {
@@ -79,6 +80,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   private app: Application;
   private db: Database;
   private heartbeatCallbackRunner: ExecutorHeartbeatCallbackRunner;
+  private completionCallbackDispatches = new Map<string, Promise<void>>();
 
   constructor(db: Database, app: Application) {
     const taskRepo = new TaskRepository(db);
@@ -425,12 +427,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             console.log(
               `⏭️ [TasksService] Skipping session IDLE update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
             );
-            // Still process callbacks (task completed, callback target needs to know)
-            const earlyCallbackTarget =
-              session.callback_config?.callback_session_id ?? session.genealogy?.parent_session_id;
-            if (earlyCallbackTarget) {
-              await this.queueCallbackToSession(task, session, earlyCallbackTarget, params);
-            }
+            // Still process completion callbacks (task completed, callback target needs to know).
+            // Route through the same centralized/idempotent dispatcher used by the normal
+            // completion path so races cannot enqueue duplicate parent callbacks.
+            await this.dispatchCompletionCallbacks(task, session, params);
             return result;
           }
 
@@ -464,67 +464,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
           }
 
-          // Queue callback to the target session if configured
-          // callback_config.callback_session_id is the single source of truth for both:
-          // - Subsessions (spawn sets it to parent session ID)
-          // - Remote sessions (create sets it when enableCallback is true)
-          // Fallback: legacy spawned sessions may only have genealogy.parent_session_id
-          // Fallback to genealogy.parent_session_id for legacy spawned sessions
-          const callbackTarget =
-            session.callback_config?.callback_session_id ?? session.genealogy?.parent_session_id;
-          if (callbackTarget) {
-            const targetSessionId = callbackTarget;
-            await this.queueCallbackToSession(task, session, targetSessionId, params);
-
-            // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.
-            // The queue processor uses a promise-based lock that will:
-            // - If target is busy: wait for current processing, then retry (self-healing)
-            // - If target is idle: immediately process the callback
-            // - If target becomes idle while waiting: the retry will catch it
-            //
-            // DO NOT check target status before triggering - let the queue processor handle it.
-            // This ensures callbacks are never missed due to timing issues.
-            try {
-              const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-              if (sessionsService.triggerQueueProcessing) {
-                console.log(
-                  `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
-                );
-                // Pass empty params to avoid leaking child's auth context to target
-                // The queue processor will reconstruct target auth from queued task metadata
-                await sessionsService.triggerQueueProcessing(targetSessionId, {});
-              }
-            } catch (error) {
-              // Don't throw - target issues shouldn't break child queue processing
-              console.warn(
-                `⚠️  [TasksService] Failed to trigger callback target queue processing (target may be deleted):`,
-                error
-              );
-            }
-          }
-
-          // Post-callback cleanup: runs independently of whether callback was delivered.
-          // "once" mode: auto-disable callback after first delivery attempt
-          // Default to "persistent" for backward compat — legacy sessions without callback_mode
-          // should continue firing on every completion as they always have.
-          if (callbackTarget) {
-            const callbackMode = session.callback_config?.callback_mode ?? 'persistent';
-            if (callbackMode === 'once') {
-              try {
-                await this.app.service('sessions').patch(session.session_id, {
-                  callback_config: {
-                    ...session.callback_config,
-                    enabled: false,
-                  },
-                });
-                console.log(
-                  `🔕 [TasksService] Auto-disabled callback for session ${shortId(session.session_id)} (once mode)`
-                );
-              } catch (error) {
-                console.warn(`⚠️  [TasksService] Failed to auto-disable callback:`, error);
-              }
-            }
-          }
+          await this.dispatchCompletionCallbacks(task, session, params);
 
           // "btw" fork origin: auto-archive the ephemeral fork after task completion.
           // Runs regardless of callback success — btw forks should always be cleaned up.
@@ -691,6 +631,179 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
+   * Centralized completion-callback dispatcher.
+   *
+   * Both subsessions and generic callback_config callbacks resolve to the same
+   * target/event pair: `session_completion` delivered to
+   * `callback_config.callback_session_id`, with a genealogy-parent fallback for
+   * legacy spawned sessions. Keeping all routing here prevents a completed child
+   * from notifying its parent once via the rich/template path and again via a
+   * second generic/raw path.
+   */
+  private async dispatchCompletionCallbacks(
+    task: Task,
+    childSession: Session,
+    params?: TaskParams
+  ): Promise<void> {
+    const targetSessionId = this.resolveCompletionCallbackTarget(childSession);
+    if (!targetSessionId) return;
+
+    const callbackTask = await this.dispatchCompletionCallbackOnce(
+      task,
+      childSession,
+      targetSessionId,
+      params
+    );
+
+    if (callbackTask) {
+      // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.
+      // The queue processor uses a promise-based lock that will:
+      // - If target is busy: wait for current processing, then retry (self-healing)
+      // - If target is idle: immediately process the callback
+      // - If target becomes idle while waiting: the retry will catch it
+      //
+      // DO NOT check target status before triggering - let the queue processor handle it.
+      // This ensures callbacks are never missed due to timing issues.
+      try {
+        const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+        if (sessionsService.triggerQueueProcessing) {
+          console.log(
+            `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
+          );
+          // Pass empty params to avoid leaking child's auth context to target.
+          // The queue processor reconstructs target auth from queued task metadata.
+          await sessionsService.triggerQueueProcessing(targetSessionId, {});
+        }
+      } catch (error) {
+        // Don't throw - target issues shouldn't break child queue processing.
+        console.warn(
+          `⚠️  [TasksService] Failed to trigger callback target queue processing (target may be deleted):`,
+          error
+        );
+      }
+    }
+
+    // Post-callback cleanup: runs independently of whether callback was delivered.
+    // "once" mode: auto-disable callback after first delivery attempt.
+    // Default to "persistent" for backward compat — legacy sessions without
+    // callback_mode should continue firing on every completion as they always have.
+    const callbackMode = childSession.callback_config?.callback_mode ?? 'persistent';
+    if (callbackMode === 'once') {
+      try {
+        await this.app.service('sessions').patch(childSession.session_id, {
+          callback_config: {
+            ...childSession.callback_config,
+            enabled: false,
+          },
+        });
+        console.log(
+          `🔕 [TasksService] Auto-disabled callback for session ${shortId(childSession.session_id)} (once mode)`
+        );
+      } catch (error) {
+        console.warn(`⚠️  [TasksService] Failed to auto-disable callback:`, error);
+      }
+    }
+  }
+
+  private resolveCompletionCallbackTarget(childSession: Session): SessionID | undefined {
+    // callback_config.callback_session_id is the single source of truth for both:
+    // - Subsessions (spawn sets it to parent session ID)
+    // - Remote sessions (create sets it when enableCallback is true)
+    // Fallback: legacy spawned sessions may only have genealogy.parent_session_id.
+    return (
+      childSession.callback_config?.callback_session_id ?? childSession.genealogy?.parent_session_id
+    );
+  }
+
+  private callbackDispatchMetadataKey(targetSessionId: SessionID): string {
+    return `session_completion:${targetSessionId}`;
+  }
+
+  private hasCompletionCallbackDispatch(
+    metadata: TaskMetadata | undefined,
+    targetSessionId: SessionID
+  ): boolean {
+    return (metadata?.callback_dispatches ?? []).some(
+      (dispatch) =>
+        dispatch.event === 'session_completion' && dispatch.target_session_id === targetSessionId
+    );
+  }
+
+  private async markCompletionCallbackDispatched(
+    task: Task,
+    targetSessionId: SessionID,
+    queuedTaskId: TaskID | undefined,
+    params?: TaskParams
+  ): Promise<void> {
+    const latestTask = (await this.taskRepo.findById(task.task_id)) ?? task;
+    if (this.hasCompletionCallbackDispatch(latestTask.metadata, targetSessionId)) return;
+
+    const metadata: TaskMetadata = {
+      ...(latestTask.metadata ?? {}),
+      callback_dispatches: [
+        ...(latestTask.metadata?.callback_dispatches ?? []),
+        {
+          event: 'session_completion',
+          target_session_id: targetSessionId,
+          queued_task_id: queuedTaskId,
+          dispatched_at: new Date().toISOString(),
+        },
+      ],
+    };
+
+    await super.patch(task.task_id, { metadata } as Partial<Task>, params);
+  }
+
+  private async dispatchCompletionCallbackOnce(
+    task: Task,
+    childSession: Session,
+    targetSessionId: SessionID,
+    params?: TaskParams
+  ): Promise<Task | undefined> {
+    const dispatchKey = `${task.task_id}:${this.callbackDispatchMetadataKey(targetSessionId)}`;
+    const existingDispatch = this.completionCallbackDispatches.get(dispatchKey);
+    if (existingDispatch) {
+      await existingDispatch;
+      return undefined;
+    }
+
+    let queuedCallbackTask: Task | undefined;
+    const dispatch = (async () => {
+      const latestTask = (await this.taskRepo.findById(task.task_id)) ?? task;
+      if (this.hasCompletionCallbackDispatch(latestTask.metadata, targetSessionId)) {
+        console.log(
+          `⏭️  [TasksService] Completion callback for task ${shortId(task.task_id)} to ${shortId(targetSessionId)} already dispatched`
+        );
+        return;
+      }
+
+      queuedCallbackTask = await this.queueCallbackToSession(
+        task,
+        childSession,
+        targetSessionId,
+        params
+      );
+      if (queuedCallbackTask) {
+        await this.markCompletionCallbackDispatched(
+          task,
+          targetSessionId,
+          queuedCallbackTask.task_id,
+          params
+        );
+      }
+    })();
+
+    this.completionCallbackDispatches.set(dispatchKey, dispatch);
+    try {
+      await dispatch;
+    } finally {
+      this.completionCallbackDispatches.delete(dispatchKey);
+    }
+
+    return queuedCallbackTask;
+  }
+
+  /**
    * Queue callback message to a target session when a session completes.
    * The target is always callback_config.callback_session_id, set by both
    * spawn (defaults to parent) and create (when enableCallback is true).
@@ -700,8 +813,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     childSession: Session,
     targetSessionId: SessionID,
     params?: TaskParams
-  ): Promise<void> {
-    if (!targetSessionId) return;
+  ): Promise<Task | undefined> {
+    if (!targetSessionId) return undefined;
 
     try {
       // Get target session to check callback config
@@ -719,7 +832,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         console.log(
           `⏭️  [TasksService] Callbacks disabled for child session ${shortId(childSession.session_id)}`
         );
-        return;
+        return undefined;
       }
 
       // Check if we should include original spawn prompt - child overrides take precedence
@@ -817,7 +930,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         console.warn(
           `⚠️  [TasksService] Cannot queue callback: target session ${shortId(targetSessionId)} has no creator (anonymous session)`
         );
-        return;
+        return undefined;
       }
 
       // Create QUEUED task on the target session carrying the callback prompt.
@@ -852,14 +965,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `🔔 Queued callback task ${shortId(callbackTask.task_id)} on session ${shortId(targetSessionId)} from child ${shortId(childSession.session_id)}`
       );
 
-      // NOTE: Queue processing is handled automatically via task completion hook.
-      // When target session becomes idle, it will drain queued tasks including this callback.
+      // NOTE: Queue processing is handled by the centralized dispatcher after
+      // it confirms a callback task was actually queued.
+      return callbackTask;
     } catch (error) {
       console.error(
         `❌ [TasksService] Failed to queue callback to ${targetSessionId} for session ${childSession.session_id}:`,
         error
       );
       // Don't throw - callback failure shouldn't break task completion
+      return undefined;
     }
   }
 

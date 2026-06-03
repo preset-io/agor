@@ -43,6 +43,18 @@ export interface TaskMetadata {
   child_session_id?: SessionID;
   child_task_id?: TaskID;
   /**
+   * Completion callbacks already dispatched for this task, keyed by event +
+   * target. The daemon uses this as an idempotency marker so child-session
+   * completion notifications are not queued twice if multiple completion
+   * paths race.
+   */
+  callback_dispatches?: Array<{
+    event: 'session_completion';
+    target_session_id: SessionID;
+    queued_task_id?: TaskID;
+    dispatched_at: string;
+  }>;
+  /**
    * Marks a task whose prompt was authored by the daemon (not typed by a
    * human). Used by widget auto-resume so the UI can label the queued
    * prompt appropriately.
