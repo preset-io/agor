@@ -31,7 +31,13 @@ import { assertValidVariant } from './_environment-helpers.js';
 const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const CLEANUP_CANDIDATE_DEFAULT_OLDER_THAN_DAYS = 7;
-const CLEANUP_CANDIDATE_DEFAULT_FILESYSTEM_STATUSES = ['ready', 'preserved', 'cleaned'] as const;
+const CLEANUP_CANDIDATE_SOURCE_PAGE_LIMIT = 10000;
+type CleanupCandidateFilesystemStatus = NonNullable<Branch['filesystem_status']>;
+const CLEANUP_CANDIDATE_DEFAULT_FILESYSTEM_STATUSES = [
+  'ready',
+  'preserved',
+  'cleaned',
+] as const satisfies readonly CleanupCandidateFilesystemStatus[];
 const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = [
   'creating',
   'ready',
@@ -39,12 +45,10 @@ const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = [
   'preserved',
   'cleaned',
   'deleted',
-] as const;
+] as const satisfies readonly CleanupCandidateFilesystemStatus[];
 const CLEANUP_CANDIDATE_STORAGE_MODES = ['worktree', 'clone'] as const;
 
-function normalizeFilesystemStatus(
-  branch: Branch
-): (typeof CLEANUP_CANDIDATE_FILESYSTEM_STATUSES)[number] {
+function normalizeFilesystemStatus(branch: Branch): CleanupCandidateFilesystemStatus {
   return branch.filesystem_status ?? 'ready';
 }
 
@@ -59,12 +63,15 @@ function parseCleanupCutoff(args: { archivedBefore?: string; archivedOlderThanDa
     if (Number.isNaN(cutoff.getTime())) {
       throw new Error('archivedBefore must be a valid ISO-8601 date/time string');
     }
+    if (cutoff.getTime() > Date.now()) {
+      throw new Error('archivedBefore must not be in the future');
+    }
     return { cutoff, source: 'archivedBefore' };
   }
 
   const olderThanDays = args.archivedOlderThanDays ?? CLEANUP_CANDIDATE_DEFAULT_OLDER_THAN_DAYS;
-  if (!Number.isFinite(olderThanDays) || olderThanDays < 0) {
-    throw new Error('archivedOlderThanDays must be a non-negative number');
+  if (!Number.isFinite(olderThanDays) || olderThanDays < 1) {
+    throw new Error('archivedOlderThanDays must be at least 1 day');
   }
   return {
     cutoff: new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000),
@@ -78,6 +85,44 @@ function notesPreview(notes: string | undefined, maxLength = 200): string | null
   const singleLine = notes.replace(/\s+/g, ' ').trim();
   if (singleLine.length <= maxLength) return singleLine;
   return `${singleLine.slice(0, maxLength - 1)}…`;
+}
+
+async function findAllArchivedBranchesForCleanup(
+  ctx: McpContext,
+  baseQuery: Record<string, unknown>
+): Promise<{ branches: Branch[]; total: number; pages: number }> {
+  const branches: Branch[] = [];
+  let skip = 0;
+  let total: number | undefined;
+  let pages = 0;
+
+  while (total === undefined || branches.length < total) {
+    const result = await ctx.app.service('branches').find({
+      query: {
+        ...baseQuery,
+        $limit: CLEANUP_CANDIDATE_SOURCE_PAGE_LIMIT,
+        $skip: skip,
+      },
+      ...ctx.baseServiceParams,
+    });
+    pages += 1;
+
+    if (Array.isArray(result)) {
+      branches.push(...(result as Branch[]));
+      total = branches.length;
+      break;
+    }
+
+    const paginated = result as { data: Branch[]; total?: number; limit?: number; skip?: number };
+    const pageData = paginated.data ?? [];
+    branches.push(...pageData);
+    total = paginated.total ?? branches.length;
+
+    if (pageData.length === 0) break;
+    skip += pageData.length;
+  }
+
+  return { branches, total: total ?? branches.length, pages };
 }
 
 export function registerBranchTools(server: McpServer, ctx: McpContext): void {
@@ -196,10 +241,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         archivedOlderThanDays: z
           .number()
           .int()
-          .nonnegative()
+          .positive()
           .optional()
           .describe(
-            'Only include branches archived more than this many days ago. Default: 7. Ignored when archivedBefore is provided.'
+            'Only include branches archived more than this many days ago. Must be at least 1. Default: 7. Ignored when archivedBefore is provided.'
           ),
         filesystemStatus: z
           .enum(CLEANUP_CANDIDATE_FILESYSTEM_STATUSES)
@@ -246,6 +291,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      if (args.filesystemStatus && args.filesystemStatuses) {
+        throw new Error('Pass either filesystemStatus or filesystemStatuses, not both');
+      }
+
       const cutoff = parseCleanupCutoff(args);
       const statuses = new Set(
         args.filesystemStatuses ??
@@ -260,18 +309,15 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
       const query: Record<string, unknown> = {
         archived: true,
-        $limit: 10000,
         $sort: { archived_at: 1 },
       };
       if (args.repoId) query.repo_id = await resolveRepoId(ctx, args.repoId);
 
-      const result = await ctx.app.service('branches').find({ query, ...ctx.baseServiceParams });
-      const branches: Branch[] = Array.isArray(result)
-        ? (result as Branch[])
-        : ((result as { data: Branch[] }).data ?? []);
-      const scannedArchivedBranches = Array.isArray(result)
-        ? branches.length
-        : ((result as { total?: number }).total ?? branches.length);
+      const {
+        branches,
+        total: scannedArchivedBranches,
+        pages: scannedPages,
+      } = await findAllArchivedBranchesForCleanup(ctx, query);
 
       const repoIds = [...new Set(branches.map((branch) => branch.repo_id))];
       const reposById = new Map<string, Repo>();
@@ -299,7 +345,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         .filter(({ branch, pathExists, filesystemStatus }) => {
           if (!branch.archived) return false; // Defense in depth: this tool never returns active branches.
           if (!branch.archived_at) return false;
-          if (new Date(branch.archived_at).getTime() >= cutoff.cutoff.getTime()) return false;
+          const archivedAtMs = new Date(branch.archived_at).getTime();
+          if (!Number.isFinite(archivedAtMs)) return false;
+          if (archivedAtMs >= cutoff.cutoff.getTime()) return false;
           if (!statuses.has(filesystemStatus)) return false;
           if (args.storageMode && (branch.storage_mode ?? 'worktree') !== args.storageMode) {
             return false;
@@ -351,7 +399,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         },
         scanned: {
           archived_branches: scannedArchivedBranches,
-          returned_page_source_count: branches.length,
+          source_pages: scannedPages,
+          source_page_limit: CLEANUP_CANDIDATE_SOURCE_PAGE_LIMIT,
         },
       });
     }

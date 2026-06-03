@@ -259,14 +259,21 @@ describe('agor_branches_cleanup_candidates', () => {
     };
   }
 
-  function makeCleanupApp(branches: unknown[]) {
-    const branchesFind = vi.fn(async () => ({
-      data: branches,
-      total: branches.length,
-      limit: 10000,
-      skip: 0,
-    }));
-    const reposGet = vi.fn(async () => repo);
+  function makeCleanupApp(branches: unknown[], options?: { repoGetFails?: boolean }) {
+    const branchesFind = vi.fn(async (params?: { query?: Record<string, unknown> }) => {
+      const skip = Number(params?.query?.$skip ?? 0);
+      const limit = Number(params?.query?.$limit ?? branches.length);
+      return {
+        data: branches.slice(skip, skip + limit),
+        total: branches.length,
+        limit,
+        skip,
+      };
+    });
+    const reposGet = vi.fn(async () => {
+      if (options?.repoGetFails) throw new Error('repo unavailable');
+      return repo;
+    });
 
     return {
       branchesFind,
@@ -314,7 +321,7 @@ describe('agor_branches_cleanup_candidates', () => {
     const parsed = JSON.parse(result.content[0].text);
 
     expect(branchesFind).toHaveBeenCalledWith({
-      query: { archived: true, $limit: 10000, $sort: { archived_at: 1 } },
+      query: { archived: true, $limit: 10000, $skip: 0, $sort: { archived_at: 1 } },
       ...baseServiceParams,
     });
     expect(
@@ -332,6 +339,11 @@ describe('agor_branches_cleanup_candidates', () => {
       repo_slug: 'preset-io/agor',
       filesystem_status: 'ready',
       path_exists: true,
+    });
+    expect(parsed.scanned).toMatchObject({
+      archived_branches: 8,
+      source_pages: 1,
+      source_page_limit: 10000,
     });
   });
 
@@ -392,5 +404,161 @@ describe('agor_branches_cleanup_candidates', () => {
       filesystem_status: 'cleaned',
       path_exists: false,
     });
+  });
+
+  it('scans multiple source pages before applying cleanup filters and pagination', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
+
+    const nonCandidates = Array.from({ length: 10000 }, (_, index) =>
+      makeBranch({
+        branch_id: `deleted-${index}`,
+        filesystem_status: 'deleted',
+      })
+    );
+    const { app, branchesFind } = makeCleanupApp([
+      ...nonCandidates,
+      makeBranch({ branch_id: 'page-two-candidate', filesystem_status: 'ready' }),
+    ]);
+
+    const cleanupCandidates = registerAndCaptureHandler('agor_branches_cleanup_candidates', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await cleanupCandidates({ limit: 1 });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(branchesFind).toHaveBeenCalledTimes(2);
+    expect(branchesFind).toHaveBeenNthCalledWith(2, {
+      query: { archived: true, $limit: 10000, $skip: 10000, $sort: { archived_at: 1 } },
+      ...baseServiceParams,
+    });
+    expect(parsed.total).toBe(1);
+    expect(parsed.candidates[0].branch_id).toBe('page-two-candidate');
+    expect(parsed.scanned.source_pages).toBe(2);
+  });
+
+  it('excludes malformed archived_at values instead of treating them as old', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
+
+    const { app } = makeCleanupApp([
+      makeBranch({ branch_id: 'bad-date', archived_at: 'not-a-date', filesystem_status: 'ready' }),
+      makeBranch({ branch_id: 'good-date', filesystem_status: 'ready' }),
+    ]);
+
+    const cleanupCandidates = registerAndCaptureHandler('agor_branches_cleanup_candidates', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await cleanupCandidates({});
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(
+      parsed.candidates.map((candidate: { branch_id: string }) => candidate.branch_id)
+    ).toEqual(['good-date']);
+  });
+
+  it('supports explicit archivedBefore and opt-in inclusion of assistant/private branches', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
+
+    const { app } = makeCleanupApp([
+      makeBranch({
+        branch_id: 'assistant',
+        filesystem_status: 'ready',
+        custom_context: { assistant: { kind: 'assistant', displayName: 'Helper' } },
+      }),
+      makeBranch({ branch_id: 'private', filesystem_status: 'ready', others_can: 'none' }),
+      makeBranch({
+        branch_id: 'after-cutoff',
+        archived_at: '2026-05-22T00:00:00.000Z',
+        filesystem_status: 'ready',
+      }),
+    ]);
+
+    const cleanupCandidates = registerAndCaptureHandler('agor_branches_cleanup_candidates', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await cleanupCandidates({
+      archivedBefore: '2026-05-21T00:00:00.000Z',
+      excludeAssistants: false,
+      excludePrivate: false,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(
+      parsed.candidates.map((candidate: { branch_id: string }) => candidate.branch_id)
+    ).toEqual(['assistant', 'private']);
+    expect(parsed.safety).toMatchObject({
+      cutoff_source: 'archivedBefore',
+      archived_older_than_days: null,
+      exclude_assistants: false,
+      exclude_private: false,
+    });
+  });
+
+  it('falls back to null repo metadata when repo enrichment fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
+
+    const { app } = makeCleanupApp(
+      [makeBranch({ branch_id: 'candidate', filesystem_status: 'ready' })],
+      { repoGetFails: true }
+    );
+
+    const cleanupCandidates = registerAndCaptureHandler('agor_branches_cleanup_candidates', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await cleanupCandidates({});
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.candidates[0]).toMatchObject({
+      branch_id: 'candidate',
+      repo_slug: null,
+      repo_name: null,
+    });
+  });
+
+  it('rejects ambiguous filesystem status inputs', async () => {
+    const { app } = makeCleanupApp([]);
+    const cleanupCandidates = registerAndCaptureHandler('agor_branches_cleanup_candidates', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await expect(
+      cleanupCandidates({ filesystemStatus: 'ready', filesystemStatuses: ['cleaned'] })
+    ).rejects.toThrow(/either filesystemStatus or filesystemStatuses/i);
+  });
+
+  it('rejects non-old cleanup cutoffs', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
+
+    const { app } = makeCleanupApp([]);
+    const cleanupCandidates = registerAndCaptureHandler('agor_branches_cleanup_candidates', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await expect(cleanupCandidates({ archivedOlderThanDays: 0 })).rejects.toThrow(
+      /at least 1 day/i
+    );
+    await expect(cleanupCandidates({ archivedBefore: '2026-06-04T00:00:00.000Z' })).rejects.toThrow(
+      /must not be in the future/i
+    );
   });
 });
