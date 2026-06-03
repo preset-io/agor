@@ -698,7 +698,8 @@ export class KnowledgeDocumentRepository
       .where(
         and(
           eq(kbDocuments.namespace_id, namespaceId),
-          eq(kbDocuments.path, normalizeKnowledgePath(path))
+          eq(kbDocuments.path, normalizeKnowledgePath(path)),
+          eq(kbDocuments.archived, false)
         )
       )
       .one();

@@ -7,6 +7,7 @@ import {
   type Database,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
+  KnowledgeNamespaceRepository,
 } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import {
@@ -39,6 +40,7 @@ export class KnowledgeVersionsService extends DrizzleService<
 > {
   private versions: KnowledgeDocumentVersionRepository;
   private documents: KnowledgeDocumentRepository;
+  private namespaces: KnowledgeNamespaceRepository;
 
   constructor(db: Database) {
     const versions = new KnowledgeDocumentVersionRepository(db);
@@ -52,6 +54,7 @@ export class KnowledgeVersionsService extends DrizzleService<
     });
     this.versions = versions;
     this.documents = new KnowledgeDocumentRepository(db);
+    this.namespaces = new KnowledgeNamespaceRepository(db);
   }
 
   private canRead(document: KnowledgeDocument, user?: User): boolean {
@@ -78,6 +81,9 @@ export class KnowledgeVersionsService extends DrizzleService<
 
     const document = await this.documents.findById(String(documentId));
     if (!document) return [];
+    if (document.archived) return [];
+    const namespace = await this.namespaces.findById(document.namespace_id);
+    if (!namespace || namespace.archived) return [];
     if (!this.canRead(document, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to view this knowledge document history');
     }

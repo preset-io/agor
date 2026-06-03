@@ -135,7 +135,10 @@ export class KnowledgeDocumentsService extends DrizzleService<
     return (user?.user_id as UserID | undefined) ?? null;
   }
 
-  private async assertActiveNamespace(document: KnowledgeDocument): Promise<void> {
+  private async assertActiveDocument(document: KnowledgeDocument): Promise<void> {
+    if (document.archived) {
+      throw new NotFound('Knowledge document not found');
+    }
     const namespace = await this.namespaces.findById(document.namespace_id);
     if (!namespace || namespace.archived) {
       throw new NotFound('Knowledge document not found');
@@ -267,7 +270,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   async get(id: Id, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
     const doc = await this.repo.findById(String(id));
     if (!doc) throw new NotFound(`Knowledge document not found: ${id}`);
-    await this.assertActiveNamespace(doc);
+    await this.assertActiveDocument(doc);
     if (!this.canRead(doc, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
@@ -280,7 +283,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   ): Promise<KnowledgeDocument | HydratedKnowledgeDocument> {
     const doc = await this.resolveDocumentRef(data);
     if (!doc) throw new NotFound('Knowledge document not found');
-    await this.assertActiveNamespace(doc);
+    await this.assertActiveDocument(doc);
     if (!this.canRead(doc, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
@@ -304,6 +307,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     });
 
     if (existing) {
+      await this.assertActiveDocument(existing);
       if (!this.canWrite(existing, params?.user as User | undefined)) {
         throw new Forbidden('You do not have permission to update this knowledge document');
       }
@@ -399,7 +403,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (id === null) throw new Error('Bulk patch is not supported for knowledge documents');
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
-    await this.assertActiveNamespace(existing);
+    await this.assertActiveDocument(existing);
     if (!this.canWrite(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
@@ -419,7 +423,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   ) {
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
-    await this.assertActiveNamespace(existing);
+    await this.assertActiveDocument(existing);
     if (!this.canWrite(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
@@ -436,7 +440,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (id === null) throw new Error('Bulk remove is not supported for knowledge documents');
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
-    await this.assertActiveNamespace(existing);
+    await this.assertActiveDocument(existing);
     if (!this.canWrite(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to delete this knowledge document');
     }

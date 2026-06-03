@@ -8,6 +8,7 @@ import {
   type KnowledgeGraphLinkInput,
   type KnowledgeGraphNeighborsQuery,
   KnowledgeGraphRepository,
+  KnowledgeNamespaceRepository,
   type KnowledgeNodeRef,
 } from '@agor/core/db';
 import { Forbidden, NotFound } from '@agor/core/feathers';
@@ -26,10 +27,12 @@ export type KnowledgeGraphParams = QueryParams<KnowledgeGraphNeighborsQuery> & A
 export class KnowledgeGraphService {
   private graph: KnowledgeGraphRepository;
   private documents: KnowledgeDocumentRepository;
+  private namespaces: KnowledgeNamespaceRepository;
 
   constructor(db: Database) {
     this.graph = new KnowledgeGraphRepository(db);
     this.documents = new KnowledgeDocumentRepository(db);
+    this.namespaces = new KnowledgeNamespaceRepository(db);
   }
 
   async create(data: KnowledgeGraphLinkInput, params?: KnowledgeGraphParams) {
@@ -46,18 +49,29 @@ export class KnowledgeGraphService {
 
   private canRead(document: KnowledgeDocument, user?: User): boolean {
     return (
-      document.visibility === 'public' ||
-      this.isAdmin(user) ||
-      Boolean(user?.user_id && document.created_by === user.user_id)
+      !document.archived &&
+      (document.visibility === 'public' ||
+        this.isAdmin(user) ||
+        Boolean(user?.user_id && document.created_by === user.user_id))
     );
   }
 
   private canWrite(document: KnowledgeDocument, user?: User): boolean {
     return (
-      this.isAdmin(user) ||
-      document.edit_policy === 'public' ||
-      Boolean(user?.user_id && document.created_by === user.user_id)
+      !document.archived &&
+      (this.isAdmin(user) ||
+        document.edit_policy === 'public' ||
+        Boolean(user?.user_id && document.created_by === user.user_id))
     );
+  }
+
+  private async activeDocument(
+    document: KnowledgeDocument | null
+  ): Promise<KnowledgeDocument | null> {
+    if (!document || document.archived) return null;
+    const namespace = await this.namespaces.findById(document.namespace_id);
+    if (!namespace || namespace.archived) return null;
+    return document;
   }
 
   private unitIdFromRef(ref: KnowledgeNodeRef): string | undefined {
@@ -75,12 +89,35 @@ export class KnowledgeGraphService {
     return undefined;
   }
 
+  private isDocumentRef(ref: KnowledgeNodeRef): boolean {
+    return Boolean(
+      ref.document_id ??
+        ref.documentId ??
+        this.unitIdFromRef(ref) ??
+        ref.namespace ??
+        ref.path ??
+        parseKnowledgeUri(ref.uri) ??
+        ref.uri?.startsWith('agor://kb/document/')
+    );
+  }
+
+  private isDocumentNode(node: KnowledgeGraphNode): boolean {
+    return Boolean(
+      node.node_type === 'document' ||
+        node.node_type === 'document_unit' ||
+        node.document_id ||
+        this.unitIdFromNode(node) ||
+        parseKnowledgeUri(node.uri) ||
+        node.uri.startsWith('agor://kb/document/')
+    );
+  }
+
   private async documentForRef(ref: KnowledgeNodeRef): Promise<KnowledgeDocument | null> {
     const documentId = ref.document_id ?? ref.documentId;
-    if (documentId) return this.documents.findById(documentId);
+    if (documentId) return this.activeDocument(await this.documents.findById(documentId));
 
     const unitId = this.unitIdFromRef(ref);
-    if (unitId) return this.documents.findByUnitId(unitId);
+    if (unitId) return this.activeDocument(await this.documents.findByUnitId(unitId));
 
     const parsed = parseKnowledgeUri(ref.uri);
     const namespaceSlug = ref.namespace ?? parsed?.namespace_slug;
@@ -88,12 +125,15 @@ export class KnowledgeGraphService {
     if (!namespaceSlug || !path) return null;
 
     const docs = await this.documents.findAll({ namespace_slug: namespaceSlug, path });
-    return docs[0] ?? null;
+    return this.activeDocument(docs[0] ?? null);
   }
 
   private async assertCanLinkRef(ref: KnowledgeNodeRef, user?: User): Promise<void> {
     const node = await this.graph.findNode(ref);
     const document = node ? await this.documentForNode(node) : await this.documentForRef(ref);
+    if (!document && (node ? this.isDocumentNode(node) : this.isDocumentRef(ref))) {
+      throw new NotFound('Knowledge document not found');
+    }
     if (!document) return;
     if (!this.canWrite(document, user)) {
       throw new Forbidden('You do not have permission to link this knowledge document');
@@ -101,20 +141,23 @@ export class KnowledgeGraphService {
   }
 
   private async documentForNode(node: KnowledgeGraphNode): Promise<KnowledgeDocument | null> {
-    if (node.document_id) return this.documents.findById(node.document_id);
+    if (node.document_id) {
+      return this.activeDocument(await this.documents.findById(node.document_id));
+    }
     const unitId = this.unitIdFromNode(node);
-    if (unitId) return this.documents.findByUnitId(unitId);
+    if (unitId) return this.activeDocument(await this.documents.findByUnitId(unitId));
     const parsed = parseKnowledgeUri(node.uri);
     if (!parsed) return null;
     const docs = await this.documents.findAll({
       namespace_slug: parsed.namespace_slug,
       path: parsed.path,
     });
-    return docs[0] ?? null;
+    return this.activeDocument(docs[0] ?? null);
   }
 
   private async canReadNode(node: KnowledgeGraphNode, user?: User): Promise<boolean> {
     const document = await this.documentForNode(node);
+    if (!document && this.isDocumentNode(node)) return false;
     return document ? this.canRead(document, user) : true;
   }
 
