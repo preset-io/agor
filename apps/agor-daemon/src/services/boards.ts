@@ -6,7 +6,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { BoardRepository, type Database } from '@agor/core/db';
+import { BoardObjectRepository, BoardRepository, type Database } from '@agor/core/db';
 import type {
   AuthenticatedParams,
   Board,
@@ -33,6 +33,7 @@ export interface BoardParams
  */
 export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardParams> {
   private boardRepo: BoardRepository;
+  private boardObjectRepo: BoardObjectRepository;
 
   constructor(db: Database) {
     const boardRepo = new BoardRepository(db);
@@ -46,6 +47,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     });
 
     this.boardRepo = boardRepo;
+    this.boardObjectRepo = new BoardObjectRepository(db);
   }
 
   /**
@@ -98,6 +100,21 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     objectId: string,
     _params?: BoardParams
   ): Promise<Board> {
+    const board = await this.boardRepo.findBySlugOrId(boardId);
+    const object = board?.objects?.[objectId];
+
+    // A generic removeObject path can remove zones too (e.g. MCP
+    // agor_boards_update.removeObjects). Clear entity zone references first so
+    // future board renders do not construct React Flow children with a missing
+    // parent. Convert zone-relative positions to absolute while the zone origin
+    // is still available.
+    if (board && object?.type === 'zone') {
+      await this.boardObjectRepo.clearZoneReferences(board.board_id, objectId, {
+        x: object.x,
+        y: object.y,
+      });
+    }
+
     return this.boardRepo.removeBoardObject(boardId, objectId);
   }
 
@@ -140,10 +157,14 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   async deleteZone(
     boardId: string,
     objectId: string,
-    deleteAssociatedSessions: boolean,
+    _deleteAssociatedSessions: boolean,
     _params?: BoardParams
   ): Promise<{ board: Board; affectedSessions: string[] }> {
-    return this.boardRepo.deleteZone(boardId, objectId, deleteAssociatedSessions);
+    const board = await this.removeBoardObject(boardId, objectId);
+    return {
+      board,
+      affectedSessions: [],
+    };
   }
 
   /**

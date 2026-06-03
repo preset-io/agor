@@ -87,6 +87,7 @@ import {
   type ParentInfo,
   relativeToAbsolute,
 } from './canvas/utils/coordinateTransforms';
+import { getValidZoneParentId, sanitizeOrphanedNodeParents } from './canvas/utils/nodeParentUtils';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
 
 interface SessionCanvasProps {
@@ -528,8 +529,34 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const deletedObjectsRef = useRef<Set<string>>(new Set());
 
     // Initialize nodes and edges state BEFORE using them
-    const [nodes, setNodes, onNodesChangeInternal] = useNodesState([]);
+    const [nodes, setNodesUnsafe, onNodesChangeInternal] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+    // React Flow throws if any child node has a parentId that is absent from
+    // the same node array. Route all local setNodes calls through this guard so
+    // stale zone references (or optimistic zone deletes) render unparented
+    // instead of crashing the board.
+    const warnedMissingParentsRef = useRef<Set<string>>(new Set());
+    const setNodes = useCallback<React.Dispatch<React.SetStateAction<Node[]>>>(
+      (value) => {
+        setNodesUnsafe((previousNodes) => {
+          const nextNodes = typeof value === 'function' ? value(previousNodes) : value;
+          return sanitizeOrphanedNodeParents(nextNodes, {
+            onOrphan: (node, missingParentId) => {
+              const warningKey = `${node.id}:${missingParentId}`;
+              if (warnedMissingParentsRef.current.has(warningKey)) return;
+              warnedMissingParentsRef.current.add(warningKey);
+              console.warn('Ignoring stale React Flow parentId on board node', {
+                nodeId: node.id,
+                nodeType: node.type,
+                missingParentId,
+              });
+            },
+          });
+        });
+      },
+      [setNodesUnsafe]
+    );
 
     // Track resize state
     const resizeTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -578,6 +605,26 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       });
       return labels;
     }, [board]);
+
+    const warnedInvalidZoneRefsRef = useRef<Set<string>>(new Set());
+    const warnInvalidZoneRef = useCallback(
+      (
+        entityKind: 'branch' | 'card',
+        entityId: string | undefined,
+        zoneId: string,
+        reason: string
+      ) => {
+        const warningKey = `${entityKind}:${entityId ?? 'unknown'}:${zoneId}`;
+        if (warnedInvalidZoneRefsRef.current.has(warningKey)) return;
+        warnedInvalidZoneRefsRef.current.add(warningKey);
+        console.warn(`Ignoring stale board zone reference for ${entityKind} node`, {
+          entityId,
+          zoneId,
+          reason,
+        });
+      },
+      []
+    );
 
     // Handler to unpin a branch from its zone
     const handleUnpinBranch = useCallback(
@@ -664,7 +711,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         // Look up zone name using full zone ID (zoneLabels uses full IDs as keys)
         const zoneName = zoneId ? zoneLabels[zoneId] || 'Unknown Zone' : undefined;
-        const zoneObj = zoneId && board?.objects?.[zoneId] ? board.objects[zoneId] : undefined;
+        const validZoneParentId = getValidZoneParentId(zoneId, board?.objects, {
+          entityId: branch.branch_id,
+          onInvalid: (entityId, invalidZoneId, reason) =>
+            warnInvalidZoneRef('branch', entityId, invalidZoneId, reason),
+        });
+        const zoneObj = validZoneParentId ? board?.objects?.[validZoneParentId] : undefined;
         const zoneColor =
           zoneObj && zoneObj.type === 'zone'
             ? zoneObj.borderColor || zoneObj.color // Backwards compat: borderColor first, then fall back to deprecated color
@@ -693,7 +745,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           height: 200, // Approximate height, will be measured by React Flow
           // Set parentId for visual nesting but allow dragging outside zone
           // Only set if zone actually exists — stale zone_id references cause React Flow errors
-          parentId: zoneObj ? zoneId : undefined,
+          parentId: validZoneParentId,
           extent: undefined, // No movement restriction - can drag anywhere
           data: {
             branch,
@@ -719,7 +771,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onExecuteScheduleNow,
             onUnpin: handleUnpinBranch,
             compact: false,
-            isPinned: !!zoneId,
+            isPinned: !!validZoneParentId,
             zoneName,
             zoneColor,
             client,
@@ -754,6 +806,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onExecuteScheduleNow,
       handleUnpinBranch,
       zoneLabels,
+      warnInvalidZoneRef,
       userById,
       client,
     ]);
@@ -813,7 +866,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         const position = { x: boardObject.position.x, y: boardObject.position.y };
         const zoneId = boardObject.zone_id;
         const zoneName = zoneId ? zoneLabels[zoneId] || 'Unknown Zone' : undefined;
-        const zoneObj = zoneId && board?.objects?.[zoneId] ? board.objects[zoneId] : undefined;
+        const validZoneParentId = getValidZoneParentId(zoneId, board?.objects, {
+          entityId: cardId,
+          onInvalid: (entityId, invalidZoneId, reason) =>
+            warnInvalidZoneRef('card', entityId, invalidZoneId, reason),
+        });
+        const zoneObj = validZoneParentId ? board?.objects?.[validZoneParentId] : undefined;
         const zoneColor =
           zoneObj && zoneObj.type === 'zone' ? zoneObj.borderColor || zoneObj.color : undefined;
 
@@ -825,11 +883,11 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           zIndex: 500, // Same level as branches
           width: 380,
           height: 120,
-          parentId: zoneObj ? zoneId : undefined,
+          parentId: validZoneParentId,
           extent: undefined,
           data: {
             card,
-            isPinned: !!zoneId,
+            isPinned: !!validZoneParentId,
             zoneName,
             zoneColor,
             onClick: handleCardClick,
@@ -839,7 +897,15 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }
 
       return nodes;
-    }, [board, boardObjectByCard, cardById, zoneLabels, handleCardClick, handleUnpinCard]);
+    }, [
+      board,
+      boardObjectByCard,
+      cardById,
+      zoneLabels,
+      handleCardClick,
+      handleUnpinCard,
+      warnInvalidZoneRef,
+    ]);
 
     // No edges needed for branch-centric boards
     // (Session genealogy is visualized within BranchCard, not as canvas edges)
