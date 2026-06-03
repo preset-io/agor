@@ -1246,8 +1246,8 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
 
         {!collapsed && (
           <div>
-            {folder.docs.map((doc) => renderDocumentRow(doc, depth + 1))}
             {visibleChildren.map((child) => renderFolderSection(child, depth + 1))}
+            {folder.docs.map((doc) => renderDocumentRow(doc, depth + 1))}
           </div>
         )}
       </div>
@@ -1256,10 +1256,10 @@ export function KnowledgePage({ client }: KnowledgePageProps) {
 
   const renderRootContents = (): React.ReactNode => (
     <>
-      {folderHierarchy.docs.map((doc) => renderDocumentRow(doc, 0))}
       {folderHierarchy.children
         .filter(shouldShowFolderInSidebar)
         .map((child) => renderFolderSection(child, 0))}
+      {folderHierarchy.docs.map((doc) => renderDocumentRow(doc, 0))}
     </>
   );
 
