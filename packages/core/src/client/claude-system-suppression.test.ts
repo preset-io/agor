@@ -49,6 +49,22 @@ describe('shouldHidePersistedClaudeSdkEvent', () => {
     ).toBe(false);
   });
 
+  it('treats non-zero hook_response exit_code as diagnostic even if outcome says success', () => {
+    expect(
+      shouldHidePersistedClaudeSdkEvent({
+        type: 'sdk_event',
+        sdkType: 'system',
+        sdkSubtype: 'hook_response',
+        metadata: {
+          subtype: 'hook_response',
+          outcome: 'success',
+          exit_code: 1,
+          stderr: 'hook failed after reporting success',
+        },
+      })
+    ).toBe(false);
+  });
+
   it('hides thinking token telemetry rows', () => {
     expect(
       shouldHidePersistedClaudeSdkEvent({
