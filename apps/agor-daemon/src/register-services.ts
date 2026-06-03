@@ -255,23 +255,29 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   if (svcEnabled('boards')) {
-    app.use('/boards', createBoardsService(db), {
-      methods: [
-        'find',
-        'get',
-        'create',
-        'update',
-        'patch',
-        'remove',
-        'toBlob',
-        'fromBlob',
-        'toYaml',
-        'fromYaml',
-        'clone',
-        'setPrimaryAssistant',
-        'clearPrimaryAssistant',
-      ],
-    });
+    app.use(
+      '/boards',
+      createBoardsService(db, (boardObject) => {
+        app.service('board-objects').emit('patched', boardObject);
+      }),
+      {
+        methods: [
+          'find',
+          'get',
+          'create',
+          'update',
+          'patch',
+          'remove',
+          'toBlob',
+          'fromBlob',
+          'toYaml',
+          'fromYaml',
+          'clone',
+          'setPrimaryAssistant',
+          'clearPrimaryAssistant',
+        ],
+      }
+    );
     app.use('/board-objects', createBoardObjectsService(db));
   }
 

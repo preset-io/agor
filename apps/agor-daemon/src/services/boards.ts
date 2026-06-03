@@ -10,6 +10,7 @@ import { BoardObjectRepository, BoardRepository, type Database } from '@agor/cor
 import type {
   AuthenticatedParams,
   Board,
+  BoardEntityObject,
   BoardExportBlob,
   BoardObject,
   QueryParams,
@@ -34,8 +35,9 @@ export interface BoardParams
 export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardParams> {
   private boardRepo: BoardRepository;
   private boardObjectRepo: BoardObjectRepository;
+  private emitBoardObjectPatched?: (boardObject: BoardEntityObject) => void;
 
-  constructor(db: Database) {
+  constructor(db: Database, emitBoardObjectPatched?: (boardObject: BoardEntityObject) => void) {
     const boardRepo = new BoardRepository(db);
     super(boardRepo, {
       id: 'board_id',
@@ -48,6 +50,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 
     this.boardRepo = boardRepo;
     this.boardObjectRepo = new BoardObjectRepository(db);
+    this.emitBoardObjectPatched = emitBoardObjectPatched;
   }
 
   /**
@@ -109,10 +112,17 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     // parent. Convert zone-relative positions to absolute while the zone origin
     // is still available.
     if (board && object?.type === 'zone') {
-      await this.boardObjectRepo.clearZoneReferences(board.board_id, objectId, {
+      const cleared = await this.boardObjectRepo.clearZoneReferences(board.board_id, objectId, {
         x: object.x,
         y: object.y,
       });
+
+      for (const boardObject of cleared) {
+        this.emitBoardObjectPatched?.({
+          ...boardObject,
+          ...(boardObject.zone_id === undefined ? { zone_id: null } : {}),
+        } as BoardEntityObject);
+      }
     }
 
     return this.boardRepo.removeBoardObject(boardId, objectId);
@@ -360,6 +370,9 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 /**
  * Service factory function
  */
-export function createBoardsService(db: Database): BoardsService {
-  return new BoardsService(db);
+export function createBoardsService(
+  db: Database,
+  emitBoardObjectPatched?: (boardObject: BoardEntityObject) => void
+): BoardsService {
+  return new BoardsService(db, emitBoardObjectPatched);
 }

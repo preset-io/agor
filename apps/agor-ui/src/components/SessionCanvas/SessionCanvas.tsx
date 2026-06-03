@@ -537,25 +537,25 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // stale zone references (or optimistic zone deletes) render unparented
     // instead of crashing the board.
     const warnedMissingParentsRef = useRef<Set<string>>(new Set());
+    const onOrphanedParent = useCallback((node: Node, missingParentId: string) => {
+      const warningKey = `${node.id}:${missingParentId}`;
+      if (warnedMissingParentsRef.current.has(warningKey)) return;
+      warnedMissingParentsRef.current.add(warningKey);
+      console.warn('Ignoring stale React Flow parentId on board node', {
+        nodeId: node.id,
+        nodeType: node.type,
+        missingParentId,
+      });
+    }, []);
+
     const setNodes = useCallback<React.Dispatch<React.SetStateAction<Node[]>>>(
       (value) => {
         setNodesUnsafe((previousNodes) => {
           const nextNodes = typeof value === 'function' ? value(previousNodes) : value;
-          return sanitizeOrphanedNodeParents(nextNodes, {
-            onOrphan: (node, missingParentId) => {
-              const warningKey = `${node.id}:${missingParentId}`;
-              if (warnedMissingParentsRef.current.has(warningKey)) return;
-              warnedMissingParentsRef.current.add(warningKey);
-              console.warn('Ignoring stale React Flow parentId on board node', {
-                nodeId: node.id,
-                nodeType: node.type,
-                missingParentId,
-              });
-            },
-          });
+          return sanitizeOrphanedNodeParents(nextNodes, { onOrphan: onOrphanedParent });
         });
       },
-      [setNodesUnsafe]
+      [setNodesUnsafe, onOrphanedParent]
     );
 
     // Track resize state
@@ -1113,22 +1113,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onCommentSelect,
     ]);
 
-    // Helper: Sanitize orphaned parentId references to prevent React Flow "Parent node not found" errors.
-    // This can happen when a branch or zone is removed but child nodes (e.g., comments) still reference it.
-    const sanitizeOrphanedParents = useCallback((nodes: Node[]): Node[] => {
-      const nodeIds = new Set(nodes.map((n) => n.id));
-      return nodes.map((node) => {
-        if (node.parentId && !nodeIds.has(node.parentId)) {
-          // Parent node no longer exists — clear parentId to prevent crash.
-          // Position is already relative to the missing parent, but React Flow
-          // will treat it as absolute once parentId is cleared. This may cause
-          // a slight position jump, but that's preferable to crashing.
-          return { ...node, parentId: undefined };
-        }
-        return node;
-      });
-    }, []);
-
     // Helper: Apply local position overrides to a set of incoming nodes (branches or cards)
     const applyLocalPositions = useCallback(
       (incomingNodes: Node[], currentNodes: Node[], zoneNodes: Node[]) => {
@@ -1233,16 +1217,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         comments: Node[],
         apps: Node[] = []
       ) => {
-        return sanitizeOrphanedParents([
-          ...zones,
-          ...branches,
-          ...cards,
-          ...apps,
-          ...markdown,
-          ...comments,
-        ]);
+        return sanitizeOrphanedNodeParents(
+          [...zones, ...branches, ...cards, ...apps, ...markdown, ...comments],
+          { onOrphan: onOrphanedParent }
+        );
       },
-      [sanitizeOrphanedParents]
+      [onOrphanedParent]
     );
 
     // Sync board-derived nodes in a single state update. Zones, markdown,

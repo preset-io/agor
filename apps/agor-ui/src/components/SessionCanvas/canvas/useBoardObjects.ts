@@ -98,27 +98,12 @@ export const useBoardObjects = ({
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
 
-      // Find branches and cards pinned to this zone (via board_objects.zone_id)
-      const affectedObjectIds: string[] = [];
-      for (const boardObj of mapToArray(boardObjectById)) {
-        if (boardObj.zone_id === objectId && (boardObj.branch_id || boardObj.card_id)) {
-          affectedObjectIds.push(boardObj.object_id);
-        }
-      }
-
-      // Optimistic removal of zone (just the zone node, entities remain but unpinned)
+      // Optimistic removal of zone. The SessionCanvas setNodes wrapper clears
+      // any orphaned parentId values locally; the daemon owns persistent
+      // unpinning and converts zone-relative child positions to absolute.
       setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
 
       try {
-        // IMPORTANT: Unpin entities FIRST before deleting the zone
-        // This prevents a race condition where entities have parentId pointing to a deleted zone
-        for (const objId of affectedObjectIds) {
-          await client.service('board-objects').patch(objId, {
-            zone_id: null,
-          });
-        }
-
-        // Now delete the zone after all branches are unpinned
         await client.service('boards').patch(board.board_id, {
           _action: 'deleteZone',
           objectId,
@@ -135,7 +120,7 @@ export const useBoardObjects = ({
         // Note: WebSocket update should restore the actual state
       }
     },
-    [board, client, setNodes, deletedObjectsRef, boardObjectById]
+    [board, client, setNodes, deletedObjectsRef]
   );
 
   /**

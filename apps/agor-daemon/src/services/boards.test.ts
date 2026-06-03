@@ -4,13 +4,42 @@
  * Basic tests to verify custom export/import/clone methods are properly wired up.
  */
 
-import type { Board, UUID } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { BoardObjectRepository, BranchRepository, generateId, RepoRepository } from '@agor/core/db';
+import type { Board, BranchID, UUID } from '@agor/core/types';
+import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { BoardsService } from './boards';
 
 const TEST_USER = 'test-user' as UUID;
 const TEST_PARAMS = { user: { user_id: TEST_USER } } as never;
+
+function createRepoData(overrides?: { repo_id?: UUID; slug?: string }) {
+  const slug = overrides?.slug ?? `test-repo-${generateId()}`;
+  return {
+    repo_id: overrides?.repo_id ?? generateId(),
+    slug,
+    name: slug,
+    repo_type: 'remote' as const,
+    remote_url: 'https://github.com/test/repo.git',
+    local_path: `/home/user/.agor/repos/${slug}`,
+    default_branch: 'main',
+  };
+}
+
+function createBranchData(overrides?: { branch_id?: BranchID; repo_id?: UUID; name?: string }) {
+  const name = overrides?.name ?? `feature-${generateId()}`;
+  return {
+    branch_id: overrides?.branch_id ?? (generateId() as BranchID),
+    repo_id: overrides?.repo_id ?? (generateId() as UUID),
+    name,
+    ref: `refs/heads/${name}`,
+    branch_unique_id: 1,
+    path: `/home/user/.agor/repos/test-repo/${name}`,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    created_by: TEST_USER,
+  };
+}
 
 describe('BoardsService - Custom Methods', () => {
   dbTest('toBlob should export board to JSON blob', async ({ db }) => {
@@ -152,6 +181,55 @@ describe('BoardsService - Custom Methods', () => {
     expect(cloned.name).toBe('Slug Clone Target');
     expect(cloned.slug).toBe('slug-clone-target');
   });
+
+  dbTest(
+    'removeBoardObject clears zone-pinned entities with absolute positions',
+    async ({ db }) => {
+      const emitBoardObjectPatched = vi.fn();
+      const service = new BoardsService(db, emitBoardObjectPatched);
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const boardObjectRepo = new BoardObjectRepository(db);
+
+      const repo = await repoRepo.create(createRepoData());
+      const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+      const board = (await service.create({
+        name: 'Zone Cleanup Board',
+        slug: `zone-cleanup-${generateId()}`,
+        created_by: TEST_USER,
+        objects: {
+          'zone-review': {
+            type: 'zone',
+            x: 100,
+            y: 200,
+            width: 400,
+            height: 300,
+            label: 'Review',
+          },
+        },
+      })) as Board;
+
+      const boardObject = await boardObjectRepo.create({
+        board_id: board.board_id,
+        branch_id: branch.branch_id,
+        position: { x: 10, y: 20 },
+        zone_id: 'zone-review',
+      });
+
+      await service.removeBoardObject(board.board_id, 'zone-review');
+
+      const updatedBoardObject = await boardObjectRepo.findByObjectId(boardObject.object_id);
+      expect(updatedBoardObject?.zone_id).toBeUndefined();
+      expect(updatedBoardObject?.position).toEqual({ x: 110, y: 220 });
+      expect(emitBoardObjectPatched).toHaveBeenCalledWith(
+        expect.objectContaining({
+          object_id: boardObject.object_id,
+          position: { x: 110, y: 220 },
+          zone_id: null,
+        })
+      );
+    }
+  );
 
   dbTest('should have all custom methods defined', async ({ db }) => {
     const service = new BoardsService(db);

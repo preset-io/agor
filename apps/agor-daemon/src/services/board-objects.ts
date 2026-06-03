@@ -224,9 +224,20 @@ export class BoardObjectsService {
   async clearZoneReferences(
     boardId: BoardID,
     zoneId: string,
-    zonePosition?: { x: number; y: number }
-  ): Promise<number> {
-    return this.boardObjectRepo.clearZoneReferences(boardId, zoneId, zonePosition);
+    zonePosition?: { x: number; y: number },
+    params?: BoardObjectParams
+  ): Promise<BoardEntityObject[]> {
+    const cleared = await this.boardObjectRepo.clearZoneReferences(boardId, zoneId, zonePosition);
+
+    for (const boardObject of cleared) {
+      const eventPayload = {
+        ...boardObject,
+        ...(boardObject.zone_id === undefined ? { zone_id: null } : {}),
+      };
+      this.emit?.('patched', eventPayload as BoardEntityObject, params);
+    }
+
+    return cleared;
   }
 
   /**

@@ -326,14 +326,14 @@ export class BoardObjectRepository {
     boardId: BoardID,
     zoneId: string,
     zonePosition?: { x: number; y: number }
-  ): Promise<number> {
+  ): Promise<BoardEntityObject[]> {
     try {
       const rows = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.board_id, boardId))
         .all();
 
-      let cleared = 0;
+      const cleared: BoardEntityObject[] = [];
       for (const row of rows) {
         const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
         if (data.zone_id === zoneId) {
@@ -349,7 +349,14 @@ export class BoardObjectRepository {
             })
             .where(eq(boardObjects.object_id, row.object_id))
             .run();
-          cleared++;
+
+          const updated = await select(this.db)
+            .from(boardObjects)
+            .where(eq(boardObjects.object_id, row.object_id))
+            .one();
+          if (updated) {
+            cleared.push(this.rowToEntity(updated));
+          }
         }
       }
 

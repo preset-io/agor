@@ -2308,24 +2308,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           if (_action === 'deleteZone' && objectId) {
             if (!context.id) throw new Error('Board ID required');
-            // Look up zone position for coordinate translation
-            const board = await boardsService!.get(context.id as string);
-            const zoneObj = board?.objects?.[objectId as string];
-            const zonePosition =
-              zoneObj && 'x' in zoneObj && 'y' in zoneObj
-                ? { x: zoneObj.x, y: zoneObj.y }
-                : undefined;
-
-            // Clear zone_id on board objects before deleting the zone
-            // Converts relative positions to absolute so entities don't jump
-            const boardObjectsService = app.service(
-              'board-objects'
-            ) as unknown as import('./services/board-objects').BoardObjectsService;
-            await boardObjectsService.clearZoneReferences(
-              context.id as import('@agor/core/types').BoardID,
-              objectId as string,
-              zonePosition
-            );
             const result = await boardsService!.deleteZone(
               context.id as string,
               objectId as string,
