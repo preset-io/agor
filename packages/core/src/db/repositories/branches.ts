@@ -566,6 +566,34 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
+   * Find branch IDs pinned to a specific board zone.
+   *
+   * Zone membership lives on board_objects.data.zone_id, not on the branches
+   * table. BranchesService.find() uses this helper to turn a zone_id query into
+   * a branch_id filter before the generic adapter applies pagination.
+   */
+  async findBranchIdsByZone(zoneId: string): Promise<BranchID[]> {
+    const { boardObjects: boardObjectsTable } = await import('../schema');
+    const { jsonExtract } = await import('../database-wrapper');
+
+    const rows = await select(this.db, {
+      branch_id: boardObjectsTable.branch_id,
+    })
+      .from(boardObjectsTable)
+      .where(sql`${jsonExtract(this.db, boardObjectsTable.data, 'zone_id')} = ${zoneId}`)
+      .all();
+
+    const uniqueIds = new Set<BranchID>();
+    for (const row of rows as { branch_id: string | null }[]) {
+      if (row.branch_id) {
+        uniqueIds.add(row.branch_id as BranchID);
+      }
+    }
+
+    return Array.from(uniqueIds);
+  }
+
+  /**
    * Enrich a single branch with zone information
    *
    * Uses the batch enrichment method for consistency and efficiency.

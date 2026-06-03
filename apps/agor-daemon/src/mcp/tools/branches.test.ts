@@ -113,7 +113,26 @@ describe('agor_branches_list', () => {
   function makeApp(findResult: unknown) {
     return {
       service(name: string) {
-        if (name === 'branches') return { find: vi.fn(async () => findResult) };
+        if (name === 'branches') {
+          return {
+            find: vi.fn(async (params?: { query?: Record<string, unknown> }) => {
+              const zoneId = params?.query?.zone_id;
+              if (!zoneId || Array.isArray(findResult)) return findResult;
+
+              // Simulate BranchesService-level filtering. The MCP tool should
+              // forward zone_id to the service instead of filtering the current
+              // page itself.
+              const result = findResult as {
+                data: Record<string, unknown>[];
+                total: number;
+                limit: number;
+                skip: number;
+              };
+              const filtered = result.data.filter((branch) => branch.zone_id === zoneId);
+              return { ...result, data: filtered, total: filtered.length };
+            }),
+          };
+        }
         throw new Error(`Unexpected service call: ${name}`);
       },
     };
@@ -159,6 +178,32 @@ describe('agor_branches_list', () => {
 
     const branch2 = parsed.data[1];
     expect(branch2.zone_id).toBeUndefined();
+  });
+
+  it('passes zone_id to the service query so filtering is pagination-correct', async () => {
+    const findFn = vi.fn(async () => ({
+      data: [{ branch_id: 'branch-1', zone_id: 'zone-review' }],
+      total: 1,
+      limit: 50,
+      skip: 0,
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { find: findFn };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const list = registerAndCaptureHandler('agor_branches_list', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await list({ zoneId: 'zone-review' });
+
+    expect(findFn).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ zone_id: 'zone-review' }) })
+    );
   });
 
   it('filters by zoneId when provided', async () => {

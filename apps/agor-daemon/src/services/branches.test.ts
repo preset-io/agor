@@ -140,6 +140,40 @@ function createServiceHarness() {
   return { service, boardObjectsService, sessionsService };
 }
 
+function createFindHarness(opts: {
+  branches: Array<Record<string, unknown>>;
+  branchIdsInZone: BranchID[];
+}) {
+  const app = {
+    service(path: string) {
+      throw new Error(`Unknown service: ${path}`);
+    },
+  } as unknown as Application;
+  const repository = {
+    findAll: vi.fn(async () => opts.branches),
+    findById: vi.fn(),
+    update: vi.fn(),
+    create: vi.fn(),
+    delete: vi.fn(),
+  };
+  const branchRepo = {
+    findBranchIdsByZone: vi.fn(async () => opts.branchIdsInZone),
+    enrichManyWithZoneInfo: vi.fn(async (branches: Array<Record<string, unknown>>) =>
+      branches.map((branch: Record<string, unknown>) => ({
+        ...branch,
+        zone_id: opts.branchIdsInZone.includes(branch.branch_id as BranchID)
+          ? 'zone-review'
+          : undefined,
+      }))
+    ),
+  };
+  const service = new BranchesService({} as never, app);
+  (service as unknown as { repository: typeof repository }).repository = repository;
+  (service as unknown as { branchRepo: typeof branchRepo }).branchRepo = branchRepo;
+
+  return { service, repository, branchRepo };
+}
+
 describe('BranchesService.patch primary assistant invariants', () => {
   it('clears the old primary and sets the new board primary when an assistant moves boards', async () => {
     const boardA = 'board-a' as BoardID;
@@ -363,6 +397,50 @@ describe('BranchesService.unarchive', () => {
       branch_id: branchId,
       position: { x: 7, y: 8 },
     });
+  });
+});
+
+describe('BranchesService.find zone filtering', () => {
+  it('applies zone_id before pagination', async () => {
+    const branch1 = { branch_id: 'branch-1', name: 'outside', board_id: 'board-1' };
+    const branch2 = { branch_id: 'branch-2', name: 'inside-a', board_id: 'board-1' };
+    const branch3 = { branch_id: 'branch-3', name: 'inside-b', board_id: 'board-1' };
+    const { service, branchRepo } = createFindHarness({
+      branches: [branch1, branch2, branch3],
+      branchIdsInZone: ['branch-2' as BranchID, 'branch-3' as BranchID],
+    });
+
+    const result = (await service.find({
+      query: { zone_id: 'zone-review', $limit: 1 },
+    })) as { data: Array<Record<string, unknown>>; total: number; limit: number; skip: number };
+
+    expect(branchRepo.findBranchIdsByZone).toHaveBeenCalledWith('zone-review');
+    expect(result.total).toBe(2);
+    expect(result.limit).toBe(1);
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].branch_id).toBe('branch-2');
+    expect(result.data[0].zone_id).toBe('zone-review');
+  });
+
+  it('intersects zone_id filtering with existing branch_id scoping', async () => {
+    const branch1 = { branch_id: 'branch-1', name: 'outside', board_id: 'board-1' };
+    const branch2 = { branch_id: 'branch-2', name: 'inside-a', board_id: 'board-1' };
+    const branch3 = { branch_id: 'branch-3', name: 'inside-b', board_id: 'board-1' };
+    const { service } = createFindHarness({
+      branches: [branch1, branch2, branch3],
+      branchIdsInZone: ['branch-2' as BranchID, 'branch-3' as BranchID],
+    });
+
+    const result = (await service.find({
+      query: {
+        zone_id: 'zone-review',
+        branch_id: { $in: ['branch-3' as BranchID] },
+      },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    expect(result.total).toBe(1);
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].branch_id).toBe('branch-3');
   });
 });
 

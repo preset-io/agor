@@ -10,6 +10,7 @@ import { generateId, shortId } from '../../lib/ids';
 import { boards } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
+import { BoardObjectRepository } from './board-objects';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 
@@ -89,6 +90,65 @@ function createBranchData(overrides?: {
     clone_depth: overrides?.clone_depth,
   } as const;
 }
+
+describe('BranchRepository.findBranchIdsByZone', () => {
+  dbTest('finds branch ids by board_objects data.zone_id', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const boardObjectRepo = new BoardObjectRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const boardId = generateId() as UUID;
+    await (db as any).insert(boards).values({
+      board_id: boardId,
+      created_at: new Date(),
+      created_by: 'test-user' as UUID,
+      name: 'Test Board',
+      data: {
+        objects: {
+          'zone-review': { type: 'zone', label: 'Review' },
+          'zone-done': { type: 'zone', label: 'Done' },
+        },
+      },
+    });
+
+    const branchInZone = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        branch_id: generateId() as BranchID,
+        name: 'feature-in-zone',
+        branch_unique_id: 1,
+        board_id: boardId,
+      })
+    );
+    const branchOtherZone = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        branch_id: generateId() as BranchID,
+        name: 'feature-other-zone',
+        branch_unique_id: 2,
+        board_id: boardId,
+      })
+    );
+
+    await boardObjectRepo.create({
+      board_id: boardId,
+      branch_id: branchInZone.branch_id,
+      position: { x: 0, y: 0 },
+      zone_id: 'zone-review',
+    });
+    await boardObjectRepo.create({
+      board_id: boardId,
+      branch_id: branchOtherZone.branch_id,
+      position: { x: 100, y: 0 },
+      zone_id: 'zone-done',
+    });
+
+    await expect(branchRepo.findBranchIdsByZone('zone-review')).resolves.toEqual([
+      branchInZone.branch_id,
+    ]);
+  });
+});
 
 // ============================================================================
 // Create

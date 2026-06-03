@@ -193,28 +193,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       } else if (!args.includeArchived) {
         query.archived = false;
       }
+      // Delegate zone filtering to BranchesService so it runs before pagination.
+      if (args.zoneId) query.zone_id = coerceString(args.zoneId);
+
       const result = await ctx.app.service('branches').find({ query, ...ctx.baseServiceParams });
-
-      // Post-enrichment zone filter: zone_id is added by the service's find() via
-      // enrichManyWithZoneInfo (LEFT JOIN on board_objects). Filter here after enrichment
-      // so the caller doesn't have to fan out with individual get() calls.
-      if (args.zoneId) {
-        const zoneId = coerceString(args.zoneId);
-        if (Array.isArray(result)) {
-          return textResult(result.filter((b: Record<string, unknown>) => b.zone_id === zoneId));
-        } else {
-          const filtered = (
-            result as {
-              data: Record<string, unknown>[];
-              total: number;
-              limit: number;
-              skip: number;
-            }
-          ).data.filter((b) => b.zone_id === zoneId);
-          return textResult({ ...result, data: filtered, total: filtered.length });
-        }
-      }
-
       return textResult(result);
     }
   );

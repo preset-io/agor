@@ -47,9 +47,11 @@ import type { InternalEnrichmentParams } from './sessions';
  * Branch service params
  */
 export type BranchParams = QueryParams<{
+  branch_id?: BranchID | { $in?: BranchID[] };
   repo_id?: UUID;
   name?: string;
   ref?: string;
+  zone_id?: string; // Virtual filter: board_objects.data.zone_id, handled before pagination
   deleteFromFilesystem?: boolean;
   include_sessions?: boolean | 'true' | 'false'; // Opt-in session activity enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
@@ -541,10 +543,46 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Override find to enrich with zone information only
    *
    * Note: Session activity is NOT included in list operations - only on single GET
+   *
+   * `zone_id` is a virtual query parameter backed by board_objects.data.zone_id.
+   * Resolve it to a branch_id filter before delegating to DrizzleService so
+   * pagination is applied to the zone-filtered result set, while preserving any
+   * existing branch_id scoping injected by RBAC hooks.
    */
   async find(params?: BranchParams) {
+    const zoneId = params?.query?.zone_id;
+    let findParams = params;
+
+    if (zoneId) {
+      const branchIdsInZone = await this.branchRepo.findBranchIdsByZone(zoneId);
+      const existingBranchFilter = params?.query?.branch_id;
+      let filteredBranchIds = branchIdsInZone;
+
+      if (typeof existingBranchFilter === 'string') {
+        filteredBranchIds = branchIdsInZone.includes(existingBranchFilter as BranchID)
+          ? [existingBranchFilter as BranchID]
+          : [];
+      } else if (
+        existingBranchFilter &&
+        typeof existingBranchFilter === 'object' &&
+        Array.isArray(existingBranchFilter.$in)
+      ) {
+        const allowed = new Set(existingBranchFilter.$in);
+        filteredBranchIds = branchIdsInZone.filter((branchId) => allowed.has(branchId));
+      }
+
+      const { zone_id: _zoneId, ...queryWithoutZone } = params?.query ?? {};
+      findParams = {
+        ...params,
+        query: {
+          ...queryWithoutZone,
+          branch_id: { $in: filteredBranchIds },
+        },
+      } as BranchParams;
+    }
+
     // Use default find to ensure all hooks and scoping are applied (including repo_id filter)
-    const result = await super.find(params);
+    const result = await super.find(findParams);
 
     // Handle both paginated and non-paginated results
     if (Array.isArray(result)) {
