@@ -271,13 +271,13 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
               {primaryAssistantBranch.issue_url && (
                 <IssuePill
                   issueUrl={primaryAssistantBranch.issue_url}
-                  currentRepoSlug={primaryAssistantRepo.slug}
+                  currentRepo={primaryAssistantRepo}
                 />
               )}
               {primaryAssistantBranch.pull_request_url && (
                 <PullRequestPill
                   prUrl={primaryAssistantBranch.pull_request_url}
-                  currentRepoSlug={primaryAssistantRepo.slug}
+                  currentRepo={primaryAssistantRepo}
                 />
               )}
             </Space>

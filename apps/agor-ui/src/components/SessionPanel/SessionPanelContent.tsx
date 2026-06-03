@@ -130,10 +130,10 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               )}
               {/* Issue and PR Pills */}
               {branch?.issue_url && (
-                <IssuePill issueUrl={branch.issue_url} currentRepoSlug={repo?.slug} />
+                <IssuePill issueUrl={branch.issue_url} currentRepo={repo ?? undefined} />
               )}
               {branch?.pull_request_url && (
-                <PullRequestPill prUrl={branch.pull_request_url} currentRepoSlug={repo?.slug} />
+                <PullRequestPill prUrl={branch.pull_request_url} currentRepo={repo ?? undefined} />
               )}
               {/* MCP Servers */}
               {sessionMcpServerIds

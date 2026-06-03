@@ -1,5 +1,38 @@
 import { describe, expect, it } from 'vitest';
-import { getUrlDisplayLabel, isGitHubUrl } from './Pill';
+import { getGitHubRepoSlugFromRemoteUrl, getUrlDisplayLabel, isGitHubUrl } from './url-helpers';
+
+const githubRepo = {
+  slug: 'preset-io/agor',
+  remote_url: 'https://github.com/preset-io/agor.git',
+};
+
+const localGithubRepo = {
+  slug: 'local/agor',
+  remote_url: 'git@github.com:preset-io/agor.git',
+};
+
+const gitlabSameSlugRepo = {
+  slug: 'preset-io/agor',
+  remote_url: 'https://gitlab.com/preset-io/agor.git',
+};
+
+describe('getGitHubRepoSlugFromRemoteUrl', () => {
+  it('extracts GitHub repo identity from HTTPS remotes', () => {
+    expect(getGitHubRepoSlugFromRemoteUrl('https://github.com/preset-io/agor.git')).toBe(
+      'preset-io/agor'
+    );
+  });
+
+  it('extracts GitHub repo identity from SSH remotes', () => {
+    expect(getGitHubRepoSlugFromRemoteUrl('git@github.com:Preset-IO/Agor.git')).toBe(
+      'preset-io/agor'
+    );
+  });
+
+  it('does not extract identity from non-GitHub remotes with the same slug', () => {
+    expect(getGitHubRepoSlugFromRemoteUrl('https://gitlab.com/preset-io/agor.git')).toBeUndefined();
+  });
+});
 
 describe('getUrlDisplayLabel', () => {
   describe('GitHub URLs', () => {
@@ -18,7 +51,7 @@ describe('getUrlDisplayLabel', () => {
     it('omits org/repo for issue URLs from the current repo', () => {
       expect(
         getUrlDisplayLabel('https://github.com/preset-io/agor/issues/714', {
-          currentRepoSlug: 'preset-io/agor',
+          currentRepo: githubRepo,
         })
       ).toBe('#714');
     });
@@ -26,7 +59,7 @@ describe('getUrlDisplayLabel', () => {
     it('omits org/repo for pull request URLs from the current repo', () => {
       expect(
         getUrlDisplayLabel('https://github.com/preset-io/agor/pull/42', {
-          currentRepoSlug: 'preset-io/agor',
+          currentRepo: githubRepo,
         })
       ).toBe('#42');
     });
@@ -34,7 +67,7 @@ describe('getUrlDisplayLabel', () => {
     it('preserves org/repo for issue URLs from a different repo', () => {
       expect(
         getUrlDisplayLabel('https://github.com/other-org/other-repo/issues/123', {
-          currentRepoSlug: 'preset-io/agor',
+          currentRepo: githubRepo,
         })
       ).toBe('other-org/other-repo#123');
     });
@@ -42,7 +75,7 @@ describe('getUrlDisplayLabel', () => {
     it('preserves org/repo for pull request URLs from a different repo', () => {
       expect(
         getUrlDisplayLabel('https://github.com/other-org/other-repo/pull/123', {
-          currentRepoSlug: 'preset-io/agor',
+          currentRepo: githubRepo,
         })
       ).toBe('other-org/other-repo#123');
     });
@@ -50,9 +83,25 @@ describe('getUrlDisplayLabel', () => {
     it('compares GitHub repo slugs case-insensitively', () => {
       expect(
         getUrlDisplayLabel('https://github.com/Preset-IO/Agor/issues/714', {
-          currentRepoSlug: 'preset-io/agor',
+          currentRepo: githubRepo,
         })
       ).toBe('#714');
+    });
+
+    it('uses GitHub remote_url identity for local repos with synthetic slugs', () => {
+      expect(
+        getUrlDisplayLabel('https://github.com/preset-io/agor/issues/714', {
+          currentRepo: localGithubRepo,
+        })
+      ).toBe('#714');
+    });
+
+    it('does not use slug-only identity for non-GitHub repos with matching slug', () => {
+      expect(
+        getUrlDisplayLabel('https://github.com/preset-io/agor/issues/714', {
+          currentRepo: gitlabSameSlugRepo,
+        })
+      ).toBe('preset-io/agor#714');
     });
 
     it('falls back to last segment for short GitHub URLs', () => {
@@ -110,7 +159,7 @@ describe('getUrlDisplayLabel', () => {
     it('does not change non-GitHub URL labels when current repo slug is provided', () => {
       expect(
         getUrlDisplayLabel('https://example.com/project/tasks/42', {
-          currentRepoSlug: 'preset-io/agor',
+          currentRepo: githubRepo,
         })
       ).toBe('42');
     });
