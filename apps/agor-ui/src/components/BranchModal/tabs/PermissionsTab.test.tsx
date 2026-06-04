@@ -32,6 +32,7 @@ const defaultState: PermissionsFormState = {
   othersCan: 'session',
   othersFsAccess: 'read',
   allowSessionSharing: false,
+  groupGrants: [],
 };
 
 describe('PermissionsTab', () => {

@@ -209,8 +209,10 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       label: 'Files',
       children: <FilesTab branch={branch} client={client} />,
     },
-    // Permissions tab — only when RBAC is enabled on this instance
-    ...(form.rbacEnabled
+    // Permissions tab — shown for RBAC-capable admins/owners. Keep it visible
+    // while owner data is loading so confirmed owners do not see the tab
+    // disappear just because async permissions metadata has not arrived yet.
+    ...(form.canViewPermissions
       ? [
           {
             key: 'permissions',

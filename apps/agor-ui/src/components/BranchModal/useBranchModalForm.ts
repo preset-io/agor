@@ -90,6 +90,15 @@ export interface BranchModalFormApi {
   allGroups: Group[];
   rbacEnabled: boolean;
   loadingOwners: boolean;
+  /**
+   * Whether the modal should render the Permissions tab.
+   *
+   * Admins keep the tab while permissions metadata is loading/partial so a
+   * secondary endpoint failure (for example group grants) cannot hide branch
+   * management from them. Non-admins keep it during owner loading, then only
+   * retain it if they are confirmed branch owners.
+   */
+  canViewPermissions: boolean;
   /** Non-fatal owners-load failure (network / server error, not 404). */
   ownersLoadError: Error | null;
 
@@ -152,6 +161,7 @@ export function useBranchModalForm({
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [rbacEnabled, setRbacEnabled] = useState<boolean>(true);
   const [loadingOwners, setLoadingOwners] = useState<boolean>(true);
+  const [groupGrantsLoaded, setGroupGrantsLoaded] = useState<boolean>(false);
   const [ownersLoadError, setOwnersLoadError] = useState<Error | null>(null);
 
   const [saving, setSaving] = useState(false);
@@ -214,6 +224,10 @@ export function useBranchModalForm({
       setAssistantState(buildAssistantDefaults(branch));
       setPermissionsState(buildPermissionsDefaults(branch, []));
       setOwners([]);
+      setAllUsers([]);
+      setAllGroups([]);
+      setRbacEnabled(true);
+      setGroupGrantsLoaded(false);
       setLoadingOwners(true);
       return;
     }
@@ -236,7 +250,13 @@ export function useBranchModalForm({
     }
   }, [open, branch]);
 
-  // Load owners + all users for the permissions tab
+  // Load owners + all users/groups for the permissions tab.
+  //
+  // RBAC feature detection must be based only on the owners endpoint. Group
+  // grants are additive metadata; if that endpoint is missing/failing (for
+  // example during a rolling deploy or against an older daemon) we should keep
+  // the tab visible for admins/owners rather than treating the whole RBAC
+  // surface as disabled.
   useEffect(() => {
     if (!open || !client || !branch) return;
     const branchId = branch.branch_id;
@@ -252,6 +272,7 @@ export function useBranchModalForm({
         if (cancelled) return;
         const ownersData = ownersResponse as User[];
         setOwners(ownersData);
+        setRbacEnabled(true);
         // Only seed selectedOwnerIds if the user hasn't touched the permissions
         // slice yet — preserves their in-flight edits across data refreshes.
         if (!permissionsTouchedRef.current) {
@@ -261,29 +282,47 @@ export function useBranchModalForm({
           }));
         }
 
-        const [users, groups, grantsResponse] = await Promise.all([
-          client.service('users').findAll({}),
-          client.service('groups').findAll({ query: { archived: false } }),
-          client.service('branches/:id/group-grants').find({ route: { id: branchId } }),
-        ]);
-        if (cancelled) return;
-        setAllUsers(users);
-        setAllGroups(groups as Group[]);
-        const grants = (grantsResponse as BranchGroupGrantWithGroup[]).map((grant) => ({
-          group_id: grant.group_id,
-          can: grant.can,
-          fs_access: grant.fs_access as FsAccessLevel | undefined,
-        }));
-        if (!permissionsTouchedRef.current) {
-          setPermissionsState((prev) => ({ ...prev, groupGrants: grants }));
+        try {
+          const users = await client.service('users').findAll({});
+          if (!cancelled) setAllUsers(users);
+        } catch (error) {
+          if (!cancelled) {
+            console.warn('Failed to load users for branch permissions:', error);
+          }
         }
-        setRbacEnabled(true);
+
+        try {
+          const [groups, grantsResponse] = await Promise.all([
+            client.service('groups').findAll({ query: { archived: false } }),
+            client.service('branches/:id/group-grants').find({ route: { id: branchId } }),
+          ]);
+          if (cancelled) return;
+          setAllGroups(groups as Group[]);
+          const grants = (grantsResponse as BranchGroupGrantWithGroup[]).map((grant) => ({
+            group_id: grant.group_id,
+            can: grant.can,
+            fs_access: grant.fs_access as FsAccessLevel | undefined,
+          }));
+          setGroupGrantsLoaded(true);
+          if (!permissionsTouchedRef.current) {
+            setPermissionsState((prev) => ({ ...prev, groupGrants: grants }));
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setAllGroups([]);
+            setGroupGrantsLoaded(false);
+            console.warn('Failed to load branch group permissions:', error);
+          }
+        }
         // biome-ignore lint/suspicious/noExplicitAny: error from feathers client is loosely typed
       } catch (error: any) {
         if (cancelled) return;
         if (error?.code === 404 || error?.message?.includes('not found')) {
           setRbacEnabled(false);
           setOwners([]);
+          setAllUsers([]);
+          setAllGroups([]);
+          setGroupGrantsLoaded(false);
         } else {
           // Surface the failure to the modal. Without this, a non-admin owner
           // sees a silently-locked-down modal (owners=[] makes isOwner false →
@@ -354,7 +393,9 @@ export function useBranchModalForm({
   // Conservative dirty bit: any edit in the permissions tab may require
   // re-saving branch group grants. The save path diffs against the server
   // before writing, so this remains safe for owner-only/field-only edits.
-  const groupGrantsChanged = Boolean(branch && rbacEnabled && permissionsTouchedRef.current);
+  const groupGrantsChanged = Boolean(
+    branch && rbacEnabled && groupGrantsLoaded && permissionsTouchedRef.current
+  );
 
   const permissionsChanged = ownersChanged || permissionFieldsChanged || groupGrantsChanged;
 
@@ -364,6 +405,7 @@ export function useBranchModalForm({
   const currentUserId = currentUser?.user_id;
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isOwner = owners.some((o) => o.user_id === currentUserId);
+  const canViewPermissions = rbacEnabled && (isAdmin || loadingOwners || isOwner);
 
   // While loading owners, allow admins to edit; restrict to admin/owner once loaded
   const canEditGeneral = loadingOwners ? isAdmin : !rbacEnabled || isAdmin || isOwner;
@@ -458,7 +500,7 @@ export function useBranchModalForm({
       }
 
       // 3. Upsert/remove branch group grants.
-      if (rbacEnabled && canEditPermissions) {
+      if (rbacEnabled && canEditPermissions && groupGrantsLoaded) {
         const currentGrants = (await client
           .service('branches/:id/group-grants')
           .find({ route: { id: branch.branch_id } })) as BranchGroupGrantWithGroup[];
@@ -554,6 +596,7 @@ export function useBranchModalForm({
     permissionFieldsChanged,
     permissionsChanged,
     canEditPermissions,
+    groupGrantsLoaded,
     owners,
     permissions,
     generalChanged,
@@ -579,6 +622,7 @@ export function useBranchModalForm({
     allGroups,
     rbacEnabled,
     loadingOwners,
+    canViewPermissions,
     ownersLoadError,
     canEditGeneral,
     canEditPermissions,

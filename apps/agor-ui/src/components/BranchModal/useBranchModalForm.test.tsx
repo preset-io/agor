@@ -40,6 +40,7 @@ interface StubOptions {
   owners?: User[];
   users?: User[];
   rbac404?: boolean;
+  groupGrants404?: boolean;
   failBranchPatch?: boolean;
   /** Throw a 500-style error on the initial owners.find load. */
   failOwnersFind?: boolean;
@@ -67,6 +68,11 @@ function makeStubClient(opts: StubOptions = {}): { client: AgorClient; calls: Se
               throw err;
             }
             return owners;
+          }
+          if (path === 'branches/:id/group-grants' && opts.groupGrants404) {
+            const err = new Error('not found') as Error & { code?: number };
+            err.code = 404;
+            throw err;
           }
           return [];
         },
@@ -486,6 +492,72 @@ describe('useBranchModalForm — unified save', () => {
     expect(result.current.rbacEnabled).toBe(true);
   });
 
+  it('keeps admin permissions visible when group-aware RBAC metadata is unavailable', async () => {
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
+    const branch = makeBranch();
+    const { client } = makeStubClient({ owners: [alice], users: [alice], groupGrants404: true });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.loadingOwners).toBe(false));
+
+    expect(result.current.rbacEnabled).toBe(true);
+    expect(result.current.canViewPermissions).toBe(true);
+    expect(result.current.canEditPermissions).toBe(true);
+  });
+
+  it('allows admins to view permissions even when owner rows are incomplete', async () => {
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
+    const branch = makeBranch();
+    const { client } = makeStubClient({ owners: [], users: [alice] });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.loadingOwners).toBe(false));
+
+    expect(result.current.canViewPermissions).toBe(true);
+    expect(result.current.canEditPermissions).toBe(true);
+  });
+
+  it('hides permissions from non-admin users who are not branch owners after owners load', async () => {
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'member' });
+    const bob = makeUser({ user_id: 'user-2', email: 'bob@example.com', role: 'member' });
+    const branch = makeBranch();
+    const { client } = makeStubClient({ owners: [bob], users: [alice, bob] });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.loadingOwners).toBe(false));
+
+    expect(result.current.canViewPermissions).toBe(false);
+    expect(result.current.canEditPermissions).toBe(false);
+  });
+
+  it('shows permissions for assistant branches when the current admin is an owner', async () => {
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
+    const branch = makeAssistantBranch();
+    const { client } = makeStubClient({ owners: [alice], users: [alice] });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.loadingOwners).toBe(false));
+
+    expect(result.current.canViewPermissions).toBe(true);
+    expect(result.current.canEditPermissions).toBe(true);
+  });
+
   it('detects no permission changes when RBAC is disabled (404 from owners service)', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
     const branch = makeBranch();
@@ -499,6 +571,7 @@ describe('useBranchModalForm — unified save', () => {
     await waitFor(() => {
       expect(result.current.loadingOwners).toBe(false);
       expect(result.current.rbacEnabled).toBe(false);
+      expect(result.current.canViewPermissions).toBe(false);
     });
 
     expect(result.current.permissionsChanged).toBe(false);
