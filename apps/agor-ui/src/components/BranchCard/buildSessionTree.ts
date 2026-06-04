@@ -32,12 +32,16 @@ export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
     sessionMap.set(session.session_id, session);
   }
 
-  // Organize by parent/fork relationships
+  // Organize by parent/fork relationships. The input list may already be
+  // filtered (for example, archived sessions are removed before rendering in
+  // BranchSessionSections), so only attach to a parent that is also present in
+  // this render set. Otherwise promote the session to a root so the tree does
+  // not silently hide visible sessions behind a filtered-out ancestor.
   for (const session of sessions) {
     const parentId =
       session.genealogy?.parent_session_id || session.genealogy?.forked_from_session_id;
 
-    if (parentId) {
+    if (parentId && sessionMap.has(parentId)) {
       // Has a parent - add to children map
       const siblings = childrenMap.get(parentId) || [];
       siblings.push(session);

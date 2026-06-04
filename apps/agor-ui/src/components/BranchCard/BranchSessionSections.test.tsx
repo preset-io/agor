@@ -25,6 +25,21 @@ const scheduledSession = {
   last_updated: '2026-06-03T00:00:00.000Z',
 } as unknown as Session;
 
+function makeManualSession(
+  overrides: { session_id: string; title: string } & Record<string, unknown>
+): Session {
+  return {
+    branch_id: 'branch-1',
+    agentic_tool: 'codex',
+    status: 'idle',
+    archived: false,
+    created_at: '2026-06-03T00:00:00.000Z',
+    last_updated: '2026-06-03T00:00:00.000Z',
+    genealogy: { children: [] },
+    ...overrides,
+  } as unknown as Session;
+}
+
 function renderSections(props: Partial<React.ComponentProps<typeof BranchSessionSections>> = {}) {
   return render(
     <ConnectionProvider
@@ -58,5 +73,25 @@ describe('BranchSessionSections', () => {
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('Scheduled Runs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument();
+  });
+
+  it('counts and renders only visible manual sessions when archived ancestors are filtered out', () => {
+    const archivedParent = makeManualSession({
+      session_id: 'session-archived-parent',
+      title: 'Archived parent',
+      archived: true,
+      genealogy: { children: ['session-visible-child'] },
+    });
+    const visibleChild = makeManualSession({
+      session_id: 'session-visible-child',
+      title: 'Visible child',
+      genealogy: { parent_session_id: 'session-archived-parent', children: [] },
+    });
+
+    renderSections({ sessions: [archivedParent, visibleChild] });
+
+    expect(screen.queryByText('Archived parent')).not.toBeInTheDocument();
+    expect(screen.getByText('Visible child')).toBeInTheDocument();
+    expect(screen.getByText('1')).toBeInTheDocument();
   });
 });
