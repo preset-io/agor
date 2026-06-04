@@ -8,13 +8,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
-import {
-  AimOutlined,
-  DeleteOutlined,
-  EditOutlined,
-  PlusOutlined,
-  RobotOutlined,
-} from '@ant-design/icons';
+import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Button,
   Empty,
@@ -35,6 +29,7 @@ import { createAssistantBranch } from '@/utils/assistantCreation';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
+import { ArchiveActionButton } from '../ArchiveToggleButton';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AssistantFormFields } from '../forms/AssistantFormFields';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
@@ -331,19 +326,13 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
               }}
             />
           </Tooltip>
-          <Tooltip title="Delete assistant">
-            <Button
-              type="text"
-              size="small"
-              icon={<DeleteOutlined />}
-              danger
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedBranch(record);
-                setArchiveDeleteModalOpen(true);
-              }}
-            />
-          </Tooltip>
+          <ArchiveActionButton
+            tooltip="Archive or delete assistant"
+            onClick={() => {
+              setSelectedBranch(record);
+              setArchiveDeleteModalOpen(true);
+            }}
+          />
         </Space>
       ),
     },

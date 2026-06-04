@@ -17,7 +17,6 @@ import type { AgorClient, User } from '@agor-live/client';
 import {
   ApartmentOutlined,
   ArrowLeftOutlined,
-  DeleteOutlined,
   DownOutlined,
   EditOutlined,
   FileAddOutlined,
@@ -58,6 +57,7 @@ import type { DataNode } from 'antd/es/tree';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { ArchiveActionButton } from '../components/ArchiveToggleButton';
 import {
   AutocompleteTextarea,
   hydrateKbDocLinks,
@@ -1212,14 +1212,15 @@ export function KnowledgePage({
     }
   };
 
-  const deleteActiveDocument = () => {
+  const archiveActiveDocument = () => {
     if (!client || !activeDoc) return;
     confirm({
-      title: 'Delete this page?',
-      content:
-        'This soft-deletes the page from Knowledge. Version history remains in the database.',
-      okText: 'Delete',
-      okButtonProps: { danger: true },
+      title: 'Archive this page?',
+      content: 'This archives the page from Knowledge. Version history remains in the database.',
+      okText: 'Archive',
+      okButtonProps: {
+        style: { backgroundColor: token.colorWarning, borderColor: token.colorWarning },
+      },
       cancelText: 'Cancel',
       async onOk() {
         if (!activeDoc) return;
@@ -1231,7 +1232,7 @@ export function KnowledgePage({
           setVersions([]);
           setSelectedVersionId(null);
         } catch (err) {
-          console.error('Failed to delete Knowledge document:', err);
+          console.error('Failed to archive Knowledge document:', err);
           setError(err instanceof Error ? err.message : String(err));
         }
       },
@@ -1829,14 +1830,14 @@ export function KnowledgePage({
                             >
                               Relocate
                             </Button>
-                            <Button
-                              danger
-                              icon={<DeleteOutlined />}
+                            <ArchiveActionButton
+                              tooltip=""
+                              size="middle"
                               disabled={!client}
-                              onClick={deleteActiveDocument}
+                              onClick={archiveActiveDocument}
                             >
-                              Delete
-                            </Button>
+                              Archive
+                            </ArchiveActionButton>
                           </>
                         )}
                         <Button

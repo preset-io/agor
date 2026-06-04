@@ -14,7 +14,6 @@ import type { AgorClient, Board, CardWithType } from '@agor-live/client';
 import {
   DeleteOutlined,
   EditOutlined,
-  InboxOutlined,
   LinkOutlined,
   PushpinFilled,
   SaveOutlined,
@@ -22,6 +21,7 @@ import {
 import { Button, Collapse, Input, Modal, Space, Tag, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
+import { ArchiveActionButton } from '../ArchiveToggleButton';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
 function isSafeUrl(url: string): boolean {
@@ -102,19 +102,29 @@ const CardModalComponent = ({
 
   const handleArchive = useCallback(async () => {
     if (!card || !client) return;
-    try {
-      const updated = await client.service('cards').patch(card.card_id, {
-        archived: true,
-        archived_at: new Date().toISOString(),
-      });
-      onCardUpdated?.(updated as CardWithType);
-      onClose();
-      showSuccess('Card archived');
-    } catch (err) {
-      console.error('Failed to archive card:', err);
-      showError('Failed to archive card');
-    }
-  }, [card, client, onCardUpdated, onClose, showSuccess, showError]);
+    Modal.confirm({
+      title: 'Archive card?',
+      content: `This will hide "${card.title}" from the board while preserving its data.`,
+      okText: 'Archive',
+      okButtonProps: {
+        style: { backgroundColor: token.colorWarning, borderColor: token.colorWarning },
+      },
+      onOk: async () => {
+        try {
+          const updated = await client.service('cards').patch(card.card_id, {
+            archived: true,
+            archived_at: new Date().toISOString(),
+          });
+          onCardUpdated?.(updated as CardWithType);
+          onClose();
+          showSuccess('Card archived');
+        } catch (err) {
+          console.error('Failed to archive card:', err);
+          showError('Failed to archive card');
+        }
+      },
+    });
+  }, [card, client, onCardUpdated, onClose, showSuccess, showError, token.colorWarning]);
 
   const handleDelete = useCallback(async () => {
     if (!card || !client) return;
@@ -150,9 +160,9 @@ const CardModalComponent = ({
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <Space>
-            <Button icon={<InboxOutlined />} onClick={handleArchive}>
+            <ArchiveActionButton tooltip="" size="middle" onClick={handleArchive}>
               Archive
-            </Button>
+            </ArchiveActionButton>
             <Button danger icon={<DeleteOutlined />} onClick={handleDelete}>
               Delete
             </Button>

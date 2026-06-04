@@ -1,5 +1,5 @@
 import type { Branch } from '@agor-live/client';
-import { Alert, Modal, Radio, Space, Typography } from 'antd';
+import { Alert, Modal, Radio, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 
 const { Text } = Typography;
@@ -24,6 +24,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   onConfirm,
   onCancel,
 }) => {
+  const { token } = theme.useToken();
   const [filesystemAction, setFilesystemAction] = useState<'preserved' | 'cleaned' | 'deleted'>(
     'cleaned'
   );
@@ -35,7 +36,12 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
 
   // Determine button text and style based on metadata action
   const okText = metadataAction === 'archive' ? 'Archive Branch' : 'Delete Permanently';
-  const okButtonProps = metadataAction === 'delete' ? { danger: true } : {};
+  const okButtonProps =
+    metadataAction === 'delete'
+      ? { danger: true }
+      : {
+          style: { backgroundColor: token.colorWarning, borderColor: token.colorWarning },
+        };
 
   return (
     <Modal

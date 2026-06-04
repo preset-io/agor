@@ -337,7 +337,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
         <ArchiveToggleButton
           archived={session.archived}
           loading={archivingIds.has(session.session_id)}
-          tooltip={session.archived ? 'Archived • Click to unarchive' : 'Click to archive'}
+          tooltip={session.archived ? 'Archived • Click to unarchive' : 'Archive session'}
           onToggle={(nextArchived) =>
             handleArchiveToggle(session.session_id as SessionID, nextArchived)
           }

@@ -24,7 +24,6 @@ import {
   CloseOutlined,
   CodeOutlined,
   ForkOutlined,
-  InboxOutlined,
   QuestionCircleOutlined,
   SendOutlined,
   SettingOutlined,
@@ -43,6 +42,7 @@ import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import { ArchiveActionButton } from '../ArchiveToggleButton';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CallbackToggleButton } from '../CallbackToggleButton';
 import { EffortSelector } from '../EffortSelector';
@@ -511,9 +511,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleArchive = () => {
     modal.confirm({
-      title: 'Archive Session',
+      title: 'Archive session?',
       content: 'Are you sure you want to archive this session?',
       okText: 'Archive',
+      okButtonProps: {
+        style: { backgroundColor: token.colorWarning, borderColor: token.colorWarning },
+      },
       cancelText: 'Cancel',
       onOk: async () => {
         await archiveSession(session.session_id);
@@ -1015,9 +1018,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 />
               </Tooltip>
             )}
-            <Tooltip title="Archive Session">
-              <Button type="text" icon={<InboxOutlined />} onClick={handleArchive} />
-            </Tooltip>
+            <ArchiveActionButton tooltip="Archive session" size="middle" onClick={handleArchive} />
             <Tooltip title="Close Panel">
               <Button
                 type="text"

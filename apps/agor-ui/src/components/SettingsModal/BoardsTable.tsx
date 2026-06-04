@@ -1,10 +1,8 @@
 import type { AgorClient, Board, Branch, Session } from '@agor-live/client';
 import {
-  CodeSandboxOutlined,
   CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
-  DropboxOutlined,
   EditOutlined,
   PlusOutlined,
   UploadOutlined,
@@ -21,11 +19,11 @@ import {
   Table,
   Tooltip,
   Typography,
-  theme,
 } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
+import { ArchiveToggleButton } from '../ArchiveToggleButton';
 import { BoardFormFields, extractBoardFormValues, isCustomCSS } from '../forms/BoardFormFields';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 
@@ -54,12 +52,10 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 }) => {
   const { modal } = App.useApp();
   const { showSuccess, showError } = useThemedMessage();
-  const { token } = theme.useToken();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
-  const [hoveredArchiveButton, setHoveredArchiveButton] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   // Calculate session count per board (branch-centric model)
@@ -270,34 +266,18 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       width: 280,
       render: (_: unknown, board: Board) => (
         <Space size="small">
-          <Tooltip title={board.archived ? 'Archived • Click to unarchive' : 'Click to archive'}>
-            <Button
-              type="text"
-              size="small"
-              icon={
-                hoveredArchiveButton === board.board_id ? (
-                  board.archived ? (
-                    <DropboxOutlined style={{ color: token.colorSuccess }} />
-                  ) : (
-                    <CodeSandboxOutlined style={{ color: token.colorWarning }} />
-                  )
-                ) : board.archived ? (
-                  <CodeSandboxOutlined style={{ color: token.colorWarning }} />
-                ) : (
-                  <DropboxOutlined style={{ color: token.colorTextSecondary }} />
-                )
+          <ArchiveToggleButton
+            archived={Boolean(board.archived)}
+            tooltip={board.archived ? 'Archived • Click to unarchive' : 'Archive board'}
+            stopPropagation={false}
+            onToggle={(nextArchived) => {
+              if (nextArchived) {
+                onArchive?.(board.board_id);
+              } else {
+                onUnarchive?.(board.board_id);
               }
-              onMouseEnter={() => setHoveredArchiveButton(board.board_id)}
-              onMouseLeave={() => setHoveredArchiveButton(null)}
-              onClick={() => {
-                if (board.archived) {
-                  onUnarchive?.(board.board_id);
-                } else {
-                  onArchive?.(board.board_id);
-                }
-              }}
-            />
-          </Tooltip>
+            }}
+          />
           <Tooltip title="Clone board (zones, configuration, and positions only)">
             <Button
               type="text"
