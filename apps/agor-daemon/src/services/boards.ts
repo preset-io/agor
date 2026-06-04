@@ -36,6 +36,7 @@ export interface BoardParams
     name?: string;
   }> {
   user?: AuthenticatedParams['user'];
+  /** Internal hook signal; set only when ensureAssistantWelcomeNote writes. */
   assistantWelcomeNoteMutated?: boolean;
 }
 
@@ -168,6 +169,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
         existing.type === 'markdown' &&
         shouldReplaceAssistantWelcomeNoteContent(existing.content)
       ) {
+        if (existing.content === objectData.content) return board;
         if (params) params.assistantWelcomeNoteMutated = true;
         return this.boardRepo.upsertBoardObject(board.board_id, ASSISTANT_WELCOME_NOTE_OBJECT_ID, {
           ...existing,

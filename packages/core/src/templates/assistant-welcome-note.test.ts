@@ -73,5 +73,13 @@ describe('assistant-welcome-note', () => {
         })}\n\nCustom user addition`
       )
     ).toBe(false);
+    expect(
+      shouldReplaceAssistantWelcomeNoteContent(
+        buildAssistantWelcomeNoteContent({
+          assistantName: 'Edited Bot',
+          assistantEmoji: '🤖',
+        }).replace("Edited Bot's Board", "Renamed Bot's Board")
+      )
+    ).toBe(false);
   });
 });

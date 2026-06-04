@@ -34,9 +34,15 @@ const LEGACY_WELCOME_NOTE_MARKERS = [
   '<--- on your left',
 ];
 
-const ASSISTANT_VALUE_PATTERN = /{{assistant\.(?:name|emoji)}}/g;
-const CURRENT_WELCOME_NOTE_STATIC_SEGMENTS =
-  ASSISTANT_WELCOME_NOTE_TEMPLATE.split(ASSISTANT_VALUE_PATTERN);
+const ASSISTANT_VALUE_PATTERN = /{{assistant\.(name|emoji)}}/g;
+const ASSISTANT_VALUE_SPLIT_PATTERN = /{{assistant\.(?:name|emoji)}}/g;
+const CURRENT_WELCOME_NOTE_STATIC_SEGMENTS = ASSISTANT_WELCOME_NOTE_TEMPLATE.split(
+  ASSISTANT_VALUE_SPLIT_PATTERN
+);
+const CURRENT_WELCOME_NOTE_PLACEHOLDERS = Array.from(
+  ASSISTANT_WELCOME_NOTE_TEMPLATE.matchAll(ASSISTANT_VALUE_PATTERN),
+  (match) => match[1] as 'name' | 'emoji'
+);
 
 /**
  * Escape text for Markdown inline/text contexts before Handlebars performs its
@@ -93,6 +99,7 @@ export function buildAssistantWelcomeNoteObject(
 
 function matchesCurrentWelcomeNoteTemplateShape(content: string): boolean {
   let offset = 0;
+  const capturedValues: Partial<Record<'name' | 'emoji', string>> = {};
 
   for (let index = 0; index < CURRENT_WELCOME_NOTE_STATIC_SEGMENTS.length; index += 1) {
     const segment = CURRENT_WELCOME_NOTE_STATIC_SEGMENTS[index];
@@ -105,6 +112,14 @@ function matchesCurrentWelcomeNoteTemplateShape(content: string): boolean {
 
     const segmentIndex = content.indexOf(segment, offset);
     if (segmentIndex === -1) return false;
+
+    const placeholder = CURRENT_WELCOME_NOTE_PLACEHOLDERS[index - 1];
+    const value = content.slice(offset, segmentIndex);
+    if (capturedValues[placeholder] === undefined) {
+      capturedValues[placeholder] = value;
+    } else if (capturedValues[placeholder] !== value) {
+      return false;
+    }
 
     offset = segmentIndex + segment.length;
   }

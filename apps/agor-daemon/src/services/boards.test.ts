@@ -258,6 +258,37 @@ describe('BoardsService - Custom Methods', () => {
     }
   );
 
+  dbTest(
+    'ensureAssistantWelcomeNote is idempotent for already-correct generated notes',
+    async ({ db }) => {
+      const service = new BoardsService(db);
+      const board = (await service.create({
+        name: 'Assistant Board Idempotent',
+        slug: `assistant-board-idempotent-${generateId()}`,
+        created_by: TEST_USER,
+      })) as Board;
+
+      const first = await service.ensureAssistantWelcomeNote({
+        boardId: board.board_id,
+        assistantName: 'Stable Bot',
+        assistantEmoji: '🤖',
+      });
+
+      const params = {};
+      const second = await service.ensureAssistantWelcomeNote(
+        {
+          boardId: board.board_id,
+          assistantName: 'Stable Bot',
+          assistantEmoji: '🤖',
+        },
+        params
+      );
+
+      expect(params).toEqual({});
+      expect(second.objects?.['welcome-note']).toEqual(first.objects?.['welcome-note']);
+    }
+  );
+
   dbTest('ensureAssistantWelcomeNote backfills unresolved placeholder notes', async ({ db }) => {
     const service = new BoardsService(db);
     const board = (await service.create({
