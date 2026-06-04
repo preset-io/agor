@@ -97,8 +97,7 @@ const PATTERNS = [
   //     Non-word boundary before `id` avoids matching words like "valid".
   new RegExp(String.raw`(?:^|[^\w])id!?\??\.(?:substring|slice)\(\s*0\s*,\s*\d+\s*\)`),
   // 2. `.replace(/-/g, '').slice(0, N)` — canonical strip-hyphens chain.
-  // biome-ignore lint/performance/useTopLevelRegex: built dynamically alongside the others
-  new RegExp(String.raw`\.replace\(\/-\/g,\s*['"]{2}\)\.slice\(\s*0\s*,\s*\d+\s*\)`),
+  /\.replace\(\/-\/g,\s*['"]{2}\)\.slice\(\s*0\s*,\s*\d+\s*\)/,
   // 3. `String(<id-expr>).(substring|slice)(0, N)` — wrapper-cast variant.
   new RegExp(
     String.raw`\bString\([^)]*(?:_id|Id|${KNOWN_NAMES})[^)]*\)\.(?:substring|slice)\(\s*0\s*,\s*\d+\s*\)`
