@@ -196,7 +196,12 @@ const ReplyItem: React.FC<{
                 {replyUser?.name || 'Anonymous'}
               </Text>
               <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                {new Date(reply.created_at).toLocaleTimeString()}
+                {new Date(reply.created_at).toLocaleString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                })}
               </Text>
             </Space>
           }
@@ -319,7 +324,12 @@ const CommentThread: React.FC<{
                 {user?.name || 'Anonymous'}
               </Text>
               <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                {new Date(comment.created_at).toLocaleTimeString()}
+                {new Date(comment.created_at).toLocaleString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                })}
               </Text>
               {comment.edited && (
                 <Text type="secondary" style={{ fontSize: token.fontSizeSM, fontStyle: 'italic' }}>
