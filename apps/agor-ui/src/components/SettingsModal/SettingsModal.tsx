@@ -36,6 +36,7 @@ import type { MenuProps } from 'antd';
 import { Layout, Menu, Modal, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
+import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
@@ -195,6 +196,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const { token } = theme.useToken();
+  const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
   // Service tier gates — hide tabs for disabled services
   const gatewayEnabled = useServiceEnabled('gateway');
@@ -520,7 +522,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <Menu
             mode="inline"
             selectedKeys={[activeTab]}
-            onClick={({ key }) => onTabChange?.(key)}
+            onClick={({ key }) => {
+              if (settingsSectionKeys.has(key)) {
+                onTabChange?.(key as SettingsSection);
+              }
+            }}
             items={menuItems}
             style={{
               border: 'none',
