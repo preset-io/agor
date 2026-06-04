@@ -18,9 +18,9 @@
  *    to enrich adjacent tool_result blocks in one pass.
  */
 
-import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createGit } from '@agor/core/git';
 import type { FileDiff, StructuredPatchHunk } from '@agor/core/types';
 import { structuredPatch } from 'diff';
 
@@ -37,16 +37,6 @@ const MAX_STORED_DIFF_LINES_PER_FILE = 200;
 const MAX_TURN_BASELINE_FILES = 5_000;
 /** Maximum aggregate text bytes to keep in a Codex turn baseline. */
 const MAX_TURN_BASELINE_BYTES = 25 * 1_048_576;
-const TURN_BASELINE_IGNORED_DIRS = new Set([
-  '.git',
-  'node_modules',
-  '.pnpm',
-  'dist',
-  'build',
-  '.next',
-  '.turbo',
-  'coverage',
-]);
 
 interface ToolUseInfo {
   name: string;
@@ -141,54 +131,58 @@ function readTextFileSnapshot(absolutePath: string): TextFileSnapshot {
 }
 
 function getGitRoot(workingDirectory?: string): string | null {
+  let current = path.resolve(workingDirectory ?? process.cwd());
+
   try {
-    return execSync('git rev-parse --show-toplevel', {
-      encoding: 'utf-8',
-      timeout: 5000,
-      ...(workingDirectory ? { cwd: workingDirectory } : {}),
-    }).trim();
+    const stat = fs.statSync(current);
+    if (!stat.isDirectory()) {
+      current = path.dirname(current);
+    }
+  } catch {
+    current = path.dirname(current);
+  }
+
+  while (true) {
+    if (fs.existsSync(path.join(current, '.git'))) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+async function getGitRootFromGit(workingDirectory: string): Promise<string | null> {
+  try {
+    const { git } = createGit(workingDirectory);
+    const gitRoot = (await git.raw(['rev-parse', '--show-toplevel'])).trim();
+    return gitRoot || null;
   } catch {
     return null;
   }
 }
 
-function listTurnBaselineFiles(gitRoot: string): string[] {
-  const files: string[] = [];
-  const stack = [''];
+async function listTurnBaselineFiles(gitRoot: string): Promise<string[]> {
+  try {
+    const { git } = createGit(gitRoot);
+    const output = await git.raw(['ls-files', '--cached', '--others', '--exclude-standard', '-z']);
+    const files: string[] = [];
+    const seen = new Set<string>();
 
-  while (stack.length > 0 && files.length < MAX_TURN_BASELINE_FILES) {
-    const currentRelativeDir = stack.pop() ?? '';
-    const currentAbsoluteDir = path.join(gitRoot, currentRelativeDir);
-
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(currentAbsoluteDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
+    for (const rawPath of output.split('\0')) {
       if (files.length >= MAX_TURN_BASELINE_FILES) break;
-      if (entry.name.includes('\0')) continue;
-
-      const relativePath = currentRelativeDir
-        ? path.posix.join(currentRelativeDir, entry.name)
-        : entry.name;
-
-      if (entry.isDirectory()) {
-        if (!TURN_BASELINE_IGNORED_DIRS.has(entry.name)) {
-          stack.push(relativePath);
-        }
-        continue;
-      }
-
-      if (entry.isFile() && isSafeRepoRelativePath(relativePath)) {
-        files.push(relativePath);
-      }
+      if (!rawPath || seen.has(rawPath) || !isSafeRepoRelativePath(rawPath)) continue;
+      seen.add(rawPath);
+      files.push(rawPath);
     }
-  }
 
-  return files;
+    return files;
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -334,17 +328,19 @@ export function clearToolInvocationState(toolUseId: string, context?: DiffEnrich
  * updated after each edit_files result so multiple edits to the same file in one
  * turn render as per-operation diffs.
  */
-export function registerEditFilesTurnBaseline(context?: DiffEnrichmentContext): void {
+export async function registerEditFilesTurnBaseline(
+  context?: DiffEnrichmentContext
+): Promise<void> {
   try {
     const workingDirectory = context?.workingDirectory;
     if (!workingDirectory) return;
 
-    const gitRoot = getGitRoot(workingDirectory);
+    const gitRoot = await getGitRootFromGit(workingDirectory);
     if (!gitRoot) return;
 
     const files = new Map<string, TextFileSnapshot>();
     let totalBytes = 0;
-    for (const relativePath of listTurnBaselineFiles(gitRoot)) {
+    for (const relativePath of await listTurnBaselineFiles(gitRoot)) {
       const absolutePath = path.join(gitRoot, relativePath);
       const snapshot = readTextFileSnapshot(absolutePath);
       if (snapshot.content !== undefined) {
@@ -366,6 +362,16 @@ export function registerEditFilesTurnBaseline(context?: DiffEnrichmentContext): 
   } catch {
     // Best effort — swallow any errors.
   }
+}
+
+/**
+ * Refresh an existing turn baseline after a non-edit_files tool that may have
+ * mutated the worktree. This keeps later edit_files diffs scoped to their own
+ * operation instead of diffing against the beginning of the whole Codex turn.
+ */
+export async function refreshEditFilesTurnBaseline(context?: DiffEnrichmentContext): Promise<void> {
+  if (!pendingEditFilesBaselines.has(getBaselineKey(context))) return;
+  await registerEditFilesTurnBaseline(context);
 }
 
 export function clearEditFilesTurnBaseline(context?: DiffEnrichmentContext): void {

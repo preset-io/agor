@@ -34,6 +34,7 @@ import {
   clearEditFilesTurnBaseline,
   clearToolInvocationState,
   enrichContentBlocks,
+  refreshEditFilesTurnBaseline,
   registerEditFilesTurnBaseline,
   registerToolInvocationStart,
 } from '../base/diff-enrichment.js';
@@ -60,6 +61,10 @@ interface CodexExecutionResult {
   rawSdkResponse?: unknown; // Raw SDK event from Codex
   rawContextUsage?: ContextUsageSnapshot;
   wasStopped?: boolean; // True if execution was stopped early via stopTask()
+}
+
+function shouldRefreshEditFilesBaselineAfterTool(toolName: string): boolean {
+  return toolName.toLowerCase() !== 'edit_files';
 }
 
 export class CodexTool implements ITool {
@@ -217,7 +222,7 @@ export class CodexTool implements ITool {
       }
     }
 
-    registerEditFilesTurnBaseline({
+    await registerEditFilesTurnBaseline({
       ...(workingDirectory ? { workingDirectory } : {}),
       ...snapshotContext,
     });
@@ -407,6 +412,12 @@ export class CodexTool implements ITool {
             ...(workingDirectory ? { workingDirectory } : {}),
             ...snapshotContext,
           });
+          if (shouldRefreshEditFilesBaselineAfterTool(event.toolUse.name)) {
+            await refreshEditFilesTurnBaseline({
+              ...(workingDirectory ? { workingDirectory } : {}),
+              ...snapshotContext,
+            });
+          }
           clearToolInvocationState(event.toolUse.id, snapshotContext);
           pendingSnapshotToolIds.delete(event.toolUse.id);
 
@@ -705,7 +716,7 @@ export class CodexTool implements ITool {
       }
     }
 
-    registerEditFilesTurnBaseline({
+    await registerEditFilesTurnBaseline({
       ...(workingDirectory ? { workingDirectory } : {}),
       ...snapshotContext,
     });
@@ -753,11 +764,17 @@ export class CodexTool implements ITool {
         }
 
         // Skip partial and tool events in non-streaming mode
-        if (
-          event.type === 'partial' ||
-          event.type === 'tool_start' ||
-          event.type === 'tool_complete'
-        ) {
+        if (event.type === 'tool_complete') {
+          if (shouldRefreshEditFilesBaselineAfterTool(event.toolUse.name)) {
+            await refreshEditFilesTurnBaseline({
+              ...(workingDirectory ? { workingDirectory } : {}),
+              ...snapshotContext,
+            });
+          }
+          continue;
+        }
+
+        if (event.type === 'partial' || event.type === 'tool_start') {
           continue;
         }
 

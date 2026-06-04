@@ -52,6 +52,14 @@ describe('EditFilesRenderer', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('+1')).toBeInTheDocument();
     expect(screen.getByText('-1')).toBeInTheDocument();
+
+    const labelText = screen.getByText('Update');
+    const label = labelText.closest('.ant-typography') ?? labelText;
+    expect(label).toHaveStyle({
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    });
   });
 
   it('keeps edit_files operation labels on one line with ellipsis styles', () => {

@@ -8,6 +8,7 @@ import {
   clearToolInvocationState,
   enrichContentBlocks,
   enrichToolResults,
+  refreshEditFilesTurnBaseline,
   registerEditFilesTurnBaseline,
   registerToolInvocationStart,
   registerToolUses,
@@ -228,7 +229,7 @@ describe('diff enrichment', () => {
     expect(contentBlocks[1].diff).toBeUndefined();
   });
 
-  it('uses the Codex turn baseline when file_change has no start-time paths', () => {
+  it('uses the Codex turn baseline when file_change has no start-time paths', async () => {
     const repoDir = createTempGitRepo();
     const filePath = path.join(repoDir, 'src', 'baseline.ts');
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -236,7 +237,10 @@ describe('diff enrichment', () => {
     execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
     execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
 
-    registerEditFilesTurnBaseline({ workingDirectory: repoDir, snapshotScope: 'turn-baseline' });
+    await registerEditFilesTurnBaseline({
+      workingDirectory: repoDir,
+      snapshotScope: 'turn-baseline',
+    });
     fs.writeFileSync(filePath, 'export const value = "after";\n', 'utf-8');
 
     const contentBlocks: TestContentBlock[] = [
@@ -267,7 +271,7 @@ describe('diff enrichment', () => {
     expect(lines.some((line) => line.includes('+export const value = "after";'))).toBe(true);
   });
 
-  it('refreshes the Codex turn baseline after each edit_files result', () => {
+  it('refreshes the Codex turn baseline after each edit_files result', async () => {
     const repoDir = createTempGitRepo();
     const filePath = path.join(repoDir, 'src', 'twice.ts');
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -276,7 +280,7 @@ describe('diff enrichment', () => {
     execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
 
     const context = { workingDirectory: repoDir, snapshotScope: 'turn-refresh' };
-    registerEditFilesTurnBaseline(context);
+    await registerEditFilesTurnBaseline(context);
 
     fs.writeFileSync(filePath, 'export const value = "two";\n', 'utf-8');
     const firstBlocks: TestContentBlock[] = [
@@ -319,6 +323,46 @@ describe('diff enrichment', () => {
     expect(secondLines.some((line) => line.includes('-export const value = "two";'))).toBe(true);
     expect(secondLines.some((line) => line.includes('+export const value = "three";'))).toBe(true);
     expect(secondLines.some((line) => line.includes('"one"'))).toBe(false);
+  });
+
+  it('refreshes the Codex turn baseline after a non-edit_files tool mutates a file', async () => {
+    const repoDir = createTempGitRepo();
+    const filePath = path.join(repoDir, 'src', 'after-bash.ts');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, 'export const value = "one";\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    const context = { workingDirectory: repoDir, snapshotScope: 'turn-refresh-after-bash' };
+    await registerEditFilesTurnBaseline(context);
+
+    // Simulate a completed Bash/command_execution tool mutating the worktree
+    // before a later Codex file_change/edit_files item updates the same file.
+    fs.writeFileSync(filePath, 'export const value = "two";\n', 'utf-8');
+    await refreshEditFilesTurnBaseline(context);
+
+    fs.writeFileSync(filePath, 'export const value = "three";\n', 'utf-8');
+    const blocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-after-bash',
+        name: 'edit_files',
+        input: { changes: [{ path: 'src/after-bash.ts', kind: 'update' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-after-bash',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(blocks, context);
+    clearEditFilesTurnBaseline(context);
+
+    const lines = blocks[1].diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(lines.some((line) => line.includes('-export const value = "two";'))).toBe(true);
+    expect(lines.some((line) => line.includes('+export const value = "three";'))).toBe(true);
+    expect(lines.some((line) => line.includes('"one"'))).toBe(false);
   });
 
   it('skips binary edit_files snapshots instead of rendering bogus text diffs', () => {
