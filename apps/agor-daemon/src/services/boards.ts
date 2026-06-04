@@ -10,7 +10,6 @@ import { BoardObjectRepository, BoardRepository, type Database } from '@agor/cor
 import {
   ASSISTANT_WELCOME_NOTE_OBJECT_ID,
   buildAssistantWelcomeNoteObject,
-  shouldReplaceAssistantWelcomeNoteContent,
 } from '@agor/core/templates/assistant-welcome-note';
 import type {
   AssistantWelcomeNoteRequest,
@@ -140,7 +139,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   }
 
   /**
-   * Custom method: Create or backfill the bundled assistant welcome note.
+   * Custom method: Create the bundled assistant welcome note when missing.
    *
    * Rendering is intentionally server-side from a static Handlebars template so
    * the browser bundle does not import Handlebars (blocked by CSP unsafe-eval),
@@ -164,20 +163,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     });
 
     const existing = board.objects?.[ASSISTANT_WELCOME_NOTE_OBJECT_ID];
-    if (existing) {
-      if (
-        existing.type === 'markdown' &&
-        shouldReplaceAssistantWelcomeNoteContent(existing.content)
-      ) {
-        if (existing.content === objectData.content) return board;
-        if (params) params.assistantWelcomeNoteMutated = true;
-        return this.boardRepo.upsertBoardObject(board.board_id, ASSISTANT_WELCOME_NOTE_OBJECT_ID, {
-          ...existing,
-          content: objectData.content,
-        });
-      }
-      return board;
-    }
+    if (existing) return board;
 
     if (params) params.assistantWelcomeNoteMutated = true;
     return this.boardRepo.upsertBoardObject(

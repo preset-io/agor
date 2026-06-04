@@ -25,60 +25,6 @@ Use it to organize:
 
 > Start by asking **{{assistant.name}}** to help set up this board for a workflow that's relevant to you.`;
 
-const LEGACY_WELCOME_NOTE_MARKERS = [
-  '{{assistant.name}}',
-  '{{assistant.emoji}}',
-  '```mermaid',
-  'flowchart LR',
-  'Workflow building blocks',
-  '<--- on your left',
-];
-
-const ASSISTANT_VALUE_PATTERN = /{{assistant\.(name|emoji)}}/g;
-const ASSISTANT_VALUE_SPLIT_PATTERN = /{{assistant\.(?:name|emoji)}}/g;
-const CURRENT_WELCOME_NOTE_STATIC_SEGMENTS = ASSISTANT_WELCOME_NOTE_TEMPLATE.split(
-  ASSISTANT_VALUE_SPLIT_PATTERN
-);
-const CURRENT_WELCOME_NOTE_PLACEHOLDERS = Array.from(
-  ASSISTANT_WELCOME_NOTE_TEMPLATE.matchAll(ASSISTANT_VALUE_PATTERN),
-  (match) => match[1] as 'name' | 'emoji'
-);
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function buildCurrentWelcomeNoteTemplatePattern(): RegExp {
-  const seenPlaceholders = new Set<'name' | 'emoji'>();
-  let pattern = `^${escapeRegExp(CURRENT_WELCOME_NOTE_STATIC_SEGMENTS[0])}`;
-
-  for (let index = 1; index < CURRENT_WELCOME_NOTE_STATIC_SEGMENTS.length; index += 1) {
-    const placeholder = CURRENT_WELCOME_NOTE_PLACEHOLDERS[index - 1];
-
-    if (seenPlaceholders.has(placeholder)) {
-      pattern += `\\k<${placeholder}>`;
-    } else {
-      seenPlaceholders.add(placeholder);
-      pattern += `(?<${placeholder}>[\\s\\S]*?)`;
-    }
-
-    pattern += escapeRegExp(CURRENT_WELCOME_NOTE_STATIC_SEGMENTS[index]);
-  }
-
-  return new RegExp(`${pattern}$`);
-}
-
-const CURRENT_WELCOME_NOTE_TEMPLATE_PATTERN = buildCurrentWelcomeNoteTemplatePattern();
-
-/**
- * Escape text for Markdown inline/text contexts before Handlebars performs its
- * normal HTML escaping. The template source is trusted/static, but assistant
- * identity fields are user-provided and are rendered as Markdown text.
- */
-function escapeMarkdownText(value: string): string {
-  return value.replace(/([\\`*_{}[\]()#+\-.!])/g, '\\$1');
-}
-
 export function buildAssistantWelcomeNoteContext({
   assistantName,
   assistantEmoji,
@@ -88,8 +34,8 @@ export function buildAssistantWelcomeNoteContext({
 
   return {
     assistant: {
-      name: escapeMarkdownText(name),
-      emoji: escapeMarkdownText(emoji),
+      name,
+      emoji,
     },
   };
 }
@@ -102,8 +48,8 @@ export function buildAssistantWelcomeNoteContext({
  *   provide data values, never template source.
  * - Values are interpolated with normal double-stash expressions, so
  *   HTML-significant characters are escaped by Handlebars.
- * - Markdown metacharacters in values are escaped before rendering so names
- *   like `[docs](javascript:...)` remain text rather than links.
+ * - The rendered Markdown is later rendered through the React/Streamdown path,
+ *   not injected with dangerouslySetInnerHTML.
  */
 export function buildAssistantWelcomeNoteContent(input: AssistantWelcomeNoteInput): string {
   return renderTemplate(ASSISTANT_WELCOME_NOTE_TEMPLATE, buildAssistantWelcomeNoteContext(input), {
@@ -121,15 +67,4 @@ export function buildAssistantWelcomeNoteObject(
     width: 700,
     content: buildAssistantWelcomeNoteContent(input),
   };
-}
-
-function matchesCurrentWelcomeNoteTemplateShape(content: string): boolean {
-  return CURRENT_WELCOME_NOTE_TEMPLATE_PATTERN.test(content);
-}
-
-export function shouldReplaceAssistantWelcomeNoteContent(content: string): boolean {
-  return (
-    LEGACY_WELCOME_NOTE_MARKERS.some((marker) => content.includes(marker)) ||
-    matchesCurrentWelcomeNoteTemplateShape(content)
-  );
 }

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ensureAssistantWelcomeNote } from './assistantWelcomeNote';
 
 describe('ensureAssistantWelcomeNote', () => {
-  it('delegates welcome-note rendering and backfill to the boards service', async () => {
+  it('delegates welcome-note rendering to the boards service', async () => {
     const boardsService = {
       ensureAssistantWelcomeNote: vi.fn().mockResolvedValue({}),
     };

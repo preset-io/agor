@@ -8,7 +8,7 @@ export interface AssistantWelcomeNoteInput {
 }
 
 /**
- * Adds or backfills the initial markdown note on an assistant board.
+ * Adds the initial markdown note on an assistant board when missing.
  *
  * The daemon renders the bundled static Handlebars template server-side via a
  * boards custom method. Keeping the browser out of this render path avoids

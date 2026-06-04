@@ -5,7 +5,6 @@
  */
 
 import { BoardObjectRepository, BranchRepository, generateId, RepoRepository } from '@agor/core/db';
-import { ASSISTANT_WELCOME_NOTE_TEMPLATE } from '@agor/core/templates/assistant-welcome-note';
 import type { Board, BranchID, UUID } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -242,101 +241,33 @@ describe('BoardsService - Custom Methods', () => {
         created_by: TEST_USER,
       })) as Board;
 
-      const updated = await service.ensureAssistantWelcomeNote({
-        boardId: board.board_id,
-        assistantName: '<img src=x onerror=alert(1)>',
-        assistantEmoji: '[bot](javascript:alert(1))',
-      });
-
-      const note = updated.objects?.['welcome-note'];
-      expect(note?.type).toBe('markdown');
-      expect(note?.content).not.toContain('{{assistant.name}}');
-      expect(note?.content).not.toContain('<img src=x onerror=alert(1)>');
-      expect(note?.content).toContain('&lt;img src&#x3D;x onerror&#x3D;alert\\(1\\)&gt;');
-      expect(note?.content).not.toContain('[bot](javascript:alert(1))');
-      expect(note?.content).toContain('\\[bot\\]\\(javascript:alert\\(1\\)\\)');
-    }
-  );
-
-  dbTest(
-    'ensureAssistantWelcomeNote is idempotent for already-correct generated notes',
-    async ({ db }) => {
-      const service = new BoardsService(db);
-      const board = (await service.create({
-        name: 'Assistant Board Idempotent',
-        slug: `assistant-board-idempotent-${generateId()}`,
-        created_by: TEST_USER,
-      })) as Board;
-
-      const first = await service.ensureAssistantWelcomeNote({
-        boardId: board.board_id,
-        assistantName: 'Stable Bot',
-        assistantEmoji: '🤖',
-      });
-
       const params = {};
-      const second = await service.ensureAssistantWelcomeNote(
+      const updated = await service.ensureAssistantWelcomeNote(
         {
           boardId: board.board_id,
-          assistantName: 'Stable Bot',
+          assistantName: '<img src=x onerror=alert(1)>',
           assistantEmoji: '🤖',
         },
         params
       );
 
-      expect(params).toEqual({});
-      expect(second.objects?.['welcome-note']).toEqual(first.objects?.['welcome-note']);
+      const note = updated.objects?.['welcome-note'];
+      expect(params).toEqual({ assistantWelcomeNoteMutated: true });
+      expect(note?.type).toBe('markdown');
+      expect(note?.content).not.toContain('{{assistant.name}}');
+      expect(note?.content).not.toContain('<img src=x onerror=alert(1)>');
+      expect(note?.content).toContain('&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt;');
+      expect(note?.content).toContain('🤖');
     }
   );
 
-  dbTest('ensureAssistantWelcomeNote backfills unresolved placeholder notes', async ({ db }) => {
-    const service = new BoardsService(db);
-    const board = (await service.create({
-      name: 'Assistant Board Backfill',
-      slug: `assistant-board-backfill-${generateId()}`,
-      created_by: TEST_USER,
-      objects: {
-        'welcome-note': {
-          type: 'markdown',
-          x: 12,
-          y: 34,
-          width: 456,
-          content: '# Welcome to {{assistant.name}}',
-        },
-      },
-    })) as Board;
-
-    const updated = await service.ensureAssistantWelcomeNote({
-      boardId: board.board_id,
-      assistantName: 'Backfill Bot',
-      assistantEmoji: '🛠️',
-    });
-
-    const note = updated.objects?.['welcome-note'];
-    expect(note).toEqual(
-      expect.objectContaining({
-        type: 'markdown',
-        x: 12,
-        y: 34,
-        width: 456,
-      })
-    );
-    expect(note?.content).toContain("Backfill Bot's Board 🛠️");
-    expect(note?.content).not.toContain('{{assistant.name}}');
-  });
-
   dbTest(
-    'ensureAssistantWelcomeNote backfills generated notes from interim regex renderer',
+    'ensureAssistantWelcomeNote is a no-op when welcome note already exists',
     async ({ db }) => {
       const service = new BoardsService(db);
-      const interimRenderedContent = ASSISTANT_WELCOME_NOTE_TEMPLATE.replaceAll(
-        '{{assistant.name}}',
-        "x's Board [docs](javascript:alert(1))"
-      ).replaceAll('{{assistant.emoji}}', '[bot](javascript:alert(1))');
-
       const board = (await service.create({
-        name: 'Assistant Board Interim Backfill',
-        slug: `assistant-board-interim-backfill-${generateId()}`,
+        name: 'Assistant Board Existing Note',
+        slug: `assistant-board-existing-${generateId()}`,
         created_by: TEST_USER,
         objects: {
           'welcome-note': {
@@ -344,7 +275,7 @@ describe('BoardsService - Custom Methods', () => {
             x: 12,
             y: 34,
             width: 456,
-            content: interimRenderedContent,
+            content: '# Welcome to {{assistant.name}}',
           },
         },
       })) as Board;
@@ -353,27 +284,14 @@ describe('BoardsService - Custom Methods', () => {
       const updated = await service.ensureAssistantWelcomeNote(
         {
           boardId: board.board_id,
-          assistantName: '[safe docs](javascript:alert(1))',
-          assistantEmoji: '[safe bot](javascript:alert(1))',
+          assistantName: 'Ignored Bot',
+          assistantEmoji: '🛠️',
         },
         params
       );
 
-      const note = updated.objects?.['welcome-note'];
-      expect(params).toEqual({ assistantWelcomeNoteMutated: true });
-      expect(note).toEqual(
-        expect.objectContaining({
-          type: 'markdown',
-          x: 12,
-          y: 34,
-          width: 456,
-        })
-      );
-      expect(note?.content).not.toContain('[docs](javascript:alert(1))');
-      expect(note?.content).not.toContain("x's Board [docs](javascript:alert(1))");
-      expect(note?.content).not.toContain('[safe docs](javascript:alert(1))');
-      expect(note?.content).toContain('\\[safe docs\\]\\(javascript:alert\\(1\\)\\)');
-      expect(note?.content).toContain('\\[safe bot\\]\\(javascript:alert\\(1\\)\\)');
+      expect(params).toEqual({});
+      expect(updated.objects?.['welcome-note']).toEqual(board.objects?.['welcome-note']);
     }
   );
 

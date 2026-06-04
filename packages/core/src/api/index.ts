@@ -398,7 +398,7 @@ export interface BoardsService extends AgorService<Board> {
   clearPrimaryAssistant(boardId: string, params?: Params): Promise<Board>;
 
   /**
-   * Create or backfill the bundled assistant welcome markdown note. Rendering
+   * Create the bundled assistant welcome markdown note when missing. Rendering
    * happens server-side from a static template; callers only provide values.
    */
   ensureAssistantWelcomeNote(data: AssistantWelcomeNoteRequest, params?: Params): Promise<Board>;
