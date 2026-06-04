@@ -6,6 +6,7 @@ import type React from 'react';
 type IconProps = React.ComponentProps<typeof InboxOutlined>;
 
 type ArchiveButtonBaseProps = Omit<ButtonProps, 'icon'> & {
+  'aria-label'?: string;
   ariaLabel?: string;
   tooltip?: React.ReactNode;
   stopPropagation?: boolean;
@@ -28,12 +29,14 @@ export const ArchiveToggleButton: React.FC<ArchiveToggleButtonProps> = ({
   tooltip,
   stopPropagation = true,
   ariaLabel,
+  'aria-label': ariaLabelProp,
   size = 'small',
   type = 'text',
   ...buttonProps
 }) => {
   const title = tooltip ?? (archived ? 'Archived • Click to unarchive' : 'Archive');
   const accessibleLabel = labelFromTooltip(title);
+  const explicitAriaLabel = ariaLabelProp ?? ariaLabel;
 
   return (
     <Tooltip title={title}>
@@ -43,7 +46,7 @@ export const ArchiveToggleButton: React.FC<ArchiveToggleButtonProps> = ({
         size={size}
         icon={<ArchiveIcon />}
         loading={loading}
-        aria-label={ariaLabel ?? accessibleLabel}
+        aria-label={explicitAriaLabel ?? accessibleLabel}
         title={buttonProps.title ?? accessibleLabel}
         onClick={(event) => {
           if (stopPropagation) {
@@ -57,9 +60,10 @@ export const ArchiveToggleButton: React.FC<ArchiveToggleButtonProps> = ({
 };
 
 export const ArchiveActionButton: React.FC<ArchiveButtonBaseProps> = ({
-  tooltip = 'Archive',
+  tooltip,
   stopPropagation = true,
   ariaLabel,
+  'aria-label': ariaLabelProp,
   size = 'small',
   type = 'text',
   onClick,
@@ -68,8 +72,10 @@ export const ArchiveActionButton: React.FC<ArchiveButtonBaseProps> = ({
   children,
   ...buttonProps
 }) => {
-  const accessibleLabel = labelFromTooltip(tooltip);
   const isIconOnly = children === undefined || children === null;
+  const title = tooltip ?? (isIconOnly ? 'Archive' : undefined);
+  const accessibleLabel = labelFromTooltip(title);
+  const explicitAriaLabel = ariaLabelProp ?? ariaLabel;
 
   const button = (
     <Button
@@ -77,7 +83,7 @@ export const ArchiveActionButton: React.FC<ArchiveButtonBaseProps> = ({
       type={type}
       size={size}
       icon={<ArchiveIcon />}
-      aria-label={ariaLabel ?? (isIconOnly ? accessibleLabel : undefined)}
+      aria-label={explicitAriaLabel ?? (isIconOnly ? accessibleLabel : undefined)}
       title={buttonProps.title ?? (isIconOnly ? accessibleLabel : undefined)}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
@@ -92,5 +98,5 @@ export const ArchiveActionButton: React.FC<ArchiveButtonBaseProps> = ({
     </Button>
   );
 
-  return tooltip ? <Tooltip title={tooltip}>{button}</Tooltip> : button;
+  return title ? <Tooltip title={title}>{button}</Tooltip> : button;
 };
