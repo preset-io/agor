@@ -1653,7 +1653,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               };
             }
           | undefined;
-        if (!zoneObj || zoneObj.type !== 'zone') {
+        if (zoneObj?.type !== 'zone') {
           throw new BadRequest(`Zone ${data.zoneId} not found on board ${branch.board_id}`);
         }
         if (zoneObj.trigger?.behavior !== 'always_new') {

@@ -35,8 +35,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       const zoneId = coerceString(args.zoneId);
       if (zoneId) {
         const zone = board.objects?.[zoneId];
-        if (!zone || zone.type !== 'zone')
-          throw new Error(`Zone ${zoneId} not found on board ${boardId}`);
+        if (zone?.type !== 'zone') throw new Error(`Zone ${zoneId} not found on board ${boardId}`);
         zoneData = zone;
       }
 
@@ -265,7 +264,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       if (zoneId) {
         const board = await ctx.app.service('boards').get(card.board_id, ctx.baseServiceParams);
         const zone = board.objects?.[zoneId];
-        if (!zone || zone.type !== 'zone')
+        if (zone?.type !== 'zone')
           throw new Error(`Zone ${zoneId} not found on board ${card.board_id}`);
         zoneData = zone;
       }

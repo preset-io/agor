@@ -941,7 +941,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const board = await ctx.app.service('boards').get(branch.board_id, ctx.baseServiceParams);
 
       const zone = board.objects?.[zoneId];
-      if (!zone || zone.type !== 'zone') {
+      if (zone?.type !== 'zone') {
         throw new Error(`Zone ${zoneId} not found on board ${branch.board_id}`);
       }
 
