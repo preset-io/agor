@@ -281,7 +281,7 @@ export function useBranchModalForm({
         // biome-ignore lint/suspicious/noExplicitAny: error from feathers client is loosely typed
       } catch (error: any) {
         if (cancelled) return;
-        if (error?.code === 404 || error?.message?.includes('not found')) {
+        if (error?.code === 404) {
           setRbacEnabled(false);
           setOwners([]);
         } else {

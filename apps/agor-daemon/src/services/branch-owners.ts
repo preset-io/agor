@@ -21,7 +21,7 @@
 import type { BranchRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { BranchID, HookContext, User, UUID } from '@agor/core/types';
+import { ROLES, type BranchID, type HookContext, type User, type UUID } from '@agor/core/types';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
 import {
   createServiceToken,
@@ -66,9 +66,9 @@ function requireViewPermission(branchRepo: BranchRepository, allowSuperadmin = t
       throw new Error('Branch ID is required');
     }
 
-    // Superadmins can view owners of any branch
+    // Org admins and superadmins can view owners of any branch
     const userRole = context.params.user?.role;
-    if (isSuperAdmin(userRole, allowSuperadmin)) {
+    if (userRole === ROLES.ADMIN || isSuperAdmin(userRole, allowSuperadmin)) {
       return context;
     }
 
