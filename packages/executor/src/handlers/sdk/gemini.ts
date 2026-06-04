@@ -29,7 +29,7 @@ export async function executeGeminiTask(params: {
   // Execute using base helper with Gemini-specific factory
   await executeToolTask({
     ...params,
-    apiKeyEnvVar: TOOL_API_KEY_NAMES['gemini']!,
+    apiKeyEnvVar: TOOL_API_KEY_NAMES.gemini!,
     toolName: 'gemini',
     createTool: (repos, apiKey, useNativeAuth) =>
       new GeminiTool(

@@ -26,7 +26,7 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     }
 
     const apiKey = authentication.apiKey;
-    if (!apiKey || !apiKey.startsWith('agor_sk_')) {
+    if (!apiKey?.startsWith('agor_sk_')) {
       throw new NotAuthenticated('Invalid API key format');
     }
 

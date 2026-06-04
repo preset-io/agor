@@ -55,7 +55,7 @@ export default defineConfig({
   },
   format: ['cjs', 'esm'],
   dts: false,
-  clean: process.env.TSUP_CLEAN === 'false' ? false : true,
+  clean: process.env.TSUP_CLEAN !== 'false',
   splitting: false,
   shims: true, // Enable shims for import.meta.url in CJS builds
   // Don't bundle agent SDKs and Node.js-only dependencies

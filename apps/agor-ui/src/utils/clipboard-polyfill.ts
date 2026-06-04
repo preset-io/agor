@@ -45,7 +45,7 @@ function execCommandCopy(text: string): Promise<void> {
  * when the Clipboard API throws.
  */
 export function installClipboardPolyfill(): void {
-  if (!navigator.clipboard || !navigator.clipboard.writeText) {
+  if (!navigator.clipboard?.writeText) {
     // Polyfill navigator.clipboard
     Object.defineProperty(navigator, 'clipboard', {
       value: {

@@ -373,7 +373,7 @@ export class TerminalsService {
     try {
       const sessionRepo = new SessionRepository(this.db);
       const session = await sessionRepo.findById(sessionId).catch(() => null);
-      if (!session || session.agentic_tool !== 'claude-code-cli') return null;
+      if (session?.agentic_tool !== 'claude-code-cli') return null;
       // Branch-spoofing guard: when the caller supplied a branchId,
       // it MUST match the session's. Otherwise the upstream RBAC
       // (gated on `data.branchId`) checked a different branch than

@@ -94,7 +94,7 @@ function normalizeModelId(model: string): string {
  * propagate the warning to logs / API responses uniformly.
  */
 export function formatModelToolMismatchWarning(result: ModelToolMatch | null): string | undefined {
-  if (!result || result.match !== 'mismatch') return undefined;
+  if (result?.match !== 'mismatch') return undefined;
   return (
     `Model "${result.model}" looks like a ${result.looksLike} model but the session ` +
     `is configured for ${result.tool}. Proceeding with the user-supplied value, but the ` +

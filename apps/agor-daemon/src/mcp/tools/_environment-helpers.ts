@@ -10,7 +10,7 @@ import type { Repo } from '@agor/core/types';
  */
 export function assertValidVariant(repo: Repo, variant: string): void {
   const repoEnv = repo.environment;
-  if (!repoEnv?.variants || !repoEnv.variants[variant]) {
+  if (!repoEnv?.variants?.[variant]) {
     const available = repoEnv?.variants ? Object.keys(repoEnv.variants) : [];
     throw new Error(
       `Invalid variant "${variant}". ` +

@@ -224,7 +224,7 @@ export async function resolveUserEnvironment(
         if (entry.scope === 'global') {
           // always include
         } else if (entry.scope === 'session') {
-          if (!sessionSelections || !sessionSelections.has(key)) {
+          if (!sessionSelections?.has(key)) {
             continue;
           }
         } else {

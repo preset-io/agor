@@ -140,7 +140,7 @@ export async function initializeToolRegistry(): Promise<void> {
   ToolRegistry.register({
     tool: 'codex',
     name: 'Codex',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES['codex']!,
+    apiKeyEnvVar: TOOL_API_KEY_NAMES.codex!,
     runner: codex.executeCodexTask,
   });
 
@@ -148,7 +148,7 @@ export async function initializeToolRegistry(): Promise<void> {
   ToolRegistry.register({
     tool: 'gemini',
     name: 'Gemini',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES['gemini']!,
+    apiKeyEnvVar: TOOL_API_KEY_NAMES.gemini!,
     runner: gemini.executeGeminiTask,
   });
 
@@ -164,7 +164,7 @@ export async function initializeToolRegistry(): Promise<void> {
   ToolRegistry.register({
     tool: 'copilot',
     name: 'GitHub Copilot',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES['copilot']!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
+    apiKeyEnvVar: TOOL_API_KEY_NAMES.copilot!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
     runner: copilot.executeCopilotTask,
   });
 

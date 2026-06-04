@@ -360,7 +360,7 @@ function buildTextBlocks(lines: string[]): SectionBlock[] {
  * mrkdwn `text` field (40k char budget) so we never silently truncate.
  */
 function monospaceFallbackBlock(tableLines: string[]): SectionBlock | null {
-  const wrapped = '```\n' + tableLines.join('\n') + '\n```';
+  const wrapped = `\`\`\`\n${tableLines.join('\n')}\n\`\`\``;
   if (wrapped.length > SECTION_MAX_CHARS) return null;
   return {
     type: 'section',

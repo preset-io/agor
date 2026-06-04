@@ -243,14 +243,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const { mcpServerById, userAuthenticatedMcpServerIds } = useAppMcpData();
 
   // Get actions from context
-  const {
-    onSendPrompt,
-    onFork,
-    onBtwFork,
-    onOpenSettings,
-    onUpdateSession,
-    onOpenTerminal,
-  } = useAppActions();
+  const { onSendPrompt, onFork, onBtwFork, onOpenSettings, onUpdateSession, onOpenTerminal } =
+    useAppActions();
 
   const { archiveSession } = useSessionActions(client);
 

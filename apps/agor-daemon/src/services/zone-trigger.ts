@@ -57,7 +57,7 @@ export async function fireAlwaysNewZoneTrigger(
   const { app, params, branch, board, zone, user, userId } = input;
 
   const trigger = zone.trigger;
-  if (!trigger?.template || !trigger.template.trim()) {
+  if (!trigger?.template?.trim()) {
     throw new Error(`Zone "${zone.label ?? ''}" has no trigger template configured`);
   }
   if (trigger.behavior !== 'always_new') {

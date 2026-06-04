@@ -448,7 +448,7 @@ export default class Init extends Command {
         name: 'email',
         message: 'Email:',
         validate: (input: string) => {
-          if (!input || !input.includes('@')) {
+          if (!input?.includes('@')) {
             return 'Please enter a valid email address';
           }
           return true;

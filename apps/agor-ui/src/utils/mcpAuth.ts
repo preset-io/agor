@@ -32,7 +32,7 @@ export function mcpServerNeedsAuth(
   server: MCPServer | undefined,
   userAuthenticatedMcpServerIds: Set<string>
 ): boolean {
-  if (!server || server.auth?.type !== 'oauth') return false;
+  if (server?.auth?.type !== 'oauth') return false;
 
   const expiresAt = server.auth.oauth_token_expires_at;
   // Use `<=` to match the daemon-side boundary: `oauth-status` treats

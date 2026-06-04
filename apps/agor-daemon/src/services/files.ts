@@ -90,7 +90,7 @@ export class FilesService {
 
       // Fetch branch to validate it still exists before crossing the executor boundary.
       const branch = await this.branchRepo.findById(session.branch_id);
-      if (!branch || !branch.path) {
+      if (!branch?.path) {
         return [];
       }
 

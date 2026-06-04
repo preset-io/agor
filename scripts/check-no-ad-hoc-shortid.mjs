@@ -95,7 +95,7 @@ const PATTERNS = [
   ),
   // 1b. Bare `id` as receiver (route params, destructured rows, `latest.id`).
   //     Non-word boundary before `id` avoids matching words like "valid".
-  new RegExp(String.raw`(?:^|[^\w])id!?\??\.(?:substring|slice)\(\s*0\s*,\s*\d+\s*\)`),
+  /(?:^|[^\w])id!?\??\.(?:substring|slice)\(\s*0\s*,\s*\d+\s*\)/,
   // 2. `.replace(/-/g, '').slice(0, N)` — canonical strip-hyphens chain.
   /\.replace\(\/-\/g,\s*['"]{2}\)\.slice\(\s*0\s*,\s*\d+\s*\)/,
   // 3. `String(<id-expr>).(substring|slice)(0, N)` — wrapper-cast variant.

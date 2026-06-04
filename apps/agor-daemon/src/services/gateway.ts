@@ -826,7 +826,7 @@ export class GatewayService {
 
     const channel = await this.channelRepo.findById(mapping.channel_id);
 
-    if (!channel || !channel.enabled) {
+    if (!channel?.enabled) {
       return { routed: false };
     }
 
@@ -906,7 +906,7 @@ export class GatewayService {
     }
 
     const channel = await this.channelRepo.findById(mapping.channel_id);
-    if (!channel || !channel.enabled || channel.channel_type !== 'github') {
+    if (!channel?.enabled || channel.channel_type !== 'github') {
       return;
     }
 

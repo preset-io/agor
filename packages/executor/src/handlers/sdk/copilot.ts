@@ -49,7 +49,7 @@ export async function executeCopilotTask(params: {
     // Execute using base helper with Copilot-specific factory
     await executeToolTask({
       ...params,
-      apiKeyEnvVar: TOOL_API_KEY_NAMES['copilot']!,
+      apiKeyEnvVar: TOOL_API_KEY_NAMES.copilot!,
       toolName: 'copilot',
       createTool: (repos, apiKey, useNativeAuth) =>
         new CopilotTool(

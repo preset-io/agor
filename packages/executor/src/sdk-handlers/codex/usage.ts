@@ -229,7 +229,7 @@ export function extractCodexContextSnapshotFromEvent(
     event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
       ? (event.payload as Record<string, unknown>)
       : undefined;
-  if (!payload || payload.type !== 'token_count') {
+  if (payload?.type !== 'token_count') {
     return undefined;
   }
 

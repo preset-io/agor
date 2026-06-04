@@ -658,7 +658,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       // Validate zoneId exists on the board
       if (data.zoneId && board) {
         const zone = board.objects?.[data.zoneId];
-        if (!zone || zone.type !== 'zone') {
+        if (zone?.type !== 'zone') {
           throw new Error(
             `Zone '${data.zoneId}' not found on board '${data.boardId}'. ` +
               `Provide a valid zoneId from the board's zone objects.`

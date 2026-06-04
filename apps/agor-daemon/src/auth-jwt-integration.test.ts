@@ -638,7 +638,7 @@ describe('POST /authentication/impersonate - Handler Logic', () => {
       params?: AuthenticatedParams & { authentication?: { payload?: Record<string, unknown> } }
     ) => {
       // 1. Caller must be authenticated
-      if (!params?.user || !params.user.user_id) {
+      if (!params?.user?.user_id) {
         throw new NotAuthenticated('Authentication required');
       }
 
