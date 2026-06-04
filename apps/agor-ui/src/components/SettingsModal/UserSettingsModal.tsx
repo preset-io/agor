@@ -3,6 +3,8 @@ import type {
   AgorClient,
   EnvVarMetadata,
   EnvVarScope,
+  Group,
+  GroupMembership,
   MCPServer,
   UpdateUserInput,
   User,
@@ -14,6 +16,7 @@ import {
   RobotOutlined,
   SettingOutlined,
   SoundOutlined,
+  TeamOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -72,6 +75,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState<string>('general');
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Separate forms for each agentic tool tab
   const [claudeForm] = Form.useForm();
@@ -100,6 +104,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Environment variable management state (scope-aware, v0.5 env-var-access)
   const [userEnvVars, setUserEnvVars] = useState<Record<string, EnvVarMetadata>>({});
   const [savingEnvVars, setSavingEnvVars] = useState<Record<string, boolean>>({});
+  const [availableGroups, setAvailableGroups] = useState<Group[]>([]);
+  const [userGroupIds, setUserGroupIds] = useState<string[]>([]);
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
 
   // Saving state for agentic tool tabs
   const [savingAgenticConfig, setSavingAgenticConfig] = useState<Record<AgenticToolName, boolean>>({
@@ -123,6 +131,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         emoji: userData.emoji,
         role: userData.role,
         unix_username: userData.unix_username,
+        groupIds: [],
         eventStreamEnabled: userData.preferences?.eventStream?.enabled ?? true,
         must_change_password: userData.must_change_password ?? false,
       });
@@ -149,12 +158,43 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     [form, claudeForm, codexForm, geminiForm, opencodeForm, copilotForm, cursorForm, audioForm]
   );
 
+  const loadUserGroups = useCallback(async () => {
+    if (!client || !user || !isAdmin) {
+      setAvailableGroups([]);
+      setUserGroupIds([]);
+      setGroupsLoaded(false);
+      form.setFieldValue('groupIds', []);
+      return;
+    }
+
+    setLoadingGroups(true);
+    setGroupsLoaded(false);
+    try {
+      const [groups, memberships] = await Promise.all([
+        client.service('groups').findAll({ query: { archived: false } }),
+        client.service('group-memberships').findAll({ query: { user_id: user.user_id } }),
+      ]);
+      const nextGroupIds = (memberships as GroupMembership[]).map(
+        (membership) => membership.group_id
+      );
+      setAvailableGroups(groups as Group[]);
+      setUserGroupIds(nextGroupIds);
+      setGroupsLoaded(true);
+      form.setFieldValue('groupIds', nextGroupIds);
+    } catch (error) {
+      console.error('Failed to load user groups:', error);
+    } finally {
+      setLoadingGroups(false);
+    }
+  }, [client, form, isAdmin, user]);
+
   // Initialize when modal opens with user data
   useEffect(() => {
     if (open && user) {
       initializeForms(user);
+      void loadUserGroups();
     }
-  }, [open, user, initializeForms]);
+  }, [open, user, initializeForms, loadUserGroups]);
 
   // Rehydrate per-tool credential presence and env-var metadata from the
   // server every time the modal opens, so flags reflect the latest patch.
@@ -197,8 +237,30 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     opencodeForm.resetFields();
     copilotForm.resetFields();
     cursorForm.resetFields();
+    setAvailableGroups([]);
+    setUserGroupIds([]);
+    setGroupsLoaded(false);
     setActiveTab('general');
     onClose();
+  };
+
+  const syncUserGroups = async (nextGroupIds: string[]) => {
+    if (!client || !user || !isAdmin || !groupsLoaded) return;
+    const add = nextGroupIds.filter((groupId) => !userGroupIds.includes(groupId));
+    const remove = userGroupIds.filter((groupId) => !nextGroupIds.includes(groupId));
+
+    for (const groupId of add) {
+      await client
+        .service('group-memberships')
+        .create({ group_id: groupId, user_id: user.user_id });
+    }
+    for (const groupId of remove) {
+      await client.service('group-memberships').remove(user.user_id, {
+        query: { group_id: groupId },
+      });
+    }
+
+    setUserGroupIds(nextGroupIds);
   };
 
   const handleUpdate = () => {
@@ -206,7 +268,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     form
       .validateFields(['email', 'name', 'emoji', 'role', 'unix_username'])
-      .then(() => {
+      .then(async () => {
         const values = form.getFieldsValue();
         const updates: UpdateUserInput = {
           email: values.email,
@@ -231,7 +293,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         ) {
           updates.must_change_password = values.must_change_password;
         }
-        onUpdate?.(user.user_id, updates);
+        await onUpdate?.(user.user_id, updates);
+        await syncUserGroups(values.groupIds || []);
         handleClose();
       })
       .catch((err) => {
@@ -449,6 +512,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         // These tabs save individually, just close
         handleClose();
         break;
+      case 'groups':
+        await syncUserGroups(form.getFieldValue('groupIds') || []);
+        handleClose();
+        break;
       case 'audio':
         await handleAudioSave();
         break;
@@ -486,6 +553,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           label: 'Audio',
           icon: <SoundOutlined />,
         },
+        ...(isAdmin
+          ? [
+              {
+                key: 'groups',
+                label: 'Groups',
+                icon: <TeamOutlined />,
+              },
+            ]
+          : []),
         {
           key: 'personal-api-keys',
           label: 'Agor API Tokens',
@@ -623,6 +699,24 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               />
             </Form.Item>
 
+            {isAdmin && (
+              <Form.Item
+                label="Groups"
+                name="groupIds"
+                help="Group memberships affect group-aware branch permissions."
+              >
+                <Select
+                  mode="multiple"
+                  loading={loadingGroups}
+                  disabled={!groupsLoaded && !loadingGroups}
+                  placeholder="Select groups..."
+                  options={[...availableGroups]
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((group) => ({ value: group.group_id, label: group.name }))}
+                />
+              </Form.Item>
+            )}
+
             {/* Only show for admins editing other users */}
             {hasMinimumRole(currentUser?.role, ROLES.ADMIN) &&
               user &&
@@ -665,6 +759,31 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         );
       case 'audio':
         return <AudioSettingsTab user={user} form={audioForm} />;
+      case 'groups':
+        return (
+          <>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+              Add or remove this user from admin-managed groups.
+            </Typography.Paragraph>
+            <Form form={form} layout="vertical">
+              <Form.Item
+                label="Groups"
+                name="groupIds"
+                help="Group memberships affect group-aware branch permissions."
+              >
+                <Select
+                  mode="multiple"
+                  loading={loadingGroups}
+                  disabled={!groupsLoaded && !loadingGroups}
+                  placeholder="Select groups..."
+                  options={[...availableGroups]
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((group) => ({ value: group.group_id, label: group.name }))}
+                />
+              </Form.Item>
+            </Form>
+          </>
+        );
       case 'personal-api-keys':
         return <PersonalApiKeysTab client={client} />;
       case 'claude-code':
@@ -765,6 +884,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       general: 'General',
       'env-vars': 'Environment Variables',
       audio: 'Audio',
+      groups: 'Groups',
       'personal-api-keys': 'Agor API Tokens',
       'claude-code': 'Claude Code',
       codex: 'Codex',

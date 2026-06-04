@@ -1,11 +1,13 @@
 import type {
   AgorClient,
   CreateUserInput,
+  Group,
+  GroupMembership,
   MCPServer,
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,
@@ -21,8 +23,9 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
+import { useThemedMessage } from '../../utils/message';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -45,9 +48,50 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
+  const { showError } = useThemedMessage();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [memberships, setMemberships] = useState<GroupMembership[]>([]);
   const [form] = Form.useForm();
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+
+  const loadGroups = useCallback(async () => {
+    if (!client || !isAdmin) {
+      setGroups([]);
+      setMemberships([]);
+      return;
+    }
+    const [nextGroups, nextMemberships] = await Promise.all([
+      client.service('groups').findAll({ query: { archived: false } }),
+      client.service('group-memberships').findAll({}),
+    ]);
+    setGroups(nextGroups as Group[]);
+    setMemberships(nextMemberships as GroupMembership[]);
+  }, [client, isAdmin]);
+
+  useEffect(() => {
+    loadGroups().catch((error) =>
+      showError(
+        `Failed to load user groups: ${error instanceof Error ? error.message : String(error)}`
+      )
+    );
+  }, [loadGroups, showError]);
+
+  const groupsByUser = useMemo(() => {
+    const map = new Map<string, Group['group_id'][]>();
+    for (const membership of memberships) {
+      const ids = map.get(membership.user_id) || [];
+      ids.push(membership.group_id);
+      map.set(membership.user_id, ids);
+    }
+    return map;
+  }, [memberships]);
+
+  const groupById = useMemo(
+    () => new Map(groups.map((group) => [group.group_id, group])),
+    [groups]
+  );
 
   const handleDelete = (userId: string) => {
     onDelete?.(userId);
@@ -115,11 +159,27 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       render: (role: User['role']) => <Tag color={getRoleColor(role)}>{role.toUpperCase()}</Tag>,
     },
     {
-      title: 'Created',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 180,
-      render: (date: Date) => new Date(date).toLocaleDateString(),
+      title: 'Groups',
+      key: 'groups',
+      width: 280,
+      render: (_: unknown, user: User) => {
+        const userGroupIds = groupsByUser.get(user.user_id) || [];
+        if (userGroupIds.length === 0) {
+          return <Typography.Text type="secondary">—</Typography.Text>;
+        }
+
+        return (
+          <Space size={[4, 4]} wrap>
+            {userGroupIds
+              .map((groupId) => groupById.get(groupId))
+              .filter((group): group is Group => Boolean(group))
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((group) => (
+                <Tag key={group.group_id}>{group.name}</Tag>
+              ))}
+          </Space>
+        );
+      },
     },
     {
       title: 'Actions',
@@ -259,7 +319,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       {/* Edit User Modal - reuses UserSettingsModal */}
       <UserSettingsModal
         open={!!editingUser}
-        onClose={() => setEditingUser(null)}
+        onClose={() => {
+          setEditingUser(null);
+          void loadGroups();
+        }}
         user={editingUser}
         mcpServerById={mcpServerById}
         client={client}

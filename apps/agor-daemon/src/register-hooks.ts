@@ -54,6 +54,7 @@ import type {
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
+import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import { applySessionConfigDefaults } from './utils/apply-session-config-defaults.js';
 import {
@@ -1395,6 +1396,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
   });
+
+  // ============================================================================
+  // Groups hooks
+  // ============================================================================
+
+  safeService('groups')?.hooks(groupsHooks);
+  safeService('group-memberships')?.hooks(groupMembershipsHooks);
 
   // ============================================================================
   // Users hooks

@@ -281,6 +281,13 @@
       "when": 1780600000000,
       "tag": "0040_knowledge_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1780700000000,
+      "tag": "0041_user_groups_branch_grants",
+      "breakpoints": true
     }
   ]
 }

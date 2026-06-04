@@ -5,8 +5,8 @@
  */
 
 import type { Session, SessionID, UUID } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS, SessionStatus } from '@agor/core/types';
-import { and, desc, eq, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
+import { SessionStatus } from '@agor/core/types';
+import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
@@ -14,7 +14,9 @@ import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import {
   branches,
+  branchGroupGrants,
   branchOwners,
+  groupMemberships,
   messages,
   type SessionInsert,
   type SessionRow,
@@ -28,6 +30,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
+import { visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
 
 /**
@@ -740,28 +743,30 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         branchOwners,
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
       )
-      .where(
-        or(
-          isNotNull(branchOwners.user_id),
-          inArray(
-            branches.others_can,
-            BRANCH_PERMISSION_LEVELS.filter((l) => l !== 'none')
-          )
+      .leftJoin(groupMemberships, eq(groupMemberships.user_id, userId))
+      .leftJoin(
+        branchGroupGrants,
+        and(
+          eq(branchGroupGrants.branch_id, branches.branch_id),
+          eq(branchGroupGrants.group_id, groupMemberships.group_id)
         )
       )
+      .where(visibleBranchAccessCondition())
       .all();
 
-    return results.map(
-      (result: {
-        sessions: SessionRow;
-        branches?: { board_id?: string } | null;
-        boards?: { slug?: string | null } | null;
-      }) => {
-        const sessionRow = result.sessions;
-        const boardId = (result.branches?.board_id ?? null) as UUID | null;
-        return this.rowToSession(sessionRow, boardId, baseUrl);
-      }
-    );
+    const seen = new Set<string>();
+    const sessionsOut: Session[] = [];
+    for (const result of results as Array<{
+      sessions: SessionRow;
+      branches?: { board_id?: string } | null;
+      boards?: { slug?: string | null } | null;
+    }>) {
+      if (seen.has(result.sessions.session_id)) continue;
+      seen.add(result.sessions.session_id);
+      const boardId = (result.branches?.board_id ?? null) as UUID | null;
+      sessionsOut.push(this.rowToSession(result.sessions, boardId, baseUrl));
+    }
+    return sessionsOut;
   }
 
   /**

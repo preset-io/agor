@@ -220,6 +220,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
                 loadingOwners={form.loadingOwners}
                 canEdit={form.canEditPermissions}
                 allUsers={form.allUsers}
+                allGroups={form.allGroups}
                 currentUser={currentUser}
                 state={form.permissions}
                 setField={form.setPermissions}

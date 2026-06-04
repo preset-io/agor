@@ -11,12 +11,15 @@ import type {
   Board,
   BoardExportBlob,
   Branch,
+  BranchGroupGrantWithGroup,
   BranchPermissionLevel,
   CardType,
   CardWithType,
   CloneRepositoryResult,
   ContextFileDetail,
   ContextFileListItem,
+  Group,
+  GroupMembership,
   MCPServer,
   Message,
   PermissionMode,
@@ -167,6 +170,9 @@ export interface ServiceTypes {
   branches: Branch;
   schedules: Schedule;
   users: User;
+  groups: Group;
+  'group-memberships': GroupMembership;
+  'branches/:id/group-grants': BranchGroupGrantWithGroup;
   cards: CardWithType;
   'card-types': CardType; // CardType CRUD
   artifacts: Artifact;

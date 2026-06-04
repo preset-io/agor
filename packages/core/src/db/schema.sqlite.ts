@@ -978,6 +978,85 @@ export const users = sqliteTable(
 );
 
 /**
+ * Groups - admin-managed user collections for sharing and branch RBAC.
+ */
+export const groups = sqliteTable(
+  'groups',
+  {
+    group_id: text('group_id', { length: 36 }).primaryKey(),
+    name: text('name').notNull(),
+    slug: text('slug').notNull(),
+    description: text('description'),
+    archived: t.bool('archived').notNull().default(false),
+    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+  },
+  (table) => ({
+    slugIdx: uniqueIndex('groups_slug_idx').on(table.slug),
+    archivedIdx: index('groups_archived_idx').on(table.archived),
+  })
+);
+
+/**
+ * Group Memberships - many-to-many users ↔ groups.
+ */
+export const groupMemberships = sqliteTable(
+  'group_memberships',
+  {
+    group_id: text('group_id', { length: 36 })
+      .notNull()
+      .references(() => groups.group_id, { onDelete: 'cascade' }),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    added_by: text('added_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.group_id, table.user_id] }),
+    userIdx: index('group_memberships_user_idx').on(table.user_id),
+  })
+);
+
+/**
+ * Branch Group Grants - group-aware Branch RBAC grants.
+ *
+ * Owners remain direct users in branch_owners. Groups receive explicit grants
+ * that participate in the same permission lattice as others_can.
+ */
+export const branchGroupGrants = sqliteTable(
+  'branch_group_grants',
+  {
+    branch_id: text('branch_id', { length: 36 })
+      .notNull()
+      .references(() => branches.branch_id, { onDelete: 'cascade' }),
+    group_id: text('group_id', { length: 36 })
+      .notNull()
+      .references(() => groups.group_id, { onDelete: 'cascade' }),
+    can: text('can', { enum: [...BRANCH_PERMISSION_LEVELS] })
+      .notNull()
+      .default('view'),
+    fs_access: text('fs_access', { enum: ['none', 'read', 'write'] }).$type<
+      'none' | 'read' | 'write'
+    >(),
+    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.branch_id, table.group_id] }),
+    groupIdx: index('branch_group_grants_group_idx').on(table.group_id),
+  })
+);
+
+/**
  * User API Keys table - Personal API keys for programmatic access
  *
  * Stores bcrypt-hashed API keys with a prefix for identification.
@@ -1921,6 +2000,12 @@ export type ScheduleRow = typeof schedules.$inferSelect;
 export type ScheduleInsert = typeof schedules.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
+export type GroupRow = typeof groups.$inferSelect;
+export type GroupInsert = typeof groups.$inferInsert;
+export type GroupMembershipRow = typeof groupMemberships.$inferSelect;
+export type GroupMembershipInsert = typeof groupMemberships.$inferInsert;
+export type BranchGroupGrantRow = typeof branchGroupGrants.$inferSelect;
+export type BranchGroupGrantInsert = typeof branchGroupGrants.$inferInsert;
 export type MCPServerRow = typeof mcpServers.$inferSelect;
 export type MCPServerInsert = typeof mcpServers.$inferInsert;
 export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;

@@ -8,7 +8,7 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import type { BranchPermissionLevel, User } from '@agor-live/client';
+import type { BranchPermissionLevel, Group, User } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import { UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Form, Select, Space, Switch, Typography } from 'antd';
@@ -24,6 +24,7 @@ interface PermissionsTabProps {
   loadingOwners: boolean;
   canEdit: boolean;
   allUsers: User[];
+  allGroups: Group[];
   currentUser?: User | null;
   state: PermissionsFormState;
   setField: <K extends keyof PermissionsFormState>(key: K, value: PermissionsFormState[K]) => void;
@@ -49,6 +50,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   loadingOwners,
   canEdit,
   allUsers,
+  allGroups = [],
   currentUser,
   state,
   setField,
@@ -61,6 +63,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   const [selectKey, setSelectKey] = useState(0);
 
   const currentUserId = currentUser?.user_id;
+  const groupGrants = state.groupGrants ?? [];
 
   const handleOwnersChange = (newOwnerIds: string[]) => {
     if (newOwnerIds.length === 0) {
@@ -138,6 +141,66 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
               );
             }}
           />
+        </Form.Item>
+
+        {/* Group Grants */}
+        <Form.Item
+          label="Groups"
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          help="Grant explicit branch access to user groups"
+          style={{ marginBottom: 12 }}
+        >
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Select
+              mode="multiple"
+              style={{ width: '100%' }}
+              placeholder="Select groups..."
+              value={groupGrants.map((grant) => grant.group_id)}
+              disabled={!canEdit}
+              options={allGroups
+                .map((group) => ({ value: group.group_id, label: group.name }))
+                .sort((a, b) => a.label.localeCompare(b.label))}
+              onChange={(groupIds) => {
+                const existing = new Map(groupGrants.map((grant) => [grant.group_id, grant]));
+                setField(
+                  'groupGrants',
+                  groupIds.map(
+                    (groupId) => existing.get(groupId) || { group_id: groupId, can: 'view' }
+                  )
+                );
+              }}
+            />
+            {groupGrants.map((grant) => {
+              const group = allGroups.find((g) => g.group_id === grant.group_id);
+              return (
+                <Space
+                  key={grant.group_id}
+                  style={{ width: '100%', justifyContent: 'space-between' }}
+                >
+                  <Typography.Text>{group?.name || grant.group_id}</Typography.Text>
+                  <Select
+                    size="small"
+                    style={{ width: 140 }}
+                    value={grant.can}
+                    disabled={!canEdit}
+                    options={[
+                      { value: 'view', label: 'View' },
+                      { value: 'session', label: 'Own Sessions' },
+                      { value: 'prompt', label: 'Prompt' },
+                      { value: 'all', label: 'All' },
+                    ]}
+                    onChange={(can) =>
+                      setField(
+                        'groupGrants',
+                        groupGrants.map((g) => (g.group_id === grant.group_id ? { ...g, can } : g))
+                      )
+                    }
+                  />
+                </Space>
+              );
+            })}
+          </Space>
         </Form.Item>
 
         {/* Permission Tier */}

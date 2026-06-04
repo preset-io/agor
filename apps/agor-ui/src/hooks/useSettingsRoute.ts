@@ -15,6 +15,7 @@ export const SETTINGS_SECTIONS = [
   'mcp',
   'agentic-tools',
   'gateway',
+  'groups',
   'users',
   'about',
 ] as const;

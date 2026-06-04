@@ -14,14 +14,15 @@ import type {
   TimezoneMode,
   UUID,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
-import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, like, lte, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import {
   branches,
+  branchGroupGrants,
   branchOwners,
+  groupMemberships,
   type ScheduleInsert,
   type ScheduleRow,
   schedules,
@@ -33,6 +34,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
+import { visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
 
 export class ScheduleRepository implements BaseRepository<Schedule, Partial<Schedule>> {
@@ -232,15 +234,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
     userId: UUID,
     filter?: { branch_id?: BranchID; enabled?: boolean; created_by?: UUID }
   ): Promise<Schedule[]> {
-    const conditions = [
-      or(
-        isNotNull(branchOwners.user_id),
-        inArray(
-          branches.others_can,
-          BRANCH_PERMISSION_LEVELS.filter((l) => l !== 'none')
-        )
-      ),
-    ];
+    const conditions = [visibleBranchAccessCondition()];
     if (filter?.branch_id) conditions.push(eq(schedules.branch_id, filter.branch_id));
     if (filter?.enabled !== undefined) conditions.push(eq(schedules.enabled, filter.enabled));
     if (filter?.created_by) conditions.push(eq(schedules.created_by, filter.created_by));
@@ -252,10 +246,25 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         branchOwners,
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
       )
+      .leftJoin(groupMemberships, eq(groupMemberships.user_id, userId))
+      .leftJoin(
+        branchGroupGrants,
+        and(
+          eq(branchGroupGrants.branch_id, branches.branch_id),
+          eq(branchGroupGrants.group_id, groupMemberships.group_id)
+        )
+      )
       .where(and(...conditions))
       .all();
 
-    return results.map((r: { schedules: ScheduleRow }) => this.rowToSchedule(r.schedules));
+    const seen = new Set<string>();
+    const out: Schedule[] = [];
+    for (const r of results as Array<{ schedules: ScheduleRow }>) {
+      if (seen.has(r.schedules.schedule_id)) continue;
+      seen.add(r.schedules.schedule_id);
+      out.push(this.rowToSchedule(r.schedules));
+    }
+    return out;
   }
 
   /**

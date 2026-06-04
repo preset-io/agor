@@ -68,6 +68,11 @@ import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
+import {
+  createGroupMembershipsService,
+  createGroupsService,
+  setupBranchGroupGrantsService,
+} from './services/groups.js';
 import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
 import { createKnowledgeGraphService } from './services/knowledge-graph.js';
 import { createKnowledgeNamespacesService } from './services/knowledge-namespaces.js';
@@ -330,6 +335,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     const daemonUser = config.daemon?.unix_user || 'agor';
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
+
+  app.use('/groups', createGroupsService(db), {
+    methods: ['find', 'get', 'create', 'patch', 'remove'],
+  });
+  app.use('/group-memberships', createGroupMembershipsService(db), {
+    methods: ['find', 'create', 'remove'],
+  });
+  setupBranchGroupGrantsService(app, db, new BranchRepository(db));
 
   app.use('/repos', createReposService(db, app), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'initializeUnixGroup'],

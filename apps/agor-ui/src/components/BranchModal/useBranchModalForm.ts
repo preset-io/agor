@@ -21,7 +21,9 @@ import type {
   AgorClient,
   AssistantConfig,
   Branch,
+  BranchGroupGrantWithGroup,
   BranchPermissionLevel,
+  Group,
   User,
 } from '@agor-live/client';
 import { getAssistantConfig, hasMinimumRole, isAssistant, ROLES } from '@agor-live/client';
@@ -60,6 +62,7 @@ export interface PermissionsFormState {
   othersCan: BranchPermissionLevel;
   othersFsAccess: FsAccessLevel;
   allowSessionSharing: boolean;
+  groupGrants: Array<{ group_id: string; can: BranchPermissionLevel; fs_access?: FsAccessLevel }>;
 }
 
 export interface BranchModalFormApi {
@@ -84,6 +87,7 @@ export interface BranchModalFormApi {
   // Owners metadata (loaded async)
   owners: User[];
   allUsers: User[];
+  allGroups: Group[];
   rbacEnabled: boolean;
   loadingOwners: boolean;
   /** Non-fatal owners-load failure (network / server error, not 404). */
@@ -131,6 +135,7 @@ const buildPermissionsDefaults = (branch: Branch | null, owners: User[]): Permis
   othersCan: branch?.others_can || 'session',
   othersFsAccess: branch?.others_fs_access || 'read',
   allowSessionSharing: Boolean(branch?.dangerously_allow_session_sharing),
+  groupGrants: [],
 });
 
 const sortedJson = (xs: string[]): string => JSON.stringify([...xs].sort());
@@ -144,6 +149,7 @@ export function useBranchModalForm({
   // Async-loaded owners data
   const [owners, setOwners] = useState<User[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [rbacEnabled, setRbacEnabled] = useState<boolean>(true);
   const [loadingOwners, setLoadingOwners] = useState<boolean>(true);
   const [ownersLoadError, setOwnersLoadError] = useState<Error | null>(null);
@@ -255,9 +261,22 @@ export function useBranchModalForm({
           }));
         }
 
-        const users = await client.service('users').findAll({});
+        const [users, groups, grantsResponse] = await Promise.all([
+          client.service('users').findAll({}),
+          client.service('groups').findAll({ query: { archived: false } }),
+          client.service('branches/:id/group-grants').find({ route: { id: branchId } }),
+        ]);
         if (cancelled) return;
         setAllUsers(users);
+        setAllGroups(groups as Group[]);
+        const grants = (grantsResponse as BranchGroupGrantWithGroup[]).map((grant) => ({
+          group_id: grant.group_id,
+          can: grant.can,
+          fs_access: grant.fs_access as FsAccessLevel | undefined,
+        }));
+        if (!permissionsTouchedRef.current) {
+          setPermissionsState((prev) => ({ ...prev, groupGrants: grants }));
+        }
         setRbacEnabled(true);
         // biome-ignore lint/suspicious/noExplicitAny: error from feathers client is loosely typed
       } catch (error: any) {
@@ -332,7 +351,12 @@ export function useBranchModalForm({
     );
   }, [branch, rbacEnabled, permissions]);
 
-  const permissionsChanged = ownersChanged || permissionFieldsChanged;
+  // Conservative dirty bit: any edit in the permissions tab may require
+  // re-saving branch group grants. The save path diffs against the server
+  // before writing, so this remains safe for owner-only/field-only edits.
+  const groupGrantsChanged = Boolean(branch && rbacEnabled && permissionsTouchedRef.current);
+
+  const permissionsChanged = ownersChanged || permissionFieldsChanged || groupGrantsChanged;
 
   const hasChanges = generalChanged || assistantChanged || permissionsChanged;
 
@@ -433,7 +457,38 @@ export function useBranchModalForm({
         await client.service('branches').patch(branch.branch_id, updates as Partial<Branch>);
       }
 
-      // 3. Remove old owners LAST — after every authorization-requiring call
+      // 3. Upsert/remove branch group grants.
+      if (rbacEnabled && canEditPermissions) {
+        const currentGrants = (await client
+          .service('branches/:id/group-grants')
+          .find({ route: { id: branch.branch_id } })) as BranchGroupGrantWithGroup[];
+        const desired = permissions.groupGrants;
+        const desiredIds = new Set(desired.map((g) => g.group_id));
+        for (const grant of desired) {
+          const current = currentGrants.find((g) => g.group_id === grant.group_id);
+          if (
+            !current ||
+            current.can !== grant.can ||
+            (current.fs_access || undefined) !== (grant.fs_access || undefined)
+          ) {
+            await client
+              .service('branches/:id/group-grants')
+              .create(
+                { group_id: grant.group_id, can: grant.can, fs_access: grant.fs_access },
+                { route: { id: branch.branch_id } }
+              );
+          }
+        }
+        for (const current of currentGrants) {
+          if (!desiredIds.has(current.group_id)) {
+            await client
+              .service('branches/:id/group-grants')
+              .remove(current.group_id, { route: { id: branch.branch_id } });
+          }
+        }
+      }
+
+      // 4. Remove old owners LAST — after every authorization-requiring call
       // has fired. A typical owner transfer (Alice removes self + adds Bob)
       // would otherwise reach the PATCH step de-authorized.
       if (rbacEnabled && ownersChanged && canEditPermissions) {
@@ -444,7 +499,7 @@ export function useBranchModalForm({
         }
       }
 
-      // 4. Assistant emoji → board icon side effect. Cosmetic only — log on
+      // 5. Assistant emoji → board icon side effect. Cosmetic only — log on
       // failure, don't fail the save.
       if (assistantChanged && isAssistantBranch && canEditGeneral && branch.board_id) {
         const config = getAssistantConfig(branch);
@@ -521,6 +576,7 @@ export function useBranchModalForm({
     permissionsChanged,
     owners,
     allUsers,
+    allGroups,
     rbacEnabled,
     loadingOwners,
     ownersLoadError,

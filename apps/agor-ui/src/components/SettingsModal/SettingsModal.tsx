@@ -46,6 +46,7 @@ import { BoardsTable } from './BoardsTable';
 import { BranchesTable } from './BranchesTable';
 import { CardsTable } from './CardsTable';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
+import { GroupsTable } from './GroupsTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
 import { UsersTable } from './UsersTable';
@@ -310,6 +311,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         label: 'Admin',
         type: 'group' as const,
         children: [
+          ...(isAdmin
+            ? [
+                {
+                  key: 'groups',
+                  label: 'Groups',
+                  icon: <TeamOutlined />,
+                },
+              ]
+            : []),
           {
             key: 'users',
             label: 'Users',
@@ -440,6 +450,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onDelete={onDeleteGatewayChannel}
           />
         );
+      case 'groups':
+        return <GroupsTable client={client} currentUser={currentUser} userById={userById} />;
       case 'users':
         return (
           <UsersTable

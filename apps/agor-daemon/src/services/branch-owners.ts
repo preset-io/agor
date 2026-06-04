@@ -80,8 +80,10 @@ function requireViewPermission(branchRepo: BranchRepository, allowSuperadmin = t
 
     const isOwner = await branchRepo.isOwner(branch.branch_id, userId as UUID);
 
-    // Check if user has at least 'view' permission
-    const effectivePermission = isOwner ? 'all' : branch.others_can || 'session';
+    // Check if user has at least 'view' permission, including group grants.
+    const effectivePermission = isOwner
+      ? 'all'
+      : await branchRepo.resolveUserPermission(branch, userId as UUID);
 
     if (PERMISSION_RANK[effectivePermission] < PERMISSION_RANK.view) {
       throw new Forbidden('You do not have permission to view this branch');

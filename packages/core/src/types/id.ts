@@ -28,6 +28,8 @@
  */
 export type UUID = string & { readonly __brand: 'UUID' };
 
+export type GroupID = UUID & { readonly __entity: 'Group' };
+
 /**
  * Short ID prefix (hex, no hyphens, length `SHORT_ID_LENGTH`).
  *

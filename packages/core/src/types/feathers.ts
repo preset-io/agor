@@ -90,6 +90,8 @@ export interface RBACParams extends AuthenticatedParams {
   branch?: import('./branch').Branch;
   /** Cached ownership status for current user */
   isBranchOwner?: boolean;
+  /** Cached effective app-layer branch permission for current user. */
+  branchPermission?: import('./branch').BranchPermissionLevel;
   /** Cached session from loadSession/loadSessionBranch hooks */
   session?: import('./session').Session;
   /** Cached session ID from resolveSessionContext hook */

@@ -5,8 +5,8 @@
  */
 
 import type { Board, BoardExportBlob, BoardObject, Branch, UUID } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS, isAssistant } from '@agor/core/types';
-import { and, eq, exists, inArray, isNotNull, isNull, like, ne, or, sql } from 'drizzle-orm';
+import { isAssistant } from '@agor/core/types';
+import { and, eq, exists, isNull, like, ne, or, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -14,7 +14,15 @@ import { generateSlug } from '../../lib/slugs';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type BoardInsert, type BoardRow, boards, branches, branchOwners } from '../schema';
+import {
+  type BoardInsert,
+  type BoardRow,
+  boards,
+  branches,
+  branchGroupGrants,
+  branchOwners,
+  groupMemberships,
+} from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -23,6 +31,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
+import { visibleBranchAccessCondition } from './branch-access';
 import { BranchRepository } from './branches';
 
 /**
@@ -305,7 +314,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * @returns Array of board ids the user can see
    */
   async findVisibleBoardIds(userId: UUID): Promise<string[]> {
-    const permissiveLevels = BRANCH_PERMISSION_LEVELS.filter((l) => l !== 'none');
     // Raw drizzle builder for the EXISTS subquery — `exists()` expects a
     // drizzle SelectQueryBuilder, not the cross-dialect wrapper shape, and
     // the subquery doesn't need `.all()` / `.one()` execution methods.
@@ -318,12 +326,15 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
           branchOwners,
           and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
         )
-        .where(
+        .leftJoin(groupMemberships, eq(groupMemberships.user_id, userId))
+        .leftJoin(
+          branchGroupGrants,
           and(
-            eq(branches.board_id, boards.board_id),
-            or(isNotNull(branchOwners.user_id), inArray(branches.others_can, permissiveLevels))
+            eq(branchGroupGrants.branch_id, branches.branch_id),
+            eq(branchGroupGrants.group_id, groupMemberships.group_id)
           )
         )
+        .where(and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition()))
     );
     const rows = await select(this.db, { board_id: boards.board_id })
       .from(boards)

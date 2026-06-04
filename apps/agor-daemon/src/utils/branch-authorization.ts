@@ -67,7 +67,8 @@ export function hasBranchPermission(
   isOwner: boolean,
   requiredLevel: BranchPermissionLevel,
   userRole?: string,
-  allowSuperadmin = true
+  allowSuperadmin = true,
+  effectivePermission?: BranchPermissionLevel
 ): boolean {
   // Owners always have 'all' permission
   if (isOwner) {
@@ -80,7 +81,7 @@ export function hasBranchPermission(
   }
 
   // Non-owners inherit from branch.others_can (defaults to 'session')
-  const effectiveLevel = branch.others_can ?? 'session';
+  const effectiveLevel = effectivePermission ?? branch.others_can ?? 'session';
   const effectiveRank = PERMISSION_RANK[effectiveLevel];
   const requiredRank = PERMISSION_RANK[requiredLevel];
 
@@ -103,7 +104,8 @@ export function resolveBranchPermission(
   userId: UUID,
   isOwner: boolean,
   userRole?: string,
-  allowSuperadmin = true
+  allowSuperadmin = true,
+  effectivePermission?: BranchPermissionLevel
 ): BranchPermissionLevel {
   if (isOwner) {
     return 'all';
@@ -112,7 +114,7 @@ export function resolveBranchPermission(
   if (isSuperAdmin(userRole, allowSuperadmin)) {
     return 'all';
   }
-  return branch.others_can ?? 'session';
+  return effectivePermission ?? branch.others_can ?? 'session';
 }
 
 /**
@@ -175,10 +177,14 @@ export function loadBranch(branchRepo: BranchRepository, branchIdField = 'branch
     // Check ownership
     const userId = context.params.user?.user_id as UUID | undefined;
     const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
+    const branchPermission = userId
+      ? await branchRepo.resolveUserPermission(branch, userId)
+      : (branch.others_can ?? 'session');
 
     // Cache on context for downstream hooks (type-safe via RBACParams)
     context.params.branch = branch;
     context.params.isBranchOwner = isOwner;
+    context.params.branchPermission = branchPermission;
 
     return context;
   };
@@ -229,13 +235,24 @@ export function ensureBranchPermission(
     const userRole = context.params.user.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
 
-    if (!hasBranchPermission(branch, userId, isOwner, requiredLevel, userRole, allowSuperadmin)) {
+    if (
+      !hasBranchPermission(
+        branch,
+        userId,
+        isOwner,
+        requiredLevel,
+        userRole,
+        allowSuperadmin,
+        context.params.branchPermission
+      )
+    ) {
       const effectiveLevel = resolveBranchPermission(
         branch,
         userId,
         isOwner,
         userRole,
-        allowSuperadmin
+        allowSuperadmin,
+        context.params.branchPermission
       );
       throw new Forbidden(
         `You need '${requiredLevel}' permission to ${action}. You have '${effectiveLevel}' permission.`
@@ -498,7 +515,7 @@ export function filterBranchesByPermission(branchRepo: BranchRepository) {
       const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
       // User can access if they're an owner OR others_can allows at least 'view' permission
       // Check against permission rank: 'none' (-1) blocks access, 'view' (0) and above allows
-      const effectivePermission = branch.others_can ?? 'session';
+      const effectivePermission = await branchRepo.resolveUserPermission(branch, userId);
       const hasAccess = isOwner || PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
 
       if (hasAccess) {
@@ -781,10 +798,14 @@ export function loadBranchFromSession(branchRepo: BranchRepository) {
     // Check ownership
     const userId = context.params.user?.user_id as UUID | undefined;
     const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
+    const branchPermission = userId
+      ? await branchRepo.resolveUserPermission(branch, userId)
+      : (branch.others_can ?? 'session');
 
     // Cache on context for downstream hooks (type-safe via RBACParams)
     context.params.branch = branch;
     context.params.isBranchOwner = isOwner;
+    context.params.branchPermission = branchPermission;
 
     return context;
   };
@@ -1045,7 +1066,7 @@ export async function ensureCanPromptTargetSession(
     return targetSession;
   }
 
-  const effectiveLevel = resolveBranchPermission(branch, userId as UUID, isOwner);
+  const effectiveLevel = await branchRepo.resolveUserPermission(branch, userId as UUID);
 
   // 'prompt' or 'all' → can prompt any session
   if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt) {
@@ -1147,7 +1168,8 @@ export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }
       userId,
       isOwner,
       userRole,
-      allowSuperadmin
+      allowSuperadmin,
+      context.params.branchPermission
     );
 
     // 'prompt' or 'all' → can prompt any session
@@ -1660,10 +1682,14 @@ export function loadScheduleAndBranch(
 
     const userId = context.params.user?.user_id as UUID | undefined;
     const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
+    const branchPermission = userId
+      ? await branchRepo.resolveUserPermission(branch, userId)
+      : (branch.others_can ?? 'session');
 
     context.params.schedule = schedule;
     context.params.branch = branch;
     context.params.isBranchOwner = isOwner;
+    context.params.branchPermission = branchPermission;
     return context;
   };
 }
@@ -1696,7 +1722,17 @@ export function ensureCanModifySchedule(options?: { allowSuperadmin?: boolean })
     // (i.e. branch.others_can >= session); everyone else needs 'all'.
     const requiredTier: BranchPermissionLevel = schedule.created_by === userId ? 'session' : 'all';
 
-    if (!hasBranchPermission(branch, userId, isOwner, requiredTier, userRole, allowSuperadmin)) {
+    if (
+      !hasBranchPermission(
+        branch,
+        userId,
+        isOwner,
+        requiredTier,
+        userRole,
+        allowSuperadmin,
+        context.params.branchPermission
+      )
+    ) {
       throw new Forbidden(
         `You need '${requiredTier}' permission on branch ${shortId(branch.branch_id)} to modify schedule ${shortId(schedule.schedule_id)}.`
       );
