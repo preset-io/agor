@@ -331,7 +331,7 @@ describe('BoardsService - Custom Methods', () => {
       const service = new BoardsService(db);
       const interimRenderedContent = ASSISTANT_WELCOME_NOTE_TEMPLATE.replaceAll(
         '{{assistant.name}}',
-        '[docs](javascript:alert(1))'
+        "x's Board [docs](javascript:alert(1))"
       ).replaceAll('{{assistant.emoji}}', '[bot](javascript:alert(1))');
 
       const board = (await service.create({
@@ -370,6 +370,7 @@ describe('BoardsService - Custom Methods', () => {
         })
       );
       expect(note?.content).not.toContain('[docs](javascript:alert(1))');
+      expect(note?.content).not.toContain("x's Board [docs](javascript:alert(1))");
       expect(note?.content).not.toContain('[safe docs](javascript:alert(1))');
       expect(note?.content).toContain('\\[safe docs\\]\\(javascript:alert\\(1\\)\\)');
       expect(note?.content).toContain('\\[safe bot\\]\\(javascript:alert\\(1\\)\\)');

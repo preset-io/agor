@@ -44,6 +44,32 @@ const CURRENT_WELCOME_NOTE_PLACEHOLDERS = Array.from(
   (match) => match[1] as 'name' | 'emoji'
 );
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildCurrentWelcomeNoteTemplatePattern(): RegExp {
+  const seenPlaceholders = new Set<'name' | 'emoji'>();
+  let pattern = `^${escapeRegExp(CURRENT_WELCOME_NOTE_STATIC_SEGMENTS[0])}`;
+
+  for (let index = 1; index < CURRENT_WELCOME_NOTE_STATIC_SEGMENTS.length; index += 1) {
+    const placeholder = CURRENT_WELCOME_NOTE_PLACEHOLDERS[index - 1];
+
+    if (seenPlaceholders.has(placeholder)) {
+      pattern += `\\k<${placeholder}>`;
+    } else {
+      seenPlaceholders.add(placeholder);
+      pattern += `(?<${placeholder}>[\\s\\S]*?)`;
+    }
+
+    pattern += escapeRegExp(CURRENT_WELCOME_NOTE_STATIC_SEGMENTS[index]);
+  }
+
+  return new RegExp(`${pattern}$`);
+}
+
+const CURRENT_WELCOME_NOTE_TEMPLATE_PATTERN = buildCurrentWelcomeNoteTemplatePattern();
+
 /**
  * Escape text for Markdown inline/text contexts before Handlebars performs its
  * normal HTML escaping. The template source is trusted/static, but assistant
@@ -98,33 +124,7 @@ export function buildAssistantWelcomeNoteObject(
 }
 
 function matchesCurrentWelcomeNoteTemplateShape(content: string): boolean {
-  let offset = 0;
-  const capturedValues: Partial<Record<'name' | 'emoji', string>> = {};
-
-  for (let index = 0; index < CURRENT_WELCOME_NOTE_STATIC_SEGMENTS.length; index += 1) {
-    const segment = CURRENT_WELCOME_NOTE_STATIC_SEGMENTS[index];
-
-    if (index === 0) {
-      if (!content.startsWith(segment)) return false;
-      offset = segment.length;
-      continue;
-    }
-
-    const segmentIndex = content.indexOf(segment, offset);
-    if (segmentIndex === -1) return false;
-
-    const placeholder = CURRENT_WELCOME_NOTE_PLACEHOLDERS[index - 1];
-    const value = content.slice(offset, segmentIndex);
-    if (capturedValues[placeholder] === undefined) {
-      capturedValues[placeholder] = value;
-    } else if (capturedValues[placeholder] !== value) {
-      return false;
-    }
-
-    offset = segmentIndex + segment.length;
-  }
-
-  return offset === content.length;
+  return CURRENT_WELCOME_NOTE_TEMPLATE_PATTERN.test(content);
 }
 
 export function shouldReplaceAssistantWelcomeNoteContent(content: string): boolean {

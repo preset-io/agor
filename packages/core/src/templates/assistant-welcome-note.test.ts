@@ -64,6 +64,14 @@ describe('assistant-welcome-note', () => {
         })
       )
     ).toBe(true);
+    expect(
+      shouldReplaceAssistantWelcomeNoteContent(
+        ASSISTANT_WELCOME_NOTE_TEMPLATE.replaceAll(
+          '{{assistant.name}}',
+          "x's Board [docs](javascript:alert(1))"
+        ).replaceAll('{{assistant.emoji}}', '🤖')
+      )
+    ).toBe(true);
     expect(shouldReplaceAssistantWelcomeNoteContent('My custom note')).toBe(false);
     expect(
       shouldReplaceAssistantWelcomeNoteContent(
