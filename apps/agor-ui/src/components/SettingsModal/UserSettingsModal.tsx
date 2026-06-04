@@ -50,6 +50,7 @@ import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFie
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { AudioSettingsTab } from './AudioSettingsTab';
+import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
 
 const { Sider, Content } = Layout;
@@ -246,20 +247,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const syncUserGroups = async (nextGroupIds: string[]) => {
     if (!client || !user || !isAdmin || !groupsLoaded) return;
-    const add = nextGroupIds.filter((groupId) => !userGroupIds.includes(groupId));
-    const remove = userGroupIds.filter((groupId) => !nextGroupIds.includes(groupId));
-
-    for (const groupId of add) {
-      await client
-        .service('group-memberships')
-        .create({ group_id: groupId, user_id: user.user_id });
-    }
-    for (const groupId of remove) {
-      await client.service('group-memberships').remove(user.user_id, {
-        query: { group_id: groupId },
-      });
-    }
-
+    await syncGroupsForUser(client, user.user_id, userGroupIds, nextGroupIds);
     setUserGroupIds(nextGroupIds);
   };
 

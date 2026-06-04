@@ -9,6 +9,7 @@ import { type Database, GroupRepository } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   BranchGroupGrantWithGroup,
+  BranchID,
   BranchPermissionLevel,
   Group,
   GroupMembership,
@@ -63,6 +64,12 @@ export function assertBranchGroupGrantPermissionLevel(
   if (value === 'none') {
     throw new BadRequest("Use removal instead of a branch group grant with permission 'none'");
   }
+}
+
+export function branchGroupGrantPermissionLevelOrDefault(value: unknown): BranchPermissionLevel {
+  const nextCan = value ?? 'view';
+  assertBranchGroupGrantPermissionLevel(nextCan);
+  return nextCan;
 }
 
 export function createGroupsService(db: Database) {
@@ -154,7 +161,7 @@ async function requireBranchGrantViewer(
   return context;
 }
 
-async function requireBranchGrantManager(
+export async function requireBranchGrantManager(
   branchRepo: BranchRepository,
   context: HookContext
 ): Promise<HookContext> {
@@ -168,9 +175,9 @@ async function requireBranchGrantManager(
   if (!branchId) throw new BadRequest('Branch ID is required');
   const branch = await branchRepo.findById(branchId);
   if (!branch) throw new BadRequest(`Branch not found: ${branchId}`);
-  const effective = await branchRepo.resolveUserPermission(branch, user.user_id as UserID);
-  if (PERMISSION_RANK[effective] < PERMISSION_RANK.all) {
-    throw new Forbidden('You need all permission to manage branch group grants');
+  const isOwner = await branchRepo.isOwner(branch.branch_id as BranchID, user.user_id as UserID);
+  if (!isOwner) {
+    throw new Forbidden('Only branch owners and admins can manage branch group grants');
   }
   return context;
 }
@@ -200,11 +207,11 @@ export function setupBranchGroupGrantsService(
         const branchId = paramsRoute(params)?.id;
         if (!branchId || !data.group_id)
           throw new BadRequest('branch id and group_id are required');
-        assertBranchGroupGrantPermissionLevel(data.can || 'view');
+        const nextCan = branchGroupGrantPermissionLevelOrDefault(data.can);
         return repo.upsertBranchGrant({
           branch_id: branchId,
           group_id: data.group_id,
-          can: data.can || 'view',
+          can: nextCan,
           fs_access: data.fs_access,
           created_by: paramsUser(params)?.user_id as UserID | undefined,
         });

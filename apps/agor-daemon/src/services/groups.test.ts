@@ -1,10 +1,13 @@
+import type { BranchRepository } from '@agor/core/db';
 import type { HookContext } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   assertBranchGroupGrantPermissionLevel,
+  branchGroupGrantPermissionLevelOrDefault,
   groupMembershipsHooks,
   groupsHooks,
+  requireBranchGrantManager,
 } from './groups';
 
 function contextFor(role?: string, extraUser: Record<string, unknown> = {}): HookContext {
@@ -75,10 +78,72 @@ describe('branch group grant permission validation', () => {
     expect(() => assertBranchGroupGrantPermissionLevel('none')).toThrow(/use removal/i);
   });
 
+  it('rejects blank or invalid grant levels', () => {
+    expect(() => branchGroupGrantPermissionLevelOrDefault('')).toThrow(/invalid/i);
+    expect(() => branchGroupGrantPermissionLevelOrDefault('admin')).toThrow(/invalid/i);
+  });
+
+  it('defaults only missing grant levels to view', () => {
+    expect(branchGroupGrantPermissionLevelOrDefault(undefined)).toBe('view');
+    expect(branchGroupGrantPermissionLevelOrDefault('session')).toBe('session');
+  });
+
   it('accepts explicit visible permission grants', () => {
     expect(() => assertBranchGroupGrantPermissionLevel('view')).not.toThrow();
     expect(() => assertBranchGroupGrantPermissionLevel('session')).not.toThrow();
     expect(() => assertBranchGroupGrantPermissionLevel('prompt')).not.toThrow();
     expect(() => assertBranchGroupGrantPermissionLevel('all')).not.toThrow();
+  });
+});
+
+describe('branch group grant management authorization', () => {
+  const branchId = '019f0000-0000-7000-8000-00000000beef';
+  const userId = '019f0000-0000-7000-8000-00000000abcd';
+
+  function managerContext(role: string): HookContext {
+    return {
+      params: {
+        provider: 'rest',
+        route: { id: branchId },
+        user: {
+          user_id: userId,
+          role,
+        },
+      },
+    } as unknown as HookContext;
+  }
+
+  function branchRepoFor(isOwner: boolean) {
+    return {
+      findById: vi.fn(async () => ({ branch_id: branchId })),
+      isOwner: vi.fn(async () => isOwner),
+      resolveUserPermission: vi.fn(async () => 'all'),
+    } as unknown as BranchRepository & {
+      isOwner: ReturnType<typeof vi.fn>;
+      resolveUserPermission: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  it('allows direct branch owners to manage group grants', async () => {
+    const repo = branchRepoFor(true);
+    await expect(
+      requireBranchGrantManager(repo, managerContext(ROLES.MEMBER))
+    ).resolves.toBeTruthy();
+  });
+
+  it('rejects non-owners even if an effective grant would resolve to all', async () => {
+    const repo = branchRepoFor(false);
+    await expect(requireBranchGrantManager(repo, managerContext(ROLES.MEMBER))).rejects.toThrow(
+      /only branch owners and admins/i
+    );
+    expect(repo.resolveUserPermission).not.toHaveBeenCalled();
+  });
+
+  it('allows admins without requiring branch ownership', async () => {
+    const repo = branchRepoFor(false);
+    await expect(
+      requireBranchGrantManager(repo, managerContext(ROLES.ADMIN))
+    ).resolves.toBeTruthy();
+    expect(repo.isOwner).not.toHaveBeenCalled();
   });
 });

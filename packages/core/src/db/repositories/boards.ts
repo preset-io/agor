@@ -14,15 +14,7 @@ import { generateSlug } from '../../lib/slugs';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
-import {
-  type BoardInsert,
-  type BoardRow,
-  boards,
-  branches,
-  branchGroupGrants,
-  branchOwners,
-  groupMemberships,
-} from '../schema';
+import { type BoardInsert, type BoardRow, boards, branches, branchOwners } from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -31,7 +23,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { activeGroupGrantAccessExists, visibleBranchAccessCondition } from './branch-access';
 import { BranchRepository } from './branches';
 
 /**
@@ -326,15 +318,12 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
           branchOwners,
           and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
         )
-        .leftJoin(groupMemberships, eq(groupMemberships.user_id, userId))
-        .leftJoin(
-          branchGroupGrants,
+        .where(
           and(
-            eq(branchGroupGrants.branch_id, branches.branch_id),
-            eq(branchGroupGrants.group_id, groupMemberships.group_id)
+            eq(branches.board_id, boards.board_id),
+            visibleBranchAccessCondition(activeGroupGrantAccessExists(this.db, userId))
           )
         )
-        .where(and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition()))
     );
     const rows = await select(this.db, { board_id: boards.board_id })
       .from(boards)

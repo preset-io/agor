@@ -342,7 +342,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/group-memberships', createGroupMembershipsService(db), {
     methods: ['find', 'create', 'remove'],
   });
-  setupBranchGroupGrantsService(app, db, new BranchRepository(db));
+  if (branchRbacEnabled) {
+    setupBranchGroupGrantsService(app, db, new BranchRepository(db));
+  }
 
   app.use('/repos', createReposService(db, app), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'initializeUnixGroup'],

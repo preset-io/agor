@@ -20,9 +20,7 @@ import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import {
   branches,
-  branchGroupGrants,
   branchOwners,
-  groupMemberships,
   type ScheduleInsert,
   type ScheduleRow,
   schedules,
@@ -34,7 +32,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { activeGroupGrantAccessExists, visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
 
 export class ScheduleRepository implements BaseRepository<Schedule, Partial<Schedule>> {
@@ -234,7 +232,9 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
     userId: UUID,
     filter?: { branch_id?: BranchID; enabled?: boolean; created_by?: UUID }
   ): Promise<Schedule[]> {
-    const conditions = [visibleBranchAccessCondition()];
+    const conditions = [
+      visibleBranchAccessCondition(activeGroupGrantAccessExists(this.db, userId)),
+    ];
     if (filter?.branch_id) conditions.push(eq(schedules.branch_id, filter.branch_id));
     if (filter?.enabled !== undefined) conditions.push(eq(schedules.enabled, filter.enabled));
     if (filter?.created_by) conditions.push(eq(schedules.created_by, filter.created_by));
@@ -245,14 +245,6 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       .leftJoin(
         branchOwners,
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
-      .leftJoin(groupMemberships, eq(groupMemberships.user_id, userId))
-      .leftJoin(
-        branchGroupGrants,
-        and(
-          eq(branchGroupGrants.branch_id, branches.branch_id),
-          eq(branchGroupGrants.group_id, groupMemberships.group_id)
-        )
       )
       .where(and(...conditions))
       .all();

@@ -70,6 +70,161 @@ describe('GroupRepository branch grants', () => {
     expect(accessible.map((b) => b.branch_id as BranchID)).toContain(branch.branch_id);
   });
 
+  dbTest('ignores archived groups when resolving branch access', async ({ db }) => {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const boards = new BoardRepository(db);
+    const branches = new BranchRepository(db);
+    const groups = new GroupRepository(db);
+    const sessions = new SessionRepository(db);
+    const schedules = new ScheduleRepository(db);
+
+    const ownerId = await makeUser(users, 'owner-archived@example.com');
+    const memberId = await makeUser(users, 'member-archived@example.com');
+
+    const repo = await repos.create({
+      name: 'archived-group-repo',
+      slug: 'archived-group-repo',
+      repo_type: 'local',
+      local_path: '/tmp/archived-group-repo',
+      default_branch: 'main',
+    });
+    const board = await boards.create({
+      name: 'Archived group board',
+      created_by: ownerId as UUID,
+    });
+    const branch = await branches.create({
+      branch_id: '019f0000-0000-7000-8000-0000000000a1' as BranchID,
+      repo_id: repo.repo_id,
+      name: 'archived-group-branch',
+      ref: 'archived-group-branch',
+      path: '/tmp/archived-group-repo/archived-group-branch',
+      created_by: ownerId as UUID,
+      branch_unique_id: 101,
+      new_branch: true,
+      others_can: 'none',
+      board_id: board.board_id,
+    });
+    const session = await sessions.create({
+      branch_id: branch.branch_id,
+      created_by: ownerId as UUID,
+      agentic_tool: 'claude-code',
+    });
+    const schedule = await schedules.create({
+      branch_id: branch.branch_id,
+      created_by: ownerId as UUID,
+      name: 'Archived group schedule',
+      cron_expression: '0 * * * *',
+      timezone_mode: 'utc',
+      prompt: 'Archived group',
+      agentic_tool_config: { agentic_tool: 'claude-code' },
+    });
+
+    const group = await groups.create({ name: 'Archived Team', created_by: ownerId });
+    await groups.addMember(group.group_id, memberId, ownerId);
+    await groups.upsertBranchGrant({
+      branch_id: branch.branch_id,
+      group_id: group.group_id,
+      can: 'all',
+      created_by: ownerId,
+    });
+    await groups.update(group.group_id, { archived: true });
+
+    await expect(branches.resolveUserPermission(branch, memberId as UUID)).resolves.toBe('none');
+
+    const accessibleBranches = await branches.findAccessibleBranches(memberId as UUID, {
+      archived: false,
+    });
+    expect(accessibleBranches.map((b) => b.branch_id)).not.toContain(branch.branch_id);
+
+    const accessibleSessions = await sessions.findAccessibleSessions(memberId as UUID);
+    expect(accessibleSessions.map((s) => s.session_id)).not.toContain(session.session_id);
+
+    const accessibleSchedules = await schedules.findAccessibleSchedules(memberId as UUID);
+    expect(accessibleSchedules.map((s) => s.schedule_id)).not.toContain(schedule.schedule_id);
+
+    const visibleBoards = await boards.findVisibleBoardIds(memberId as UUID);
+    expect(visibleBoards).not.toContain(board.board_id);
+  });
+
+  dbTest('ignores invalid persisted group grant permissions', async ({ db }) => {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branches = new BranchRepository(db);
+    const groups = new GroupRepository(db);
+
+    const ownerId = await makeUser(users, 'owner-invalid-grant@example.com');
+    const memberId = await makeUser(users, 'member-invalid-grant@example.com');
+
+    const repo = await repos.create({
+      name: 'invalid-grant-repo',
+      slug: 'invalid-grant-repo',
+      repo_type: 'local',
+      local_path: '/tmp/invalid-grant-repo',
+      default_branch: 'main',
+    });
+    const invalidOnlyBranch = await branches.create({
+      branch_id: '019f0000-0000-7000-8000-0000000000b1' as BranchID,
+      repo_id: repo.repo_id,
+      name: 'invalid-only',
+      ref: 'invalid-only',
+      path: '/tmp/invalid-grant-repo/invalid-only',
+      created_by: ownerId as UUID,
+      branch_unique_id: 111,
+      new_branch: true,
+      others_can: 'none',
+    });
+    const mixedBranch = await branches.create({
+      branch_id: '019f0000-0000-7000-8000-0000000000b2' as BranchID,
+      repo_id: repo.repo_id,
+      name: 'invalid-plus-valid',
+      ref: 'invalid-plus-valid',
+      path: '/tmp/invalid-grant-repo/invalid-plus-valid',
+      created_by: ownerId as UUID,
+      branch_unique_id: 112,
+      new_branch: true,
+      others_can: 'none',
+    });
+
+    const invalidGroup = await groups.create({ name: 'Invalid Legacy Grant', created_by: ownerId });
+    const validGroup = await groups.create({ name: 'Valid Grant', created_by: ownerId });
+    await groups.addMember(invalidGroup.group_id, memberId, ownerId);
+    await groups.addMember(validGroup.group_id, memberId, ownerId);
+
+    await groups.upsertBranchGrant({
+      branch_id: invalidOnlyBranch.branch_id,
+      group_id: invalidGroup.group_id,
+      can: 'admin' as never,
+      created_by: ownerId,
+    });
+    await groups.upsertBranchGrant({
+      branch_id: mixedBranch.branch_id,
+      group_id: invalidGroup.group_id,
+      can: 'admin' as never,
+      created_by: ownerId,
+    });
+    await groups.upsertBranchGrant({
+      branch_id: mixedBranch.branch_id,
+      group_id: validGroup.group_id,
+      can: 'session',
+      created_by: ownerId,
+    });
+
+    await expect(branches.resolveUserPermission(invalidOnlyBranch, memberId as UUID)).resolves.toBe(
+      'none'
+    );
+    await expect(branches.resolveUserPermission(mixedBranch, memberId as UUID)).resolves.toBe(
+      'session'
+    );
+
+    const accessible = await branches.findAccessibleBranches(memberId as UUID, {
+      archived: false,
+    });
+    const accessibleIds = new Set(accessible.map((branch) => branch.branch_id));
+    expect(accessibleIds.has(invalidOnlyBranch.branch_id)).toBe(false);
+    expect(accessibleIds.has(mixedBranch.branch_id)).toBe(true);
+  });
+
   dbTest('does not treat none group grants as visible branch access', async ({ db }) => {
     const users = new UsersRepository(db);
     const repos = new RepoRepository(db);

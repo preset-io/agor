@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
 import { useThemedMessage } from '../../utils/message';
+import { syncGroupMembersForGroup } from './groupMembershipSync';
 
 interface GroupsTableProps {
   client: AgorClient | null;
@@ -134,19 +135,12 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
 
   const syncGroupMembers = async (group: Group, nextUserIds: string[]) => {
     if (!client) return;
-    const current = membershipsByGroup.get(group.group_id) || [];
-    const add = nextUserIds.filter((id) => !current.includes(id));
-    const remove = current.filter((id) => !nextUserIds.includes(id));
-    for (const userId of add) {
-      await client
-        .service('group-memberships')
-        .create({ group_id: group.group_id, user_id: userId });
-    }
-    for (const userId of remove) {
-      await client
-        .service('group-memberships')
-        .remove(userId, { query: { group_id: group.group_id } });
-    }
+    await syncGroupMembersForGroup(
+      client,
+      group.group_id,
+      membershipsByGroup.get(group.group_id) || [],
+      nextUserIds
+    );
   };
 
   const setGroupMembers = async (group: Group, nextUserIds: string[]) => {

@@ -27,6 +27,7 @@ import {
   branchGroupGrants,
   branchOwners,
   groupMemberships,
+  groups,
 } from '../schema';
 import {
   type BaseRepository,
@@ -35,7 +36,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { activeGroupGrantAccessExists, visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
 
 const BRANCH_PERMISSION_RANK = Object.fromEntries(
@@ -443,7 +444,16 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           eq(groupMemberships.user_id, userId)
         )
       )
-      .where(eq(branchGroupGrants.branch_id, branchId))
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .where(
+        and(
+          eq(branchGroupGrants.branch_id, branchId),
+          inArray(branchGroupGrants.can, BRANCH_PERMISSION_LEVELS)
+        )
+      )
       .all();
 
     let best: NonNullable<Branch['others_can']> | null = null;
@@ -600,7 +610,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * @returns Array of accessible branches
    */
   async findAccessibleBranches(userId: UUID, filter?: { archived?: boolean }): Promise<Branch[]> {
-    const conditions = [visibleBranchAccessCondition()];
+    const conditions = [
+      visibleBranchAccessCondition(activeGroupGrantAccessExists(this.db, userId)),
+    ];
 
     // Apply archived filter at SQL level
     if (filter?.archived === true) {
@@ -614,14 +626,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       .leftJoin(
         branchOwners,
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
-      .leftJoin(groupMemberships, eq(groupMemberships.user_id, userId))
-      .leftJoin(
-        branchGroupGrants,
-        and(
-          eq(branchGroupGrants.branch_id, branches.branch_id),
-          eq(branchGroupGrants.group_id, groupMemberships.group_id)
-        )
       )
       .where(and(...conditions))
       .all();

@@ -14,9 +14,7 @@ import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import {
   branches,
-  branchGroupGrants,
   branchOwners,
-  groupMemberships,
   messages,
   type SessionInsert,
   type SessionRow,
@@ -30,7 +28,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { activeGroupGrantAccessExists, visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
 
 /**
@@ -743,15 +741,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         branchOwners,
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
       )
-      .leftJoin(groupMemberships, eq(groupMemberships.user_id, userId))
-      .leftJoin(
-        branchGroupGrants,
-        and(
-          eq(branchGroupGrants.branch_id, branches.branch_id),
-          eq(branchGroupGrants.group_id, groupMemberships.group_id)
-        )
-      )
-      .where(visibleBranchAccessCondition())
+      .where(visibleBranchAccessCondition(activeGroupGrantAccessExists(this.db, userId)))
       .all();
 
     const seen = new Set<string>();
