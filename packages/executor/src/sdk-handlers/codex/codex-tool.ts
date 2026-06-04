@@ -31,8 +31,10 @@ import {
   type TaskID,
 } from '../../types.js';
 import {
+  clearEditFilesTurnBaseline,
   clearToolInvocationState,
   enrichContentBlocks,
+  registerEditFilesTurnBaseline,
   registerToolInvocationStart,
 } from '../base/diff-enrichment.js';
 import type {
@@ -215,214 +217,68 @@ export class CodexTool implements ITool {
       }
     }
 
-    for await (const event of this.promptService.promptSessionStreaming(
-      sessionId,
-      prompt,
-      taskId,
-      permissionMode,
-      abortController
-    )) {
-      // Detect if execution was stopped early
-      if (event.type === 'stopped') {
-        wasStopped = true;
-        console.log(`🛑 Codex execution was stopped for session ${sessionId}`);
-        for (const toolUseId of pendingSnapshotToolIds) {
-          clearToolInvocationState(toolUseId, snapshotContext);
+    registerEditFilesTurnBaseline({
+      ...(workingDirectory ? { workingDirectory } : {}),
+      ...snapshotContext,
+    });
+
+    try {
+      for await (const event of this.promptService.promptSessionStreaming(
+        sessionId,
+        prompt,
+        taskId,
+        permissionMode,
+        abortController
+      )) {
+        // Detect if execution was stopped early
+        if (event.type === 'stopped') {
+          wasStopped = true;
+          console.log(`🛑 Codex execution was stopped for session ${sessionId}`);
+          for (const toolUseId of pendingSnapshotToolIds) {
+            clearToolInvocationState(toolUseId, snapshotContext);
+          }
+          pendingSnapshotToolIds.clear();
+          continue; // Skip processing this event
         }
-        pendingSnapshotToolIds.clear();
-        continue; // Skip processing this event
-      }
-      // Capture resolved model from partial/complete events
-      if (!resolvedModel) {
-        if (event.type === 'partial') {
-          resolvedModel = event.resolvedModel;
-        } else if (event.type === 'complete') {
-          resolvedModel = event.resolvedModel;
-        }
-      }
-
-      // Handle tool execution start (live UI indicator)
-      if (event.type === 'tool_start') {
-        registerToolInvocationStart(event.toolUse.id, event.toolUse.name, event.toolUse.input, {
-          ...(workingDirectory ? { workingDirectory } : {}),
-          ...snapshotContext,
-        });
-        pendingSnapshotToolIds.add(event.toolUse.id);
-
-        if (taskId) {
-          await this.emitTaskEvent('tool:start', {
-            task_id: taskId,
-            session_id: sessionId,
-            tool_use_id: event.toolUse.id,
-            tool_name: event.toolUse.name,
-          });
-        }
-
-        // Create tool row immediately so UI shows "running" state.
-        const toolMessageId = generateId() as MessageID;
-        await this.createAssistantMessage(
-          sessionId,
-          toolMessageId,
-          [
-            {
-              type: 'tool_use',
-              id: event.toolUse.id,
-              name: event.toolUse.name,
-              input: event.toolUse.input,
-            },
-          ],
-          [
-            {
-              id: event.toolUse.id,
-              name: event.toolUse.name,
-              input: event.toolUse.input,
-            },
-          ],
-          taskId,
-          nextIndex++,
-          resolvedModel
-        );
-        assistantMessageIds.push(toolMessageId);
-        pendingToolMessageIds.set(event.toolUse.id, toolMessageId);
-      }
-
-      if (event.type === 'complete' && event.usage) {
-        tokenUsage = event.usage;
-      }
-
-      if (event.type === 'complete' && event.rawContextUsage) {
-        rawContextUsage = event.rawContextUsage;
-      }
-
-      // Capture raw SDK response for token accounting
-      if (event.type === 'complete' && event.rawSdkEvent) {
-        rawSdkResponse = event.rawSdkEvent;
-      }
-
-      // Capture Codex thread ID
-      if (!capturedThreadId && event.threadId) {
-        capturedThreadId = event.threadId;
-        await this.captureThreadId(sessionId, capturedThreadId);
-      }
-
-      // Handle partial streaming events (token-level chunks)
-      // NOTE: Codex SDK does NOT emit partial/delta events for text — agent_message text
-      // arrives all at once via item.completed → complete events (which are handled below).
-      // This code path is kept for future compatibility if OpenAI adds true token-level streaming.
-      if (event.type === 'partial' && event.textChunk) {
-        // Start new message if needed
-        if (!currentMessageId) {
-          const newMessageId = generateId() as MessageID;
-          _firstTokenTime = Date.now();
-
-          if (streamingCallbacks) {
-            try {
-              await streamingCallbacks.onStreamStart(newMessageId, {
-                session_id: sessionId,
-                task_id: taskId,
-                role: MessageRole.ASSISTANT,
-                timestamp: new Date().toISOString(),
-              });
-              // Only track message ID after successful start
-              currentMessageId = newMessageId;
-              streamStarted = true;
-            } catch (err) {
-              console.error(`[Codex] Streaming start failed for ${newMessageId}:`, err);
-              try {
-                await streamingCallbacks.onStreamError(
-                  newMessageId,
-                  err instanceof Error ? err : new Error(String(err))
-                );
-              } catch {
-                /* best-effort */
-              }
-            }
-          } else {
-            currentMessageId = newMessageId;
+        // Capture resolved model from partial/complete events
+        if (!resolvedModel) {
+          if (event.type === 'partial') {
+            resolvedModel = event.resolvedModel;
+          } else if (event.type === 'complete') {
+            resolvedModel = event.resolvedModel;
           }
         }
 
-        // Emit chunk immediately
-        if (streamingCallbacks && currentMessageId) {
-          try {
-            await streamingCallbacks.onStreamChunk(currentMessageId, event.textChunk);
-          } catch (err) {
-            console.error(`[Codex] Streaming chunk failed for ${currentMessageId}:`, err);
-            try {
-              await streamingCallbacks.onStreamError(
-                currentMessageId,
-                err instanceof Error ? err : new Error(String(err))
-              );
-            } catch {
-              /* best-effort */
-            }
+        // Handle tool execution start (live UI indicator)
+        if (event.type === 'tool_start') {
+          registerToolInvocationStart(event.toolUse.id, event.toolUse.name, event.toolUse.input, {
+            ...(workingDirectory ? { workingDirectory } : {}),
+            ...snapshotContext,
+          });
+          pendingSnapshotToolIds.add(event.toolUse.id);
+
+          if (taskId) {
+            await this.emitTaskEvent('tool:start', {
+              task_id: taskId,
+              session_id: sessionId,
+              tool_use_id: event.toolUse.id,
+              tool_name: event.toolUse.name,
+            });
           }
-        }
-      }
-      // Handle tool completion (create message immediately for live updates)
-      else if (event.type === 'tool_complete') {
-        if (taskId) {
-          await this.emitTaskEvent('tool:complete', {
-            task_id: taskId,
-            session_id: sessionId,
-            tool_use_id: event.toolUse.id,
-          });
-        }
 
-        const toolResultContent =
-          event.toolUse.output !== undefined
-            ? event.toolUse.output
-            : event.toolUse.status
-              ? `[${event.toolUse.status}]`
-              : '';
-        const toolContent = [
-          {
-            type: 'tool_use',
-            id: event.toolUse.id,
-            name: event.toolUse.name,
-            input: event.toolUse.input,
-          },
-          ...(event.toolUse.output !== undefined || event.toolUse.status
-            ? [
-                {
-                  type: 'tool_result',
-                  tool_use_id: event.toolUse.id,
-                  content: toolResultContent,
-                  is_error: event.toolUse.status === 'failed' || event.toolUse.status === 'error',
-                },
-              ]
-            : []),
-        ];
-
-        // Best-effort diff enrichment for Edit/Write tool results
-        enrichContentBlocks(toolContent, {
-          ...(workingDirectory ? { workingDirectory } : {}),
-          ...snapshotContext,
-        });
-        clearToolInvocationState(event.toolUse.id, snapshotContext);
-        pendingSnapshotToolIds.delete(event.toolUse.id);
-
-        const existingToolMessageId = pendingToolMessageIds.get(event.toolUse.id);
-        if (existingToolMessageId) {
-          await this.messagesService?.patch(existingToolMessageId, {
-            content: toolContent as Message['content'],
-            content_preview:
-              typeof toolResultContent === 'string' ? toolResultContent.substring(0, 200) : '',
-          });
-          pendingToolMessageIds.delete(event.toolUse.id);
-        } else {
-          // Fallback path if start event wasn't observed.
+          // Create tool row immediately so UI shows "running" state.
           const toolMessageId = generateId() as MessageID;
           await this.createAssistantMessage(
             sessionId,
             toolMessageId,
-            toolContent as Array<{
-              type: string;
-              text?: string;
-              id?: string;
-              name?: string;
-              input?: Record<string, unknown>;
-            }>,
+            [
+              {
+                type: 'tool_use',
+                id: event.toolUse.id,
+                name: event.toolUse.name,
+                input: event.toolUse.input,
+              },
+            ],
             [
               {
                 id: event.toolUse.id,
@@ -435,58 +291,74 @@ export class CodexTool implements ITool {
             resolvedModel
           );
           assistantMessageIds.push(toolMessageId);
+          pendingToolMessageIds.set(event.toolUse.id, toolMessageId);
         }
-      }
-      // Handle complete message (save to database)
-      else if (event.type === 'complete' && event.content) {
-        const usageForMessage = event.usage ?? tokenUsage;
-        // Filter out tool_use and tool_result blocks (already saved via tool_complete events),
-        // but keep text + thinking blocks so Codex reasoning is visible in the UI.
-        const nonToolContent = event.content.filter(
-          (block) => block.type === 'text' || block.type === 'thinking'
-        );
 
-        // Only create message if there's non-tool content (not just tools)
-        if (nonToolContent.length > 0) {
-          // Extract full text for streaming callback
-          const fullText = nonToolContent
-            .filter((block) => block.type === 'text')
-            .map((block) => (block as { text?: string }).text || '')
-            .join('');
-          const fullThinking = nonToolContent
-            .filter((block) => block.type === 'thinking')
-            .map((block) => (block as { text?: string }).text || '')
-            .join('');
+        if (event.type === 'complete' && event.usage) {
+          tokenUsage = event.usage;
+        }
 
-          // Use existing message ID from streaming (if any) or generate new
-          const assistantMessageId = currentMessageId || (generateId() as MessageID);
+        if (event.type === 'complete' && event.rawContextUsage) {
+          rawContextUsage = event.rawContextUsage;
+        }
 
-          // Codex SDK doesn't support token-level text streaming, but we can still
-          // use streaming callbacks to show text immediately via WebSocket before DB write.
-          // This sends the complete text as a single "chunk" for instant display.
-          if (streamingCallbacks && fullText) {
-            try {
-              if (!currentMessageId) {
-                // No partial path — send full start/chunk/end sequence
-                await streamingCallbacks.onStreamStart(assistantMessageId, {
+        // Capture raw SDK response for token accounting
+        if (event.type === 'complete' && event.rawSdkEvent) {
+          rawSdkResponse = event.rawSdkEvent;
+        }
+
+        // Capture Codex thread ID
+        if (!capturedThreadId && event.threadId) {
+          capturedThreadId = event.threadId;
+          await this.captureThreadId(sessionId, capturedThreadId);
+        }
+
+        // Handle partial streaming events (token-level chunks)
+        // NOTE: Codex SDK does NOT emit partial/delta events for text — agent_message text
+        // arrives all at once via item.completed → complete events (which are handled below).
+        // This code path is kept for future compatibility if OpenAI adds true token-level streaming.
+        if (event.type === 'partial' && event.textChunk) {
+          // Start new message if needed
+          if (!currentMessageId) {
+            const newMessageId = generateId() as MessageID;
+            _firstTokenTime = Date.now();
+
+            if (streamingCallbacks) {
+              try {
+                await streamingCallbacks.onStreamStart(newMessageId, {
                   session_id: sessionId,
                   task_id: taskId,
                   role: MessageRole.ASSISTANT,
                   timestamp: new Date().toISOString(),
                 });
+                // Only track message ID after successful start
+                currentMessageId = newMessageId;
                 streamStarted = true;
-                await streamingCallbacks.onStreamChunk(assistantMessageId, fullText);
+              } catch (err) {
+                console.error(`[Codex] Streaming start failed for ${newMessageId}:`, err);
+                try {
+                  await streamingCallbacks.onStreamError(
+                    newMessageId,
+                    err instanceof Error ? err : new Error(String(err))
+                  );
+                } catch {
+                  /* best-effort */
+                }
               }
-              // Only close stream if one was successfully started
-              if (streamStarted) {
-                await streamingCallbacks.onStreamEnd(assistantMessageId);
-              }
+            } else {
+              currentMessageId = newMessageId;
+            }
+          }
+
+          // Emit chunk immediately
+          if (streamingCallbacks && currentMessageId) {
+            try {
+              await streamingCallbacks.onStreamChunk(currentMessageId, event.textChunk);
             } catch (err) {
-              console.error(`[Codex] Streaming callback failed for ${assistantMessageId}:`, err);
-              // Notify UI so it can clear spinner/pending state
+              console.error(`[Codex] Streaming chunk failed for ${currentMessageId}:`, err);
               try {
                 await streamingCallbacks.onStreamError(
-                  assistantMessageId,
+                  currentMessageId,
                   err instanceof Error ? err : new Error(String(err))
                 );
               } catch {
@@ -494,46 +366,189 @@ export class CodexTool implements ITool {
               }
             }
           }
-
-          // Codex reasoning is not token-streamed by SDK. Emit a synthetic single
-          // thinking chunk so users see reasoning activity in real time.
-          if (streamingCallbacks && fullThinking && !fullText) {
-            try {
-              if (streamingCallbacks.onThinkingStart) {
-                await streamingCallbacks.onThinkingStart(assistantMessageId, {});
-              }
-              if (streamingCallbacks.onThinkingChunk) {
-                await streamingCallbacks.onThinkingChunk(assistantMessageId, fullThinking);
-              }
-              if (streamingCallbacks.onThinkingEnd) {
-                await streamingCallbacks.onThinkingEnd(assistantMessageId);
-              }
-            } catch (err) {
-              console.error(`[Codex] Thinking callback failed for ${assistantMessageId}:`, err);
-            }
+        }
+        // Handle tool completion (create message immediately for live updates)
+        else if (event.type === 'tool_complete') {
+          if (taskId) {
+            await this.emitTaskEvent('tool:complete', {
+              task_id: taskId,
+              session_id: sessionId,
+              tool_use_id: event.toolUse.id,
+            });
           }
 
-          // Create complete message in DB (non-tool content only, tools already saved)
-          await this.createAssistantMessage(
-            sessionId,
-            assistantMessageId,
-            nonToolContent,
-            undefined, // No tool uses in this message (already saved separately)
-            taskId,
-            nextIndex++,
-            resolvedModel,
-            usageForMessage
-          );
-          assistantMessageIds.push(assistantMessageId);
+          const toolResultContent =
+            event.toolUse.output !== undefined
+              ? event.toolUse.output
+              : event.toolUse.status
+                ? `[${event.toolUse.status}]`
+                : '';
+          const toolContent = [
+            {
+              type: 'tool_use',
+              id: event.toolUse.id,
+              name: event.toolUse.name,
+              input: event.toolUse.input,
+            },
+            ...(event.toolUse.output !== undefined || event.toolUse.status
+              ? [
+                  {
+                    type: 'tool_result',
+                    tool_use_id: event.toolUse.id,
+                    content: toolResultContent,
+                    is_error: event.toolUse.status === 'failed' || event.toolUse.status === 'error',
+                  },
+                ]
+              : []),
+          ];
 
-          // Reset for next message
-          currentMessageId = null;
-          streamStarted = false;
+          // Best-effort diff enrichment for Edit/Write tool results
+          enrichContentBlocks(toolContent, {
+            ...(workingDirectory ? { workingDirectory } : {}),
+            ...snapshotContext,
+          });
+          clearToolInvocationState(event.toolUse.id, snapshotContext);
+          pendingSnapshotToolIds.delete(event.toolUse.id);
+
+          const existingToolMessageId = pendingToolMessageIds.get(event.toolUse.id);
+          if (existingToolMessageId) {
+            await this.messagesService?.patch(existingToolMessageId, {
+              content: toolContent as Message['content'],
+              content_preview:
+                typeof toolResultContent === 'string' ? toolResultContent.substring(0, 200) : '',
+            });
+            pendingToolMessageIds.delete(event.toolUse.id);
+          } else {
+            // Fallback path if start event wasn't observed.
+            const toolMessageId = generateId() as MessageID;
+            await this.createAssistantMessage(
+              sessionId,
+              toolMessageId,
+              toolContent as Array<{
+                type: string;
+                text?: string;
+                id?: string;
+                name?: string;
+                input?: Record<string, unknown>;
+              }>,
+              [
+                {
+                  id: event.toolUse.id,
+                  name: event.toolUse.name,
+                  input: event.toolUse.input,
+                },
+              ],
+              taskId,
+              nextIndex++,
+              resolvedModel
+            );
+            assistantMessageIds.push(toolMessageId);
+          }
         }
+        // Handle complete message (save to database)
+        else if (event.type === 'complete' && event.content) {
+          const usageForMessage = event.usage ?? tokenUsage;
+          // Filter out tool_use and tool_result blocks (already saved via tool_complete events),
+          // but keep text + thinking blocks so Codex reasoning is visible in the UI.
+          const nonToolContent = event.content.filter(
+            (block) => block.type === 'text' || block.type === 'thinking'
+          );
 
-        _streamStartTime = Date.now();
-        _firstTokenTime = null;
+          // Only create message if there's non-tool content (not just tools)
+          if (nonToolContent.length > 0) {
+            // Extract full text for streaming callback
+            const fullText = nonToolContent
+              .filter((block) => block.type === 'text')
+              .map((block) => (block as { text?: string }).text || '')
+              .join('');
+            const fullThinking = nonToolContent
+              .filter((block) => block.type === 'thinking')
+              .map((block) => (block as { text?: string }).text || '')
+              .join('');
+
+            // Use existing message ID from streaming (if any) or generate new
+            const assistantMessageId = currentMessageId || (generateId() as MessageID);
+
+            // Codex SDK doesn't support token-level text streaming, but we can still
+            // use streaming callbacks to show text immediately via WebSocket before DB write.
+            // This sends the complete text as a single "chunk" for instant display.
+            if (streamingCallbacks && fullText) {
+              try {
+                if (!currentMessageId) {
+                  // No partial path — send full start/chunk/end sequence
+                  await streamingCallbacks.onStreamStart(assistantMessageId, {
+                    session_id: sessionId,
+                    task_id: taskId,
+                    role: MessageRole.ASSISTANT,
+                    timestamp: new Date().toISOString(),
+                  });
+                  streamStarted = true;
+                  await streamingCallbacks.onStreamChunk(assistantMessageId, fullText);
+                }
+                // Only close stream if one was successfully started
+                if (streamStarted) {
+                  await streamingCallbacks.onStreamEnd(assistantMessageId);
+                }
+              } catch (err) {
+                console.error(`[Codex] Streaming callback failed for ${assistantMessageId}:`, err);
+                // Notify UI so it can clear spinner/pending state
+                try {
+                  await streamingCallbacks.onStreamError(
+                    assistantMessageId,
+                    err instanceof Error ? err : new Error(String(err))
+                  );
+                } catch {
+                  /* best-effort */
+                }
+              }
+            }
+
+            // Codex reasoning is not token-streamed by SDK. Emit a synthetic single
+            // thinking chunk so users see reasoning activity in real time.
+            if (streamingCallbacks && fullThinking && !fullText) {
+              try {
+                if (streamingCallbacks.onThinkingStart) {
+                  await streamingCallbacks.onThinkingStart(assistantMessageId, {});
+                }
+                if (streamingCallbacks.onThinkingChunk) {
+                  await streamingCallbacks.onThinkingChunk(assistantMessageId, fullThinking);
+                }
+                if (streamingCallbacks.onThinkingEnd) {
+                  await streamingCallbacks.onThinkingEnd(assistantMessageId);
+                }
+              } catch (err) {
+                console.error(`[Codex] Thinking callback failed for ${assistantMessageId}:`, err);
+              }
+            }
+
+            // Create complete message in DB (non-tool content only, tools already saved)
+            await this.createAssistantMessage(
+              sessionId,
+              assistantMessageId,
+              nonToolContent,
+              undefined, // No tool uses in this message (already saved separately)
+              taskId,
+              nextIndex++,
+              resolvedModel,
+              usageForMessage
+            );
+            assistantMessageIds.push(assistantMessageId);
+
+            // Reset for next message
+            currentMessageId = null;
+            streamStarted = false;
+          }
+
+          _streamStartTime = Date.now();
+          _firstTokenTime = null;
+        }
       }
+    } finally {
+      for (const toolUseId of pendingSnapshotToolIds) {
+        clearToolInvocationState(toolUseId, snapshotContext);
+      }
+      pendingSnapshotToolIds.clear();
+      clearEditFilesTurnBaseline(snapshotContext);
     }
 
     return {
@@ -679,73 +694,97 @@ export class CodexTool implements ITool {
     let rawSdkResponse: unknown;
     let rawContextUsage: ContextUsageSnapshot | undefined;
     let wasStopped = false;
+    let workingDirectory: string | undefined;
+    const snapshotContext = { snapshotScope: sessionId };
 
-    for await (const event of this.promptService.promptSessionStreaming(
-      sessionId,
-      prompt,
-      taskId,
-      permissionMode
-    )) {
-      // Detect if execution was stopped early
-      if (event.type === 'stopped') {
-        wasStopped = true;
-        console.log(`🛑 Codex execution was stopped for session ${sessionId}`);
-        continue; // Skip processing this event
+    if (this.sessionsRepo && this.branchesRepo) {
+      const session = await this.sessionsRepo.findById(sessionId);
+      if (session) {
+        const branch = await this.branchesRepo.findById(session.branch_id);
+        workingDirectory = branch?.path;
       }
+    }
 
-      // Capture resolved model from partial/complete events
-      if (!resolvedModel) {
-        if (event.type === 'partial') {
-          resolvedModel = event.resolvedModel;
-        } else if (event.type === 'complete') {
-          resolvedModel = event.resolvedModel;
+    registerEditFilesTurnBaseline({
+      ...(workingDirectory ? { workingDirectory } : {}),
+      ...snapshotContext,
+    });
+
+    try {
+      for await (const event of this.promptService.promptSessionStreaming(
+        sessionId,
+        prompt,
+        taskId,
+        permissionMode
+      )) {
+        // Detect if execution was stopped early
+        if (event.type === 'stopped') {
+          wasStopped = true;
+          console.log(`🛑 Codex execution was stopped for session ${sessionId}`);
+          continue; // Skip processing this event
+        }
+
+        // Capture resolved model from partial/complete events
+        if (!resolvedModel) {
+          if (event.type === 'partial') {
+            resolvedModel = event.resolvedModel;
+          } else if (event.type === 'complete') {
+            resolvedModel = event.resolvedModel;
+          }
+        }
+
+        if (event.type === 'complete' && event.usage) {
+          tokenUsage = event.usage;
+        }
+
+        if (event.type === 'complete' && event.rawContextUsage) {
+          rawContextUsage = event.rawContextUsage;
+        }
+
+        // Capture raw SDK response for token accounting
+        if (event.type === 'complete' && event.rawSdkEvent) {
+          rawSdkResponse = event.rawSdkEvent;
+        }
+
+        // Capture Codex thread ID
+        if (!capturedThreadId && event.threadId) {
+          capturedThreadId = event.threadId;
+          await this.captureThreadId(sessionId, capturedThreadId);
+        }
+
+        // Skip partial and tool events in non-streaming mode
+        if (
+          event.type === 'partial' ||
+          event.type === 'tool_start' ||
+          event.type === 'tool_complete'
+        ) {
+          continue;
+        }
+
+        // Handle complete messages only
+        if (event.type === 'complete' && event.content) {
+          enrichContentBlocks(event.content, {
+            ...(workingDirectory ? { workingDirectory } : {}),
+            ...snapshotContext,
+          });
+
+          const messageId = generateId() as MessageID;
+          const usageForMessage = event.usage ?? tokenUsage;
+          await this.createAssistantMessage(
+            sessionId,
+            messageId,
+            event.content,
+            event.toolUses,
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            usageForMessage
+          );
+          assistantMessageIds.push(messageId);
         }
       }
-
-      if (event.type === 'complete' && event.usage) {
-        tokenUsage = event.usage;
-      }
-
-      if (event.type === 'complete' && event.rawContextUsage) {
-        rawContextUsage = event.rawContextUsage;
-      }
-
-      // Capture raw SDK response for token accounting
-      if (event.type === 'complete' && event.rawSdkEvent) {
-        rawSdkResponse = event.rawSdkEvent;
-      }
-
-      // Capture Codex thread ID
-      if (!capturedThreadId && event.threadId) {
-        capturedThreadId = event.threadId;
-        await this.captureThreadId(sessionId, capturedThreadId);
-      }
-
-      // Skip partial and tool events in non-streaming mode
-      if (
-        event.type === 'partial' ||
-        event.type === 'tool_start' ||
-        event.type === 'tool_complete'
-      ) {
-        continue;
-      }
-
-      // Handle complete messages only
-      if (event.type === 'complete' && event.content) {
-        const messageId = generateId() as MessageID;
-        const usageForMessage = event.usage ?? tokenUsage;
-        await this.createAssistantMessage(
-          sessionId,
-          messageId,
-          event.content,
-          event.toolUses,
-          taskId,
-          nextIndex++,
-          resolvedModel,
-          usageForMessage
-        );
-        assistantMessageIds.push(messageId);
-      }
+    } finally {
+      clearEditFilesTurnBaseline(snapshotContext);
     }
 
     return {

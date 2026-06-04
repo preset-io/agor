@@ -53,4 +53,31 @@ describe('EditFilesRenderer', () => {
     expect(screen.getByText('+1')).toBeInTheDocument();
     expect(screen.getByText('-1')).toBeInTheDocument();
   });
+
+  it('keeps edit_files operation labels on one line with ellipsis styles', () => {
+    render(
+      <div style={{ width: 80 }}>
+        <EditFilesRenderer
+          toolUseId="tool-edit-files-fallback"
+          input={{
+            changes: [
+              {
+                path: 'apps/agor-ui/src/components/very/long/path/example.tsx',
+                kind: 'update',
+              },
+            ],
+          }}
+          result={{ content: '[completed]' }}
+        />
+      </div>
+    );
+
+    const labelText = screen.getByText('Update');
+    const label = labelText.closest('.ant-typography') ?? labelText;
+    expect(label).toHaveStyle({
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    });
+  });
 });

@@ -6,7 +6,7 @@
  * Falls back to a simple file path display when no diff data exists.
  */
 
-import { Typography, theme } from 'antd';
+import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { DiffBlock } from './DiffBlock';
 import { extractErrorMessage, type ToolRendererProps } from './index';
@@ -38,6 +38,14 @@ const kindLabel = (kind: string): string => {
   }
 };
 
+const normalizePathForMatch = (filePath: string): string => filePath.replace(/\\/g, '/');
+
+const pathsMatch = (left: string, right: string): boolean => {
+  const a = normalizePathForMatch(left);
+  const b = normalizePathForMatch(right);
+  return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+};
+
 export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }) => {
   const { token } = theme.useToken();
   const changes = input.changes as FileChange[] | undefined;
@@ -49,15 +57,15 @@ export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {changes.map((change) => {
-        const fileDiff = fileDiffs?.find((f) => f.path === change.path);
+        const fileDiff = fileDiffs?.find((f) => pathsMatch(f.path, change.path));
 
         // If we have enrichment data, use the full DiffBlock
         if (fileDiff) {
           return (
             <DiffBlock
               key={change.path}
-              filePath={change.path}
-              operationType={kindToOperationType(change.kind)}
+              filePath={fileDiff.path || change.path}
+              operationType={kindToOperationType(fileDiff.kind || change.kind)}
               structuredPatch={fileDiff.structuredPatch}
               isError={result?.is_error}
               errorMessage={extractErrorMessage(result)}
@@ -81,12 +89,36 @@ export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }
               fontSize: token.fontSizeSM,
             }}
           >
-            <Typography.Text strong style={{ fontSize: token.fontSizeSM }}>
-              {kindLabel(change.kind)}
-            </Typography.Text>
-            <Typography.Text code style={{ fontSize: token.fontSizeSM - 1 }}>
-              {change.path}
-            </Typography.Text>
+            <Tooltip title={kindLabel(change.kind)}>
+              <Typography.Text
+                strong
+                style={{
+                  fontSize: token.fontSizeSM,
+                  maxWidth: 72,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 1,
+                }}
+              >
+                {kindLabel(change.kind)}
+              </Typography.Text>
+            </Tooltip>
+            <Tooltip title={change.path}>
+              <Typography.Text
+                code
+                style={{
+                  fontSize: token.fontSizeSM - 1,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {change.path}
+              </Typography.Text>
+            </Tooltip>
           </div>
         );
       })}
