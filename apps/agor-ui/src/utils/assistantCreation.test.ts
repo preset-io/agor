@@ -41,8 +41,7 @@ describe('createAssistantBranch', () => {
         icon: '🍍',
         objects: {},
       }),
-      get: vi.fn().mockResolvedValue({ board_id: 'board-1', objects: {} }),
-      patch: vi.fn().mockResolvedValue({}),
+      ensureAssistantWelcomeNote: vi.fn().mockResolvedValue({}),
       setPrimaryAssistant: vi.fn().mockResolvedValue({}),
     };
     const client = {
@@ -86,13 +85,11 @@ describe('createAssistantBranch', () => {
       name: "Pineapple Helper's Board",
       icon: '🍍',
     });
-    expect(boardsService.patch).toHaveBeenCalledWith(
-      'board-1',
-      expect.objectContaining({
-        _action: 'upsertObject',
-        objectId: 'welcome-note',
-      })
-    );
+    expect(boardsService.ensureAssistantWelcomeNote).toHaveBeenCalledWith({
+      boardId: 'board-1',
+      assistantName: 'Pineapple Helper',
+      assistantEmoji: '🍍',
+    });
     expect(boardsService.setPrimaryAssistant).toHaveBeenCalledWith({
       boardId: 'board-1',
       branchId: branch.branch_id,

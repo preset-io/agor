@@ -194,6 +194,17 @@ export type BoardObject =
   | AppBoardObject
   | ArtifactBoardObject;
 
+export interface AssistantWelcomeNoteRequest {
+  /** Board to create/update the bundled assistant welcome note on. */
+  boardId?: BoardID | string;
+  /** Alias accepted by Feathers custom method callers. */
+  id?: BoardID | string;
+  /** User-provided assistant display name. */
+  assistantName: string;
+  /** Optional user-provided assistant emoji/icon. */
+  assistantEmoji?: string | null;
+}
+
 export interface Board {
   /** Unique board identifier (UUIDv7) */
   board_id: BoardID;

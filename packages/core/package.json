@@ -112,6 +112,12 @@
       "import": "./dist/templates/spawn-subsession-template.js",
       "require": "./dist/templates/spawn-subsession-template.cjs"
     },
+    "./templates/assistant-welcome-note": {
+      "source": "./src/templates/assistant-welcome-note.ts",
+      "types": "./dist/templates/assistant-welcome-note.d.ts",
+      "import": "./dist/templates/assistant-welcome-note.js",
+      "require": "./dist/templates/assistant-welcome-note.cjs"
+    },
     "./templates/zone-trigger-context": {
       "source": "./src/templates/zone-trigger-context.ts",
       "types": "./dist/templates/zone-trigger-context.d.ts",

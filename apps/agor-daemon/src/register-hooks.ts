@@ -2332,6 +2332,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       clone: [requireMinimumRole(ROLES.MEMBER, 'clone boards')],
       setPrimaryAssistant: [requireMinimumRole(ROLES.MEMBER, 'set primary assistant')],
       clearPrimaryAssistant: [requireMinimumRole(ROLES.MEMBER, 'clear primary assistant')],
+      ensureAssistantWelcomeNote: [
+        requireMinimumRole(ROLES.MEMBER, 'create assistant welcome note'),
+      ],
     },
     after: {
       // Strip private artifact objects from board.objects for non-owners
@@ -2437,6 +2440,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       clearPrimaryAssistant: [
+        async (context: HookContext<Board>) => {
+          if (context.result) {
+            app.service('boards').emit('patched', context.result);
+          }
+          return context;
+        },
+      ],
+      ensureAssistantWelcomeNote: [
         async (context: HookContext<Board>) => {
           if (context.result) {
             app.service('boards').emit('patched', context.result);

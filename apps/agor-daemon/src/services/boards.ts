@@ -7,7 +7,13 @@
 
 import { PAGINATION } from '@agor/core/config';
 import { BoardObjectRepository, BoardRepository, type Database } from '@agor/core/db';
+import {
+  ASSISTANT_WELCOME_NOTE_OBJECT_ID,
+  buildAssistantWelcomeNoteObject,
+  shouldReplaceAssistantWelcomeNoteContent,
+} from '@agor/core/templates/assistant-welcome-note';
 import type {
+  AssistantWelcomeNoteRequest,
   AuthenticatedParams,
   Board,
   BoardExportBlob,
@@ -129,6 +135,51 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     }
 
     return this.boardRepo.removeBoardObject(boardId, objectId);
+  }
+
+  /**
+   * Custom method: Create or backfill the bundled assistant welcome note.
+   *
+   * Rendering is intentionally server-side from a static Handlebars template so
+   * the browser bundle does not import Handlebars (blocked by CSP unsafe-eval),
+   * and callers never provide template source for this path.
+   */
+  async ensureAssistantWelcomeNote(
+    data: AssistantWelcomeNoteRequest,
+    _params?: BoardParams
+  ): Promise<Board> {
+    const boardIdentifier = data.boardId ?? data.id;
+    if (!boardIdentifier) throw new Error('Board ID required');
+
+    const board = await this.boardRepo.findBySlugOrId(String(boardIdentifier));
+    if (!board) {
+      throw new NotFoundError('Board', String(boardIdentifier));
+    }
+
+    const objectData = buildAssistantWelcomeNoteObject({
+      assistantName: typeof data.assistantName === 'string' ? data.assistantName : '',
+      assistantEmoji: typeof data.assistantEmoji === 'string' ? data.assistantEmoji : null,
+    });
+
+    const existing = board.objects?.[ASSISTANT_WELCOME_NOTE_OBJECT_ID];
+    if (existing) {
+      if (
+        existing.type === 'markdown' &&
+        shouldReplaceAssistantWelcomeNoteContent(existing.content)
+      ) {
+        return this.boardRepo.upsertBoardObject(board.board_id, ASSISTANT_WELCOME_NOTE_OBJECT_ID, {
+          ...existing,
+          content: objectData.content,
+        });
+      }
+      return board;
+    }
+
+    return this.boardRepo.upsertBoardObject(
+      board.board_id,
+      ASSISTANT_WELCOME_NOTE_OBJECT_ID,
+      objectData
+    );
   }
 
   /**

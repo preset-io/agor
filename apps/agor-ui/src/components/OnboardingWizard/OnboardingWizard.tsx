@@ -891,6 +891,14 @@ export function OnboardingWizard({
     const existingBoardId = user?.preferences?.mainBoardId;
     if (existingBoardId && user && boardById.get(existingBoardId)?.created_by === user.user_id) {
       setCreatedBoardId(existingBoardId);
+      if (path === 'assistant') {
+        await ensureAssistantWelcomeNote({
+          client,
+          boardId: existingBoardId,
+          assistantName: assistantDisplayName.trim() || 'My Assistant',
+          assistantEmoji,
+        });
+      }
       setLoading(false);
       setCurrentStep('branch');
       return;

@@ -1,44 +1,53 @@
-import { describe, expect, it } from 'vitest';
-import {
-  ASSISTANT_WELCOME_NOTE_TEMPLATE,
-  buildAssistantWelcomeNoteContent,
-} from './assistantWelcomeNote';
+import { describe, expect, it, vi } from 'vitest';
+import { ensureAssistantWelcomeNote } from './assistantWelcomeNote';
 
-describe('buildAssistantWelcomeNoteContent', () => {
-  it('substitutes assistant name and emoji into the template', () => {
-    const content = buildAssistantWelcomeNoteContent({
+describe('ensureAssistantWelcomeNote', () => {
+  it('delegates welcome-note rendering and backfill to the boards service', async () => {
+    const boardsService = {
+      ensureAssistantWelcomeNote: vi.fn().mockResolvedValue({}),
+    };
+    const client = {
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    };
+
+    await ensureAssistantWelcomeNote({
+      client: client as never,
+      boardId: 'board-1',
       assistantName: 'Product/Design Agor Board',
       assistantEmoji: '🧋',
     });
 
-    expect(ASSISTANT_WELCOME_NOTE_TEMPLATE).toContain('{{assistant.name}}');
-    expect(content).not.toContain('{{assistant.name}}');
-    expect(content).not.toContain('{{assistant.emoji}}');
-    expect(content).toContain("Product/Design Agor Board's Board 🧋");
-    expect(content).toContain('**Product/Design Agor Board**');
+    expect(boardsService.ensureAssistantWelcomeNote).toHaveBeenCalledWith({
+      boardId: 'board-1',
+      assistantName: 'Product/Design Agor Board',
+      assistantEmoji: '🧋',
+    });
   });
 
-  it('falls back to defaults when name is empty and emoji is missing', () => {
-    const content = buildAssistantWelcomeNoteContent({
-      assistantName: '   ',
-      assistantEmoji: null,
-    });
+  it('is best-effort when the daemon-side call fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const boardsService = {
+      ensureAssistantWelcomeNote: vi.fn().mockRejectedValue(new Error('boom')),
+    };
+    const client = {
+      service: vi.fn(() => boardsService),
+    };
 
-    expect(content).toContain("your assistant's Board 🤖");
-    expect(content).not.toContain('{{assistant.name}}');
-    expect(content).not.toContain('{{assistant.emoji}}');
-  });
+    await expect(
+      ensureAssistantWelcomeNote({
+        client: client as never,
+        boardId: 'board-1',
+        assistantName: 'Helper',
+      })
+    ).resolves.toBeUndefined();
 
-  it('replaces all occurrences of the name placeholder', () => {
-    const content = buildAssistantWelcomeNoteContent({
-      assistantName: 'Bug Fixer',
-      assistantEmoji: '🐛',
-    });
-
-    const occurrences = (content.match(/Bug Fixer/g) ?? []).length;
-    const templateOccurrences = (
-      ASSISTANT_WELCOME_NOTE_TEMPLATE.match(/\{\{assistant\.name\}\}/g) ?? []
-    ).length;
-    expect(occurrences).toBe(templateOccurrences);
+    expect(warn).toHaveBeenCalledWith(
+      'Failed to create assistant welcome note:',
+      expect.any(Error)
+    );
+    warn.mockRestore();
   });
 });

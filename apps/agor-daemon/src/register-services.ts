@@ -275,6 +275,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           'clone',
           'setPrimaryAssistant',
           'clearPrimaryAssistant',
+          'ensureAssistantWelcomeNote',
         ],
       }
     );

@@ -6,6 +6,7 @@
 
 import type {
   Artifact,
+  AssistantWelcomeNoteRequest,
   AuthenticationResult,
   Board,
   BoardExportBlob,
@@ -395,6 +396,12 @@ export interface BoardsService extends AgorService<Board> {
     params?: Params
   ): Promise<Board>;
   clearPrimaryAssistant(boardId: string, params?: Params): Promise<Board>;
+
+  /**
+   * Create or backfill the bundled assistant welcome markdown note. Rendering
+   * happens server-side from a static template; callers only provide values.
+   */
+  ensureAssistantWelcomeNote(data: AssistantWelcomeNoteRequest, params?: Params): Promise<Board>;
 }
 
 /**
@@ -569,7 +576,8 @@ function extendBoardsService(client: AgorClient): void {
         'fromYaml',
         'clone',
         'setPrimaryAssistant',
-        'clearPrimaryAssistant'
+        'clearPrimaryAssistant',
+        'ensureAssistantWelcomeNote'
       );
     }
   };
