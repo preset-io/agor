@@ -365,6 +365,42 @@ describe('diff enrichment', () => {
     expect(lines.some((line) => line.includes('"one"'))).toBe(false);
   });
 
+  it('skips tracked symlinks during Codex turn baseline capture', async () => {
+    const repoDir = createTempGitRepo();
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agor-diff-enrichment-outside-'));
+    tempDirs.push(outsideDir);
+    const outsideFile = path.join(outsideDir, 'secret.txt');
+    const linkPath = path.join(repoDir, 'linked.txt');
+
+    fs.writeFileSync(outsideFile, 'outside-before\n', 'utf-8');
+    fs.symlinkSync(outsideFile, linkPath);
+    execSync('git add linked.txt', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "tracked symlink"', { cwd: repoDir, stdio: 'ignore' });
+
+    const context = { workingDirectory: repoDir, snapshotScope: 'turn-symlink' };
+    await registerEditFilesTurnBaseline(context);
+
+    fs.writeFileSync(outsideFile, 'outside-after\n', 'utf-8');
+    const blocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-symlink',
+        name: 'edit_files',
+        input: { changes: [{ path: 'linked.txt', kind: 'update' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-symlink',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(blocks, context);
+    clearEditFilesTurnBaseline(context);
+
+    expect(blocks[1].diff).toBeUndefined();
+  });
+
   it('skips binary edit_files snapshots instead of rendering bogus text diffs', () => {
     const repoDir = createTempGitRepo();
     const filePath = path.join(repoDir, 'asset.bin');

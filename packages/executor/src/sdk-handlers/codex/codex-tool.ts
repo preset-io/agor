@@ -64,7 +64,13 @@ interface CodexExecutionResult {
 }
 
 function shouldRefreshEditFilesBaselineAfterTool(toolName: string): boolean {
-  return toolName.toLowerCase() !== 'edit_files';
+  const normalized = toolName.toLowerCase();
+  if (normalized === 'edit_files') return false;
+
+  // Codex-native command execution is normalized to Bash. MCP tools are
+  // represented as "server.tool"; keep those conservative because an MCP can
+  // mutate the branch filesystem.
+  return normalized === 'bash' || toolName.includes('.');
 }
 
 export class CodexTool implements ITool {

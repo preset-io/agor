@@ -112,10 +112,11 @@ function tryRealpath(p: string): string | null {
 
 function readTextFileSnapshot(absolutePath: string): TextFileSnapshot {
   try {
-    const stat = fs.statSync(absolutePath);
-    if (!stat.isFile()) {
+    const linkStat = fs.lstatSync(absolutePath);
+    if (!linkStat.isFile()) {
       return { exists: true, skipped: true };
     }
+    const stat = fs.statSync(absolutePath);
     if (stat.size > MAX_FILE_SIZE_BYTES) {
       return { exists: true, skipped: true };
     }
