@@ -8,7 +8,7 @@
  * Highlights @ mentions with a background overlay.
  */
 
-import type { AgorClient, KnowledgeDocumentID, SessionID, User } from '@agor-live/client';
+import type { AgorClient, SessionID, User } from '@agor-live/client';
 import { Input, Popover, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useEmojiAutocomplete } from '@/hooks/useEmojiAutocomplete';
@@ -52,7 +52,7 @@ interface SlashCommandResult {
 
 interface KbDocResult {
   kbTitle: string;
-  kbDocumentId: KnowledgeDocumentID;
+  kbDocumentId: KbDocMention['documentId'];
   kbPath: string;
   kbUri: string;
   kbRoutePath: string;
