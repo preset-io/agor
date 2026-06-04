@@ -64,6 +64,7 @@ import {
   type KbDocMention,
 } from '../components/AutocompleteTextarea';
 import { BrandLogo } from '../components/BrandLogo';
+import { GlobalUserMenu } from '../components/GlobalUserMenu';
 import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
@@ -103,6 +104,8 @@ interface KnowledgePageProps {
   currentUser?: User | null;
   /** All known users, keyed by id — powers `@` user mentions in the editor. */
   userById?: Map<string, User>;
+  onUserSettingsClick?: () => void;
+  onLogout?: () => void;
 }
 
 const EMPTY_USER_MAP: Map<string, User> = new Map();
@@ -298,6 +301,8 @@ export function KnowledgePage({
   client,
   currentUser = null,
   userById = EMPTY_USER_MAP,
+  onUserSettingsClick,
+  onLogout,
 }: KnowledgePageProps) {
   const { token } = theme.useToken();
   const { confirm } = useThemedModal();
@@ -1540,6 +1545,11 @@ export function KnowledgePage({
           <Button icon={<ReloadOutlined />} onClick={loadDocuments} loading={loading}>
             Refresh
           </Button>
+          <GlobalUserMenu
+            user={currentUser}
+            onUserSettingsClick={onUserSettingsClick}
+            onLogout={onLogout}
+          />
         </Space>
       </Header>
 

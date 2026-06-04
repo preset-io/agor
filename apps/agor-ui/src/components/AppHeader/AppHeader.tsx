@@ -12,33 +12,18 @@ import {
   ApiOutlined,
   BookOutlined,
   CommentOutlined,
-  LogoutOutlined,
   QuestionCircleOutlined,
   SettingOutlined,
-  SoundOutlined,
   UnorderedListOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
-import type { MenuProps } from 'antd';
-import {
-  Badge,
-  Button,
-  Divider,
-  Dropdown,
-  Layout,
-  Popover,
-  Space,
-  Tag,
-  Tooltip,
-  theme,
-} from 'antd';
-import { useState } from 'react';
+import { Badge, Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { GlobalSearch } from '../GlobalSearch';
+import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ThemeSwitcher } from '../ThemeSwitcher';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
@@ -166,62 +151,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.
   const mutationDisabled = useConnectionDisabled();
-  const userEmoji = user?.emoji || '👤';
-  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
-
   const headerIconButtonStyle = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
   } as const;
-  // Check if audio notifications are enabled
-  const audioEnabled = user?.preferences?.audio?.enabled ?? false;
-
-  const userMenuItems: MenuProps['items'] = [
-    {
-      key: 'user-info',
-      label: (
-        <div style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 20 }}>{userEmoji}</span>
-          <div>
-            <div style={{ fontWeight: 500 }}>{user?.name || 'User'}</div>
-            <div style={{ fontSize: 12, color: token.colorTextDescription }}>{user?.email}</div>
-          </div>
-        </div>
-      ),
-      disabled: true,
-    },
-    {
-      type: 'divider',
-    },
-    {
-      key: 'user-settings',
-      label: (
-        <Space>
-          <span>User Settings</span>
-          {audioEnabled && (
-            <Tooltip title="Audio notifications enabled">
-              <SoundOutlined style={{ color: token.colorSuccess, fontSize: 12 }} />
-            </Tooltip>
-          )}
-        </Space>
-      ),
-      icon: <UserOutlined />,
-      onClick: () => {
-        setUserDropdownOpen(false);
-        onUserSettingsClick?.();
-      },
-    },
-    {
-      key: 'logout',
-      label: 'Logout',
-      icon: <LogoutOutlined />,
-      onClick: () => {
-        setUserDropdownOpen(false);
-        onLogout?.();
-      },
-    },
-  ];
 
   return (
     <Header
@@ -388,23 +322,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             disabled={mutationDisabled}
           />
         </Tooltip>
-        <Dropdown
-          menu={{ items: userMenuItems }}
-          placement="bottomRight"
-          trigger={['click']}
-          open={userDropdownOpen}
-          onOpenChange={setUserDropdownOpen}
+        <GlobalUserMenu
+          user={user}
           disabled={mutationDisabled}
-        >
-          <Tooltip title={user?.name || 'User menu'} placement="bottom">
-            <Button
-              type="text"
-              icon={<UserOutlined style={{ fontSize: token.fontSizeLG }} />}
-              style={headerIconButtonStyle}
-              disabled={mutationDisabled}
-            />
-          </Tooltip>
-        </Dropdown>
+          onUserSettingsClick={onUserSettingsClick}
+          onLogout={onLogout}
+        />
       </Space>
     </Header>
   );

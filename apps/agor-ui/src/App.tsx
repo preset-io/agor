@@ -37,6 +37,7 @@ import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { OnboardingWizard } from './components/OnboardingWizard';
+import { UserSettingsModal } from './components/SettingsModal';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
@@ -55,6 +56,7 @@ import { KnowledgePage } from './pages/KnowledgePage';
 import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
+import { isKnowledgeRoutePath } from './utils/surfaceRoutes';
 
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
@@ -65,6 +67,8 @@ function DeviceRouter() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    if (isKnowledgeRoutePath(location.pathname)) return;
+
     const checkAndRoute = () => {
       const isMobile = isMobileDevice();
       const isOnMobilePath = location.pathname.startsWith('/m');
@@ -105,6 +109,13 @@ function AppContent() {
   const { token } = theme.useToken();
   const { showSuccess, showError, showWarning, showLoading, destroy } = useThemedMessage();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isKnowledgeSurfaceRoute = isKnowledgeRoutePath(location.pathname);
+  const routeRequiresWorkspaceSurface = !isKnowledgeSurfaceRoute;
+  const [workspaceSurfaceStarted, setWorkspaceSurfaceStarted] = useState(
+    routeRequiresWorkspaceSurface
+  );
+  const workspaceSurfaceShouldRun = routeRequiresWorkspaceSurface || workspaceSurfaceStarted;
 
   // Fetch daemon auth and instance configuration
   const {
@@ -176,7 +187,7 @@ function AppContent() {
     loading,
     error: dataError,
   } = useAgorData(client, {
-    enabled: !user?.must_change_password,
+    enabled: workspaceSurfaceShouldRun && !user?.must_change_password,
   });
 
   // Session actions
@@ -192,8 +203,15 @@ function AppContent() {
   const [openUserSettings, setOpenUserSettings] = useState(false);
   const [openNewBranch, setOpenNewBranch] = useState(false);
 
+  // Surface runtime lifecycle: the Workspace store is heavy, so a fresh
+  // Knowledge deep link should not hydrate boards/branches/sessions. Once the
+  // Workspace surface has started in this tab, keep it warm across internal KB
+  // navigation so returning to the board is instant.
+  useEffect(() => {
+    if (routeRequiresWorkspaceSurface) setWorkspaceSurfaceStarted(true);
+  }, [routeRequiresWorkspaceSurface]);
+
   // Detect GitHub App setup callback URL and auto-open gateway settings
-  const location = useLocation();
   useEffect(() => {
     if (
       location.pathname === '/gateway/github/setup' &&
@@ -254,11 +272,13 @@ function AppContent() {
       currentUser.onboarding_completed === false &&
       !currentUser.must_change_password &&
       connected &&
+      workspaceSurfaceShouldRun &&
+      !isKnowledgeSurfaceRoute &&
       !loading
     ) {
       setOnboardingWizardOpen(true);
     }
-  }, [currentUser, connected, loading]);
+  }, [currentUser, connected, workspaceSurfaceShouldRun, isKnowledgeSurfaceRoute, loading]);
 
   // Handle wizard completion
   const handleOnboardingComplete = async (result: {
@@ -385,7 +405,7 @@ function AppContent() {
 
   // Show reconnecting state if we have tokens but lost connection.
   // ONLY show fullscreen on initial connection, not during reconnections.
-  if (hasTokens && (!connected || !authenticated) && !hasLoadedOnce) {
+  if (hasTokens && (!connected || !authenticated) && workspaceSurfaceShouldRun && !hasLoadedOnce) {
     return (
       <div
         style={{
@@ -455,14 +475,14 @@ function AppContent() {
 
   // Show loading state ONLY on initial load, not during reconnections
   // Once data is loaded, keep UI mounted and show connection status in header instead
-  if (loaderPhase !== 'done') {
+  if (workspaceSurfaceShouldRun && loaderPhase !== 'done') {
     return (
       <InitialLoadingScreen phase={loaderPhase} connecting={connecting} items={initialLoadItems} />
     );
   }
 
   // Show data error (but not if user needs to change password - let the modal render)
-  if (dataError && !user?.must_change_password) {
+  if (workspaceSurfaceShouldRun && dataError && !user?.must_change_password) {
     return (
       <div
         style={{
@@ -1333,6 +1353,16 @@ function AppContent() {
     setOpenNewBranch(false);
   };
 
+  const knowledgePageElement = (
+    <KnowledgePage
+      client={client}
+      currentUser={currentUser}
+      userById={userById}
+      onUserSettingsClick={() => setOpenUserSettings(true)}
+      onLogout={logout}
+    />
+  );
+
   // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
   // AgorApp — the multiple routes exist so react-router's useParams
   // (read inside useUrlState) populates the right named params for
@@ -1429,6 +1459,25 @@ function AppContent() {
           onLogout={logout}
         />
 
+        {/* Core/current-user settings POC for lightweight surfaces. The full
+            workspace App still owns its existing Settings/UserSettings modals;
+            this lets Knowledge expose the shared user menu without mounting
+            the Workspace route tree. */}
+        {isKnowledgeSurfaceRoute && (
+          <UserSettingsModal
+            open={openUserSettings}
+            onClose={() => setOpenUserSettings(false)}
+            user={currentUser}
+            currentUser={currentUser}
+            mcpServerById={mcpServerById}
+            client={client}
+            onUpdate={async (userId, updates) => {
+              await handleUpdateUser(userId, updates);
+              await reAuthenticate();
+            }}
+          />
+        )}
+
         {/* Onboarding Wizard - shown for new users.
             Key by user identity so the wizard's local React state (currentStep,
             resumedRef, createdRepoId, etc.) is bound to the signed-in user.
@@ -1479,30 +1528,10 @@ function AppContent() {
           <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
 
           {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
-          <Route
-            path="/knowledge"
-            element={
-              <KnowledgePage client={client} currentUser={currentUser} userById={userById} />
-            }
-          />
-          <Route
-            path="/knowledge/:namespaceSlug/*"
-            element={
-              <KnowledgePage client={client} currentUser={currentUser} userById={userById} />
-            }
-          />
-          <Route
-            path="/kb"
-            element={
-              <KnowledgePage client={client} currentUser={currentUser} userById={userById} />
-            }
-          />
-          <Route
-            path="/kb/:namespaceSlug/*"
-            element={
-              <KnowledgePage client={client} currentUser={currentUser} userById={userById} />
-            }
-          />
+          <Route path="/knowledge" element={knowledgePageElement} />
+          <Route path="/knowledge/:namespaceSlug/*" element={knowledgePageElement} />
+          <Route path="/kb" element={knowledgePageElement} />
+          <Route path="/kb/:namespaceSlug/*" element={knowledgePageElement} />
 
           {/* Mobile routes */}
           <Route
