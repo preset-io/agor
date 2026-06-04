@@ -34,6 +34,10 @@ const LEGACY_WELCOME_NOTE_MARKERS = [
   '<--- on your left',
 ];
 
+const ASSISTANT_VALUE_PATTERN = /{{assistant\.(?:name|emoji)}}/g;
+const CURRENT_WELCOME_NOTE_STATIC_SEGMENTS =
+  ASSISTANT_WELCOME_NOTE_TEMPLATE.split(ASSISTANT_VALUE_PATTERN);
+
 /**
  * Escape text for Markdown inline/text contexts before Handlebars performs its
  * normal HTML escaping. The template source is trusted/static, but assistant
@@ -87,6 +91,30 @@ export function buildAssistantWelcomeNoteObject(
   };
 }
 
+function matchesCurrentWelcomeNoteTemplateShape(content: string): boolean {
+  let offset = 0;
+
+  for (let index = 0; index < CURRENT_WELCOME_NOTE_STATIC_SEGMENTS.length; index += 1) {
+    const segment = CURRENT_WELCOME_NOTE_STATIC_SEGMENTS[index];
+
+    if (index === 0) {
+      if (!content.startsWith(segment)) return false;
+      offset = segment.length;
+      continue;
+    }
+
+    const segmentIndex = content.indexOf(segment, offset);
+    if (segmentIndex === -1) return false;
+
+    offset = segmentIndex + segment.length;
+  }
+
+  return offset === content.length;
+}
+
 export function shouldReplaceAssistantWelcomeNoteContent(content: string): boolean {
-  return LEGACY_WELCOME_NOTE_MARKERS.some((marker) => content.includes(marker));
+  return (
+    LEGACY_WELCOME_NOTE_MARKERS.some((marker) => content.includes(marker)) ||
+    matchesCurrentWelcomeNoteTemplateShape(content)
+  );
 }

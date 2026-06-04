@@ -36,6 +36,7 @@ export interface BoardParams
     name?: string;
   }> {
   user?: AuthenticatedParams['user'];
+  assistantWelcomeNoteMutated?: boolean;
 }
 
 /**
@@ -146,7 +147,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    */
   async ensureAssistantWelcomeNote(
     data: AssistantWelcomeNoteRequest,
-    _params?: BoardParams
+    params?: BoardParams
   ): Promise<Board> {
     const boardIdentifier = data.boardId ?? data.id;
     if (!boardIdentifier) throw new Error('Board ID required');
@@ -167,6 +168,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
         existing.type === 'markdown' &&
         shouldReplaceAssistantWelcomeNoteContent(existing.content)
       ) {
+        if (params) params.assistantWelcomeNoteMutated = true;
         return this.boardRepo.upsertBoardObject(board.board_id, ASSISTANT_WELCOME_NOTE_OBJECT_ID, {
           ...existing,
           content: objectData.content,
@@ -175,6 +177,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       return board;
     }
 
+    if (params) params.assistantWelcomeNoteMutated = true;
     return this.boardRepo.upsertBoardObject(
       board.board_id,
       ASSISTANT_WELCOME_NOTE_OBJECT_ID,

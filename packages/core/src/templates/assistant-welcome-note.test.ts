@@ -53,9 +53,25 @@ describe('assistant-welcome-note', () => {
     expect(content).toContain('\\[bot\\]\\(javascript:alert\\(1\\)\\)');
   });
 
-  it('detects unresolved placeholder and legacy welcome-note content for backfill', () => {
+  it('detects unresolved placeholder, legacy, and generated welcome-note content for backfill', () => {
     expect(shouldReplaceAssistantWelcomeNoteContent('# Welcome {{assistant.name}}')).toBe(true);
     expect(shouldReplaceAssistantWelcomeNoteContent('```mermaid\nflowchart LR')).toBe(true);
+    expect(
+      shouldReplaceAssistantWelcomeNoteContent(
+        buildAssistantWelcomeNoteContent({
+          assistantName: '[docs](javascript:alert(1))',
+          assistantEmoji: '🤖',
+        })
+      )
+    ).toBe(true);
     expect(shouldReplaceAssistantWelcomeNoteContent('My custom note')).toBe(false);
+    expect(
+      shouldReplaceAssistantWelcomeNoteContent(
+        `${buildAssistantWelcomeNoteContent({
+          assistantName: 'Edited Bot',
+          assistantEmoji: '🤖',
+        })}\n\nCustom user addition`
+      )
+    ).toBe(false);
   });
 });

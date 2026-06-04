@@ -2449,7 +2449,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       ensureAssistantWelcomeNote: [
         async (context: HookContext<Board>) => {
-          if (context.result) {
+          const assistantWelcomeNoteMutated = (
+            context.params as typeof context.params & {
+              assistantWelcomeNoteMutated?: boolean;
+            }
+          ).assistantWelcomeNoteMutated;
+          if (context.result && assistantWelcomeNoteMutated) {
             app.service('boards').emit('patched', context.result);
           }
           return context;

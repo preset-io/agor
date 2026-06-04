@@ -5,6 +5,7 @@
  */
 
 import { BoardObjectRepository, BranchRepository, generateId, RepoRepository } from '@agor/core/db';
+import { ASSISTANT_WELCOME_NOTE_TEMPLATE } from '@agor/core/templates/assistant-welcome-note';
 import type { Board, BranchID, UUID } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -293,6 +294,57 @@ describe('BoardsService - Custom Methods', () => {
     expect(note?.content).not.toContain('{{assistant.name}}');
   });
 
+  dbTest(
+    'ensureAssistantWelcomeNote backfills generated notes from interim regex renderer',
+    async ({ db }) => {
+      const service = new BoardsService(db);
+      const interimRenderedContent = ASSISTANT_WELCOME_NOTE_TEMPLATE.replaceAll(
+        '{{assistant.name}}',
+        '[docs](javascript:alert(1))'
+      ).replaceAll('{{assistant.emoji}}', '[bot](javascript:alert(1))');
+
+      const board = (await service.create({
+        name: 'Assistant Board Interim Backfill',
+        slug: `assistant-board-interim-backfill-${generateId()}`,
+        created_by: TEST_USER,
+        objects: {
+          'welcome-note': {
+            type: 'markdown',
+            x: 12,
+            y: 34,
+            width: 456,
+            content: interimRenderedContent,
+          },
+        },
+      })) as Board;
+
+      const params = {};
+      const updated = await service.ensureAssistantWelcomeNote(
+        {
+          boardId: board.board_id,
+          assistantName: '[safe docs](javascript:alert(1))',
+          assistantEmoji: '[safe bot](javascript:alert(1))',
+        },
+        params
+      );
+
+      const note = updated.objects?.['welcome-note'];
+      expect(params).toEqual({ assistantWelcomeNoteMutated: true });
+      expect(note).toEqual(
+        expect.objectContaining({
+          type: 'markdown',
+          x: 12,
+          y: 34,
+          width: 456,
+        })
+      );
+      expect(note?.content).not.toContain('[docs](javascript:alert(1))');
+      expect(note?.content).not.toContain('[safe docs](javascript:alert(1))');
+      expect(note?.content).toContain('\\[safe docs\\]\\(javascript:alert\\(1\\)\\)');
+      expect(note?.content).toContain('\\[safe bot\\]\\(javascript:alert\\(1\\)\\)');
+    }
+  );
+
   dbTest('ensureAssistantWelcomeNote preserves custom existing welcome notes', async ({ db }) => {
     const service = new BoardsService(db);
     const board = (await service.create({
@@ -310,11 +362,16 @@ describe('BoardsService - Custom Methods', () => {
       },
     })) as Board;
 
-    const updated = await service.ensureAssistantWelcomeNote({
-      boardId: board.board_id,
-      assistantName: 'Ignored Bot',
-    });
+    const params = {};
+    const updated = await service.ensureAssistantWelcomeNote(
+      {
+        boardId: board.board_id,
+        assistantName: 'Ignored Bot',
+      },
+      params
+    );
 
+    expect(params).toEqual({});
     expect(updated.objects?.['welcome-note']).toEqual(board.objects?.['welcome-note']);
   });
 
