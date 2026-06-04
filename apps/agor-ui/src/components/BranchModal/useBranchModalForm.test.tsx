@@ -354,9 +354,44 @@ describe('useBranchModalForm — unified save', () => {
     });
 
     expect(result.current.ownersLoadError?.message).toBe('database is down');
+    expect(result.current.groupGrantsStatus).toBe('unavailable');
+    expect(result.current.groupGrantsError?.message).toBe('database is down');
     // RBAC stays "enabled" so the modal doesn't silently flip into the
     // open-access mode based on an unrelated network blip.
     expect(result.current.rbacEnabled).toBe(true);
+  });
+
+  it('enables owner-editable permissions before slow group grants finish loading', async () => {
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
+    const branch = makeBranch();
+    let resolveGroupGrants: (value: unknown[]) => void = () => {};
+    const groupGrantsPromise = new Promise<unknown[]>((resolve) => {
+      resolveGroupGrants = resolve;
+    });
+    const { client } = makeStubClient({
+      owners: [alice],
+      users: [alice],
+      groupGrantsPromise,
+    });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(result.current.loadingOwners).toBe(false);
+      expect(result.current.groupGrantsStatus).toBe('loading');
+    });
+
+    expect(result.current.canEditPermissions).toBe(true);
+
+    await act(async () => {
+      resolveGroupGrants([]);
+      await groupGrantsPromise;
+    });
+
+    await waitFor(() => expect(result.current.groupGrantsStatus).toBe('loaded'));
   });
 
   it('keeps admin permissions visible when group-aware RBAC metadata is unavailable', async () => {

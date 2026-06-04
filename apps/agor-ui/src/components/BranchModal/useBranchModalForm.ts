@@ -299,6 +299,14 @@ export function useBranchModalForm({
           }
         }
 
+        // Owners/users gate owner and branch-level editability. Group grants
+        // are optional auxiliary metadata with their own status; keep loading
+        // them independently so a slow/missing group-grants endpoint does not
+        // hold owner/branch-level controls disabled.
+        if (!cancelled) {
+          setLoadingOwners(false);
+        }
+
         try {
           const [groups, grantsResponse] = await Promise.all([
             client.service('groups').findAll({ query: { archived: false } }),
@@ -341,10 +349,12 @@ export function useBranchModalForm({
           const err = error instanceof Error ? error : new Error(String(error));
           console.error('Failed to load branch owners:', err);
           setOwnersLoadError(err);
+          setAllGroups([]);
+          setGroupGrantsStatus('unavailable');
+          setGroupGrantsError(err);
         }
-      } finally {
-        if (!cancelled) setLoadingOwners(false);
       }
+      if (!cancelled) setLoadingOwners(false);
     };
 
     load();

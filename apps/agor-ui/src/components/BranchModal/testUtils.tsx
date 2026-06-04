@@ -22,6 +22,8 @@ export interface StubClientOptions {
   users?: User[];
   rbac404?: boolean;
   groupGrants404?: boolean;
+  groupGrants?: unknown[];
+  groupGrantsPromise?: Promise<unknown[]>;
   failBranchPatch?: boolean;
   /** Throw a 500-style error on the initial owners.find load. */
   failOwnersFind?: boolean;
@@ -57,6 +59,12 @@ export function makeStubClient(opts: StubClientOptions = {}): {
             const err = new Error('not found') as Error & { code?: number };
             err.code = 404;
             throw err;
+          }
+          if (path === 'branches/:id/group-grants' && opts.groupGrantsPromise) {
+            return opts.groupGrantsPromise;
+          }
+          if (path === 'branches/:id/group-grants') {
+            return opts.groupGrants ?? [];
           }
           return [];
         },
