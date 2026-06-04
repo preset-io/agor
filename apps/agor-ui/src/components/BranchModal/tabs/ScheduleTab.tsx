@@ -15,11 +15,12 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import { Button, Empty, Popconfirm, Space, Spin, Switch, Table, Typography } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { UserAvatar } from '../../metadata/UserAvatar';
 import { ScheduleModal } from '../../ScheduleModal';
 import { ScheduleRunsPanel } from '../../ScheduleRunsPanel';
+import type { UseBranchSchedulesResult } from './useBranchSchedules';
 
 const { Text } = Typography;
 
@@ -30,6 +31,7 @@ interface ScheduleTabProps {
   currentUser?: User | null;
   userById?: Map<string, User>;
   onOpenSession?: (sessionId: string) => void;
+  schedulesState: UseBranchSchedulesResult;
 }
 
 const formatTimestamp = (ms: number | null | undefined) =>
@@ -50,64 +52,14 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   currentUser,
   userById = new Map(),
   onOpenSession,
+  schedulesState,
 }) => {
   const { showError, showSuccess } = useThemedMessage();
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { schedules, loading, fetchSchedules } = schedulesState;
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [runsPanelSchedule, setRunsPanelSchedule] = useState<Schedule | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
-
-  const fetchSchedules = useCallback(async () => {
-    if (!client) return;
-    setLoading(true);
-    try {
-      const result = await client.service('schedules').find({
-        query: {
-          branch_id: branch.branch_id,
-          $sort: { created_at: -1 },
-        },
-      });
-      setSchedules(Array.isArray(result) ? result : result.data);
-    } catch (err) {
-      console.error('Failed to load schedules:', err);
-      showError('Failed to load schedules');
-    } finally {
-      setLoading(false);
-    }
-  }, [client, branch.branch_id, showError]);
-
-  useEffect(() => {
-    fetchSchedules();
-  }, [fetchSchedules]);
-
-  // Live updates via Feathers events. The service emits these for every
-  // CRUD op, including ones on other branches — filter to ours.
-  useEffect(() => {
-    if (!client) return;
-    const service = client.service('schedules');
-    const matchesBranch = (s: Schedule) => s.branch_id === branch.branch_id;
-    const onCreated = (s: Schedule) => {
-      if (matchesBranch(s)) setSchedules((prev) => [s, ...prev]);
-    };
-    const onPatched = (s: Schedule) => {
-      if (matchesBranch(s)) {
-        setSchedules((prev) => prev.map((p) => (p.schedule_id === s.schedule_id ? s : p)));
-      }
-    };
-    const onRemoved = (s: Schedule) => {
-      setSchedules((prev) => prev.filter((p) => p.schedule_id !== s.schedule_id));
-    };
-    service.on('created', onCreated);
-    service.on('patched', onPatched);
-    service.on('removed', onRemoved);
-    return () => {
-      service.off('created', onCreated);
-      service.off('patched', onPatched);
-      service.off('removed', onRemoved);
-    };
-  }, [client, branch.branch_id]);
 
   const handleNew = () => {
     setEditingSchedule(null);

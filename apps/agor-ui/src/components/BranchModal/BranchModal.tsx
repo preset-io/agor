@@ -20,6 +20,7 @@ import { GeneralTab } from './tabs/GeneralTab';
 import { PermissionsTab } from './tabs/PermissionsTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
+import { useBranchSchedules } from './tabs/useBranchSchedules';
 import { type BranchUpdate, useBranchModalForm } from './useBranchModalForm';
 
 export type BranchModalTab =
@@ -82,6 +83,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const [activeTab, setActiveTab] = useState<BranchModalTab>('general');
+  const branchId = open ? (branch?.branch_id ?? null) : null;
 
   const form = useBranchModalForm({
     branch,
@@ -93,6 +95,11 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     () => new Map(form.allUsers.map((user) => [user.user_id, user])),
     [form.allUsers]
   );
+  const schedulesState = useBranchSchedules({
+    client,
+    branchId,
+    onError: showError,
+  });
 
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
   useEffect(() => {
@@ -231,7 +238,17 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       : []),
     {
       key: 'schedule',
-      label: 'Schedules',
+      label: (
+        <span>
+          Schedules{' '}
+          <Badge
+            count={schedulesState.schedules.length}
+            showZero
+            size="small"
+            style={{ backgroundColor: token.colorPrimaryBgHover }}
+          />
+        </span>
+      ),
       children: (
         <ScheduleTab
           branch={branch}
@@ -239,6 +256,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
           mcpServerById={mcpServerById}
           currentUser={currentUser}
           userById={userById}
+          schedulesState={schedulesState}
           onOpenSession={(sessionId) => {
             onSessionClick?.(sessionId);
             onClose();
