@@ -472,6 +472,66 @@ describe('diff enrichment', () => {
     expect(lines.some((line) => line.includes('+export const added = true;'))).toBe(true);
   });
 
+  it('skips symlinks in edit_files add fallback when no baseline is available', () => {
+    const repoDir = createTempGitRepo();
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agor-diff-enrichment-add-outside-'));
+    tempDirs.push(outsideDir);
+    const outsideFile = path.join(outsideDir, 'secret.txt');
+    const linkPath = path.join(repoDir, 'linked-add.txt');
+
+    fs.writeFileSync(path.join(repoDir, 'README.md'), '# test\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    fs.writeFileSync(outsideFile, 'outside secret\n', 'utf-8');
+    fs.symlinkSync(outsideFile, linkPath);
+
+    const contentBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-add-symlink',
+        name: 'edit_files',
+        input: { changes: [{ path: 'linked-add.txt', kind: 'add' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-add-symlink',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
+
+    expect(contentBlocks[1].diff).toBeUndefined();
+  });
+
+  it('skips binary files in edit_files add fallback when no baseline is available', () => {
+    const repoDir = createTempGitRepo();
+    fs.writeFileSync(path.join(repoDir, 'README.md'), '# test\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    fs.writeFileSync(path.join(repoDir, 'asset.bin'), Buffer.from([1, 2, 0, 3]));
+
+    const contentBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-add-binary',
+        name: 'edit_files',
+        input: { changes: [{ path: 'asset.bin', kind: 'add' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-add-binary',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
+
+    expect(contentBlocks[1].diff).toBeUndefined();
+  });
+
   it('truncates large edit_files add diffs before storing them', () => {
     const repoDir = createTempGitRepo();
     const srcDir = path.join(repoDir, 'src');

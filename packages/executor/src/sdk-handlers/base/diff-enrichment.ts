@@ -702,9 +702,9 @@ function enrichEditFilesResult(
       // Only render files inside the repo.
       if (!resolveRepoRelativePath(gitRoot, resolvedPath)) continue;
 
-      const stat = fs.statSync(resolvedPath);
-      if (stat.size > MAX_FILE_SIZE_BYTES) continue;
-      const content = fs.readFileSync(resolvedPath, 'utf-8');
+      const after = readTextFileSnapshot(resolvedPath);
+      if (!after.exists || after.content === undefined) continue;
+      const content = after.content;
       const patch = structuredPatch(filePath, filePath, '', content, '', '', {
         context: 0,
       });
