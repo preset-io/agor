@@ -1,13 +1,7 @@
-import { CodeSandboxOutlined, DropboxOutlined } from '@ant-design/icons';
+import { InboxOutlined } from '@ant-design/icons';
 import type { ButtonProps } from 'antd';
-import { Button, Tooltip, theme } from 'antd';
+import { Button, Tooltip } from 'antd';
 import type React from 'react';
-import { useState } from 'react';
-
-interface ArchiveIconProps {
-  archived?: boolean;
-  hovered?: boolean;
-}
 
 interface ArchiveToggleButtonProps {
   archived: boolean;
@@ -24,23 +18,7 @@ interface ArchiveActionButtonProps extends Omit<ButtonProps, 'icon'> {
   stopPropagation?: boolean;
 }
 
-export const ArchiveIcon: React.FC<ArchiveIconProps> = ({ archived = false, hovered = false }) => {
-  const { token } = theme.useToken();
-
-  if (archived) {
-    return hovered ? (
-      <DropboxOutlined style={{ color: token.colorSuccess }} />
-    ) : (
-      <CodeSandboxOutlined style={{ color: token.colorWarning }} />
-    );
-  }
-
-  return hovered ? (
-    <CodeSandboxOutlined style={{ color: token.colorWarning }} />
-  ) : (
-    <DropboxOutlined style={{ color: token.colorWarning }} />
-  );
-};
+export const ArchiveIcon: React.FC = () => <InboxOutlined />;
 
 export const ArchiveToggleButton: React.FC<ArchiveToggleButtonProps> = ({
   archived,
@@ -51,8 +29,6 @@ export const ArchiveToggleButton: React.FC<ArchiveToggleButtonProps> = ({
   disabled,
   style,
 }) => {
-  const [hovered, setHovered] = useState(false);
-
   const title = tooltip ?? (archived ? 'Archived • Click to unarchive' : 'Archive');
 
   return (
@@ -60,12 +36,10 @@ export const ArchiveToggleButton: React.FC<ArchiveToggleButtonProps> = ({
       <Button
         type="text"
         size="small"
-        icon={<ArchiveIcon archived={archived} hovered={hovered} />}
+        icon={<ArchiveIcon />}
         loading={loading}
         disabled={disabled}
         style={style}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
         onClick={(event) => {
           if (stopPropagation) {
             event.stopPropagation();
@@ -88,22 +62,14 @@ export const ArchiveActionButton: React.FC<ArchiveActionButtonProps> = ({
   children,
   ...buttonProps
 }) => {
-  const [hovered, setHovered] = useState(false);
-
   const button = (
     <Button
       {...buttonProps}
       type={type}
       size={size}
-      icon={<ArchiveIcon hovered={hovered} />}
-      onMouseEnter={(event) => {
-        setHovered(true);
-        onMouseEnter?.(event);
-      }}
-      onMouseLeave={(event) => {
-        setHovered(false);
-        onMouseLeave?.(event);
-      }}
+      icon={<ArchiveIcon />}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
       onClick={(event) => {
         if (stopPropagation) {
           event.stopPropagation();

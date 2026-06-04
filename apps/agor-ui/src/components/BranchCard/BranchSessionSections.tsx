@@ -237,9 +237,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         title: 'Archive session?',
         content: 'Are you sure you want to archive this session?',
         okText: 'Archive',
-        okButtonProps: {
-          style: { backgroundColor: token.colorWarning, borderColor: token.colorWarning },
-        },
         cancelText: 'Cancel',
         onOk: async () => {
           setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
@@ -260,7 +257,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         },
       });
     },
-    [archiveSession, modal, showSuccess, showError, token.colorWarning]
+    [archiveSession, modal, showSuccess, showError]
   );
 
   const getGatewaySource = useCallback(

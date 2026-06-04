@@ -106,9 +106,6 @@ const CardModalComponent = ({
       title: 'Archive card?',
       content: `This will hide "${card.title}" from the board while preserving its data.`,
       okText: 'Archive',
-      okButtonProps: {
-        style: { backgroundColor: token.colorWarning, borderColor: token.colorWarning },
-      },
       onOk: async () => {
         try {
           const updated = await client.service('cards').patch(card.card_id, {
@@ -124,7 +121,7 @@ const CardModalComponent = ({
         }
       },
     });
-  }, [card, client, onCardUpdated, onClose, showSuccess, showError, token.colorWarning]);
+  }, [card, client, onCardUpdated, onClose, showSuccess, showError]);
 
   const handleDelete = useCallback(async () => {
     if (!card || !client) return;

@@ -514,9 +514,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       title: 'Archive session?',
       content: 'Are you sure you want to archive this session?',
       okText: 'Archive',
-      okButtonProps: {
-        style: { backgroundColor: token.colorWarning, borderColor: token.colorWarning },
-      },
       cancelText: 'Cancel',
       onOk: async () => {
         await archiveSession(session.session_id);

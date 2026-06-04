@@ -1218,9 +1218,6 @@ export function KnowledgePage({
       title: 'Archive this page?',
       content: 'This archives the page from Knowledge. Version history remains in the database.',
       okText: 'Archive',
-      okButtonProps: {
-        style: { backgroundColor: token.colorWarning, borderColor: token.colorWarning },
-      },
       cancelText: 'Cancel',
       async onOk() {
         if (!activeDoc) return;
