@@ -1,4 +1,3 @@
-import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type { AgorClient, Board, BoardID, BoardObject } from '@agor-live/client';
 
 export const ASSISTANT_WELCOME_NOTE_OBJECT_ID = 'welcome-note';
@@ -32,15 +31,12 @@ export function buildAssistantWelcomeNoteContent({
   assistantEmoji,
 }: Pick<AssistantWelcomeNoteInput, 'assistantName' | 'assistantEmoji'>): string {
   const name = assistantName.trim() || 'your assistant';
-  return renderTemplate(
-    ASSISTANT_WELCOME_NOTE_TEMPLATE,
-    {
-      assistant: {
-        name,
-        emoji: assistantEmoji?.trim() || '🤖',
-      },
-    },
-    { onError: 'raw' }
+  const emoji = assistantEmoji?.trim() || '🤖';
+  // Handlebars uses new Function() which is blocked by the app's CSP
+  // (script-src has no 'unsafe-eval'). Use simple string replacement instead.
+  return ASSISTANT_WELCOME_NOTE_TEMPLATE.replace(/\{\{assistant\.name\}\}/g, name).replace(
+    /\{\{assistant\.emoji\}\}/g,
+    emoji
   );
 }
 
@@ -71,7 +67,8 @@ export async function ensureAssistantWelcomeNote({
     if (existing) {
       if (
         existing.type === 'markdown' &&
-        (existing.content.includes('```mermaid') ||
+        (existing.content.includes('{{assistant.name}}') ||
+          existing.content.includes('```mermaid') ||
           existing.content.includes('flowchart LR') ||
           existing.content.includes('Workflow building blocks') ||
           existing.content.includes('<--- on your left'))
