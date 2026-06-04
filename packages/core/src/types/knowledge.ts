@@ -102,6 +102,21 @@ export type KnowledgeGraphEdgeType = (typeof KNOWLEDGE_GRAPH_EDGE_TYPES)[number]
 
 export const KNOWLEDGE_URI_PREFIX = 'agor://kb/';
 
+/**
+ * Canonical, rename-proof URI for an in-content reference to a Knowledge Base
+ * document. Distinct from the path-based content address `agor://kb/<slug>/<path>`
+ * (which doubles as the doc's address in the MCP/REST API): the literal
+ * `document` type segment guarantees the two grammars never collide, and it
+ * matches the typed node-URI scheme used by the knowledge graph repository.
+ */
+export const KNOWLEDGE_DOCUMENT_URI_PREFIX = 'agor://kb/document/';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function buildKnowledgeDocumentUri(documentId: string): string {
+  return `${KNOWLEDGE_DOCUMENT_URI_PREFIX}${documentId}`;
+}
+
 const INVALID_KNOWLEDGE_PATH_CHARS = new Set(['<', '>', ':', '"', '\\', '|', '?', '*']);
 const RESERVED_WINDOWS_NAMES_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
@@ -172,6 +187,68 @@ export function parseKnowledgeUri(
 export function titleFromKnowledgePath(path: string): string {
   const leaf = normalizeKnowledgePath(path).split('/').pop() || path;
   return leaf.replace(/\.(md|markdown)$/i, '').replace(/[-_]+/g, ' ') || path;
+}
+
+/**
+ * A reference to a KB document extracted from markdown. Either a rename-proof id
+ * reference (`agor://kb/document/<uuid>`) or a path-based content address
+ * (`agor://kb/<slug>/<path>` or the in-app route variants).
+ */
+export type KnowledgeLinkRef =
+  | { document_id: KnowledgeDocumentID; namespace_slug?: undefined; path?: undefined }
+  | { document_id?: undefined; namespace_slug: string; path: string };
+
+// Matches both canonical URIs (agor://kb/<slug>/<path>) and in-app route links
+// (/kb/<slug>/<path> or /knowledge/<slug>/<path>) as inserted by the editor's
+// `@` autocomplete. Path segments may be percent-encoded.
+const KNOWLEDGE_LINK_RE =
+  /(?:agor:\/\/kb\/|\/(?:kb|knowledge)\/)([A-Za-z0-9._~%-]+)\/([^\s)"'<>]+)/g;
+
+const safeDecodeSegment = (segment: string): string => {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+};
+
+/**
+ * Extract references to other Knowledge Base documents from markdown. Returns a
+ * deduplicated list of `{ namespace_slug, path }`. Non-throwing: malformed
+ * targets are skipped so callers can run this during save without guarding.
+ */
+export function extractKnowledgeLinks(markdown?: string | null): KnowledgeLinkRef[] {
+  if (!markdown) return [];
+  const results: KnowledgeLinkRef[] = [];
+  const seen = new Set<string>();
+  for (const match of markdown.matchAll(KNOWLEDGE_LINK_RE)) {
+    const namespaceSlug = safeDecodeSegment(match[1]).trim();
+    if (!namespaceSlug) continue;
+    const rawPath = match[2].split(/[?#]/)[0];
+
+    // Rename-proof id reference: agor://kb/document/<uuid>. The `document` type
+    // segment is reserved, so this never collides with a real namespace slug.
+    if (match[0].startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX) && UUID_RE.test(rawPath)) {
+      const documentId = rawPath.toLowerCase() as KnowledgeDocumentID;
+      const key = `id:${documentId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({ document_id: documentId });
+      continue;
+    }
+
+    let path: string;
+    try {
+      path = normalizeKnowledgePath(rawPath.split('/').map(safeDecodeSegment).join('/'));
+    } catch {
+      continue;
+    }
+    const key = `${namespaceSlug}/${path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push({ namespace_slug: namespaceSlug, path });
+  }
+  return results;
 }
 
 export function titleFromKnowledgeContent(content: string, fallback = 'Untitled'): string {
@@ -310,4 +387,31 @@ export interface KnowledgeGraphEdge {
   created_at: Date;
   archived: boolean;
   archived_at?: Date | null;
+}
+
+/** A document node in the namespace-wide knowledge graph view. */
+export interface KnowledgeGraphDocNode {
+  document_id: KnowledgeDocumentID;
+  title: string;
+  path: string;
+  uri: string;
+  kind: KnowledgeDocumentKind;
+  visibility: KnowledgeVisibility;
+}
+
+/** A doc-to-doc edge in the namespace-wide knowledge graph view. */
+export interface KnowledgeGraphDocEdge {
+  source_document_id: KnowledgeDocumentID;
+  target_document_id: KnowledgeDocumentID;
+  edge_type: KnowledgeGraphEdgeType;
+}
+
+/**
+ * Whole-namespace document graph: every readable document in a namespace plus
+ * the doc-to-doc edges between them. Powers the Knowledge graph home view.
+ */
+export interface KnowledgeNamespaceGraph {
+  namespace_id: KnowledgeNamespaceID | null;
+  nodes: KnowledgeGraphDocNode[];
+  edges: KnowledgeGraphDocEdge[];
 }

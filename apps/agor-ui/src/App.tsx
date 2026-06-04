@@ -1481,16 +1481,27 @@ function AppContent() {
           {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
           <Route
             path="/knowledge"
-            element={<KnowledgePage client={client} currentUser={currentUser} />}
+            element={
+              <KnowledgePage client={client} currentUser={currentUser} userById={userById} />
+            }
           />
           <Route
             path="/knowledge/:namespaceSlug/*"
-            element={<KnowledgePage client={client} currentUser={currentUser} />}
+            element={
+              <KnowledgePage client={client} currentUser={currentUser} userById={userById} />
+            }
           />
-          <Route path="/kb" element={<KnowledgePage client={client} currentUser={currentUser} />} />
+          <Route
+            path="/kb"
+            element={
+              <KnowledgePage client={client} currentUser={currentUser} userById={userById} />
+            }
+          />
           <Route
             path="/kb/:namespaceSlug/*"
-            element={<KnowledgePage client={client} currentUser={currentUser} />}
+            element={
+              <KnowledgePage client={client} currentUser={currentUser} userById={userById} />
+            }
           />
 
           {/* Mobile routes */}

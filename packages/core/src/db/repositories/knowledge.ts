@@ -34,7 +34,7 @@ import {
   parseKnowledgeUri,
   titleFromKnowledgePath,
 } from '@agor/core/types';
-import { and, desc, eq, like, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
@@ -179,6 +179,19 @@ export interface KnowledgeGraphNeighborsResult {
   center: KnowledgeGraphNode;
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
+}
+
+export interface KnowledgeNamespaceGraphQuery {
+  namespace_id: KnowledgeNamespaceID;
+  edge_types?: KnowledgeGraphEdgeType[];
+  include_archived?: boolean;
+}
+
+/** A doc-to-doc edge expressed in document-id terms (graph node ids resolved). */
+export interface KnowledgeDocumentEdge {
+  source_document_id: KnowledgeDocumentID;
+  target_document_id: KnowledgeDocumentID;
+  edge_type: KnowledgeGraphEdgeType;
 }
 
 export interface KnowledgeSearchResult {
@@ -1108,7 +1121,9 @@ export class KnowledgeGraphRepository {
 
   private deriveNodeType(ref: KnowledgeNodeRef): KnowledgeGraphNodeType {
     if (ref.node_type) return ref.node_type;
-    if (ref.namespace_id) return 'namespace';
+    // Document/unit refs carry a `namespace_id` too, so resolve them before the
+    // bare-namespace check — otherwise a document node gets mistyped as
+    // 'namespace' and drops out of document-scoped graph queries.
     if (ref.unit_id || ref.uri?.startsWith('agor://kb/unit/')) return 'document_unit';
     if (
       ref.document_id ||
@@ -1117,6 +1132,7 @@ export class KnowledgeGraphRepository {
       parseKnowledgeUri(ref.uri)
     )
       return 'document';
+    if (ref.namespace_id) return 'namespace';
     if (ref.branch_id) return 'branch';
     if (ref.session_id) return 'session';
     if (ref.task_id) return 'task';
@@ -1240,6 +1256,66 @@ export class KnowledgeGraphRepository {
     return this.rowToEdge(row);
   }
 
+  /**
+   * Idempotently replace the set of outgoing edges of a single type from one
+   * source node. Edges to targets no longer present are archived; new targets
+   * are linked. Used to keep derived edges (e.g. doc-to-doc `references`) in
+   * sync with a document's content on every save.
+   */
+  async syncOutgoingEdges(input: {
+    source: KnowledgeNodeRef;
+    edge_type: KnowledgeGraphEdgeType;
+    targets: KnowledgeNodeRef[];
+    created_by?: UserID | null;
+  }): Promise<void> {
+    const source = await this.getOrCreateNode(input.source, input.created_by);
+
+    const desiredTargetIds = new Set<string>();
+    for (const ref of input.targets) {
+      const target = await this.getOrCreateNode(ref, input.created_by);
+      if (target.node_id === source.node_id) continue;
+      desiredTargetIds.add(target.node_id);
+    }
+
+    const existingEdges = await select(this.db)
+      .from(kbGraphEdges)
+      .where(
+        and(
+          eq(kbGraphEdges.source_node_id, source.node_id),
+          eq(kbGraphEdges.edge_type, input.edge_type),
+          eq(kbGraphEdges.archived, false)
+        )
+      )
+      .all();
+    const existingTargetIds = new Set(existingEdges.map((e: KBGraphEdgeRow) => e.target_node_id));
+
+    for (const edge of existingEdges) {
+      if (desiredTargetIds.has(edge.target_node_id)) continue;
+      await update(this.db, kbGraphEdges)
+        .set({ archived: true, archived_at: new Date() })
+        .where(eq(kbGraphEdges.edge_id, edge.edge_id))
+        .run();
+    }
+
+    for (const targetNodeId of desiredTargetIds) {
+      if (existingTargetIds.has(targetNodeId)) continue;
+      await insert(this.db, kbGraphEdges)
+        .values({
+          edge_id: generateId(),
+          source_node_id: source.node_id,
+          target_node_id: targetNodeId,
+          edge_type: input.edge_type,
+          confidence: null,
+          properties: null,
+          created_by: input.created_by ?? null,
+          created_at: new Date(),
+          archived: false,
+          archived_at: null,
+        } satisfies KBGraphEdgeInsert)
+        .run();
+    }
+  }
+
   async neighbors(query: KnowledgeGraphNeighborsQuery): Promise<KnowledgeGraphNeighborsResult> {
     const center = await this.findNode(query.node, { includeArchived: query.include_archived });
     if (!center) throw new EntityNotFoundError('KnowledgeGraphNode', JSON.stringify(query.node));
@@ -1288,5 +1364,62 @@ export class KnowledgeGraphRepository {
     }
 
     return { center, nodes, edges };
+  }
+
+  /**
+   * Return every doc-to-doc edge whose endpoints are both document nodes in the
+   * given namespace, expressed in document-id terms. Powers the namespace-wide
+   * graph view. Cross-namespace edges (one endpoint outside the namespace) are
+   * excluded since only nodes carrying this `namespace_id` are considered.
+   */
+  async documentEdgesForNamespace(
+    query: KnowledgeNamespaceGraphQuery
+  ): Promise<KnowledgeDocumentEdge[]> {
+    const nodeRows = await select(this.db)
+      .from(kbGraphNodes)
+      .where(
+        and(
+          eq(kbGraphNodes.namespace_id, query.namespace_id),
+          eq(kbGraphNodes.node_type, 'document'),
+          eq(kbGraphNodes.archived, false)
+        )
+      )
+      .all();
+
+    const documentIdByNodeId = new Map<string, KnowledgeDocumentID>();
+    for (const row of nodeRows) {
+      if (row.document_id) {
+        documentIdByNodeId.set(row.node_id, row.document_id as KnowledgeDocumentID);
+      }
+    }
+    const nodeIds = [...documentIdByNodeId.keys()];
+    if (nodeIds.length === 0) return [];
+
+    const edgeConditions = [
+      inArray(kbGraphEdges.source_node_id, nodeIds),
+      inArray(kbGraphEdges.target_node_id, nodeIds),
+    ];
+    if (!query.include_archived) edgeConditions.push(eq(kbGraphEdges.archived, false));
+    if (query.edge_types?.length) {
+      edgeConditions.push(or(...query.edge_types.map((t) => eq(kbGraphEdges.edge_type, t)))!);
+    }
+
+    const edgeRows = await select(this.db)
+      .from(kbGraphEdges)
+      .where(and(...edgeConditions))
+      .all();
+
+    const edges: KnowledgeDocumentEdge[] = [];
+    for (const row of edgeRows) {
+      const source = documentIdByNodeId.get(row.source_node_id);
+      const target = documentIdByNodeId.get(row.target_node_id);
+      if (!source || !target || source === target) continue;
+      edges.push({
+        source_document_id: source,
+        target_document_id: target,
+        edge_type: row.edge_type as KnowledgeGraphEdgeType,
+      });
+    }
+    return edges;
   }
 }

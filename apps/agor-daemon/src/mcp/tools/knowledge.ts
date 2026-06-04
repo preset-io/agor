@@ -6,6 +6,7 @@ import type {
   KnowledgeVisibility,
 } from '@agor/core/types';
 import {
+  buildKnowledgeDocumentUri,
   KNOWLEDGE_DOCUMENT_KINDS,
   KNOWLEDGE_EDIT_POLICIES,
   KNOWLEDGE_GRAPH_EDGE_TYPES,
@@ -90,6 +91,30 @@ function knowledgeNotImplementedResult(toolName: string, servicePaths: string[])
 
 function mcpParams(ctx: McpContext, query?: Record<string, unknown>): Record<string, unknown> {
   return query ? { ...ctx.baseServiceParams, query } : { ...ctx.baseServiceParams };
+}
+
+/**
+ * Decorate Knowledge documents in a service result with `reference_uri` — the
+ * rename-proof `agor://kb/document/<id>` link to embed in other docs' markdown
+ * (an embedded link auto-creates a `references` graph edge on save). Walks
+ * arrays, Feathers `{ data }` pages, bare documents, hydrated documents (which
+ * also carry a nested `document`), and search rows that wrap a `document`.
+ */
+function enrichWithReferenceUri(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(enrichWithReferenceUri);
+  if (!value || typeof value !== 'object') return value;
+  const obj = value as Record<string, unknown>;
+  if (Array.isArray(obj.data)) {
+    return { ...obj, data: obj.data.map(enrichWithReferenceUri) };
+  }
+  let next = obj;
+  if (typeof obj.document_id === 'string') {
+    next = { ...next, reference_uri: buildKnowledgeDocumentUri(obj.document_id) };
+  }
+  if (obj.document && typeof obj.document === 'object') {
+    next = { ...next, document: enrichWithReferenceUri(obj.document) };
+  }
+  return next;
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -214,7 +239,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_search',
     {
       description:
-        'Search Agor Knowledge documents. Supports namespace/path/kind filters now, with semantic/hybrid modes reserved for the future backend.',
+        'Search Agor Knowledge documents. Supports namespace/path/kind filters now, with semantic/hybrid modes reserved for the future backend. Each result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         query: z.string().describe('Search text. Use an empty string to browse with filters.'),
@@ -250,7 +275,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (args.limit) query.limit = args.limit;
       if (args.mode) query.mode = args.mode;
 
-      if (service.find) return textResult(await service.find(mcpParams(ctx, query)));
+      if (service.find)
+        return textResult(enrichWithReferenceUri(await service.find(mcpParams(ctx, query))));
       return knowledgeNotImplementedResult('agor_kb_search', ['kb/search.find']);
     }
   );
@@ -259,7 +285,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_get',
     {
       description:
-        'Get a Knowledge document by documentId, canonical URI, or namespace + path. Returns the current version content by default when the backend supports includeContent.',
+        'Get a Knowledge document by documentId, canonical URI, or namespace + path. Returns the current version content by default when the backend supports includeContent. The result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
@@ -291,7 +317,10 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
 
       const documentId = coerceString(args.documentId);
       if (documentId) {
-        if (service.get) return textResult(await service.get(documentId, mcpParams(ctx, query)));
+        if (service.get)
+          return textResult(
+            enrichWithReferenceUri(await service.get(documentId, mcpParams(ctx, query)))
+          );
         return knowledgeNotImplementedResult('agor_kb_get', ['kb/documents.get']);
       }
 
@@ -321,9 +350,10 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         },
         mcpParams(ctx)
       );
-      if (customResult !== undefined) return textResult(customResult);
+      if (customResult !== undefined) return textResult(enrichWithReferenceUri(customResult));
 
-      if (service.find) return textResult(await service.find(mcpParams(ctx, query)));
+      if (service.find)
+        return textResult(enrichWithReferenceUri(await service.find(mcpParams(ctx, query))));
       return knowledgeNotImplementedResult('agor_kb_get', ['kb/documents.find']);
     }
   );
@@ -332,7 +362,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_put',
     {
       description:
-        'Create or update a markdown Knowledge document. This is an idempotent upsert keyed by documentId, URI, or namespace + path when the backend implements putDocument.',
+        'Create or update a markdown Knowledge document. Idempotent upsert keyed by documentId, URI, or namespace + path when the backend implements putDocument. To build the knowledge graph, embed links to other KB docs in the markdown — each resolvable link becomes a "references" edge automatically on save. Prefer the rename-proof form [label](agor://kb/document/<documentId>); [label](agor://kb/<namespace>/<path>) also works but breaks if the target moves. Get a doc\'s reference_uri from agor_kb_search or agor_kb_get.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         documentId: z.string().optional().describe('Existing Knowledge document ID to update'),
@@ -348,13 +378,19 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         title: z
           .string()
           .optional()
-          .describe('Human-readable title. Defaults can be derived from path.'),
-        content: z.string().describe('Markdown content for the new version'),
+          .describe(
+            'Human-readable title (optional). When omitted, the first markdown line (e.g. an H1) becomes the title, falling back to the document path.'
+          ),
+        content: z
+          .string()
+          .describe(
+            'Markdown content for the new version. Embed [label](agor://kb/document/<documentId>) links to other KB docs to create graph edges between them.'
+          ),
         firstLineIsTitle: z
           .boolean()
           .optional()
           .describe(
-            'When true, the first non-empty markdown line is treated as the document title and stored as metadata.title_from_content.'
+            'Derive the title from the first non-empty markdown line (stored as metadata.title_from_content). Defaults to true when `title` is omitted, false when an explicit `title` is given.'
           ),
         kind: KnowledgeDocumentKindSchema.optional().describe('Document kind (default: doc)'),
         visibility: KnowledgeVisibilitySchema.optional().describe(
@@ -395,28 +431,26 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
 
       const uri = coerceString(args.uri);
       const parsedUri = parseKnowledgeUri(uri);
-      const metadataInput = coerceJsonRecord(args.metadata) as Record<string, unknown> | undefined;
-      const metadata = {
-        ...(metadataInput ?? {}),
-        ...(args.firstLineIsTitle === undefined
-          ? {}
-          : { title_from_content: args.firstLineIsTitle }),
-      };
+      const title = coerceString(args.title);
+      // Title is optional: derive it from the first markdown line unless the
+      // caller passed an explicit title (or set the flag themselves).
+      const firstLineIsTitle = args.firstLineIsTitle ?? title === undefined;
 
       const data = {
         document_id: coerceString(args.documentId),
         uri,
         namespace_slug: coerceString(args.namespace) ?? parsedUri?.namespace_slug,
         path: coerceString(args.path) ?? parsedUri?.path,
-        title: coerceString(args.title),
+        title,
         content_text: content,
+        first_line_is_title: firstLineIsTitle,
         kind: (args.kind as KnowledgeDocumentKind | undefined) ?? 'doc',
         visibility: args.visibility as KnowledgeVisibility | undefined,
         edit_policy: args.editPolicy as KnowledgeEditPolicy | undefined,
         create_namespace: args.createNamespace === true,
         namespace_display_name: coerceString(args.namespaceDisplayName),
         frontmatter: coerceJsonRecord(args.frontmatter),
-        metadata,
+        metadata: coerceJsonRecord(args.metadata),
         change_summary: coerceString(args.changeSummary),
         expected_version: args.expectedVersion,
       };

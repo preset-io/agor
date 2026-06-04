@@ -14,6 +14,9 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useEmojiAutocomplete } from '@/hooks/useEmojiAutocomplete';
 import { mapToArray } from '@/utils/mapHelpers';
 import './AutocompleteTextarea.css';
+import { buildKbDocLink, filterKbDocs, type KbDocMention } from './kbMentions';
+
+export type { KbDocMention } from './kbMentions';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -47,11 +50,21 @@ interface SlashCommandResult {
   type: 'slash_command';
 }
 
+interface KbDocResult {
+  kbTitle: string;
+  kbDocumentId: string;
+  kbPath: string;
+  kbUri: string;
+  kbRoutePath: string;
+  type: 'kb_doc';
+}
+
 type AutocompleteResult =
   | FileResult
   | UserResult
   | EmojiResult
   | SlashCommandResult
+  | KbDocResult
   | { heading: string };
 
 interface AutocompleteTextareaProps {
@@ -71,6 +84,12 @@ interface AutocompleteTextareaProps {
   slashCommands?: string[];
   /** Available skills from the SDK (stored on session.custom_context) */
   skills?: string[];
+  /**
+   * Knowledge Base documents available for `@` references. When provided, the
+   * `@` autocomplete includes a "Knowledge Base" section and inserts a markdown
+   * link to the selected doc. Empty/omitted in non-KB contexts.
+   */
+  kbDocs?: KbDocMention[];
   /** Draw attention to the textarea while it is empty. */
   highlightWhenEmpty?: boolean;
 }
@@ -236,6 +255,75 @@ const highlightMentions = (text: string, highlightColor: string): React.ReactNod
   return parts;
 };
 
+// Style properties replicated onto the mirror div so its text wraps identically
+// to the textarea, letting us measure the pixel position of any character index.
+const CARET_MIRROR_PROPS = [
+  'boxSizing',
+  'width',
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'paddingLeft',
+  'borderTopWidth',
+  'borderRightWidth',
+  'borderBottomWidth',
+  'borderLeftWidth',
+  'fontStyle',
+  'fontVariant',
+  'fontWeight',
+  'fontStretch',
+  'fontSize',
+  'fontFamily',
+  'lineHeight',
+  'letterSpacing',
+  'wordSpacing',
+  'textIndent',
+  'textTransform',
+  'tabSize',
+] as const;
+
+/**
+ * Measure the pixel position (relative to the textarea's padding box, before
+ * scroll) of a character index, using a hidden mirror div that reproduces the
+ * textarea's wrapping. Returns the caret's top-left and the line height so
+ * callers can anchor a popover just below the caret line.
+ */
+const getCaretCoordinates = (
+  textarea: HTMLTextAreaElement,
+  text: string,
+  index: number
+): { left: number; top: number; lineHeight: number } => {
+  const computed = window.getComputedStyle(textarea);
+  const mirror = document.createElement('div');
+  const style = mirror.style;
+  style.position = 'absolute';
+  style.visibility = 'hidden';
+  style.whiteSpace = 'pre-wrap';
+  style.wordWrap = 'break-word';
+  style.top = '0';
+  style.left = '-9999px';
+  for (const prop of CARET_MIRROR_PROPS) {
+    style[prop] = computed[prop];
+  }
+
+  mirror.textContent = text.slice(0, index);
+  const marker = document.createElement('span');
+  // Non-empty content so the span has measurable layout at line end.
+  marker.textContent = text.slice(index) || '.';
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+
+  const parsedLineHeight = Number.parseFloat(computed.lineHeight);
+  const lineHeight = Number.isNaN(parsedLineHeight)
+    ? Number.parseFloat(computed.fontSize) * 1.4
+    : parsedLineHeight;
+  const left = marker.offsetLeft;
+  const top = marker.offsetTop;
+
+  document.body.removeChild(mirror);
+  return { left, top, lineHeight };
+};
+
 export const AutocompleteTextarea = React.forwardRef<
   HTMLTextAreaElement,
   AutocompleteTextareaProps
@@ -253,6 +341,7 @@ export const AutocompleteTextarea = React.forwardRef<
       onFilesDrop,
       slashCommands = [],
       skills = [],
+      kbDocs = [],
       highlightWhenEmpty = false,
     },
     ref
@@ -279,6 +368,11 @@ export const AutocompleteTextarea = React.forwardRef<
     const [scrollTop, setScrollTop] = useState(0);
     const overlayRef = useRef<HTMLDivElement>(null);
 
+    // Popover offset (in px) so the dropdown anchors near the trigger caret
+    // rather than the textarea's bottom-left. Anchored to the trigger index so
+    // it stays put as the user types the query.
+    const [popoverOffset, setPopoverOffset] = useState<[number, number]>([0, 0]);
+
     /**
      * Synchronize overlay scroll with textarea scroll
      */
@@ -295,6 +389,22 @@ export const AutocompleteTextarea = React.forwardRef<
         textarea.removeEventListener('scroll', handleScroll);
       };
     }, []);
+
+    /**
+     * Anchor the popover near the trigger caret. Recomputed when the popover
+     * opens, the trigger moves, or the text/scroll reflows. With the Popover's
+     * `bottomLeft` placement the popup's top-left aligns to the wrapper's
+     * bottom-left, so we offset back up to the caret line.
+     */
+    React.useEffect(() => {
+      if (!showPopover || triggerIndex < 0) return;
+      const textarea = textareaRef.current?.current;
+      if (!textarea) return;
+      const { left, top, lineHeight } = getCaretCoordinates(textarea, value, triggerIndex);
+      const offsetX = Math.max(0, left - textarea.scrollLeft);
+      const offsetY = top + lineHeight - scrollTop - textarea.offsetHeight;
+      setPopoverOffset([offsetX, offsetY]);
+    }, [showPopover, triggerIndex, scrollTop, value]);
 
     /**
      * Scroll highlighted item into view
@@ -383,7 +493,22 @@ export const AutocompleteTextarea = React.forwardRef<
       const options: AutocompleteResult[] = [];
 
       if (triggerType === '@') {
-        // @ trigger: show files and users
+        // @ trigger: show KB docs, files, and users
+        if (kbDocs.length > 0) {
+          const kbResults: KbDocResult[] = filterKbDocs(kbDocs, query).map((doc) => ({
+            kbTitle: doc.title,
+            kbDocumentId: doc.documentId,
+            kbPath: doc.path,
+            kbUri: doc.uri,
+            kbRoutePath: doc.routePath,
+            type: 'kb_doc' as const,
+          }));
+          if (kbResults.length > 0) {
+            options.push({ heading: 'KNOWLEDGE BASE' });
+            options.push(...kbResults);
+          }
+        }
+
         if (fileResults.length > 0) {
           options.push({ heading: 'FILES & FOLDERS' });
           options.push(...fileResults);
@@ -409,7 +534,7 @@ export const AutocompleteTextarea = React.forwardRef<
       }
 
       return options;
-    }, [triggerType, fileResults, emojiResults, slashCommandResults, query, filterUsers]);
+    }, [triggerType, fileResults, emojiResults, slashCommandResults, kbDocs, query, filterUsers]);
 
     /**
      * Auto-highlight first selectable item when options change
@@ -550,7 +675,7 @@ export const AutocompleteTextarea = React.forwardRef<
      * Handle item selection
      */
     const handleSelect = useCallback(
-      (item: FileResult | UserResult | EmojiResult | SlashCommandResult) => {
+      (item: FileResult | UserResult | EmojiResult | SlashCommandResult | KbDocResult) => {
         if (triggerIndex === -1) return;
 
         const cursorPos = textareaRef.current.current?.selectionStart || 0;
@@ -560,7 +685,10 @@ export const AutocompleteTextarea = React.forwardRef<
         let insertText = '';
         let addTrailingSpace = true;
 
-        if ('command' in item) {
+        if ('kbDocumentId' in item) {
+          // KB doc reference - replace @query with a rename-proof markdown link
+          insertText = buildKbDocLink(item.kbTitle, item.kbDocumentId);
+        } else if ('command' in item) {
           // Slash command selection - replace with /command
           insertText = `/${item.command}`;
         } else if ('emoji' in item) {
@@ -651,7 +779,7 @@ export const AutocompleteTextarea = React.forwardRef<
               if (highlightedIndex >= 0) {
                 const item = autocompleteOptions[highlightedIndex];
                 if (!('heading' in item)) {
-                  handleSelect(item as FileResult | UserResult | SlashCommandResult);
+                  handleSelect(item as FileResult | UserResult | SlashCommandResult | KbDocResult);
                 }
               } else if (autocompleteOptions.length > 0) {
                 // If nothing highlighted, highlight first non-heading item
@@ -673,13 +801,15 @@ export const AutocompleteTextarea = React.forwardRef<
               if (highlightedIndex >= 0) {
                 const item = autocompleteOptions[highlightedIndex];
                 if (!('heading' in item)) {
-                  handleSelect(item as FileResult | UserResult | EmojiResult | SlashCommandResult);
+                  handleSelect(
+                    item as FileResult | UserResult | EmojiResult | SlashCommandResult | KbDocResult
+                  );
                 }
               } else {
                 // Nothing highlighted - select first non-heading item (like Slack)
                 const firstItem = autocompleteOptions.find((item) => !('heading' in item));
                 if (firstItem) {
-                  handleSelect(firstItem as FileResult | UserResult | EmojiResult);
+                  handleSelect(firstItem as FileResult | UserResult | EmojiResult | KbDocResult);
                 }
               }
             } else if (!isPopoverOpen && onKeyPress) {
@@ -837,8 +967,13 @@ export const AutocompleteTextarea = React.forwardRef<
             let itemKey = '';
             let isFolder = false;
             let isCommand = false;
+            let isKbDoc = false;
 
-            if ('command' in item) {
+            if ('kbRoutePath' in item) {
+              label = item.kbTitle;
+              itemKey = `kb-${item.kbUri}`;
+              isKbDoc = true;
+            } else if ('command' in item) {
               label = `/${item.command}`;
               itemKey = `cmd-${item.command}`;
               isCommand = true;
@@ -860,7 +995,9 @@ export const AutocompleteTextarea = React.forwardRef<
               <div
                 key={itemKey}
                 onClick={() =>
-                  handleSelect(item as FileResult | UserResult | EmojiResult | SlashCommandResult)
+                  handleSelect(
+                    item as FileResult | UserResult | EmojiResult | SlashCommandResult | KbDocResult
+                  )
                 }
                 style={{
                   padding: `${token.paddingXS}px ${token.paddingSM}px`,
@@ -902,6 +1039,8 @@ export const AutocompleteTextarea = React.forwardRef<
                 )}
                 {/* Show folder icon for folders */}
                 {isFolder && <span style={{ opacity: 0.6 }}>📁</span>}
+                {/* Show doc icon for KB docs */}
+                {isKbDoc && <span style={{ opacity: 0.6 }}>📄</span>}
                 <Text ellipsis style={{ flex: 1 }}>
                   {'emoji' in item
                     ? `:${item.shortcode}:`
@@ -911,6 +1050,20 @@ export const AutocompleteTextarea = React.forwardRef<
                         : ''
                       : label}
                 </Text>
+                {/* Show namespace/path for KB docs */}
+                {isKbDoc && 'kbPath' in item && (
+                  <Text
+                    style={{
+                      fontSize: token.fontSizeSM - 1,
+                      color: token.colorTextDescription,
+                      flexShrink: 0,
+                      maxWidth: 140,
+                    }}
+                    ellipsis
+                  >
+                    {item.kbPath}
+                  </Text>
+                )}
                 {/* Show source badge for slash commands */}
                 {isCommand && 'source' in item && (
                   <Text
@@ -940,6 +1093,10 @@ export const AutocompleteTextarea = React.forwardRef<
         open={showPopover && autocompleteOptions.length > 0}
         trigger={[]}
         placement="bottomLeft"
+        align={{
+          offset: popoverOffset,
+          overflow: { adjustX: true, adjustY: true },
+        }}
         overlayStyle={{ paddingTop: 4 }}
       >
         <div

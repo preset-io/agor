@@ -12,6 +12,7 @@ import {
   type KnowledgeDocumentFilters,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
+  KnowledgeGraphRepository,
   KnowledgeNamespaceRepository,
   type UpdateKnowledgeDocumentInput,
 } from '@agor/core/db';
@@ -28,6 +29,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  extractKnowledgeLinks,
   hasMinimumRole,
   parseKnowledgeUri,
   ROLES,
@@ -93,6 +95,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   private repo: KnowledgeDocumentRepository;
   private versions: KnowledgeDocumentVersionRepository;
   private namespaces: KnowledgeNamespaceRepository;
+  private graph: KnowledgeGraphRepository;
 
   constructor(db: Database) {
     const repo = new KnowledgeDocumentRepository(db);
@@ -107,6 +110,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     this.repo = repo;
     this.versions = new KnowledgeDocumentVersionRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
+    this.graph = new KnowledgeGraphRepository(db);
   }
 
   private isAdmin(user?: User): boolean {
@@ -203,6 +207,49 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const namespace = await this.namespaces.findBySlug(String(namespaceSlug));
     if (!namespace || namespace.archived) return null;
     return this.repo.findByNamespaceAndPath(namespace.namespace_id, String(path));
+  }
+
+  /**
+   * Keep the knowledge graph's outgoing `references` edges for a document in
+   * sync with the doc-to-doc links in its markdown. Only runs when content was
+   * (re)written; metadata-only saves leave existing edges untouched. Failures
+   * are swallowed so graph upkeep never blocks a save.
+   */
+  private async syncGraphReferences(
+    doc: KnowledgeDocument,
+    content: string | null | undefined,
+    userId: UserID | null
+  ): Promise<void> {
+    if (typeof content !== 'string') return;
+    try {
+      const links = extractKnowledgeLinks(content);
+      const targets: { uri: string; document_id: string; namespace_id: string }[] = [];
+      const seen = new Set<string>();
+      for (const link of links) {
+        const target = await this.resolveDocumentRef(
+          link.document_id
+            ? { document_id: link.document_id }
+            : { namespace_slug: link.namespace_slug, path: link.path }
+        );
+        if (!target || target.archived) continue;
+        if (target.document_id === doc.document_id) continue;
+        if (seen.has(target.document_id)) continue;
+        seen.add(target.document_id);
+        targets.push({
+          uri: target.uri,
+          document_id: target.document_id,
+          namespace_id: target.namespace_id,
+        });
+      }
+      await this.graph.syncOutgoingEdges({
+        source: { uri: doc.uri, document_id: doc.document_id, namespace_id: doc.namespace_id },
+        edge_type: 'references',
+        targets,
+        created_by: userId,
+      });
+    } catch (err) {
+      console.error('Failed to sync knowledge graph references:', err);
+    }
   }
 
   private async versionFor(
@@ -349,6 +396,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
           existing
         )
       );
+      await this.syncGraphReferences(result, data.content_text, userId);
       this.emit?.('patched', result, params);
       return result;
     }
@@ -382,6 +430,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
         updated_by: this.attributionUserId(params, data.updated_by),
       })
     );
+    await this.syncGraphReferences(result, data.content_text, userId);
     this.emit?.('created', result, params);
     return result;
   }
@@ -402,6 +451,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const result = await this.repo.create({
       ...prepared,
     });
+    await this.syncGraphReferences(result, data.content_text, userId);
     this.emit?.('created', result, params);
     return result;
   }
@@ -437,6 +487,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
     });
+    await this.syncGraphReferences(
+      result,
+      (data as KnowledgeDocumentWriteData).content_text,
+      this.attributionUserId(params, data.updated_by)
+    );
     this.emit?.('patched', result, params);
     return result;
   }
@@ -458,6 +513,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
     });
+    await this.syncGraphReferences(
+      result,
+      (data as KnowledgeDocumentWriteData).content_text,
+      this.attributionUserId(params, data.updated_by)
+    );
     this.emit?.('updated', result, params);
     return result;
   }

@@ -3,9 +3,11 @@ import type {
   KnowledgeNamespace as CoreKnowledgeNamespace,
   KnowledgeDocumentVersion as CoreKnowledgeVersion,
   KnowledgeDocumentKind,
+  KnowledgeNamespaceGraph,
 } from '@agor/core/types';
 import {
   hasMinimumRole,
+  KNOWLEDGE_DOCUMENT_KINDS,
   normalizeKnowledgeFolderPath,
   ROLES,
   titleFromKnowledgeContent,
@@ -13,6 +15,7 @@ import {
 } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import {
+  ApartmentOutlined,
   ArrowLeftOutlined,
   DeleteOutlined,
   DownOutlined,
@@ -55,8 +58,13 @@ import type { DataNode } from 'antd/es/tree';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import {
+  AutocompleteTextarea,
+  hydrateKbDocLinks,
+  type KbDocMention,
+} from '../components/AutocompleteTextarea';
 import { BrandLogo } from '../components/BrandLogo';
-import { CodeEditor } from '../components/CodeEditor';
+import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
 import { useThemedModal } from '../utils/modal';
@@ -93,7 +101,11 @@ interface KnowledgeSearchResult {
 interface KnowledgePageProps {
   client: AgorClient | null;
   currentUser?: User | null;
+  /** All known users, keyed by id — powers `@` user mentions in the editor. */
+  userById?: Map<string, User>;
 }
+
+const EMPTY_USER_MAP: Map<string, User> = new Map();
 
 const DEFAULT_MARKDOWN = `# New Knowledge Page\n\nWrite markdown here.\n`;
 const DRAFT_DOCUMENT_ID = '__knowledge_draft__' as CoreKnowledgeDocument['document_id'];
@@ -164,6 +176,28 @@ const buildKnowledgeRoutePath = (
   return encodedDocumentPath
     ? `${basePath}/${encodedNamespace}/${encodedDocumentPath}`
     : `${basePath}/${encodedNamespace}`;
+};
+
+// Non-throwing slug extraction from a `agor://kb/<slug>/<path>` URI. Unlike
+// parseKnowledgeUri (which normalizes/validates the path and throws), this only
+// pulls the namespace slug so one malformed doc can't break the mention list.
+const namespaceSlugFromUri = (uri?: string | null): string | null => {
+  const prefix = 'agor://kb/';
+  if (!uri?.startsWith(prefix)) return null;
+  const rest = uri.slice(prefix.length);
+  const slash = rest.indexOf('/');
+  return slash > 0 ? rest.slice(0, slash) : null;
+};
+
+// Non-throwing leaf title used only as a fallback when a doc has no title.
+const leafTitleFromPath = (path: string): string => {
+  const leaf = path.split('/').filter(Boolean).pop() ?? path;
+  return (
+    leaf
+      .replace(/\.(md|markdown)$/i, '')
+      .replace(/[-_]+/g, ' ')
+      .trim() || path
+  );
 };
 
 const normalizeFindResult = <T,>(result: T[] | { data?: T[] }): T[] =>
@@ -260,7 +294,11 @@ interface FolderSection {
   docs: KnowledgeDocument[];
 }
 
-export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps) {
+export function KnowledgePage({
+  client,
+  currentUser = null,
+  userById = EMPTY_USER_MAP,
+}: KnowledgePageProps) {
   const { token } = theme.useToken();
   const { confirm } = useThemedModal();
   const navigate = useNavigate();
@@ -274,11 +312,18 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
   const routeSearchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const [namespaces, setNamespaces] = useState<KnowledgeNamespace[]>([]);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  // All readable docs (across namespaces) for `@` reference autocomplete.
+  const [mentionDocs, setMentionDocs] = useState<KbDocMention[]>([]);
   const [draftDocument, setDraftDocument] = useState<KnowledgeDocument | null>(null);
   const [draftNamespaceSlug, setDraftNamespaceSlug] = useState<string | null>(null);
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
   const [activeSpace, setActiveSpace] = useState(() => routeNamespaceSlug ?? 'global');
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
+  // Whole-Space document graph shown as the home view when no doc is open.
+  const [graphData, setGraphData] = useState<KnowledgeNamespaceGraph | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  // Doc hovered in either the tree or the graph, for bidirectional highlighting.
+  const [hoverDocId, setHoverDocId] = useState<string | null>(null);
   const [selectedFolder, setSelectedFolder] = useState(ROOT_FOLDER);
   const [expandedTreeKeys, setExpandedTreeKeys] = useState<React.Key[]>([
     'folder:',
@@ -286,6 +331,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
   ]);
   const [titleDraft, setTitleDraft] = useState('');
   const [visibilityDraft, setVisibilityDraft] = useState<KnowledgeDocument['visibility']>('public');
+  const [kindDraft, setKindDraft] = useState<KnowledgeDocumentKind>('doc');
   const [titleFromContent, setTitleFromContent] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState(DEFAULT_MARKDOWN);
   const [searchQuery, setSearchQuery] = useState(() => routeSearchParams.get('q') ?? '');
@@ -307,6 +353,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
   const [isEditing, setIsEditing] = useState(() => routeSearchParams.get('mode') === 'edit');
   const pendingEditModeRef = useRef<boolean | null>(null);
   const activeDocIdRef = useRef<string | null>(activeDocId);
+  const prevRouteDocPathRef = useRef<string | null>(routeDocumentPath);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
   const [relocateModalOpen, setRelocateModalOpen] = useState(false);
   const [relocateFolder, setRelocateFolder] = useState(ROOT_FOLDER);
@@ -352,6 +399,50 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
       (activeSpace !== 'all' ? activeSpace : selectedNamespace?.slug) ??
       'global',
     [activeSpace, namespaceSlugById, selectedNamespace?.slug]
+  );
+
+  // Resolve rename-proof `agor://kb/document/<uuid>` links to clickable links for
+  // display. Built from mentionDocs (all docs, not the filtered view) so
+  // cross-namespace references hydrate too. Emit absolute same-origin URLs: the
+  // markdown renderer's link hardener (rehype-harden) blocks both non-http(s)
+  // schemes and relative paths, so a bare route would render as "[blocked]".
+  const kbRouteById = useMemo(
+    () => new Map(mentionDocs.map((doc) => [doc.documentId, doc.routePath])),
+    [mentionDocs]
+  );
+  const hydrateKbLinks = useCallback(
+    (markdown: string) =>
+      hydrateKbDocLinks(markdown, (id) => {
+        const route = kbRouteById.get(id);
+        return route ? `${window.location.origin}${route}` : undefined;
+      }),
+    [kbRouteById]
+  );
+
+  // Streamdown renders every link with target="_blank", so a same-origin KB
+  // doc link would pop a new tab instead of navigating in-app. Intercept plain
+  // left-clicks on internal /kb|/knowledge links and route them through the
+  // SPA; modified clicks (cmd/ctrl/shift) keep the native open-in-new-tab.
+  const handleKbContentClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (event.defaultPrevented) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = (event.target as HTMLElement).closest('a');
+      const href = anchor?.getAttribute('href');
+      if (!href) return;
+      let url: URL;
+      try {
+        url = new URL(href, window.location.origin);
+      } catch {
+        return;
+      }
+      if (url.origin !== window.location.origin || !/^\/(kb|knowledge)\//.test(url.pathname)) {
+        return;
+      }
+      event.preventDefault();
+      navigate(`${url.pathname}${url.search}${url.hash}`);
+    },
+    [navigate]
   );
 
   const nextDraftTitle = useMemo(() => {
@@ -489,6 +580,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
           (markdownDraft !== savedMarkdown ||
             titleDraft !== activeDoc.title ||
             visibilityDraft !== activeDoc.visibility ||
+            kindDraft !== activeDoc.kind ||
             titleFromContent !== (activeDoc.metadata?.title_from_content === true) ||
             renamePathOnTitleChange))
     );
@@ -510,12 +602,41 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
     }
   }, [client, activeSpace]);
 
+  // Load every readable doc (no namespace/kind filter) so `@` can reference
+  // docs across spaces. Kept separate from `documents`, which is scoped by the
+  // sidebar's active namespace, kind, and search query.
+  const loadMentionDocs = useCallback(async () => {
+    if (!client) return;
+    try {
+      const result = await client.service('kb/documents').find({ query: { archived: false } });
+      const rows = normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]);
+      const mentions = rows.reduce<KbDocMention[]>((acc, doc) => {
+        const path = doc.path?.trim();
+        if (!path) return acc;
+        const slug = namespaceSlugFromUri(doc.uri);
+        if (!slug) return acc;
+        acc.push({
+          title: doc.title?.trim() || leafTitleFromPath(path),
+          documentId: doc.document_id,
+          path,
+          uri: doc.uri,
+          routePath: buildKnowledgeRoutePath('/kb', slug, path),
+        });
+        return acc;
+      }, []);
+      setMentionDocs(mentions);
+    } catch (err) {
+      console.error('Failed to load Knowledge mentions:', err);
+    }
+  }, [client]);
+
   const loadDocuments = useCallback(async () => {
     if (!client) return;
     setLoading(true);
     setError(null);
     try {
       await loadNamespaces();
+      void loadMentionDocs();
       const kind = kindForSegment(kindFilter);
       const namespaceFilter = activeSpace === 'all' ? undefined : activeSpace;
       if (searchQuery.trim()) {
@@ -545,11 +666,35 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
     } finally {
       setLoading(false);
     }
-  }, [client, activeSpace, kindFilter, searchQuery, loadNamespaces]);
+  }, [client, activeSpace, kindFilter, searchQuery, loadNamespaces, loadMentionDocs]);
 
   useEffect(() => {
     loadDocuments();
   }, [loadDocuments]);
+
+  // The namespace graph is scoped to a single Space; "All Spaces" has no graph.
+  const loadGraph = useCallback(async () => {
+    if (!client || activeSpace === 'all') {
+      setGraphData(null);
+      return;
+    }
+    setGraphLoading(true);
+    try {
+      const result = await client.service('kb/graph').find({ query: { namespace: activeSpace } });
+      setGraphData(result as unknown as KnowledgeNamespaceGraph);
+    } catch (err) {
+      console.error('Failed to load Knowledge graph:', err);
+      setGraphData(null);
+    } finally {
+      setGraphLoading(false);
+    }
+  }, [client, activeSpace]);
+
+  // Refresh the graph whenever it becomes the visible view (no doc open), so
+  // edges created by a just-saved edit show up on return.
+  useEffect(() => {
+    if (!activeDocId) loadGraph();
+  }, [activeDocId, loadGraph]);
 
   const confirmDiscardUnsavedChanges = useCallback(async (): Promise<boolean> => {
     if (!hasUnsavedChanges) return true;
@@ -585,8 +730,17 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
       routeSearchParams.get('mode') === 'edit' &&
       (Boolean(routeDocumentPath) || routeSearchParams.get('draft') === 'page');
 
+    // Only clear when the URL genuinely transitioned away from a document.
+    // selectKnowledgeDocument issues setActiveDocId + navigate together; React
+    // commits the state before react-router's location updates, so for one
+    // render activeDocId is set while routeDocumentPath still lags at ''. Without
+    // this transition guard we'd clear activeDocId on that transient render,
+    // flashing the graph back before the URL catches up and re-opens the doc.
+    const routeDocPathTransitionedAway = !routeDocumentPath && Boolean(prevRouteDocPathRef.current);
+    prevRouteDocPathRef.current = routeDocumentPath;
+
     if (
-      !routeDocumentPath &&
+      routeDocPathTransitionedAway &&
       activeDocId &&
       !draftDocument &&
       activeDocIdRef.current !== DRAFT_DOCUMENT_ID
@@ -641,6 +795,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
       setSelectedFolder(parentFolderForPath(activeDoc.path));
       setTitleDraft(activeDoc.title);
       setVisibilityDraft(activeDoc.visibility);
+      setKindDraft(activeDoc.kind);
       setTitleFromContent(activeDoc.metadata?.title_from_content === true);
       setRenamePathOnTitleChange(false);
       setIsEditing(pendingEditModeRef.current ?? routeSearchParams.get('mode') === 'edit');
@@ -672,21 +827,21 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
       return;
     }
 
-    const activeNamespaceSlug = activeDoc ? namespaceSlugForDocument(activeDoc) : activeSpace;
-    const shouldKeepNamespaceRoute = Boolean(routeNamespaceSlug) && activeSpace !== 'all';
-    const targetPath = activeDoc
-      ? buildKnowledgeRoutePath(routeBasePath, activeNamespaceSlug, activeDoc.path)
-      : shouldKeepNamespaceRoute
-        ? buildKnowledgeRoutePath(routeBasePath, activeNamespaceSlug)
-        : routeBasePath;
-    const targetUrl = `${targetPath}${buildKnowledgeSearch()}`;
-    const currentUrl = `${location.pathname}${location.search}`;
+    // Only an OPEN document drives the URL from this effect. When no doc is
+    // open, the namespace portion of the URL is owned solely by the navigation
+    // handlers (changeKnowledgeSpace / goToGraphHome) and read back into state
+    // by the route-reading effect above. Mirroring `activeSpace` into the URL
+    // here as well made the namespace a two-writer value: this effect and the
+    // route-reading effect would leapfrog (each acting on the other's
+    // pre-commit value), ping-ponging the route between namespaces forever.
+    if (!activeDoc) return;
 
+    const targetUrl = `${buildKnowledgeRoutePath(routeBasePath, namespaceSlugForDocument(activeDoc), activeDoc.path)}${buildKnowledgeSearch()}`;
+    const currentUrl = `${location.pathname}${location.search}`;
     if (targetUrl !== currentUrl) navigate(targetUrl, { replace: true });
   }, [
     activeDoc,
     activeDocId,
-    activeSpace,
     buildKnowledgeSearch,
     documents,
     draftDocument,
@@ -778,6 +933,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
     setSelectedFolder(ROOT_FOLDER);
     setTitleDraft(title);
     setVisibilityDraft(draft.visibility);
+    setKindDraft(draft.kind);
     setTitleFromContent(true);
     setRenamePathOnTitleChange(false);
     setMarkdownDraft(`# ${title}\n\nWrite markdown here.\n`);
@@ -889,7 +1045,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
           namespace_slug: namespaceSlug,
           path,
           title: nextTitle,
-          kind: 'doc',
+          kind: kindDraft,
           visibility: visibilityDraft,
           metadata: {
             ...(activeDoc.metadata ?? {}),
@@ -925,6 +1081,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
       const updated = (await client.service('kb/documents').patch(activeDoc.document_id, {
         title: nextTitle,
         visibility: visibilityDraft,
+        kind: kindDraft,
         ...(nextPath ? { path: nextPath } : {}),
         content_text: markdownDraft,
         metadata: {
@@ -997,6 +1154,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
       setActiveDocId(null);
       setTitleDraft('');
       setVisibilityDraft('public');
+      setKindDraft('doc');
       setTitleFromContent(false);
       setRenamePathOnTitleChange(false);
       setMarkdownDraft(DEFAULT_MARKDOWN);
@@ -1006,6 +1164,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
     }
     setTitleDraft(activeDoc.title);
     setVisibilityDraft(activeDoc.visibility);
+    setKindDraft(activeDoc.kind);
     setTitleFromContent(activeDoc.metadata?.title_from_content === true);
     setRenamePathOnTitleChange(false);
     setMarkdownDraft(versions[0]?.content_text ?? DEFAULT_MARKDOWN);
@@ -1113,6 +1272,39 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
     );
   };
 
+  const goToGraphHome = async () => {
+    if (!(await confirmDiscardUnsavedChanges())) return;
+    clearDraftDocument();
+    activeDocIdRef.current = null;
+    setActiveDocId(null);
+    pendingEditModeRef.current = false;
+    setIsEditing(false);
+    const targetPath =
+      activeSpace === 'all' ? routeBasePath : buildKnowledgeRoutePath(routeBasePath, activeSpace);
+    navigate(`${targetPath}${buildKnowledgeSearch({ editing: false })}`);
+  };
+
+  const openGraphDoc = async (documentId: string) => {
+    const known = documents.find((doc) => doc.document_id === documentId);
+    if (known) {
+      await selectKnowledgeDocument(known);
+      return;
+    }
+    // Node is filtered out of the sidebar (kind filter / search). Resolve it
+    // from the graph data and clear filters so the routed doc lands in
+    // `documents` and the route-resolution effect can open it.
+    const node = graphData?.nodes.find((n) => n.document_id === documentId);
+    if (!node) return;
+    if (!(await confirmDiscardUnsavedChanges())) return;
+    clearDraftDocument();
+    const slug = namespaceSlugFromUri(node.uri) ?? activeSpace;
+    setKindFilter('All');
+    setSearchQuery('');
+    pendingEditModeRef.current = false;
+    setIsEditing(false);
+    navigate(buildKnowledgeRoutePath(routeBasePath, slug, node.path));
+  };
+
   const changeKnowledgeSpace = async (space: string) => {
     if (!(await confirmDiscardUnsavedChanges())) return;
     clearDraftDocument();
@@ -1127,43 +1319,54 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
     navigate(`${targetPath}${buildKnowledgeSearch({ editing: false })}`);
   };
 
-  const renderDocumentRow = (doc: KnowledgeDocument, depth = 0): React.ReactNode => (
-    <button
-      key={doc.document_id}
-      type="button"
-      onClick={() => selectKnowledgeDocument(doc)}
-      style={{
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        minHeight: 30,
-        margin: '1px 0',
-        padding: '5px 8px',
-        paddingLeft: 10 + depth * 16,
-        border: 0,
-        borderRadius: token.borderRadius,
-        background:
-          activeDoc?.document_id === doc.document_id ? token.colorPrimaryBg : 'transparent',
-        color: token.colorText,
-        cursor: 'pointer',
-        textAlign: 'left',
-      }}
-    >
-      <FileOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
-      <span
+  const renderDocumentRow = (doc: KnowledgeDocument, depth = 0): React.ReactNode => {
+    const isActive = activeDoc?.document_id === doc.document_id;
+    const isHovered = hoverDocId === doc.document_id;
+    return (
+      <button
+        key={doc.document_id}
+        type="button"
+        onClick={() => selectKnowledgeDocument(doc)}
+        onMouseEnter={() => setHoverDocId(doc.document_id)}
+        onMouseLeave={() =>
+          setHoverDocId((current) => (current === doc.document_id ? null : current))
+        }
         style={{
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          fontWeight: activeDoc?.document_id === doc.document_id ? 600 : 400,
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          minHeight: 30,
+          margin: '1px 0',
+          padding: '5px 8px',
+          paddingLeft: 10 + depth * 16,
+          border: 0,
+          borderRadius: token.borderRadius,
+          background: isActive
+            ? token.colorPrimaryBg
+            : isHovered
+              ? token.colorFillSecondary
+              : 'transparent',
+          color: token.colorText,
+          cursor: 'pointer',
+          textAlign: 'left',
         }}
       >
-        {doc.title}
-      </span>
-    </button>
-  );
+        <FileOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
+        <span
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontWeight: isActive ? 600 : 400,
+          }}
+        >
+          {doc.title}
+        </span>
+      </button>
+    );
+  };
 
   const shouldShowFolderInSidebar = (folder: FolderSection): boolean => {
     if (folder.path === ROOT_FOLDER) return true;
@@ -1290,6 +1493,9 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
   const folderNameHelp =
     'Use letters, numbers, spaces, dashes, underscores, dots, and / for subfolders.';
   const showReadActions = titleActionsVisible;
+  // Graph is the home view: shown in the main panel whenever no doc is open.
+  const showGraph = !activeDoc && !isEditing;
+  const fillMain = isEditing || showGraph;
 
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden', background: token.colorBgLayout }}>
@@ -1313,7 +1519,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
             }}
           />
           <BrandLogo level={5} />
-          <Text strong style={{ fontSize: 15 }}>
+          <Text strong style={{ fontSize: 15, cursor: 'pointer' }} onClick={goToGraphHome}>
             Knowledge
           </Text>
           <Tooltip title="Knowledge is in beta — expect rough edges while the data model, MCP tools, and editor settle.">
@@ -1411,6 +1617,29 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
                   padding: 4,
                 }}
               >
+                <button
+                  type="button"
+                  onClick={goToGraphHome}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    minHeight: 30,
+                    margin: '1px 0',
+                    padding: '5px 10px',
+                    border: 0,
+                    borderRadius: token.borderRadius,
+                    background: !activeDoc ? token.colorPrimaryBg : 'transparent',
+                    color: token.colorText,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    fontWeight: !activeDoc ? 600 : 400,
+                  }}
+                >
+                  <ApartmentOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
+                  <span>Graph</span>
+                </button>
                 {renderRootContents()}
               </div>
             </Spin>
@@ -1421,19 +1650,19 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
           style={{
             flex: 1,
             minWidth: 0,
-            overflow: isEditing ? 'hidden' : 'auto',
+            overflow: fillMain ? 'hidden' : 'auto',
             background: token.colorBgLayout,
           }}
         >
           <div
             style={{
-              maxWidth: isEditing ? 'none' : 1040,
-              height: isEditing ? '100%' : undefined,
-              margin: isEditing ? 0 : '0 auto',
-              padding: isEditing ? 24 : '40px 56px',
+              maxWidth: fillMain ? 'none' : 1040,
+              height: fillMain ? '100%' : undefined,
+              margin: fillMain ? 0 : '0 auto',
+              padding: showGraph ? 0 : isEditing ? 24 : '40px 56px',
               boxSizing: 'border-box',
-              display: isEditing ? 'flex' : undefined,
-              flexDirection: isEditing ? 'column' : undefined,
+              display: fillMain ? 'flex' : undefined,
+              flexDirection: fillMain ? 'column' : undefined,
               minHeight: 0,
             }}
           >
@@ -1513,7 +1742,20 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
                           {activeDoc.visibility}
                         </Tag>
                       )}
-                      <Tag>{kindLabels[activeDoc.kind] ?? activeDoc.kind}</Tag>
+                      {isEditing ? (
+                        <Select
+                          size="small"
+                          value={kindDraft}
+                          onChange={setKindDraft}
+                          style={{ width: 128 }}
+                          options={KNOWLEDGE_DOCUMENT_KINDS.map((kind) => ({
+                            label: kindLabels[kind],
+                            value: kind,
+                          }))}
+                        />
+                      ) : (
+                        <Tag>{kindLabels[activeDoc.kind] ?? activeDoc.kind}</Tag>
+                      )}
                       <Text type="secondary">{activeDoc.path}</Text>
                     </Space>
                     {isEditing && (
@@ -1635,14 +1877,19 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
                       }}
                     >
                       <Text strong>Markdown</Text>
-                      <div style={{ flex: 1, minHeight: 0 }}>
-                        <CodeEditor
+                      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                        <AutocompleteTextarea
                           key={activeDoc.document_id}
                           value={markdownDraft}
                           onChange={setMarkdownDraft}
-                          language="markdown"
-                          placeholder={'# Page title\n\nWrite markdown here.'}
-                          height="100%"
+                          client={client}
+                          sessionId={null}
+                          userById={userById}
+                          kbDocs={mentionDocs}
+                          placeholder={
+                            '# Page title\n\nWrite markdown here. Type @ to link a doc or mention a user, : for emoji.'
+                          }
+                          autoSize={{ minRows: 24 }}
                         />
                       </div>
                     </div>
@@ -1658,6 +1905,7 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
                     >
                       <Text strong>Preview</Text>
                       <div
+                        onClick={handleKbContentClick}
                         style={{
                           flex: 1,
                           minHeight: 0,
@@ -1668,12 +1916,13 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
                           background: token.colorBgContainer,
                         }}
                       >
-                        <MarkdownRenderer content={markdownDraft} />
+                        <MarkdownRenderer content={hydrateKbLinks(markdownDraft)} />
                       </div>
                     </div>
                   </Flex>
                 ) : (
                   <div
+                    onClick={handleKbContentClick}
                     style={{
                       padding: '8px 0 80px',
                       fontSize: 16,
@@ -1681,24 +1930,32 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
                     }}
                   >
                     <MarkdownRenderer
-                      content={
+                      content={hydrateKbLinks(
                         titleFromContent
                           ? stripFirstMarkdownTitleLine(markdownDraft)
                           : markdownDraft
-                      }
+                      )}
                     />
                   </div>
                 )}
               </div>
             ) : (
-              <Empty
-                style={{ paddingTop: 120 }}
-                description={
-                  selectedFolder
-                    ? `Select a page or create one in ${selectedFolder}/.`
-                    : 'Select a page or create one in the root folder.'
-                }
-              />
+              <div style={{ flex: 1, minHeight: 0, width: '100%' }}>
+                <KnowledgeGraph
+                  nodes={graphData?.nodes ?? []}
+                  edges={graphData?.edges ?? []}
+                  activeDocId={activeDocId}
+                  hoverDocId={hoverDocId}
+                  onSelectDoc={openGraphDoc}
+                  onHoverDoc={setHoverDocId}
+                  loading={graphLoading}
+                  emptyText={
+                    activeSpace === 'all'
+                      ? 'Pick a Space to see its document graph.'
+                      : 'No linked documents in this Space yet.'
+                  }
+                />
+              </div>
             )}
           </div>
         </main>
@@ -1792,13 +2049,18 @@ export function KnowledgePage({ client, currentUser = null }: KnowledgePageProps
                   <Empty description="No previous version to diff against" />
                 )
               ) : (
-                <div style={{ maxWidth: 900, margin: '0 auto', paddingBottom: 80 }}>
+                <div
+                  onClick={handleKbContentClick}
+                  style={{ maxWidth: 900, margin: '0 auto', paddingBottom: 80 }}
+                >
                   <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                     <Space wrap>
                       <Tag>v{selectedVersion.version_number}</Tag>
                       <Text type="secondary">{formatTimestamp(selectedVersion.created_at)}</Text>
                     </Space>
-                    <MarkdownRenderer content={selectedVersion.content_text ?? ''} />
+                    <MarkdownRenderer
+                      content={hydrateKbLinks(selectedVersion.content_text ?? '')}
+                    />
                   </Space>
                 </div>
               )
