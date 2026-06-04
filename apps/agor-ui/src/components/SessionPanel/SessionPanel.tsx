@@ -23,8 +23,8 @@ import {
   BranchesOutlined,
   CloseOutlined,
   CodeOutlined,
-  DeleteOutlined,
   ForkOutlined,
+  InboxOutlined,
   QuestionCircleOutlined,
   SendOutlined,
   SettingOutlined,
@@ -37,6 +37,7 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppMcpData, useAppUserData } from '../../contexts/AppDataContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
@@ -248,9 +249,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onBtwFork,
     onOpenSettings,
     onUpdateSession,
-    onDeleteSession: onDelete,
     onOpenTerminal,
   } = useAppActions();
+
+  const { archiveSession } = useSessionActions(client);
 
   // Tool capabilities — drives which buttons are shown
   const toolCaps = session?.agentic_tool
@@ -513,15 +515,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return null;
   }
 
-  const handleDelete = () => {
+  const handleArchive = () => {
     modal.confirm({
-      title: 'Delete Session',
-      content: 'Are you sure you want to delete this session? This action cannot be undone.',
-      okText: 'Delete',
-      okType: 'danger',
+      title: 'Archive Session',
+      content: 'Are you sure you want to archive this session?',
+      okText: 'Archive',
       cancelText: 'Cancel',
-      onOk: () => {
-        onDelete?.(session.session_id);
+      onOk: async () => {
+        await archiveSession(session.session_id);
         onClose();
       },
     });
@@ -1020,11 +1021,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 />
               </Tooltip>
             )}
-            {onDelete && (
-              <Tooltip title="Delete Session">
-                <Button type="text" danger icon={<DeleteOutlined />} onClick={handleDelete} />
-              </Tooltip>
-            )}
+            <Tooltip title="Archive Session">
+              <Button type="text" icon={<InboxOutlined />} onClick={handleArchive} />
+            </Tooltip>
             <Tooltip title="Close Panel">
               <Button
                 type="text"
