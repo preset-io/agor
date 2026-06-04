@@ -6,26 +6,11 @@
  * the visible behaviors that matter to users.
  */
 
-import type { User } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { App as AntApp } from 'antd';
-import type { ReactElement } from 'react';
+import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { makeUser, renderWithApp } from '../testUtils';
 import type { PermissionsFormState } from '../useBranchModalForm';
 import { PermissionsTab } from './PermissionsTab';
-
-function renderWithApp(ui: ReactElement) {
-  return render(<AntApp>{ui}</AntApp>);
-}
-
-function makeUser(overrides: Partial<User> = {}): User {
-  return {
-    user_id: 'user-1',
-    email: 'alice@example.com',
-    role: 'admin',
-    ...overrides,
-  } as unknown as User;
-}
 
 const defaultState: PermissionsFormState = {
   selectedOwnerIds: ['user-1'],
@@ -127,5 +112,24 @@ describe('PermissionsTab', () => {
       />
     );
     expect(screen.getByRole('switch')).toBeDisabled();
+  });
+
+  it('warns when group permissions are unavailable without hiding branch-level controls', () => {
+    renderWithApp(
+      <PermissionsTab
+        loadingOwners={false}
+        canEdit={true}
+        allUsers={[makeUser()]}
+        currentUser={makeUser()}
+        state={defaultState}
+        setField={vi.fn()}
+        groupGrantsStatus="unavailable"
+        groupGrantsError={new Error('not found')}
+      />
+    );
+
+    expect(screen.getByText('Group permissions unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Others Can')).toBeInTheDocument();
+    expect(screen.getByText('Filesystem Access')).toBeInTheDocument();
   });
 });

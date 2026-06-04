@@ -65,6 +65,8 @@ export interface PermissionsFormState {
   groupGrants: Array<{ group_id: string; can: BranchPermissionLevel; fs_access?: FsAccessLevel }>;
 }
 
+export type GroupGrantsStatus = 'loading' | 'loaded' | 'unavailable';
+
 export interface BranchModalFormApi {
   // General slice
   general: GeneralFormState;
@@ -88,6 +90,8 @@ export interface BranchModalFormApi {
   owners: User[];
   allUsers: User[];
   allGroups: Group[];
+  groupGrantsStatus: GroupGrantsStatus;
+  groupGrantsError: Error | null;
   rbacEnabled: boolean;
   loadingOwners: boolean;
   /**
@@ -161,7 +165,8 @@ export function useBranchModalForm({
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [rbacEnabled, setRbacEnabled] = useState<boolean>(true);
   const [loadingOwners, setLoadingOwners] = useState<boolean>(true);
-  const [groupGrantsLoaded, setGroupGrantsLoaded] = useState<boolean>(false);
+  const [groupGrantsStatus, setGroupGrantsStatus] = useState<GroupGrantsStatus>('loading');
+  const [groupGrantsError, setGroupGrantsError] = useState<Error | null>(null);
   const [ownersLoadError, setOwnersLoadError] = useState<Error | null>(null);
 
   const [saving, setSaving] = useState(false);
@@ -227,7 +232,8 @@ export function useBranchModalForm({
       setAllUsers([]);
       setAllGroups([]);
       setRbacEnabled(true);
-      setGroupGrantsLoaded(false);
+      setGroupGrantsStatus('loading');
+      setGroupGrantsError(null);
       setLoadingOwners(true);
       return;
     }
@@ -266,6 +272,8 @@ export function useBranchModalForm({
       try {
         setLoadingOwners(true);
         setOwnersLoadError(null);
+        setGroupGrantsStatus('loading');
+        setGroupGrantsError(null);
         const ownersResponse = await client
           .service('branches/:id/owners')
           .find({ route: { id: branchId } });
@@ -303,14 +311,16 @@ export function useBranchModalForm({
             can: grant.can,
             fs_access: grant.fs_access as FsAccessLevel | undefined,
           }));
-          setGroupGrantsLoaded(true);
+          setGroupGrantsStatus('loaded');
+          setGroupGrantsError(null);
           if (!permissionsTouchedRef.current) {
             setPermissionsState((prev) => ({ ...prev, groupGrants: grants }));
           }
         } catch (error) {
           if (!cancelled) {
             setAllGroups([]);
-            setGroupGrantsLoaded(false);
+            setGroupGrantsStatus('unavailable');
+            setGroupGrantsError(error instanceof Error ? error : new Error(String(error)));
             console.warn('Failed to load branch group permissions:', error);
           }
         }
@@ -322,7 +332,8 @@ export function useBranchModalForm({
           setOwners([]);
           setAllUsers([]);
           setAllGroups([]);
-          setGroupGrantsLoaded(false);
+          setGroupGrantsStatus('unavailable');
+          setGroupGrantsError(error instanceof Error ? error : new Error(String(error)));
         } else {
           // Surface the failure to the modal. Without this, a non-admin owner
           // sees a silently-locked-down modal (owners=[] makes isOwner false →
@@ -394,7 +405,7 @@ export function useBranchModalForm({
   // re-saving branch group grants. The save path diffs against the server
   // before writing, so this remains safe for owner-only/field-only edits.
   const groupGrantsChanged = Boolean(
-    branch && rbacEnabled && groupGrantsLoaded && permissionsTouchedRef.current
+    branch && rbacEnabled && groupGrantsStatus === 'loaded' && permissionsTouchedRef.current
   );
 
   const permissionsChanged = ownersChanged || permissionFieldsChanged || groupGrantsChanged;
@@ -404,12 +415,16 @@ export function useBranchModalForm({
   // Permission gating
   const currentUserId = currentUser?.user_id;
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const isSuperAdmin = hasMinimumRole(currentUser?.role, ROLES.SUPERADMIN);
   const isOwner = owners.some((o) => o.user_id === currentUserId);
   const canViewPermissions = rbacEnabled && (isAdmin || loadingOwners || isOwner);
 
-  // While loading owners, allow admins to edit; restrict to admin/owner once loaded
-  const canEditGeneral = loadingOwners ? isAdmin : !rbacEnabled || isAdmin || isOwner;
-  const canEditPermissions = isAdmin || (!loadingOwners && isOwner);
+  // Backend branch mutations are authorized by branch ownership or superadmin
+  // branch-RBAC bypass. Plain admins can view the tab as a diagnostic/admin
+  // affordance, but enabling controls for non-owner admins would lead to save
+  // failures for owner/permission-field mutations.
+  const canEditGeneral = loadingOwners ? isSuperAdmin : !rbacEnabled || isSuperAdmin || isOwner;
+  const canEditPermissions = isSuperAdmin || (!loadingOwners && isOwner);
 
   const reset = useCallback(() => {
     setGeneralState(buildGeneralDefaults(branch));
@@ -500,7 +515,7 @@ export function useBranchModalForm({
       }
 
       // 3. Upsert/remove branch group grants.
-      if (rbacEnabled && canEditPermissions && groupGrantsLoaded) {
+      if (rbacEnabled && canEditPermissions && groupGrantsStatus === 'loaded') {
         const currentGrants = (await client
           .service('branches/:id/group-grants')
           .find({ route: { id: branch.branch_id } })) as BranchGroupGrantWithGroup[];
@@ -596,7 +611,7 @@ export function useBranchModalForm({
     permissionFieldsChanged,
     permissionsChanged,
     canEditPermissions,
-    groupGrantsLoaded,
+    groupGrantsStatus,
     owners,
     permissions,
     generalChanged,
@@ -620,6 +635,8 @@ export function useBranchModalForm({
     owners,
     allUsers,
     allGroups,
+    groupGrantsStatus,
+    groupGrantsError,
     rbacEnabled,
     loadingOwners,
     canViewPermissions,

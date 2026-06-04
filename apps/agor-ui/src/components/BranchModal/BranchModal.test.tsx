@@ -6,111 +6,18 @@
  * admin/owner and partial-RBAC-data cases.
  */
 
-import type { AgorClient, AssistantConfig, Branch, Repo, User } from '@agor-live/client';
-import { render, screen, waitFor } from '@testing-library/react';
-import { App as AntApp } from 'antd';
-import type { ReactElement } from 'react';
+import type { AgorClient, Branch, User } from '@agor-live/client';
+import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { BranchModal } from './BranchModal';
-
-function renderWithApp(ui: ReactElement) {
-  return render(<AntApp>{ui}</AntApp>);
-}
-
-interface StubOptions {
-  owners?: User[];
-  users?: User[];
-  groupGrants404?: boolean;
-}
-
-function makeStubClient(opts: StubOptions = {}): AgorClient {
-  const owners = [...(opts.owners ?? [])];
-  const users = opts.users ?? owners;
-
-  return {
-    service(path: string) {
-      return {
-        async find() {
-          if (path === 'branches/:id/owners') return owners;
-          if (path === 'branches/:id/group-grants') {
-            if (opts.groupGrants404) {
-              const err = new Error('not found') as Error & { code?: number };
-              err.code = 404;
-              throw err;
-            }
-            return [];
-          }
-          return [];
-        },
-        async findAll() {
-          if (path === 'users') return users;
-          if (path === 'groups') return [];
-          return [];
-        },
-        async patch(id: string, body: unknown) {
-          return { ...(body as object), branch_id: id };
-        },
-      };
-    },
-  } as unknown as AgorClient;
-}
-
-function makeUser(overrides: Partial<User> = {}): User {
-  return {
-    user_id: 'user-1',
-    email: 'alice@example.com',
-    role: 'admin',
-    ...overrides,
-  } as unknown as User;
-}
-
-function makeRepo(): Repo {
-  return {
-    repo_id: 'repo-1',
-    slug: 'preset-io/agor',
-    path: '/tmp/agor',
-  } as unknown as Repo;
-}
-
-function makeBranch(overrides: Partial<Branch> = {}): Branch {
-  return {
-    branch_id: 'branch-1',
-    branch_unique_id: 1,
-    name: 'kelly',
-    repo_id: 'repo-1',
-    ref: 'kelly',
-    path: '/tmp/agor/kelly',
-    new_branch: true,
-    created_at: '2026-06-04T00:00:00.000Z',
-    updated_at: '2026-06-04T00:00:00.000Z',
-    created_by: 'user-1',
-    sessions: [],
-    needs_attention: false,
-    archived: false,
-    mcp_server_ids: [],
-    others_can: 'session',
-    others_fs_access: 'read',
-    dangerously_allow_session_sharing: false,
-    ...overrides,
-  } as unknown as Branch;
-}
-
-function makeAssistantBranch(
-  overrides: Partial<Branch> = {},
-  configOverrides: Partial<AssistantConfig> = {}
-): Branch {
-  return makeBranch({
-    custom_context: {
-      assistant: {
-        kind: 'assistant',
-        displayName: 'Kelly',
-        emoji: '🤖',
-        ...configOverrides,
-      } as AssistantConfig,
-    },
-    ...overrides,
-  });
-}
+import {
+  makeAssistantBranch,
+  makeBranch,
+  makeRepo,
+  makeStubClient,
+  makeUser,
+  renderWithApp,
+} from './testUtils';
 
 function renderBranchModal({
   branch = makeBranch(),
@@ -140,7 +47,7 @@ describe('BranchModal — permissions tab visibility', () => {
 
     renderBranchModal({
       currentUser: seb,
-      client: makeStubClient({ owners: [seb], users: [seb] }),
+      client: makeStubClient({ owners: [seb], users: [seb] }).client,
     });
 
     expect(await screen.findByRole('tab', { name: /permissions/i })).toBeInTheDocument();
@@ -151,7 +58,7 @@ describe('BranchModal — permissions tab visibility', () => {
 
     renderBranchModal({
       currentUser: seb,
-      client: makeStubClient({ owners: [], users: [seb], groupGrants404: true }),
+      client: makeStubClient({ owners: [], users: [seb], groupGrants404: true }).client,
     });
 
     expect(await screen.findByRole('tab', { name: /permissions/i })).toBeInTheDocument();
@@ -163,7 +70,7 @@ describe('BranchModal — permissions tab visibility', () => {
 
     renderBranchModal({
       currentUser: seb,
-      client: makeStubClient({ owners: [owner], users: [seb, owner] }),
+      client: makeStubClient({ owners: [owner], users: [seb, owner] }).client,
     });
 
     await waitFor(() => {
@@ -177,7 +84,7 @@ describe('BranchModal — permissions tab visibility', () => {
     renderBranchModal({
       branch: makeAssistantBranch(),
       currentUser: seb,
-      client: makeStubClient({ owners: [seb], users: [seb] }),
+      client: makeStubClient({ owners: [seb], users: [seb] }).client,
     });
 
     expect(await screen.findByRole('tab', { name: /assistant/i })).toBeInTheDocument();

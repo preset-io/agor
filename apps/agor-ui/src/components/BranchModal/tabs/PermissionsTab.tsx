@@ -15,7 +15,7 @@ import { Alert, Form, Select, Space, Switch, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { Tag } from '../../Tag';
-import type { FsAccessLevel, PermissionsFormState } from '../useBranchModalForm';
+import type { FsAccessLevel, GroupGrantsStatus, PermissionsFormState } from '../useBranchModalForm';
 
 // Note: this tab is only rendered when RBAC is enabled — the parent
 // `BranchModal` hides it otherwise. No in-tab `rbacEnabled=false` placeholder
@@ -25,6 +25,8 @@ interface PermissionsTabProps {
   canEdit: boolean;
   allUsers: User[];
   allGroups: Group[];
+  groupGrantsStatus?: GroupGrantsStatus;
+  groupGrantsError?: Error | null;
   currentUser?: User | null;
   state: PermissionsFormState;
   setField: <K extends keyof PermissionsFormState>(key: K, value: PermissionsFormState[K]) => void;
@@ -51,6 +53,8 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   canEdit,
   allUsers,
   allGroups = [],
+  groupGrantsStatus = 'loaded',
+  groupGrantsError,
   currentUser,
   state,
   setField,
@@ -64,6 +68,9 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
 
   const currentUserId = currentUser?.user_id;
   const groupGrants = state.groupGrants ?? [];
+  const groupGrantsUnavailable = groupGrantsStatus === 'unavailable';
+  const groupGrantsLoading = groupGrantsStatus === 'loading';
+  const canEditGroups = canEdit && groupGrantsStatus === 'loaded';
 
   const handleOwnersChange = (newOwnerIds: string[]) => {
     if (newOwnerIds.length === 0) {
@@ -152,12 +159,25 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
           style={{ marginBottom: 12 }}
         >
           <Space direction="vertical" style={{ width: '100%' }}>
+            {groupGrantsUnavailable && (
+              <Alert
+                type="warning"
+                showIcon
+                message="Group permissions unavailable"
+                description={`Owner and branch-level permissions can still be edited. ${
+                  groupGrantsError?.message
+                    ? `Group permissions could not be loaded: ${groupGrantsError.message}`
+                    : 'This daemon may not support group grants yet.'
+                }`}
+              />
+            )}
             <Select
               mode="multiple"
               style={{ width: '100%' }}
               placeholder="Select groups..."
               value={groupGrants.map((grant) => grant.group_id)}
-              disabled={!canEdit}
+              loading={groupGrantsLoading}
+              disabled={!canEditGroups}
               options={allGroups
                 .map((group) => ({ value: group.group_id, label: group.name }))
                 .sort((a, b) => a.label.localeCompare(b.label))}
@@ -183,7 +203,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
                     size="small"
                     style={{ width: 140 }}
                     value={grant.can}
-                    disabled={!canEdit}
+                    disabled={!canEditGroups}
                     options={[
                       { value: 'view', label: 'View' },
                       { value: 'session', label: 'Own Sessions' },
