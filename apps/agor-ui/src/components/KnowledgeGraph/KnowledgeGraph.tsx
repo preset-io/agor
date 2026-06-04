@@ -13,7 +13,16 @@ import type {
   KnowledgeGraphDocNode,
 } from '@agor/core/types';
 import { Empty, Spin, Typography, theme } from 'antd';
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef } from 'react';
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Background,
   Controls,
@@ -22,13 +31,20 @@ import {
   MiniMap,
   type Node,
   type NodeProps,
+  Panel,
   Position,
   ReactFlow,
   type ReactFlowInstance,
   useNodesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { type ForceLink, useForceLayout } from './useForceLayout';
+import { ForcePanel } from './ForcePanel';
+import {
+  DEFAULT_FORCE_PARAMS,
+  type ForceLink,
+  type ForceParams,
+  useForceLayout,
+} from './useForceLayout';
 
 const { Text } = Typography;
 
@@ -130,6 +146,7 @@ export function KnowledgeGraph({
 }: KnowledgeGraphProps) {
   const { token } = theme.useToken();
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState([]);
+  const [forceParams, setForceParams] = useState<ForceParams>(DEFAULT_FORCE_PARAMS);
 
   const nodeSignature = nodeIdSignature(docNodes);
   const docNodeById = useMemo(
@@ -193,6 +210,7 @@ export function KnowledgeGraph({
   const { onDragStart, onDrag, onDragStop } = useForceLayout({
     nodeIds,
     links,
+    params: forceParams,
     setNodes: setRfNodes,
     onTick: trackFit,
     onSettle: () => {
@@ -200,6 +218,15 @@ export function KnowledgeGraph({
       trackViewport.current = false;
     },
   });
+
+  // Retuning forces reheats the simulation; re-arm viewport tracking so the
+  // camera follows the graph as it re-settles instead of letting nodes drift
+  // out of frame.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on forceParams; re-arm tracking when the layout is retuned.
+  useEffect(() => {
+    if (docNodes.length === 0) return;
+    trackViewport.current = true;
+  }, [forceParams]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the node-id set; re-arm tracking and frame the graph whenever that set changes.
   useEffect(() => {
@@ -303,6 +330,10 @@ export function KnowledgeGraph({
           onNodeDragStop={(_, node: Node) => onDragStop(node.id)}
           fitView
           minZoom={0.1}
+          // Figma-style navigation, matching SessionCanvas: two-finger scroll
+          // pans, and zoom requires holding Cmd/Ctrl while scrolling.
+          panOnScroll
+          zoomActivationKeyCode={['Meta', 'Control']}
           proOptions={{ hideAttribution: true }}
         >
           <Background color={token.colorBorderSecondary} gap={20} />
@@ -313,6 +344,13 @@ export function KnowledgeGraph({
             nodeColor={(node) => KIND_COLORS[(node.data as DocNodeData)?.kind] ?? KIND_COLORS.doc}
             style={{ background: token.colorBgContainer }}
           />
+          <Panel position="top-right">
+            <ForcePanel
+              params={forceParams}
+              onChange={setForceParams}
+              onReset={() => setForceParams(DEFAULT_FORCE_PARAMS)}
+            />
+          </Panel>
         </ReactFlow>
       </HighlightContext.Provider>
     </div>
