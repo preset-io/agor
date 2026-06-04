@@ -6,7 +6,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { getSessionStatusTone } from '../../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
-import { ArchiveToggleButton } from '../../ArchiveToggleButton';
+import { ArchiveToggleButton } from '../../ArchiveButton';
 import { TaskStatusIcon } from '../../TaskStatusIcon';
 import { ToolIcon } from '../../ToolIcon/ToolIcon';
 

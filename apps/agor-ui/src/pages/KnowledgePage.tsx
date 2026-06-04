@@ -57,7 +57,7 @@ import type { DataNode } from 'antd/es/tree';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArchiveActionButton } from '../components/ArchiveToggleButton';
+import { ArchiveActionButton } from '../components/ArchiveButton';
 import {
   AutocompleteTextarea,
   hydrateKbDocLinks,

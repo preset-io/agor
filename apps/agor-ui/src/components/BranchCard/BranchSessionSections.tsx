@@ -40,7 +40,7 @@ import {
   sortSessions,
 } from '../../utils/sessionSearch';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
-import { ArchiveActionButton } from '../ArchiveToggleButton';
+import { ArchiveActionButton } from '../ArchiveButton';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { HighlightMatch } from '../HighlightMatch';
 import { ChannelPill } from '../Pill';

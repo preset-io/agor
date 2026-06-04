@@ -42,7 +42,7 @@ import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
-import { ArchiveActionButton } from '../ArchiveToggleButton';
+import { ArchiveActionButton } from '../ArchiveButton';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CallbackToggleButton } from '../CallbackToggleButton';
 import { EffortSelector } from '../EffortSelector';
@@ -510,14 +510,24 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }
 
   const handleArchive = () => {
+    if (!client || connectionDisabled) {
+      showError('Cannot archive while disconnected from the daemon.');
+      return;
+    }
+
     modal.confirm({
       title: 'Archive session?',
       content: 'Are you sure you want to archive this session?',
       okText: 'Archive',
       cancelText: 'Cancel',
       onOk: async () => {
-        await archiveSession(session.session_id);
-        onClose();
+        const archived = await archiveSession(session.session_id);
+        if (archived) {
+          showSuccess('Session archived');
+          onClose();
+        } else {
+          showError('Failed to archive session');
+        }
       },
     });
   };
@@ -1015,7 +1025,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 />
               </Tooltip>
             )}
-            <ArchiveActionButton tooltip="Archive session" size="middle" onClick={handleArchive} />
+            <ArchiveActionButton
+              tooltip={connectionDisabled ? 'Disconnected from daemon' : 'Archive session'}
+              size="middle"
+              disabled={connectionDisabled || !client}
+              onClick={handleArchive}
+            />
             <Tooltip title="Close Panel">
               <Button
                 type="text"

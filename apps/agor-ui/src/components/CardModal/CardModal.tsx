@@ -21,7 +21,7 @@ import {
 import { Button, Collapse, Input, Modal, Space, Tag, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
-import { ArchiveActionButton } from '../ArchiveToggleButton';
+import { ArchiveActionButton } from '../ArchiveButton';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
 function isSafeUrl(url: string): boolean {

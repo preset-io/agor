@@ -1,6 +1,6 @@
 import type { Branch } from '@agor-live/client';
 import { Alert, Modal, Radio, Space, Typography } from 'antd';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const { Text } = Typography;
 
@@ -9,6 +9,7 @@ interface ArchiveDeleteBranchModalProps {
   branch: Branch;
   sessionCount?: number;
   environmentRunning?: boolean;
+  initialMetadataAction?: 'archive' | 'delete';
   onConfirm: (options: {
     metadataAction: 'archive' | 'delete';
     filesystemAction: 'preserved' | 'cleaned' | 'deleted';
@@ -21,13 +22,20 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   branch,
   sessionCount = 0,
   environmentRunning = false,
+  initialMetadataAction = 'archive',
   onConfirm,
   onCancel,
 }) => {
   const [filesystemAction, setFilesystemAction] = useState<'preserved' | 'cleaned' | 'deleted'>(
     'cleaned'
   );
-  const [metadataAction, setMetadataAction] = useState<'archive' | 'delete'>('archive');
+  const [metadataAction, setMetadataAction] = useState<'archive' | 'delete'>(initialMetadataAction);
+
+  useEffect(() => {
+    if (open) {
+      setMetadataAction(initialMetadataAction);
+    }
+  }, [initialMetadataAction, open]);
 
   const handleOk = () => {
     onConfirm({ metadataAction, filesystemAction });

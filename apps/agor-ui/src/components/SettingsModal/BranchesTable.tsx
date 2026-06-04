@@ -25,8 +25,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { ArchiveToggleButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
-import { ArchiveToggleButton } from '../ArchiveToggleButton';
 import { BranchFormFields } from '../BranchFormFields';
 import { renderEnvCell } from './BranchEnvColumn';
 
@@ -108,6 +108,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   );
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
+  const [initialArchiveDeleteAction, setInitialArchiveDeleteAction] = useState<
+    'archive' | 'delete'
+  >('archive');
   const [archivedBranches, setArchivedBranches] = useState<Branch[]>([]);
   const [archivedLoaded, setArchivedLoaded] = useState(false);
   const [archivedLoading, setArchivedLoading] = useState(false);
@@ -425,6 +428,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
                 return;
               }
               setSelectedBranch(record);
+              setInitialArchiveDeleteAction('archive');
               setArchiveDeleteModalOpen(true);
             }}
           />
@@ -445,6 +449,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             onClick={(e) => {
               e.stopPropagation();
               setSelectedBranch(record);
+              setInitialArchiveDeleteAction('delete');
               setArchiveDeleteModalOpen(true);
             }}
           />
@@ -628,14 +633,17 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           branch={selectedBranch}
           sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}
           environmentRunning={selectedBranch.environment_instance?.status === 'running'}
+          initialMetadataAction={initialArchiveDeleteAction}
           onConfirm={(options) => {
             handleArchiveOrDelete(selectedBranch.branch_id, options);
             setArchiveDeleteModalOpen(false);
             setSelectedBranch(null);
+            setInitialArchiveDeleteAction('archive');
           }}
           onCancel={() => {
             setArchiveDeleteModalOpen(false);
             setSelectedBranch(null);
+            setInitialArchiveDeleteAction('archive');
           }}
         />
       )}

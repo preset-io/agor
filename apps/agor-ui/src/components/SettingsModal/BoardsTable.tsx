@@ -23,7 +23,7 @@ import {
 import { useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
-import { ArchiveToggleButton } from '../ArchiveToggleButton';
+import { ArchiveToggleButton } from '../ArchiveButton';
 import { BoardFormFields, extractBoardFormValues, isCustomCSS } from '../forms/BoardFormFields';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 
