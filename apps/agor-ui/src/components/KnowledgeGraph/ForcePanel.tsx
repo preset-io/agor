@@ -81,7 +81,12 @@ export function ForcePanel({ params, onChange, onReset }: ForcePanelProps) {
         <Text strong style={{ fontSize: 12 }}>
           Force layout
         </Text>
-        <Button type="text" size="small" onClick={() => setOpen(false)}>
+        <Button
+          type="text"
+          size="small"
+          aria-label="Collapse force layout panel"
+          onClick={() => setOpen(false)}
+        >
           ✕
         </Button>
       </div>

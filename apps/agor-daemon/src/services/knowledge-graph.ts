@@ -23,7 +23,13 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, parseKnowledgeUri, ROLES } from '@agor/core/types';
+import {
+  hasMinimumRole,
+  KNOWLEDGE_DOCUMENT_URI_PREFIX,
+  KNOWLEDGE_UNIT_URI_PREFIX,
+  parseKnowledgeUri,
+  ROLES,
+} from '@agor/core/types';
 
 /** Query for the namespace-wide graph view (whole-namespace document graph). */
 export interface KnowledgeNamespaceGraphRequest {
@@ -36,9 +42,6 @@ export type KnowledgeGraphParams = QueryParams<
   KnowledgeGraphNeighborsQuery & KnowledgeNamespaceGraphRequest
 > &
   AuthenticatedParams;
-
-const KB_DOCUMENT_URI_PREFIX = 'agor://kb/document/';
-const KB_UNIT_URI_PREFIX = 'agor://kb/unit/';
 
 export class KnowledgeGraphService {
   private graph: KnowledgeGraphRepository;
@@ -143,16 +146,16 @@ export class KnowledgeGraphService {
   private documentIdFromRef(ref: KnowledgeNodeRef): string | undefined {
     const documentId = ref.document_id ?? ref.documentId;
     if (documentId) return documentId;
-    if (ref.uri?.startsWith(KB_DOCUMENT_URI_PREFIX)) {
-      return ref.uri.slice(KB_DOCUMENT_URI_PREFIX.length);
+    if (ref.uri?.startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX)) {
+      return ref.uri.slice(KNOWLEDGE_DOCUMENT_URI_PREFIX.length);
     }
     return undefined;
   }
 
   private documentIdFromNode(node: KnowledgeGraphNode): string | undefined {
     if (node.document_id) return node.document_id;
-    if (node.uri.startsWith(KB_DOCUMENT_URI_PREFIX)) {
-      return node.uri.slice(KB_DOCUMENT_URI_PREFIX.length);
+    if (node.uri.startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX)) {
+      return node.uri.slice(KNOWLEDGE_DOCUMENT_URI_PREFIX.length);
     }
     return undefined;
   }
@@ -160,13 +163,15 @@ export class KnowledgeGraphService {
   private unitIdFromRef(ref: KnowledgeNodeRef): string | undefined {
     const unitId = ref.unit_id ?? ref.unitId;
     if (unitId) return unitId;
-    if (ref.uri?.startsWith(KB_UNIT_URI_PREFIX)) return ref.uri.slice(KB_UNIT_URI_PREFIX.length);
+    if (ref.uri?.startsWith(KNOWLEDGE_UNIT_URI_PREFIX))
+      return ref.uri.slice(KNOWLEDGE_UNIT_URI_PREFIX.length);
     return undefined;
   }
 
   private unitIdFromNode(node: KnowledgeGraphNode): string | undefined {
     if (node.unit_id) return node.unit_id;
-    if (node.uri.startsWith(KB_UNIT_URI_PREFIX)) return node.uri.slice(KB_UNIT_URI_PREFIX.length);
+    if (node.uri.startsWith(KNOWLEDGE_UNIT_URI_PREFIX))
+      return node.uri.slice(KNOWLEDGE_UNIT_URI_PREFIX.length);
     return undefined;
   }
 

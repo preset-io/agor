@@ -111,10 +111,21 @@ export const KNOWLEDGE_URI_PREFIX = 'agor://kb/';
  */
 export const KNOWLEDGE_DOCUMENT_URI_PREFIX = 'agor://kb/document/';
 
+/**
+ * Canonical, rename-proof URI for a knowledge document *unit* (search/indexing
+ * sub-part of a document). Mirrors `KNOWLEDGE_DOCUMENT_URI_PREFIX` and the typed
+ * node-URI scheme used by the knowledge graph repository.
+ */
+export const KNOWLEDGE_UNIT_URI_PREFIX = 'agor://kb/unit/';
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function buildKnowledgeDocumentUri(documentId: string): string {
   return `${KNOWLEDGE_DOCUMENT_URI_PREFIX}${documentId}`;
+}
+
+export function buildKnowledgeUnitUri(unitId: string): string {
+  return `${KNOWLEDGE_UNIT_URI_PREFIX}${unitId}`;
 }
 
 const INVALID_KNOWLEDGE_PATH_CHARS = new Set(['<', '>', ':', '"', '\\', '|', '?', '*']);

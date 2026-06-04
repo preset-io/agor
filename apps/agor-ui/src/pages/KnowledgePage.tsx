@@ -407,7 +407,7 @@ export function KnowledgePage({
   // markdown renderer's link hardener (rehype-harden) blocks both non-http(s)
   // schemes and relative paths, so a bare route would render as "[blocked]".
   const kbRouteById = useMemo(
-    () => new Map(mentionDocs.map((doc) => [doc.documentId, doc.routePath])),
+    () => new Map<string, string>(mentionDocs.map((doc) => [doc.documentId, doc.routePath])),
     [mentionDocs]
   );
   const hydrateKbLinks = useCallback(

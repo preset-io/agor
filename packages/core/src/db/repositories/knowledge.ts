@@ -29,7 +29,11 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  buildKnowledgeDocumentUri,
+  buildKnowledgeUnitUri,
   buildKnowledgeUri,
+  KNOWLEDGE_DOCUMENT_URI_PREFIX,
+  KNOWLEDGE_UNIT_URI_PREFIX,
   normalizeKnowledgePath,
   parseKnowledgeUri,
   titleFromKnowledgePath,
@@ -1124,11 +1128,11 @@ export class KnowledgeGraphRepository {
     // Document/unit refs carry a `namespace_id` too, so resolve them before the
     // bare-namespace check — otherwise a document node gets mistyped as
     // 'namespace' and drops out of document-scoped graph queries.
-    if (ref.unit_id || ref.uri?.startsWith('agor://kb/unit/')) return 'document_unit';
+    if (ref.unit_id || ref.uri?.startsWith(KNOWLEDGE_UNIT_URI_PREFIX)) return 'document_unit';
     if (
       ref.document_id ||
       (ref.namespace && ref.path) ||
-      ref.uri?.startsWith('agor://kb/document/') ||
+      ref.uri?.startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX) ||
       parseKnowledgeUri(ref.uri)
     )
       return 'document';
@@ -1149,10 +1153,14 @@ export class KnowledgeGraphRepository {
     if (ref.uri) return ref.uri;
     if (ref.namespace && ref.path)
       return buildKnowledgeUri(ref.namespace, normalizeKnowledgePath(ref.path));
+    // Document/unit refs carry a `namespace_id` too, so derive their typed URIs
+    // before the bare-namespace fallback — otherwise a document node would get a
+    // namespace URI while `deriveNodeType` types it as 'document', producing a
+    // mismatched node.
+    if (ref.document_id) return buildKnowledgeDocumentUri(ref.document_id);
+    if (ref.unit_id) return buildKnowledgeUnitUri(ref.unit_id);
     const typed = [
       ['namespace', ref.namespace_id],
-      ['kb/document', ref.document_id],
-      ['kb/unit', ref.unit_id],
       ['branch', ref.branch_id],
       ['session', ref.session_id],
       ['task', ref.task_id],

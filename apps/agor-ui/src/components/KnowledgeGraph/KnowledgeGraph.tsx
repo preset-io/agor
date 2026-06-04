@@ -134,6 +134,15 @@ function nodeIdSignature(nodes: KnowledgeGraphDocNode[]): string {
     .join(',');
 }
 
+// Includes the rendered fields (title, kind) so the React Flow node `data` is
+// refreshed when a document is edited, even when the node-id set is unchanged.
+function nodeDataSignature(nodes: KnowledgeGraphDocNode[]): string {
+  return nodes
+    .map((n) => `${n.document_id}:${n.title}:${n.kind}`)
+    .sort()
+    .join('|');
+}
+
 export function KnowledgeGraph({
   nodes: docNodes,
   edges: docEdges,
@@ -149,14 +158,18 @@ export function KnowledgeGraph({
   const [forceParams, setForceParams] = useState<ForceParams>(DEFAULT_FORCE_PARAMS);
 
   const nodeSignature = nodeIdSignature(docNodes);
+  const dataSignature = nodeDataSignature(docNodes);
   const docNodeById = useMemo(
     () => new Map<string, KnowledgeGraphDocNode>(docNodes.map((n) => [n.document_id, n])),
     [docNodes]
   );
 
-  // Rebuild the React Flow node set when the document set changes, preserving
-  // any positions already settled by the simulation for surviving nodes.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the node-id set (`nodeSignature`); reading `docNodeById`/state via closure is intentional to avoid clobbering live positions.
+  // Rebuild the React Flow node set when the document set OR its rendered data
+  // (title/kind) changes, preserving any positions already settled by the
+  // simulation for surviving nodes. Keyed on `dataSignature` (which subsumes the
+  // id set) so edits refresh labels/colors without resetting positions; the
+  // separate fit/re-arm effects stay keyed on the id set only.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `dataSignature`; reading `docNodes`/state via closure is intentional to avoid clobbering live positions.
   useEffect(() => {
     setRfNodes((current) => {
       const positionById = new Map(current.map((n) => [n.id, n.position]));
@@ -177,7 +190,7 @@ export function KnowledgeGraph({
         };
       });
     });
-  }, [nodeSignature, setRfNodes]);
+  }, [dataSignature, setRfNodes]);
 
   const links: ForceLink[] = useMemo(
     () => docEdges.map((e) => ({ source: e.source_document_id, target: e.target_document_id })),
@@ -325,6 +338,12 @@ export function KnowledgeGraph({
           onNodeDragStart={(_, node: Node) => {
             trackViewport.current = false;
             onDragStart(node.id, node.position.x, node.position.y);
+          }}
+          // Disable auto-fit when the user pans/zooms so the camera never fights
+          // the pointer. Programmatic moves (our own fitView) pass a null event,
+          // so they don't cancel tracking mid-settle.
+          onMoveStart={(event) => {
+            if (event) trackViewport.current = false;
           }}
           onNodeDrag={(_, node: Node) => onDrag(node.id, node.position.x, node.position.y)}
           onNodeDragStop={(_, node: Node) => onDragStop(node.id)}

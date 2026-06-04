@@ -29,6 +29,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  buildKnowledgeDocumentUri,
   extractKnowledgeLinks,
   hasMinimumRole,
   parseKnowledgeUri,
@@ -223,6 +224,9 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (typeof content !== 'string') return;
     try {
       const links = extractKnowledgeLinks(content);
+      // Key graph nodes by the rename-proof `agor://kb/document/<id>` URI rather
+      // than the path-based `doc.uri`, so renaming a document doesn't orphan its
+      // graph node (and its edges) behind a stale path.
       const targets: { uri: string; document_id: string; namespace_id: string }[] = [];
       const seen = new Set<string>();
       for (const link of links) {
@@ -236,13 +240,17 @@ export class KnowledgeDocumentsService extends DrizzleService<
         if (seen.has(target.document_id)) continue;
         seen.add(target.document_id);
         targets.push({
-          uri: target.uri,
+          uri: buildKnowledgeDocumentUri(target.document_id),
           document_id: target.document_id,
           namespace_id: target.namespace_id,
         });
       }
       await this.graph.syncOutgoingEdges({
-        source: { uri: doc.uri, document_id: doc.document_id, namespace_id: doc.namespace_id },
+        source: {
+          uri: buildKnowledgeDocumentUri(doc.document_id),
+          document_id: doc.document_id,
+          namespace_id: doc.namespace_id,
+        },
         edge_type: 'references',
         targets,
         created_by: userId,

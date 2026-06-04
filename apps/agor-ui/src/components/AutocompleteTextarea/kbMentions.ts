@@ -5,13 +5,17 @@
  * unit-tested without rendering the textarea.
  */
 
-import { buildKnowledgeDocumentUri, KNOWLEDGE_DOCUMENT_URI_PREFIX } from '@agor/core/types';
+import {
+  buildKnowledgeDocumentUri,
+  KNOWLEDGE_DOCUMENT_URI_PREFIX,
+  type KnowledgeDocumentID,
+} from '@agor/core/types';
 
 export interface KbDocMention {
   /** Display title, used as the dropdown label and the markdown link text. */
   title: string;
   /** Document UUID — the rename-proof identity used in the inserted link. */
-  documentId: string;
+  documentId: KnowledgeDocumentID;
   /** Normalized document path within its namespace (used for matching). */
   path: string;
   /** Canonical `agor://kb/<namespace>/<path>` URI for the doc. */
@@ -59,7 +63,7 @@ export function filterKbDocs(
  * the label is the doc title with `[` / `]` escaped so it can't break out of the
  * link syntax.
  */
-export function buildKbDocLink(title: string, documentId: string): string {
+export function buildKbDocLink(title: string, documentId: KnowledgeDocumentID): string {
   const label = title.replace(/[[\]]/g, '\\$&').trim() || 'Untitled';
   return `[${label}](${buildKnowledgeDocumentUri(documentId)})`;
 }
