@@ -96,9 +96,18 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   // Always use Streamdown for rich features (Mermaid, math, GFM, copy/download buttons)
   // Only enable incomplete markdown parsing during active streaming
   // Security: Streamdown sanitizes HTML by default to prevent XSS
+  //
+  // Streamdown memoizes several internal markdown element components by source
+  // position. For non-streaming editor previews, some in-place edits can keep a
+  // stable internal block/component identity and leave old rendered text on
+  // screen. Key non-streaming renders by the normalized markdown text so every
+  // committed content change remounts Streamdown and refreshes the preview. Keep
+  // streaming renders on a stable key to avoid resetting animation/highlighting
+  // state on every chunk.
   return (
     <Typography style={mergedStyles} className={compact ? 'markdown-compact' : undefined}>
       <Streamdown
+        key={isStreaming ? 'streaming' : text}
         parseIncompleteMarkdown={isStreaming} // Parse incomplete syntax only while streaming
         className={inline ? 'inline-markdown' : 'markdown-content'}
         isAnimating={isStreaming} // Disable buttons during streaming
