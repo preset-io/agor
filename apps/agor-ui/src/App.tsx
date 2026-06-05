@@ -26,16 +26,14 @@ import {
   UI_MOUNT_PATH,
 } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
-import { App as AgorApp } from './components/App';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
-import { MobileApp } from './components/mobile/MobileApp';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -51,8 +49,6 @@ import {
   useServerVersion,
   useSessionActions,
 } from './hooks';
-import { KnowledgePage } from './pages/KnowledgePage';
-import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import {
   KNOWLEDGE_ROUTE_PATHS,
@@ -62,6 +58,19 @@ import {
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
+
+const AgorApp = lazy(() => import('./components/App').then((module) => ({ default: module.App })));
+const KnowledgePage = lazy(() =>
+  import('./pages/KnowledgePage').then((module) => ({ default: module.KnowledgePage }))
+);
+const MobileApp = lazy(() =>
+  import('./components/mobile/MobileApp').then((module) => ({ default: module.MobileApp }))
+);
+const StreamdownDemoPage = lazy(() =>
+  import('./pages/StreamdownDemoPage').then((module) => ({
+    default: module.StreamdownDemoPage,
+  }))
+);
 
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
@@ -119,6 +128,22 @@ function AppContent() {
     location.pathname
   );
   const sharedSurfaceOwnsUserSettings = routeUsesSharedUserSettings(location.pathname);
+
+  const routeFallback = (
+    <div
+      style={{
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: token.colorBgLayout,
+      }}
+    >
+      <Spin size="large" />
+      <div style={{ marginTop: 16, color: token.colorTextSecondary }}>Loading surface...</div>
+    </div>
+  );
 
   // Fetch daemon auth and instance configuration
   const {
@@ -1520,68 +1545,73 @@ function AppContent() {
         />
 
         <DeviceRouter />
-        <Routes>
-          {/* Demo route */}
-          <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
+        <Suspense fallback={routeFallback}>
+          <Routes>
+            {/* Demo route */}
+            <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
 
-          {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
-          {KNOWLEDGE_ROUTE_PATHS.map((path) => (
-            <Route key={path} path={path} element={knowledgePageElement} />
-          ))}
+            {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
+            {KNOWLEDGE_ROUTE_PATHS.map((path) => (
+              <Route key={path} path={path} element={knowledgePageElement} />
+            ))}
 
-          {/* Mobile routes */}
-          <Route
-            path="/m/*"
-            element={
-              <MobileApp
-                client={client}
-                user={user}
-                sessionById={sessionById}
-                sessionsByBranch={sessionsByBranch}
-                boardById={boardById}
-                commentById={commentById}
-                repoById={repoById}
-                branchById={branchById}
-                userById={userById}
-                onSendPrompt={handleSendPrompt}
-                onSendComment={handleSendComment}
-                onReplyComment={handleReplyComment}
-                onResolveComment={handleResolveComment}
-                onToggleReaction={handleToggleReaction}
-                onDeleteComment={handleDeleteComment}
-                onLogout={logout}
-                promptDrafts={promptDrafts}
-                onUpdateDraft={handleUpdateDraft}
-              />
-            }
-          />
+            {/* Mobile routes */}
+            <Route
+              path="/m/*"
+              element={
+                <MobileApp
+                  client={client}
+                  user={user}
+                  sessionById={sessionById}
+                  sessionsByBranch={sessionsByBranch}
+                  boardById={boardById}
+                  commentById={commentById}
+                  repoById={repoById}
+                  branchById={branchById}
+                  userById={userById}
+                  onSendPrompt={handleSendPrompt}
+                  onSendComment={handleSendComment}
+                  onReplyComment={handleReplyComment}
+                  onResolveComment={handleResolveComment}
+                  onToggleReaction={handleToggleReaction}
+                  onDeleteComment={handleDeleteComment}
+                  onLogout={logout}
+                  promptDrafts={promptDrafts}
+                  onUpdateDraft={handleUpdateDraft}
+                />
+              }
+            />
 
-          {/* Desktop routes — flat entity URLs. Boards have their own
-              path because they're a destination; sub-entities (session,
-              branch, artifact) get top-level paths keyed by short ID
-              so they're stable across board moves. The app resolves the
-              entity at click time, looks up its current board, and
-              switches if needed. Path segments come from the shared
-              `ENTITY_PATH_SEGMENTS` constant so this list and the
-              URL/path builders can't drift. See
-              `packages/core/src/utils/url.ts`. */}
-          <Route path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`} element={desktopAppElement} />
-          <Route
-            path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
-            element={desktopAppElement}
-          />
-          <Route
-            path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
-            element={desktopAppElement}
-          />
-          <Route
-            path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
-            element={desktopAppElement}
-          />
+            {/* Desktop routes — flat entity URLs. Boards have their own
+                path because they're a destination; sub-entities (session,
+                branch, artifact) get top-level paths keyed by short ID
+                so they're stable across board moves. The app resolves the
+                entity at click time, looks up its current board, and
+                switches if needed. Path segments come from the shared
+                `ENTITY_PATH_SEGMENTS` constant so this list and the
+                URL/path builders can't drift. See
+                `packages/core/src/utils/url.ts`. */}
+            <Route
+              path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`}
+              element={desktopAppElement}
+            />
+            <Route
+              path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
+              element={desktopAppElement}
+            />
+            <Route
+              path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
+              element={desktopAppElement}
+            />
+            <Route
+              path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
+              element={desktopAppElement}
+            />
 
-          {/* Fallback for unknown / root paths */}
-          <Route path="/*" element={desktopAppElement} />
-        </Routes>
+            {/* Fallback for unknown / root paths */}
+            <Route path="/*" element={desktopAppElement} />
+          </Routes>
+        </Suspense>
       </ConnectionProvider>
     </ServicesConfigContext.Provider>
   );

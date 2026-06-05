@@ -22,6 +22,11 @@ piece of Phase 2's surface model:
 - `GlobalUserMenu` is surface-agnostic and `SharedUserSettingsModal` owns the
   current-user settings flow for lightweight surfaces without mounting the
   Workspace route tree;
+- the KB header now carries the cheap shared utilities from the workspace
+  header: docs link, theme picker, and current-user menu;
+- major route surfaces (`Workspace`, `Knowledge`, mobile, and demo) are loaded
+  with `React.lazy`, so a fresh KB deep link does not eagerly download the
+  Workspace route component tree before the route has selected KB;
 - focused tests cover route classification and the sticky Workspace lifecycle.
 
 This intentionally keeps the authenticated socket client as a shared app-shell
@@ -164,7 +169,12 @@ The router includes KB routes:
 <Route path="/kb/:namespaceSlug/*" element={<KnowledgePage ... />} />
 ```
 
-Because these imports are static and the workspace store is started above the router, a KB external deep link does not currently benefit from route-level code splitting or runtime isolation.
+At the start of this branch these imports were static and the workspace store
+was started above the router, so a KB external deep link did not benefit from
+route-level code splitting or runtime isolation. This PR now lazy-loads the
+major route surface components and gates workspace-store startup by route
+surface; follow-up work should verify production bundle splits and continue
+shrinking the shared app shell.
 
 ## Current KnowledgePage dependencies
 
@@ -401,7 +411,9 @@ Regression risks to test:
 
 ### Phase 2 — Extract route islands and lazy-load major bundles
 
-_Status: started in this PR with explicit surface metadata and shared user settings; full route-island extraction/lazy-loading remains follow-up work._
+_Status: started in this PR with explicit surface metadata, shared user
+settings, shared KB utilities, and route-level `React.lazy` for major surfaces.
+Full route-island extraction and deeper bundle trimming remains follow-up work._
 
 Implement Option B:
 

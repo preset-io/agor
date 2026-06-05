@@ -25,6 +25,7 @@ import {
   FolderOpenOutlined,
   FolderOutlined,
   HistoryOutlined,
+  QuestionCircleOutlined,
   ReloadOutlined,
   SaveOutlined,
   SearchOutlined,
@@ -67,6 +68,7 @@ import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
 import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
+import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
 import { useThemedModal } from '../utils/modal';
 
@@ -1545,6 +1547,17 @@ export function KnowledgePage({
           <Button icon={<ReloadOutlined />} onClick={loadDocuments} loading={loading}>
             Refresh
           </Button>
+          <Tooltip title="Documentation" placement="bottom">
+            <Button
+              type="text"
+              icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
+              href="https://agor.live/guide/getting-started"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            />
+          </Tooltip>
+          <ThemeSwitcher />
           <GlobalUserMenu
             user={currentUser}
             onUserSettingsClick={onUserSettingsClick}
