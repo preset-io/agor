@@ -82,6 +82,7 @@ export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }
               display: 'flex',
               alignItems: 'center',
               gap: 6,
+              minWidth: 0,
               padding: `${token.sizeUnit * 0.75}px ${token.sizeUnit}px`,
               borderRadius: token.borderRadius,
               background: token.colorBgLayout,
@@ -94,12 +95,12 @@ export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }
                 strong
                 style={{
                   fontSize: token.fontSizeSM,
-                  maxWidth: 72,
+                  maxWidth: 96,
                   minWidth: 0,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
-                  flexShrink: 1,
+                  flexShrink: 0,
                 }}
               >
                 {kindLabel(change.kind)}
@@ -111,6 +112,7 @@ export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }
                 style={{
                   fontSize: token.fontSizeSM - 1,
                   minWidth: 0,
+                  flex: '1 1 auto',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
