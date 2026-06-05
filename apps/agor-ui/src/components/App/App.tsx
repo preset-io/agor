@@ -70,6 +70,7 @@ import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal, UserSettingsModal } from '../SettingsModal';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
+import { getShowCommentsPanelState, getToggleBoardPanelState } from './boardPanelActions';
 import { getPrimaryAssistantSessionToRestore } from './primaryAssistantRestore';
 
 const { Content } = Layout;
@@ -551,14 +552,30 @@ export const App: React.FC<AppProps> = ({
     setTerminalOpen(true);
   }, []);
 
+  const applyLeftPanelState = useCallback(
+    (state: { collapsed: boolean; activeTab: BoardAssistantPanelTab }) => {
+      setLeftPanelTab(state.activeTab);
+      setCommentsPanelCollapsed(state.collapsed);
+    },
+    [setCommentsPanelCollapsed]
+  );
+
+  const handleToggleBoardPanel = useCallback(() => {
+    applyLeftPanelState(
+      getToggleBoardPanelState({
+        collapsed: leftPanelCollapsed,
+        activeTab: leftPanelTab,
+      })
+    );
+  }, [applyLeftPanelState, leftPanelCollapsed, leftPanelTab]);
+
   // Stable callbacks passed into SessionCanvas. These previously lived as
   // inline arrows in JSX, which gave them a fresh identity on every App
   // render — that propagated into the canvas's `initialNodes` useMemo deps
   // and triggered a full node-list recompute on every socket event.
   const handleOpenCommentsPanel = useCallback(() => {
-    setLeftPanelTab('comments');
-    setCommentsPanelCollapsed(false);
-  }, [setCommentsPanelCollapsed]);
+    applyLeftPanelState(getShowCommentsPanelState({ collapsed: true, activeTab: 'assistant' }));
+  }, [applyLeftPanelState]);
 
   const handleCommentSelect = useCallback((commentId: string | null) => {
     // Toggle selection: if clicking same comment, deselect
@@ -814,6 +831,13 @@ export const App: React.FC<AppProps> = ({
     : undefined;
   const primaryAssistantInaccessible = Boolean(primaryAssistantId && !primaryAssistantBranch);
 
+  // Preserve the historical board-switch behavior now that the panel itself
+  // no longer pushes a default tab into controlled parent state on mount.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset the tab when switching boards, even if the default tab string is unchanged.
+  useEffect(() => {
+    setLeftPanelTab(primaryAssistantInaccessible ? 'all-sessions' : 'assistant');
+  }, [currentBoard?.board_id, primaryAssistantInaccessible]);
+
   useEffect(() => {
     const latestSessionId = getPrimaryAssistantSessionToRestore({
       currentBoardId: currentBoard?.board_id,
@@ -964,11 +988,8 @@ export const App: React.FC<AppProps> = ({
               currentUserId={user?.user_id}
               connected={connected}
               connecting={connecting}
-              onMenuClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-              onCommentsClick={() => {
-                setLeftPanelTab('comments');
-                setCommentsPanelCollapsed(false);
-              }}
+              onMenuClick={handleToggleBoardPanel}
+              onCommentsClick={handleOpenCommentsPanel}
               onEventStreamClick={() => {
                 // If session is open, close it and show event stream
                 if (effectiveSelectedSessionId) {

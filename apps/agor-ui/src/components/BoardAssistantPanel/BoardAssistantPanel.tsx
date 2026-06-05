@@ -117,6 +117,7 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
     : 'assistant';
   const [uncontrolledActiveTab, setUncontrolledActiveTab] =
     useState<BoardAssistantPanelTab>(defaultTab);
+  const isControlled = controlledActiveTab !== undefined;
   const activeTab = controlledActiveTab ?? uncontrolledActiveTab;
   const setActiveTab = (tab: BoardAssistantPanelTab) => {
     setUncontrolledActiveTab(tab);
@@ -126,8 +127,10 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset the tab when switching boards, even if the default tab string is unchanged.
   useEffect(() => {
     setUncontrolledActiveTab(defaultTab);
-    onTabChange?.(defaultTab);
-  }, [defaultTab, board?.board_id, onTabChange]);
+    if (!isControlled) {
+      onTabChange?.(defaultTab);
+    }
+  }, [defaultTab, board?.board_id, isControlled, onTabChange]);
 
   const assistantOptions = useMemo(
     () =>
