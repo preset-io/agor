@@ -15,6 +15,12 @@
  */
 
 import {
+  MANAGED_ENV_EXECUTION_MODE_DEFAULT,
+  type ManagedEnvExecutionMode,
+  validateManagedEnvLifecyclePolicy,
+  validateRepoEnvironmentLifecyclePolicy,
+} from '@agor/core/environment/webhook';
+import {
   type AgorClient,
   type Branch,
   type Repo,
@@ -77,12 +83,6 @@ interface BranchRenderedSnapshot {
   app?: string;
 }
 
-type ManagedEnvsExecutionMode = 'hybrid' | 'webhook-only';
-
-const LIFECYCLE_FIELDS: Array<
-  keyof Pick<BranchRenderedSnapshot, 'start' | 'stop' | 'nuke' | 'logs'>
-> = ['start', 'stop', 'nuke', 'logs'];
-
 function snapshotFromBranch(wt: Branch): BranchRenderedSnapshot {
   return {
     start: wt.start_command || undefined,
@@ -102,10 +102,6 @@ function prettyYaml(value: unknown): string {
   }
 }
 
-function isHttpUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value.trim());
-}
-
 export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   branch,
   repo,
@@ -122,8 +118,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
   // ----- Permission gating -----
   const managedEnvsMinimumRole = featuresConfig?.managedEnvsMinimumRole ?? 'member';
-  const managedEnvsExecutionMode: ManagedEnvsExecutionMode =
-    featuresConfig?.managedEnvsExecutionMode ?? 'hybrid';
+  const managedEnvsExecutionMode: ManagedEnvExecutionMode =
+    featuresConfig?.managedEnvsExecutionMode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
   const isWebhookMode = managedEnvsExecutionMode === 'webhook-only';
   const canTriggerEnv =
     managedEnvsMinimumRole !== 'none' &&
@@ -134,7 +130,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       ? 'Managed environments are disabled on this instance'
       : `Requires ${managedEnvsMinimumRole} role or higher`;
   const lifecycleFieldHelp = isWebhookMode
-    ? 'This instance uses webhook-managed environments. Use absolute http(s) URLs for start, stop, nuke, and logs.'
+    ? 'This instance uses webhook-managed environments. Use public http(s) URLs for start, stop, nuke, and logs.'
     : 'This instance supports shell commands and URL webhooks for start, stop, nuke, and logs.';
   const repoPlaceholder = isWebhookMode
     ? 'version: 2\ndefault: remote\nvariants:\n  remote:\n    start: https://env.example.com/start?branch={{branch.name}}\n    stop: https://env.example.com/stop?branch={{branch.name}}\n    health: https://apps.example.com/{{branch.name}}/health\n    app: https://apps.example.com/{{branch.name}}\n'
@@ -362,16 +358,11 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     try {
       const validated = validateRepoEnvironment(parsed);
       if (isWebhookMode) {
-        for (const [variantName, variant] of Object.entries(validated.variants)) {
-          for (const field of LIFECYCLE_FIELDS) {
-            const value = variant[field];
-            if (typeof value === 'string' && value.trim() && !isHttpUrl(value)) {
-              setRepoYamlError(
-                `In webhook mode, variants.${variantName}.${field} should be an absolute http(s) URL`
-              );
-              return null;
-            }
-          }
+        try {
+          validateRepoEnvironmentLifecyclePolicy(validated, managedEnvsExecutionMode);
+        } catch (err) {
+          setRepoYamlError(err instanceof Error ? err.message : 'Invalid webhook lifecycle URL');
+          return null;
         }
       }
       setRepoYamlError(null);
@@ -423,12 +414,20 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       return null;
     }
     if (isWebhookMode) {
-      for (const field of LIFECYCLE_FIELDS) {
-        const value = obj[field];
-        if (typeof value === 'string' && value.trim() && !isHttpUrl(value)) {
-          setSnapshotYamlError(`In webhook mode, ${field} should be an absolute http(s) URL`);
-          return null;
-        }
+      try {
+        validateManagedEnvLifecyclePolicy(
+          {
+            start: obj.start,
+            stop: obj.stop,
+            nuke: obj.nuke,
+            logs: obj.logs,
+          },
+          managedEnvsExecutionMode,
+          'branch environment'
+        );
+      } catch (err) {
+        setSnapshotYamlError(err instanceof Error ? err.message : 'Invalid webhook lifecycle URL');
+        return null;
       }
     }
     setSnapshotYamlError(null);

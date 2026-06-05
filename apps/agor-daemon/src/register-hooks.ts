@@ -7,7 +7,14 @@
  */
 
 import { analyticsLogger } from '@agor/core/analytics';
-import { type AgorConfig, isUnixImpersonationEnabled, type UnknownJson } from '@agor/core/config';
+import {
+  type AgorConfig,
+  isUnixImpersonationEnabled,
+  loadConfig,
+  type UnknownJson,
+  validateRepoEnvironment,
+  wrapV1AsV2,
+} from '@agor/core/config';
 import {
   ArtifactRepository,
   BoardRepository,
@@ -19,6 +26,12 @@ import {
   UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
+import {
+  MANAGED_ENV_EXECUTION_MODE_DEFAULT,
+  validateManagedEnvLifecyclePolicy,
+  validateRenderedManagedEnvUrlFields,
+  validateRepoEnvironmentLifecyclePolicy,
+} from '@agor/core/environment/webhook';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
@@ -36,6 +49,7 @@ import {
 import type {
   AuthenticatedParams,
   Board,
+  Branch,
   HookContext,
   MCPServer,
   Paginated,
@@ -102,6 +116,99 @@ import {
   getDaemonUrl,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
+
+const BRANCH_ENV_FIELDS = [
+  'start_command',
+  'stop_command',
+  'nuke_command',
+  'logs_command',
+  'health_check_url',
+  'app_url',
+] as const;
+
+function itemHasAnyField(item: Record<string, unknown>, fields: readonly string[]): boolean {
+  return fields.some((field) => Object.hasOwn(item, field));
+}
+
+async function getManagedEnvExecutionMode() {
+  const config = await loadConfig();
+  return config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
+}
+
+function validateRepoEnvPolicyHook() {
+  return async (context: HookContext) => {
+    const mode = await getManagedEnvExecutionMode();
+    const items = Array.isArray(context.data) ? context.data : [context.data];
+
+    for (const item of items as Array<Record<string, unknown>>) {
+      if (Object.hasOwn(item, 'environment') && item.environment !== null) {
+        try {
+          const env = validateRepoEnvironment(item.environment);
+          validateRepoEnvironmentLifecyclePolicy(env, mode);
+        } catch (error) {
+          throw new BadRequest(error instanceof Error ? error.message : 'Invalid repo environment');
+        }
+      }
+
+      if (Object.hasOwn(item, 'environment_config') && item.environment_config !== null) {
+        try {
+          const env = wrapV1AsV2(item.environment_config as Parameters<typeof wrapV1AsV2>[0]);
+          if (env) validateRepoEnvironmentLifecyclePolicy(env, mode, 'legacy repo environment');
+        } catch (error) {
+          throw new BadRequest(
+            error instanceof Error ? error.message : 'Invalid legacy repo environment'
+          );
+        }
+      }
+    }
+
+    return context;
+  };
+}
+
+function branchEnvFieldsFromItem(item: Partial<Branch>) {
+  return {
+    start: item.start_command,
+    stop: item.stop_command,
+    nuke: item.nuke_command,
+    logs: item.logs_command,
+  };
+}
+
+function validateBranchEnvPolicyHook() {
+  return async (context: HookContext) => {
+    const items = Array.isArray(context.data) ? context.data : [context.data];
+    const shouldValidate = (items as Array<Record<string, unknown>>).some((item) =>
+      itemHasAnyField(item, BRANCH_ENV_FIELDS)
+    );
+    if (!shouldValidate) return context;
+
+    const mode = await getManagedEnvExecutionMode();
+    for (const raw of items as Array<Partial<Branch>>) {
+      let item = raw;
+      if (context.method === 'patch' && context.id !== null && context.id !== undefined) {
+        const existing = (await context.service.get(context.id, context.params)) as Branch;
+        item = { ...existing, ...raw };
+      }
+
+      try {
+        validateManagedEnvLifecyclePolicy(
+          branchEnvFieldsFromItem(item),
+          mode,
+          'branch environment'
+        );
+        validateRenderedManagedEnvUrlFields({
+          health: item.health_check_url,
+          app: item.app_url,
+        });
+      } catch (error) {
+        throw new BadRequest(error instanceof Error ? error.message : 'Invalid branch environment');
+      }
+    }
+
+    return context;
+  };
+}
 
 /**
  * Session fields written as runtime bookkeeping during the prompt/execution
@@ -696,9 +803,21 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'access repositories'),
       ],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create repositories'), requireAdminForEnvConfig()],
-      update: [requireMinimumRole(ROLES.MEMBER, 'update repositories'), requireAdminForEnvConfig()],
-      patch: [requireMinimumRole(ROLES.MEMBER, 'update repositories'), requireAdminForEnvConfig()],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'create repositories'),
+        requireAdminForEnvConfig(),
+        validateRepoEnvPolicyHook(),
+      ],
+      update: [
+        requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        requireAdminForEnvConfig(),
+        validateRepoEnvPolicyHook(),
+      ],
+      patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        requireAdminForEnvConfig(),
+        validateRepoEnvPolicyHook(),
+      ],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete repositories')],
     },
     after: {
@@ -731,11 +850,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create branches'),
         requireAdminForEnvConfig(),
+        validateBranchEnvPolicyHook(),
         injectCreatedBy(),
       ],
-      update: [requireMinimumRole(ROLES.MEMBER, 'update branches'), requireAdminForEnvConfig()],
+      update: [
+        requireMinimumRole(ROLES.MEMBER, 'update branches'),
+        requireAdminForEnvConfig(),
+        validateBranchEnvPolicyHook(),
+      ],
       patch: [
         requireAdminForEnvConfig(),
+        validateBranchEnvPolicyHook(),
         ...(branchRbacEnabled
           ? [
               loadBranch(branchRepository),

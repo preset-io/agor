@@ -1,4 +1,5 @@
-import type { EnvironmentCommandType } from '../unix/environment-command-spawn.js';
+import { resolveVariant } from '../config/variant-resolver.js';
+import type { RepoEnvironment } from '../types/branch.js';
 import { isAllowedHealthCheckUrl, normalizeOptionalHttpUrl } from '../utils/url.js';
 
 /**
@@ -10,6 +11,11 @@ import { isAllowedHealthCheckUrl, normalizeOptionalHttpUrl } from '../utils/url.
  *   must be an HTTP(S) URL and is invoked with GET; shell commands are rejected.
  */
 export type ManagedEnvExecutionMode = 'hybrid' | 'webhook-only';
+export type ManagedEnvCommandType = 'start' | 'stop' | 'nuke' | 'logs' | 'health';
+
+export const MANAGED_ENV_LIFECYCLE_FIELDS = ['start', 'stop', 'nuke', 'logs'] as const;
+
+export type ManagedEnvLifecycleField = (typeof MANAGED_ENV_LIFECYCLE_FIELDS)[number];
 
 export type ManagedEnvCommandExecution =
   | { kind: 'command'; command: string }
@@ -28,6 +34,75 @@ const HTTP_URL_PREFIX = /^https?:\/\//i;
  */
 export function isUrlShapedManagedEnvCommand(value: string): boolean {
   return HTTP_URL_PREFIX.test(value.trim());
+}
+
+function hostnameEqualsOrEndsWith(hostname: string, suffix: string): boolean {
+  return hostname === suffix || hostname.endsWith(`.${suffix}`);
+}
+
+function isBlockedIPv4(hostname: string): boolean {
+  const parts = hostname.split('.');
+  if (parts.length !== 4) return false;
+  const octets = parts.map((part) => Number(part));
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    return false;
+  }
+  const [a, b] = octets;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    a >= 224
+  );
+}
+
+function isBlockedIPv6(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!normalized.includes(':')) return false;
+  const mappedIPv4 = normalized.match(/:ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mappedIPv4) return isBlockedIPv4(mappedIPv4[1]);
+  return (
+    normalized === '::1' ||
+    normalized === '::' ||
+    normalized.startsWith('fe80:') ||
+    normalized.startsWith('fc') ||
+    normalized.startsWith('fd')
+  );
+}
+
+/**
+ * Webhook destinations have a stricter SSRF posture than health checks.
+ *
+ * Health checks intentionally allow localhost/private networks because they
+ * often probe branch-local services. Managed environment webhooks are outbound
+ * orchestration calls, so V1 allows public HTTP(S) destinations only. This is
+ * a syntactic guard (no DNS resolution); operators should still point webhooks
+ * at trusted orchestration services.
+ */
+export function isAllowedManagedEnvWebhookUrl(urlString: string): boolean {
+  let normalized: string | undefined;
+  try {
+    normalized = normalizeOptionalHttpUrl(urlString, 'managed environment webhook');
+  } catch {
+    return false;
+  }
+  if (!normalized) return false;
+
+  const url = new URL(normalized);
+  const hostname = url.hostname.toLowerCase();
+
+  if (url.username || url.password) return false;
+  if (hostname === 'localhost' || hostnameEqualsOrEndsWith(hostname, 'localhost')) return false;
+  if (hostname === 'metadata.google.internal') return false;
+  if (hostnameEqualsOrEndsWith(hostname, 'internal')) return false;
+  if (hostname.endsWith('.local')) return false;
+  if (isBlockedIPv4(hostname)) return false;
+  if (isBlockedIPv6(hostname)) return false;
+
+  return true;
 }
 
 /**
@@ -49,11 +124,64 @@ export function normalizeManagedEnvWebhookUrl(value: string, fieldName = 'enviro
     throw new Error(`${fieldName} must not include URL credentials`);
   }
 
-  if (!isAllowedHealthCheckUrl(normalized)) {
+  if (!isAllowedManagedEnvWebhookUrl(normalized)) {
     throw new Error(`${fieldName} is blocked by Agor's managed-environment webhook policy`);
   }
 
   return normalized;
+}
+
+export function validateManagedEnvLifecyclePolicy(
+  lifecycleFields: Partial<Record<ManagedEnvLifecycleField, string | null | undefined>>,
+  mode: ManagedEnvExecutionMode,
+  context = 'managed environment'
+): void {
+  for (const field of MANAGED_ENV_LIFECYCLE_FIELDS) {
+    const value = lifecycleFields[field];
+    if (!value?.trim()) continue;
+
+    if (isUrlShapedManagedEnvCommand(value)) {
+      normalizeManagedEnvWebhookUrl(value, `${context} ${field} webhook`);
+      continue;
+    }
+
+    if (mode === 'webhook-only') {
+      throw new Error(
+        `${context} ${field} must render to an http(s) URL webhook on this Agor instance`
+      );
+    }
+  }
+}
+
+export function validateRepoEnvironmentLifecyclePolicy(
+  env: RepoEnvironment,
+  mode: ManagedEnvExecutionMode,
+  context = 'repo environment'
+): void {
+  for (const variantName of Object.keys(env.variants)) {
+    const resolved = resolveVariant(env, variantName);
+    if (!resolved) continue;
+    validateManagedEnvLifecyclePolicy(
+      {
+        start: resolved.start,
+        stop: resolved.stop,
+        nuke: resolved.nuke,
+        logs: resolved.logs,
+      },
+      mode,
+      `${context} variant "${variantName}"`
+    );
+  }
+}
+
+export function validateRenderedManagedEnvUrlFields(fields: {
+  health?: string | null;
+  app?: string | null;
+}): void {
+  if (fields.health?.trim() && !isAllowedHealthCheckUrl(fields.health)) {
+    throw new Error('managed environment health must render to an allowed http(s) URL');
+  }
+  normalizeOptionalHttpUrl(fields.app, 'managed environment app URL');
 }
 
 export function redactManagedEnvWebhookUrlForAudit(url: string): string {
@@ -66,7 +194,7 @@ export function redactManagedEnvWebhookUrlForAudit(url: string): string {
   }
 }
 
-function commandTypeLabel(commandType: EnvironmentCommandType): string {
+function commandTypeLabel(commandType: ManagedEnvCommandType): string {
   switch (commandType) {
     case 'start':
       return 'start';
@@ -88,7 +216,7 @@ function commandTypeLabel(commandType: EnvironmentCommandType): string {
 export function resolveManagedEnvCommandExecution(
   command: string,
   mode: ManagedEnvExecutionMode,
-  commandType: EnvironmentCommandType
+  commandType: ManagedEnvCommandType
 ): ManagedEnvCommandExecution {
   if (isUrlShapedManagedEnvCommand(command)) {
     return {

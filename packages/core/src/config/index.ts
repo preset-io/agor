@@ -39,3 +39,4 @@ export {
   SANDPACK_CSP_WORKER_SRC,
 } from './security-resolver';
 export * from './types';
+export * from './variant-resolver';

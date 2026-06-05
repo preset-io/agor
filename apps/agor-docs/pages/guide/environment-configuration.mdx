@@ -379,8 +379,9 @@ execution:
   managed_envs_execution_mode: webhook-only
 ```
 
-In `webhook-only` mode, rendered `start`, `stop`, `nuke`, and `logs` fields are
-explicit `http://` or `https://` URLs. Agor sends a GET request to the URL.
+In `webhook-only` mode, rendered `start`, `stop`, `nuke`, and `logs` fields
+must render to explicit `http://` or `https://` URLs. Agor sends a GET request
+to the URL.
 
 ```yaml
 environment:
@@ -395,9 +396,11 @@ environment:
 ```
 
 V1 webhooks are intentionally simple: GET only, no custom headers, no request
-body, no signing, and redirects are not followed. Use a trusted orchestration
-service, and avoid secrets in query strings because rendered branch snapshots and
-infrastructure logs may expose them.
+body, no signing, and redirects are not followed. V1 webhook targets must be
+public HTTP(S) destinations; localhost, private/link-local ranges, and URL
+credentials are rejected. Use a trusted orchestration service, and avoid secrets
+in query strings because rendered branch snapshots and infrastructure logs may
+expose them.
 
 ---
 

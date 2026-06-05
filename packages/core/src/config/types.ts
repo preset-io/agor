@@ -2,25 +2,19 @@
  * Agor Configuration Types
  */
 
+import type { ManagedEnvExecutionMode } from '../environment/webhook';
 import type { BranchPermissionLevel } from '../types/branch';
 import type { DaemonResourcesConfig } from '../types/config-resources';
 import type { UserRole } from '../types/user';
+
+export type { ManagedEnvExecutionMode };
+export type ManagedEnvsExecutionMode = ManagedEnvExecutionMode;
 
 /**
  * Minimum role allowed to trigger managed environment commands
  * (start/stop/nuke/logs). `'none'` disables the feature entirely.
  */
 export type ManagedEnvsMinimumRole = 'none' | UserRole;
-
-/**
- * Operator policy for managed environment lifecycle execution.
- *
- * - `hybrid` (default): rendered start/stop/nuke/logs fields execute as shell
- *   commands, except explicit HTTP(S) URLs are invoked as GET webhooks.
- * - `webhook-only`: rendered lifecycle fields must be HTTP(S) URLs; shell
- *   commands are rejected before execution.
- */
-export type ManagedEnvsExecutionMode = 'hybrid' | 'webhook-only';
 
 /**
  * Type for user-provided JSON data where structure is unknown or dynamic

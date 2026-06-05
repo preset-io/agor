@@ -20,9 +20,12 @@ import {
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
+  MANAGED_ENV_EXECUTION_MODE_DEFAULT,
   type ManagedEnvExecutionMode,
   redactManagedEnvWebhookUrlForAudit,
   resolveManagedEnvCommandExecution,
+  validateManagedEnvLifecyclePolicy,
+  validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
@@ -131,7 +134,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   private async getManagedEnvExecutionMode(): Promise<ManagedEnvExecutionMode> {
     const config = await loadConfig();
-    return config.execution?.managed_envs_execution_mode ?? 'hybrid';
+    return config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
   }
 
   private async resolveEnvironmentCommand(command: string, commandType: EnvironmentCommandType) {
@@ -149,10 +152,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     logs?: string;
   }): Promise<void> {
     const mode = await this.getManagedEnvExecutionMode();
-    resolveManagedEnvCommandExecution(snapshot.start ?? '', mode, 'start');
-    resolveManagedEnvCommandExecution(snapshot.stop ?? '', mode, 'stop');
-    if (snapshot.nuke) resolveManagedEnvCommandExecution(snapshot.nuke, mode, 'nuke');
-    if (snapshot.logs) resolveManagedEnvCommandExecution(snapshot.logs, mode, 'logs');
+    validateManagedEnvLifecyclePolicy(
+      {
+        start: snapshot.start,
+        stop: snapshot.stop,
+        nuke: snapshot.nuke,
+        logs: snapshot.logs,
+      },
+      mode,
+      'rendered branch environment'
+    );
   }
 
   private async executeEnvironmentWebhook(options: {
@@ -2064,6 +2073,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     await this.validateRenderedEnvironmentActions(snapshot);
+    validateRenderedManagedEnvUrlFields({
+      health: snapshot.health,
+      app: snapshot.app,
+    });
 
     return await this.patch(
       id,

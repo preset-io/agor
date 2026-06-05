@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isAllowedManagedEnvWebhookUrl,
   isUrlShapedManagedEnvCommand,
   normalizeManagedEnvWebhookUrl,
   redactManagedEnvWebhookUrlForAudit,
   resolveManagedEnvCommandExecution,
+  validateManagedEnvLifecyclePolicy,
+  validateRenderedManagedEnvUrlFields,
+  validateRepoEnvironmentLifecyclePolicy,
 } from './webhook.js';
 
 describe('managed environment webhook URL detection', () => {
@@ -26,10 +30,74 @@ describe('managed environment webhook URL detection', () => {
     );
   });
 
+  it('uses a stricter webhook destination policy than health checks', () => {
+    expect(isAllowedManagedEnvWebhookUrl('https://hooks.example.com/start')).toBe(true);
+    expect(isAllowedManagedEnvWebhookUrl('http://localhost:3000/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://127.0.0.1:3000/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://10.0.0.5/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://192.168.1.20/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://172.16.0.1/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://metadata.google.internal/')).toBe(false);
+  });
+
   it('redacts query strings for audit logging', () => {
     expect(redactManagedEnvWebhookUrlForAudit('https://hooks.example.com/start?token=secret')).toBe(
       'https://hooks.example.com/start?[redacted]'
     );
+  });
+});
+
+describe('managed environment policy validation', () => {
+  it('allows shell commands in hybrid mode and URL webhooks in both modes', () => {
+    expect(() =>
+      validateManagedEnvLifecyclePolicy(
+        { start: 'docker compose up -d', stop: 'https://hooks.example.com/stop' },
+        'hybrid'
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateManagedEnvLifecyclePolicy(
+        { start: 'https://hooks.example.com/start', stop: 'https://hooks.example.com/stop' },
+        'webhook-only'
+      )
+    ).not.toThrow();
+  });
+
+  it('rejects shell commands in webhook-only repo environments', () => {
+    expect(() =>
+      validateRepoEnvironmentLifecyclePolicy(
+        {
+          version: 2,
+          default: 'child',
+          variants: {
+            base: {
+              start: 'docker compose up -d',
+              stop: 'https://hooks.example.com/stop',
+            },
+            child: {
+              extends: 'base',
+              stop: 'https://hooks.example.com/child-stop',
+            },
+          },
+        },
+        'webhook-only'
+      )
+    ).toThrow(/variant "base" start must render to an http\(s\) URL webhook/);
+  });
+
+  it('validates rendered health and app as URL-only fields', () => {
+    expect(() =>
+      validateRenderedManagedEnvUrlFields({
+        health: 'http://localhost:3000/health',
+        app: 'http://localhost:3000',
+      })
+    ).not.toThrow();
+    expect(() => validateRenderedManagedEnvUrlFields({ app: 'javascript:alert(1)' })).toThrow(
+      /app URL must use http or https/
+    );
+    expect(() =>
+      validateRenderedManagedEnvUrlFields({ health: 'http://169.254.169.254/latest/meta-data' })
+    ).toThrow(/health must render to an allowed http\(s\) URL/);
   });
 });
 
