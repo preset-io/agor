@@ -264,6 +264,12 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .describe(
             "Include other users' draft documents in browsing/search (default: false). Drafts remain directly accessible by URL when visibility permits."
           ),
+        includeIndexing: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include per-document embedding/indexing summary: derived state, chunk counts, queue depth, model, and last error.'
+          ),
         includeArchived: z
           .boolean()
           .optional()
@@ -292,6 +298,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (args.status) query.status = args.status as KnowledgeDocumentStatus;
       query.include_my_drafts = args.includeMyDrafts !== false;
       query.include_other_user_drafts = args.includeOtherUserDrafts === true;
+      if (args.includeIndexing === true) query.include_indexing = true;
       if (args.limit) query.limit = args.limit;
       if (args.mode) query.mode = args.mode;
 
@@ -324,6 +331,12 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .boolean()
           .optional()
           .describe('Include graph links/backlinks when supported'),
+        includeIndexing: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include per-document embedding/indexing summary: derived state, chunk counts, queue depth, model, and last error.'
+          ),
       }),
     },
     async (args) => {
@@ -334,6 +347,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const query: Record<string, unknown> = { include_content: includeContent };
       if (args.version !== undefined) query.version = args.version;
       if (args.includeLinks !== undefined) query.include_links = args.includeLinks;
+      if (args.includeIndexing === true) query.include_indexing = true;
 
       const documentId = coerceString(args.documentId);
       if (documentId) {
@@ -374,6 +388,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           path,
           include_content: includeContent,
           include_links: args.includeLinks === true,
+          include_indexing: args.includeIndexing === true,
           version: args.version,
         },
         mcpParams(ctx)

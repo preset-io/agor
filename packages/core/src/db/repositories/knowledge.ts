@@ -11,12 +11,14 @@ import { createHash } from 'node:crypto';
 import type {
   KnowledgeDocument,
   KnowledgeDocumentID,
+  KnowledgeDocumentIndexingStatus,
   KnowledgeDocumentKind,
   KnowledgeDocumentStatus,
   KnowledgeDocumentUnitID,
   KnowledgeDocumentVersion,
   KnowledgeDocumentVersionID,
   KnowledgeEditPolicy,
+  KnowledgeEmbeddingStatus,
   KnowledgeGraphEdge,
   KnowledgeGraphEdgeID,
   KnowledgeGraphEdgeType,
@@ -36,6 +38,7 @@ import {
   buildKnowledgeUnitUri,
   buildKnowledgeUri,
   KNOWLEDGE_DOCUMENT_URI_PREFIX,
+  KNOWLEDGE_EMBEDDING_STATUSES,
   KNOWLEDGE_UNIT_URI_PREFIX,
   normalizeKnowledgePath,
   parseKnowledgeUri,
@@ -154,6 +157,8 @@ export interface KnowledgeSearchQuery {
   includeMyDrafts?: boolean;
   include_other_user_drafts?: boolean;
   includeOtherUserDrafts?: boolean;
+  include_indexing?: boolean;
+  includeIndexing?: boolean;
   limit?: number;
   readable_by_user_id?: UserID;
   readable_as_admin?: boolean;
@@ -819,6 +824,108 @@ export class KnowledgeDocumentRepository
       .one();
     if (!unit) return null;
     return this.findById(unit.document_id);
+  }
+
+  async indexingStatusForDocuments(
+    documentIds: KnowledgeDocumentID[]
+  ): Promise<Map<KnowledgeDocumentID, KnowledgeDocumentIndexingStatus>> {
+    const uniqueIds = [...new Set(documentIds)].filter(Boolean);
+    const result = new Map<KnowledgeDocumentID, KnowledgeDocumentIndexingStatus>();
+    if (uniqueIds.length === 0) return result;
+
+    const emptyCounts = () =>
+      Object.fromEntries(KNOWLEDGE_EMBEDDING_STATUSES.map((status) => [status, 0])) as Record<
+        KnowledgeEmbeddingStatus,
+        number
+      >;
+
+    for (const documentId of uniqueIds) {
+      result.set(documentId as KnowledgeDocumentID, {
+        state: 'empty',
+        total_units: 0,
+        chunks: emptyCounts(),
+        queue_depth: 0,
+        embedding_model: null,
+        embedding_dimensions: null,
+        last_error: null,
+        last_updated_at: null,
+      });
+    }
+
+    const rows = await select(this.db, {
+      document_id: kbDocumentUnits.document_id,
+      embedding_status: kbDocumentUnits.embedding_status,
+      embedding_model: kbDocumentUnits.embedding_model,
+      embedding_dimensions: kbDocumentUnits.embedding_dimensions,
+      embedding_error: kbDocumentUnits.embedding_error,
+      updated_at: kbDocumentUnits.updated_at,
+    })
+      .from(kbDocumentUnits)
+      .innerJoin(
+        kbDocuments,
+        and(
+          eq(kbDocumentUnits.document_id, kbDocuments.document_id),
+          eq(kbDocumentUnits.version_id, kbDocuments.current_version_id)
+        )
+      )
+      .where(inArray(kbDocumentUnits.document_id, uniqueIds))
+      .all();
+
+    for (const row of rows) {
+      const documentId = row.document_id as KnowledgeDocumentID;
+      const current =
+        result.get(documentId) ??
+        ({
+          state: 'empty',
+          total_units: 0,
+          chunks: emptyCounts(),
+          queue_depth: 0,
+          embedding_model: null,
+          embedding_dimensions: null,
+          last_error: null,
+          last_updated_at: null,
+        } satisfies KnowledgeDocumentIndexingStatus);
+      const status = row.embedding_status as keyof typeof current.chunks;
+      current.total_units += 1;
+      current.chunks[status] += 1;
+      if (!current.embedding_model && row.embedding_model)
+        current.embedding_model = row.embedding_model;
+      if (!current.embedding_dimensions && row.embedding_dimensions) {
+        current.embedding_dimensions = row.embedding_dimensions;
+      }
+      if (!current.last_error && row.embedding_error) current.last_error = row.embedding_error;
+      const updatedAt = row.updated_at ? new Date(row.updated_at) : null;
+      if (
+        updatedAt &&
+        (!current.last_updated_at || updatedAt.getTime() > current.last_updated_at.getTime())
+      ) {
+        current.last_updated_at = updatedAt;
+      }
+      result.set(documentId, current);
+    }
+
+    for (const status of result.values()) {
+      status.queue_depth = status.chunks.pending + status.chunks.stale;
+      if (status.total_units === 0) status.state = 'empty';
+      else if (status.chunks.error > 0) status.state = 'error';
+      else if (status.chunks.stale > 0) status.state = 'stale';
+      else if (status.chunks.pending > 0) status.state = 'queued';
+      else if (status.chunks.ready === status.total_units) status.state = 'ready';
+      else if (status.chunks.not_configured === status.total_units) status.state = 'not_configured';
+      else status.state = 'mixed';
+    }
+
+    return result;
+  }
+
+  async attachIndexingStatus<T extends KnowledgeDocument>(documents: T | T[]): Promise<T | T[]> {
+    const list = Array.isArray(documents) ? documents : [documents];
+    const statuses = await this.indexingStatusForDocuments(list.map((doc) => doc.document_id));
+    const withStatus = list.map((doc) => ({
+      ...doc,
+      indexing_status: statuses.get(doc.document_id) ?? null,
+    }));
+    return Array.isArray(documents) ? withStatus : withStatus[0];
   }
 
   async findAll(filters?: KnowledgeDocumentFilters): Promise<KnowledgeDocument[]> {

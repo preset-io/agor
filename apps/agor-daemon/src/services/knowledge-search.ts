@@ -8,6 +8,7 @@ import {
   type Database,
   executeRaw,
   isPostgresDatabase,
+  KnowledgeDocumentRepository,
   type KnowledgeSearchQuery,
   KnowledgeSearchRepository,
   sql,
@@ -42,11 +43,13 @@ export type KnowledgeSearchParams = QueryParams<KnowledgeSearchQuery> & Authenti
 
 export class KnowledgeSearchService {
   private repo: KnowledgeSearchRepository;
+  private documents: KnowledgeDocumentRepository;
   private variables: AppVariableRepository;
   private embeddingProvider = new OpenAIEmbeddingProvider();
 
   constructor(private db: Database) {
     this.repo = new KnowledgeSearchRepository(db);
+    this.documents = new KnowledgeDocumentRepository(db);
     this.variables = new AppVariableRepository(db);
   }
 
@@ -301,7 +304,16 @@ export class KnowledgeSearchService {
         chunks: [chunk],
       });
     }
-    return [...byDoc.values()].slice(0, rawQuery.limit ?? 25);
+    const values = [...byDoc.values()].slice(0, rawQuery.limit ?? 25);
+    if (rawQuery.include_indexing === true || rawQuery.includeIndexing === true) {
+      const docsWithIndexing = (await this.documents.attachIndexingStatus(
+        values.map((result) => result.document)
+      )) as (typeof values)[number]['document'][];
+      docsWithIndexing.forEach((doc, index) => {
+        values[index].document = doc;
+      });
+    }
+    return values;
   }
 
   private hybridMerge(
@@ -333,6 +345,14 @@ export class KnowledgeSearchService {
     const textResults = (await this.repo.search({ ...query, mode: 'text' })).filter((result) =>
       this.canRead(result, user)
     );
+    if (query.include_indexing === true || query.includeIndexing === true) {
+      const docsWithIndexing = (await this.documents.attachIndexingStatus(
+        textResults.map((result) => result.document)
+      )) as (typeof textResults)[number]['document'][];
+      docsWithIndexing.forEach((doc, index) => {
+        textResults[index].document = doc;
+      });
+    }
     if (query.mode === 'hybrid') {
       const semanticResults = await this.semanticSearch(query, user);
       return this.hybridMerge(textResults, semanticResults).slice(0, query.limit ?? 25);
@@ -348,6 +368,14 @@ export class KnowledgeSearchService {
     const textResults = (await this.repo.search({ ...query, mode: 'text' })).filter((result) =>
       this.canRead(result, user)
     );
+    if (query.include_indexing === true || query.includeIndexing === true) {
+      const docsWithIndexing = (await this.documents.attachIndexingStatus(
+        textResults.map((result) => result.document)
+      )) as (typeof textResults)[number]['document'][];
+      docsWithIndexing.forEach((doc, index) => {
+        textResults[index].document = doc;
+      });
+    }
     if (query.mode === 'hybrid') {
       const semanticResults = await this.semanticSearch(query, user);
       return this.hybridMerge(textResults, semanticResults).slice(0, query.limit ?? 25);

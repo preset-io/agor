@@ -367,6 +367,14 @@ describe('KnowledgeSearchService and KnowledgeVersionsService permissions', () =
       const ownerTree = await documents.find(params(owner, { archived: false }));
       expect(ownerTree.map((doc) => doc.document_id)).toContain(draftDoc.document_id);
 
+      const ownerTreeWithIndexing = await documents.find(
+        params(owner, { archived: false, include_indexing: true })
+      );
+      expect(
+        ownerTreeWithIndexing.find((doc) => doc.document_id === draftDoc.document_id)
+          ?.indexing_status
+      ).toMatchObject({ state: 'not_configured', total_units: 1 });
+
       const otherTree = await documents.find(params(other, { archived: false }));
       expect(otherTree.map((doc) => doc.document_id)).not.toContain(draftDoc.document_id);
       expect(otherTree.map((doc) => doc.document_id)).toContain(publishedDoc.document_id);
@@ -375,6 +383,15 @@ describe('KnowledgeSearchService and KnowledgeVersionsService permissions', () =
       expect(ownerSearch.map((result) => result.document.document_id)).toContain(
         draftDoc.document_id
       );
+
+      const ownerSearchWithIndexing = await search.find(
+        params(owner, { q: 'draftneedle', include_indexing: true })
+      );
+      expect(
+        ownerSearchWithIndexing.find(
+          (result) => result.document.document_id === draftDoc.document_id
+        )?.document.indexing_status
+      ).toMatchObject({ state: 'not_configured', total_units: 1 });
 
       const otherSearch = await search.find(params(other, { q: 'draftneedle' }));
       expect(otherSearch.map((result) => result.document.document_id)).not.toContain(

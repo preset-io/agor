@@ -9,7 +9,7 @@ import {
   validateKnowledgePath,
 } from '../../types';
 import type { Database } from '../client';
-import { select } from '../database-wrapper';
+import { select, update } from '../database-wrapper';
 import { kbDocumentUnits } from '../schema';
 import { dbTest } from '../test-helpers';
 import {
@@ -127,6 +127,53 @@ describe('Knowledge repositories', () => {
       .where(eq(kbDocumentUnits.document_id, created.document_id))
       .all();
     expect(units).toHaveLength(2);
+  });
+
+  dbTest('summarizes indexing status for current document units', async ({ db }) => {
+    const owner = await seedUser(db, 'kb-owner');
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const documents = new KnowledgeDocumentRepository(db);
+
+    const namespace = await namespaces.create({
+      slug: 'indexing-status-test',
+      display_name: 'Indexing Status Test',
+    });
+    const created = await documents.create({
+      namespace_id: namespace.namespace_id,
+      path: 'indexed.md',
+      title: 'Indexed',
+      content_text: 'v1',
+      created_by: owner.user_id as UserID,
+    });
+
+    const initial = (await documents.indexingStatusForDocuments([created.document_id])).get(
+      created.document_id
+    );
+    expect(initial).toMatchObject({
+      state: 'not_configured',
+      total_units: 1,
+      queue_depth: 0,
+    });
+
+    const updated = await documents.update(created.document_id, {
+      content_text: 'v2',
+      updated_by: owner.user_id as UserID,
+    });
+    expect(updated.current_version_id).toBeTruthy();
+    await update(db, kbDocumentUnits)
+      .set({ embedding_status: 'pending', updated_at: new Date() })
+      .where(eq(kbDocumentUnits.version_id, updated.current_version_id as string))
+      .run();
+
+    const status = (await documents.indexingStatusForDocuments([created.document_id])).get(
+      created.document_id
+    );
+    expect(status).toMatchObject({
+      state: 'queued',
+      total_units: 1,
+      queue_depth: 1,
+      chunks: expect.objectContaining({ pending: 1, not_configured: 0 }),
+    });
   });
 
   dbTest('soft-delete allows path reuse while search hides archived documents', async ({ db }) => {

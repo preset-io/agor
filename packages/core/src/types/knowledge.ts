@@ -70,6 +70,18 @@ export const KNOWLEDGE_EMBEDDING_STATUSES = [
 
 export type KnowledgeEmbeddingStatus = (typeof KNOWLEDGE_EMBEDDING_STATUSES)[number];
 
+export const KNOWLEDGE_DOCUMENT_INDEXING_STATES = [
+  'empty',
+  'not_configured',
+  'queued',
+  'ready',
+  'stale',
+  'error',
+  'mixed',
+] as const;
+
+export type KnowledgeDocumentIndexingState = (typeof KNOWLEDGE_DOCUMENT_INDEXING_STATES)[number];
+
 export const KNOWLEDGE_SEARCH_MODES = ['text', 'semantic', 'hybrid'] as const;
 export type KnowledgeSearchMode = (typeof KNOWLEDGE_SEARCH_MODES)[number];
 
@@ -340,6 +352,11 @@ export interface KnowledgeDocument {
   updated_at?: Date | null;
   archived: boolean;
   archived_at?: Date | null;
+  /**
+   * Optional aggregate over the current version's internal search/indexing
+   * units. Included by API calls that request `include_indexing`.
+   */
+  indexing_status?: KnowledgeDocumentIndexingStatus | null;
 }
 
 export interface KnowledgeDocumentVersion {
@@ -381,6 +398,17 @@ export interface KnowledgeDocumentUnit {
   metadata?: Record<string, unknown> | null;
   created_at: Date;
   updated_at?: Date | null;
+}
+
+export interface KnowledgeDocumentIndexingStatus {
+  state: KnowledgeDocumentIndexingState;
+  total_units: number;
+  chunks: Record<KnowledgeEmbeddingStatus, number>;
+  queue_depth: number;
+  embedding_model?: string | null;
+  embedding_dimensions?: number | null;
+  last_error?: string | null;
+  last_updated_at?: Date | null;
 }
 
 export interface KnowledgeEmbeddingSpace {

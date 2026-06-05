@@ -3,6 +3,7 @@ import type {
   KnowledgeIndexingStatus as CoreKnowledgeIndexingStatus,
   KnowledgeNamespace as CoreKnowledgeNamespace,
   KnowledgeDocumentVersion as CoreKnowledgeVersion,
+  KnowledgeDocumentIndexingStatus,
   KnowledgeDocumentKind,
   KnowledgeDocumentStatus,
   KnowledgeNamespaceGraph,
@@ -168,6 +169,57 @@ const kindLabels: Record<KnowledgeDocumentKind, string> = {
   bundle: 'Bundle',
   external: 'Reference',
 };
+
+const indexingStateMeta: Record<
+  KnowledgeDocumentIndexingStatus['state'],
+  { label: string; color: string; tooltip: string }
+> = {
+  empty: {
+    label: 'No index',
+    color: 'default',
+    tooltip: 'No indexable units exist for the current version yet.',
+  },
+  not_configured: {
+    label: 'Embeddings off',
+    color: 'default',
+    tooltip: 'Semantic embeddings are not configured for these chunks.',
+  },
+  queued: {
+    label: 'Queued',
+    color: 'processing',
+    tooltip: 'Some chunks are queued for embedding.',
+  },
+  ready: {
+    label: 'Indexed',
+    color: 'green',
+    tooltip: 'Current chunks have ready embeddings.',
+  },
+  stale: {
+    label: 'Needs reindex',
+    color: 'gold',
+    tooltip: 'Some chunks are stale and queued for refresh.',
+  },
+  error: {
+    label: 'Index error',
+    color: 'red',
+    tooltip: 'At least one chunk failed embedding.',
+  },
+  mixed: {
+    label: 'Partial index',
+    color: 'blue',
+    tooltip: 'Chunks have mixed indexing states.',
+  },
+};
+
+function indexingTooltip(status: KnowledgeDocumentIndexingStatus): string {
+  const counts = Object.entries(status.chunks)
+    .filter(([, count]) => Number(count) > 0)
+    .map(([state, count]) => `${state}: ${count}`)
+    .join(', ');
+  const model = status.embedding_model ? ` · ${status.embedding_model}` : '';
+  const error = status.last_error ? ` · ${status.last_error}` : '';
+  return `${indexingStateMeta[status.state].tooltip}${model}${counts ? ` · ${counts}` : ''}${error}`;
+}
 
 const kindForSegment = (segment: string): KnowledgeDocumentKind | undefined => {
   if (segment === 'Pages') return 'doc';
@@ -707,6 +759,7 @@ export function KnowledgePage({
             kind,
             limit: 50,
             mode: searchMode,
+            include_indexing: true,
           },
         });
         const rows = normalizeFindResult<KnowledgeSearchResult>(result as KnowledgeSearchResult[]);
@@ -717,6 +770,7 @@ export function KnowledgePage({
             namespace_slug: namespaceFilter,
             kind,
             archived: false,
+            include_indexing: true,
           },
         });
         setDocuments(normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]));
@@ -947,6 +1001,7 @@ export function KnowledgePage({
             path: routeDocumentPath,
             archived: false,
             include_other_user_drafts: true,
+            include_indexing: true,
           },
         });
         if (cancelled) return;
@@ -1564,6 +1619,17 @@ export function KnowledgePage({
             Draft
           </Tag>
         )}
+        {doc.indexing_status && (
+          <Tooltip title={indexingTooltip(doc.indexing_status)}>
+            <Tag
+              color={indexingStateMeta[doc.indexing_status.state].color}
+              bordered={false}
+              style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px' }}
+            >
+              {indexingStateMeta[doc.indexing_status.state].label}
+            </Tag>
+          </Tooltip>
+        )}
       </button>
     );
   };
@@ -1995,6 +2061,13 @@ export function KnowledgePage({
                         <Tag color="gold">Draft</Tag>
                       ) : (
                         <Tag color="blue">Published</Tag>
+                      )}
+                      {activeDoc.indexing_status && (
+                        <Tooltip title={indexingTooltip(activeDoc.indexing_status)}>
+                          <Tag color={indexingStateMeta[activeDoc.indexing_status.state].color}>
+                            {indexingStateMeta[activeDoc.indexing_status.state].label}
+                          </Tag>
+                        </Tooltip>
                       )}
                       {isEditing ? (
                         <Select
