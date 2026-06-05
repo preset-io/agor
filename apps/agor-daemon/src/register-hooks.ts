@@ -932,6 +932,24 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
+  safeService('kb/settings')?.hooks({
+    before: {
+      all: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'configure Knowledge semantic search')],
+    },
+  });
+
+  safeService('kb/indexing/status')?.hooks({
+    before: {
+      all: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'view Knowledge indexing status')],
+    },
+  });
+
+  safeService('kb/indexing/reindex')?.hooks({
+    before: {
+      all: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'reindex Knowledge embeddings')],
+    },
+  });
+
   (safeService('kb/graph') as { hooks?: (options: unknown) => void } | undefined)?.hooks?.({
     before: {
       all: [requireAuth],

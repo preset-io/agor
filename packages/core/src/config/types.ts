@@ -979,6 +979,30 @@ export interface AgorProxyConfig {
 }
 
 /**
+ * Knowledge Base semantic search settings. Secrets are stored separately in the
+ * encrypted app_variables table; this config only carries non-secret defaults.
+ */
+export interface AgorKnowledgeSettings {
+  semantic_search?: {
+    enabled?: boolean;
+    provider?: 'openai' | 'voyage' | 'openai-compatible';
+    model?: string;
+    dimensions?: number;
+    chunking?: {
+      target_tokens?: number;
+      max_tokens?: number;
+      overlap_tokens?: number;
+      min_tokens?: number;
+    };
+    indexing?: {
+      paused?: boolean;
+      batch_size?: number;
+      concurrency?: number;
+    };
+  };
+}
+
+/**
  * Complete Agor configuration
  */
 export interface AgorConfig {
@@ -1017,6 +1041,9 @@ export interface AgorConfig {
 
   /** Backend analytics settings. Disabled by default. */
   analytics?: AgorAnalyticsSettings;
+
+  /** Knowledge Base semantic search settings. */
+  knowledge?: AgorKnowledgeSettings;
 
   /** Tool credentials (API keys, tokens) */
   credentials?: AgorCredentials;
@@ -1073,6 +1100,7 @@ export type ConfigKey =
   | `branches.${keyof AgorBranchesSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
+  | `knowledge.${keyof AgorKnowledgeSettings}`
   | `credentials.${keyof AgorCredentials}`
   | `onboarding.${keyof AgorOnboardingSettings}`
   | `services.${keyof import('../types/config-services').DaemonServicesConfig}`;

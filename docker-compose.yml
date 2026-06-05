@@ -179,7 +179,9 @@ services:
   # Usage: docker-compose --profile postgres up
   postgres:
     profiles: ['postgres'] # Optional service - only runs when profile is specified
-    image: postgres:16-alpine
+    # pgvector image tracks upstream Postgres and preinstalls the vector extension.
+    # Keep this on PG16 to match existing dev volumes and DATABASE_URL defaults.
+    image: pgvector/pgvector:0.8.2-pg16-trixie
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-agor}
       POSTGRES_USER: ${POSTGRES_USER:-agor}

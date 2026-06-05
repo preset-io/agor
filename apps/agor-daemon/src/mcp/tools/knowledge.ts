@@ -8,6 +8,7 @@ import type {
 import {
   buildKnowledgeDocumentUri,
   KNOWLEDGE_DOCUMENT_KINDS,
+  KNOWLEDGE_DOCUMENT_URI_PREFIX,
   KNOWLEDGE_EDIT_POLICIES,
   KNOWLEDGE_GRAPH_EDGE_TYPES,
   KNOWLEDGE_GRAPH_NODE_TYPES,
@@ -239,7 +240,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_search',
     {
       description:
-        'Search Agor Knowledge documents. Supports namespace/path/kind filters now, with semantic/hybrid modes reserved for the future backend. Each result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
+        'Search Agor Knowledge documents. Supports text, semantic, and hybrid modes when Knowledge embeddings are enabled/configured. Each result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         query: z.string().describe('Search text. Use an empty string to browse with filters.'),
@@ -256,7 +257,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .enum(['text', 'semantic', 'hybrid'])
           .optional()
           .describe(
-            'Search mode. V1 services should support text; semantic/hybrid may return a clear unsupported error.'
+            'Search mode. `text` is always available; `semantic` and `hybrid` require Postgres + pgvector + configured Knowledge embeddings.'
           ),
       }),
     },
@@ -325,6 +326,14 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       }
 
       const uri = coerceString(args.uri);
+      if (uri?.startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX)) {
+        const idFromUri = uri.slice(KNOWLEDGE_DOCUMENT_URI_PREFIX.length);
+        if (service.get)
+          return textResult(
+            enrichWithReferenceUri(await service.get(idFromUri, mcpParams(ctx, query)))
+          );
+        return knowledgeNotImplementedResult('agor_kb_get', ['kb/documents.get']);
+      }
       if (uri) query.uri = uri;
       const parsedUri = parseKnowledgeUri(uri);
       const namespace = coerceString(args.namespace) ?? parsedUri?.namespace_slug;
@@ -379,7 +388,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .string()
           .optional()
           .describe(
-            'Human-readable title (optional). When omitted, the first markdown line (e.g. an H1) becomes the title, falling back to the document path.'
+            'Optional explicit title. Prefer omitting this when `content` starts with an H1; Agor will derive the title from that heading and hide the duplicate heading in the viewer. Only provide a title when `firstLineIsTitle:false` or the content has no title heading.'
           ),
         content: z
           .string()
@@ -390,7 +399,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .boolean()
           .optional()
           .describe(
-            'Derive the title from the first non-empty markdown line (stored as metadata.title_from_content). Defaults to true when `title` is omitted, false when an explicit `title` is given.'
+            'Derive the title from the first non-empty markdown line and hide that line in the read-only viewer. Defaults to true when content starts with an H1 (even if `title` is also provided) or when `title` is omitted; set false only when the explicit `title` should be separate from the markdown body.'
           ),
         kind: KnowledgeDocumentKindSchema.optional().describe('Document kind (default: doc)'),
         visibility: KnowledgeVisibilitySchema.optional().describe(
@@ -432,9 +441,16 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const uri = coerceString(args.uri);
       const parsedUri = parseKnowledgeUri(uri);
       const title = coerceString(args.title);
-      // Title is optional: derive it from the first markdown line unless the
-      // caller passed an explicit title (or set the flag themselves).
-      const firstLineIsTitle = args.firstLineIsTitle ?? title === undefined;
+      const firstContentLine = content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean);
+      const contentStartsWithHeading = Boolean(firstContentLine?.match(/^#{1,6}\s+\S/));
+      // Agents commonly pass both `title` and markdown beginning with `# Title`.
+      // Default to deriving/hiding the first heading in that case so the viewer
+      // does not render duplicate titles. Callers can opt out explicitly.
+      const firstLineIsTitle =
+        args.firstLineIsTitle ?? (contentStartsWithHeading || title === undefined);
 
       const data = {
         document_id: coerceString(args.documentId),
@@ -504,6 +520,14 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       };
       if (args.documentId) query.document_id = coerceString(args.documentId);
       const uri = coerceString(args.uri);
+      if (uri?.startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX)) {
+        const idFromUri = uri.slice(KNOWLEDGE_DOCUMENT_URI_PREFIX.length);
+        if (service.get)
+          return textResult(
+            enrichWithReferenceUri(await service.get(idFromUri, mcpParams(ctx, query)))
+          );
+        return knowledgeNotImplementedResult('agor_kb_get', ['kb/documents.get']);
+      }
       if (uri) query.uri = uri;
       const parsedUri = parseKnowledgeUri(uri);
       const namespace = coerceString(args.namespace) ?? parsedUri?.namespace_slug;

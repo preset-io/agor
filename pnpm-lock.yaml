@@ -157,6 +157,9 @@ importers:
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
+      '@types/mdast':
+        specifier: ^4.0.4
+        version: 4.0.4
       compression:
         specifier: ^1.8.1
         version: 1.8.1
@@ -184,15 +187,27 @@ importers:
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
+      mdast-util-to-markdown:
+        specifier: ^2.1.2
+        version: 2.1.2
       multer:
         specifier: ^2.1.1
         version: 2.1.1
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
+      remark-parse:
+        specifier: ^11.0.0
+        version: 11.0.0
       socket.io:
         specifier: ^4.8.3
         version: 4.8.3
       swagger-ui-dist:
         specifier: ^5.32.6
         version: 5.32.6
+      unified:
+        specifier: ^11.0.5
+        version: 11.0.5
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.154
@@ -547,6 +562,9 @@ importers:
       '@slack/web-api':
         specifier: ^7.16.0
         version: 7.16.0
+      '@types/mdast':
+        specifier: ^4.0.4
+        version: 4.0.4
       analytics:
         specifier: ^0.8.19
         version: 0.8.19(@types/dlv@1.1.5)
@@ -607,6 +625,9 @@ importers:
       md-to-slack:
         specifier: ^1.1.7
         version: 1.1.7
+      mdast-util-to-markdown:
+        specifier: ^2.1.2
+        version: 2.1.2
       multer:
         specifier: ^2.1.1
         version: 2.1.1
@@ -619,6 +640,12 @@ importers:
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
+      remark-parse:
+        specifier: ^11.0.0
+        version: 11.0.0
       simple-git:
         specifier: ^3.36.0
         version: 3.36.0
@@ -634,6 +661,9 @@ importers:
       swagger-ui-dist:
         specifier: ^5.32.6
         version: 5.32.6
+      unified:
+        specifier: ^11.0.5
+        version: 11.0.5
       uuid:
         specifier: ^14.0.0
         version: 14.0.0
@@ -7059,7 +7089,6 @@ packages:
 
   libsql@0.5.29:
     resolution: {integrity: sha512-8lMP8iMgiBzzoNbAPQ59qdVcj6UaE/Vnm+fiwX4doX4Narook0a4GPKWBEv+CR8a1OwbfkgL18uBfBjWdF0Fzg==}
-    cpu: [x64, arm64, wasm32, arm]
     os: [darwin, linux, win32]
 
   lightningcss-android-arm64@1.32.0:

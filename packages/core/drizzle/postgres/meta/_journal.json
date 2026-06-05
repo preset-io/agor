@@ -288,6 +288,20 @@
       "when": 1780700000000,
       "tag": "0041_user_groups_branch_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1780800000000,
+      "tag": "0042_app_variables",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1780900000000,
+      "tag": "0043_kb_embeddings",
+      "breakpoints": true
     }
   ]
 }

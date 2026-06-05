@@ -5,10 +5,12 @@
  * immutable document version and advances `current_version_id`.
  */
 
-import { PAGINATION } from '@agor/core/config';
+import { loadConfig, PAGINATION } from '@agor/core/config';
 import {
+  AppVariableRepository,
   type CreateKnowledgeDocumentInput,
   type Database,
+  isPostgresDatabase,
   type KnowledgeDocumentFilters,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
@@ -16,7 +18,7 @@ import {
   KnowledgeNamespaceRepository,
   type UpdateKnowledgeDocumentInput,
 } from '@agor/core/db';
-import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
+import { type Application, BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   Id,
@@ -37,6 +39,15 @@ import {
   titleFromKnowledgeContent,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import {
+  isUsableOpenAIEmbeddingConfig,
+  KNOWLEDGE_EMBEDDINGS_API_KEY,
+  KNOWLEDGE_EMBEDDINGS_NAMESPACE,
+} from '../knowledge/embeddings.js';
+import {
+  knowledgeChunkerOptionsFromConfig,
+  knowledgeUnitsForMarkdown,
+} from '../knowledge/units.js';
 
 export type KnowledgeDocumentParams = QueryParams<{
   namespace_id?: KnowledgeNamespaceID;
@@ -94,11 +105,15 @@ export class KnowledgeDocumentsService extends DrizzleService<
   KnowledgeDocumentParams
 > {
   private repo: KnowledgeDocumentRepository;
+  private variables: AppVariableRepository;
   private versions: KnowledgeDocumentVersionRepository;
   private namespaces: KnowledgeNamespaceRepository;
   private graph: KnowledgeGraphRepository;
 
-  constructor(db: Database) {
+  constructor(
+    private db: Database,
+    private app?: Application
+  ) {
     const repo = new KnowledgeDocumentRepository(db);
     super(repo, {
       id: 'document_id',
@@ -109,6 +124,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       },
     });
     this.repo = repo;
+    this.variables = new AppVariableRepository(db);
     this.versions = new KnowledgeDocumentVersionRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
     this.graph = new KnowledgeGraphRepository(db);
@@ -216,6 +232,40 @@ export class KnowledgeDocumentsService extends DrizzleService<
    * (re)written; metadata-only saves leave existing edges untouched. Failures
    * are swallowed so graph upkeep never blocks a save.
    */
+
+  private async isEmbeddingConfigured(): Promise<boolean> {
+    const config = await loadConfig();
+    if (!isPostgresDatabase(this.db)) return false;
+    const apiKey = await this.variables.find(
+      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
+      KNOWLEDGE_EMBEDDINGS_API_KEY
+    );
+    return isUsableOpenAIEmbeddingConfig(
+      config.knowledge?.semantic_search ?? {},
+      Boolean(apiKey?.value_encrypted)
+    );
+  }
+
+  private async replaceSearchUnitsForContent(
+    doc: KnowledgeDocument,
+    content?: string | null
+  ): Promise<void> {
+    if (typeof content !== 'string' || !doc.current_version_id) return;
+    const config = await loadConfig();
+    const chunks = knowledgeUnitsForMarkdown(
+      doc.path,
+      content,
+      knowledgeChunkerOptionsFromConfig(config)
+    );
+    await this.repo.replaceUnitsForVersion(doc.current_version_id, chunks, {
+      embeddingConfigured: await this.isEmbeddingConfigured(),
+    });
+    const indexer = (this.app as unknown as { get?: (key: string) => unknown } | undefined)?.get?.(
+      'knowledgeEmbeddingIndexer'
+    ) as { wake?: () => void } | undefined;
+    indexer?.wake?.();
+  }
+
   private async syncGraphReferences(
     doc: KnowledgeDocument,
     content: string | null | undefined,
@@ -295,7 +345,9 @@ export class KnowledgeDocumentsService extends DrizzleService<
       current_version: version,
       content: version?.content_text ?? null,
       first_line_is_title: document.metadata?.title_from_content === true,
-      ...(params?.include_links ? { links: [] } : {}),
+      ...(params?.include_links
+        ? { links: extractKnowledgeLinks(version?.content_text ?? '') }
+        : {}),
     };
   }
 
@@ -404,6 +456,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
           existing
         )
       );
+      await this.replaceSearchUnitsForContent(result, data.content_text);
       await this.syncGraphReferences(result, data.content_text, userId);
       this.emit?.('patched', result, params);
       return result;
@@ -438,6 +491,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
         updated_by: this.attributionUserId(params, data.updated_by),
       })
     );
+    await this.replaceSearchUnitsForContent(result, data.content_text);
     await this.syncGraphReferences(result, data.content_text, userId);
     this.emit?.('created', result, params);
     return result;
@@ -459,6 +513,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const result = await this.repo.create({
       ...prepared,
     });
+    await this.replaceSearchUnitsForContent(result, data.content_text);
     await this.syncGraphReferences(result, data.content_text, userId);
     this.emit?.('created', result, params);
     return result;
@@ -495,6 +550,10 @@ export class KnowledgeDocumentsService extends DrizzleService<
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
     });
+    await this.replaceSearchUnitsForContent(
+      result,
+      (data as KnowledgeDocumentWriteData).content_text
+    );
     await this.syncGraphReferences(
       result,
       (data as KnowledgeDocumentWriteData).content_text,
@@ -521,6 +580,10 @@ export class KnowledgeDocumentsService extends DrizzleService<
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
     });
+    await this.replaceSearchUnitsForContent(
+      result,
+      (data as KnowledgeDocumentWriteData).content_text
+    );
     await this.syncGraphReferences(
       result,
       (data as KnowledgeDocumentWriteData).content_text,
@@ -544,6 +607,9 @@ export class KnowledgeDocumentsService extends DrizzleService<
   }
 }
 
-export function createKnowledgeDocumentsService(db: Database): KnowledgeDocumentsService {
-  return new KnowledgeDocumentsService(db);
+export function createKnowledgeDocumentsService(
+  db: Database,
+  app?: Application
+): KnowledgeDocumentsService {
+  return new KnowledgeDocumentsService(db, app);
 }

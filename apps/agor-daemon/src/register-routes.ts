@@ -3580,7 +3580,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     file_browser: ['file', 'files', 'context'],
     mcp_servers: ['mcp-servers', 'session-mcp-servers'],
     leaderboard: ['leaderboard'],
-    knowledge: ['kb/namespaces', 'kb/documents', 'kb/versions', 'kb/search', 'kb/graph'],
+    knowledge: [
+      'kb/namespaces',
+      'kb/documents',
+      'kb/versions',
+      'kb/search',
+      'kb/settings',
+      'kb/indexing/status',
+      'kb/indexing/reindex',
+      'kb/graph',
+    ],
   };
 
   const mappedGroups = new Set(Object.keys(SERVICE_GROUP_PATHS));

@@ -1,9 +1,12 @@
 import type {
   KnowledgeDocument as CoreKnowledgeDocument,
+  KnowledgeIndexingStatus as CoreKnowledgeIndexingStatus,
   KnowledgeNamespace as CoreKnowledgeNamespace,
   KnowledgeDocumentVersion as CoreKnowledgeVersion,
   KnowledgeDocumentKind,
   KnowledgeNamespaceGraph,
+  KnowledgeSearchMode,
+  KnowledgeSemanticSettingsPublic,
 } from '@agor/core/types';
 import {
   hasMinimumRole,
@@ -29,6 +32,7 @@ import {
   ReloadOutlined,
   SaveOutlined,
   SearchOutlined,
+  SettingOutlined,
   UpOutlined,
 } from '@ant-design/icons';
 import {
@@ -41,6 +45,7 @@ import {
   Flex,
   Form,
   Input,
+  InputNumber,
   Layout,
   List,
   Modal,
@@ -48,6 +53,7 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
   Tag,
   Tooltip,
   Tree,
@@ -99,7 +105,12 @@ interface KnowledgeSearchResult {
   current_version?: KnowledgeVersion | null;
   snippet?: string | null;
   score: number;
+  mode?: KnowledgeSearchMode;
+  chunks?: Array<{ unit_id: string; snippet?: string | null; score?: number }>;
 }
+
+type KnowledgeSemanticSettings = KnowledgeSemanticSettingsPublic & { api_key?: string | null };
+type KnowledgeIndexingStatus = CoreKnowledgeIndexingStatus;
 
 interface KnowledgePageProps {
   client: AgorClient | null;
@@ -116,6 +127,35 @@ const DEFAULT_MARKDOWN = `# New Knowledge Page\n\nWrite markdown here.\n`;
 const DRAFT_DOCUMENT_ID = '__knowledge_draft__' as CoreKnowledgeDocument['document_id'];
 const ROOT_FOLDER = '';
 const DEFAULT_FOLDERS = ['pages', 'skills', 'memories'];
+const DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS: KnowledgeSemanticSettings = {
+  enabled: false,
+  provider: 'openai',
+  model: 'text-embedding-3-small',
+  dimensions: 1536,
+  api_key_configured: false,
+  chunking: {
+    target_tokens: 850,
+    max_tokens: 1200,
+    overlap_tokens: 100,
+    min_tokens: 80,
+  },
+  indexing: {
+    paused: false,
+    batch_size: 32,
+    concurrency: 1,
+  },
+};
+
+const OPENAI_EMBEDDING_MODEL_OPTIONS = [
+  {
+    label: 'text-embedding-3-small — recommended',
+    value: 'text-embedding-3-small',
+  },
+  {
+    label: 'text-embedding-3-large — higher quality',
+    value: 'text-embedding-3-large',
+  },
+];
 
 const kindLabels: Record<KnowledgeDocumentKind, string> = {
   doc: 'Page',
@@ -342,6 +382,7 @@ export function KnowledgePage({
   const [titleFromContent, setTitleFromContent] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState(DEFAULT_MARKDOWN);
   const [searchQuery, setSearchQuery] = useState(() => routeSearchParams.get('q') ?? '');
+  const [searchMode, setSearchMode] = useState<KnowledgeSearchMode>('text');
   const [kindFilter, setKindFilter] = useState<string>(() =>
     kindFilterFromUrlParam(routeSearchParams.get('kind'))
   );
@@ -369,6 +410,15 @@ export function KnowledgePage({
   const [historyView, setHistoryView] = useState<'preview' | 'diff'>('preview');
   const [titleActionsVisible, setTitleActionsVisible] = useState(false);
   const [renamePathOnTitleChange, setRenamePathOnTitleChange] = useState(false);
+  const [knowledgeSettingsOpen, setKnowledgeSettingsOpen] = useState(false);
+  const [knowledgeSettings, setKnowledgeSettings] =
+    useState<KnowledgeSemanticSettingsPublic | null>(null);
+  const [indexingStatus, setIndexingStatus] = useState<KnowledgeIndexingStatus | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsApiKeyDraft, setSettingsApiKeyDraft] = useState('');
+  const [settingsForm] = Form.useForm<KnowledgeSemanticSettings>();
 
   useEffect(() => {
     document.title = 'Knowledge · Agor';
@@ -653,6 +703,7 @@ export function KnowledgePage({
             namespace_slug: namespaceFilter,
             kind,
             limit: 50,
+            mode: searchMode,
           },
         });
         const rows = normalizeFindResult<KnowledgeSearchResult>(result as KnowledgeSearchResult[]);
@@ -673,11 +724,98 @@ export function KnowledgePage({
     } finally {
       setLoading(false);
     }
-  }, [client, activeSpace, kindFilter, searchQuery, loadNamespaces, loadMentionDocs]);
+  }, [client, activeSpace, kindFilter, searchQuery, searchMode, loadNamespaces, loadMentionDocs]);
 
   useEffect(() => {
     loadDocuments();
   }, [loadDocuments]);
+  const refreshKnowledgeSettings = useCallback(async () => {
+    if (!client) return;
+    setSettingsLoading(true);
+    setSettingsError(null);
+    try {
+      const [settings, status] = await Promise.all([
+        client.service('kb/settings').find(),
+        client.service('kb/indexing/status').find(),
+      ]);
+      const nextSettings = {
+        ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS,
+        ...(settings as unknown as KnowledgeSemanticSettingsPublic),
+        chunking: {
+          ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.chunking,
+          ...((settings as unknown as KnowledgeSemanticSettingsPublic).chunking ?? {}),
+        },
+        indexing: {
+          ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.indexing,
+          ...((settings as unknown as KnowledgeSemanticSettingsPublic).indexing ?? {}),
+        },
+      };
+      setKnowledgeSettings(nextSettings);
+      setIndexingStatus(status as unknown as KnowledgeIndexingStatus);
+      settingsForm.setFieldsValue(nextSettings);
+    } catch (err) {
+      console.error('Failed to load Knowledge semantic settings:', err);
+      setSettingsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, [client, settingsForm]);
+
+  const openKnowledgeSettings = useCallback(() => {
+    setKnowledgeSettingsOpen(true);
+    setSettingsApiKeyDraft('');
+    setSettingsError(null);
+    void refreshKnowledgeSettings();
+  }, [refreshKnowledgeSettings]);
+
+  const saveKnowledgeSettings = useCallback(async () => {
+    if (!client) return;
+    setSettingsSaving(true);
+    setSettingsError(null);
+    try {
+      const values = await settingsForm.validateFields();
+      const patch: Record<string, unknown> = {
+        enabled: values.enabled ?? DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.enabled,
+        provider: values.provider ?? DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.provider,
+        model: values.model || DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.model,
+        dimensions: values.dimensions ?? DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.dimensions,
+        chunking: {
+          ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.chunking,
+          ...(values.chunking ?? {}),
+        },
+        indexing: {
+          ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.indexing,
+          ...(values.indexing ?? {}),
+        },
+      };
+      if (settingsApiKeyDraft.trim()) patch.api_key = settingsApiKeyDraft.trim();
+      const next = await client.service('kb/settings').create(patch);
+      setKnowledgeSettings(next as KnowledgeSemanticSettingsPublic);
+      setSettingsApiKeyDraft('');
+      await refreshKnowledgeSettings();
+      setKnowledgeSettingsOpen(false);
+    } catch (err) {
+      console.error('Failed to save Knowledge semantic settings:', err);
+      setSettingsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSettingsSaving(false);
+    }
+  }, [client, refreshKnowledgeSettings, settingsApiKeyDraft, settingsForm]);
+
+  const reindexKnowledge = useCallback(async () => {
+    if (!client) return;
+    setSettingsSaving(true);
+    setSettingsError(null);
+    try {
+      await client.service('kb/indexing/reindex').create({});
+      await refreshKnowledgeSettings();
+    } catch (err) {
+      console.error('Failed to queue Knowledge reindex:', err);
+      setSettingsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSettingsSaving(false);
+    }
+  }, [client, refreshKnowledgeSettings]);
 
   // The namespace graph is scoped to a single Space; "All Spaces" has no graph.
   const loadGraph = useCallback(async () => {
@@ -1019,7 +1157,7 @@ export function KnowledgePage({
         metadata: { title_from_content: true },
         content_text: `# ${title}\n\nWrite markdown here.\n`,
         change_summary: 'Initial version',
-      })) as KnowledgeDocument;
+      } as unknown as Partial<CoreKnowledgeDocument>)) as KnowledgeDocument;
       setDocuments((prev) => [created, ...prev]);
       setActiveSpace(namespaceSlug);
       activeDocIdRef.current = created.document_id;
@@ -1060,7 +1198,7 @@ export function KnowledgePage({
           },
           content_text: markdownDraft,
           change_summary: 'Initial version',
-        })) as KnowledgeDocument;
+        } as unknown as Partial<CoreKnowledgeDocument>)) as KnowledgeDocument;
         setDocuments((prev) => [created, ...prev]);
         setDraftDocument(null);
         setDraftNamespaceSlug(null);
@@ -1098,7 +1236,7 @@ export function KnowledgePage({
         change_summary: nextPath
           ? `Edited and renamed from ${activeDoc.path} to ${nextPath}`
           : 'Edited from Knowledge UI',
-      })) as KnowledgeDocument;
+      } as unknown as Partial<CoreKnowledgeDocument>)) as KnowledgeDocument;
       setDocuments((prev) =>
         prev.map((doc) => (doc.document_id === updated.document_id ? updated : doc))
       );
@@ -1136,7 +1274,7 @@ export function KnowledgePage({
       const updated = (await client.service('kb/documents').patch(doc.document_id, {
         path: nextPath,
         change_summary: `Moved to ${targetFolder || 'root'}`,
-      })) as KnowledgeDocument;
+      } as unknown as Partial<CoreKnowledgeDocument>)) as KnowledgeDocument;
       setDocuments((prev) =>
         prev.map((item) => (item.document_id === updated.document_id ? updated : item))
       );
@@ -1203,7 +1341,7 @@ export function KnowledgePage({
           title_from_content: titleFromContent,
         },
         change_summary: `Restored version ${selectedVersion.version_number}`,
-      })) as KnowledgeDocument;
+      } as unknown as Partial<CoreKnowledgeDocument>)) as KnowledgeDocument;
       setDocuments((prev) =>
         prev.map((doc) => (doc.document_id === updated.document_id ? updated : doc))
       );
@@ -1558,6 +1696,16 @@ export function KnowledgePage({
             />
           </Tooltip>
           <ThemeSwitcher />
+          {hasMinimumRole(currentUser?.role, ROLES.ADMIN) && (
+            <Tooltip title="Knowledge settings" placement="bottom">
+              <Button
+                type="text"
+                icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
+                onClick={openKnowledgeSettings}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              />
+            </Tooltip>
+          )}
           <GlobalUserMenu
             user={currentUser}
             onUserSettingsClick={onUserSettingsClick}
@@ -1604,6 +1752,17 @@ export function KnowledgePage({
                   replace: true,
                 });
               }}
+            />
+            <Segmented
+              block
+              size="small"
+              value={searchMode}
+              onChange={(value) => setSearchMode(value as KnowledgeSearchMode)}
+              options={[
+                { label: 'Text', value: 'text' },
+                { label: 'Semantic', value: 'semantic' },
+                { label: 'Hybrid', value: 'hybrid' },
+              ]}
             />
             <Flex gap={8}>
               <Button
@@ -2091,6 +2250,151 @@ export function KnowledgePage({
           </div>
         </Flex>
       </Drawer>
+
+      <Modal
+        title="Knowledge semantic search"
+        open={knowledgeSettingsOpen}
+        onCancel={() => setKnowledgeSettingsOpen(false)}
+        okText="Save settings"
+        onOk={saveKnowledgeSettings}
+        confirmLoading={settingsSaving}
+        width={720}
+      >
+        <Spin spinning={settingsLoading}>
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            {settingsError && <Alert type="error" showIcon message={settingsError} />}
+            <Alert
+              type="info"
+              showIcon
+              message="Semantic search uses markdown-aware chunks stored in Postgres/pgvector. SQLite can save settings and chunks, but vector search requires Postgres."
+            />
+            {indexingStatus && (
+              <div
+                style={{
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: token.borderRadiusLG,
+                  padding: 12,
+                  background: token.colorFillQuaternary,
+                }}
+              >
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <Text strong>Indexing status</Text>
+                  <Text type="secondary">
+                    {indexingStatus.dialect} · pgvector{' '}
+                    {indexingStatus.pgvector_available ? 'available' : 'not available'} · queue{' '}
+                    {indexingStatus.queue_depth}
+                  </Text>
+                  <Space wrap>
+                    {Object.entries(indexingStatus.chunks).map(([status, count]) => (
+                      <Tag key={status}>
+                        {status}: {Number(count)}
+                      </Tag>
+                    ))}
+                  </Space>
+                  {indexingStatus.last_error && (
+                    <Alert type="warning" message={indexingStatus.last_error} />
+                  )}
+                </Space>
+              </div>
+            )}
+            <Form
+              form={settingsForm}
+              layout="vertical"
+              initialValues={knowledgeSettings ?? DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS}
+            >
+              <Form.Item
+                name="enabled"
+                label="Enable semantic / hybrid search"
+                valuePropName="checked"
+              >
+                <Switch />
+              </Form.Item>
+              <Flex gap={12} wrap="wrap">
+                <Form.Item name="provider" label="Provider" style={{ minWidth: 180, flex: 1 }}>
+                  <Select options={[{ label: 'OpenAI', value: 'openai' }]} />
+                </Form.Item>
+                <Form.Item name="model" label="Model" style={{ minWidth: 240, flex: 2 }}>
+                  <Select
+                    options={OPENAI_EMBEDDING_MODEL_OPTIONS}
+                    onChange={() => settingsForm.setFieldValue('dimensions', 1536)}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="dimensions"
+                  label="Dimensions"
+                  tooltip="Agor V1 indexes 1536-dimensional embeddings. text-embedding-3-large is requested with dimensions=1536."
+                  style={{ width: 140 }}
+                >
+                  <InputNumber
+                    disabled
+                    min={1536}
+                    max={1536}
+                    precision={0}
+                    style={{ width: '100%' }}
+                  />
+                </Form.Item>
+              </Flex>
+              <Form.Item label="OpenAI API key">
+                <Input.Password
+                  value={settingsApiKeyDraft}
+                  onChange={(event) => setSettingsApiKeyDraft(event.target.value)}
+                  placeholder={
+                    knowledgeSettings?.api_key_configured
+                      ? 'Configured — enter a new key to replace'
+                      : 'sk-...'
+                  }
+                  autoComplete="off"
+                />
+              </Form.Item>
+              <Flex gap={12} wrap="wrap">
+                <Form.Item
+                  name={['chunking', 'target_tokens']}
+                  label="Target tokens"
+                  style={{ width: 150 }}
+                >
+                  <InputNumber min={100} precision={0} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  name={['chunking', 'max_tokens']}
+                  label="Max tokens"
+                  style={{ width: 150 }}
+                >
+                  <InputNumber min={100} precision={0} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  name={['chunking', 'overlap_tokens']}
+                  label="Overlap"
+                  style={{ width: 130 }}
+                >
+                  <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  name={['chunking', 'min_tokens']}
+                  label="Min tokens"
+                  style={{ width: 130 }}
+                >
+                  <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  name={['indexing', 'batch_size']}
+                  label="Batch size"
+                  style={{ width: 130 }}
+                >
+                  <InputNumber min={1} max={256} precision={0} style={{ width: '100%' }} />
+                </Form.Item>
+              </Flex>
+            </Form>
+            <Flex justify="space-between" align="center">
+              <Text type="secondary">
+                Reindexing queues current Knowledge chunks and wakes the background indexer.
+              </Text>
+              <Button onClick={reindexKnowledge} loading={settingsSaving}>
+                Reindex now
+              </Button>
+            </Flex>
+          </Space>
+        </Spin>
+      </Modal>
 
       <Modal
         title="Relocate page"

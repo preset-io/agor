@@ -75,8 +75,11 @@ import {
 } from './services/groups.js';
 import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
 import { createKnowledgeGraphService } from './services/knowledge-graph.js';
+import { createKnowledgeIndexingStatusService } from './services/knowledge-indexing.js';
 import { createKnowledgeNamespacesService } from './services/knowledge-namespaces.js';
+import { createKnowledgeReindexService } from './services/knowledge-reindex.js';
 import { createKnowledgeSearchService } from './services/knowledge-search.js';
+import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
 import { createMCPServersService } from './services/mcp-servers.js';
@@ -361,7 +364,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/kb/namespaces', createKnowledgeNamespacesService(db), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove'],
   });
-  app.use('/kb/documents', createKnowledgeDocumentsService(db), {
+  app.use('/kb/documents', createKnowledgeDocumentsService(db, app), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'getDocument', 'putDocument'],
   });
   app.use('/kb/versions', createKnowledgeVersionsService(db), {
@@ -369,6 +372,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   app.use('/kb/search', createKnowledgeSearchService(db), {
     methods: ['find', 'create'],
+  });
+  app.use('/kb/settings', createKnowledgeSettingsService(db, app), {
+    methods: ['find', 'create', 'patch'],
+  });
+  app.use('/kb/indexing/status', createKnowledgeIndexingStatusService(db, app), {
+    methods: ['find'],
+  });
+  app.use('/kb/indexing/reindex', createKnowledgeReindexService(db, app), {
+    methods: ['create'],
   });
   app.use('/kb/graph', createKnowledgeGraphService(db), {
     methods: ['find', 'create', 'link', 'neighbors'],

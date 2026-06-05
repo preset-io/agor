@@ -32,6 +32,7 @@ export const groupMemberships = schema.groupMemberships;
 export const branchGroupGrants = schema.branchGroupGrants;
 export const schedules = schema.schedules;
 export const users = schema.users;
+export const appVariables = schema.appVariables;
 export const mcpServers = schema.mcpServers;
 export const cardTypes = schema.cardTypes;
 export const cards = schema.cards;
@@ -50,6 +51,7 @@ export const kbNamespaces = schema.kbNamespaces;
 export const kbDocuments = schema.kbDocuments;
 export const kbDocumentVersions = schema.kbDocumentVersions;
 export const kbDocumentUnits = schema.kbDocumentUnits;
+export const kbEmbeddingSpaces = schema.kbEmbeddingSpaces;
 export const kbGraphNodes = schema.kbGraphNodes;
 export const kbGraphEdges = schema.kbGraphEdges;
 

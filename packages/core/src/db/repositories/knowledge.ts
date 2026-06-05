@@ -25,6 +25,8 @@ import type {
   KnowledgeNamespace,
   KnowledgeNamespaceID,
   KnowledgeNamespaceKind,
+  KnowledgeSearchMode,
+  KnowledgeSearchResult,
   KnowledgeVisibility,
   UserID,
 } from '@agor/core/types';
@@ -108,12 +110,29 @@ export interface UpdateKnowledgeDocumentInput extends Partial<KnowledgeDocument>
   change_summary?: string | null;
 }
 
+export interface ReplaceKnowledgeUnitInput {
+  kind: 'document' | 'section' | 'file' | 'auto_split';
+  ordinal: number;
+  path_anchor?: string | null;
+  heading_path?: string | null;
+  source_path?: string | null;
+  content_text: string;
+  content_md5: string;
+  start_offset?: number | null;
+  end_offset?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
 type KnowledgeDocumentWriteInput = Partial<KnowledgeDocument> &
   Partial<CreateKnowledgeDocumentInput> &
   Partial<UpdateKnowledgeDocumentInput>;
 
 export interface KnowledgeSearchQuery {
   q?: string;
+  mode?: KnowledgeSearchMode;
+  include_chunks?: boolean;
+  min_similarity?: number;
+  rerank_limit?: number;
   namespace_id?: KnowledgeNamespaceID;
   namespace_slug?: string;
   path_prefix?: string;
@@ -123,6 +142,22 @@ export interface KnowledgeSearchQuery {
   limit?: number;
   readable_by_user_id?: UserID;
   readable_as_admin?: boolean;
+}
+
+function deterministicKnowledgeUnitId(
+  versionId: KnowledgeDocumentVersionID,
+  unit: ReplaceKnowledgeUnitInput
+): KnowledgeDocumentUnitID {
+  const hash = createHash('sha256')
+    .update(`${versionId}:${unit.ordinal}:${unit.path_anchor ?? ''}:${unit.content_md5}`)
+    .digest('hex');
+  // UUID-shaped deterministic ID for stable `agor://kb/unit/<id>` references.
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-${(
+    (Number.parseInt(hash.slice(16, 18), 16) & 0x3f) |
+    0x80
+  )
+    .toString(16)
+    .padStart(2, '0')}${hash.slice(18, 20)}-${hash.slice(20, 32)}` as KnowledgeDocumentUnitID;
 }
 
 export interface KnowledgeNodeRef {
@@ -196,14 +231,6 @@ export interface KnowledgeDocumentEdge {
   source_document_id: KnowledgeDocumentID;
   target_document_id: KnowledgeDocumentID;
   edge_type: KnowledgeGraphEdgeType;
-}
-
-export interface KnowledgeSearchResult {
-  document: KnowledgeDocument;
-  current_version?: KnowledgeDocumentVersion | null;
-  namespace: KnowledgeNamespace;
-  snippet?: string | null;
-  score: number;
 }
 
 function hashContent(content: string): {
@@ -885,6 +912,48 @@ export class KnowledgeDocumentRepository
     });
   }
 
+  async replaceUnitsForVersion(
+    versionId: KnowledgeDocumentVersionID,
+    units: ReplaceKnowledgeUnitInput[],
+    options: { embeddingConfigured?: boolean } = {}
+  ): Promise<void> {
+    const version = await new KnowledgeDocumentVersionRepository(this.db).findById(versionId);
+    if (!version) throw new EntityNotFoundError('KnowledgeDocumentVersion', versionId);
+    await this.db.transaction(async (tx) => {
+      const txDb = txAsDb(tx);
+      await deleteFrom(txDb, kbDocumentUnits)
+        .where(eq(kbDocumentUnits.version_id, versionId))
+        .run();
+      if (units.length === 0) return;
+      await insert(txDb, kbDocumentUnits)
+        .values(
+          units.map((unit) => ({
+            unit_id: deterministicKnowledgeUnitId(version.version_id, unit),
+            document_id: version.document_id,
+            version_id: version.version_id,
+            kind: unit.kind,
+            ordinal: unit.ordinal,
+            path_anchor: unit.path_anchor ?? null,
+            heading_path: unit.heading_path ?? null,
+            source_path: unit.source_path ?? null,
+            content_text: unit.content_text,
+            content_md5: unit.content_md5,
+            start_offset: unit.start_offset ?? null,
+            end_offset: unit.end_offset ?? null,
+            embedding_status: options.embeddingConfigured ? 'pending' : 'not_configured',
+            embedding_model: null,
+            embedding_dimensions: null,
+            embedding_hash: null,
+            embedding_error: null,
+            metadata: unit.metadata ?? null,
+            created_at: new Date(),
+            updated_at: new Date(),
+          }))
+        )
+        .run();
+    });
+  }
+
   async delete(id: string): Promise<void> {
     const fullId = await this.resolveId(id);
     const result = await update(this.db, kbDocuments)
@@ -907,6 +976,12 @@ export class KnowledgeSearchRepository {
   }
 
   async search(query: KnowledgeSearchQuery): Promise<KnowledgeSearchResult[]> {
+    const mode = query.mode ?? 'text';
+    if (mode !== 'text') {
+      throw new RepositoryError(
+        'Semantic Knowledge search is not configured yet. Use mode:"text" or configure Postgres + pgvector embeddings.'
+      );
+    }
     const q = query.q?.trim() ?? '';
     const limit = Math.min(Math.max(query.limit ?? 25, 1), 100);
     let namespaceId = query.namespace_id;
@@ -939,13 +1014,21 @@ export class KnowledgeSearchRepository {
       );
     }
 
+    const needle = q.toLowerCase();
+    const terms = needle
+      .split(/[^a-z0-9-]+/i)
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 2);
+
     if (q) {
-      const pattern = `%${q.toLowerCase()}%`;
+      const patterns = [`%${needle}%`, ...terms.map((term) => `%${term}%`)];
       conditions.push(
         or(
-          sql`lower(${kbDocuments.title}) like ${pattern}`,
-          sql`lower(${kbDocuments.path}) like ${pattern}`,
-          sql`lower(${kbDocumentVersions.content_text}) like ${pattern}`
+          ...patterns.flatMap((pattern) => [
+            sql`lower(${kbDocuments.title}) like ${pattern}`,
+            sql`lower(${kbDocuments.path}) like ${pattern}`,
+            sql`lower(${kbDocumentVersions.content_text}) like ${pattern}`,
+          ])
         )!
       );
     }
@@ -961,38 +1044,59 @@ export class KnowledgeSearchRepository {
       dbQuery = dbQuery.where(and(...conditions)) as typeof dbQuery;
     }
 
-    const rows = await dbQuery.orderBy(desc(kbDocuments.updated_at)).limit(limit).all();
+    const rows = (await dbQuery
+      .orderBy(desc(kbDocuments.updated_at))
+      .limit(q ? Math.max(limit, 100) : limit)
+      .all()) as Array<Record<string, unknown>>;
     const baseUrl = await getBaseUrl();
 
-    return rows.map((row: Record<string, unknown>) => {
-      const namespace = this.namespaces.rowToNamespace(row.kb_namespaces as KBNamespaceRow);
-      const document = this.documents.rowToDocument(row.kb_documents as KBDocumentRow, {
-        baseUrl,
-        namespaceSlug: namespace.slug,
-      });
-      const version = row.kb_document_versions
-        ? this.versions.rowToVersion(row.kb_document_versions as KBDocumentVersionRow)
-        : null;
-      const hayTitle = document.title.toLowerCase();
-      const hayPath = document.path.toLowerCase();
-      const needle = q.toLowerCase();
-      const score = !needle
-        ? 0
-        : hayTitle === needle
-          ? 10
-          : hayTitle.includes(needle)
-            ? 5
-            : hayPath.includes(needle)
-              ? 3
-              : 1;
-      return {
-        document,
-        namespace,
-        current_version: version,
-        snippet: makeSnippet(version?.content_text, q),
-        score,
-      };
-    });
+    return rows
+      .map((row: Record<string, unknown>): KnowledgeSearchResult => {
+        const namespace = this.namespaces.rowToNamespace(row.kb_namespaces as KBNamespaceRow);
+        const document = this.documents.rowToDocument(row.kb_documents as KBDocumentRow, {
+          baseUrl,
+          namespaceSlug: namespace.slug,
+        });
+        const version = row.kb_document_versions
+          ? this.versions.rowToVersion(row.kb_document_versions as KBDocumentVersionRow)
+          : null;
+        const hayTitle = document.title.toLowerCase();
+        const hayPath = document.path.toLowerCase();
+        const hayContent = (version?.content_text ?? '').toLowerCase();
+        let score = 0;
+        if (needle) {
+          if (hayTitle === needle) score += 100;
+          else if (hayTitle.includes(needle)) score += 60;
+          if (hayPath.includes(needle)) score += 30;
+          if (hayContent.includes(needle)) score += 15;
+          let matchedTerms = 0;
+          for (const term of terms) {
+            const matched =
+              hayTitle.includes(term) || hayPath.includes(term) || hayContent.includes(term);
+            if (!matched) continue;
+            matchedTerms += 1;
+            if (hayTitle.includes(term)) score += 10;
+            if (hayPath.includes(term)) score += 5;
+            if (hayContent.includes(term)) score += 2;
+          }
+          if (terms.length > 0 && matchedTerms === terms.length) score += 20;
+        }
+        return {
+          document,
+          namespace,
+          current_version: version,
+          snippet: makeSnippet(version?.content_text, q),
+          score,
+          mode: 'text' as const,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          new Date(b.document.updated_at ?? 0).getTime() -
+            new Date(a.document.updated_at ?? 0).getTime()
+      )
+      .slice(0, limit);
   }
 }
 

@@ -1,18 +1,27 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { __resetConfigCacheForTests, type AgorConfig, saveConfig } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import {
+  eq,
   generateId,
   KnowledgeDocumentRepository,
   KnowledgeNamespaceRepository,
+  kbDocumentUnits,
+  select,
   UsersRepository,
 } from '@agor/core/db';
-import { Forbidden, NotFound } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type { KnowledgeDocument, User, UserID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { KnowledgeDocumentsService } from './knowledge-documents';
 import { KnowledgeGraphService } from './knowledge-graph';
+import { KnowledgeReindexService } from './knowledge-reindex';
 import { KnowledgeSearchService } from './knowledge-search';
+import { KnowledgeSettingsService } from './knowledge-settings';
 import { KnowledgeVersionsService } from './knowledge-versions';
 
 async function seedUser(
@@ -59,6 +68,20 @@ async function seedDocument(
 
 function params(user: User, query?: Record<string, unknown>) {
   return { user, query } as never;
+}
+
+async function withTempConfig<T>(config: AgorConfig, run: () => Promise<T>): Promise<T> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-kb-service-test-'));
+  const spy = vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+  __resetConfigCacheForTests();
+  try {
+    await saveConfig(config);
+    return await run();
+  } finally {
+    __resetConfigCacheForTests();
+    spy.mockRestore();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 describe('KnowledgeDocumentsService permissions', () => {
@@ -190,6 +213,83 @@ describe('KnowledgeDocumentsService permissions', () => {
         params(owner)
       );
       expect(recreated.document_id).not.toBe(created.document_id);
+    }
+  );
+});
+
+describe('Knowledge semantic indexing lifecycle', () => {
+  dbTest('rejects unsupported providers and normalizes blank API keys', async ({ db }) => {
+    await withTempConfig({}, async () => {
+      const admin = await seedUser(db, 'admin', ROLES.ADMIN);
+      const settings = new KnowledgeSettingsService(db);
+
+      await expect(
+        settings.patch(null, { provider: 'voyage' as never }, params(admin))
+      ).rejects.toBeInstanceOf(BadRequest);
+
+      const saved = await settings.patch(
+        null,
+        { enabled: true, provider: 'openai', api_key: '   ' },
+        params(admin)
+      );
+      expect(saved.api_key_configured).toBe(false);
+    });
+  });
+
+  dbTest('reindex rebuilds chunks from current document content on SQLite', async ({ db }) => {
+    await withTempConfig(
+      {
+        knowledge: {
+          semantic_search: {
+            enabled: true,
+            provider: 'openai',
+            chunking: {
+              target_tokens: 40,
+              max_tokens: 60,
+              overlap_tokens: 0,
+              min_tokens: 1,
+            },
+          },
+        },
+      },
+      async () => {
+        const owner = await seedUser(db, 'owner');
+        const doc = await seedDocument(db, owner, {
+          content_text: `# Big\n\n${Array.from({ length: 500 }, (_, i) => `word${i}`).join(' ')}`,
+        });
+
+        const result = await new KnowledgeReindexService(db).create();
+        expect(result.status).toBe('not_configured');
+        expect(result.queued).toBeGreaterThan(1);
+
+        const units = await select(db)
+          .from(kbDocumentUnits)
+          .where(eq(kbDocumentUnits.version_id, doc.current_version_id))
+          .all();
+        expect(units).toHaveLength(result.queued);
+        expect(new Set(units.map((unit) => unit.embedding_status))).toEqual(
+          new Set(['not_configured'])
+        );
+      }
+    );
+  });
+
+  dbTest(
+    'document content writes wake the embedding indexer through the app reference',
+    async ({ db }) => {
+      await withTempConfig({}, async () => {
+        const owner = await seedUser(db, 'owner');
+        const doc = await seedDocument(db, owner, { content_text: '# Page\n\nBefore' });
+        const wake = vi.fn();
+        const app = {
+          get: (key: string) => (key === 'knowledgeEmbeddingIndexer' ? { wake } : undefined),
+        } as never;
+        const service = new KnowledgeDocumentsService(db, app);
+
+        await service.patch(doc.document_id, { content_text: '# Page\n\nAfter' }, params(owner));
+
+        expect(wake).toHaveBeenCalledTimes(1);
+      });
     }
   );
 });

@@ -2,6 +2,7 @@
  * Repository Exports
  */
 
+export * from './app-variables';
 export * from './artifact-trust';
 export * from './artifacts';
 export * from './base';

@@ -1057,6 +1057,36 @@ export const branchGroupGrants = sqliteTable(
 );
 
 /**
+ * App Variables - daemon-owned application settings and secrets.
+ *
+ * Values can be plaintext (`value_text`) for non-secret JSON/string settings or
+ * encrypted (`value_encrypted`) with AGOR_MASTER_SECRET for daemon service
+ * credentials such as Knowledge embedding provider API keys.
+ */
+export const appVariables = sqliteTable(
+  'app_variables',
+  {
+    variable_id: text('variable_id', { length: 36 }).primaryKey(),
+    namespace: text('namespace').notNull(),
+    key: text('key').notNull(),
+    value_text: text('value_text'),
+    value_encrypted: text('value_encrypted'),
+    is_encrypted: t.bool('is_encrypted').notNull().default(false),
+    content_type: text('content_type').notNull().default('text/plain'),
+    metadata: t.json<Record<string, unknown>>('metadata'),
+    updated_by: text('updated_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    namespaceKeyIdx: uniqueIndex('app_variables_namespace_key_idx').on(table.namespace, table.key),
+    namespaceIdx: index('app_variables_namespace_idx').on(table.namespace),
+  })
+);
+
+/**
  * User API Keys table - Personal API keys for programmatic access
  *
  * Stores bcrypt-hashed API keys with a prefix for identification.
@@ -1836,6 +1866,33 @@ export const kbDocumentUnits = sqliteTable(
   })
 );
 
+/** Embedding spaces configured for Knowledge semantic search metadata. */
+export const kbEmbeddingSpaces = sqliteTable(
+  'kb_embedding_spaces',
+  {
+    embedding_space_id: text('embedding_space_id', { length: 36 }).primaryKey(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    dimensions: integer('dimensions').notNull(),
+    storage_type: text('storage_type').notNull().default('vector'),
+    distance: text('distance').notNull().default('cosine'),
+    active: t.bool('active').notNull().default(true),
+    metadata: t.json<Record<string, unknown>>('metadata'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+  },
+  (table) => ({
+    providerModelIdx: uniqueIndex('kb_embedding_spaces_provider_model_idx').on(
+      table.provider,
+      table.model,
+      table.dimensions,
+      table.storage_type,
+      table.distance
+    ),
+    activeIdx: index('kb_embedding_spaces_active_idx').on(table.active),
+  })
+);
+
 /**
  * Graph nodes for knowledge documents, document units, core Agor objects, tags,
  * and external references.
@@ -2000,6 +2057,8 @@ export type ScheduleRow = typeof schedules.$inferSelect;
 export type ScheduleInsert = typeof schedules.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
+export type AppVariableRow = typeof appVariables.$inferSelect;
+export type AppVariableInsert = typeof appVariables.$inferInsert;
 export type GroupRow = typeof groups.$inferSelect;
 export type GroupInsert = typeof groups.$inferInsert;
 export type GroupMembershipRow = typeof groupMemberships.$inferSelect;
@@ -2036,6 +2095,8 @@ export type KBDocumentVersionRow = typeof kbDocumentVersions.$inferSelect;
 export type KBDocumentVersionInsert = typeof kbDocumentVersions.$inferInsert;
 export type KBDocumentUnitRow = typeof kbDocumentUnits.$inferSelect;
 export type KBDocumentUnitInsert = typeof kbDocumentUnits.$inferInsert;
+export type KBEmbeddingSpaceRow = typeof kbEmbeddingSpaces.$inferSelect;
+export type KBEmbeddingSpaceInsert = typeof kbEmbeddingSpaces.$inferInsert;
 export type KBGraphNodeRow = typeof kbGraphNodes.$inferSelect;
 export type KBGraphNodeInsert = typeof kbGraphNodes.$inferInsert;
 export type KBGraphEdgeRow = typeof kbGraphEdges.$inferSelect;

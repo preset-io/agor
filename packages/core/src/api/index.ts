@@ -20,6 +20,14 @@ import type {
   ContextFileListItem,
   Group,
   GroupMembership,
+  KnowledgeDocument,
+  KnowledgeDocumentVersion,
+  KnowledgeEmbeddingStatus,
+  KnowledgeIndexingStatus,
+  KnowledgeNamespace,
+  KnowledgeNamespaceGraph,
+  KnowledgeSearchResult,
+  KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
   PermissionMode,
@@ -178,6 +186,14 @@ export interface ServiceTypes {
   artifacts: Artifact;
   'mcp-servers': MCPServer;
   context: ContextFileListItem | ContextFileDetail; // GET /context returns list, GET /context/:path returns detail
+  'kb/namespaces': KnowledgeNamespace;
+  'kb/documents': KnowledgeDocument;
+  'kb/versions': KnowledgeDocumentVersion;
+  'kb/search': KnowledgeSearchResult;
+  'kb/graph': KnowledgeNamespaceGraph;
+  'kb/settings': KnowledgeSemanticSettingsPublic;
+  'kb/indexing/status': KnowledgeIndexingStatus;
+  'kb/indexing/reindex': { queued: number; status: KnowledgeEmbeddingStatus };
   templates: TemplateRenderResponse;
 }
 

@@ -17,6 +17,7 @@ import type { Application, SessionsServiceImpl, TasksServiceImpl } from './decla
 import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
 import type { GatewayService } from './services/gateway.js';
 import { createHealthMonitor } from './services/health-monitor.js';
+import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
 import { SchedulerService } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
@@ -453,7 +454,16 @@ export async function startup(ctx: StartupContext): Promise<void> {
     console.log(`🔄 Scheduler started (tick interval: 30s)`);
   }
 
-  // 7. Initialize gateway: refresh channel state cache, then start Socket Mode listeners
+  // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)
+  let knowledgeEmbeddingIndexer: KnowledgeEmbeddingIndexer | null = null;
+  if (svcEnabled('knowledge')) {
+    knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db);
+    knowledgeEmbeddingIndexer.start();
+    app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
+    console.log('🧠 Knowledge embedding indexer started');
+  }
+
+  // 8. Initialize gateway: refresh channel state cache, then start Socket Mode listeners
   const gatewayService = safeService('gateway') as unknown as GatewayService | undefined;
   if (gatewayService) {
     gatewayService
@@ -492,6 +502,12 @@ export async function startup(ctx: StartupContext): Promise<void> {
       if (gatewayService) {
         console.log('🌐 Stopping gateway listeners...');
         await gatewayService.stopListeners();
+      }
+
+      // Stop Knowledge embedding indexer
+      if (knowledgeEmbeddingIndexer) {
+        console.log('🧠 Stopping Knowledge embedding indexer...');
+        knowledgeEmbeddingIndexer.stop();
       }
 
       // Stop scheduler

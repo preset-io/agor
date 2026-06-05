@@ -14,6 +14,7 @@ export type KnowledgeNamespaceID = UUID;
 export type KnowledgeDocumentID = UUID;
 export type KnowledgeDocumentVersionID = UUID;
 export type KnowledgeDocumentUnitID = UUID;
+export type KnowledgeEmbeddingSpaceID = UUID;
 export type KnowledgeGraphNodeID = UUID;
 export type KnowledgeGraphEdgeID = UUID;
 
@@ -65,6 +66,18 @@ export const KNOWLEDGE_EMBEDDING_STATUSES = [
 ] as const;
 
 export type KnowledgeEmbeddingStatus = (typeof KNOWLEDGE_EMBEDDING_STATUSES)[number];
+
+export const KNOWLEDGE_SEARCH_MODES = ['text', 'semantic', 'hybrid'] as const;
+export type KnowledgeSearchMode = (typeof KNOWLEDGE_SEARCH_MODES)[number];
+
+export const KNOWLEDGE_EMBEDDING_PROVIDERS = ['openai', 'voyage', 'openai-compatible'] as const;
+export type KnowledgeEmbeddingProvider = (typeof KNOWLEDGE_EMBEDDING_PROVIDERS)[number];
+
+export const KNOWLEDGE_VECTOR_STORAGE_TYPES = ['vector', 'halfvec', 'bit', 'sparsevec'] as const;
+export type KnowledgeVectorStorageType = (typeof KNOWLEDGE_VECTOR_STORAGE_TYPES)[number];
+
+export const KNOWLEDGE_VECTOR_DISTANCES = ['cosine', 'inner_product', 'l2'] as const;
+export type KnowledgeVectorDistance = (typeof KNOWLEDGE_VECTOR_DISTANCES)[number];
 
 export const KNOWLEDGE_GRAPH_NODE_TYPES = [
   'namespace',
@@ -360,6 +373,75 @@ export interface KnowledgeDocumentUnit {
   metadata?: Record<string, unknown> | null;
   created_at: Date;
   updated_at?: Date | null;
+}
+
+export interface KnowledgeEmbeddingSpace {
+  embedding_space_id: KnowledgeEmbeddingSpaceID;
+  provider: KnowledgeEmbeddingProvider;
+  model: string;
+  dimensions: number;
+  storage_type: KnowledgeVectorStorageType;
+  distance: KnowledgeVectorDistance;
+  active: boolean;
+  metadata?: Record<string, unknown> | null;
+  created_at: Date;
+  updated_at?: Date | null;
+}
+
+export interface KnowledgeSearchChunkResult {
+  unit_id: KnowledgeDocumentUnitID;
+  reference_uri: string;
+  heading_path?: string | null;
+  path_anchor?: string | null;
+  content_text?: string | null;
+  snippet?: string | null;
+  score: number;
+  distance?: number | null;
+  start_offset?: number | null;
+  end_offset?: number | null;
+}
+
+export interface KnowledgeSearchResult {
+  document: KnowledgeDocument;
+  namespace: KnowledgeNamespace;
+  current_version?: KnowledgeDocumentVersion | null;
+  snippet?: string | null;
+  score: number;
+  mode?: KnowledgeSearchMode;
+  chunks?: KnowledgeSearchChunkResult[];
+}
+
+export interface KnowledgeIndexingStatus {
+  enabled: boolean;
+  configured: boolean;
+  dialect: 'sqlite' | 'postgresql' | 'unknown';
+  pgvector_available: boolean;
+  provider?: KnowledgeEmbeddingProvider | null;
+  model?: string | null;
+  dimensions?: number | null;
+  chunks: Record<KnowledgeEmbeddingStatus, number>;
+  queue_depth: number;
+  last_indexed_at?: Date | null;
+  last_error?: string | null;
+}
+
+export interface KnowledgeSemanticSettingsPublic {
+  enabled: boolean;
+  provider?: KnowledgeEmbeddingProvider | null;
+  model?: string | null;
+  dimensions?: number | null;
+  api_key_configured: boolean;
+  chunking?: {
+    target_tokens?: number;
+    max_tokens?: number;
+    overlap_tokens?: number;
+    min_tokens?: number;
+  };
+  indexing?: {
+    paused?: boolean;
+    batch_size?: number;
+    concurrency?: number;
+  };
 }
 
 export interface KnowledgeGraphNode {
