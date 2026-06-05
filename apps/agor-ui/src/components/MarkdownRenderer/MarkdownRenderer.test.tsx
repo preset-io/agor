@@ -9,6 +9,14 @@ describe('MarkdownRenderer', () => {
     const { rerender } = render(<MarkdownRenderer content={doc} />);
     expect(screen.getByText(/Git syncing\?/)).toBeInTheDocument();
     rerender(<MarkdownRenderer content={doc.replace('Add semantic', 'Add amazing semantic')} />);
-    expect(await screen.findByText(/Add amazing semantic/)).toBeInTheDocument();
+
+    expect(
+      await screen.findByText(
+        'Add amazing semantic and hybrid search once embeddings are configured.'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Add semantic and hybrid search once embeddings are configured.')
+    ).not.toBeInTheDocument();
   });
 });

@@ -16,6 +16,8 @@ export default defineConfig({
     setupFiles: './src/test/setup.ts',
     server: {
       deps: {
+        // Streamdown dynamically imports KaTeX CSS; inline both packages so
+        // Vite transforms that CSS import in jsdom component tests.
         inline: ['streamdown', 'katex'],
       },
     },
