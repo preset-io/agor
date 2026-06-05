@@ -38,36 +38,38 @@ export const KNOWLEDGE_ROUTE_PATHS = [
   '/kb/:namespaceSlug/*',
 ] as const;
 
-export const SURFACE_REGISTRY = [
-  defineSurface({
-    id: 'knowledge',
-    label: 'Knowledge',
-    routePaths: KNOWLEDGE_ROUTE_PATHS,
-    startsWorkspaceRuntime: false,
-    usesDeviceRouter: false,
-    usesSharedUserSettings: true,
-  }),
-  defineSurface({
-    id: 'demo',
-    label: 'Demo',
-    routePaths: ['/demo/streamdown'],
-    startsWorkspaceRuntime: false,
-    usesDeviceRouter: false,
-    usesSharedUserSettings: false,
-  }),
-  defineSurface({
-    id: 'workspace',
-    label: 'Workspace',
-    routePaths: ['/*'],
-    startsWorkspaceRuntime: true,
-    usesDeviceRouter: true,
-    usesSharedUserSettings: false,
-  }),
-] as const;
+export const KNOWLEDGE_SURFACE = defineSurface({
+  id: 'knowledge',
+  label: 'Knowledge',
+  routePaths: KNOWLEDGE_ROUTE_PATHS,
+  startsWorkspaceRuntime: false,
+  usesDeviceRouter: false,
+  usesSharedUserSettings: true,
+});
+
+export const DEMO_SURFACE = defineSurface({
+  id: 'demo',
+  label: 'Demo',
+  routePaths: ['/demo/streamdown'],
+  startsWorkspaceRuntime: false,
+  usesDeviceRouter: false,
+  usesSharedUserSettings: false,
+});
+
+export const WORKSPACE_SURFACE = defineSurface({
+  id: 'workspace',
+  label: 'Workspace',
+  routePaths: ['/*'],
+  startsWorkspaceRuntime: true,
+  usesDeviceRouter: true,
+  usesSharedUserSettings: false,
+});
+
+export const SURFACE_REGISTRY = [KNOWLEDGE_SURFACE, DEMO_SURFACE, WORKSPACE_SURFACE] as const;
 
 export function getRouteSurface(pathname: string): RouteSurfaceDefinition {
   return (
-    SURFACE_REGISTRY.find((surface) => surfaceMatchesPath(surface, pathname)) ?? SURFACE_REGISTRY[2]
+    SURFACE_REGISTRY.find((surface) => surfaceMatchesPath(surface, pathname)) ?? WORKSPACE_SURFACE
   );
 }
 
