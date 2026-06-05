@@ -1,3 +1,5 @@
+import { matchPath } from 'react-router-dom';
+
 export type RouteSurfaceId = 'workspace' | 'knowledge' | 'demo';
 
 export interface RouteSurfaceDefinition {
@@ -6,8 +8,6 @@ export interface RouteSurfaceDefinition {
   label: string;
   /** React Router route patterns owned by this surface. */
   routePaths: readonly string[];
-  /** Match URL pathnames at runtime before rendering the route tree. */
-  matchesPath: (pathname: string) => boolean;
   /** Whether entering this surface should start the heavy Workspace store. */
   startsWorkspaceRuntime: boolean;
   /** Whether the mobile/desktop device redirect should run on this surface. */
@@ -16,10 +16,20 @@ export interface RouteSurfaceDefinition {
   usesSharedUserSettings: boolean;
 }
 
-const pathStartsWithSegment = (pathname: string, segment: string): boolean => {
-  const normalized = pathname.startsWith('/') ? pathname : `/${pathname}`;
-  return normalized === `/${segment}` || normalized.startsWith(`/${segment}/`);
-};
+const normalizePathname = (pathname: string): string =>
+  pathname.startsWith('/') ? pathname : `/${pathname}`;
+
+function routePathMatches(pathname: string, routePath: string): boolean {
+  return matchPath({ path: routePath, end: true }, normalizePathname(pathname)) !== null;
+}
+
+function surfaceMatchesPath(surface: RouteSurfaceDefinition, pathname: string): boolean {
+  return surface.routePaths.some((routePath) => routePathMatches(pathname, routePath));
+}
+
+function defineSurface(surface: RouteSurfaceDefinition): RouteSurfaceDefinition {
+  return surface;
+}
 
 export const KNOWLEDGE_ROUTE_PATHS = [
   '/knowledge',
@@ -29,38 +39,36 @@ export const KNOWLEDGE_ROUTE_PATHS = [
 ] as const;
 
 export const SURFACE_REGISTRY = [
-  {
+  defineSurface({
     id: 'knowledge',
     label: 'Knowledge',
     routePaths: KNOWLEDGE_ROUTE_PATHS,
-    matchesPath: (pathname: string) =>
-      pathStartsWithSegment(pathname, 'kb') || pathStartsWithSegment(pathname, 'knowledge'),
     startsWorkspaceRuntime: false,
     usesDeviceRouter: false,
     usesSharedUserSettings: true,
-  },
-  {
+  }),
+  defineSurface({
     id: 'demo',
     label: 'Demo',
     routePaths: ['/demo/streamdown'],
-    matchesPath: (pathname: string) => pathStartsWithSegment(pathname, 'demo'),
     startsWorkspaceRuntime: false,
     usesDeviceRouter: false,
     usesSharedUserSettings: false,
-  },
-  {
+  }),
+  defineSurface({
     id: 'workspace',
     label: 'Workspace',
     routePaths: ['/*'],
-    matchesPath: () => true,
     startsWorkspaceRuntime: true,
     usesDeviceRouter: true,
     usesSharedUserSettings: false,
-  },
-] as const satisfies readonly RouteSurfaceDefinition[];
+  }),
+] as const;
 
 export function getRouteSurface(pathname: string): RouteSurfaceDefinition {
-  return SURFACE_REGISTRY.find((surface) => surface.matchesPath(pathname)) ?? SURFACE_REGISTRY[2];
+  return (
+    SURFACE_REGISTRY.find((surface) => surfaceMatchesPath(surface, pathname)) ?? SURFACE_REGISTRY[2]
+  );
 }
 
 export function isKnowledgeRoutePath(pathname: string): boolean {

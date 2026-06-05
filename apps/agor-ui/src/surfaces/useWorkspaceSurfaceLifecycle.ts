@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getRouteSurface, routeStartsWorkspaceRuntime } from './surfaceRegistry';
+import { getRouteSurface } from './surfaceRegistry';
 
 export interface WorkspaceSurfaceLifecycle {
   currentSurface: ReturnType<typeof getRouteSurface>;
@@ -18,7 +18,7 @@ export interface WorkspaceSurfaceLifecycle {
  */
 export function useWorkspaceSurfaceLifecycle(pathname: string): WorkspaceSurfaceLifecycle {
   const currentSurface = getRouteSurface(pathname);
-  const routeRequiresWorkspaceSurface = routeStartsWorkspaceRuntime(pathname);
+  const routeRequiresWorkspaceSurface = currentSurface.startsWorkspaceRuntime;
   const [workspaceSurfaceStarted, setWorkspaceSurfaceStarted] = useState(
     routeRequiresWorkspaceSurface
   );

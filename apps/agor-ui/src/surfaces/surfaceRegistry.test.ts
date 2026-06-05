@@ -6,14 +6,17 @@ import {
   routeStartsWorkspaceRuntime,
   routeUsesDeviceRouter,
   routeUsesSharedUserSettings,
-} from './surfaceRoutes';
+} from './surfaceRegistry';
 
-describe('surface route classifiers', () => {
+describe('surface route registry', () => {
   it.each([
     '/kb',
     '/kb/',
+    '/kb/global',
     '/kb/global/page.md',
     '/knowledge',
+    '/knowledge/',
+    '/knowledge/team',
     '/knowledge/team/docs',
   ])('classifies %s as Knowledge', (path) => {
     expect(getRouteSurface(path).id).toBe('knowledge');
@@ -40,11 +43,20 @@ describe('surface route classifiers', () => {
     expect(routeUsesSharedUserSettings(path)).toBe(false);
   });
 
-  it('keeps standalone demo routes lightweight', () => {
+  it('keeps the registered standalone demo route lightweight', () => {
     expect(getRouteSurface('/demo/streamdown').id).toBe('demo');
     expect(routeStartsWorkspaceRuntime('/demo/streamdown')).toBe(false);
     expect(routeUsesDeviceRouter('/demo/streamdown')).toBe(false);
     expect(routeUsesSharedUserSettings('/demo/streamdown')).toBe(false);
+  });
+
+  it.each([
+    '/demo',
+    '/demo/',
+    '/demo/anything-else',
+  ])('falls back to Workspace for unregistered demo path %s', (path) => {
+    expect(getRouteSurface(path).id).toBe('workspace');
+    expect(routeStartsWorkspaceRuntime(path)).toBe(true);
   });
 
   it('does not treat similarly prefixed paths as Knowledge', () => {

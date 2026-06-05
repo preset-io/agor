@@ -50,11 +50,7 @@ import {
   useSessionActions,
 } from './hooks';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
-import {
-  KNOWLEDGE_ROUTE_PATHS,
-  routeUsesDeviceRouter,
-  routeUsesSharedUserSettings,
-} from './surfaces/surfaceRegistry';
+import { KNOWLEDGE_ROUTE_PATHS, routeUsesDeviceRouter } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
@@ -127,7 +123,7 @@ function AppContent() {
   const { currentSurface, workspaceSurfaceShouldRun } = useWorkspaceSurfaceLifecycle(
     location.pathname
   );
-  const sharedSurfaceOwnsUserSettings = routeUsesSharedUserSettings(location.pathname);
+  const sharedSurfaceOwnsUserSettings = currentSurface.usesSharedUserSettings;
 
   const routeFallback = (
     <div
