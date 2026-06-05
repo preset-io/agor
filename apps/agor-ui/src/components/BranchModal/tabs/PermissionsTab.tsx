@@ -14,6 +14,7 @@ import { UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Form, Select, Space, Switch, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
+import { filterSelectOptionBySearchText, groupSelectSearchText } from '../../../utils/selectSearch';
 import { Tag } from '../../Tag';
 import type { FsAccessLevel, GroupGrantsStatus, PermissionsFormState } from '../useBranchModalForm';
 
@@ -179,8 +180,16 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
               loading={groupGrantsLoading}
               disabled={!canEditGroups}
               options={allGroups
-                .map((group) => ({ value: group.group_id, label: group.name }))
+                .map((group) => ({
+                  value: group.group_id,
+                  label: group.name,
+                  searchText: groupSelectSearchText(group),
+                }))
                 .sort((a, b) => a.label.localeCompare(b.label))}
+              showSearch
+              optionFilterProp="searchText"
+              optionLabelProp="label"
+              filterOption={filterSelectOptionBySearchText}
               onChange={(groupIds) => {
                 const existing = new Map(groupGrants.map((grant) => [grant.group_id, grant]));
                 setField(

@@ -16,6 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
+import { filterSelectOptionBySearchText, userSelectSearchText } from '@/utils/selectSearch';
 import { useThemedMessage } from '../../utils/message';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
 
@@ -156,6 +157,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
     (u) => ({
       value: u.user_id,
       label: u.email,
+      searchText: userSelectSearchText(u),
     })
   );
   return (
@@ -193,6 +195,10 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
                 style={{ minWidth: 320 }}
                 value={membershipsByGroup.get(group.group_id) || []}
                 options={userOptions}
+                showSearch
+                optionFilterProp="searchText"
+                optionLabelProp="label"
+                filterOption={filterSelectOptionBySearchText}
                 onChange={(ids) => setGroupMembers(group, ids)}
               />
             ),
@@ -260,6 +266,10 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
               style={{ width: '100%' }}
               value={editingMemberIds}
               options={userOptions}
+              showSearch
+              optionFilterProp="searchText"
+              optionLabelProp="label"
+              filterOption={filterSelectOptionBySearchText}
               onChange={setEditingMemberIds}
               placeholder="Select users..."
             />
