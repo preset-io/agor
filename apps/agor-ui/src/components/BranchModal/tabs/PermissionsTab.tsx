@@ -14,7 +14,11 @@ import { UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Form, Select, Space, Switch, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
-import { filterSelectOptionBySearchText, groupSelectSearchText } from '../../../utils/selectSearch';
+import {
+  filterSelectOptionBySearchText,
+  groupSelectLabel,
+  groupSelectSearchText,
+} from '../../../utils/selectSearch';
 import { Tag } from '../../Tag';
 import type { FsAccessLevel, GroupGrantsStatus, PermissionsFormState } from '../useBranchModalForm';
 
@@ -182,7 +186,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
               options={allGroups
                 .map((group) => ({
                   value: group.group_id,
-                  label: group.name,
+                  label: groupSelectLabel(group),
                   searchText: groupSelectSearchText(group),
                 }))
                 .sort((a, b) => a.label.localeCompare(b.label))}

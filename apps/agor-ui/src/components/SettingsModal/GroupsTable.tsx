@@ -16,7 +16,11 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
-import { filterSelectOptionBySearchText, userSelectSearchText } from '@/utils/selectSearch';
+import {
+  filterSelectOptionBySearchText,
+  userSelectLabel,
+  userSelectSearchText,
+} from '@/utils/selectSearch';
 import { useThemedMessage } from '../../utils/message';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
 
@@ -156,7 +160,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const userOptions = mapToSortedArray(userById, (a, b) => a.email.localeCompare(b.email)).map(
     (u) => ({
       value: u.user_id,
-      label: u.email,
+      label: userSelectLabel(u),
       searchText: userSelectSearchText(u),
     })
   );

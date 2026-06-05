@@ -40,7 +40,11 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
-import { filterSelectOptionBySearchText, groupSelectSearchText } from '../../utils/selectSearch';
+import {
+  filterSelectOptionBySearchText,
+  groupSelectLabel,
+  groupSelectSearchText,
+} from '../../utils/selectSearch';
 import {
   AgenticToolConfigForm,
   buildConfigFromFormValues,
@@ -116,7 +120,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         .sort((a, b) => a.name.localeCompare(b.name))
         .map((group) => ({
           value: group.group_id,
-          label: group.name,
+          label: groupSelectLabel(group),
           searchText: groupSelectSearchText(group),
         })),
     [availableGroups]

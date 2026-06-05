@@ -2,7 +2,9 @@ import type { Group, User } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import {
   filterSelectOptionBySearchText,
+  groupSelectLabel,
   groupSelectSearchText,
+  userSelectLabel,
   userSelectSearchText,
 } from './selectSearch';
 
@@ -32,62 +34,81 @@ const makeGroup = (overrides: Partial<Group>): Group =>
   }) as Group;
 
 describe('Select search helpers', () => {
-  it('Settings → Groups user select filters by name and email', () => {
-    const searchText = userSelectSearchText(
-      makeUser({ name: 'Grace Hopper', email: 'grace@example.com', unix_username: 'ghopper' })
-    );
+  it('Settings → Groups user select filters by visible name/email label', () => {
+    const user = makeUser({
+      name: 'Grace Hopper',
+      email: 'grace@example.com',
+      unix_username: 'ghopper',
+    });
+    const label = userSelectLabel(user);
+    const searchText = userSelectSearchText(user);
 
-    expect(
-      filterSelectOptionBySearchText('grace', { value: 'user-1', label: 'JSX', searchText })
-    ).toBe(true);
+    expect(label).toBe('Grace Hopper (grace@example.com)');
+    expect(filterSelectOptionBySearchText('grace', { value: 'user-1', label, searchText })).toBe(
+      true
+    );
     expect(
       filterSelectOptionBySearchText('example.com', {
         value: 'user-1',
-        label: 'JSX',
+        label,
         searchText,
       })
     ).toBe(true);
-    expect(
-      filterSelectOptionBySearchText('ghopper', { value: 'user-1', label: 'JSX', searchText })
-    ).toBe(true);
+    expect(filterSelectOptionBySearchText('ghopper', { value: 'user-1', label, searchText })).toBe(
+      false
+    );
     expect(
       filterSelectOptionBySearchText('unrelated', {
         value: 'user-1',
-        label: 'JSX',
+        label,
         searchText,
       })
     ).toBe(false);
   });
 
-  it('Settings → Groups group select filters by group name', () => {
-    const searchText = groupSelectSearchText(makeGroup({ name: 'Design Systems' }));
+  it('Settings → Groups group select filters by visible name/slug label', () => {
+    const group = makeGroup({ name: 'Design Systems', slug: 'design-systems' });
+    const label = groupSelectLabel(group);
+    const searchText = groupSelectSearchText(group);
 
-    expect(
-      filterSelectOptionBySearchText('design', { value: 'group-1', label: 'JSX', searchText })
-    ).toBe(true);
-    expect(
-      filterSelectOptionBySearchText('systems', { value: 'group-1', label: 'JSX', searchText })
-    ).toBe(true);
-    expect(
-      filterSelectOptionBySearchText('finance', { value: 'group-1', label: 'JSX', searchText })
-    ).toBe(false);
+    expect(label).toBe('Design Systems (design-systems)');
+    expect(filterSelectOptionBySearchText('design', { value: 'group-1', label, searchText })).toBe(
+      true
+    );
+    expect(filterSelectOptionBySearchText('systems', { value: 'group-1', label, searchText })).toBe(
+      true
+    );
+    expect(filterSelectOptionBySearchText('finance', { value: 'group-1', label, searchText })).toBe(
+      false
+    );
   });
 
-  it('BranchModal Permissions group select filters by group name when labels are JSX', () => {
-    const searchText = groupSelectSearchText(makeGroup({ name: 'Release Managers' }));
+  it('BranchModal Permissions group select filters by visible group label when labels are JSX', () => {
+    const group = makeGroup({ name: 'Release Managers', slug: 'release-managers' });
+    const searchText = groupSelectSearchText(group);
 
     expect(
       filterSelectOptionBySearchText('release', {
         value: 'group-1',
-        label: <span>Release Managers</span>,
+        label: <span>{groupSelectLabel(group)}</span>,
         searchText,
       })
     ).toBe(true);
     expect(
       filterSelectOptionBySearchText('security', {
         value: 'group-1',
-        label: <span>Release Managers</span>,
+        label: <span>{groupSelectLabel(group)}</span>,
         searchText,
+      })
+    ).toBe(false);
+  });
+
+  it('does not match hidden option values that are not in the visible label', () => {
+    expect(
+      filterSelectOptionBySearchText('hidden-id', {
+        value: 'hidden-id',
+        label: 'Visible Label',
+        searchText: 'visible label',
       })
     ).toBe(false);
   });
