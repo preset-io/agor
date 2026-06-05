@@ -31,6 +31,10 @@ import {
   getRemoteUrl,
   getReposDir,
   isValidGitRepo,
+  redactGitUrlCredentials,
+  scanGitConfigRemoteCredentials,
+  scrubGitConfigRemoteCredentials,
+  stripGitUrlCredentials,
 } from '@agor/core/git';
 import type {
   AuthenticatedParams,
@@ -158,13 +162,20 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { url: string; slug?: string; name?: string; default_branch?: string },
     params?: RepoParams
   ): Promise<CloneRepositoryResult> {
+    const remoteUrl = stripGitUrlCredentials(data.url);
+    if (remoteUrl !== data.url) {
+      console.warn(
+        `[repos.clone] Stripped credentials from submitted remote URL: ${redactGitUrlCredentials(data.url)}`
+      );
+    }
+
     // Note: `||` (not `??`) is intentional — we want an empty `data.slug`
     // to fall through to derivation rather than be treated as "explicit".
     let slug = data.slug || data.name;
     if (!slug) {
       // Normalize URL (strip trailing slashes and `.git`) using the shared
       // canonical form, so UI and daemon cannot drift.
-      slug = extractSlugFromUrl(normalizeRepoUrl(data.url));
+      slug = extractSlugFromUrl(normalizeRepoUrl(remoteUrl));
     }
     if (!slug || !isValidSlug(slug)) {
       throw new Error('Could not derive a valid slug from URL. Please provide a slug.');
@@ -240,7 +251,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         slug: slug as RepoSlug,
         name: data.name || slug,
         repo_type: 'remote',
-        remote_url: data.url,
+        remote_url: remoteUrl,
         local_path: expectedLocalPath,
         ...(data.default_branch ? { default_branch: data.default_branch } : {}),
         clone_status: 'cloning',
@@ -264,7 +275,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         sessionToken,
         daemonUrl: getDaemonUrl(),
         params: {
-          url: data.url,
+          url: remoteUrl,
           slug,
           repoId,
           outputPath: expectedLocalPath,
@@ -302,7 +313,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
                 : '';
               io.emit('repo:cloneError', {
                 slug,
-                url: data.url,
+                url: remoteUrl,
                 error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
                 repo_id: repoId,
               });
@@ -420,10 +431,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     if (patch.remote_url !== undefined) {
-      if (patch.remote_url && !isValidGitUrl(patch.remote_url)) {
+      const safeRemoteUrl = patch.remote_url ? stripGitUrlCredentials(patch.remote_url) : '';
+      if (safeRemoteUrl !== patch.remote_url) {
+        console.warn(
+          `[repos.updateMetadata] Stripped credentials from submitted remote URL: ${redactGitUrlCredentials(patch.remote_url)}`
+        );
+      }
+      if (safeRemoteUrl && !isValidGitUrl(safeRemoteUrl)) {
         throw new Error('remote_url must be a valid git URL (https:// or git@)');
       }
-      cleanPatch.remote_url = patch.remote_url;
+      cleanPatch.remote_url = safeRemoteUrl;
     }
 
     if (patch.default_branch !== undefined) cleanPatch.default_branch = patch.default_branch;
@@ -518,7 +535,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       );
     }
 
-    const remoteUrl = (await getRemoteUrl(repoPath)) ?? undefined;
+    const remoteUrl = stripGitUrlCredentials((await getRemoteUrl(repoPath)) ?? '') || undefined;
+    const scanResult = await scanGitConfigRemoteCredentials(repoPath);
+    if (scanResult.findings.length > 0) {
+      console.warn(
+        `[repos.local] Registered local repo has ${scanResult.findings.length} credential-bearing remote URL(s) in git config; persisted remote_url was sanitized. Run the repair utility if this repo is managed/shared.`
+      );
+    }
     const name = slug.split('/').pop() ?? slug;
 
     const repo = (await this.create(
@@ -631,6 +654,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         `Cannot create a clone-mode branch for repo '${repo.slug}': repo has no remote_url. ` +
           `Use storage_mode='worktree' or register the repo with a remote first.`
       );
+    }
+
+    if (repo.local_path) {
+      const scrubResult = await scrubGitConfigRemoteCredentials(repo.local_path);
+      if (scrubResult.findings.length > 0) {
+        console.warn(
+          `[ReposService.createBranch] Scrubbed ${scrubResult.findings.length} credential-bearing git remote URL(s) from repo '${repo.slug}' before branch creation.`
+        );
+      }
     }
 
     // NOTE: Filesystem / git-state preflights (target-dir-exists, source-ref

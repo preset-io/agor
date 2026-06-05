@@ -33,8 +33,10 @@ import {
   deleteRepoDirectory,
   ensureGitRemoteUrl,
   getReposDir,
+  redactGitUrlCredentials,
   removeGitWorktree,
   restoreBranchFilesystem,
+  stripGitUrlCredentials,
 } from '@agor/core/git';
 import type {
   BranchAgorYmlExportPayload,
@@ -674,6 +676,7 @@ export async function handleGitClone(
   options: CommandOptions
 ): Promise<ExecutorResult> {
   const createDbRecord = payload.params.createDbRecord ?? true;
+  const safeCloneUrl = stripGitUrlCredentials(payload.params.url);
 
   // Dry run mode - just validate and return
   if (options.dryRun) {
@@ -682,7 +685,7 @@ export async function handleGitClone(
       data: {
         dryRun: true,
         command: 'git.clone',
-        url: payload.params.url,
+        url: safeCloneUrl,
         outputPath: payload.params.outputPath,
         branch: payload.params.branch,
         bare: payload.params.bare,
@@ -723,12 +726,12 @@ export async function handleGitClone(
     // below.
     const pinnedBranch = payload.params.default_branch?.trim() || undefined;
     console.log(
-      `[git.clone] Cloning ${payload.params.url} to ${outputPath || reposDir}` +
+      `[git.clone] Cloning ${redactGitUrlCredentials(safeCloneUrl)} to ${outputPath || reposDir}` +
         (pinnedBranch ? ` (branch: ${pinnedBranch})` : '') +
         '...'
     );
     const cloneResult = await cloneRepo({
-      url: payload.params.url,
+      url: safeCloneUrl,
       targetDir: outputPath, // undefined = let cloneRepo compute path
       bare: payload.params.bare,
       branch: pinnedBranch,
@@ -738,7 +741,7 @@ export async function handleGitClone(
     console.log(`[git.clone] Clone successful: ${cloneResult.path}`);
 
     // Compute slug for the repo
-    const slug = payload.params.slug || computeRepoSlug(payload.params.url);
+    const slug = payload.params.slug || computeRepoSlug(safeCloneUrl);
     const repoName = extractRepoName(slug);
 
     // Create DB record if requested (default: true)
@@ -807,7 +810,7 @@ export async function handleGitClone(
           repo_type: 'remote',
           slug,
           name: repoName,
-          remote_url: payload.params.url,
+          remote_url: safeCloneUrl,
           local_path: cloneResult.path,
           default_branch: defaultBranch,
           clone_status: 'ready',
@@ -894,7 +897,7 @@ export async function handleGitClone(
         code: 'GIT_CLONE_FAILED',
         message: errorMessage,
         details: {
-          url: payload.params.url,
+          url: safeCloneUrl,
           outputPath: cloneOutputPath,
         },
       },
@@ -1085,7 +1088,7 @@ export async function handleGitBranchAdd(
       // the executor handler doesn't have to orchestrate post-clone git ops.
       const cloneRef = shouldCreateBranch ? sourceBranch || branch : branch;
       console.log(
-        `[git.branch.add] Using createBranchAsClone (remote=${remoteUrl}, ` +
+        `[git.branch.add] Using createBranchAsClone (remote=${redactGitUrlCredentials(remoteUrl)}, ` +
           `ref=${cloneRef}${shouldCreateBranch && branch !== cloneRef ? `, newBranch=${branch}` : ''}, ` +
           `depth=${cloneDepth ?? 'full'}, referenceHint=${referencePath ?? 'none'})`
       );

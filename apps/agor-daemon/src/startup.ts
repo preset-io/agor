@@ -21,6 +21,7 @@ import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexe
 import { SchedulerService } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
+import { warnOnManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
 
 // ---------------------------------------------------------------------------
 // Context
@@ -370,13 +371,16 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 1. Cleanup orphaned tasks/sessions from previous daemon instance
   await cleanupOrphans(ctx);
 
-  // 2. Initialize Health Monitor for periodic environment health checks
+  // 2. Warn on credential-bearing git remote URLs in managed repo/branch configs.
+  await warnOnManagedGitRemoteCredentials(db);
+
+  // 3. Initialize Health Monitor for periodic environment health checks
   const healthMonitor = await createHealthMonitor(app);
 
-  // 3. Validate/generate master secret for API key encryption
+  // 4. Validate/generate master secret for API key encryption
   await ensureMasterSecret(config);
 
-  // 4. Start server
+  // 5. Start server
   const server = await app.listen(DAEMON_PORT, DAEMON_HOST);
 
   const displayHost = DAEMON_HOST === '0.0.0.0' ? 'localhost' : DAEMON_HOST;

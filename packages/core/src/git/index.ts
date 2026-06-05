@@ -8,9 +8,9 @@
  * fresh Unix group memberships (groups are cached at login time).
  */
 
-import { existsSync } from 'node:fs';
-import { mkdir, stat } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { existsSync, type Stats } from 'node:fs';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { getBranchesDir, getReposDir } from '../config/config-manager';
 import type { RepoCloneErrorCategory } from '../types/repo';
@@ -189,6 +189,215 @@ export function parseHostFromGitUrl(url: string): string | undefined {
   // URL parser rejects this shape, so we still need a regex.
   // Reject paths starting with `/` — that's a local filesystem path.
   return url.match(/^(?:[^@\s:]+@)?([^/:\s]+):(?!\/)/)?.[1];
+}
+
+/**
+ * True when a git URL embeds URL userinfo (`scheme://USER[:PASS]@host/...`).
+ *
+ * For Agor's purposes any URL userinfo in a persisted remote is unsafe, even
+ * if it is "just" a username: users commonly paste PATs as either the username
+ * or password, and shared worktree repos expose `.git/config` to every branch.
+ * SCP-like SSH URLs (`git@github.com:org/repo.git`) are intentionally not
+ * treated as credential-bearing.
+ */
+export function gitUrlHasUserinfo(rawUrl: string): boolean {
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawUrl)) return false;
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.username.length > 0 || parsed.password.length > 0;
+  } catch {
+    return /:\/\/[^/@\s]+@/.test(rawUrl);
+  }
+}
+
+/**
+ * Redact URL userinfo for logs/errors. Keeps host/path visible for diagnosis
+ * without exposing the embedded secret.
+ */
+export function redactGitUrlCredentials(rawUrl: string): string {
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawUrl)) return rawUrl;
+  return rawUrl.replace(/:\/\/[^/@\s]+@/g, '://<redacted>@');
+}
+
+/**
+ * Remove URL userinfo from a git URL before persisting it or handing it to
+ * `git clone`. If parsing fails, fall back to a conservative regex scrub.
+ */
+export function stripGitUrlCredentials(rawUrl: string): string {
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawUrl)) return rawUrl;
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.username || parsed.password) {
+      parsed.username = '';
+      parsed.password = '';
+      return parsed.toString();
+    }
+    return rawUrl;
+  } catch {
+    return rawUrl.replace(/:\/\/[^/@\s]+@/g, '://');
+  }
+}
+
+export interface GitRemoteCredentialFinding {
+  configPath: string;
+  remote: string;
+  key: 'url' | 'pushurl';
+  redactedUrl: string;
+  sanitizedUrl: string;
+}
+
+export interface GitRemoteCredentialScanResult {
+  repoPath: string;
+  configPaths: string[];
+  findings: GitRemoteCredentialFinding[];
+}
+
+export interface GitRemoteCredentialScrubResult extends GitRemoteCredentialScanResult {
+  changed: boolean;
+}
+
+function parseGitdirPointer(raw: string): string | undefined {
+  const match = raw.match(/^gitdir:\s*(.+?)\s*$/m);
+  return match?.[1];
+}
+
+async function findGitConfigPaths(repoPath: string): Promise<string[]> {
+  const dotGit = join(repoPath, '.git');
+  const paths = new Set<string>();
+
+  let dotGitStat: Stats;
+  try {
+    dotGitStat = await stat(dotGit);
+  } catch {
+    return [];
+  }
+
+  if (dotGitStat.isDirectory()) {
+    paths.add(join(dotGit, 'config'));
+  } else if (dotGitStat.isFile()) {
+    const pointer = parseGitdirPointer(await readFile(dotGit, 'utf8'));
+    if (pointer) {
+      const gitDir = isAbsolute(pointer) ? pointer : resolve(repoPath, pointer);
+      paths.add(join(gitDir, 'config'));
+
+      // Git worktrees keep remotes in the common dir's config, while the
+      // per-worktree gitdir may also have config.worktree. Check both.
+      try {
+        const commonDirRaw = (await readFile(join(gitDir, 'commondir'), 'utf8')).trim();
+        if (commonDirRaw) {
+          const commonDir = isAbsolute(commonDirRaw) ? commonDirRaw : resolve(gitDir, commonDirRaw);
+          paths.add(join(commonDir, 'config'));
+        }
+      } catch {
+        // No commondir (or unreadable) — candidate above is enough.
+      }
+    }
+  }
+
+  const existing: string[] = [];
+  for (const candidate of paths) {
+    try {
+      const candidateStat = await stat(candidate);
+      if (candidateStat.isFile()) existing.push(candidate);
+    } catch {
+      // Ignore missing candidate configs.
+    }
+  }
+  return existing;
+}
+
+function parseRemoteSection(line: string): string | undefined {
+  const match = line.match(/^\s*\[remote\s+"((?:\\.|[^"])*)"\]\s*(?:[#;].*)?$/);
+  return match?.[1]?.replace(/\\"/g, '"');
+}
+
+function scrubGitConfigText(
+  configPath: string,
+  text: string,
+  writeChanges: boolean
+): { text: string; findings: GitRemoteCredentialFinding[]; changed: boolean } {
+  const lines = text.split('\n');
+  const findings: GitRemoteCredentialFinding[] = [];
+  let currentRemote: string | undefined;
+  let changed = false;
+
+  const nextLines = lines.map((line) => {
+    const remote = parseRemoteSection(line);
+    if (remote !== undefined) {
+      currentRemote = remote;
+      return line;
+    }
+    if (/^\s*\[/.test(line)) {
+      currentRemote = undefined;
+      return line;
+    }
+    if (!currentRemote) return line;
+
+    const match = line.match(/^(\s*)(url|pushurl)(\s*=\s*)(.*?)(\r?)$/i);
+    if (!match) return line;
+
+    const [, indent, rawKey, sep, rawValue, cr] = match;
+    const value = rawValue.trim();
+    if (!gitUrlHasUserinfo(value)) return line;
+
+    const key = rawKey.toLowerCase() as 'url' | 'pushurl';
+    const sanitizedUrl = stripGitUrlCredentials(value);
+    findings.push({
+      configPath,
+      remote: currentRemote,
+      key,
+      redactedUrl: redactGitUrlCredentials(value),
+      sanitizedUrl,
+    });
+    changed = true;
+    return writeChanges ? `${indent}${rawKey}${sep}${sanitizedUrl}${cr}` : line;
+  });
+
+  return { text: nextLines.join('\n'), findings, changed };
+}
+
+/**
+ * Scan a repo or worktree for credential-bearing remote URLs in its git config
+ * without invoking git. For worktree pointer files, this checks both the
+ * per-worktree gitdir and the shared common `.git/config`.
+ */
+export async function scanGitConfigRemoteCredentials(
+  repoPath: string
+): Promise<GitRemoteCredentialScanResult> {
+  const configPaths = await findGitConfigPaths(repoPath);
+  const findings: GitRemoteCredentialFinding[] = [];
+
+  for (const configPath of configPaths) {
+    const text = await readFile(configPath, 'utf8');
+    findings.push(...scrubGitConfigText(configPath, text, false).findings);
+  }
+
+  return { repoPath, configPaths, findings };
+}
+
+/**
+ * Repair credential-bearing remote URL entries in `.git/config` by replacing
+ * each `remote.<name>.url` / `pushurl` value with the same URL minus userinfo.
+ * Findings contain only redacted/sanitized values.
+ */
+export async function scrubGitConfigRemoteCredentials(
+  repoPath: string
+): Promise<GitRemoteCredentialScrubResult> {
+  const configPaths = await findGitConfigPaths(repoPath);
+  const findings: GitRemoteCredentialFinding[] = [];
+  let changed = false;
+
+  for (const configPath of configPaths) {
+    const text = await readFile(configPath, 'utf8');
+    const result = scrubGitConfigText(configPath, text, true);
+    findings.push(...result.findings);
+    if (result.changed) {
+      await writeFile(configPath, result.text, 'utf8');
+      changed = true;
+    }
+  }
+
+  return { repoPath, configPaths, findings, changed };
 }
 
 /**
@@ -551,7 +760,12 @@ export function extractRepoName(url: string): string {
  * Clone a Git repository to ~/.agor/repos/<name>
  */
 export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
-  const cloneUrl = options.url;
+  const cloneUrl = stripGitUrlCredentials(options.url);
+  if (cloneUrl !== options.url) {
+    console.warn(
+      `🔒 Stripped credentials from clone URL before use: ${redactGitUrlCredentials(options.url)}`
+    );
+  }
 
   const repoName = extractRepoName(cloneUrl);
   const reposDir = getReposDir();
@@ -573,6 +787,7 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     const isValid = await isGitRepo(targetPath);
 
     if (isValid) {
+      await scrubGitConfigRemoteCredentials(targetPath);
       // Repository already exists and is valid — reuse it. If the caller
       // pinned a branch, the working tree has to actually be on that branch
       // before we return: skipping the checkout silently leaves disk on the
@@ -660,9 +875,11 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   if (options.bare) cloneArgs.push('--bare');
   if (options.branch) cloneArgs.push('--branch', options.branch);
   console.log(
-    `Cloning ${options.url} to ${targetPath}${options.branch ? ` (branch: ${options.branch})` : ''}...`
+    `Cloning ${redactGitUrlCredentials(cloneUrl)} to ${targetPath}${options.branch ? ` (branch: ${options.branch})` : ''}...`
   );
   await git.clone(cloneUrl, targetPath, cloneArgs);
+
+  await scrubGitConfigRemoteCredentials(targetPath);
 
   // Default branch: prefer the explicit pin (so the DB record matches what's
   // on disk); fall back to the remote's HEAD when the caller didn't pin one.
@@ -783,7 +1000,7 @@ export async function getRemoteUrl(
     const { git } = createGit(repoPath);
     const remotes = await git.getRemotes(true);
     const remoteObj = remotes.find((r) => r.name === remote);
-    return remoteObj?.refs.fetch ?? null;
+    return remoteObj?.refs.fetch ? stripGitUrlCredentials(remoteObj.refs.fetch) : null;
   } catch {
     return null;
   }
@@ -815,6 +1032,7 @@ export async function ensureGitRemoteUrl(
   env?: Record<string, string>
 ): Promise<EnsureRemoteUrlResult> {
   const { git } = createGit(repoPath, env);
+  const safeExpectedUrl = stripGitUrlCredentials(expectedUrl);
   const configKey = `remote.${remoteName}.url`;
 
   // `--get-all` exits 1 when the key is unset; absence ≡ "no remote".
@@ -832,11 +1050,11 @@ export async function ensureGitRemoteUrl(
   if (currentUrls.length === 0) {
     return { changed: false, previousUrl: undefined };
   }
-  if (currentUrls.length === 1 && currentUrls[0] === expectedUrl) {
+  if (currentUrls.length === 1 && currentUrls[0] === safeExpectedUrl) {
     return { changed: false, previousUrl: currentUrls[0] };
   }
 
-  await git.raw(['config', '--replace-all', configKey, expectedUrl]);
+  await git.raw(['config', '--replace-all', configKey, safeExpectedUrl]);
   return { changed: true, previousUrl: currentUrls.join('\n') };
 }
 
@@ -878,6 +1096,13 @@ export async function createBranch(
 
   if (!repoPath) {
     throw new Error('repoPath is required but was null/undefined');
+  }
+
+  const scrubResult = await scrubGitConfigRemoteCredentials(repoPath);
+  if (scrubResult.findings.length > 0) {
+    console.warn(
+      `🔒 Scrubbed ${scrubResult.findings.length} credential-bearing git remote URL(s) from ${scrubResult.configPaths.length} git config file(s) before creating a worktree branch.`
+    );
   }
 
   // Refuse to clobber an existing directory. Matches createBranchAsClone's
@@ -1127,11 +1352,17 @@ export interface CreateBranchAsCloneResult {
 export async function createBranchAsClone(
   options: CreateBranchAsCloneOptions
 ): Promise<CreateBranchAsCloneResult> {
-  const { remoteUrl, targetPath, ref, newBranchName, depth, referencePath, env } = options;
+  const { targetPath, ref, newBranchName, depth, referencePath, env } = options;
+  const remoteUrl = stripGitUrlCredentials(options.remoteUrl);
   const singleBranch = options.singleBranch ?? true;
 
   if (!remoteUrl) {
     throw new Error('remoteUrl is required');
+  }
+  if (remoteUrl !== options.remoteUrl) {
+    console.warn(
+      `🔒 Stripped credentials from clone-mode remote URL before use: ${redactGitUrlCredentials(options.remoteUrl)}`
+    );
   }
   if (!targetPath) {
     throw new Error('targetPath is required');
@@ -1184,12 +1415,13 @@ export async function createBranchAsClone(
   if (useReference && referencePath) cloneArgs.push('--reference', referencePath);
 
   console.log(
-    `[createBranchAsClone] Cloning ${remoteUrl} → ${targetPath} ` +
+    `[createBranchAsClone] Cloning ${redactGitUrlCredentials(remoteUrl)} → ${targetPath} ` +
       `(ref=${ref}${newBranchName ? `, newBranch=${newBranchName}` : ''}, ` +
       `depth=${depth ?? 'full'}, singleBranch=${singleBranch}, ` +
       `reference=${useReference ? referencePath : 'none'})`
   );
   await git.clone(remoteUrl, targetPath, cloneArgs);
+  await scrubGitConfigRemoteCredentials(targetPath);
 
   // Optional post-clone fork: create the new branch off the cloned tip.
   // simple-git's `.checkoutLocalBranch` issues `git checkout -b <name>`.
@@ -1255,6 +1487,13 @@ export async function restoreBranchFilesystem(
   // (which re-validates) and to ls-remote (which does not).
   await validateGitRef(ref);
   await validateGitRef(baseRef);
+
+  const scrubResult = await scrubGitConfigRemoteCredentials(repoPath);
+  if (scrubResult.findings.length > 0) {
+    console.warn(
+      `[restoreBranch] Scrubbed ${scrubResult.findings.length} credential-bearing git remote URL(s) before restore.`
+    );
+  }
 
   const hasToken = !!(env?.GITHUB_TOKEN ?? env?.GH_TOKEN);
   const authHost = hasToken ? await resolveAuthHost(repoPath) : undefined;

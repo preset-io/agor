@@ -19,7 +19,12 @@ import {
   buildWorktreeAddArgs,
   createBranch,
   deleteBranch,
+  gitUrlHasUserinfo,
   isLikelyGitToken,
+  redactGitUrlCredentials,
+  scanGitConfigRemoteCredentials,
+  scrubGitConfigRemoteCredentials,
+  stripGitUrlCredentials,
   validateGitRef,
 } from './index';
 
@@ -199,6 +204,86 @@ describe('isLikelyGitToken — credential helper shape check', () => {
     expect(isLikelyGitToken(`ghp_${'a'.repeat(36)}`)).toBe(true);
     expect(isLikelyGitToken(`github_pat_${'A'.repeat(40)}`)).toBe(true);
     expect(isLikelyGitToken('a'.repeat(40))).toBe(true);
+  });
+});
+
+describe('credential-bearing remote URL utilities', () => {
+  it('detects, redacts, and strips URL userinfo without treating SSH scp syntax as credentials', () => {
+    const unsafe = 'https://user:REDACTED@example.com/org/repo.git';
+    expect(gitUrlHasUserinfo(unsafe)).toBe(true);
+    expect(redactGitUrlCredentials(unsafe)).toBe('https://<redacted>@example.com/org/repo.git');
+    expect(stripGitUrlCredentials(unsafe)).toBe('https://example.com/org/repo.git');
+
+    expect(gitUrlHasUserinfo('git@example.com:org/repo.git')).toBe(false);
+    expect(stripGitUrlCredentials('git@example.com:org/repo.git')).toBe(
+      'git@example.com:org/repo.git'
+    );
+  });
+
+  it('scans and repairs remote url and pushurl entries in .git/config', async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-git-remote-sec-'));
+    try {
+      const repoPath = path.join(tmpRoot, 'repo');
+      await fs.mkdir(path.join(repoPath, '.git'), { recursive: true });
+      const configPath = path.join(repoPath, '.git', 'config');
+      await fs.writeFile(
+        configPath,
+        [
+          '[core]',
+          '\trepositoryformatversion = 0',
+          '[remote "origin"]',
+          '\turl = https://user:REDACTED@example.com/org/repo.git',
+          '\tpushurl = https://user:REDACTED@example.com/org/repo-push.git',
+          '[remote "ssh"]',
+          '\turl = git@example.com:org/repo.git',
+          '',
+        ].join('\n')
+      );
+
+      const scan = await scanGitConfigRemoteCredentials(repoPath);
+      expect(scan.findings).toHaveLength(2);
+      expect(scan.findings.map((f) => `${f.remote}.${f.key}`)).toEqual([
+        'origin.url',
+        'origin.pushurl',
+      ]);
+
+      const scrub = await scrubGitConfigRemoteCredentials(repoPath);
+      expect(scrub.changed).toBe(true);
+      expect(scrub.findings).toHaveLength(2);
+
+      const repaired = await fs.readFile(configPath, 'utf8');
+      expect(repaired).toContain('url = https://example.com/org/repo.git');
+      expect(repaired).toContain('pushurl = https://example.com/org/repo-push.git');
+      expect(repaired).toContain('url = git@example.com:org/repo.git');
+      expect(repaired).not.toContain('user:REDACTED@');
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('follows worktree .git pointer files to the shared common config', async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-git-remote-sec-'));
+    try {
+      const baseGit = path.join(tmpRoot, 'base.git');
+      const worktreeGit = path.join(baseGit, 'worktrees', 'feature');
+      const branchPath = path.join(tmpRoot, 'branch');
+      await fs.mkdir(worktreeGit, { recursive: true });
+      await fs.mkdir(branchPath, { recursive: true });
+      await fs.writeFile(path.join(branchPath, '.git'), `gitdir: ${worktreeGit}\n`);
+      await fs.writeFile(path.join(worktreeGit, 'commondir'), '../..\n');
+      await fs.writeFile(
+        path.join(baseGit, 'config'),
+        ['[remote "origin"]', '\turl = https://user:REDACTED@example.com/org/repo.git', ''].join(
+          '\n'
+        )
+      );
+
+      const scan = await scanGitConfigRemoteCredentials(branchPath);
+      expect(scan.findings).toHaveLength(1);
+      expect(scan.findings[0].configPath).toBe(path.join(baseGit, 'config'));
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });
 
