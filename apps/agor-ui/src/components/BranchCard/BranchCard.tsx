@@ -253,6 +253,7 @@ const BranchCardComponent = ({
     >
       {/* Branch header */}
       <div
+        className={!inPopover && !panelMode ? 'drag-handle' : undefined}
         style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -359,11 +360,10 @@ const BranchCardComponent = ({
           {!inPopover && !panelMode && (
             <Button
               type="text"
-              size="small"
-              icon={<DragOutlined />}
+              icon={<DragOutlined style={{ fontSize: 16 }} />}
               className="drag-handle"
               title="Drag to reposition"
-              style={{ cursor: 'grab' }}
+              style={{ cursor: 'grab', padding: '4px 8px' }}
             />
           )}
           <div className="nodrag">

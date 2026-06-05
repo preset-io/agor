@@ -682,6 +682,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         nodes.push({
           id: branch.branch_id,
           type: 'branchNode',
+          dragHandle: '.drag-handle',
           position, // When pinned (parentId set), this is relative to zone; otherwise absolute
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 500, // Above zones, below comments
@@ -817,6 +818,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         nodes.push({
           id: `card-${cardId}`,
           type: 'cardNode',
+          dragHandle: '.drag-handle',
           position,
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 500, // Same level as branches
@@ -1087,7 +1089,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
             if (positionConfirmed) {
               delete localPositionsRef.current[newNode.id];
-              return { ...newNode, selected: existingNode?.selected };
+              return { ...newNode, selected: existingNode?.selected, zIndex: existingNode?.zIndex ?? newNode.zIndex };
             }
 
             let positionToUse = localPosition;
@@ -1100,10 +1102,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               }
             }
 
-            return { ...newNode, position: positionToUse, selected: existingNode?.selected };
+            return { ...newNode, position: positionToUse, selected: existingNode?.selected, zIndex: existingNode?.zIndex ?? newNode.zIndex };
           }
 
-          return { ...newNode, selected: existingNode?.selected };
+          return { ...newNode, selected: existingNode?.selected, zIndex: existingNode?.zIndex ?? newNode.zIndex };
         });
       },
       []
@@ -2199,10 +2201,21 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return;
         }
 
-        // Branch cards handle their own session clicks internally
-        // (no canvas-level click handler needed for branchNode)
+        // Bring clicked card to front (zones and comments are excluded from this)
+        if (node.type !== 'zone' && node.type !== 'comment') {
+          setNodes((nds) => {
+            const raisable = nds.filter((n) => n.type !== 'zone' && n.type !== 'comment');
+            const currentZ = nds.find((n) => n.id === node.id)?.zIndex ?? 0;
+            const isAlreadyOnTop = raisable.every(
+              (n) => n.id === node.id || (n.zIndex ?? 0) < currentZ
+            );
+            if (isAlreadyOnTop) return nds;
+            const maxZ = Math.max(0, ...raisable.map((n) => n.zIndex ?? 0));
+            return nds.map((n) => (n.id === node.id ? { ...n, zIndex: maxZ + 1 } : n));
+          });
+        }
       },
-      [activeTool, deleteObject, mutationGate.canMutate]
+      [activeTool, deleteObject, mutationGate.canMutate, setNodes]
     );
 
     // Clear comment placement state when switching away from comment tool
