@@ -30,6 +30,9 @@ const DEBOUNCE_MS = 300;
 const AUTOCOMPLETE_POPOVER_VIEWPORT_MARGIN = 8;
 const AUTOCOMPLETE_POPOVER_WIDTH = 320;
 const AUTOCOMPLETE_POPOVER_MAX_HEIGHT = 300;
+const EMPTY_SLASH_COMMANDS: string[] = [];
+const EMPTY_SKILLS: string[] = [];
+const EMPTY_KB_DOCS: KbDocMention[] = [];
 
 interface FileResult {
   path: string;
@@ -343,9 +346,9 @@ export const AutocompleteTextarea = React.forwardRef<
       userById,
       autoSize,
       onFilesDrop,
-      slashCommands = [],
-      skills = [],
-      kbDocs = [],
+      slashCommands = EMPTY_SLASH_COMMANDS,
+      skills = EMPTY_SKILLS,
+      kbDocs = EMPTY_KB_DOCS,
       highlightWhenEmpty = false,
     },
     ref
@@ -437,7 +440,7 @@ export const AutocompleteTextarea = React.forwardRef<
         const children = popoverContentRef.current.children;
         if (highlightedIndex < children.length) {
           const highlightedElement = children[highlightedIndex];
-          if (highlightedElement) {
+          if (highlightedElement && typeof highlightedElement.scrollIntoView === 'function') {
             highlightedElement.scrollIntoView({
               behavior: 'smooth',
               block: 'nearest',
@@ -562,7 +565,7 @@ export const AutocompleteTextarea = React.forwardRef<
     /**
      * Auto-highlight first selectable item when options change
      */
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
       if (autocompleteOptions.length > 0 && showPopover) {
         // Find first non-heading item and highlight it
         const firstItemIndex = autocompleteOptions.findIndex((item) => !('heading' in item));
