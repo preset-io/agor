@@ -16,11 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
-import {
-  filterSelectOptionBySearchText,
-  userSelectLabel,
-  userSelectSearchText,
-} from '@/utils/selectSearch';
+import { searchableSelectProps, toUserSelectOption } from '@/utils/selectSearch';
 import { useThemedMessage } from '../../utils/message';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
 
@@ -158,11 +154,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   }
 
   const userOptions = mapToSortedArray(userById, (a, b) => a.email.localeCompare(b.email)).map(
-    (u) => ({
-      value: u.user_id,
-      label: userSelectLabel(u),
-      searchText: userSelectSearchText(u),
-    })
+    toUserSelectOption
   );
   return (
     <div>
@@ -199,10 +191,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
                 style={{ minWidth: 320 }}
                 value={membershipsByGroup.get(group.group_id) || []}
                 options={userOptions}
-                showSearch
-                optionFilterProp="searchText"
-                optionLabelProp="label"
-                filterOption={filterSelectOptionBySearchText}
+                {...searchableSelectProps}
                 onChange={(ids) => setGroupMembers(group, ids)}
               />
             ),
@@ -270,10 +259,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
               style={{ width: '100%' }}
               value={editingMemberIds}
               options={userOptions}
-              showSearch
-              optionFilterProp="searchText"
-              optionLabelProp="label"
-              filterOption={filterSelectOptionBySearchText}
+              {...searchableSelectProps}
               onChange={setEditingMemberIds}
               placeholder="Select users..."
             />

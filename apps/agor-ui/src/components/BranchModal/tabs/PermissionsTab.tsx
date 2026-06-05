@@ -9,15 +9,15 @@
  */
 
 import type { BranchPermissionLevel, Group, User } from '@agor-live/client';
-import { shortId } from '@agor-live/client';
 import { UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Form, Select, Space, Switch, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import {
-  filterSelectOptionBySearchText,
-  groupSelectLabel,
-  groupSelectSearchText,
+  searchableSelectProps,
+  selectSearchTextFromLabel,
+  toGroupSelectOption,
+  toUserSelectOption,
 } from '../../../utils/selectSearch';
 import { Tag } from '../../Tag';
 import type { FsAccessLevel, GroupGrantsStatus, PermissionsFormState } from '../useBranchModalForm';
@@ -121,17 +121,17 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
             onChange={handleOwnersChange}
             loading={loadingOwners}
             disabled={!canEdit}
-            showSearch
-            filterOption={(input, option) =>
-              (option?.label?.toString() || '').toLowerCase().includes(input.toLowerCase())
-            }
-            optionLabelProp="label"
+            {...searchableSelectProps}
             options={allUsers
               .map((user) => {
                 const isCurrentUser = user.user_id === currentUserId;
-                const label = user.email || `User ${shortId(user.user_id)}`;
-                const displayLabel = isCurrentUser ? `${label} (You)` : label;
-                return { value: user.user_id, label: displayLabel };
+                const option = toUserSelectOption(user);
+                const label = isCurrentUser ? `${option.label} (You)` : option.label;
+                return {
+                  ...option,
+                  label,
+                  searchText: selectSearchTextFromLabel(label),
+                };
               })
               .sort((a, b) => a.label.localeCompare(b.label))}
             tagRender={(props) => {
@@ -184,16 +184,9 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
               loading={groupGrantsLoading}
               disabled={!canEditGroups}
               options={allGroups
-                .map((group) => ({
-                  value: group.group_id,
-                  label: groupSelectLabel(group),
-                  searchText: groupSelectSearchText(group),
-                }))
+                .map(toGroupSelectOption)
                 .sort((a, b) => a.label.localeCompare(b.label))}
-              showSearch
-              optionFilterProp="searchText"
-              optionLabelProp="label"
-              filterOption={filterSelectOptionBySearchText}
+              {...searchableSelectProps}
               onChange={(groupIds) => {
                 const existing = new Map(groupGrants.map((grant) => [grant.group_id, grant]));
                 setField(

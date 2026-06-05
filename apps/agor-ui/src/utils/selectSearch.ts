@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 export interface SearchableSelectOption<Value extends string = string> {
   value: Value;
-  label: ReactNode;
+  label: string;
   searchText: string;
 }
 
@@ -31,6 +31,30 @@ export const userSelectSearchText = (user: Pick<User, 'email' | 'name'>) =>
 export const groupSelectSearchText = (group: Pick<Group, 'name' | 'slug'>) =>
   normalizeSearchText(groupSelectLabel(group));
 
+export const selectSearchTextFromLabel = (label: string) => normalizeSearchText(label);
+
+export const toUserSelectOption = (
+  user: Pick<User, 'user_id' | 'email' | 'name'>
+): SearchableSelectOption<User['user_id']> => {
+  const label = userSelectLabel(user);
+  return {
+    value: user.user_id,
+    label,
+    searchText: selectSearchTextFromLabel(label),
+  };
+};
+
+export const toGroupSelectOption = (
+  group: Pick<Group, 'group_id' | 'name' | 'slug'>
+): SearchableSelectOption<Group['group_id']> => {
+  const label = groupSelectLabel(group);
+  return {
+    value: group.group_id,
+    label,
+    searchText: selectSearchTextFromLabel(label),
+  };
+};
+
 /**
  * Ant Design Select's default filtering can search `value` instead of the
  * human-readable option label when `options` are used, and JSX labels stringify
@@ -42,6 +66,7 @@ export const filterSelectOptionBySearchText = (
   option?: {
     searchText?: string;
     label?: ReactNode;
+    value?: unknown;
   } | null
 ): boolean => {
   const needle = normalizeSearchText(input);
@@ -50,3 +75,10 @@ export const filterSelectOptionBySearchText = (
   const labelText = typeof option?.label === 'string' ? option.label : '';
   return compactSearchText([option?.searchText, labelText]).includes(needle);
 };
+
+export const searchableSelectProps = {
+  showSearch: true,
+  optionFilterProp: 'searchText',
+  optionLabelProp: 'label',
+  filterOption: filterSelectOptionBySearchText,
+} as const;

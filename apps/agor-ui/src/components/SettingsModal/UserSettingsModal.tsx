@@ -40,11 +40,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
-import {
-  filterSelectOptionBySearchText,
-  groupSelectLabel,
-  groupSelectSearchText,
-} from '../../utils/selectSearch';
+import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import {
   AgenticToolConfigForm,
   buildConfigFromFormValues,
@@ -116,13 +112,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [groupsLoaded, setGroupsLoaded] = useState(false);
   const groupSelectOptions = useMemo(
     () =>
-      [...availableGroups]
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((group) => ({
-          value: group.group_id,
-          label: groupSelectLabel(group),
-          searchText: groupSelectSearchText(group),
-        })),
+      [...availableGroups].sort((a, b) => a.name.localeCompare(b.name)).map(toGroupSelectOption),
     [availableGroups]
   );
 
@@ -715,10 +705,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   disabled={!groupsLoaded && !loadingGroups}
                   placeholder="Select groups..."
                   options={groupSelectOptions}
-                  showSearch
-                  optionFilterProp="searchText"
-                  optionLabelProp="label"
-                  filterOption={filterSelectOptionBySearchText}
+                  {...searchableSelectProps}
                 />
               </Form.Item>
             )}
@@ -783,10 +770,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   disabled={!groupsLoaded && !loadingGroups}
                   placeholder="Select groups..."
                   options={groupSelectOptions}
-                  showSearch
-                  optionFilterProp="searchText"
-                  optionLabelProp="label"
-                  filterOption={filterSelectOptionBySearchText}
+                  {...searchableSelectProps}
                 />
               </Form.Item>
             </Form>

@@ -4,6 +4,9 @@ import {
   filterSelectOptionBySearchText,
   groupSelectLabel,
   groupSelectSearchText,
+  searchableSelectProps,
+  toGroupSelectOption,
+  toUserSelectOption,
   userSelectLabel,
   userSelectSearchText,
 } from './selectSearch';
@@ -66,6 +69,23 @@ describe('Select search helpers', () => {
     ).toBe(false);
   });
 
+  it('builds user options with email-only fallback labels', () => {
+    const user = makeUser({ name: undefined, email: 'solo@example.com' });
+
+    expect(toUserSelectOption(user)).toEqual({
+      value: 'user-1',
+      label: 'solo@example.com',
+      searchText: 'solo@example.com',
+    });
+  });
+
+  it('does not duplicate user name when it matches email', () => {
+    const user = makeUser({ name: 'same@example.com', email: 'same@example.com' });
+
+    expect(userSelectLabel(user)).toBe('same@example.com');
+    expect(userSelectSearchText(user)).toBe('same@example.com');
+  });
+
   it('Settings → Groups group select filters by visible name/slug label', () => {
     const group = makeGroup({ name: 'Design Systems', slug: 'design-systems' });
     const label = groupSelectLabel(group);
@@ -81,6 +101,16 @@ describe('Select search helpers', () => {
     expect(filterSelectOptionBySearchText('finance', { value: 'group-1', label, searchText })).toBe(
       false
     );
+  });
+
+  it('builds group options from the visible name/slug label', () => {
+    const group = makeGroup({ name: 'Platform Engineers', slug: 'platform-eng' });
+
+    expect(toGroupSelectOption(group)).toEqual({
+      value: 'group-1',
+      label: 'Platform Engineers (platform-eng)',
+      searchText: 'platform engineers (platform-eng)',
+    });
   });
 
   it('BranchModal Permissions group select filters by visible group label when labels are JSX', () => {
@@ -111,5 +141,14 @@ describe('Select search helpers', () => {
         searchText: 'visible label',
       })
     ).toBe(false);
+  });
+
+  it('exports shared Ant Design Select search props', () => {
+    expect(searchableSelectProps).toMatchObject({
+      showSearch: true,
+      optionFilterProp: 'searchText',
+      optionLabelProp: 'label',
+    });
+    expect(searchableSelectProps.filterOption).toBe(filterSelectOptionBySearchText);
   });
 });
