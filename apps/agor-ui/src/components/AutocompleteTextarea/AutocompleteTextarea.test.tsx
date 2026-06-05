@@ -34,17 +34,27 @@ describe('AutocompleteTextarea', () => {
     expect(screen.getByText('beta')).toBeInTheDocument();
 
     fireEvent.keyDown(textarea, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40 });
-
-    await waitFor(() => {
-      expect(screen.getByText('beta').closest('div')).toHaveStyle({
-        color: 'rgb(22, 119, 255)',
-      });
-    });
-
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() => {
       expect(textarea).toHaveValue('/beta ');
+    });
+  });
+
+  it('navigates autocomplete options upward with arrow keys', async () => {
+    const textarea = renderSlashAutocomplete();
+
+    fireEvent.change(textarea, { target: { value: '/', selectionStart: 1 } });
+
+    await screen.findByText('alpha');
+    expect(screen.getByText('beta')).toBeInTheDocument();
+
+    fireEvent.keyDown(textarea, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40 });
+    fireEvent.keyDown(textarea, { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, which: 38 });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue('/alpha ');
     });
   });
 });

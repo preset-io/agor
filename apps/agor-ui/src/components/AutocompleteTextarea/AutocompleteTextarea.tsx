@@ -356,6 +356,7 @@ export const AutocompleteTextarea = React.forwardRef<
     const { token } = theme.useToken();
     const textareaRef = useRef<{ current: HTMLTextAreaElement | null }>({ current: null });
     const wrapperRef = useRef<HTMLDivElement>(null);
+    const popoverRef = useRef<React.ElementRef<typeof Popover> | null>(null);
     const popoverContentRef = useRef<HTMLDivElement>(null);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
     const [isDragOver, setIsDragOver] = useState(false);
@@ -561,6 +562,30 @@ export const AutocompleteTextarea = React.forwardRef<
 
       return options;
     }, [triggerType, fileResults, emojiResults, slashCommandResults, kbDocs, query, filterUsers]);
+
+    const popoverAnchorKey = `${popoverPlacement}:${popoverAnchor[0]}:${popoverAnchor[1]}`;
+
+    /**
+     * The Popover target is a zero-size span that moves as the caret anchor
+     * changes. rc-trigger does not necessarily realign an already-open popup
+     * when only the target element's CSS left/top changes, so explicitly ask
+     * AntD to re-align after every anchor or placement update.
+     */
+    React.useLayoutEffect(() => {
+      if (!showPopover || autocompleteOptions.length === 0) return;
+
+      popoverRef.current?.forceAlign();
+      const anchorKeyAtSchedule = popoverAnchorKey;
+      const realignTimer = window.setTimeout(() => {
+        if (anchorKeyAtSchedule === popoverAnchorKey) {
+          popoverRef.current?.forceAlign();
+        }
+      }, 0);
+
+      return () => {
+        window.clearTimeout(realignTimer);
+      };
+    }, [showPopover, autocompleteOptions.length, popoverAnchorKey]);
 
     /**
      * Auto-highlight first selectable item when options change
@@ -1132,6 +1157,7 @@ export const AutocompleteTextarea = React.forwardRef<
         onPaste={handlePaste}
       >
         <Popover
+          ref={popoverRef}
           content={popoverContent}
           open={showPopover && autocompleteOptions.length > 0}
           trigger={[]}
@@ -1140,7 +1166,9 @@ export const AutocompleteTextarea = React.forwardRef<
           arrow={false}
         >
           <span
+            key={popoverAnchorKey}
             aria-hidden="true"
+            data-popover-anchor-key={popoverAnchorKey}
             tabIndex={-1}
             style={{
               position: 'absolute',
