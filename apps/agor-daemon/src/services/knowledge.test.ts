@@ -291,6 +291,25 @@ describe('Knowledge semantic indexing lifecycle', () => {
   });
 
   dbTest(
+    'indexing status hides stale indexer errors when semantic search is disabled',
+    async ({ db }) => {
+      await withTempConfig({}, async () => {
+        const app = {
+          get: (key: string) =>
+            key === 'knowledgeEmbeddingIndexer'
+              ? { getLastError: () => 'old pgvector error', getLastIndexedAt: () => null }
+              : undefined,
+        } as never;
+
+        const status = await new KnowledgeIndexingStatusService(db, app).find();
+
+        expect(status.enabled).toBe(false);
+        expect(status.last_error).toBeNull();
+      });
+    }
+  );
+
+  dbTest(
     'indexer clears stale pgvector errors when semantic indexing is disabled',
     async ({ db }) => {
       await withTempConfig({}, async () => {

@@ -67,17 +67,24 @@ export class KnowledgeIndexingStatusService {
     }
 
     const pgvector = await getKnowledgePgvectorCapability(this.db);
+    const semanticEnabled = semantic.enabled === true;
+    const embeddingConfigUsable = isUsableOpenAIEmbeddingConfig(
+      semantic,
+      Boolean(apiKey?.value_encrypted)
+    );
+    const configured = isPostgresDatabase(this.db) && pgvector.available && embeddingConfigUsable;
 
     const indexer = (this.app as unknown as { get?: (key: string) => unknown } | undefined)?.get?.(
       'knowledgeEmbeddingIndexer'
     ) as { getLastIndexedAt?: () => Date | null; getLastError?: () => string | null } | undefined;
+    const lastError = semanticEnabled
+      ? ((configured ? indexer?.getLastError?.() : null) ??
+        (!pgvector.available ? pgvector.reason : null))
+      : null;
 
     return {
-      enabled: semantic.enabled === true,
-      configured:
-        isPostgresDatabase(this.db) &&
-        pgvector.available &&
-        isUsableOpenAIEmbeddingConfig(semantic, Boolean(apiKey?.value_encrypted)),
+      enabled: semanticEnabled,
+      configured,
       dialect: isPostgresDatabase(this.db) ? 'postgresql' : 'sqlite',
       pgvector_available: pgvector.available,
       pgvector_extension_installed: pgvector.extensionInstalled,
@@ -90,9 +97,7 @@ export class KnowledgeIndexingStatusService {
       chunks: counts,
       queue_depth: counts.pending + counts.stale,
       last_indexed_at: indexer?.getLastIndexedAt?.() ?? null,
-      last_error:
-        indexer?.getLastError?.() ??
-        (semantic.enabled === true && !pgvector.available ? pgvector.reason : null),
+      last_error: lastError,
     };
   }
 }
