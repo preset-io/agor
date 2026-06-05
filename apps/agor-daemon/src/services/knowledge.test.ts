@@ -62,6 +62,7 @@ async function seedDocument(
     path: overrides.path ?? 'page.md',
     title: overrides.title ?? 'Page',
     visibility: overrides.visibility ?? 'public',
+    status: overrides.status ?? 'published',
     edit_policy: overrides.edit_policy ?? 'owner',
     content_text: overrides.content_text ?? '# Page\n\nBody',
     created_by: owner.user_id as UserID,
@@ -343,6 +344,58 @@ describe('Knowledge semantic indexing lifecycle', () => {
 });
 
 describe('KnowledgeSearchService and KnowledgeVersionsService permissions', () => {
+  dbTest(
+    'applies draft lifecycle defaults in tree/list, search, and direct get',
+    async ({ db }) => {
+      const owner = await seedUser(db, 'owner');
+      const other = await seedUser(db, 'other');
+      const draftDoc = await seedDocument(db, owner, {
+        status: 'draft',
+        visibility: 'public',
+        path: 'draft.md',
+        content_text: 'draftneedle',
+      });
+      const publishedDoc = await seedDocument(db, owner, {
+        status: 'published',
+        visibility: 'public',
+        path: 'published.md',
+        content_text: 'draftneedle',
+      });
+      const documents = new KnowledgeDocumentsService(db);
+      const search = new KnowledgeSearchService(db);
+
+      const ownerTree = await documents.find(params(owner, { archived: false }));
+      expect(ownerTree.map((doc) => doc.document_id)).toContain(draftDoc.document_id);
+
+      const otherTree = await documents.find(params(other, { archived: false }));
+      expect(otherTree.map((doc) => doc.document_id)).not.toContain(draftDoc.document_id);
+      expect(otherTree.map((doc) => doc.document_id)).toContain(publishedDoc.document_id);
+
+      const ownerSearch = await search.find(params(owner, { q: 'draftneedle' }));
+      expect(ownerSearch.map((result) => result.document.document_id)).toContain(
+        draftDoc.document_id
+      );
+
+      const otherSearch = await search.find(params(other, { q: 'draftneedle' }));
+      expect(otherSearch.map((result) => result.document.document_id)).not.toContain(
+        draftDoc.document_id
+      );
+      expect(otherSearch.map((result) => result.document.document_id)).toContain(
+        publishedDoc.document_id
+      );
+
+      await expect(documents.get(draftDoc.document_id, params(other))).resolves.toMatchObject({
+        document_id: draftDoc.document_id,
+        status: 'draft',
+      });
+
+      const optedIn = await search.find(
+        params(other, { q: 'draftneedle', include_other_user_drafts: true })
+      );
+      expect(optedIn.map((result) => result.document.document_id)).toContain(draftDoc.document_id);
+    }
+  );
+
   dbTest('scopes search results and ignores non-admin include_archived', async ({ db }) => {
     const owner = await seedUser(db, 'owner');
     const other = await seedUser(db, 'other');

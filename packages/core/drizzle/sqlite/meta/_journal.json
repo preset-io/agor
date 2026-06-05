@@ -358,6 +358,13 @@
       "when": 1780900000000,
       "tag": "0052_kb_embedding_spaces",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1781000000000,
+      "tag": "0053_kb_document_status",
+      "breakpoints": true
     }
   ]
 }

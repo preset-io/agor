@@ -4,6 +4,7 @@ import type {
   KnowledgeNamespace as CoreKnowledgeNamespace,
   KnowledgeDocumentVersion as CoreKnowledgeVersion,
   KnowledgeDocumentKind,
+  KnowledgeDocumentStatus,
   KnowledgeNamespaceGraph,
   KnowledgeSearchMode,
   KnowledgeSemanticSettingsPublic,
@@ -378,6 +379,7 @@ export function KnowledgePage({
   ]);
   const [titleDraft, setTitleDraft] = useState('');
   const [visibilityDraft, setVisibilityDraft] = useState<KnowledgeDocument['visibility']>('public');
+  const [statusDraft, setStatusDraft] = useState<KnowledgeDocumentStatus>('published');
   const [kindDraft, setKindDraft] = useState<KnowledgeDocumentKind>('doc');
   const [titleFromContent, setTitleFromContent] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState(DEFAULT_MARKDOWN);
@@ -637,6 +639,7 @@ export function KnowledgePage({
           (markdownDraft !== savedMarkdown ||
             titleDraft !== activeDoc.title ||
             visibilityDraft !== activeDoc.visibility ||
+            statusDraft !== activeDoc.status ||
             kindDraft !== activeDoc.kind ||
             titleFromContent !== (activeDoc.metadata?.title_from_content === true) ||
             renamePathOnTitleChange))
@@ -928,6 +931,44 @@ export function KnowledgePage({
   }, [activeDocId, documents, namespaceSlugForDocument, routeDocumentPath, routeNamespaceSlug]);
 
   useEffect(() => {
+    if (!client || loading || activeDocIdRef.current === DRAFT_DOCUMENT_ID) return;
+    if (!routeNamespaceSlug || !routeDocumentPath) return;
+    const routedDocument = documents.find(
+      (doc) =>
+        doc.path === routeDocumentPath && namespaceSlugForDocument(doc) === routeNamespaceSlug
+    );
+    if (routedDocument) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await client.service('kb/documents').find({
+          query: {
+            namespace_slug: routeNamespaceSlug,
+            path: routeDocumentPath,
+            archived: false,
+            include_other_user_drafts: true,
+          },
+        });
+        if (cancelled) return;
+        const [directDoc] = normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]);
+        if (!directDoc) return;
+        setDocuments((prev) =>
+          prev.some((doc) => doc.document_id === directDoc.document_id)
+            ? prev
+            : [directDoc, ...prev]
+        );
+        activeDocIdRef.current = directDoc.document_id;
+        setActiveDocId(directDoc.document_id);
+      } catch (err) {
+        if (!cancelled) console.error('Failed to load direct Knowledge document:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, documents, loading, namespaceSlugForDocument, routeDocumentPath, routeNamespaceSlug]);
+
+  useEffect(() => {
     if (activeDocIdRef.current === DRAFT_DOCUMENT_ID) return;
     if (activeDocId && !activeDoc && !loading) {
       activeDocIdRef.current = null;
@@ -940,6 +981,7 @@ export function KnowledgePage({
       setSelectedFolder(parentFolderForPath(activeDoc.path));
       setTitleDraft(activeDoc.title);
       setVisibilityDraft(activeDoc.visibility);
+      setStatusDraft(activeDoc.status ?? 'published');
       setKindDraft(activeDoc.kind);
       setTitleFromContent(activeDoc.metadata?.title_from_content === true);
       setRenamePathOnTitleChange(false);
@@ -1061,6 +1103,7 @@ export function KnowledgePage({
       title,
       kind: 'doc',
       visibility: namespace?.visibility_default ?? 'public',
+      status: 'published',
       edit_policy: 'owner',
       current_version_id: null,
       metadata: { title_from_content: true },
@@ -1078,6 +1121,7 @@ export function KnowledgePage({
     setSelectedFolder(ROOT_FOLDER);
     setTitleDraft(title);
     setVisibilityDraft(draft.visibility);
+    setStatusDraft(draft.status);
     setKindDraft(draft.kind);
     setTitleFromContent(true);
     setRenamePathOnTitleChange(false);
@@ -1154,6 +1198,7 @@ export function KnowledgePage({
           namespaces.find((ns) => ns.slug === namespaceSlug)?.visibility_default ??
           selectedNamespace?.visibility_default ??
           'public',
+        status: 'published',
         metadata: { title_from_content: true },
         content_text: `# ${title}\n\nWrite markdown here.\n`,
         change_summary: 'Initial version',
@@ -1192,6 +1237,7 @@ export function KnowledgePage({
           title: nextTitle,
           kind: kindDraft,
           visibility: visibilityDraft,
+          status: statusDraft,
           metadata: {
             ...(activeDoc.metadata ?? {}),
             title_from_content: titleFromContent,
@@ -1226,6 +1272,7 @@ export function KnowledgePage({
       const updated = (await client.service('kb/documents').patch(activeDoc.document_id, {
         title: nextTitle,
         visibility: visibilityDraft,
+        status: statusDraft,
         kind: kindDraft,
         ...(nextPath ? { path: nextPath } : {}),
         content_text: markdownDraft,
@@ -1498,6 +1545,7 @@ export function KnowledgePage({
         <FileOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
         <span
           style={{
+            flex: 1,
             minWidth: 0,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -1507,6 +1555,15 @@ export function KnowledgePage({
         >
           {doc.title}
         </span>
+        {doc.status === 'draft' && (
+          <Tag
+            color="gold"
+            bordered={false}
+            style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px' }}
+          >
+            Draft
+          </Tag>
+        )}
       </button>
     );
   };
@@ -1921,6 +1978,23 @@ export function KnowledgePage({
                         <Tag color={activeDoc.visibility === 'public' ? 'green' : 'default'}>
                           {activeDoc.visibility}
                         </Tag>
+                      )}
+                      {isEditing ? (
+                        <Select
+                          size="small"
+                          value={statusDraft}
+                          disabled={!canManageActiveVisibility}
+                          onChange={setStatusDraft}
+                          style={{ width: 118 }}
+                          options={[
+                            { label: 'Published', value: 'published' },
+                            { label: 'Draft', value: 'draft' },
+                          ]}
+                        />
+                      ) : activeDoc.status === 'draft' ? (
+                        <Tag color="gold">Draft</Tag>
+                      ) : (
+                        <Tag color="blue">Published</Tag>
                       )}
                       {isEditing ? (
                         <Select

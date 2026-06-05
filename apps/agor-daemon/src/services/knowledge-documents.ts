@@ -56,7 +56,12 @@ export type KnowledgeDocumentParams = QueryParams<{
   path?: string;
   kind?: KnowledgeDocument['kind'];
   visibility?: KnowledgeDocument['visibility'];
+  status?: KnowledgeDocument['status'];
   archived?: boolean;
+  include_my_drafts?: boolean;
+  includeMyDrafts?: boolean;
+  include_other_user_drafts?: boolean;
+  includeOtherUserDrafts?: boolean;
   include_content?: boolean;
   include_links?: boolean;
   version?: string | number;
@@ -164,10 +169,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
       data.visibility !== undefined && data.visibility !== existing.visibility;
     const editPolicyChanged =
       data.edit_policy !== undefined && data.edit_policy !== existing.edit_policy;
-    if (!visibilityChanged && !editPolicyChanged) return;
+    const statusChanged = data.status !== undefined && data.status !== existing.status;
+    if (!visibilityChanged && !editPolicyChanged && !statusChanged) return;
     if (!this.canManageDocument(existing, user)) {
       throw new Forbidden(
-        'Only the owner or an admin can change knowledge document visibility or edit policy'
+        'Only the owner or an admin can change knowledge document visibility, lifecycle status, or edit policy'
       );
     }
   }
@@ -381,9 +387,18 @@ export class KnowledgeDocumentsService extends DrizzleService<
           path: query.path,
           kind: query.kind,
           visibility: query.visibility,
+          status: query.status,
           archived: isAdmin ? query.archived : false,
+          include_my_drafts: query.include_my_drafts ?? query.includeMyDrafts ?? true,
+          include_other_user_drafts:
+            query.include_other_user_drafts ?? query.includeOtherUserDrafts ?? false,
+          draft_filter_user_id: user?.user_id as UserID | undefined,
         }
-      : undefined;
+      : {
+          include_my_drafts: true,
+          include_other_user_drafts: false,
+          draft_filter_user_id: user?.user_id as UserID | undefined,
+        };
     const rows = await this.repo.findAll(filters);
     const readable = rows.filter((doc) => this.canRead(doc, user));
     if (params?.query?.include_content !== true && params?.query?.include_links !== true) {

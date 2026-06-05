@@ -1,5 +1,6 @@
 import type {
   KnowledgeDocumentKind,
+  KnowledgeDocumentStatus,
   KnowledgeEditPolicy,
   KnowledgeGraphEdgeType,
   KnowledgeGraphNodeType,
@@ -8,6 +9,7 @@ import type {
 import {
   buildKnowledgeDocumentUri,
   KNOWLEDGE_DOCUMENT_KINDS,
+  KNOWLEDGE_DOCUMENT_STATUSES,
   KNOWLEDGE_DOCUMENT_URI_PREFIX,
   KNOWLEDGE_EDIT_POLICIES,
   KNOWLEDGE_GRAPH_EDGE_TYPES,
@@ -21,6 +23,7 @@ import type { McpContext } from '../server.js';
 import { coerceJsonRecord, coerceString, textResult } from '../server.js';
 
 const KnowledgeDocumentKindSchema = z.enum(KNOWLEDGE_DOCUMENT_KINDS);
+const KnowledgeDocumentStatusSchema = z.enum(KNOWLEDGE_DOCUMENT_STATUSES);
 const KnowledgeVisibilitySchema = z.enum(KNOWLEDGE_VISIBILITIES);
 const KnowledgeEditPolicySchema = z.enum(KNOWLEDGE_EDIT_POLICIES);
 const KnowledgeGraphNodeTypeSchema = z.enum(KNOWLEDGE_GRAPH_NODE_TYPES);
@@ -248,6 +251,19 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         pathPrefix: z.string().optional().describe('Filter to document paths under this prefix'),
         kind: KnowledgeDocumentKindSchema.optional().describe('Filter by document kind'),
         visibility: KnowledgeVisibilitySchema.optional().describe('Filter by visibility'),
+        status: KnowledgeDocumentStatusSchema.optional().describe(
+          'Filter by lifecycle status: draft or published'
+        ),
+        includeMyDrafts: z
+          .boolean()
+          .optional()
+          .describe('Include documents you authored with status=draft (default: true)'),
+        includeOtherUserDrafts: z
+          .boolean()
+          .optional()
+          .describe(
+            "Include other users' draft documents in browsing/search (default: false). Drafts remain directly accessible by URL when visibility permits."
+          ),
         includeArchived: z
           .boolean()
           .optional()
@@ -273,6 +289,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (args.pathPrefix) query.path_prefix = coerceString(args.pathPrefix);
       if (args.kind) query.kind = args.kind as KnowledgeDocumentKind;
       if (args.visibility) query.visibility = args.visibility as KnowledgeVisibility;
+      if (args.status) query.status = args.status as KnowledgeDocumentStatus;
+      query.include_my_drafts = args.includeMyDrafts !== false;
+      query.include_other_user_drafts = args.includeOtherUserDrafts === true;
       if (args.limit) query.limit = args.limit;
       if (args.mode) query.mode = args.mode;
 
@@ -405,6 +424,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         visibility: KnowledgeVisibilitySchema.optional().describe(
           'Visibility (default: namespace default or public)'
         ),
+        status: KnowledgeDocumentStatusSchema.optional().describe(
+          'Lifecycle status (default: published). Drafts are shareable by direct URL, but hidden from other users in browsing/search by default.'
+        ),
         editPolicy: KnowledgeEditPolicySchema.optional().describe('Edit policy (default: owner)'),
         createNamespace: z
           .boolean()
@@ -462,6 +484,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         first_line_is_title: firstLineIsTitle,
         kind: (args.kind as KnowledgeDocumentKind | undefined) ?? 'doc',
         visibility: args.visibility as KnowledgeVisibility | undefined,
+        status: args.status as KnowledgeDocumentStatus | undefined,
         edit_policy: args.editPolicy as KnowledgeEditPolicy | undefined,
         create_namespace: args.createNamespace === true,
         namespace_display_name: coerceString(args.namespaceDisplayName),

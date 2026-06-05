@@ -45,6 +45,9 @@ export type KnowledgeDocumentKind = (typeof KNOWLEDGE_DOCUMENT_KINDS)[number];
 export const KNOWLEDGE_VISIBILITIES = ['public', 'private'] as const;
 export type KnowledgeVisibility = (typeof KNOWLEDGE_VISIBILITIES)[number];
 
+export const KNOWLEDGE_DOCUMENT_STATUSES = ['draft', 'published'] as const;
+export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[number];
+
 export const KNOWLEDGE_EDIT_POLICIES = ['owner', 'public', 'admins'] as const;
 export type KnowledgeEditPolicy = (typeof KNOWLEDGE_EDIT_POLICIES)[number];
 
@@ -323,6 +326,11 @@ export interface KnowledgeDocument {
   title: string;
   kind: KnowledgeDocumentKind;
   visibility: KnowledgeVisibility;
+  /**
+   * Lifecycle status. Drafts are not secret and direct reads still use normal
+   * visibility checks, but browsing/search hide other users' drafts by default.
+   */
+  status: KnowledgeDocumentStatus;
   edit_policy: KnowledgeEditPolicy;
   current_version_id?: KnowledgeDocumentVersionID | null;
   metadata?: Record<string, unknown> | null;
@@ -499,6 +507,7 @@ export interface KnowledgeGraphDocNode {
   uri: string;
   kind: KnowledgeDocumentKind;
   visibility: KnowledgeVisibility;
+  status: KnowledgeDocumentStatus;
 }
 
 /** A doc-to-doc edge in the namespace-wide knowledge graph view. */

@@ -302,6 +302,13 @@
       "when": 1780900000000,
       "tag": "0043_kb_embeddings",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1781000000000,
+      "tag": "0044_kb_document_status",
+      "breakpoints": true
     }
   ]
 }

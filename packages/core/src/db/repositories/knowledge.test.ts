@@ -70,6 +70,7 @@ describe('Knowledge repositories', () => {
     expect(created.uri).toBe('agor://kb/repo-test/guides/intro.md');
     expect(created.url).toContain('/ui/kb/repo-test/guides/intro.md');
     expect(created.current_version_id).toBeTruthy();
+    expect(created.status).toBe('published');
 
     const history = await versions.findAll({ document_id: created.document_id });
     expect(history).toHaveLength(1);

@@ -1748,6 +1748,9 @@ export const kbDocuments = sqliteTable(
     visibility: text('visibility', { enum: ['public', 'private'] })
       .notNull()
       .default('public'),
+    status: text('status', { enum: ['draft', 'published'] })
+      .notNull()
+      .default('published'),
     edit_policy: text('edit_policy', { enum: ['owner', 'public', 'admins'] })
       .notNull()
       .default('owner'),
@@ -1773,6 +1776,7 @@ export const kbDocuments = sqliteTable(
     namespaceIdx: index('kb_documents_namespace_idx').on(table.namespace_id),
     kindIdx: index('kb_documents_kind_idx').on(table.kind),
     visibilityIdx: index('kb_documents_visibility_idx').on(table.visibility),
+    statusIdx: index('kb_documents_status_idx').on(table.status),
     createdByIdx: index('kb_documents_created_by_idx').on(table.created_by),
     updatedAtIdx: index('kb_documents_updated_at_idx').on(table.updated_at),
     archivedIdx: index('kb_documents_archived_idx').on(table.archived),
