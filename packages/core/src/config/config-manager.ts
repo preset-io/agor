@@ -183,11 +183,11 @@ function validateConfig(config: AgorConfig): void {
   const managedEnvExecutionMode = config.execution?.managed_envs_execution_mode;
   if (
     managedEnvExecutionMode !== undefined &&
-    managedEnvExecutionMode !== 'command' &&
+    managedEnvExecutionMode !== 'hybrid' &&
     managedEnvExecutionMode !== 'webhook-only'
   ) {
     throw new Error(
-      `Config error: execution.managed_envs_execution_mode must be one of: command, webhook-only`
+      `Config error: execution.managed_envs_execution_mode must be one of: hybrid, webhook-only`
     );
   }
 

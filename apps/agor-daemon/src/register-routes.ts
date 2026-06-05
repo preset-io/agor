@@ -3379,7 +3379,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // How managed environment lifecycle fields execute. In
           // webhook-only mode the UI/MCP may still show env controls, but
           // non-URL rendered commands are rejected server-side.
-          managedEnvsExecutionMode: config.execution?.managed_envs_execution_mode ?? 'command',
+          managedEnvsExecutionMode: config.execution?.managed_envs_execution_mode ?? 'hybrid',
           // True when the daemon runs in a multi-user Unix isolation mode
           // (insulated/strict). UI hides "trust everyone on this instance"
           // surfaces when true. Server-side gates (e.g. ArtifactsService.
@@ -3427,7 +3427,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           execution: {
             branchRbac: config.execution?.branch_rbac === true,
             unixUserMode: config.execution?.unix_user_mode ?? 'simple',
-            managedEnvsExecutionMode: config.execution?.managed_envs_execution_mode ?? 'command',
+            managedEnvsExecutionMode: config.execution?.managed_envs_execution_mode ?? 'hybrid',
           },
           // Resolved security posture — admins can confirm in Settings → About
           // which CSP/CORS policy the daemon booted with, without tailing logs

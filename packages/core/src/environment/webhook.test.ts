@@ -34,18 +34,18 @@ describe('managed environment webhook URL detection', () => {
 });
 
 describe('resolveManagedEnvCommandExecution', () => {
-  it('preserves shell command execution in default command mode', () => {
-    expect(resolveManagedEnvCommandExecution('docker compose up -d', 'command', 'start')).toEqual({
+  it('preserves shell command execution in default hybrid mode', () => {
+    expect(resolveManagedEnvCommandExecution('docker compose up -d', 'hybrid', 'start')).toEqual({
       kind: 'command',
       command: 'docker compose up -d',
     });
   });
 
-  it('uses GET webhook execution for URL-shaped fields in command mode', () => {
+  it('uses GET webhook execution for URL-shaped fields in hybrid mode', () => {
     expect(
       resolveManagedEnvCommandExecution(
         'https://hooks.example.com/start?token=secret',
-        'command',
+        'hybrid',
         'start'
       )
     ).toEqual({

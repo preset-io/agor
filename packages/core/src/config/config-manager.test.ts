@@ -197,7 +197,7 @@ describe('loadConfig', () => {
     );
 
     await expect(loadConfig()).rejects.toThrow(
-      /execution\.managed_envs_execution_mode must be one of: command, webhook-only/
+      /execution\.managed_envs_execution_mode must be one of: hybrid, webhook-only/
     );
   });
 

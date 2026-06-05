@@ -131,7 +131,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   private async getManagedEnvExecutionMode(): Promise<ManagedEnvExecutionMode> {
     const config = await loadConfig();
-    return config.execution?.managed_envs_execution_mode ?? 'command';
+    return config.execution?.managed_envs_execution_mode ?? 'hybrid';
   }
 
   private async resolveEnvironmentCommand(command: string, commandType: EnvironmentCommandType) {

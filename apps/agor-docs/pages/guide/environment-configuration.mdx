@@ -395,14 +395,14 @@ infrastructure logs may expose them. If you need authentication, put it behind
 network policy or a future signed-webhook layer rather than embedding tokens in
 `.agor.yml`.
 
-Default mode remains `command` for backwards compatibility:
+Default mode is `hybrid` for backwards compatibility:
 
 ```yaml
 execution:
-  managed_envs_execution_mode: command
+  managed_envs_execution_mode: hybrid
 ```
 
-In command mode, existing shell commands continue to work. URL-shaped lifecycle
+In hybrid mode, existing shell commands continue to work. URL-shaped lifecycle
 fields still use webhook execution so a repo can migrate one action at a time.
 
 ---

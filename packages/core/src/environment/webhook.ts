@@ -4,18 +4,18 @@ import { isAllowedHealthCheckUrl, normalizeOptionalHttpUrl } from '../utils/url.
 /**
  * How Agor executes rendered managed-environment lifecycle fields.
  *
- * - `command`: backwards-compatible shell command execution. URL-shaped fields
+ * - `hybrid`: backwards-compatible shell command execution. URL-shaped fields
  *   are treated as webhooks instead of shell strings.
  * - `webhook-only`: operator lockdown mode. Every executable lifecycle field
  *   must be an HTTP(S) URL and is invoked with GET; shell commands are rejected.
  */
-export type ManagedEnvExecutionMode = 'command' | 'webhook-only';
+export type ManagedEnvExecutionMode = 'hybrid' | 'webhook-only';
 
 export type ManagedEnvCommandExecution =
   | { kind: 'command'; command: string }
   | { kind: 'webhook'; url: string };
 
-export const MANAGED_ENV_EXECUTION_MODE_DEFAULT: ManagedEnvExecutionMode = 'command';
+export const MANAGED_ENV_EXECUTION_MODE_DEFAULT: ManagedEnvExecutionMode = 'hybrid';
 
 export const MANAGED_ENV_WEBHOOK_DOCS_PATH = '/guide/environment-configuration#webhook-only-mode';
 
