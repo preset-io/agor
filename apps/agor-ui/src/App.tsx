@@ -37,7 +37,6 @@ import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { MobileApp } from './components/mobile/MobileApp';
 import { OnboardingWizard } from './components/OnboardingWizard';
-import { UserSettingsModal } from './components/SettingsModal';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
@@ -54,9 +53,15 @@ import {
 } from './hooks';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { StreamdownDemoPage } from './pages/StreamdownDemoPage';
+import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
+import {
+  KNOWLEDGE_ROUTE_PATHS,
+  routeUsesDeviceRouter,
+  routeUsesSharedUserSettings,
+} from './surfaces/surfaceRegistry';
+import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
-import { isKnowledgeRoutePath } from './utils/surfaceRoutes';
 
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
@@ -67,7 +72,7 @@ function DeviceRouter() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (isKnowledgeRoutePath(location.pathname)) return;
+    if (!routeUsesDeviceRouter(location.pathname)) return;
 
     const checkAndRoute = () => {
       const isMobile = isMobileDevice();
@@ -110,12 +115,10 @@ function AppContent() {
   const { showSuccess, showError, showWarning, showLoading, destroy } = useThemedMessage();
   const navigate = useNavigate();
   const location = useLocation();
-  const isKnowledgeSurfaceRoute = isKnowledgeRoutePath(location.pathname);
-  const routeRequiresWorkspaceSurface = !isKnowledgeSurfaceRoute;
-  const [workspaceSurfaceStarted, setWorkspaceSurfaceStarted] = useState(
-    routeRequiresWorkspaceSurface
+  const { currentSurface, workspaceSurfaceShouldRun } = useWorkspaceSurfaceLifecycle(
+    location.pathname
   );
-  const workspaceSurfaceShouldRun = routeRequiresWorkspaceSurface || workspaceSurfaceStarted;
+  const sharedSurfaceOwnsUserSettings = routeUsesSharedUserSettings(location.pathname);
 
   // Fetch daemon auth and instance configuration
   const {
@@ -203,14 +206,6 @@ function AppContent() {
   const [openUserSettings, setOpenUserSettings] = useState(false);
   const [openNewBranch, setOpenNewBranch] = useState(false);
 
-  // Surface runtime lifecycle: the Workspace store is heavy, so a fresh
-  // Knowledge deep link should not hydrate boards/branches/sessions. Once the
-  // Workspace surface has started in this tab, keep it warm across internal KB
-  // navigation so returning to the board is instant.
-  useEffect(() => {
-    if (routeRequiresWorkspaceSurface) setWorkspaceSurfaceStarted(true);
-  }, [routeRequiresWorkspaceSurface]);
-
   // Detect GitHub App setup callback URL and auto-open gateway settings
   useEffect(() => {
     if (
@@ -273,12 +268,18 @@ function AppContent() {
       !currentUser.must_change_password &&
       connected &&
       workspaceSurfaceShouldRun &&
-      !isKnowledgeSurfaceRoute &&
+      currentSurface.startsWorkspaceRuntime &&
       !loading
     ) {
       setOnboardingWizardOpen(true);
     }
-  }, [currentUser, connected, workspaceSurfaceShouldRun, isKnowledgeSurfaceRoute, loading]);
+  }, [
+    currentUser,
+    connected,
+    workspaceSurfaceShouldRun,
+    currentSurface.startsWorkspaceRuntime,
+    loading,
+  ]);
 
   // Handle wizard completion
   const handleOnboardingComplete = async (result: {
@@ -1459,22 +1460,18 @@ function AppContent() {
           onLogout={logout}
         />
 
-        {/* Core/current-user settings POC for lightweight surfaces. The full
-            workspace App still owns its existing Settings/UserSettings modals;
-            this lets Knowledge expose the shared user menu without mounting
-            the Workspace route tree. */}
-        {isKnowledgeSurfaceRoute && (
-          <UserSettingsModal
+        {/* Shared/current-user settings for lightweight surfaces. The full
+            Workspace App still owns its existing settings stack; this wrapper
+            lets Knowledge expose the user menu without mounting Workspace. */}
+        {sharedSurfaceOwnsUserSettings && (
+          <SharedUserSettingsModal
             open={openUserSettings}
             onClose={() => setOpenUserSettings(false)}
             user={currentUser}
-            currentUser={currentUser}
-            mcpServerById={mcpServerById}
             client={client}
-            onUpdate={async (userId, updates) => {
-              await handleUpdateUser(userId, updates);
-              await reAuthenticate();
-            }}
+            mcpServerById={mcpServerById}
+            onUpdateUser={handleUpdateUser}
+            onRefreshCurrentUser={reAuthenticate}
           />
         )}
 
@@ -1528,10 +1525,9 @@ function AppContent() {
           <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
 
           {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
-          <Route path="/knowledge" element={knowledgePageElement} />
-          <Route path="/knowledge/:namespaceSlug/*" element={knowledgePageElement} />
-          <Route path="/kb" element={knowledgePageElement} />
-          <Route path="/kb/:namespaceSlug/*" element={knowledgePageElement} />
+          {KNOWLEDGE_ROUTE_PATHS.map((path) => (
+            <Route key={path} path={path} element={knowledgePageElement} />
+          ))}
 
           {/* Mobile routes */}
           <Route

@@ -4,6 +4,30 @@ _Date: 2026-06-04_
 
 _Branch: `kb-lightweight-entrypoint-analysis`_
 
+## Current implementation status in this PR
+
+This branch now implements a conservative version of Phase 1 plus the first
+piece of Phase 2's surface model:
+
+- top-level route metadata lives in `apps/agor-ui/src/surfaces/surfaceRegistry.ts`;
+- `useWorkspaceSurfaceLifecycle()` makes Workspace startup sticky per tab:
+  fresh KB/demo routes do not hydrate Workspace, but once Workspace has started
+  it stays warm across later KB navigation;
+- `AppContent` gates `useAgorData()` and the Workspace initial loading/error
+  overlay behind the Workspace surface lifecycle;
+- Knowledge routes are declared from `KNOWLEDGE_ROUTE_PATHS` instead of ad hoc
+  repeated route literals;
+- mobile/desktop device redirects are surface-aware and do not hijack KB deep
+  links;
+- `GlobalUserMenu` is surface-agnostic and `SharedUserSettingsModal` owns the
+  current-user settings flow for lightweight surfaces without mounting the
+  Workspace route tree;
+- focused tests cover route classification and the sticky Workspace lifecycle.
+
+This intentionally keeps the authenticated socket client as a shared app-shell
+concern for now. The remaining performance frontier is making KB use a REST-only
+client until Workspace starts, and/or adding scoped realtime subscriptions.
+
 ## Summary recommendation
 
 Treat Knowledge Base (KB) as a route island with its own lightweight boot path. A fresh external deep link to `/kb/...` or `/knowledge/...` should load only:
@@ -353,6 +377,8 @@ No product behavior change.
 
 ### Phase 1 — Small safe PR: gate workspace store on fresh KB routes
 
+_Status: mostly implemented in this PR._
+
 Implement Option A narrowly:
 
 - Add a route classifier helper, e.g. `isKnowledgeRoutePath(pathname)` with tests.
@@ -374,6 +400,8 @@ Regression risks to test:
 - `@` user mentions either degrade acceptably or lazily fetch users.
 
 ### Phase 2 — Extract route islands and lazy-load major bundles
+
+_Status: started in this PR with explicit surface metadata and shared user settings; full route-island extraction/lazy-loading remains follow-up work._
 
 Implement Option B:
 
