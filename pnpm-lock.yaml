@@ -488,38 +488,38 @@ importers:
         specifier: ^1.0.15
         version: 1.0.15
       '@feathersjs/authentication':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/authentication-client':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/authentication-local':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/errors':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/express':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/feathers':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/rest-client':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/schema':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/socketio':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/socketio-client':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/typebox':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@github/copilot-sdk':
         specifier: ^0.2.2
         version: 0.2.2
@@ -677,17 +677,17 @@ importers:
   packages/client:
     dependencies:
       '@feathersjs/authentication-client':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/feathers':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/rest-client':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/socketio-client':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       js-yaml:
         specifier: ^4.1.1
         version: 4.1.1
@@ -720,38 +720,38 @@ importers:
         specifier: ^0.100.0
         version: 0.100.0(zod@4.4.3)
       '@feathersjs/authentication':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/authentication-client':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/authentication-local':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/errors':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/express':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/feathers':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/rest-client':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/schema':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@feathersjs/socketio':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/socketio-client':
-        specifier: ^5.0.44
-        version: 5.0.44
+        specifier: ^5.0.45
+        version: 5.0.45
       '@feathersjs/typebox':
-        specifier: ^5.0.44
-        version: 5.0.44(typescript@6.0.3)
+        specifier: ^5.0.45
+        version: 5.0.45(typescript@6.0.3)
       '@google/gemini-cli-core':
         specifier: ^0.31.0
         version: 0.31.0(@grpc/grpc-js@1.14.4)(encoding@0.1.13)(express@5.2.1)
@@ -1794,66 +1794,66 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@feathersjs/adapter-commons@5.0.44':
-    resolution: {integrity: sha512-m9rho8bJnNw8wJEuwQkUMiWf9N8qeWxUB/4yDD2lEwKIlP7/DKxwrWveN11T5veO4T452Z+5/uv5chBWijYG5w==}
+  '@feathersjs/adapter-commons@5.0.45':
+    resolution: {integrity: sha512-5GZluJHbBDrbScbEPUvZbayND4ONlRyy9OQGVTACzpdETrp4iTf0zxntpkHlrHXpqd0MUvEAd81BgkZx5OaHVg==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/authentication-client@5.0.44':
-    resolution: {integrity: sha512-VJ+WoEDnAQQK+2VnSxkFzZ2zFZ1lf+CTMmb1VPmUT+sn64tcxAXcHxqGbb9hFJh2WTiDF+jFAgSkuc0+C1d3TA==}
+  '@feathersjs/authentication-client@5.0.45':
+    resolution: {integrity: sha512-n8ZN7BQKvVWNVmKRMaVuQBlu2mUUORPnL69ucC1XYs8WhtGrgqfAvc1eZjo3QVKYzZo5yWx1Sfo3wuR66ntcoA==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/authentication-local@5.0.44':
-    resolution: {integrity: sha512-UcDJLxcNj2UOUvnXbEA63/FHBmDlAy+XvrnGfeofN7DCvl547s/a22QLJJ7GCSgAM6gST8At0hfXTCy2x4pGyg==}
+  '@feathersjs/authentication-local@5.0.45':
+    resolution: {integrity: sha512-3Ma+ZEK9LINj+IU3eBIViLC/fZY2TwwklS1TNI4L0HlPJJhXWavr0pm2NDk9c0T3Ej2ljs5sHSKTDNVuXj7Q/g==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/authentication@5.0.44':
-    resolution: {integrity: sha512-ZTWYtLI1rOa7jvijhJQNNkNJaB/SGCY2q/qgKafoNxBxvyj+u8lIGYi53aZzTL397XbbDG2d7aeBZaV1pc+eMA==}
+  '@feathersjs/authentication@5.0.45':
+    resolution: {integrity: sha512-9kn5SPilK1cbOQuExJOb2lvucGaa9DO91kbK9QBeaCzbYzkX33KJ/yuhiMGD+wOK4H0u9M3FnEsIL/t6P6H6Rg==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/commons@5.0.44':
-    resolution: {integrity: sha512-PnxCyKqzWLAqv1LSazDsOXNf520KQOlqUasZ/9YRz4lYRPJ0pzzfZXvzmjBFOsNPaohzKmyySS8578E9vlTQrA==}
+  '@feathersjs/commons@5.0.45':
+    resolution: {integrity: sha512-dCe9Kfi+T6wRvhXLii1PJWaRAvqiJRMmBFsNzrrOi/wacph14NijUK63H8u/iy8Ni3gYIRaEYyBnKTfTbxbiRQ==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/errors@5.0.44':
-    resolution: {integrity: sha512-QcxrUvEFHGBT47VyH02rlhw51M+G0yam3fpDnko1HlkM6C62notLwE2lirEDz34JWITwkn/lwV527h1HwHpOuQ==}
+  '@feathersjs/errors@5.0.45':
+    resolution: {integrity: sha512-BwMYJ62FMcB9yNyPW5ghr49k44Xv8tM+4lz2Sv9q2Gcf9Br2ZYBNOTH+2OAWVcdaCm/xAYdd/RWgUzzCIVRspg==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/express@5.0.44':
-    resolution: {integrity: sha512-mnSUxOjQnuDzQJD6jlmTtsZimxB7IoJMHyXe0T+nnYOhBIWnuX//6oznncgUUXIGxjhcpswA/2BPoeLFDnZFzQ==}
+  '@feathersjs/express@5.0.45':
+    resolution: {integrity: sha512-Ks0+mKr5tZNNBh3r/bBmyroNlGBvr1HQMB2yvqnOCTnoZGt07aS7+tN5LvmDel+uytGDx4RIIOFIJfmm7pZqSQ==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/feathers@5.0.44':
-    resolution: {integrity: sha512-qxZ9ZQQBIfyIdQKUIFUXZ2EegcUWpIwG4BOBpO7RZXu7nlv9SNMttrTbVWEfUzc72jhKtJuRW8/FHdrsb1446g==}
+  '@feathersjs/feathers@5.0.45':
+    resolution: {integrity: sha512-0NLBzf67grpx1uX8+t09ctklhgmh4T9D1q/kkdPdR21qYhPcvI+6wrJHJo/CfnQNEJ6mlVVV2NqdDDC/omC+Bg==}
     engines: {node: '>= 12'}
 
   '@feathersjs/hooks@0.9.0':
     resolution: {integrity: sha512-kLfWnuhbC25CPkR1/TDcVs0rSiv0JLNxrpUivLwc7FUnkyeciRi5VOmC1SOzL2SOagcozu3+m4VQiONyzgfY7w==}
     engines: {node: '>= 14'}
 
-  '@feathersjs/rest-client@5.0.44':
-    resolution: {integrity: sha512-3YhMFYjY3sL7IzBz3MATdnA+4hCFTpYEVZB7Fnio5V7ZM7ZvN1vEf4dg1Y/d91oNSzDt0trxQyIU+IbGAzkWOA==}
+  '@feathersjs/rest-client@5.0.45':
+    resolution: {integrity: sha512-fCFkoSWUz2O09bkg19uGl5CCdHDiZIiW6Oevnl/1HMwDJaB9/OQdsuviodFV1QoYUBEvALFcqwlb1NPFi6OFtQ==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/schema@5.0.44':
-    resolution: {integrity: sha512-1xk7+Zs17MQEgfPDipf9ribG4hF+YdYxfO3Dijn1GSk1x285HVqgSH4MQLUpY+z6gfBn5/jE3S7+yDQ4ITmrXw==}
+  '@feathersjs/schema@5.0.45':
+    resolution: {integrity: sha512-njZvGWGtly3JORVjEorpTO+vLeJIxjOJgE3f/RkurhX1nDrUC7fpN3s6xiy1MeZhlRXXzmfq+fU8KYrD8OIDoA==}
     engines: {node: '>= 12'}
     peerDependencies:
       typescript: '>=5.0'
 
-  '@feathersjs/socketio-client@5.0.44':
-    resolution: {integrity: sha512-u2Kou90fF2jPCRXNq+wFiyAsUonaGrORxKWQl26AAVL/J36PybkxgvVR1TNzcPKk2KbHriUhMqYFyaIPBmkfEg==}
+  '@feathersjs/socketio-client@5.0.45':
+    resolution: {integrity: sha512-ZgAP6D7/l+ws6gh4uqx57VoXYG0nJFWBeCe7kgD9vS4teMIyMOvTWgVlrvpCzRh/9ZRM/tHo/tMgTiIY44todg==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/socketio@5.0.44':
-    resolution: {integrity: sha512-Z9QHn5pK3SexzzI9Ro6oR6VQNsPvC060Nxa64smb1KlOJAeJe/dSLfvDj4FTQNu8Ikow0BEd6vmWYB0SMsU02w==}
+  '@feathersjs/socketio@5.0.45':
+    resolution: {integrity: sha512-RUyzXPjihwTbcSXn7iqHCa5R/Zv7U+q0t/reYjmNv+7gdU4X6xzer7kcQYBPG+YVd8PMF0S8RytaaVm3Kf86OA==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/transport-commons@5.0.44':
-    resolution: {integrity: sha512-BxUyGFcbt+o5TWcXKXNVrbh3zrq2iGAzE9uvaVJ7tVQX820LVHOWAp6NL5GxG+InhLUq0cc3CTpQENE0+oXRMw==}
+  '@feathersjs/transport-commons@5.0.45':
+    resolution: {integrity: sha512-AsrcsHwp89nfjHKOUMPb0n8F1REt3NbjT03hBnzMznbRMoGNpV8SnlwSlulW60aF69R6lr61doGC2ye4hpYFzA==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/typebox@5.0.44':
-    resolution: {integrity: sha512-UEUnJZ49DADpWpehTPANQTPPvX6l1X5p2TEh2X24WRVNxMFUTnlgQ2b8Cvp2reh6KP7bWGvmmEAuW5NM7ZvaqQ==}
+  '@feathersjs/typebox@5.0.45':
+    resolution: {integrity: sha512-ZqeMjwVX/HlmLwILNPDdkCuNQAiOv8Ye4HqFrzxp0FKI+szQrFY4EOx+8MwbVK3mZRqcvL3XAUgfC8enYfbUXw==}
     engines: {node: '>= 12'}
 
   '@floating-ui/core@1.7.3':
@@ -4529,8 +4529,8 @@ packages:
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
-  '@types/express-serve-static-core@4.19.7':
-    resolution: {integrity: sha512-FvPtiIf1LfhzsaIXhv/PHan/2FeQBbtBDtfX2QfvPxdUelMDEckK08SM6nqo1MIZY3RUlfA+HV8+hFUSio78qg==}
+  '@types/express-serve-static-core@4.19.8':
+    resolution: {integrity: sha512-02S5fmqeoKzVZCHPZid4b8JH2eM5HzQLZWN2FohQEy/0eXTq8VXZfSN6Pcr3F6N9R/vNrj7cpgbhjie6m/1tCA==}
 
   '@types/express-serve-static-core@5.1.0':
     resolution: {integrity: sha512-jnHMsrd0Mwa9Cf4IdOzbz543y4XJepXrbia2T4b6+spXC2We3t1y6K44D3mR8XMFSXMCf3/l7rCgddfx7UNVBA==}
@@ -4616,6 +4616,9 @@ packages:
   '@types/qs@6.14.0':
     resolution: {integrity: sha512-eOunJqu0K1923aExK6y8p6fsihYEn/BYuQ4g0CxAAgFc4b/ZLN4CrsRZ55srTdqoiLzU2B2evC+apEIxprEzkQ==}
 
+  '@types/qs@6.15.1':
+    resolution: {integrity: sha512-GZHUBZR9hckSUhrxmp1nG6NwdpM9fCunJwyThLW1X3AyHgd9IlHb6VANpQQqDr2o/qQp6McZ3y/IA2rVzKzSbw==}
+
   '@types/range-parser@1.2.7':
     resolution: {integrity: sha512-hKormJbkJqzQGhziax5PItDUTMAM9uE2XXQmM37dyd4hVM+5aVl7oVxMVUiVQn2oCQFN/LKCZdvSM0pFRqbSmQ==}
 
@@ -4651,8 +4654,8 @@ packages:
   '@types/serve-static@2.2.0':
     resolution: {integrity: sha512-8mam4H1NHLtu7nmtalF7eyBH14QyOASmcxHhSfEoRyr0nP/YdoesEtU+uSRvMe96TW/HPTtkoKqQLl53N7UXMQ==}
 
-  '@types/superagent@8.1.9':
-    resolution: {integrity: sha512-pTVjI73witn+9ILmoJdajHGW2jkSaOzhiFYF1Rd3EQ94kymLqB9PjD9ISg7WaALC7+dCHT0FGe9T2LktLq/3GQ==}
+  '@types/superagent@8.1.10':
+    resolution: {integrity: sha512-nbt4IWXABhW0jGmmpRzCFNlbmwCTzZ2gTUsNIr+X+ItdqPms+PAJZbWsNzpS2USqXjcoNLQcO6nXo60zcPQiIg==}
 
   '@types/tough-cookie@4.0.5':
     resolution: {integrity: sha512-/Ad8+nIOV7Rl++6f1BdKxFSMgmoqEoYbHRpPcx3JEfv8VRsQe9Z4mCXeJBzxs7mbHY/XOZZuXlRNfhpVPbs6ZA==}
@@ -4862,6 +4865,9 @@ packages:
   ajv@8.18.0:
     resolution: {integrity: sha512-PlXPeEWMXMZ7sPYOHqmDyCJzcfNrUr3fGNKtezX14ykXOEIvyK81d+qydx89KY5O71FKMPaQ2vBfBFI5NHR63A==}
 
+  ajv@8.20.0:
+    resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
+
   analytics-utils@1.1.1:
     resolution: {integrity: sha512-nRybjTpRAcHVhWb1cvYaOLJaI3R79r8XjMbu5c0wd2jKmANNqSrYwybiU0X3mp+CQQdm4YiAggTXb2cIA8XhUg==}
     peerDependencies:
@@ -5041,8 +5047,8 @@ packages:
   bl@4.1.0:
     resolution: {integrity: sha512-1W07cM9gS6DcLperZfFSj+bWLtaPGSOHWhPiGzXmvVJbRLdG82sH/Kn8EtW1VqWVA54AKf2h5k5BbnIbwF3h6w==}
 
-  body-parser@1.20.4:
-    resolution: {integrity: sha512-ZTgYYLMOXY9qKU/57FAo8F+HA2dGX7bqGc71txDRC1rS4frdFI5R7NhluHxH6M0YItAP0sHB4uqAOcYKxO6uGA==}
+  body-parser@1.20.5:
+    resolution: {integrity: sha512-3grm+/2tUOvu2cjJkvsIxrv/wVpfXQW4PsQHYm7yk4vfpu7Ekl6nEsYBoJUL6qDwZUx8wUhQ8tR2qz+ad9c9OA==}
     engines: {node: '>= 0.8', npm: 1.2.8000 || >= 1.4.16}
 
   body-parser@2.2.1:
@@ -6148,8 +6154,8 @@ packages:
   express-static-gzip@3.0.1:
     resolution: {integrity: sha512-LMeU/3YjFlFUa4vrPX+RoMMRW5mIpF4Iysgs6gX7A59WCY4BzyF3O28mBr4eMlWuW4DU9wVAVuVcfx29ln1N6g==}
 
-  express@4.22.1:
-    resolution: {integrity: sha512-F2X8g9P1X7uCPZMA3MVf9wcTqlyNp7IhH5qPCI0izhaOIYXaW9L535tGA3qmjRzpH+bZczqq7hVKxTR4NWnu+g==}
+  express@4.22.2:
+    resolution: {integrity: sha512-IuL+Elrou2ZvCFHs18/CIzy2Nzvo25nZ1/D2eIZlz7c+QUayAcYoiM2BthCjs+EBHVpjYjcuLDAiCWgeIX3X1Q==}
     engines: {node: '>= 0.10.0'}
 
   express@5.2.1:
@@ -6195,6 +6201,9 @@ packages:
 
   fast-uri@3.1.0:
     resolution: {integrity: sha512-iPeeDKJSWf4IEOasVVrknXpaBV0IApz/gp7S2bb7Z4Lljbl2MGJRqInZiUrQwV16cpzw/D3S5j5Julj/gT52AA==}
+
+  fast-uri@3.1.2:
+    resolution: {integrity: sha512-rVjf7ArG3LTk+FS6Yw81V1DLuZl1bRbNrev6Tmd/9RaroeeRRJhAt7jg/6YFxbvAQXUCavSoZhPPj6oOx+5KjQ==}
 
   fast-xml-builder@1.2.0:
     resolution: {integrity: sha512-00aAWieqff+ZJhsXA4g1g7M8k+7AYoMUUHF+/zFb5U6Uv/P0Vl4QZo84/IcufzYalLuEj9928bXN9PbbFzMF0Q==}
@@ -6660,10 +6669,6 @@ packages:
     resolution: {integrity: sha512-ahwimsC23ICE4kPl9xTBjKB4inbRaeLyZeRunC/1Jy/Z6X8tv22MEAjK+KBOMSVLaqXPTTmd8638waVIKLGx2w==}
     engines: {node: '>=8.0.0'}
 
-  http-errors@2.0.0:
-    resolution: {integrity: sha512-FtwrG/euBzaEjYeRqOgly7G0qviiXoJWnvEH2Z1plBdXgbyjv34pHTSb9zoeHMyDy33+DWy5Wt9Wo+TURtOYSQ==}
-    engines: {node: '>= 0.8'}
-
   http-errors@2.0.1:
     resolution: {integrity: sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==}
     engines: {node: '>= 0.8'}
@@ -7070,6 +7075,7 @@ packages:
 
   libsql@0.5.29:
     resolution: {integrity: sha512-8lMP8iMgiBzzoNbAPQ59qdVcj6UaE/Vnm+fiwX4doX4Narook0a4GPKWBEv+CR8a1OwbfkgL18uBfBjWdF0Fzg==}
+    cpu: [x64, arm64, wasm32, arm]
     os: [darwin, linux, win32]
 
   lightningcss-android-arm64@1.32.0:
@@ -8195,6 +8201,10 @@ packages:
     resolution: {integrity: sha512-6YHEFRL9mfgcAvql/XhwTvf5jKcOiiupt2FiJxHkiX1z4j7WL8J/jRHYLluORvc1XxB5rV20KoeK00gVJamspg==}
     engines: {node: '>=0.6'}
 
+  qs@6.15.2:
+    resolution: {integrity: sha512-Rzq0KEyX/w/tEybncDgdkZrJgVUsUMk3xjh3t5bv3S1HTAtg+uOYt72+ZfwiQwKdysThkTBdL/rTi6HDmX9Ddw==}
+    engines: {node: '>=0.6'}
+
   quansync@0.2.11:
     resolution: {integrity: sha512-AifT7QEbW9Nri4tAwR5M/uzpBuqfZf+zwaEM/QkzEjj7NBuFD2rBuy0K3dE+8wltbezDV7JMA0WfnCPYRSYbXA==}
 
@@ -8608,8 +8618,8 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  send@0.19.1:
-    resolution: {integrity: sha512-p4rRk4f23ynFEfcD9LA0xRYngj+IyGiEYyqqOak8kaN0TvNmuxC2dcVeBn62GpCeR2CpWqyHCNScTP91QbAVFg==}
+  send@0.19.2:
+    resolution: {integrity: sha512-VMbMxbDeehAxpOtWJXlcUS5E8iXh6QmN+BkRX1GARS3wRaXEEgzCcB10gTQazO42tpNIya8xIyNx8fll1OFPrg==}
     engines: {node: '>= 0.8.0'}
 
   send@1.2.0:
@@ -8809,10 +8819,6 @@ packages:
 
   static-browser-server@1.0.3:
     resolution: {integrity: sha512-ZUyfgGDdFRbZGGJQ1YhiM930Yczz5VlbJObrQLlk24+qNHVQx4OlLcYswEUo3bIyNAbQUIUR9Yr5/Hqjzqb4zA==}
-
-  statuses@2.0.1:
-    resolution: {integrity: sha512-RwNA9Z/7PrK06rYLIzFMlaF+l73iwpzsqRIFgbMLbTcLD6cOao82TaWefPXQvB2fOC4AjuYSEndS7N/mTCbkdQ==}
-    engines: {node: '>= 0.8'}
 
   statuses@2.0.2:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
@@ -9348,6 +9354,10 @@ packages:
     resolution: {integrity: sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==}
     hasBin: true
 
+  uuid@11.1.1:
+    resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
+    hasBin: true
+
   uuid@13.0.0:
     resolution: {integrity: sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==}
     hasBin: true
@@ -9725,7 +9735,7 @@ snapshots:
 
   '@a2a-js/sdk@0.3.10(@grpc/grpc-js@1.14.4)(express@5.2.1)':
     dependencies:
-      uuid: 11.1.0
+      uuid: 11.1.1
     optionalDependencies:
       '@grpc/grpc-js': 1.14.4
       express: 5.2.1
@@ -10726,126 +10736,126 @@ snapshots:
   '@esbuild/win32-x64@0.25.4':
     optional: true
 
-  '@feathersjs/adapter-commons@5.0.44':
+  '@feathersjs/adapter-commons@5.0.45':
     dependencies:
-      '@feathersjs/commons': 5.0.44
-      '@feathersjs/errors': 5.0.44
-      '@feathersjs/feathers': 5.0.44
+      '@feathersjs/commons': 5.0.45
+      '@feathersjs/errors': 5.0.45
+      '@feathersjs/feathers': 5.0.45
 
-  '@feathersjs/authentication-client@5.0.44(typescript@6.0.3)':
+  '@feathersjs/authentication-client@5.0.45(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/authentication': 5.0.44(typescript@6.0.3)
-      '@feathersjs/commons': 5.0.44
-      '@feathersjs/errors': 5.0.44
-      '@feathersjs/feathers': 5.0.44
+      '@feathersjs/authentication': 5.0.45(typescript@6.0.3)
+      '@feathersjs/commons': 5.0.45
+      '@feathersjs/errors': 5.0.45
+      '@feathersjs/feathers': 5.0.45
     transitivePeerDependencies:
       - typescript
 
-  '@feathersjs/authentication-local@5.0.44(typescript@6.0.3)':
+  '@feathersjs/authentication-local@5.0.45(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/authentication': 5.0.44(typescript@6.0.3)
-      '@feathersjs/commons': 5.0.44
-      '@feathersjs/errors': 5.0.44
-      '@feathersjs/feathers': 5.0.44
+      '@feathersjs/authentication': 5.0.45(typescript@6.0.3)
+      '@feathersjs/commons': 5.0.45
+      '@feathersjs/errors': 5.0.45
+      '@feathersjs/feathers': 5.0.45
       bcryptjs: 3.0.3
       lodash: 4.18.1
     transitivePeerDependencies:
       - typescript
 
-  '@feathersjs/authentication@5.0.44(typescript@6.0.3)':
+  '@feathersjs/authentication@5.0.45(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/commons': 5.0.44
-      '@feathersjs/errors': 5.0.44
-      '@feathersjs/feathers': 5.0.44
+      '@feathersjs/commons': 5.0.45
+      '@feathersjs/errors': 5.0.45
+      '@feathersjs/feathers': 5.0.45
       '@feathersjs/hooks': 0.9.0
-      '@feathersjs/schema': 5.0.44(typescript@6.0.3)
-      '@feathersjs/transport-commons': 5.0.44
+      '@feathersjs/schema': 5.0.45(typescript@6.0.3)
+      '@feathersjs/transport-commons': 5.0.45
       '@types/jsonwebtoken': 9.0.10
       jsonwebtoken: 9.0.3
       lodash: 4.18.1
       long-timeout: 0.1.1
-      uuid: 11.1.0
+      uuid: 11.1.1
     transitivePeerDependencies:
       - typescript
 
-  '@feathersjs/commons@5.0.44': {}
+  '@feathersjs/commons@5.0.45': {}
 
-  '@feathersjs/errors@5.0.44': {}
+  '@feathersjs/errors@5.0.45': {}
 
-  '@feathersjs/express@5.0.44(typescript@6.0.3)':
+  '@feathersjs/express@5.0.45(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/authentication': 5.0.44(typescript@6.0.3)
-      '@feathersjs/commons': 5.0.44
-      '@feathersjs/errors': 5.0.44
-      '@feathersjs/feathers': 5.0.44
-      '@feathersjs/transport-commons': 5.0.44
+      '@feathersjs/authentication': 5.0.45(typescript@6.0.3)
+      '@feathersjs/commons': 5.0.45
+      '@feathersjs/errors': 5.0.45
+      '@feathersjs/feathers': 5.0.45
+      '@feathersjs/transport-commons': 5.0.45
       '@types/compression': 1.8.1
       '@types/cors': 2.8.19
       '@types/express': 4.17.25
-      '@types/express-serve-static-core': 4.19.7
+      '@types/express-serve-static-core': 4.19.8
       compression: 1.8.1
       cors: 2.8.6
-      express: 4.22.1
+      express: 4.22.2
     transitivePeerDependencies:
       - supports-color
       - typescript
 
-  '@feathersjs/feathers@5.0.44':
+  '@feathersjs/feathers@5.0.45':
     dependencies:
-      '@feathersjs/commons': 5.0.44
+      '@feathersjs/commons': 5.0.45
       '@feathersjs/hooks': 0.9.0
       events: 3.3.0
 
   '@feathersjs/hooks@0.9.0': {}
 
-  '@feathersjs/rest-client@5.0.44':
+  '@feathersjs/rest-client@5.0.45':
     dependencies:
-      '@feathersjs/commons': 5.0.44
-      '@feathersjs/errors': 5.0.44
-      '@feathersjs/feathers': 5.0.44
-      '@types/superagent': 8.1.9
-      qs: 6.15.1
+      '@feathersjs/commons': 5.0.45
+      '@feathersjs/errors': 5.0.45
+      '@feathersjs/feathers': 5.0.45
+      '@types/superagent': 8.1.10
+      qs: 6.15.2
 
-  '@feathersjs/schema@5.0.44(typescript@6.0.3)':
+  '@feathersjs/schema@5.0.45(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/adapter-commons': 5.0.44
-      '@feathersjs/commons': 5.0.44
-      '@feathersjs/errors': 5.0.44
-      '@feathersjs/feathers': 5.0.44
+      '@feathersjs/adapter-commons': 5.0.45
+      '@feathersjs/commons': 5.0.45
+      '@feathersjs/errors': 5.0.45
+      '@feathersjs/feathers': 5.0.45
       '@feathersjs/hooks': 0.9.0
       '@types/json-schema': 7.0.15
-      ajv: 8.18.0
-      ajv-formats: 3.0.1(ajv@8.18.0)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
       json-schema-to-ts: 3.1.1
       typescript: 6.0.3
 
-  '@feathersjs/socketio-client@5.0.44':
+  '@feathersjs/socketio-client@5.0.45':
     dependencies:
-      '@feathersjs/feathers': 5.0.44
-      '@feathersjs/transport-commons': 5.0.44
+      '@feathersjs/feathers': 5.0.45
+      '@feathersjs/transport-commons': 5.0.45
 
-  '@feathersjs/socketio@5.0.44':
+  '@feathersjs/socketio@5.0.45':
     dependencies:
-      '@feathersjs/commons': 5.0.44
-      '@feathersjs/feathers': 5.0.44
-      '@feathersjs/transport-commons': 5.0.44
+      '@feathersjs/commons': 5.0.45
+      '@feathersjs/feathers': 5.0.45
+      '@feathersjs/transport-commons': 5.0.45
       socket.io: 4.8.3
     transitivePeerDependencies:
       - bufferutil
       - supports-color
       - utf-8-validate
 
-  '@feathersjs/transport-commons@5.0.44':
+  '@feathersjs/transport-commons@5.0.45':
     dependencies:
-      '@feathersjs/commons': 5.0.44
-      '@feathersjs/errors': 5.0.44
-      '@feathersjs/feathers': 5.0.44
+      '@feathersjs/commons': 5.0.45
+      '@feathersjs/errors': 5.0.45
+      '@feathersjs/feathers': 5.0.45
       encodeurl: 2.0.0
       lodash: 4.18.1
 
-  '@feathersjs/typebox@5.0.44(typescript@6.0.3)':
+  '@feathersjs/typebox@5.0.45(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/schema': 5.0.44(typescript@6.0.3)
+      '@feathersjs/schema': 5.0.45(typescript@6.0.3)
       '@sinclair/typebox': 0.25.24
     transitivePeerDependencies:
       - typescript
@@ -14003,10 +14013,10 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
-  '@types/express-serve-static-core@4.19.7':
+  '@types/express-serve-static-core@4.19.8':
     dependencies:
-      '@types/node': 25.9.1
-      '@types/qs': 6.14.0
+      '@types/node': 24.10.0
+      '@types/qs': 6.15.1
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
 
@@ -14020,8 +14030,8 @@ snapshots:
   '@types/express@4.17.25':
     dependencies:
       '@types/body-parser': 1.19.6
-      '@types/express-serve-static-core': 4.19.7
-      '@types/qs': 6.14.0
+      '@types/express-serve-static-core': 4.19.8
+      '@types/qs': 6.15.1
       '@types/serve-static': 1.15.10
 
   '@types/express@5.0.6':
@@ -14099,6 +14109,8 @@ snapshots:
 
   '@types/qs@6.14.0': {}
 
+  '@types/qs@6.15.1': {}
+
   '@types/range-parser@1.2.7': {}
 
   '@types/react-dom@18.3.7(@types/react@18.3.26)':
@@ -14145,11 +14157,11 @@ snapshots:
       '@types/http-errors': 2.0.5
       '@types/node': 24.10.0
 
-  '@types/superagent@8.1.9':
+  '@types/superagent@8.1.10':
     dependencies:
       '@types/cookiejar': 2.1.5
       '@types/methods': 1.1.4
-      '@types/node': 25.9.1
+      '@types/node': 24.10.0
       form-data: 4.0.5
 
   '@types/tough-cookie@4.0.5': {}
@@ -14367,10 +14379,21 @@ snapshots:
     optionalDependencies:
       ajv: 8.18.0
 
+  ajv-formats@3.0.1(ajv@8.20.0):
+    optionalDependencies:
+      ajv: 8.20.0
+
   ajv@8.18.0:
     dependencies:
       fast-deep-equal: 3.1.3
       fast-uri: 3.1.0
+      json-schema-traverse: 1.0.0
+      require-from-string: 2.0.2
+
+  ajv@8.20.0:
+    dependencies:
+      fast-deep-equal: 3.1.3
+      fast-uri: 3.1.2
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -14585,7 +14608,7 @@ snapshots:
       inherits: 2.0.4
       readable-stream: 3.6.2
 
-  body-parser@1.20.4:
+  body-parser@1.20.5:
     dependencies:
       bytes: 3.1.2
       content-type: 1.0.5
@@ -14595,7 +14618,7 @@ snapshots:
       http-errors: 2.0.1
       iconv-lite: 0.4.24
       on-finished: 2.4.1
-      qs: 6.15.1
+      qs: 6.15.2
       raw-body: 2.5.3
       type-is: 1.6.18
       unpipe: 1.0.0
@@ -15732,11 +15755,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  express@4.22.1:
+  express@4.22.2:
     dependencies:
       accepts: 1.3.8
       array-flatten: 1.1.1
-      body-parser: 1.20.4
+      body-parser: 1.20.5
       content-disposition: 0.5.4
       content-type: 1.0.5
       cookie: 0.7.2
@@ -15755,10 +15778,10 @@ snapshots:
       parseurl: 1.3.3
       path-to-regexp: 0.1.13
       proxy-addr: 2.0.7
-      qs: 6.15.1
+      qs: 6.15.2
       range-parser: 1.2.1
       safe-buffer: 5.2.1
-      send: 0.19.1
+      send: 0.19.2
       serve-static: 1.16.3
       setprototypeof: 1.2.0
       statuses: 2.0.2
@@ -15844,6 +15867,8 @@ snapshots:
   fast-sha256@1.3.0: {}
 
   fast-uri@3.1.0: {}
+
+  fast-uri@3.1.2: {}
 
   fast-xml-builder@1.2.0:
     dependencies:
@@ -16230,7 +16255,7 @@ snapshots:
       extend: 3.0.2
       gaxios: 6.7.1(encoding@0.1.13)
       google-auth-library: 9.15.1(encoding@0.1.13)
-      qs: 6.15.1
+      qs: 6.15.2
       url-template: 2.0.8
       uuid: 9.0.1
     transitivePeerDependencies:
@@ -16531,14 +16556,6 @@ snapshots:
       tunnel-agent: 0.6.0
     transitivePeerDependencies:
       - supports-color
-
-  http-errors@2.0.0:
-    dependencies:
-      depd: 2.0.0
-      inherits: 2.0.4
-      setprototypeof: 1.2.0
-      statuses: 2.0.1
-      toidentifier: 1.0.1
 
   http-errors@2.0.1:
     dependencies:
@@ -18477,7 +18494,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.1
-      '@types/node': 25.9.1
+      '@types/node': 24.10.0
       long: 5.3.2
 
   protobufjs@8.4.2:
@@ -18510,6 +18527,10 @@ snapshots:
   punycode@2.3.1: {}
 
   qs@6.15.1:
+    dependencies:
+      side-channel: 1.1.0
+
+  qs@6.15.2:
     dependencies:
       side-channel: 1.1.0
 
@@ -19108,7 +19129,7 @@ snapshots:
 
   semver@7.8.2: {}
 
-  send@0.19.1:
+  send@0.19.2:
     dependencies:
       debug: 2.6.9
       depd: 2.0.0
@@ -19117,12 +19138,12 @@ snapshots:
       escape-html: 1.0.3
       etag: 1.8.1
       fresh: 0.5.2
-      http-errors: 2.0.0
+      http-errors: 2.0.1
       mime: 1.6.0
       ms: 2.1.3
       on-finished: 2.4.1
       range-parser: 1.2.1
-      statuses: 2.0.1
+      statuses: 2.0.2
     transitivePeerDependencies:
       - supports-color
 
@@ -19169,7 +19190,7 @@ snapshots:
       encodeurl: 2.0.0
       escape-html: 1.0.3
       parseurl: 1.3.3
-      send: 0.19.1
+      send: 0.19.2
     transitivePeerDependencies:
       - supports-color
 
@@ -19477,8 +19498,6 @@ snapshots:
       dotenv: 16.6.1
       mime-db: 1.54.0
       outvariant: 1.4.0
-
-  statuses@2.0.1: {}
 
   statuses@2.0.2: {}
 
@@ -20042,6 +20061,8 @@ snapshots:
   utils-merge@1.0.1: {}
 
   uuid@11.1.0: {}
+
+  uuid@11.1.1: {}
 
   uuid@13.0.0: {}
 
