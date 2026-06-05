@@ -13,6 +13,16 @@ import type { UserRole } from '../types/user';
 export type ManagedEnvsMinimumRole = 'none' | UserRole;
 
 /**
+ * Operator policy for managed environment lifecycle execution.
+ *
+ * - `command` (default): rendered start/stop/nuke/logs fields execute as shell
+ *   commands, except explicit HTTP(S) URLs are invoked as GET webhooks.
+ * - `webhook-only`: rendered lifecycle fields must be HTTP(S) URLs; shell
+ *   commands are rejected before execution.
+ */
+export type ManagedEnvsExecutionMode = 'command' | 'webhook-only';
+
+/**
  * Type for user-provided JSON data where structure is unknown or dynamic
  *
  * Use this instead of `any` when dealing with user input or dynamic data structures.
@@ -519,6 +529,23 @@ export interface AgorExecutionSettings {
    * of this flag when `branch_rbac: true`.
    */
   managed_envs_minimum_role?: ManagedEnvsMinimumRole;
+
+  /**
+   * Managed environment lifecycle execution policy.
+   *
+   * - `'command'` — default/backwards-compatible mode. Rendered lifecycle
+   *   fields run as shell commands, except fields that are explicit `http://`
+   *   or `https://` URLs are invoked as GET webhooks.
+   * - `'webhook-only'` — lockdown mode for deployments that must not let
+   *   `.agor.yml` run arbitrary shell/Docker/Kubernetes commands through Agor.
+   *   `start`, `stop`, `nuke`, and `logs` must render to HTTP(S) URLs.
+   *
+   * Server policy wins over repo-authored `.agor.yml`: a repo cannot opt out
+   * of webhook-only mode.
+   *
+   * Default: `'command'`.
+   */
+  managed_envs_execution_mode?: ManagedEnvsExecutionMode;
 
   /**
    * Branch storage configuration — operator gate for which storage modes a

@@ -80,6 +80,12 @@ This self-awareness is what lets agents behave like team members instead of deta
 
 Because MCP calls are just JSON-RPC, complex workflows can be scripted once and reused by any tool that speaks the protocol.
 
+Environment MCP tools call the same branch environment service as the UI. If an
+operator sets `execution.managed_envs_execution_mode: webhook-only`, MCP
+`agor_environment_start`, `agor_environment_stop`, `agor_environment_logs`, and
+`agor_environment_nuke` reject rendered shell commands and only invoke explicit
+HTTP(S) webhook URLs. See [Environments: webhook-only mode](/guide/environment-configuration#webhook-only-mode).
+
 ## External Agent Access
 
 External agents can use the same MCP endpoint:

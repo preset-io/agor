@@ -19,6 +19,11 @@ import {
   type Database,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
+import {
+  type ManagedEnvExecutionMode,
+  redactManagedEnvWebhookUrlForAudit,
+  resolveManagedEnvCommandExecution,
+} from '@agor/core/environment/webhook';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
@@ -31,7 +36,11 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { isAssistant, ROLES } from '@agor/core/types';
-import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
+import {
+  type EnvironmentCommandType,
+  getGidFromGroupName,
+  spawnEnvironmentCommand,
+} from '@agor/core/unix';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
@@ -118,6 +127,137 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<void> {
     const config = await loadConfig();
     ensureCanTriggerManagedEnv(config.execution?.managed_envs_minimum_role, params, action);
+  }
+
+  private async getManagedEnvExecutionMode(): Promise<ManagedEnvExecutionMode> {
+    const config = await loadConfig();
+    return config.execution?.managed_envs_execution_mode ?? 'command';
+  }
+
+  private async resolveEnvironmentCommand(command: string, commandType: EnvironmentCommandType) {
+    return resolveManagedEnvCommandExecution(
+      command,
+      await this.getManagedEnvExecutionMode(),
+      commandType
+    );
+  }
+
+  private async validateRenderedEnvironmentActions(snapshot: {
+    start?: string;
+    stop?: string;
+    nuke?: string;
+    logs?: string;
+  }): Promise<void> {
+    const mode = await this.getManagedEnvExecutionMode();
+    resolveManagedEnvCommandExecution(snapshot.start ?? '', mode, 'start');
+    resolveManagedEnvCommandExecution(snapshot.stop ?? '', mode, 'stop');
+    if (snapshot.nuke) resolveManagedEnvCommandExecution(snapshot.nuke, mode, 'nuke');
+    if (snapshot.logs) resolveManagedEnvCommandExecution(snapshot.logs, mode, 'logs');
+  }
+
+  private async executeEnvironmentWebhook(options: {
+    url: string;
+    branch: Branch;
+    commandType: EnvironmentCommandType;
+    triggeredBy?: { user_id?: string; email?: string };
+    maxBytes?: number;
+  }): Promise<{ body: string; truncated: boolean; status: number }> {
+    const {
+      url,
+      branch,
+      commandType,
+      triggeredBy,
+      maxBytes = ENVIRONMENT.LOGS_MAX_BYTES,
+    } = options;
+    const redactedUrl = redactManagedEnvWebhookUrlForAudit(url);
+
+    console.log(
+      `🔗 Calling environment ${commandType} webhook for branch ${branch.name}: ${redactedUrl}`
+    );
+    console.log(
+      `AUDIT ${JSON.stringify({
+        event: 'agor.env_webhook.get',
+        timestamp: new Date().toISOString(),
+        branch_id: branch.branch_id,
+        branch_name: branch.name,
+        command_type: commandType,
+        url: redactedUrl,
+        triggered_by_user_id: triggeredBy?.user_id,
+        triggered_by_email: triggeredBy?.email,
+      })}`
+    );
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.LOGS_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Agor managed-environment webhook',
+        },
+      });
+
+      const { body, truncated } = await this.readLimitedWebhookBody(response, maxBytes);
+
+      if (!response.ok) {
+        throw new Error(`Environment ${commandType} webhook returned HTTP ${response.status}`);
+      }
+
+      return { body, truncated, status: response.status };
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(
+          `Environment ${commandType} webhook timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async readLimitedWebhookBody(
+    response: Response,
+    maxBytes: number
+  ): Promise<{ body: string; truncated: boolean }> {
+    const reader = response.body?.getReader();
+    if (!reader) return { body: '', truncated: false };
+
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let truncated = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      const remaining = maxBytes - total;
+      if (remaining <= 0) {
+        truncated = true;
+        await reader.cancel();
+        break;
+      }
+
+      if (value.byteLength <= remaining) {
+        chunks.push(value);
+        total += value.byteLength;
+      } else {
+        chunks.push(value.slice(0, remaining));
+        total += remaining;
+        truncated = true;
+        await reader.cancel();
+        break;
+      }
+    }
+
+    return {
+      body: Buffer.concat(chunks, total).toString('utf8'),
+      truncated,
+    };
   }
 
   /**
@@ -1191,8 +1331,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     try {
       // Use static start_command (initialized from template at branch creation)
       const command = branch.start_command;
+      const execution = await this.resolveEnvironmentCommand(command, 'start');
 
-      console.log(`🚀 Starting environment for branch ${branch.name}: ${command}`);
+      console.log(
+        `🚀 Starting environment for branch ${branch.name}: ${
+          execution.kind === 'webhook'
+            ? redactManagedEnvWebhookUrlForAudit(execution.url)
+            : execution.command
+        }`
+      );
 
       // Create log directory
       const logPath = join(
@@ -1205,61 +1352,72 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
       await mkdir(dirname(logPath), { recursive: true });
 
-      // Execute command and wait for it to complete
-      // Use stdio: 'pipe' to capture output for error reporting
-      const childProcess = await spawnEnvironmentCommand({
-        command,
-        branch,
-        db: this.db,
-        commandType: 'start',
-        stdio: 'pipe',
-        triggeredBy: this.extractTriggeredBy(params),
-      });
-
-      // Collect stdout/stderr for error reporting (last ~100 lines)
-      const outputChunks: string[] = [];
-      const MAX_OUTPUT_LINES = 100;
-
-      const collectOutput = (stream: NodeJS.ReadableStream | null, prefix?: string) => {
-        if (!stream) return;
-        stream.on('data', (chunk: Buffer) => {
-          const text = chunk.toString();
-          // Also forward to daemon console so logs aren't lost
-          if (prefix) {
-            process.stderr.write(text);
-          } else {
-            process.stdout.write(text);
-          }
-          outputChunks.push(text);
+      if (execution.kind === 'webhook') {
+        await this.executeEnvironmentWebhook({
+          url: execution.url,
+          branch,
+          commandType: 'start',
+          triggeredBy: this.extractTriggeredBy(params),
+          maxBytes: 16 * 1024,
         });
-      };
-      collectOutput(childProcess.stdout);
-      collectOutput(childProcess.stderr, 'stderr');
-
-      await new Promise<void>((resolve, reject) => {
-        childProcess.on('exit', (code: number | null) => {
-          if (code === 0) {
-            console.log(`✅ Start command completed successfully for ${branch.name}`);
-            resolve();
-          } else {
-            // Combine collected output and truncate to last ~100 lines
-            const fullOutput = outputChunks.join('');
-            const lines = fullOutput.split('\n');
-            const truncated =
-              lines.length > MAX_OUTPUT_LINES
-                ? `... (truncated ${lines.length - MAX_OUTPUT_LINES} lines)\n${lines.slice(-MAX_OUTPUT_LINES).join('\n')}`
-                : fullOutput;
-            const output = truncated.trim();
-            const err = new Error(`Start command exited with code ${code}`) as Error & {
-              commandOutput?: string;
-            };
-            err.commandOutput = output || undefined;
-            reject(err);
-          }
+        console.log(`✅ Start webhook completed successfully for ${branch.name}`);
+      } else {
+        // Execute command and wait for it to complete
+        // Use stdio: 'pipe' to capture output for error reporting
+        const childProcess = await spawnEnvironmentCommand({
+          command: execution.command,
+          branch,
+          db: this.db,
+          commandType: 'start',
+          stdio: 'pipe',
+          triggeredBy: this.extractTriggeredBy(params),
         });
 
-        childProcess.on('error', (error: Error) => reject(error));
-      });
+        // Collect stdout/stderr for error reporting (last ~100 lines)
+        const outputChunks: string[] = [];
+        const MAX_OUTPUT_LINES = 100;
+
+        const collectOutput = (stream: NodeJS.ReadableStream | null, prefix?: string) => {
+          if (!stream) return;
+          stream.on('data', (chunk: Buffer) => {
+            const text = chunk.toString();
+            // Also forward to daemon console so logs aren't lost
+            if (prefix) {
+              process.stderr.write(text);
+            } else {
+              process.stdout.write(text);
+            }
+            outputChunks.push(text);
+          });
+        };
+        collectOutput(childProcess.stdout);
+        collectOutput(childProcess.stderr, 'stderr');
+
+        await new Promise<void>((resolve, reject) => {
+          childProcess.on('exit', (code: number | null) => {
+            if (code === 0) {
+              console.log(`✅ Start command completed successfully for ${branch.name}`);
+              resolve();
+            } else {
+              // Combine collected output and truncate to last ~100 lines
+              const fullOutput = outputChunks.join('');
+              const lines = fullOutput.split('\n');
+              const truncated =
+                lines.length > MAX_OUTPUT_LINES
+                  ? `... (truncated ${lines.length - MAX_OUTPUT_LINES} lines)\n${lines.slice(-MAX_OUTPUT_LINES).join('\n')}`
+                  : fullOutput;
+              const output = truncated.trim();
+              const err = new Error(`Start command exited with code ${code}`) as Error & {
+                commandOutput?: string;
+              };
+              err.commandOutput = output || undefined;
+              reject(err);
+            }
+          });
+
+          childProcess.on('error', (error: Error) => reject(error));
+        });
+      }
 
       // Use static app_url (initialized from template at branch creation)
       let access_urls: Array<{ name: string; url: string }> | undefined;
@@ -1325,29 +1483,46 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       if (branch.stop_command) {
         // Use static stop_command (initialized from template at branch creation)
         const command = branch.stop_command;
+        const execution = await this.resolveEnvironmentCommand(command, 'stop');
 
-        console.log(`🛑 Stopping environment for branch ${branch.name}: ${command}`);
+        console.log(
+          `🛑 Stopping environment for branch ${branch.name}: ${
+            execution.kind === 'webhook'
+              ? redactManagedEnvWebhookUrlForAudit(execution.url)
+              : execution.command
+          }`
+        );
 
-        // Execute down command
-        const stopProcess = await spawnEnvironmentCommand({
-          command,
-          branch,
-          db: this.db,
-          commandType: 'stop',
-          triggeredBy: this.extractTriggeredBy(params),
-        });
-
-        await new Promise<void>((resolve, reject) => {
-          stopProcess.on('exit', (code: number | null) => {
-            if (code === 0) {
-              resolve();
-            } else {
-              reject(new Error(`Down command exited with code ${code}`));
-            }
+        if (execution.kind === 'webhook') {
+          await this.executeEnvironmentWebhook({
+            url: execution.url,
+            branch,
+            commandType: 'stop',
+            triggeredBy: this.extractTriggeredBy(params),
+            maxBytes: 16 * 1024,
+          });
+        } else {
+          // Execute down command
+          const stopProcess = await spawnEnvironmentCommand({
+            command: execution.command,
+            branch,
+            db: this.db,
+            commandType: 'stop',
+            triggeredBy: this.extractTriggeredBy(params),
           });
 
-          stopProcess.on('error', (error: Error) => reject(error));
-        });
+          await new Promise<void>((resolve, reject) => {
+            stopProcess.on('exit', (code: number | null) => {
+              if (code === 0) {
+                resolve();
+              } else {
+                reject(new Error(`Down command exited with code ${code}`));
+              }
+            });
+
+            stopProcess.on('error', (error: Error) => reject(error));
+          });
+        }
       } else {
         // No down command - kill the managed process if we have it
         const managedProcess = this.processes.get(id);
@@ -1443,30 +1618,47 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     try {
       const command = branch.nuke_command;
+      const execution = await this.resolveEnvironmentCommand(command, 'nuke');
 
-      console.log(`💣 NUKING environment for branch ${branch.name}: ${command}`);
+      console.log(
+        `💣 NUKING environment for branch ${branch.name}: ${
+          execution.kind === 'webhook'
+            ? redactManagedEnvWebhookUrlForAudit(execution.url)
+            : execution.command
+        }`
+      );
       console.warn('⚠️  This is a destructive operation!');
 
-      // Execute nuke command
-      const nukeProcess = await spawnEnvironmentCommand({
-        command,
-        branch,
-        db: this.db,
-        commandType: 'nuke',
-        triggeredBy: this.extractTriggeredBy(params),
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        nukeProcess.on('exit', (code: number | null) => {
-          if (code === 0) {
-            resolve();
-          } else {
-            reject(new Error(`Nuke command exited with code ${code}`));
-          }
+      if (execution.kind === 'webhook') {
+        await this.executeEnvironmentWebhook({
+          url: execution.url,
+          branch,
+          commandType: 'nuke',
+          triggeredBy: this.extractTriggeredBy(params),
+          maxBytes: 16 * 1024,
+        });
+      } else {
+        // Execute nuke command
+        const nukeProcess = await spawnEnvironmentCommand({
+          command: execution.command,
+          branch,
+          db: this.db,
+          commandType: 'nuke',
+          triggeredBy: this.extractTriggeredBy(params),
         });
 
-        nukeProcess.on('error', (error: Error) => reject(error));
-      });
+        await new Promise<void>((resolve, reject) => {
+          nukeProcess.on('exit', (code: number | null) => {
+            if (code === 0) {
+              resolve();
+            } else {
+              reject(new Error(`Nuke command exited with code ${code}`));
+            }
+          });
+
+          nukeProcess.on('error', (error: Error) => reject(error));
+        });
+      }
 
       // Clean up any managed process references
       const managedProcess = this.processes.get(id);
@@ -1674,66 +1866,88 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     try {
       // Use static logs_command (initialized from template at branch creation)
       const command = branch.logs_command;
+      const execution = await this.resolveEnvironmentCommand(command, 'logs');
 
-      console.log(`📋 Fetching logs for branch ${branch.name}: ${command}`);
+      console.log(
+        `📋 Fetching logs for branch ${branch.name}: ${
+          execution.kind === 'webhook'
+            ? redactManagedEnvWebhookUrlForAudit(execution.url)
+            : execution.command
+        }`
+      );
 
-      // Execute command with timeout and output limits
-      const childProcess = await spawnEnvironmentCommand({
-        command,
-        branch,
-        db: this.db,
-        commandType: 'logs',
-        stdio: 'pipe', // Need to capture output for logs
-        triggeredBy: this.extractTriggeredBy(params),
-      });
+      const result =
+        execution.kind === 'webhook'
+          ? await this.executeEnvironmentWebhook({
+              url: execution.url,
+              branch,
+              commandType: 'logs',
+              triggeredBy: this.extractTriggeredBy(params),
+              maxBytes: ENVIRONMENT.LOGS_MAX_BYTES,
+            }).then(({ body, truncated }) => ({ stdout: body, stderr: '', truncated }))
+          : await new Promise<{
+              stdout: string;
+              stderr: string;
+              truncated: boolean;
+            }>((resolve, reject) => {
+              // Execute command with timeout and output limits
+              spawnEnvironmentCommand({
+                command: execution.command,
+                branch,
+                db: this.db,
+                commandType: 'logs',
+                stdio: 'pipe', // Need to capture output for logs
+                triggeredBy: this.extractTriggeredBy(params),
+              })
+                .then((childProcess) => {
+                  let stdout = '';
+                  let stderr = '';
+                  let truncated = false;
 
-      const result = await new Promise<{
-        stdout: string;
-        stderr: string;
-        truncated: boolean;
-      }>((resolve, reject) => {
-        let stdout = '';
-        let stderr = '';
-        let truncated = false;
+                  // Set timeout
+                  const timeout = setTimeout(() => {
+                    childProcess.kill('SIGTERM');
+                    reject(
+                      new Error(
+                        `Logs command timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`
+                      )
+                    );
+                  }, ENVIRONMENT.LOGS_TIMEOUT_MS);
 
-        // Set timeout
-        const timeout = setTimeout(() => {
-          childProcess.kill('SIGTERM');
-          reject(new Error(`Logs command timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`));
-        }, ENVIRONMENT.LOGS_TIMEOUT_MS);
+                  // Capture stdout with size limit
+                  childProcess.stdout?.on('data', (data: Buffer) => {
+                    const chunk = data.toString();
+                    if (stdout.length + chunk.length <= ENVIRONMENT.LOGS_MAX_BYTES) {
+                      stdout += chunk;
+                    } else {
+                      // Truncate to max bytes
+                      stdout += chunk.substring(0, ENVIRONMENT.LOGS_MAX_BYTES - stdout.length);
+                      truncated = true;
+                      childProcess.kill('SIGTERM');
+                    }
+                  });
 
-        // Capture stdout with size limit
-        childProcess.stdout?.on('data', (data: Buffer) => {
-          const chunk = data.toString();
-          if (stdout.length + chunk.length <= ENVIRONMENT.LOGS_MAX_BYTES) {
-            stdout += chunk;
-          } else {
-            // Truncate to max bytes
-            stdout += chunk.substring(0, ENVIRONMENT.LOGS_MAX_BYTES - stdout.length);
-            truncated = true;
-            childProcess.kill('SIGTERM');
-          }
-        });
+                  // Capture stderr
+                  childProcess.stderr?.on('data', (data: Buffer) => {
+                    stderr += data.toString();
+                  });
 
-        // Capture stderr
-        childProcess.stderr?.on('data', (data: Buffer) => {
-          stderr += data.toString();
-        });
+                  childProcess.on('exit', (code: number | null) => {
+                    clearTimeout(timeout);
+                    if (code === 0 || stdout.length > 0) {
+                      resolve({ stdout, stderr, truncated });
+                    } else {
+                      reject(new Error(stderr || `Logs command exited with code ${code}`));
+                    }
+                  });
 
-        childProcess.on('exit', (code: number | null) => {
-          clearTimeout(timeout);
-          if (code === 0 || stdout.length > 0) {
-            resolve({ stdout, stderr, truncated });
-          } else {
-            reject(new Error(stderr || `Logs command exited with code ${code}`));
-          }
-        });
-
-        childProcess.on('error', (error: Error) => {
-          clearTimeout(timeout);
-          reject(error);
-        });
-      });
+                  childProcess.on('error', (error: Error) => {
+                    clearTimeout(timeout);
+                    reject(error);
+                  });
+                })
+                .catch(reject);
+            });
 
       // Process output: split into lines and keep last N lines
       const allLines = result.stdout.split('\n');
@@ -1848,6 +2062,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // returns null when env is absent. Defensive throw keeps types honest.
       throw new Error('Failed to render environment snapshot');
     }
+
+    await this.validateRenderedEnvironmentActions(snapshot);
 
     return await this.patch(
       id,

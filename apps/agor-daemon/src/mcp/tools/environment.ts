@@ -11,7 +11,8 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
   server.registerTool(
     'agor_environment_start',
     {
-      description: 'Start the environment for a branch by running its configured start command',
+      description:
+        'Start the environment for a branch using its configured start action (shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
@@ -45,7 +46,8 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
   server.registerTool(
     'agor_environment_stop',
     {
-      description: 'Stop the environment for a branch by running its configured stop command',
+      description:
+        'Stop the environment for a branch using its configured stop action (shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
@@ -108,7 +110,8 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
   server.registerTool(
     'agor_environment_logs',
     {
-      description: 'Fetch recent logs from a branch environment (non-streaming, last ~100 lines)',
+      description:
+        'Fetch recent logs from a branch environment (non-streaming, last ~100 lines; shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
@@ -278,7 +281,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
     'agor_environment_nuke',
     {
       description:
-        'Nuke the environment for a branch (destructive operation - typically removes volumes and all data)',
+        'Nuke the environment for a branch (destructive operation - typically removes volumes and all data; shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),

@@ -169,6 +169,38 @@ describe('loadConfig', () => {
     await expect(loadConfig()).rejects.toThrow('Failed to load config');
   });
 
+  it('accepts managed environment webhook-only execution mode', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ execution: { managed_envs_execution_mode: 'webhook-only' } }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      execution: { managed_envs_execution_mode: 'webhook-only' },
+    });
+  });
+
+  it('rejects invalid managed environment execution modes', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ execution: { managed_envs_execution_mode: 'docker' } }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(
+      /execution\.managed_envs_execution_mode must be one of: command, webhook-only/
+    );
+  });
+
   it('should handle partial config with missing sections', async () => {
     const partialConfig: AgorConfig = {
       daemon: { port: 4040 },

@@ -321,6 +321,12 @@
       "types": "./dist/git/exec.d.ts",
       "import": "./dist/git/exec.js",
       "require": "./dist/git/exec.cjs"
+    },
+    "./environment/webhook": {
+      "source": "./src/environment/webhook.ts",
+      "types": "./dist/environment/webhook.d.ts",
+      "import": "./dist/environment/webhook.js",
+      "require": "./dist/environment/webhook.cjs"
     }
   },
   "scripts": {

@@ -127,6 +127,11 @@ environment:
       app:    "<url template>"             # optional
 ```
 
+`start`, `stop`, `nuke`, and `logs` are rendered lifecycle fields. In the
+default server mode they are shell commands, except an explicit `http://` or
+`https://` value is treated as a webhook and invoked with HTTP GET. `health`
+and `app` are always URL templates, not shell commands.
+
 ### Required fields
 
 - `version: 2` at the top level.
@@ -350,6 +355,55 @@ Restating the callout from above because it's the single most common mistake:
 - Values get **baked into shell strings** at render time — anyone who can read the branch snapshot sees them.
 - Use it for IPs, hostnames, registries, profile names. **Not** for API keys, tokens, or passwords.
 - For secrets, use the per-session env-var system. Scope is per-session, access is limited to the session owner, and values never land in a rendered command.
+
+### 3. Webhook-only execution mode {/* #webhook-only-mode */}
+
+Operators who do not want Agor to run arbitrary shell/Docker/Kubernetes
+commands from repo-managed environment variants can lock managed environments
+down to webhooks:
+
+```yaml
+# ~/.agor/config.yaml
+execution:
+  managed_envs_execution_mode: webhook-only
+```
+
+In webhook-only mode, rendered `start`, `stop`, `nuke`, and `logs` fields must
+be explicit `http://` or `https://` URLs. Agor sends a GET request to the URL.
+Non-URL values fail before execution with a clear error that points back to this
+section. The server policy is authoritative: a repo's `.agor.yml` cannot opt out
+of webhook-only mode.
+
+```yaml
+environment:
+  default: remote
+  variants:
+    remote:
+      start: "https://orchestrator.example.com/agor/start?branch={{branch.name}}"
+      stop:  "https://orchestrator.example.com/agor/stop?branch={{branch.name}}"
+      logs:  "https://orchestrator.example.com/agor/logs?branch={{branch.name}}"
+      health: "https://apps.example.com/{{branch.name}}/health"
+      app:    "https://apps.example.com/{{branch.name}}"
+```
+
+V1 webhooks are intentionally simple: GET only, no custom headers, no request
+body, no signing, and redirects are not followed. Agor blocks obvious cloud
+metadata/link-local targets and URL credentials, but webhooks are still outbound
+server-side HTTP requests. Point them at a trusted orchestration service and
+avoid putting secrets in query strings because rendered branch snapshots and
+infrastructure logs may expose them. If you need authentication, put it behind
+network policy or a future signed-webhook layer rather than embedding tokens in
+`.agor.yml`.
+
+Default mode remains `command` for backwards compatibility:
+
+```yaml
+execution:
+  managed_envs_execution_mode: command
+```
+
+In command mode, existing shell commands continue to work. URL-shaped lifecycle
+fields still use webhook execution so a repo can migrate one action at a time.
 
 ---
 
