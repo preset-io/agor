@@ -30,6 +30,10 @@ import {
   normalizeKnowledgeEmbeddingApiKey,
   SUPPORTED_OPENAI_EMBEDDING_MODELS,
 } from '../knowledge/embeddings.js';
+import {
+  ensureKnowledgePgvectorStorage,
+  getKnowledgePgvectorCapability,
+} from '../knowledge/pgvector.js';
 import { rebuildCurrentKnowledgeUnits } from '../knowledge/units.js';
 
 const DEFAULT_PROVIDER: KnowledgeEmbeddingProvider = 'openai';
@@ -133,10 +137,13 @@ export class KnowledgeSettingsService {
       .all();
 
     if (isPostgresDatabase(this.db) && rows.length > 0) {
-      await executeRaw(
-        this.db,
-        sql`DELETE FROM kb_unit_embeddings WHERE unit_id IN (SELECT unit_id FROM kb_document_units WHERE version_id IN (SELECT current_version_id FROM kb_documents WHERE current_version_id IS NOT NULL AND archived = false))`
-      );
+      const pgvector = await getKnowledgePgvectorCapability(this.db);
+      if (pgvector.storageReady) {
+        await executeRaw(
+          this.db,
+          sql`DELETE FROM kb_unit_embeddings WHERE unit_id IN (SELECT unit_id FROM kb_document_units WHERE version_id IN (SELECT current_version_id FROM kb_documents WHERE current_version_id IS NOT NULL AND archived = false))`
+        );
+      }
     }
     return rows.length;
   }
@@ -234,7 +241,8 @@ export class KnowledgeSettingsService {
       );
       const configured =
         isPostgresDatabase(this.db) &&
-        isUsableOpenAIEmbeddingConfig(next, Boolean(apiKey?.value_encrypted));
+        isUsableOpenAIEmbeddingConfig(next, Boolean(apiKey?.value_encrypted)) &&
+        (await ensureKnowledgePgvectorStorage(this.db)).available;
       const queued = chunkingChanged
         ? await rebuildCurrentKnowledgeUnits(this.db, config, { embeddingConfigured: configured })
         : await this.markCurrentUnitsForEmbedding(configured ? 'pending' : 'not_configured');

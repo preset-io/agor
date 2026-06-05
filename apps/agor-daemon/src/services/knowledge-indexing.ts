@@ -2,7 +2,6 @@ import { loadConfig } from '@agor/core/config';
 import {
   AppVariableRepository,
   type Database,
-  executeRaw,
   isPostgresDatabase,
   kbDocumentUnits,
   select,
@@ -22,6 +21,7 @@ import {
   KNOWLEDGE_EMBEDDINGS_API_KEY,
   KNOWLEDGE_EMBEDDINGS_NAMESPACE,
 } from '../knowledge/embeddings.js';
+import { getKnowledgePgvectorCapability } from '../knowledge/pgvector.js';
 
 const STATUSES: KnowledgeEmbeddingStatus[] = [
   'not_configured',
@@ -66,19 +66,7 @@ export class KnowledgeIndexingStatusService {
       counts[row.status] = Number(row.count) || 0;
     }
 
-    let pgvectorAvailable = false;
-    if (isPostgresDatabase(this.db)) {
-      try {
-        const pgvectorRows = await executeRaw(
-          this.db,
-          sql`SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS available`
-        );
-        const first = pgvectorRows.rows?.[0] as { available?: boolean } | undefined;
-        pgvectorAvailable = Boolean(first?.available);
-      } catch {
-        pgvectorAvailable = false;
-      }
-    }
+    const pgvector = await getKnowledgePgvectorCapability(this.db);
 
     const indexer = (this.app as unknown as { get?: (key: string) => unknown } | undefined)?.get?.(
       'knowledgeEmbeddingIndexer'
@@ -88,17 +76,19 @@ export class KnowledgeIndexingStatusService {
       enabled: semantic.enabled === true,
       configured:
         isPostgresDatabase(this.db) &&
-        pgvectorAvailable &&
+        pgvector.available &&
         isUsableOpenAIEmbeddingConfig(semantic, Boolean(apiKey?.value_encrypted)),
       dialect: isPostgresDatabase(this.db) ? 'postgresql' : 'sqlite',
-      pgvector_available: pgvectorAvailable,
+      pgvector_available: pgvector.extensionInstalled,
       provider: semantic.provider ?? 'openai',
       model: semantic.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL,
       dimensions: semantic.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
       chunks: counts,
       queue_depth: counts.pending + counts.stale,
       last_indexed_at: indexer?.getLastIndexedAt?.() ?? null,
-      last_error: indexer?.getLastError?.() ?? null,
+      last_error:
+        indexer?.getLastError?.() ??
+        (semantic.enabled === true && !pgvector.available ? pgvector.reason : null),
     };
   }
 }

@@ -43,24 +43,6 @@ const bytea = customType<{ data: Buffer | null; driverData: Buffer | null }>({
   },
 });
 
-const vector = customType<{ data: number[]; driverData: string; config?: { dimensions?: number } }>(
-  {
-    dataType(config) {
-      return config?.dimensions ? `vector(${config.dimensions})` : 'vector';
-    },
-    toDriver(value: number[]) {
-      return `[${value.join(',')}]`;
-    },
-    fromDriver(value: string) {
-      return value
-        .replace(/^\[|\]$/g, '')
-        .split(',')
-        .filter(Boolean)
-        .map((item) => Number(item));
-    },
-  }
-);
-
 // PostgreSQL-specific type helpers (inline to avoid factory pattern type issues)
 const t = {
   timestamp: (name: string) => timestamp(name, { mode: 'date', withTimezone: true }),
@@ -1872,27 +1854,12 @@ export const kbEmbeddingSpaces = pgTable(
   })
 );
 
-/** OpenAI-small V1 vector storage for Knowledge units. */
-export const kbUnitEmbeddings = pgTable(
-  'kb_unit_embeddings',
-  {
-    unit_id: varchar('unit_id', { length: 36 })
-      .notNull()
-      .references(() => kbDocumentUnits.unit_id, { onDelete: 'cascade' }),
-    embedding_space_id: varchar('embedding_space_id', { length: 36 })
-      .notNull()
-      .references(() => kbEmbeddingSpaces.embedding_space_id, { onDelete: 'cascade' }),
-    content_sha256: text('content_sha256').notNull(),
-    embedding: vector('embedding').notNull(),
-    token_count: integer('token_count'),
-    created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at').notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.unit_id, table.embedding_space_id] }),
-    spaceIdx: index('kb_unit_embeddings_space_idx').on(table.embedding_space_id),
-  })
-);
+/**
+ * Optional pgvector-backed Knowledge embeddings storage is created by the daemon
+ * at runtime when semantic search is enabled and pgvector is available. It is
+ * deliberately not part of the required Drizzle schema/migrations so Agor can
+ * install and upgrade on PostgreSQL instances without pgvector.
+ */
 
 /**
  * Graph nodes for knowledge documents, document units, core Agor objects, tags,
@@ -2099,8 +2066,6 @@ export type KBDocumentUnitRow = typeof kbDocumentUnits.$inferSelect;
 export type KBDocumentUnitInsert = typeof kbDocumentUnits.$inferInsert;
 export type KBEmbeddingSpaceRow = typeof kbEmbeddingSpaces.$inferSelect;
 export type KBEmbeddingSpaceInsert = typeof kbEmbeddingSpaces.$inferInsert;
-export type KBUnitEmbeddingRow = typeof kbUnitEmbeddings.$inferSelect;
-export type KBUnitEmbeddingInsert = typeof kbUnitEmbeddings.$inferInsert;
 export type KBGraphNodeRow = typeof kbGraphNodes.$inferSelect;
 export type KBGraphNodeInsert = typeof kbGraphNodes.$inferInsert;
 export type KBGraphEdgeRow = typeof kbGraphEdges.$inferSelect;

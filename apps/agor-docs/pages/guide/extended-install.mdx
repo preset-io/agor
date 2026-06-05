@@ -40,6 +40,22 @@ The daemon detects Zellij at startup and logs whether it's available.
 
 ---
 
+## Optional: pgvector (for Knowledge semantic search)
+
+Agor does **not** require pgvector to install, upgrade, or run. Knowledge text search works without it.
+
+If you want Knowledge semantic or hybrid search on PostgreSQL, install the `pgvector` package on the Postgres server and enable the extension in the Agor database:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+Run that as a database owner or another role with permission to create extensions. After pgvector is enabled, configure Knowledge semantic search in Agor and run a Knowledge reindex; the daemon creates the vector storage table and index idempotently when the feature is enabled.
+
+If pgvector is missing or the Agor DB user cannot enable it, semantic search returns a clear `semantic_unavailable` error and text search continues to work.
+
+---
+
 ## Authentication
 
 Agor supports Claude Code, Codex, Gemini, OpenCode, and GitHub Copilot. The [onboarding wizard](/guide/getting-started#meet-your-first-assistant) handles the simple case — paste an API key, done. This section covers the alternatives: subscription-based auth, server-side CLI login, workspace-wide fallbacks, and how Agor resolves them when several are present.

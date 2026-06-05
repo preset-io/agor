@@ -44,6 +44,7 @@ import {
   KNOWLEDGE_EMBEDDINGS_API_KEY,
   KNOWLEDGE_EMBEDDINGS_NAMESPACE,
 } from '../knowledge/embeddings.js';
+import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
 import {
   knowledgeChunkerOptionsFromConfig,
   knowledgeUnitsForMarkdown,
@@ -240,9 +241,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
       KNOWLEDGE_EMBEDDINGS_NAMESPACE,
       KNOWLEDGE_EMBEDDINGS_API_KEY
     );
-    return isUsableOpenAIEmbeddingConfig(
-      config.knowledge?.semantic_search ?? {},
-      Boolean(apiKey?.value_encrypted)
+    return (
+      isUsableOpenAIEmbeddingConfig(
+        config.knowledge?.semantic_search ?? {},
+        Boolean(apiKey?.value_encrypted)
+      ) && (await ensureKnowledgePgvectorStorage(this.db)).available
     );
   }
 

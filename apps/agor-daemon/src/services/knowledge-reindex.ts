@@ -7,6 +7,7 @@ import {
   KNOWLEDGE_EMBEDDINGS_API_KEY,
   KNOWLEDGE_EMBEDDINGS_NAMESPACE,
 } from '../knowledge/embeddings.js';
+import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
 import { rebuildCurrentKnowledgeUnits } from '../knowledge/units.js';
 
 export interface KnowledgeReindexResult {
@@ -35,7 +36,8 @@ export class KnowledgeReindexService {
     );
     const embeddingConfigured =
       isPostgresDatabase(this.db) &&
-      isUsableOpenAIEmbeddingConfig(semantic, Boolean(apiKey?.value_encrypted));
+      isUsableOpenAIEmbeddingConfig(semantic, Boolean(apiKey?.value_encrypted)) &&
+      (await ensureKnowledgePgvectorStorage(this.db)).available;
     const status: KnowledgeEmbeddingStatus = embeddingConfigured ? 'pending' : 'not_configured';
 
     const queued = await rebuildCurrentKnowledgeUnits(this.db, config, { embeddingConfigured });

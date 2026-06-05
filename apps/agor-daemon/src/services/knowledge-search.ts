@@ -33,6 +33,10 @@ import {
   OpenAIEmbeddingProvider,
   SUPPORTED_OPENAI_EMBEDDING_MODELS,
 } from '../knowledge/embeddings.js';
+import {
+  getKnowledgePgvectorCapability,
+  semanticUnavailableMessage,
+} from '../knowledge/pgvector.js';
 
 export type KnowledgeSearchParams = QueryParams<KnowledgeSearchQuery> & AuthenticatedParams;
 
@@ -60,7 +64,10 @@ export class KnowledgeSearchService {
   private assertSupportedMode(query?: KnowledgeSearchQuery): void {
     const mode = query?.mode ?? 'text';
     if (mode !== 'text' && !isPostgresDatabase(this.db)) {
-      throw new BadRequest('Semantic Knowledge search requires Postgres with pgvector.');
+      throw new BadRequest(
+        semanticUnavailableMessage('the configured database is not PostgreSQL'),
+        { code: 'semantic_unavailable' }
+      );
     }
   }
 
@@ -95,7 +102,18 @@ export class KnowledgeSearchService {
     user?: User
   ): Promise<KnowledgeSearchResult[]> {
     if (!isPostgresDatabase(this.db)) {
-      throw new BadRequest('Semantic Knowledge search requires Postgres with pgvector.');
+      throw new BadRequest(
+        semanticUnavailableMessage('the configured database is not PostgreSQL'),
+        { code: 'semantic_unavailable' }
+      );
+    }
+    const pgvector = await getKnowledgePgvectorCapability(this.db);
+    if (!pgvector.available) {
+      throw new BadRequest(semanticUnavailableMessage(pgvector.reason), {
+        code: 'semantic_unavailable',
+        reason: pgvector.reason,
+        setup_hint: pgvector.setupHint,
+      });
     }
     const config = await loadConfig();
     const semantic = config.knowledge?.semantic_search ?? {};

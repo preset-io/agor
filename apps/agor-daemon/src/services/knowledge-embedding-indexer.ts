@@ -24,6 +24,7 @@ import {
   SUPPORTED_OPENAI_EMBEDDING_MODELS,
   sha256Text,
 } from '../knowledge/embeddings.js';
+import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
 
 const DEFAULT_TICK_MS = 30_000;
 
@@ -116,8 +117,8 @@ export class KnowledgeEmbeddingIndexer {
     if (this.running) return;
     this.running = true;
     try {
-      await this.indexBatch();
-      this.lastError = null;
+      const indexed = await this.indexBatch();
+      if (indexed > 0 || !this.lastError) this.lastError = null;
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
       throw error;
@@ -152,7 +153,15 @@ export class KnowledgeEmbeddingIndexer {
       );
     }
 
+    const pgvector = await ensureKnowledgePgvectorStorage(this.db);
+    if (!pgvector.available) {
+      this.lastError = pgvector.reason ?? 'Knowledge pgvector storage is unavailable';
+      return 0;
+    }
+
     const batchSize = Math.min(Math.max(semantic.indexing?.batch_size ?? 32, 1), 128);
+    this.lastError = null;
+
     const rows = (await select(this.db)
       .from(kbDocumentUnits)
       .where(
