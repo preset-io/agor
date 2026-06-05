@@ -66,7 +66,8 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   const { token } = theme.useToken();
 
   // Handle array of strings: filter empty, join with double newlines
-  let text = Array.isArray(content) ? content.filter((t) => t.trim()).join('\n\n') : content;
+  const rawText = Array.isArray(content) ? content.filter((t) => t.trim()).join('\n\n') : content;
+  let text = rawText;
 
   // Pre-process text to highlight @ mentions
   text = highlightMentionsInMarkdown(text);
@@ -99,6 +100,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   return (
     <Typography style={mergedStyles} className={compact ? 'markdown-compact' : undefined}>
       <Streamdown
+        key={isStreaming ? undefined : markdownContentKey(rawText)}
         parseIncompleteMarkdown={isStreaming} // Parse incomplete syntax only while streaming
         className={inline ? 'inline-markdown' : 'markdown-content'}
         isAnimating={isStreaming} // Disable buttons during streaming
@@ -114,3 +116,18 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
 
 export const MarkdownRenderer = React.memo(MarkdownRendererInner);
 MarkdownRenderer.displayName = 'MarkdownRenderer';
+
+function markdownContentKey(text: string): string {
+  // Streamdown memoizes several rendered markdown node components by AST
+  // position. Container positions (for example a `<ul>` spanning multiple
+  // bullets) do not change when text changes inside an earlier child line, so
+  // React can skip reconciling that subtree and leave stale preview text. Use a
+  // content-derived key for non-streaming renders to remount Streamdown whenever
+  // the markdown source changes.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${text.length}:${(hash >>> 0).toString(36)}`;
+}

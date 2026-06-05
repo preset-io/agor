@@ -14,6 +14,11 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
+    server: {
+      deps: {
+        inline: ['streamdown', 'katex'],
+      },
+    },
     exclude: [...configDefaults.exclude, 'src/utils/theme.test.ts'],
     // Ant Design Form / Select first-mount cost (CSS parse + JSDOM
     // getComputedStyle stubs) blows past vitest's 5s default on CI cold
