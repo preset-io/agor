@@ -52,6 +52,11 @@ interface FeaturesConfig {
    */
   managedEnvsMinimumRole?: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin';
   /**
+   * How managed environment lifecycle fields are handled by this instance.
+   * Defaults to 'hybrid': shell commands and URL webhooks are both supported.
+   */
+  managedEnvsExecutionMode?: 'hybrid' | 'webhook-only';
+  /**
    * True when the daemon runs in a multi-user Unix isolation mode
    * (insulated/strict). The UI uses this to hide "trust everyone on this
    * instance" surfaces (e.g. the `instance` scope option in the artifact

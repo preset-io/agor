@@ -128,9 +128,9 @@ environment:
 ```
 
 `start`, `stop`, `nuke`, and `logs` are rendered lifecycle fields. In the
-default server mode they are shell commands, except an explicit `http://` or
-`https://` value is treated as a webhook and invoked with HTTP GET. `health`
-and `app` are always URL templates, not shell commands.
+default `hybrid` mode they can be shell commands or explicit `http://` /
+`https://` webhooks. Webhooks are invoked with HTTP GET. `health` and `app` are
+always URL templates, not shell commands.
 
 ### Required fields
 
@@ -356,11 +356,22 @@ Restating the callout from above because it's the single most common mistake:
 - Use it for IPs, hostnames, registries, profile names. **Not** for API keys, tokens, or passwords.
 - For secrets, use the per-session env-var system. Scope is per-session, access is limited to the session owner, and values never land in a rendered command.
 
-### 3. Webhook-only execution mode {/* #webhook-only-mode */}
+### 3. Managed environment execution mode {/* #webhook-only-mode */}
 
-Operators who do not want Agor to run arbitrary shell/Docker/Kubernetes
-commands from repo-managed environment variants can lock managed environments
-down to webhooks:
+Agor instances choose how lifecycle fields are handled. The default is
+`hybrid`:
+
+```yaml
+# ~/.agor/config.yaml
+execution:
+  managed_envs_execution_mode: hybrid
+```
+
+In `hybrid` mode, lifecycle fields can be shell commands or explicit
+`http://` / `https://` webhooks. URL-shaped fields use webhook execution, so a
+repo can use webhooks for one action and commands for another.
+
+Some instances are configured for webhook-managed environments:
 
 ```yaml
 # ~/.agor/config.yaml
@@ -368,11 +379,8 @@ execution:
   managed_envs_execution_mode: webhook-only
 ```
 
-In webhook-only mode, rendered `start`, `stop`, `nuke`, and `logs` fields must
-be explicit `http://` or `https://` URLs. Agor sends a GET request to the URL.
-Non-URL values fail before execution with a clear error that points back to this
-section. The server policy is authoritative: a repo's `.agor.yml` cannot opt out
-of webhook-only mode.
+In `webhook-only` mode, rendered `start`, `stop`, `nuke`, and `logs` fields are
+explicit `http://` or `https://` URLs. Agor sends a GET request to the URL.
 
 ```yaml
 environment:
@@ -387,23 +395,9 @@ environment:
 ```
 
 V1 webhooks are intentionally simple: GET only, no custom headers, no request
-body, no signing, and redirects are not followed. Agor blocks obvious cloud
-metadata/link-local targets and URL credentials, but webhooks are still outbound
-server-side HTTP requests. Point them at a trusted orchestration service and
-avoid putting secrets in query strings because rendered branch snapshots and
-infrastructure logs may expose them. If you need authentication, put it behind
-network policy or a future signed-webhook layer rather than embedding tokens in
-`.agor.yml`.
-
-Default mode is `hybrid` for backwards compatibility:
-
-```yaml
-execution:
-  managed_envs_execution_mode: hybrid
-```
-
-In hybrid mode, existing shell commands continue to work. URL-shaped lifecycle
-fields still use webhook execution so a repo can migrate one action at a time.
+body, no signing, and redirects are not followed. Use a trusted orchestration
+service, and avoid secrets in query strings because rendered branch snapshots and
+infrastructure logs may expose them.
 
 ---
 
