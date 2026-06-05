@@ -1973,7 +1973,7 @@ export function KnowledgePage({
         title="Version history"
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
-        width="72vw"
+        size="72vw"
         destroyOnHidden
         extra={
           <Space>

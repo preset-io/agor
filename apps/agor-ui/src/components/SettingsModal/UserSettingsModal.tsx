@@ -38,7 +38,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import {
   AgenticToolConfigForm,
@@ -54,6 +54,19 @@ import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
 
 const { Sider, Content } = Layout;
+
+const AGENTIC_TOOL_TABS = [
+  'claude-code',
+  'claude-code-cli',
+  'codex',
+  'gemini',
+  'opencode',
+  'copilot',
+  'cursor',
+] as const satisfies readonly AgenticToolName[];
+
+const isAgenticToolTab = (value: string): value is AgenticToolName =>
+  AGENTIC_TOOL_TABS.includes(value as AgenticToolName);
 
 export interface UserSettingsModalProps {
   open: boolean;
@@ -87,6 +100,19 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [copilotForm] = Form.useForm();
   const [cursorForm] = Form.useForm();
   const [audioForm] = Form.useForm();
+
+  const agenticFormByTool = useMemo<Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]>>(
+    () => ({
+      'claude-code': claudeForm,
+      'claude-code-cli': claudeCliForm,
+      codex: codexForm,
+      gemini: geminiForm,
+      opencode: opencodeForm,
+      copilot: copilotForm,
+      cursor: cursorForm,
+    }),
+    [claudeCliForm, claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm]
+  );
 
   // Per-tool credential presence state, keyed `${tool}.${field}` for spinner
   // tracking. The actual presence map is rebuilt from `user.agentic_tools`
@@ -136,27 +162,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         eventStreamEnabled: userData.preferences?.eventStream?.enabled ?? true,
         must_change_password: userData.must_change_password ?? false,
       });
-
-      // Initialize agentic tool forms with user's defaults
-      const defaults = userData.default_agentic_config;
-      claudeForm.setFieldsValue(getFormValuesFromConfig('claude-code', defaults?.['claude-code']));
-      codexForm.setFieldsValue(getFormValuesFromConfig('codex', defaults?.codex));
-      geminiForm.setFieldsValue(getFormValuesFromConfig('gemini', defaults?.gemini));
-      opencodeForm.setFieldsValue(getFormValuesFromConfig('opencode', defaults?.opencode));
-      copilotForm.setFieldsValue(getFormValuesFromConfig('copilot', defaults?.copilot));
-      cursorForm.setFieldsValue(getFormValuesFromConfig('cursor', defaults?.cursor));
-
-      // Initialize audio form with user's preferences
-      const audioPrefs = userData.preferences?.audio;
-      audioForm.setFieldsValue({
-        enabled: audioPrefs?.enabled ?? DEFAULT_AUDIO_PREFERENCES.enabled,
-        chime: audioPrefs?.chime ?? DEFAULT_AUDIO_PREFERENCES.chime,
-        volume: audioPrefs?.volume ?? DEFAULT_AUDIO_PREFERENCES.volume,
-        minDurationSeconds:
-          audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
-      });
     },
-    [form, claudeForm, codexForm, geminiForm, opencodeForm, copilotForm, cursorForm, audioForm]
+    [form]
   );
 
   const loadUserGroups = useCallback(async () => {
@@ -197,6 +204,31 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }
   }, [open, user, initializeForms, loadUserGroups]);
 
+  // Hydrate tab-specific forms only after that tab has rendered its
+  // corresponding <Form>. Calling setFieldsValue on never-mounted form
+  // instances triggers Ant's "useForm is not connected" console warning.
+  useEffect(() => {
+    if (!open || !user) return;
+
+    if (isAgenticToolTab(activeTab)) {
+      agenticFormByTool[activeTab].setFieldsValue(
+        getFormValuesFromConfig(activeTab, user.default_agentic_config?.[activeTab])
+      );
+      return;
+    }
+
+    if (activeTab === 'audio') {
+      const audioPrefs = user.preferences?.audio;
+      audioForm.setFieldsValue({
+        enabled: audioPrefs?.enabled ?? DEFAULT_AUDIO_PREFERENCES.enabled,
+        chime: audioPrefs?.chime ?? DEFAULT_AUDIO_PREFERENCES.chime,
+        volume: audioPrefs?.volume ?? DEFAULT_AUDIO_PREFERENCES.volume,
+        minDurationSeconds:
+          audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
+      });
+    }
+  }, [activeTab, audioForm, agenticFormByTool, open, user]);
+
   // Rehydrate per-tool credential presence and env-var metadata from the
   // server every time the modal opens, so flags reflect the latest patch.
   useEffect(() => {
@@ -231,13 +263,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const handleClose = () => {
     form.resetFields();
-    audioForm.resetFields();
-    claudeForm.resetFields();
-    codexForm.resetFields();
-    geminiForm.resetFields();
-    opencodeForm.resetFields();
-    copilotForm.resetFields();
-    cursorForm.resetFields();
     setAvailableGroups([]);
     setUserGroupIds([]);
     setGroupsLoaded(false);
@@ -413,20 +438,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const handleAgenticConfigSave = async (tool: AgenticToolName) => {
     if (!user) return;
 
-    const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
-      'claude-code': claudeForm,
-      'claude-code-cli': claudeCliForm,
-      codex: codexForm,
-      gemini: geminiForm,
-      opencode: opencodeForm,
-      copilot: copilotForm,
-      cursor: cursorForm,
-    };
-
     try {
       setSavingAgenticConfig((prev) => ({ ...prev, [tool]: true }));
 
-      const values = formMap[tool].getFieldsValue() as Parameters<
+      const values = agenticFormByTool[tool].getFieldsValue() as Parameters<
         typeof buildConfigFromFormValues
       >[1];
       const newConfig = {
@@ -449,17 +464,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   // Handle agentic tool config clear
   const handleAgenticConfigClear = (tool: AgenticToolName) => {
-    const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
-      'claude-code': claudeForm,
-      'claude-code-cli': claudeCliForm,
-      codex: codexForm,
-      gemini: geminiForm,
-      opencode: opencodeForm,
-      copilot: copilotForm,
-      cursor: cursorForm,
-    };
-
-    formMap[tool].setFieldsValue(getClearedFormValues(tool));
+    agenticFormByTool[tool].setFieldsValue(getClearedFormValues(tool));
   };
 
   const handleAudioSave = async () => {
@@ -508,10 +513,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         await handleAudioSave();
         break;
       case 'claude-code':
+      case 'claude-code-cli':
       case 'codex':
       case 'gemini':
       case 'opencode':
       case 'copilot':
+      case 'cursor':
         await handleAgenticConfigSave(activeTab as AgenticToolName);
         break;
     }
@@ -782,16 +789,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'copilot':
       case 'cursor': {
         const toolName = activeTab as AgenticToolName;
-        const formMap: Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]> = {
-          'claude-code': claudeForm,
-          'claude-code-cli': claudeCliForm,
-          codex: codexForm,
-          gemini: geminiForm,
-          opencode: opencodeForm,
-          copilot: copilotForm,
-          cursor: cursorForm,
-        };
-        const currentForm = formMap[toolName];
+        const currentForm = agenticFormByTool[toolName];
         const displayNames: Record<AgenticToolName, string> = {
           'claude-code': 'Claude Code',
           'claude-code-cli': 'Claude Code CLI',
@@ -944,6 +942,17 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       }}
       closeIcon={<CloseOutlined />}
     >
+      {/* Keep inactive tab form instances connected to Ant Form. Without these
+          lightweight hidden connectors, calling form methods while switching
+          tabs can produce noisy "useForm is not connected" console warnings. */}
+      <div hidden aria-hidden="true">
+        {activeTab !== 'audio' && <Form component={false} form={audioForm} />}
+        {AGENTIC_TOOL_TABS.map((tool) =>
+          activeTab === tool ? null : (
+            <Form key={tool} component={false} form={agenticFormByTool[tool]} />
+          )
+        )}
+      </div>
       <Layout style={{ height: '100%', background: token.colorBgContainer }}>
         <Sider
           width={200}
