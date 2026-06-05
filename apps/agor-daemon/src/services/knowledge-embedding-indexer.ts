@@ -81,6 +81,11 @@ export class KnowledgeEmbeddingIndexer {
     return this.lastIndexedAt;
   }
 
+  private idle(): 0 {
+    this.lastError = null;
+    return 0;
+  }
+
   private async ensureEmbeddingSpace(params: {
     provider: string;
     model: string;
@@ -130,17 +135,17 @@ export class KnowledgeEmbeddingIndexer {
   async indexBatch(): Promise<number> {
     const config = await loadConfig();
     const semantic = config.knowledge?.semantic_search;
-    if (semantic?.enabled !== true) return 0;
-    if (semantic.indexing?.paused === true) return 0;
-    if (!isPostgresDatabase(this.db)) return 0;
+    if (semantic?.enabled !== true) return this.idle();
+    if (semantic.indexing?.paused === true) return this.idle();
+    if (!isPostgresDatabase(this.db)) return this.idle();
     const provider = semantic.provider ?? 'openai';
-    if (provider !== 'openai') return 0;
+    if (provider !== 'openai') return this.idle();
 
     const apiKey = await this.variables.getPlain(
       KNOWLEDGE_EMBEDDINGS_NAMESPACE,
       KNOWLEDGE_EMBEDDINGS_API_KEY
     );
-    if (!apiKey) return 0;
+    if (!apiKey) return this.idle();
 
     const model = semantic.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL;
     if (!SUPPORTED_OPENAI_EMBEDDING_MODELS.has(model)) {
@@ -170,7 +175,7 @@ export class KnowledgeEmbeddingIndexer {
       .orderBy(kbDocumentUnits.created_at)
       .limit(batchSize)
       .all()) as PendingUnitRow[];
-    if (rows.length === 0) return 0;
+    if (rows.length === 0) return this.idle();
 
     const embeddingSpaceId = await this.ensureEmbeddingSpace({ provider, model, dimensions });
     let results: Awaited<ReturnType<OpenAIEmbeddingProvider['embed']>>;

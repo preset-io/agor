@@ -79,7 +79,11 @@ export class KnowledgeIndexingStatusService {
         pgvector.available &&
         isUsableOpenAIEmbeddingConfig(semantic, Boolean(apiKey?.value_encrypted)),
       dialect: isPostgresDatabase(this.db) ? 'postgresql' : 'sqlite',
-      pgvector_available: pgvector.extensionInstalled,
+      pgvector_available: pgvector.available,
+      pgvector_extension_installed: pgvector.extensionInstalled,
+      pgvector_storage_ready: pgvector.storageReady,
+      pgvector_reason: pgvector.reason,
+      pgvector_setup_hint: pgvector.setupHint,
       provider: semantic.provider ?? 'openai',
       model: semantic.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL,
       dimensions: semantic.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,

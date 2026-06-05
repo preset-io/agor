@@ -18,7 +18,9 @@ import { ROLES } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { KnowledgeDocumentsService } from './knowledge-documents';
+import { KnowledgeEmbeddingIndexer } from './knowledge-embedding-indexer';
 import { KnowledgeGraphService } from './knowledge-graph';
+import { KnowledgeIndexingStatusService } from './knowledge-indexing';
 import { KnowledgeReindexService } from './knowledge-reindex';
 import { KnowledgeSearchService } from './knowledge-search';
 import { KnowledgeSettingsService } from './knowledge-settings';
@@ -273,6 +275,33 @@ describe('Knowledge semantic indexing lifecycle', () => {
       }
     );
   });
+
+  dbTest('indexing status separates pgvector extension from usable storage', async ({ db }) => {
+    await withTempConfig(
+      { knowledge: { semantic_search: { enabled: true, provider: 'openai' } } },
+      async () => {
+        const status = await new KnowledgeIndexingStatusService(db).find();
+
+        expect(status.pgvector_available).toBe(false);
+        expect(status.pgvector_extension_installed).toBe(false);
+        expect(status.pgvector_storage_ready).toBe(false);
+        expect(status.last_error).toContain('not PostgreSQL');
+      }
+    );
+  });
+
+  dbTest(
+    'indexer clears stale pgvector errors when semantic indexing is disabled',
+    async ({ db }) => {
+      await withTempConfig({}, async () => {
+        const indexer = new KnowledgeEmbeddingIndexer(db);
+        (indexer as unknown as { lastError: string | null }).lastError = 'old pgvector error';
+
+        await expect(indexer.indexBatch()).resolves.toBe(0);
+        expect(indexer.getLastError()).toBeNull();
+      });
+    }
+  );
 
   dbTest(
     'document content writes wake the embedding indexer through the app reference',

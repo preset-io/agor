@@ -2281,8 +2281,12 @@ export function KnowledgePage({
                   <Text strong>Indexing status</Text>
                   <Text type="secondary">
                     {indexingStatus.dialect} · pgvector{' '}
-                    {indexingStatus.pgvector_available ? 'available' : 'not available'} · queue{' '}
-                    {indexingStatus.queue_depth}
+                    {indexingStatus.pgvector_available
+                      ? 'ready'
+                      : indexingStatus.pgvector_extension_installed
+                        ? 'extension installed, storage not ready'
+                        : 'not available'}{' '}
+                    · queue {indexingStatus.queue_depth}
                   </Text>
                   <Space wrap>
                     {Object.entries(indexingStatus.chunks).map(([status, count]) => (

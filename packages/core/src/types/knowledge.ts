@@ -415,7 +415,16 @@ export interface KnowledgeIndexingStatus {
   enabled: boolean;
   configured: boolean;
   dialect: 'sqlite' | 'postgresql' | 'unknown';
+  /** True only when semantic search can use pgvector storage end-to-end. */
   pgvector_available: boolean;
+  /** Whether the Postgres pgvector extension is installed in this database. */
+  pgvector_extension_installed?: boolean;
+  /** Whether Agor's optional Knowledge vector table exists and is usable. */
+  pgvector_storage_ready?: boolean;
+  /** Human-readable reason semantic pgvector storage is unavailable, when known. */
+  pgvector_reason?: string | null;
+  /** Admin setup hint for enabling pgvector, when unavailable. */
+  pgvector_setup_hint?: string | null;
   provider?: KnowledgeEmbeddingProvider | null;
   model?: string | null;
   dimensions?: number | null;
