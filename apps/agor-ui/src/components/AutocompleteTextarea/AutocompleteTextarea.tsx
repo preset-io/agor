@@ -409,7 +409,7 @@ export const AutocompleteTextarea = React.forwardRef<
      * auto flip/overflow behavior instead of us maintaining custom placement
      * math.
      */
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
       if (!showPopover || triggerIndex < 0) return;
       const textarea = textareaRef.current?.current;
       const wrapper = wrapperRef.current;
