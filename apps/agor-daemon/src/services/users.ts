@@ -51,6 +51,19 @@ import {
   toAgenticToolsStatus,
 } from '@agor/core/types';
 
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return undefined;
+  return Math.floor(numeric);
+}
+
+function queryString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 /**
  * Apply a per-tool credential patch to the encrypted-at-rest blob.
  *
@@ -143,11 +156,20 @@ export class UsersService {
   constructor(protected db: Database) {}
 
   /**
-   * Find all users (supports filtering by email for authentication)
+   * Find all users.
+   *
+   * Supports:
+   * - `email` exact lookup for authentication (includes password, legacy behavior)
+   * - `search` / `query` / `q` case-insensitive substring lookup across
+   *   name, email, and unix_username
+   * - Feathers-style `$limit` / `$skip`, plus plain `limit` / `skip` /
+   *   `offset` for MCP/client ergonomics
    */
   async find(params?: Params): Promise<Paginated<User>> {
+    const rawQuery = (params?.query ?? {}) as Record<string, unknown>;
+
     // Check if filtering by email (for authentication)
-    const email = params?.query?.email as string | undefined;
+    const email = rawQuery.email as string | undefined;
     const includePassword = !!email; // Include password when looking up by email (for authentication)
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
@@ -163,12 +185,39 @@ export class UsersService {
       rows = await select(this.db).from(users).all();
     }
 
-    const results = rows.map((row) => this.rowToUser(row, includePassword, requesterId));
+    rows = rows.sort(
+      (a, b) => a.email.localeCompare(b.email) || a.user_id.localeCompare(b.user_id)
+    );
+
+    const search =
+      queryString(rawQuery.search) ?? queryString(rawQuery.query) ?? queryString(rawQuery.q);
+
+    if (search) {
+      const needle = search.toLowerCase();
+      rows = rows.filter((row) =>
+        [row.name, row.email, row.unix_username].some((value) =>
+          (value ?? '').toLowerCase().includes(needle)
+        )
+      );
+    }
+
+    const total = rows.length;
+    const skip =
+      optionalNonNegativeInteger(rawQuery.$skip) ??
+      optionalNonNegativeInteger(rawQuery.skip) ??
+      optionalNonNegativeInteger(rawQuery.offset) ??
+      0;
+    const limit =
+      optionalNonNegativeInteger(rawQuery.$limit) ?? optionalNonNegativeInteger(rawQuery.limit);
+    const pageRows =
+      limit === undefined ? rows.slice(skip) : rows.slice(skip, skip + Math.max(limit, 0));
+
+    const results = pageRows.map((row) => this.rowToUser(row, includePassword, requesterId));
 
     return {
-      total: results.length,
-      limit: results.length,
-      skip: 0,
+      total,
+      limit: limit ?? results.length,
+      skip,
       data: results,
     };
   }

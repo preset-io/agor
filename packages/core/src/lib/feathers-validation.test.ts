@@ -3,6 +3,7 @@ import {
   boardObjectQueryValidator,
   branchQueryValidator,
   typedValidateQuery,
+  userQueryValidator,
 } from './feathers-validation';
 
 describe('boardObjectQueryValidator', () => {
@@ -55,6 +56,39 @@ describe('branchQueryValidator', () => {
       repo_id: '019e8e1c',
       zone_id: 'zone-review',
       archived: false,
+    });
+  });
+});
+
+describe('userQueryValidator', () => {
+  it('preserves user search and pagination aliases used by MCP tools', async () => {
+    const context = {
+      params: {
+        query: {
+          search: 'reed',
+          query: 'preset',
+          q: 'unix',
+          limit: '10',
+          skip: '2',
+          offset: '3',
+          $limit: '50',
+          $skip: '5',
+          unknown: 'removed',
+        },
+      },
+    };
+
+    await typedValidateQuery(userQueryValidator)(context);
+
+    expect(context.params.query).toEqual({
+      search: 'reed',
+      query: 'preset',
+      q: 'unix',
+      limit: 10,
+      skip: 2,
+      offset: 3,
+      $limit: 50,
+      $skip: 5,
     });
   });
 });

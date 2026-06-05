@@ -399,7 +399,8 @@ $ agor session list | grep running | wc -l
 **User Tools:**
 | Tool | Description | Example |
 |------|-------------|---------|
-| `agor_users_list` | List all users | `{ limit: 10 }` |
+| `agor_users_list` | List users with pagination, compact rows, and optional search | `{ search: 'reed', limit: 10 }` |
+| `agor_users_find` | Find users by name, email, or Unix username before admin updates | `{ email: 'reed@preset.io' }` |
 | `agor_users_get` | Get user by ID | `{ userId: '...' }` |
 | `agor_users_get_current` | Get current authenticated user | `{}` |
 | `agor_users_update_current` | Update own profile | `{ name: 'Alice', emoji: '🚀' }` |

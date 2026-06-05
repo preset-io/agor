@@ -179,6 +179,12 @@ export const userQuerySchema = createQuerySchema(
   Type.Object({
     user_id: Type.Optional(CommonSchemas.uuid),
     email: Type.Optional(Type.String({ maxLength: 255 })),
+    search: Type.Optional(Type.String({ maxLength: 255 })),
+    query: Type.Optional(Type.String({ maxLength: 255 })),
+    q: Type.Optional(Type.String({ maxLength: 255 })),
+    limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+    skip: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+    offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
     role: Type.Optional(
       Type.Union([
         Type.Literal('superadmin'),

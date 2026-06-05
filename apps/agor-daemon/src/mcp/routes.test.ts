@@ -99,6 +99,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_tasks_list');
     expect(toolNames).toContain('agor_tasks_get');
     expect(toolNames).toContain('agor_users_list');
+    expect(toolNames).toContain('agor_users_find');
     expect(toolNames).toContain('agor_users_get');
     expect(toolNames).toContain('agor_users_get_current');
     expect(toolNames).toContain('agor_users_update_current');
@@ -537,7 +538,27 @@ describeIntegration('MCP Tools - User Tools', () => {
 
     expect(result).toHaveProperty('total');
     expect(result).toHaveProperty('data');
+    expect(result.limit).toBe(5);
+    expect(result.skip).toBe(0);
     expect(Array.isArray(result.data)).toBe(true);
+    expect(result.data.length).toBeLessThanOrEqual(5);
+    if (result.data.length > 0) {
+      expect(result.data[0]).toHaveProperty('user_id');
+      expect(result.data[0]).toHaveProperty('email');
+      expect(result.data[0]).not.toHaveProperty('env_vars');
+      expect(result.data[0]).not.toHaveProperty('default_agentic_config');
+    }
+  });
+
+  it('agor_users_find returns compact matches', async () => {
+    const currentUser = await callMCPTool('agor_users_get_current');
+    const result = await callMCPTool('agor_users_find', { email: currentUser.email, limit: 5 });
+
+    expect(result.total).toBeGreaterThanOrEqual(1);
+    expect(
+      result.data.some((user: { user_id: string }) => user.user_id === currentUser.user_id)
+    ).toBe(true);
+    expect(result.data[0]).not.toHaveProperty('env_vars');
   });
 
   it('agor_users_get_current returns current user', async () => {

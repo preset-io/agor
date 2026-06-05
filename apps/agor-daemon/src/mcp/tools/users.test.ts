@@ -43,4 +43,226 @@ describe('user MCP tools in sessionless context', () => {
     expect(parsed.user_id).toBe('user-1');
     expect(getUser).toHaveBeenCalledWith('user-1', {});
   });
+
+  it('agor_users_list paginates, searches, and returns compact rows by default', async () => {
+    const findUsers = vi.fn(async () => ({
+      total: 2,
+      limit: 1,
+      skip: 1,
+      data: [
+        {
+          user_id: 'user-2',
+          email: 'reed@preset.io',
+          name: 'Reed',
+          emoji: '🎸',
+          role: 'member',
+          unix_username: 'reed',
+          created_at: new Date('2026-01-01T00:00:00.000Z'),
+          updated_at: new Date('2026-01-02T00:00:00.000Z'),
+          env_vars: { SECRET: { set: true, scope: 'global' } },
+          default_agentic_config: { 'claude-code': { model_config: { mode: 'alias' } } },
+        },
+      ],
+    }));
+    let handler: ToolHandler | undefined;
+    const fakeServer = {
+      registerTool: (name: string, _cfg: unknown, cb: ToolHandler) => {
+        if (name === 'agor_users_list') handler = cb;
+      },
+    } as unknown as McpServer;
+
+    registerUserTools(fakeServer, {
+      app: {
+        service: (name: string) => {
+          if (name !== 'users') throw new Error(`Unexpected service: ${name}`);
+          return { find: findUsers };
+        },
+      } as any,
+      db: {} as any,
+      userId: 'admin-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'admin-1', email: 'admin@example.com', role: 'admin' } as any,
+      baseServiceParams: { authenticated: true },
+    });
+
+    if (!handler) throw new Error('agor_users_list was not registered');
+    const result = await handler({ limit: 1, skip: 1, search: 'reed' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(findUsers).toHaveBeenCalledWith({
+      query: { $limit: 1, $skip: 1, search: 'reed' },
+      authenticated: true,
+    });
+    expect(parsed).toMatchObject({ total: 2, limit: 1, skip: 1 });
+    expect(parsed.data[0]).toEqual({
+      user_id: 'user-2',
+      email: 'reed@preset.io',
+      name: 'Reed',
+      emoji: '🎸',
+      role: 'member',
+      unix_username: 'reed',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+    });
+  });
+
+  it('agor_users_list supports detailed and field-selected output modes', async () => {
+    const detailedUser = {
+      user_id: 'user-2',
+      email: 'reed@preset.io',
+      name: 'Reed',
+      emoji: '🎸',
+      role: 'member',
+      unix_username: 'reed',
+      created_at: new Date('2026-01-01T00:00:00.000Z'),
+      env_vars: { SECRET: { set: true, scope: 'global' } },
+    };
+    const findUsers = vi.fn(async () => ({
+      total: 1,
+      limit: 50,
+      skip: 0,
+      data: [detailedUser],
+    }));
+    let handler: ToolHandler | undefined;
+    const fakeServer = {
+      registerTool: (name: string, _cfg: unknown, cb: ToolHandler) => {
+        if (name === 'agor_users_list') handler = cb;
+      },
+    } as unknown as McpServer;
+
+    registerUserTools(fakeServer, {
+      app: {
+        service: (name: string) => {
+          if (name !== 'users') throw new Error(`Unexpected service: ${name}`);
+          return { find: findUsers };
+        },
+      } as any,
+      db: {} as any,
+      userId: 'admin-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'admin-1', email: 'admin@example.com', role: 'admin' } as any,
+      baseServiceParams: {},
+    });
+
+    if (!handler) throw new Error('agor_users_list was not registered');
+
+    const detailed = JSON.parse((await handler({ lean: false })).content[0].text);
+    expect(detailed.data[0]).toHaveProperty('env_vars');
+
+    const selected = JSON.parse((await handler({ fields: ['user_id', 'emoji'] })).content[0].text);
+    expect(selected.data[0]).toEqual({ user_id: 'user-2', emoji: '🎸' });
+  });
+
+  it('agor_users_find returns compact matches using the search query', async () => {
+    const findUsers = vi.fn(async () => ({
+      total: 1,
+      limit: 10,
+      skip: 0,
+      data: [
+        {
+          user_id: 'user-2',
+          email: 'reed@preset.io',
+          name: 'Reed',
+          emoji: '🎸',
+          role: 'member',
+          created_at: new Date('2026-01-01T00:00:00.000Z'),
+          onboarding_completed: true,
+          must_change_password: false,
+        },
+      ],
+    }));
+    let handler: ToolHandler | undefined;
+    const fakeServer = {
+      registerTool: (name: string, _cfg: unknown, cb: ToolHandler) => {
+        if (name === 'agor_users_find') handler = cb;
+      },
+    } as unknown as McpServer;
+
+    registerUserTools(fakeServer, {
+      app: {
+        service: (name: string) => {
+          if (name !== 'users') throw new Error(`Unexpected service: ${name}`);
+          return { find: findUsers };
+        },
+      } as any,
+      db: {} as any,
+      userId: 'admin-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'admin-1', email: 'admin@example.com', role: 'admin' } as any,
+      baseServiceParams: {},
+    });
+
+    if (!handler) throw new Error('agor_users_find was not registered');
+    const result = await handler({ query: 'Reed' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(findUsers).toHaveBeenCalledWith({
+      query: { search: 'Reed', $limit: 10, $skip: 0 },
+    });
+    expect(parsed.data[0]).toEqual({
+      user_id: 'user-2',
+      email: 'reed@preset.io',
+      name: 'Reed',
+      emoji: '🎸',
+      role: 'member',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('agor_users_find applies field-specific filters after broad service search', async () => {
+    const findUsers = vi.fn(async () => ({
+      total: 2,
+      limit: 10000,
+      skip: 0,
+      data: [
+        {
+          user_id: 'user-2',
+          email: 'reed@preset.io',
+          name: 'Reed',
+          emoji: '🎸',
+          role: 'member',
+          created_at: new Date('2026-01-01T00:00:00.000Z'),
+        },
+        {
+          user_id: 'user-3',
+          email: 'other@example.com',
+          name: 'Reed Elsewhere',
+          emoji: '🧪',
+          role: 'member',
+          created_at: new Date('2026-01-03T00:00:00.000Z'),
+        },
+      ],
+    }));
+    let handler: ToolHandler | undefined;
+    const fakeServer = {
+      registerTool: (name: string, _cfg: unknown, cb: ToolHandler) => {
+        if (name === 'agor_users_find') handler = cb;
+      },
+    } as unknown as McpServer;
+
+    registerUserTools(fakeServer, {
+      app: {
+        service: (name: string) => {
+          if (name !== 'users') throw new Error(`Unexpected service: ${name}`);
+          return { find: findUsers };
+        },
+      } as any,
+      db: {} as any,
+      userId: 'admin-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'admin-1', email: 'admin@example.com', role: 'admin' } as any,
+      baseServiceParams: {},
+    });
+
+    if (!handler) throw new Error('agor_users_find was not registered');
+    const result = await handler({ email: 'preset.io', limit: 5 });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(findUsers).toHaveBeenCalledWith({
+      query: { search: 'preset.io', $limit: 10000, $skip: 0 },
+    });
+    expect(parsed.total).toBe(1);
+    expect(parsed.limit).toBe(5);
+    expect(parsed.data.map((user: { user_id: string }) => user.user_id)).toEqual(['user-2']);
+  });
 });

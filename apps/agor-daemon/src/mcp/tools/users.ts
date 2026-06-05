@@ -1,29 +1,191 @@
-import { ROLES } from '@agor/core/types';
+import { ROLES, type User } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
+
+const USER_LIST_FIELDS = [
+  'user_id',
+  'email',
+  'name',
+  'emoji',
+  'role',
+  'unix_username',
+  'created_at',
+  'updated_at',
+] as const;
+
+const USER_QUERY_LIMIT_MAX = 10000;
+
+type UserListField = (typeof USER_LIST_FIELDS)[number];
+type UserListRow = Pick<User, UserListField>;
+type UserFindField = 'email' | 'name' | 'unix_username';
+
+function compactUser(user: User, fields?: UserListField[]): Partial<UserListRow> {
+  const selectedFields = fields && fields.length > 0 ? fields : USER_LIST_FIELDS;
+  return Object.fromEntries(
+    selectedFields.map((field) => [field, user[field]])
+  ) as Partial<UserListRow>;
+}
+
+function compactUsersResult(
+  result: { total: number; limit: number; skip: number; data: User[] },
+  fields?: UserListField[]
+) {
+  return {
+    ...result,
+    data: result.data.map((user) => compactUser(user, fields)),
+  };
+}
+
+function includesCaseInsensitive(value: string | undefined, term: string): boolean {
+  return value?.toLowerCase().includes(term.toLowerCase()) ?? false;
+}
 
 export function registerUserTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_users_list
   server.registerTool(
     'agor_users_list',
     {
-      description: 'List all users in the system',
+      description:
+        'List users in the system with pagination and optional case-insensitive search across name, email, and unix_username. Returns compact rows by default; pass lean:false for detailed user payloads.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        limit: z.number().optional().describe('Maximum number of results (default: 50)'),
+        limit: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(USER_QUERY_LIMIT_MAX)
+          .optional()
+          .describe('Maximum number of results (default: 50)'),
+        skip: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(USER_QUERY_LIMIT_MAX)
+          .optional()
+          .describe('Number of results to skip'),
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(USER_QUERY_LIMIT_MAX)
+          .optional()
+          .describe('Alias for skip'),
+        search: z
+          .string()
+          .optional()
+          .describe('Case-insensitive search across name, email, and unix_username'),
+        query: z
+          .string()
+          .optional()
+          .describe('Alias for search; case-insensitive name/email/unix_username lookup'),
+        lean: z
+          .boolean()
+          .optional()
+          .describe('Return compact rows only (default: true). Set false for detailed users.'),
+        fields: z
+          .array(z.enum(USER_LIST_FIELDS))
+          .optional()
+          .describe('Optional compact fields to return when lean is true'),
       }),
     },
     async (args) => {
-      const query: Record<string, unknown> = {};
-      if (args.limit) query.$limit = args.limit;
-      const users = await ctx.app.service('users').find({ query, ...ctx.baseServiceParams });
-      return textResult(users);
+      const query: Record<string, unknown> = {
+        $limit: args.limit ?? 50,
+        $skip: args.skip ?? args.offset ?? 0,
+      };
+      if (args.search) query.search = args.search;
+      if (args.query) query.search = args.query;
+
+      const users = (await ctx.app.service('users').find({
+        query,
+        ...ctx.baseServiceParams,
+      })) as { total: number; limit: number; skip: number; data: User[] };
+
+      return textResult(args.lean === false ? users : compactUsersResult(users, args.fields));
     }
   );
 
-  // Tool 2: agor_users_get
+  // Tool 2: agor_users_find
+  server.registerTool(
+    'agor_users_find',
+    {
+      description:
+        'Find users by name, email, or unix_username. Useful before admin updates: returns compact matching rows with user_id. Pass email when available; matching is case-insensitive substring.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        search: z
+          .string()
+          .optional()
+          .describe('Case-insensitive search across name, email, and unix_username'),
+        query: z.string().optional().describe('Alias for search'),
+        email: z.string().optional().describe('Email to search for (case-insensitive substring)'),
+        name: z.string().optional().describe('Name to search for (case-insensitive substring)'),
+        unix_username: z
+          .string()
+          .optional()
+          .describe('Unix username to search for (case-insensitive substring)'),
+        limit: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(USER_QUERY_LIMIT_MAX)
+          .optional()
+          .describe('Maximum number of matches (default: 10)'),
+      }),
+    },
+    async (args) => {
+      const genericTerms = [args.search, args.query].filter(
+        (term): term is string => typeof term === 'string' && term.trim().length > 0
+      );
+      const fieldFilters = (
+        [
+          ['email', args.email],
+          ['name', args.name],
+          ['unix_username', args.unix_username],
+        ] satisfies Array<[UserFindField, string | undefined]>
+      ).filter((filter): filter is [UserFindField, string] => {
+        const [, term] = filter;
+        return typeof term === 'string' && term.trim().length > 0;
+      });
+      const firstFieldTerm = fieldFilters[0]?.[1];
+      const searchTerm = genericTerms[0] ?? firstFieldTerm;
+
+      if (!searchTerm) {
+        throw new Error('Provide search, query, email, name, or unix_username');
+      }
+
+      const requestedLimit = args.limit ?? 10;
+      const users = (await ctx.app.service('users').find({
+        query: {
+          search: searchTerm,
+          $limit: fieldFilters.length > 0 ? USER_QUERY_LIMIT_MAX : requestedLimit,
+          $skip: 0,
+        },
+        ...ctx.baseServiceParams,
+      })) as { total: number; limit: number; skip: number; data: User[] };
+
+      if (fieldFilters.length === 0) {
+        return textResult(compactUsersResult(users));
+      }
+
+      const filteredData = users.data.filter((user) =>
+        fieldFilters.every(([field, term]) => includesCaseInsensitive(user[field], term))
+      );
+
+      return textResult(
+        compactUsersResult({
+          total: filteredData.length,
+          limit: requestedLimit,
+          skip: 0,
+          data: filteredData.slice(0, requestedLimit),
+        })
+      );
+    }
+  );
+
+  // Tool 3: agor_users_get
   server.registerTool(
     'agor_users_get',
     {
@@ -39,7 +201,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  // Tool 3: agor_users_get_current
+  // Tool 4: agor_users_get_current
   server.registerTool(
     'agor_users_get_current',
     {
@@ -54,7 +216,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  // Tool 4: agor_users_update_current
+  // Tool 5: agor_users_update_current
   server.registerTool(
     'agor_users_update_current',
     {
@@ -85,7 +247,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  // Tool 5: agor_users_update
+  // Tool 6: agor_users_update
   server.registerTool(
     'agor_users_update',
     {
@@ -144,7 +306,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  // Tool 6: agor_user_create
+  // Tool 7: agor_user_create
   server.registerTool(
     'agor_user_create',
     {
