@@ -38,6 +38,7 @@
     "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
     "jsonwebtoken": "^9.0.3",
+    "mdast-util-gfm": "^3.1.0",
     "mdast-util-to-markdown": "^2.1.2",
     "multer": "^2.1.1",
     "remark-gfm": "^4.0.1",

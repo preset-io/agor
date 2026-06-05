@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { RootContent } from 'mdast';
+import { gfmToMarkdown } from 'mdast-util-gfm';
 import { toMarkdown } from 'mdast-util-to-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
@@ -76,7 +77,10 @@ function nodeText(node: RootContent): string {
 }
 
 function nodeMarkdown(node: RootContent): string {
-  return toMarkdown({ type: 'root', children: [node] }, { bullet: '-', fences: true }).trim();
+  return toMarkdown(
+    { type: 'root', children: [node] },
+    { bullet: '-', extensions: [gfmToMarkdown()], fences: true }
+  ).trim();
 }
 
 function offsetsFor(nodes: RootContent[]): { start: number | null; end: number | null } {

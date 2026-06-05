@@ -17,4 +17,15 @@ describe('chunkMarkdownForKnowledge', () => {
     expect(chunks[0].content_text).toBe('Body');
     expect(chunks[0].heading_path).toBeNull();
   });
+
+  it('serializes GFM tables while rebuilding knowledge chunks', () => {
+    const chunks = chunkMarkdownForKnowledge(
+      ['# Data', '', '| Name | Value |', '| --- | --- |', '| alpha | 1 |'].join('\n'),
+      { minTokens: 1 }
+    );
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content_text).toContain('| Name  | Value |');
+    expect(chunks[0].content_text).toContain('| alpha | 1     |');
+  });
 });
