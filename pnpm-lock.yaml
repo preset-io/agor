@@ -428,8 +428,8 @@ importers:
         specifier: ^10.4.2
         version: 10.4.2(@vitest/runner@4.1.8)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.16(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.22.4)(yaml@2.8.3)))(vitest@4.1.8)
       '@storybook/react':
-        specifier: ^9.1.10
-        version: 9.1.16(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.16(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.22.4)(yaml@2.8.3)))(typescript@6.0.3)
+        specifier: ^10.4.2
+        version: 10.4.2(@types/react-dom@18.3.7(@types/react@18.3.26))(@types/react@18.3.26)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.16(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.22.4)(yaml@2.8.3)))(typescript@6.0.3)
       '@storybook/react-vite':
         specifier: ^10.4.2
         version: 10.4.2(@types/react-dom@18.3.7(@types/react@18.3.26))(@types/react@18.3.26)(esbuild@0.25.12)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rollup@4.61.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.16(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.22.4)(yaml@2.8.3)))(typescript@6.0.3)(vite@8.0.16(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.22.4)(yaml@2.8.3))
@@ -4108,18 +4108,6 @@ packages:
       typescript:
         optional: true
 
-  '@storybook/react@9.1.16':
-    resolution: {integrity: sha512-M/SkHJJdtiGpodBJq9+DYmSkEOD+VqlPxKI+FvbHESTNs//1IgqFIjEWetd8quhd9oj/gvo4ICBAPu+UmD6M9w==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0-beta
-      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0-beta
-      storybook: '>=9.1.19 <10'
-      typescript: '>= 4.9.x'
-    peerDependenciesMeta:
-      typescript:
-        optional: true
-
   '@swc/helpers@0.5.15':
     resolution: {integrity: sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g==}
 
@@ -7070,6 +7058,7 @@ packages:
 
   libsql@0.5.29:
     resolution: {integrity: sha512-8lMP8iMgiBzzoNbAPQ59qdVcj6UaE/Vnm+fiwX4doX4Narook0a4GPKWBEv+CR8a1OwbfkgL18uBfBjWdF0Fzg==}
+    cpu: [x64, arm64, wasm32, arm]
     os: [darwin, linux, win32]
 
   lightningcss-android-arm64@1.32.0:
@@ -13515,16 +13504,6 @@ snapshots:
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
-
-  '@storybook/react@9.1.16(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.16(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.22.4)(yaml@2.8.3)))(typescript@6.0.3)':
-    dependencies:
-      '@storybook/global': 5.0.0
-      '@storybook/react-dom-shim': 9.1.16(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.16(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.22.4)(yaml@2.8.3)))
-      react: 18.3.1
-      react-dom: 18.3.1(react@18.3.1)
-      storybook: 9.1.20(@testing-library/dom@10.4.1)(prettier@3.8.3)(vite@8.0.16(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.22.4)(yaml@2.8.3))
-    optionalDependencies:
-      typescript: 6.0.3
 
   '@swc/helpers@0.5.15':
     dependencies:

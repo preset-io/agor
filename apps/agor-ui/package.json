@@ -59,7 +59,7 @@
     "@storybook/addon-docs": "^9.1.10",
     "@storybook/addon-onboarding": "^9.1.10",
     "@storybook/addon-vitest": "^10.4.2",
-    "@storybook/react": "^9.1.10",
+    "@storybook/react": "^10.4.2",
     "@storybook/react-vite": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
