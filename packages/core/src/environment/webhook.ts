@@ -11,11 +11,11 @@ import { isAllowedHealthCheckUrl, normalizeOptionalHttpUrl } from '../utils/url.
  *   must be an HTTP(S) URL and is invoked with GET; shell commands are rejected.
  */
 export type ManagedEnvExecutionMode = 'hybrid' | 'webhook-only';
-export type ManagedEnvCommandType = 'start' | 'stop' | 'nuke' | 'logs' | 'health';
 
 export const MANAGED_ENV_LIFECYCLE_FIELDS = ['start', 'stop', 'nuke', 'logs'] as const;
 
 export type ManagedEnvLifecycleField = (typeof MANAGED_ENV_LIFECYCLE_FIELDS)[number];
+export type ManagedEnvCommandType = ManagedEnvLifecycleField;
 
 export type ManagedEnvCommandExecution =
   | { kind: 'command'; command: string }
@@ -64,12 +64,31 @@ function isBlockedIPv6(hostname: string): boolean {
   if (!normalized.includes(':')) return false;
   const mappedIPv4 = normalized.match(/:ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mappedIPv4) return isBlockedIPv4(mappedIPv4[1]);
+
+  const hextets = normalized.split(':').filter(Boolean);
+  const mappedIndex = hextets.lastIndexOf('ffff');
+  if (mappedIndex >= 0 && hextets.length - mappedIndex === 3) {
+    const high = Number.parseInt(hextets[mappedIndex + 1], 16);
+    const low = Number.parseInt(hextets[mappedIndex + 2], 16);
+    if (
+      Number.isInteger(high) &&
+      Number.isInteger(low) &&
+      high >= 0 &&
+      high <= 0xffff &&
+      low >= 0 &&
+      low <= 0xffff
+    ) {
+      const ipv4 = `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+      return isBlockedIPv4(ipv4);
+    }
+  }
+
+  const firstHextet = Number.parseInt(hextets[0] ?? '', 16);
   return (
     normalized === '::1' ||
     normalized === '::' ||
-    normalized.startsWith('fe80:') ||
-    normalized.startsWith('fc') ||
-    normalized.startsWith('fd')
+    (Number.isInteger(firstHextet) && firstHextet >= 0xfe80 && firstHextet <= 0xfebf) ||
+    (Number.isInteger(firstHextet) && firstHextet >= 0xfc00 && firstHextet <= 0xfdff)
   );
 }
 
@@ -161,16 +180,22 @@ export function validateRepoEnvironmentLifecyclePolicy(
   for (const variantName of Object.keys(env.variants)) {
     const resolved = resolveVariant(env, variantName);
     if (!resolved) continue;
-    validateManagedEnvLifecyclePolicy(
-      {
-        start: resolved.start,
-        stop: resolved.stop,
-        nuke: resolved.nuke,
-        logs: resolved.logs,
-      },
-      mode,
-      `${context} variant "${variantName}"`
-    );
+    const lifecycleFields = {
+      start: resolved.start,
+      stop: resolved.stop,
+      nuke: resolved.nuke,
+      logs: resolved.logs,
+    } satisfies Partial<Record<ManagedEnvLifecycleField, string | null | undefined>>;
+
+    for (const field of MANAGED_ENV_LIFECYCLE_FIELDS) {
+      const value = lifecycleFields[field];
+      if (value?.includes('{{')) continue;
+      validateManagedEnvLifecyclePolicy(
+        { [field]: value },
+        mode,
+        `${context} variant "${variantName}"`
+      );
+    }
   }
 }
 
@@ -204,8 +229,6 @@ function commandTypeLabel(commandType: ManagedEnvCommandType): string {
       return 'nuke';
     case 'logs':
       return 'logs';
-    case 'health':
-      return 'health';
   }
 }
 

@@ -38,6 +38,10 @@ describe('managed environment webhook URL detection', () => {
     expect(isAllowedManagedEnvWebhookUrl('http://192.168.1.20/start')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://172.16.0.1/start')).toBe(false);
     expect(isAllowedManagedEnvWebhookUrl('http://metadata.google.internal/')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://[::ffff:127.0.0.1]/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://[::ffff:169.254.169.254]/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://[fe90::1]/start')).toBe(false);
+    expect(isAllowedManagedEnvWebhookUrl('http://[fea0::1]/start')).toBe(false);
   });
 
   it('redacts query strings for audit logging', () => {
@@ -83,6 +87,24 @@ describe('managed environment policy validation', () => {
         'webhook-only'
       )
     ).toThrow(/variant "base" start must render to an http\(s\) URL webhook/);
+  });
+
+  it('allows unresolved repo lifecycle templates for rendered branch-state validation', () => {
+    expect(() =>
+      validateRepoEnvironmentLifecyclePolicy(
+        {
+          version: 2,
+          default: 'default',
+          variants: {
+            default: {
+              start: '{{custom.webhook_base}}/start?branch={{branch.name}}',
+              stop: 'https://hooks.example.com/stop',
+            },
+          },
+        },
+        'webhook-only'
+      )
+    ).not.toThrow();
   });
 
   it('validates rendered health and app as URL-only fields', () => {

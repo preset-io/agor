@@ -21,6 +21,7 @@ import {
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
   MANAGED_ENV_EXECUTION_MODE_DEFAULT,
+  type ManagedEnvCommandType,
   type ManagedEnvExecutionMode,
   redactManagedEnvWebhookUrlForAudit,
   resolveManagedEnvCommandExecution,
@@ -39,11 +40,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { isAssistant, ROLES } from '@agor/core/types';
-import {
-  type EnvironmentCommandType,
-  getGidFromGroupName,
-  spawnEnvironmentCommand,
-} from '@agor/core/unix';
+import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
@@ -137,7 +134,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
   }
 
-  private async resolveEnvironmentCommand(command: string, commandType: EnvironmentCommandType) {
+  private async resolveEnvironmentCommand(command: string, commandType: ManagedEnvCommandType) {
     return resolveManagedEnvCommandExecution(
       command,
       await this.getManagedEnvExecutionMode(),
@@ -167,7 +164,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private async executeEnvironmentWebhook(options: {
     url: string;
     branch: Branch;
-    commandType: EnvironmentCommandType;
+    commandType: ManagedEnvCommandType;
     triggeredBy?: { user_id?: string; email?: string };
     maxBytes?: number;
   }): Promise<{ body: string; truncated: boolean; status: number }> {
