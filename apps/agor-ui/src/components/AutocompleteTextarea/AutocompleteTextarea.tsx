@@ -377,6 +377,9 @@ export const AutocompleteTextarea = React.forwardRef<
     // placement engine flip between bottom/top and left/right edge alignments
     // near viewport boundaries.
     const [popoverAnchor, setPopoverAnchor] = useState<[number, number]>([0, 0]);
+    const [popoverPlacement, setPopoverPlacement] = useState<'bottomLeft' | 'topLeft'>(
+      'bottomLeft'
+    );
 
     /**
      * Synchronize overlay scroll with textarea scroll
@@ -410,9 +413,19 @@ export const AutocompleteTextarea = React.forwardRef<
       const { left, top, lineHeight } = getCaretCoordinates(textarea, value, triggerIndex);
       const textareaRect = textarea.getBoundingClientRect();
       const wrapperRect = wrapper.getBoundingClientRect();
+      const caretTopInWrapper = textareaRect.top - wrapperRect.top + top - scrollTop;
+      const caretTopInViewport = textareaRect.top + top - scrollTop;
+      const caretBottomInViewport = caretTopInViewport + lineHeight;
+      const spaceAbove = caretTopInViewport;
+      const spaceBelow = window.innerHeight - caretBottomInViewport;
+      const shouldPlaceAbove =
+        spaceBelow < AUTOCOMPLETE_POPOVER_MAX_HEIGHT + AUTOCOMPLETE_POPOVER_VIEWPORT_MARGIN &&
+        spaceAbove > spaceBelow;
+
+      setPopoverPlacement(shouldPlaceAbove ? 'topLeft' : 'bottomLeft');
       setPopoverAnchor([
         textareaRect.left - wrapperRect.left + Math.max(0, left - textarea.scrollLeft),
-        textareaRect.top - wrapperRect.top + top + lineHeight - scrollTop,
+        shouldPlaceAbove ? caretTopInWrapper : caretTopInWrapper + lineHeight,
       ]);
     }, [showPopover, triggerIndex, scrollTop, value]);
 
@@ -916,6 +929,11 @@ export const AutocompleteTextarea = React.forwardRef<
     const popoverContent = (
       <div
         ref={popoverContentRef}
+        onMouseDown={(e) => {
+          // Keep focus in the textarea so arrow-key navigation continues to
+          // work after interacting with the suggestion list.
+          e.preventDefault();
+        }}
         style={{
           width: `min(${AUTOCOMPLETE_POPOVER_WIDTH}px, calc(100vw - ${
             AUTOCOMPLETE_POPOVER_VIEWPORT_MARGIN * 2
@@ -926,8 +944,6 @@ export const AutocompleteTextarea = React.forwardRef<
           }px))`,
           overflowY: 'auto',
           minWidth: `min(250px, calc(100vw - ${AUTOCOMPLETE_POPOVER_VIEWPORT_MARGIN * 2}px))`,
-          border: `1px solid ${token.colorBorder}`,
-          borderRadius: token.borderRadius,
         }}
       >
         {isLoading && (
@@ -1116,12 +1132,13 @@ export const AutocompleteTextarea = React.forwardRef<
           content={popoverContent}
           open={showPopover && autocompleteOptions.length > 0}
           trigger={[]}
-          placement="bottomLeft"
+          placement={popoverPlacement}
           autoAdjustOverflow
-          overlayStyle={{ paddingTop: 4 }}
+          arrow={false}
         >
           <span
             aria-hidden="true"
+            tabIndex={-1}
             style={{
               position: 'absolute',
               left: popoverAnchor[0],
