@@ -16,6 +16,12 @@ import { useEmojiAutocomplete } from '@/hooks/useEmojiAutocomplete';
 import { mapToArray } from '@/utils/mapHelpers';
 import './AutocompleteTextarea.css';
 import { buildKbDocLink, filterKbDocs, type KbDocMention } from './kbMentions';
+import {
+  AUTOCOMPLETE_POPOVER_MAX_HEIGHT,
+  AUTOCOMPLETE_POPOVER_VIEWPORT_MARGIN,
+  AUTOCOMPLETE_POPOVER_WIDTH,
+  getAutocompletePopoverOffset,
+} from './popoverPosition';
 
 export type { KbDocMention } from './kbMentions';
 
@@ -401,10 +407,18 @@ export const AutocompleteTextarea = React.forwardRef<
       if (!showPopover || triggerIndex < 0) return;
       const textarea = textareaRef.current?.current;
       if (!textarea) return;
-      const { left, top, lineHeight } = getCaretCoordinates(textarea, value, triggerIndex);
-      const offsetX = Math.max(0, left - textarea.scrollLeft);
-      const offsetY = top + lineHeight - scrollTop - textarea.offsetHeight;
-      setPopoverOffset([offsetX, offsetY]);
+      const caret = getCaretCoordinates(textarea, value, triggerIndex);
+      setPopoverOffset(
+        getAutocompletePopoverOffset({
+          textareaRect: textarea.getBoundingClientRect(),
+          caret,
+          textareaScrollLeft: textarea.scrollLeft,
+          textareaScrollTop: scrollTop,
+          textareaOffsetHeight: textarea.offsetHeight,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+        })
+      );
     }, [showPopover, triggerIndex, scrollTop, value]);
 
     /**
@@ -908,9 +922,15 @@ export const AutocompleteTextarea = React.forwardRef<
       <div
         ref={popoverContentRef}
         style={{
-          maxHeight: '300px',
+          width: `min(${AUTOCOMPLETE_POPOVER_WIDTH}px, calc(100vw - ${
+            AUTOCOMPLETE_POPOVER_VIEWPORT_MARGIN * 2
+          }px))`,
+          maxWidth: `calc(100vw - ${AUTOCOMPLETE_POPOVER_VIEWPORT_MARGIN * 2}px)`,
+          maxHeight: `min(${AUTOCOMPLETE_POPOVER_MAX_HEIGHT}px, calc(100vh - ${
+            AUTOCOMPLETE_POPOVER_VIEWPORT_MARGIN * 2
+          }px))`,
           overflowY: 'auto',
-          minWidth: '250px',
+          minWidth: `min(250px, calc(100vw - ${AUTOCOMPLETE_POPOVER_VIEWPORT_MARGIN * 2}px))`,
           border: `1px solid ${token.colorBorder}`,
           borderRadius: token.borderRadius,
         }}
