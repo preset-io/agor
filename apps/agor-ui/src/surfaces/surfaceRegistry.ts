@@ -1,6 +1,6 @@
 import { matchPath } from 'react-router-dom';
 
-export type RouteSurfaceId = 'workspace' | 'knowledge' | 'demo';
+export type RouteSurfaceId = 'workspace' | 'knowledge' | 'artifact-fullscreen' | 'demo';
 
 export interface RouteSurfaceDefinition {
   id: RouteSurfaceId;
@@ -47,6 +47,17 @@ export const KNOWLEDGE_SURFACE = defineSurface({
   usesSharedUserSettings: true,
 });
 
+export const ARTIFACT_FULLSCREEN_ROUTE_PATHS = ['/a/:artifactShortId/fullscreen'] as const;
+
+export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
+  id: 'artifact-fullscreen',
+  label: 'Artifact fullscreen',
+  routePaths: ARTIFACT_FULLSCREEN_ROUTE_PATHS,
+  startsWorkspaceRuntime: false,
+  usesDeviceRouter: false,
+  usesSharedUserSettings: true,
+});
+
 export const DEMO_SURFACE = defineSurface({
   id: 'demo',
   label: 'Demo',
@@ -65,7 +76,12 @@ export const WORKSPACE_SURFACE = defineSurface({
   usesSharedUserSettings: false,
 });
 
-export const SURFACE_REGISTRY = [KNOWLEDGE_SURFACE, DEMO_SURFACE, WORKSPACE_SURFACE] as const;
+export const SURFACE_REGISTRY = [
+  KNOWLEDGE_SURFACE,
+  ARTIFACT_FULLSCREEN_SURFACE,
+  DEMO_SURFACE,
+  WORKSPACE_SURFACE,
+] as const;
 
 export function getRouteSurface(pathname: string): RouteSurfaceDefinition {
   return (

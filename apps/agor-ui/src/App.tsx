@@ -50,7 +50,11 @@ import {
   useSessionActions,
 } from './hooks';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
-import { KNOWLEDGE_ROUTE_PATHS, routeUsesDeviceRouter } from './surfaces/surfaceRegistry';
+import {
+  ARTIFACT_FULLSCREEN_ROUTE_PATHS,
+  KNOWLEDGE_ROUTE_PATHS,
+  routeUsesDeviceRouter,
+} from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
@@ -58,6 +62,11 @@ import { useThemedMessage } from './utils/message';
 const AgorApp = lazy(() => import('./components/App').then((module) => ({ default: module.App })));
 const KnowledgePage = lazy(() =>
   import('./pages/KnowledgePage').then((module) => ({ default: module.KnowledgePage }))
+);
+const ArtifactFullscreenPage = lazy(() =>
+  import('./pages/ArtifactFullscreenPage').then((module) => ({
+    default: module.ArtifactFullscreenPage,
+  }))
 );
 const MobileApp = lazy(() =>
   import('./components/mobile/MobileApp').then((module) => ({ default: module.MobileApp }))
@@ -1385,6 +1394,15 @@ function AppContent() {
     />
   );
 
+  const artifactFullscreenElement = (
+    <ArtifactFullscreenPage
+      client={client}
+      currentUser={currentUser}
+      onUserSettingsClick={() => setOpenUserSettings(true)}
+      onLogout={logout}
+    />
+  );
+
   // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
   // AgorApp — the multiple routes exist so react-router's useParams
   // (read inside useUrlState) populates the right named params for
@@ -1549,6 +1567,12 @@ function AppContent() {
             {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
             {KNOWLEDGE_ROUTE_PATHS.map((path) => (
               <Route key={path} path={path} element={knowledgePageElement} />
+            ))}
+
+            {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,
+                but does not start the Workspace board/session store on fresh loads. */}
+            {ARTIFACT_FULLSCREEN_ROUTE_PATHS.map((path) => (
+              <Route key={path} path={path} element={artifactFullscreenElement} />
             ))}
 
             {/* Mobile routes */}

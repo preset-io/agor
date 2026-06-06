@@ -1,6 +1,6 @@
-import type { Artifact, Board, Branch } from '@agor-live/client';
-import { shortId } from '@agor-live/client';
-import { AimOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
+import type { Artifact, ArtifactID, Board, Branch } from '@agor-live/client';
+import { artifactFullscreenPath, shortId } from '@agor-live/client';
+import { AimOutlined, DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons';
 import {
   Badge,
   Button,
@@ -18,6 +18,7 @@ import {
 } from 'antd';
 import { useCallback, useState } from 'react';
 import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
+import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 
 interface ArtifactsTableProps {
@@ -188,7 +189,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 120,
+      width: 150,
       render: (_: unknown, artifact: Artifact) => (
         <Space size="small">
           {artifact.board_id && (
@@ -204,6 +205,17 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
               />
             </Tooltip>
           )}
+          <Tooltip title="Open fullscreen">
+            <Button
+              type="text"
+              size="small"
+              icon={<ExportOutlined />}
+              href={uiRouteHref(artifactFullscreenPath(artifact.artifact_id as ArtifactID))}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </Tooltip>
           <Tooltip title="Edit artifact">
             <Button
               type="text"

@@ -119,6 +119,38 @@ async function seedArtifact(
   return created;
 }
 
+describe('ArtifactRepository URL fields', () => {
+  dbTest('returns both board url and fullscreen_url from repository reads', async ({ db }) => {
+    const previousBaseUrl = process.env.AGOR_BASE_URL;
+    process.env.AGOR_BASE_URL = 'https://agor.example.com/ui';
+    try {
+      const artifactRepo = new ArtifactRepository(db);
+      const board = await seedBoard(db);
+      const artifact = await seedArtifact(db, board.board_id, { userId: 'user-owner' });
+      const artifactShortId = shortId(artifact.artifact_id);
+
+      expect(artifact.url).toBe(`https://agor.example.com/ui/a/${artifactShortId}/`);
+      expect(artifact.fullscreen_url).toBe(
+        `https://agor.example.com/ui/a/${artifactShortId}/fullscreen`
+      );
+
+      const fetched = await artifactRepo.findById(artifact.artifact_id);
+      expect(fetched?.url).toBe(artifact.url);
+      expect(fetched?.fullscreen_url).toBe(artifact.fullscreen_url);
+
+      const listed = await artifactRepo.findAll();
+      expect(listed[0]?.url).toBe(artifact.url);
+      expect(listed[0]?.fullscreen_url).toBe(artifact.fullscreen_url);
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.AGOR_BASE_URL;
+      } else {
+        process.env.AGOR_BASE_URL = previousBaseUrl;
+      }
+    }
+  });
+});
+
 describe('ArtifactsService.updateMetadata', () => {
   dbTest('moves artifact to a new board and preserves placement', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());

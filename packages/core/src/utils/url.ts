@@ -94,6 +94,12 @@ export function artifactPath(artifactId: ArtifactID): string {
   return `/${ENTITY_PATH_SEGMENTS.artifact}/${shortId(artifactId)}/`;
 }
 
+/** `/a/<artifactShort>/fullscreen` — lightweight fullscreen artifact surface.
+ *  Optional UI chrome is controlled client-side with `?show_navbar=false`. */
+export function artifactFullscreenPath(artifactId: ArtifactID): string {
+  return `/${ENTITY_PATH_SEGMENTS.artifact}/${shortId(artifactId)}/fullscreen`;
+}
+
 function encodePathSegments(path: string): string {
   return path
     .split('/')
@@ -163,6 +169,13 @@ export function getBranchUrl(branchId: BranchID, baseUrl: string): string {
  *  resolves to its board at click time. */
 export function getArtifactUrl(artifactId: ArtifactID, baseUrl: string): string {
   return fullUrl(artifactPath(artifactId), baseUrl);
+}
+
+/** Generate a lightweight fullscreen artifact URL. Renders the artifact
+ *  outside the board canvas/card chrome. Append `?show_navbar=false` to hide the
+ *  compact navbar. */
+export function getArtifactFullscreenUrl(artifactId: ArtifactID, baseUrl: string): string {
+  return fullUrl(artifactFullscreenPath(artifactId), baseUrl);
 }
 
 /** Generate a Knowledge URL from namespace + optional document path. */

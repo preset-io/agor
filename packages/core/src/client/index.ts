@@ -80,10 +80,12 @@ export {
 // agent share-link generation. See `packages/core/src/utils/url.ts` for
 // the path shape and `UI_MOUNT_PATH` convention.
 export {
+  artifactFullscreenPath,
   artifactPath,
   boardPath,
   branchPath,
   ENTITY_PATH_SEGMENTS,
+  getArtifactFullscreenUrl,
   getArtifactUrl,
   getBoardUrl,
   getBranchUrl,

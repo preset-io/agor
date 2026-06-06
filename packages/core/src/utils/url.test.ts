@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ArtifactID, BoardID, BranchID, SessionID } from '../types/id';
 import {
+  getArtifactFullscreenUrl,
   getArtifactUrl,
   getBoardUrl,
   getBranchUrl,
@@ -48,6 +49,13 @@ describe('entity URL builders — fullUrl double-prefix regression', () => {
   it('produces correct artifact URL when baseUrl has /ui suffix', () => {
     const url = getArtifactUrl(ARTIFACT_ID, 'https://agor.example.com/ui');
     expect(url).toMatch(/^https:\/\/agor\.example\.com\/ui\/a\//);
+    expect(url).not.toContain('/ui/ui/');
+  });
+
+  it('produces correct artifact fullscreen URL when baseUrl has /ui suffix', () => {
+    const url = getArtifactFullscreenUrl(ARTIFACT_ID, 'https://agor.example.com/ui');
+    expect(url).toMatch(/^https:\/\/agor\.example\.com\/ui\/a\//);
+    expect(url).toMatch(/\/fullscreen$/);
     expect(url).not.toContain('/ui/ui/');
   });
 

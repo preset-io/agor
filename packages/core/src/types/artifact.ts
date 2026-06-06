@@ -214,6 +214,13 @@ export interface Artifact {
   archived_at?: string | null;
 
   /**
+   * External/user-facing URL for viewing this artifact fullscreen, outside
+   * board canvas/card chrome. Format: `{baseUrl}/ui/a/{artifactShortId}/fullscreen`
+   * Append `?show_navbar=false` client-side to hide the compact navbar.
+   */
+  fullscreen_url?: string | null;
+
+  /**
    * External/user-facing URL for viewing this artifact in the UI.
    *
    * Computed property added by the repository layer. Optional —

@@ -19,7 +19,7 @@ import type {
 import { and, eq, like, or } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
-import { getArtifactUrl } from '../../utils/url';
+import { getArtifactFullscreenUrl, getArtifactUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type ArtifactInsert, type ArtifactRow, artifacts } from '../schema';
@@ -46,6 +46,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
   private rowToArtifact(row: ArtifactRow, baseUrl?: string): Artifact {
     const artifactId = row.artifact_id as ArtifactID;
     const url = baseUrl && row.board_id ? getArtifactUrl(artifactId, baseUrl) : null;
+    const fullscreenUrl = baseUrl ? getArtifactFullscreenUrl(artifactId, baseUrl) : null;
     return {
       artifact_id: artifactId as UUID,
       branch_id: (row.branch_id as BranchID) ?? null,
@@ -70,6 +71,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       updated_at: new Date(row.updated_at).toISOString(),
       archived: Boolean(row.archived),
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+      fullscreen_url: fullscreenUrl,
       url,
     };
   }

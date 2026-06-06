@@ -1,39 +1,10 @@
-/**
- * ArtifactNode — Board canvas node for live Sandpack artifacts
- *
- * Fetches artifact payload from the daemon REST API, renders via Sandpack,
- * captures console events, and reloads when a WebSocket 'patched' event
- * signals a content_hash change.
- */
-
-// Polyfill crypto.subtle for non-secure contexts (HTTP).
-// Sandpack uses crypto.subtle.digest() to generate short IDs, which is only
-// available in secure contexts (HTTPS/localhost). On plain HTTP, we provide
-// a simple fallback using Math.random.
-if (typeof globalThis.crypto !== 'undefined' && !globalThis.crypto.subtle) {
-  // biome-ignore lint/suspicious/noExplicitAny: minimal polyfill for Sandpack compatibility
-  (globalThis.crypto as any).subtle = {
-    async digest(_algo: string, data: ArrayBuffer) {
-      // Simple hash fallback — not cryptographically secure, only used for Sandpack IDs
-      const bytes = new Uint8Array(data);
-      let hash = 0;
-      for (const b of bytes) {
-        hash = (hash * 31 + b) | 0;
-      }
-      const result = new ArrayBuffer(4);
-      new DataView(result).setInt32(0, hash);
-      return result;
-    },
-  };
-}
-
 import type {
   ArtifactBoardObject,
   ArtifactID,
   ArtifactPayload,
   BoardObject,
 } from '@agor-live/client';
-import { shortId } from '@agor-live/client';
+import { artifactFullscreenPath, shortId } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -41,10 +12,10 @@ import {
   DeleteOutlined,
   ExportOutlined,
   EyeOutlined,
+  FullscreenOutlined,
   LoadingOutlined,
   LockOutlined,
   ReloadOutlined,
-  SafetyOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import {
@@ -52,28 +23,27 @@ import {
   SandpackProvider,
   type SandpackSetup,
   useSandpack,
-  useSandpackConsole,
 } from '@codesandbox/sandpack-react';
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  Popconfirm,
-  Spin,
-  Tag,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Alert, Badge, Button, Card, Popconfirm, Spin, Tooltip, Typography, theme } from 'antd';
 import { compressToBase64 } from 'lz-string';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
+import {
+  ArtifactConsoleReporter,
+  ArtifactRuntimeBridge,
+  ArtifactSandpackErrorReporter,
+  renderArtifactTrustBadge,
+} from '@/components/artifacts/ArtifactRenderSupport';
 import { getDaemonUrl } from '@/config/daemon';
+import { getAuthHeaders } from '@/utils/authHeaders';
 import { copyToClipboard } from '@/utils/clipboard';
 import { useThemedMessage } from '@/utils/message';
+import { ensureSandpackCryptoSubtle } from '@/utils/sandpackCrypto';
+import { uiRouteHref } from '@/utils/uiRoutes';
 import { ArtifactConsentModal } from '../../ArtifactConsentModal/ArtifactConsentModal';
 import { withBodyReset } from './utils/sandpackDefaults';
+
+ensureSandpackCryptoSubtle();
 
 interface ArtifactNodeData {
   objectId: string;
@@ -93,247 +63,6 @@ interface ArtifactNodeData {
 
 const MIN_WIDTH = 300;
 const MIN_HEIGHT = 200;
-
-/** Get auth headers for daemon REST calls (reads JWT from FeathersJS storage) */
-function getAuthHeaders(): HeadersInit {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('feathers-jwt') : null;
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-}
-
-/**
- * Decode the current user's id from the Feathers JWT in localStorage.
- *
- * Used by the runtime-query bridge to filter out queries the daemon emits
- * for OTHER users — without this, every authenticated browser tab would
- * run the agent's selector against its own (potentially secret-bearing)
- * render. The server-side correlation already drops cross-user response
- * POSTs, but the actual DOM query still ran in the wrong tab. Filtering
- * client-side prevents the query from executing at all.
- *
- * Returns null on any parse failure — callers should treat that as
- * "don't run this query" (safe default).
- */
-function getCurrentUserIdFromJwt(): string | null {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('feathers-jwt') : null;
-  if (!token) return null;
-  try {
-    const parts = token.split('.');
-    if (parts.length < 2) return null;
-    // base64url → base64. atob requires `=` padding to a multiple of 4;
-    // base64url payloads are usually unpadded, so add it back before
-    // decoding. Without this, decode can throw on perfectly valid JWTs
-    // and we'd fail open (see the bridge's requester filter).
-    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    while (b64.length % 4 !== 0) b64 += '=';
-    const payload = JSON.parse(atob(b64));
-    return typeof payload.sub === 'string' ? payload.sub : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Inner component that captures Sandpack console events and forwards them to the daemon.
- * Must be inside SandpackProvider.
- */
-/** Max console entries to send per batch, and minimum interval between sends. */
-const CONSOLE_BATCH_MAX = 50;
-const CONSOLE_THROTTLE_MS = 2000;
-
-function ConsoleReporter({ artifactId }: { artifactId: string }) {
-  const { logs } = useSandpackConsole({ resetOnPreviewRestart: false });
-  const lastSentRef = useRef(0);
-  const lastSendTimeRef = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (logs.length <= lastSentRef.current) return;
-
-    const sendBatch = () => {
-      const newLogs = logs.slice(lastSentRef.current, lastSentRef.current + CONSOLE_BATCH_MAX);
-      lastSentRef.current = Math.min(logs.length, lastSentRef.current + CONSOLE_BATCH_MAX);
-      lastSendTimeRef.current = Date.now();
-
-      const entries = newLogs.map((log) => ({
-        timestamp: Date.now(),
-        level:
-          log.method === 'warn'
-            ? 'warn'
-            : log.method === 'error'
-              ? 'error'
-              : log.method === 'info'
-                ? 'info'
-                : 'log',
-        message:
-          log.data
-            ?.map((d: unknown) => (typeof d === 'string' ? d : JSON.stringify(d)))
-            .join(' ') ?? '',
-      }));
-
-      fetch(`${getDaemonUrl()}/artifacts/${artifactId}/console`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ entries }),
-      }).catch(() => {});
-    };
-
-    const elapsed = Date.now() - lastSendTimeRef.current;
-    if (elapsed >= CONSOLE_THROTTLE_MS) {
-      sendBatch();
-    } else if (!timerRef.current) {
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null;
-        sendBatch();
-      }, CONSOLE_THROTTLE_MS - elapsed);
-    }
-
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, [logs, artifactId]);
-
-  return null;
-}
-
-/**
- * Inner component that captures Sandpack bundler/runtime errors and forwards them to the daemon.
- * These errors (e.g. "Could not find module './data'") happen inside Sandpack's bundler
- * before any user JS executes, so they never reach console.error.
- * Must be inside SandpackProvider.
- */
-const SANDPACK_ERROR_THROTTLE_MS = 1000;
-
-/**
- * Bridges agent-driven runtime queries: WS event from the daemon → postMessage
- * to the iframe → reply postMessage from `agor-runtime.js` → POST back to
- * the daemon's `/artifacts/:id/runtime-response/:requestId`. Must be inside
- * `<SandpackProvider>` so it can grab the iframe ref via `useSandpackClient`.
- *
- * Multiple ArtifactNode instances can be on the same board. Each registers
- * its own bridge; the one whose `artifactId` matches the incoming event
- * answers, the rest ignore. Server-side correlation also enforces that
- * the responding user matches the requester, so even if multiple tabs
- * answered the same query (one per ArtifactNode for the same artifact),
- * only the first response wins.
- */
-const RUNTIME_QUERY_DEFAULT_TIMEOUT_MS = 6000;
-function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
-  // CRITICAL: must be `useSandpack` (read existing clients) rather than
-  // `useSandpackClient` — the latter "registers a new sandpack client"
-  // and expects the caller to render its own <iframe> and pass the ref;
-  // because we don't render one, the ref stays null forever and the
-  // bridge can never postMessage to the actual preview iframe. By going
-  // through `sandpack.clients`, we grab the iframe the sibling
-  // <SandpackPreview> already registered with the provider.
-  const { sandpack } = useSandpack();
-  // Park the current sandpack state in a ref so the window-event handler
-  // can read the latest `clients` without re-attaching on every Sandpack
-  // re-render (status ticks, file updates, etc). Re-attaching would
-  // leave a brief gap where a daemon emit could miss the listener.
-  const sandpackRef = useRef(sandpack);
-  sandpackRef.current = sandpack;
-
-  useEffect(() => {
-    const handleQuery = (event: Event) => {
-      const detail = (event as CustomEvent).detail as {
-        request_id: string;
-        artifact_id: string;
-        requested_by_user_id?: string;
-        kind: string;
-        args: Record<string, unknown>;
-      };
-      if (!detail || detail.artifact_id !== artifactId) return;
-
-      // Requester filter: the daemon's `agor-query` event broadcasts on
-      // the global authenticated channel, so EVERY logged-in tab receives
-      // it. Without this client-side check, every tab would run the DOM
-      // query against its own (possibly secret-bearing) render — the
-      // server would later drop the wrong-user response, but the query
-      // would have already executed. Fail closed (skip the query) if we
-      // can't establish the viewer's identity — falling open here would
-      // re-introduce the cross-user privacy leak this filter exists to
-      // prevent.
-      if (detail.requested_by_user_id) {
-        const currentUserId = getCurrentUserIdFromJwt();
-        if (!currentUserId || currentUserId !== detail.requested_by_user_id) return;
-      }
-
-      const requestId = detail.request_id;
-      // Pick the first registered Sandpack client's iframe. In practice
-      // each ArtifactNode has one preview (one client). If multiple
-      // existed we'd target the first; the agor-runtime listener is
-      // identical across them so the choice is arbitrary.
-      const currentSandpack = sandpackRef.current;
-      const clientIds = Object.keys(currentSandpack.clients);
-      const firstClient = clientIds.length > 0 ? currentSandpack.clients[clientIds[0]] : null;
-      const target = firstClient?.iframe?.contentWindow ?? null;
-      if (!target) {
-        // Sandpack hasn't registered a client yet (still booting, or
-        // initMode='user-visible' is waiting for visibility). The
-        // daemon's pending entry will time out cleanly. The agent's
-        // retry will land after Sandpack is ready.
-        return;
-      }
-
-      const messageHandler = (msgEvent: MessageEvent) => {
-        const data = msgEvent.data;
-        if (!data || typeof data !== 'object') return;
-        if (data.type !== 'agor:result' || data.requestId !== requestId) return;
-        // Source check (defense in depth): only accept replies from the
-        // iframe we just dispatched to, not from any other postMessage
-        // source that happens to know our requestId.
-        if (msgEvent.source !== target) return;
-        cleanup();
-        void postResult({ ok: !!data.ok, result: data.result, error: data.error });
-      };
-      const timeout = setTimeout(() => {
-        cleanup();
-        void postResult({
-          ok: false,
-          error: 'Iframe did not respond before timeout (agor-runtime.js may be missing).',
-        });
-      }, RUNTIME_QUERY_DEFAULT_TIMEOUT_MS);
-      const cleanup = () => {
-        window.removeEventListener('message', messageHandler);
-        clearTimeout(timeout);
-      };
-
-      const postResult = async (body: { ok: boolean; result?: unknown; error?: string }) => {
-        try {
-          await fetch(`${getDaemonUrl()}/artifacts/${artifactId}/runtime-response/${requestId}`, {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify(body),
-          });
-        } catch {
-          // The daemon's pending entry will time out on its own — nothing
-          // we can do client-side if the response POST itself fails.
-        }
-      };
-
-      window.addEventListener('message', messageHandler);
-      // Forward to the iframe. Cross-origin so target origin is '*';
-      // payload carries no secrets, just a query for the iframe to run.
-      target.postMessage(
-        { type: 'agor:query', requestId, kind: detail.kind, args: detail.args },
-        '*'
-      );
-    };
-    window.addEventListener('agor:artifact-runtime-query', handleQuery);
-    return () => window.removeEventListener('agor:artifact-runtime-query', handleQuery);
-    // `sandpack` is read via sandpackRef at query time, so we don't need
-    // it in deps — the handler attaches once per artifact and keeps
-    // working as Sandpack re-renders.
-  }, [artifactId]);
-
-  return null;
-}
 
 /**
  * Eject the rendered artifact to a fresh CodeSandbox sandbox in a new tab.
@@ -427,75 +156,6 @@ function CodeSandboxExporter({ artifactId }: { artifactId: string }) {
   return null;
 }
 
-function SandpackErrorReporter({ artifactId }: { artifactId: string }) {
-  const { sandpack } = useSandpack();
-  const lastSentRef = useRef<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingSendRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    // Serialize current state for comparison (includes status so status-only changes are sent)
-    const stateKey = `${sandpack.error?.message ?? ''}\0${sandpack.status}`;
-
-    // Skip if we already sent this exact state
-    if (stateKey === lastSentRef.current) return;
-
-    const sendError = () => {
-      lastSentRef.current = stateKey;
-      pendingSendRef.current = null;
-
-      const payload: {
-        error: {
-          message: string;
-          title?: string;
-          path?: string;
-          line?: number;
-          column?: number;
-        } | null;
-        status: string;
-      } = {
-        error: sandpack.error
-          ? {
-              message: sandpack.error.message,
-              ...(sandpack.error.title ? { title: sandpack.error.title } : {}),
-              ...(sandpack.error.path ? { path: sandpack.error.path } : {}),
-              ...(sandpack.error.line != null ? { line: sandpack.error.line } : {}),
-              ...(sandpack.error.column != null ? { column: sandpack.error.column } : {}),
-            }
-          : null,
-        status: sandpack.status,
-      };
-
-      fetch(`${getDaemonUrl()}/artifacts/${artifactId}/sandpack-error`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-    };
-
-    // Throttle to avoid spamming during rapid state changes
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-    pendingSendRef.current = sendError;
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      sendError();
-    }, SANDPACK_ERROR_THROTTLE_MS);
-
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-        // Flush pending update on unmount to avoid stale backend state
-        pendingSendRef.current?.();
-      }
-    };
-  }, [sandpack.error, sandpack.status, artifactId]);
-
-  return null;
-}
-
 export const ArtifactNode = ({
   data,
   selected,
@@ -575,6 +235,14 @@ export const ArtifactNode = ({
     window.dispatchEvent(new CustomEvent(`agor:export-codesandbox-${data.artifactId}`));
   }, [data.artifactId]);
 
+  const handleOpenFullscreen = useCallback(() => {
+    window.open(
+      uiRouteHref(artifactFullscreenPath(data.artifactId as ArtifactID)),
+      '_blank',
+      'noopener,noreferrer'
+    );
+  }, [data.artifactId]);
+
   // Title bar — always rendered, regardless of load state. When the
   // payload hasn't come back yet (initial fetch in flight, or the row's
   // files column got corrupted and getPayload threw), the user still
@@ -593,7 +261,9 @@ export const ArtifactNode = ({
       ? 'processing'
       : 'success';
   const headerBadgeTitle = error ? 'Failed to load' : loading ? 'Reloading...' : 'Live';
-  const trustBadge = payload ? renderTrustBadge(payload, () => setConsentOpen(true)) : null;
+  const trustBadge = payload
+    ? renderArtifactTrustBadge(payload, () => setConsentOpen(true), { className: 'nodrag nopan' })
+    : null;
   // A loaded payload that's also in the error state is stale — the body
   // renders the error placeholder, so the header shouldn't expose
   // payload-acting controls (Export / Interact / Consent) that operate
@@ -642,6 +312,17 @@ export const ArtifactNode = ({
             />
           </Tooltip>
         )}
+        <Tooltip title="Open fullscreen">
+          <Button
+            type="text"
+            size="small"
+            icon={<FullscreenOutlined />}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleOpenFullscreen();
+            }}
+          />
+        </Tooltip>
         {hasUsablePayload && (
           <Tooltip title="Open in CodeSandbox (eject — daemon-injected env vars/AGOR_TOKEN won't carry over)">
             <Button
@@ -916,8 +597,8 @@ export const ArtifactNode = ({
               showOpenInCodeSandbox={false}
               showRefreshButton={interactMode}
             />
-            <ConsoleReporter artifactId={data.artifactId} />
-            <SandpackErrorReporter artifactId={data.artifactId} />
+            <ArtifactConsoleReporter artifactId={data.artifactId} />
+            <ArtifactSandpackErrorReporter artifactId={data.artifactId} />
             <ArtifactRuntimeBridge artifactId={data.artifactId} />
             <CodeSandboxExporter artifactId={data.artifactId} />
           </SandpackProvider>
@@ -941,64 +622,6 @@ export const ArtifactNode = ({
     </>
   );
 };
-
-function renderTrustBadge(payload: ArtifactPayload, onTrustClick?: () => void) {
-  const state = payload.trust_state;
-  if (state === 'no_secrets_needed') return null;
-  if (state === 'self') {
-    return (
-      <Tag color="blue" icon={<SafetyOutlined />} style={{ fontSize: 10, marginLeft: 4 }}>
-        Yours
-      </Tag>
-    );
-  }
-  if (state === 'trusted') {
-    const scopeLabel =
-      payload.trust_scope === 'instance'
-        ? 'instance-wide'
-        : payload.trust_scope === 'author'
-          ? 'this author'
-          : payload.trust_scope === 'session'
-            ? 'just-once'
-            : 'this artifact';
-    return (
-      <Tooltip title={`Secrets injected — trust granted for ${scopeLabel}`}>
-        <Tag color="green" icon={<SafetyOutlined />} style={{ fontSize: 10, marginLeft: 4 }}>
-          Trusted
-        </Tag>
-      </Tooltip>
-    );
-  }
-  // 'untrusted' — the badge itself is the affordance. `nodrag nopan` is
-  // required because React Flow's drag handler arms on mousedown at the
-  // parent node level, which would swallow the click before onClick fires
-  // (stopPropagation on click is too late, same gotcha as the controls
-  // row above).
-  return (
-    <Tooltip title="Click to review and grant trust so secrets are injected">
-      <Tag
-        color="orange"
-        icon={<LockOutlined />}
-        className={onTrustClick ? 'nodrag nopan' : undefined}
-        style={{
-          fontSize: 10,
-          marginLeft: 4,
-          cursor: onTrustClick ? 'pointer' : undefined,
-        }}
-        onClick={
-          onTrustClick
-            ? (e) => {
-                e.stopPropagation();
-                onTrustClick();
-              }
-            : undefined
-        }
-      >
-        Untrusted
-      </Tag>
-    </Tooltip>
-  );
-}
 
 function LegacyBanner({ upgradeInstructions }: { upgradeInstructions: string }) {
   const { token } = theme.useToken();

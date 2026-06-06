@@ -28,6 +28,7 @@ import { useMemo, useState } from 'react';
 import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
 import { getDaemonUrl } from '@/config/daemon';
 import { useAuthConfig } from '@/hooks/useAuthConfig';
+import { getAuthHeaders } from '@/utils/authHeaders';
 import { getLanguageFromPath } from '@/utils/language';
 import { useThemedMessage } from '@/utils/message';
 import { FileCollection, type FileItem } from '../FileCollection/FileCollection';
@@ -50,14 +51,6 @@ interface ArtifactConsentModalProps {
 }
 
 const HIGH_POWER_GRANT_KEYS = new Set<keyof AgorGrants>(['agor_token']);
-
-function getAuthHeaders(): HeadersInit {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('feathers-jwt') : null;
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-}
 
 export function ArtifactConsentModal({
   open,
