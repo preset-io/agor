@@ -11,6 +11,7 @@
  * and no `sandpack.json`/`agor.config.js` sidecar.
  */
 
+import path from 'node:path';
 import { BranchRepository } from '@agor/core/db';
 import type {
   AgorGrants,
@@ -91,7 +92,7 @@ export function registerArtifactTools(server: McpServer, ctx: McpContext): void 
 If artifactId is omitted, creates a new artifact.
 If artifactId is provided, updates the existing artifact (must be owned by you).
 
-The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor.config.js\`). The agent decides where to create the folder — inside the branch, a temp directory, etc. The folder is only read at publish time; after that, the artifact lives in the database.
+The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor.config.js\`). Prefer \`branchId + subpath\`: \`subpath\` is a branch-relative folder path and the daemon verifies the caller has access to that branch worktree before reading files. Legacy absolute \`folderPath\` is still accepted for compatibility, but if it resolves inside a registered branch it is subject to the same branch access check. The folder is only read at publish time; after that, the artifact lives in the database.
 
 Recommended: create the folder inside your branch so files can be version-controlled.
 
@@ -117,7 +118,7 @@ IMPORTANT:
           .string()
           .optional()
           .describe(
-            'Absolute path to folder containing artifact files. Optional when branchId + subpath are provided.'
+            'Legacy absolute path to folder containing artifact files. Prefer branchId + subpath. If this resolves inside a registered branch, branch session permission is required.'
           ),
         branchId: z
           .string()
@@ -128,7 +129,7 @@ IMPORTANT:
         subpath: z
           .string()
           .optional()
-          .describe('Branch-relative subpath to the artifact folder (requires branchId).'),
+          .describe('Branch-relative subpath to the artifact folder (required with branchId).'),
         boardId: z
           .string()
           .optional()
@@ -193,9 +194,9 @@ IMPORTANT:
       const resolvedArtifactId = coerceString(args.artifactId)
         ? await resolveArtifactId(ctx, coerceString(args.artifactId)!)
         : undefined;
-      if (!folderPath && !resolvedBranchId) {
+      if (!folderPath && (!resolvedBranchId || !subpath)) {
         throw new Error(
-          'Provide either folderPath or branchId (with optional subpath) to publish artifacts.'
+          'Provide either legacy folderPath or branchId + subpath to publish artifacts.'
         );
       }
       const artifact = await service.publishArtifact(
@@ -236,13 +237,13 @@ IMPORTANT:
     'agor_artifacts_check_build',
     {
       description:
-        'Check build readiness of artifact files in a folder. Verifies source files exist and are non-empty (does not run a real build or syntax check). Use this before publishing to verify basic structure.',
+        'Check build readiness of artifact files in a branch-relative folder (branchId + subpath preferred) or legacy absolute folderPath. Verifies source files exist and are non-empty (does not run a real build or syntax check). Use this before publishing to verify basic structure.',
       inputSchema: z.object({
         folderPath: z
           .string()
           .optional()
           .describe(
-            'Absolute path to the folder containing artifact files to check. Optional when branchId + subpath are provided.'
+            'Legacy absolute path to the folder containing artifact files to check. Prefer branchId + subpath. If this resolves inside a registered branch, branch session permission is required.'
           ),
         branchId: z
           .string()
@@ -253,7 +254,9 @@ IMPORTANT:
         subpath: z
           .string()
           .optional()
-          .describe('Branch-relative subpath pointing at the artifact folder (requires branchId).'),
+          .describe(
+            'Branch-relative subpath pointing at the artifact folder (required with branchId).'
+          ),
       }),
     },
     async (args) => {
@@ -262,9 +265,9 @@ IMPORTANT:
       const resolvedBranchId = branchIdRaw ? await resolveBranchId(ctx, branchIdRaw) : undefined;
       const folderPath = coerceString(args.folderPath);
       const subpath = coerceString(args.subpath);
-      if (!folderPath && !resolvedBranchId) {
+      if (!folderPath && (!resolvedBranchId || !subpath)) {
         throw new Error(
-          'Provide either folderPath or branchId (with optional subpath) to check artifact files.'
+          'Provide either legacy folderPath or branchId + subpath to check artifact files.'
         );
       }
       const result = await service.checkBuildFromFolder(
@@ -520,12 +523,15 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
       if (!fullBranch) {
         return textResult({ error: `Branch ${branchId} not found` });
       }
+      const effective = await branchRepo.resolveUserPermission(fullBranch, userIdBranded);
       const canWrite = hasBranchPermission(
         fullBranch,
         userIdBranded,
         isOwner,
         'session',
-        ctx.authenticatedUser.role
+        ctx.authenticatedUser.role,
+        true,
+        effective
       );
       if (!canWrite) {
         return textResult({
@@ -538,13 +544,18 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         overwrite: args.overwrite,
       });
 
+      const destinationSubpath = path
+        .relative(branch.path, result.destinationPath)
+        .replace(/\\/g, '/');
+
       return textResult({
         artifactId,
         branchId: branch.branch_id,
+        subpath: destinationSubpath,
         destinationPath: result.destinationPath,
         fileCount: result.fileCount,
         bytesWritten: result.bytesWritten,
-        instructions: `Artifact materialized to ${result.destinationPath}. The folder includes \`agor.artifact.json\` — keep it: it carries template/sandpack_config/required_env_vars/agor_grants for round-trip publishing. Edit source files there, then call agor_artifacts_publish with folderPath=${result.destinationPath} and artifactId=${artifactId} to push changes back.`,
+        instructions: `Artifact materialized to branch ${branch.branch_id} at subpath ${destinationSubpath}. The folder includes \`agor.artifact.json\` — keep it: it carries template/sandpack_config/required_env_vars/agor_grants for round-trip publishing. Edit source files there, then call agor_artifacts_publish with branchId=${branch.branch_id}, subpath=${destinationSubpath}, and artifactId=${artifactId} to push changes back.`,
       });
     }
   );

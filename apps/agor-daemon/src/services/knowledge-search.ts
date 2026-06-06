@@ -19,7 +19,7 @@ import {
   buildKnowledgeUnitUri,
   hasMinimumRole,
   type KnowledgeSearchResult,
-  normalizeKnowledgePath,
+  normalizeKnowledgeFolderPath,
   type QueryParams,
   ROLES,
   type User,
@@ -174,9 +174,10 @@ export class KnowledgeSearchService {
     const vector = embeddingToPgvector(queryEmbedding.embedding);
     const limit = Math.min(Math.max(rawQuery.rerank_limit ?? rawQuery.limit ?? 25, 1), 100);
     const isAdmin = hasMinimumRole(user?.role, ROLES.ADMIN);
-    const pathPrefix = rawQuery.path_prefix?.trim()
-      ? normalizeKnowledgePath(rawQuery.path_prefix)
-      : null;
+    const normalizedPathPrefix = rawQuery.path_prefix?.trim()
+      ? normalizeKnowledgeFolderPath(rawQuery.path_prefix)
+      : '';
+    const pathPrefix = normalizedPathPrefix || null;
     const minSimilarity = this.parseMinSimilarity(rawQuery.min_similarity);
     const includeMyDrafts = rawQuery.include_my_drafts !== false;
     const includeOtherUserDrafts = rawQuery.include_other_user_drafts === true;

@@ -55,6 +55,13 @@ The MCP Knowledge tools currently expose:
 
 The UI follows the same model: `KnowledgePage.tsx` loads content for the active document and saves via `client.service('kb/documents').patch(activeDoc.document_id, { content_text: ... })`.
 
+Markdown link extraction is intentionally KB-document-focused today. Links like
+`agor://kb/document/<id>` or `agor://kb/<namespace>/<path>` create document
+`references` edges on save. Links to other Agor object schemes such as
+`agor://session/...` are not auto-extracted from markdown; agents should use
+explicit `agor_kb_link` calls for session, board, artifact, external URL, or
+other non-KB graph edges.
+
 ### 1.3 Internal KB units are not yet an editing API
 
 `kb_document_units` already represent document/section/file/auto-split units used for search/indexing. The markdown chunking path can produce heading-aware units, and search results can include chunks/snippets.
@@ -879,4 +886,9 @@ Then add filesystem materialization as an explicit Agor workspace feature, not a
 
 - `kb/document-edits` service applies `KnowledgeEditOp[]` sequentially and reuses `putDocument` so only one version is minted per successful call. Dry runs skip the commit and can optionally return the post-edit content via `returnContent:"full"`.
 - The MCP tool `agor_kb_edit` surfaces the same guarantee and encourages batching to avoid version spam.
-- Artifact publish/check now prefer `branchId + subpath` and enforce branch RBAC when paths resolve inside a registered worktree; legacy `folderPath` is still accepted but inherits the same permission gate.
+- Artifact publish/check now prefer `branchId + subpath` and enforce branch RBAC when paths resolve inside a registered worktree; legacy `folderPath` is still accepted but inherits the same permission gate. The service-level `branchId` path now requires a non-empty branch-relative `subpath` so branch-root reads are not implicit.
+- `agor_kb_outline` and `agor_kb_get_range` provide bounded remote reads for large documents, returning line ranges, content hashes, and the current version token.
+- `agor_kb_materialize` writes a KB markdown snapshot plus a `.agor-kb.json` sidecar into a branch worktree after branch `session` permission and containment checks. `agor_kb_publish_from_worktree` reads the branch-relative file back, uses the sidecar for document/version context when present, and updates existing documents through the targeted edit service so one publish creates one KB version.
+- Automatic markdown link extraction is KB-document-link oriented. Links to sessions, boards, branches, external URLs, etc. should be represented with explicit `agor_kb_link` calls until/unless broader auto-link extraction is intentionally added.
+- Review follow-up moved branch workspace path/RBAC/canonical containment into a shared daemon utility used by KB and artifacts, and moved markdown outline/range parsing into a shared daemon knowledge helper backed by the existing remark parser so fenced code blocks do not create false headings.
+- Worktree materialize/publish validates the derived `.agor-kb.json` sidecar path through the same branch-workspace canonical containment helper as the markdown file before reading or writing it. Worktree publish updates the sidecar after successful non-dry publishes so subsequent publishes carry a fresh expected version.

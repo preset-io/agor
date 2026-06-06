@@ -1,10 +1,19 @@
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { BranchRepository } from '@agor/core/db';
+import { NotFound } from '@agor/core/feathers';
 import type {
+  BranchID,
   KnowledgeDocumentKind,
   KnowledgeDocumentStatus,
+  KnowledgeDocumentVersion,
   KnowledgeEditPolicy,
   KnowledgeGraphEdgeType,
   KnowledgeGraphNodeType,
   KnowledgeVisibility,
+  UserRole,
 } from '@agor/core/types';
 import {
   buildKnowledgeDocumentUri,
@@ -18,7 +27,15 @@ import {
   parseKnowledgeUri,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createTwoFilesPatch } from 'diff';
 import { z } from 'zod';
+import {
+  markdownOutline,
+  resolveHeadingRange,
+  splitMarkdownLines,
+} from '../../knowledge/markdown-outline.js';
+import { resolveBranchWorkspacePath } from '../../utils/branch-workspace-path.js';
+import { resolveBranchId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { coerceJsonRecord, coerceString, textResult } from '../server.js';
 
@@ -216,6 +233,122 @@ async function callCustomMethod(
     service,
     data,
     params
+  );
+}
+
+type HydratedKnowledgeDocumentResult = Record<string, unknown> & {
+  document?: Record<string, unknown>;
+  current_version?: KnowledgeDocumentVersion | null;
+  content?: string | null;
+};
+
+function md5(text: string): string {
+  return createHash('md5').update(text).digest('hex');
+}
+
+function versionToken(version: KnowledgeDocumentVersion | null | undefined) {
+  if (!version) return null;
+  return {
+    version_id: version.version_id,
+    version_number: version.version_number,
+    content_sha256: version.content_sha256 ?? null,
+    etag: `kbv:${version.version_id}`,
+  };
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof NotFound ||
+    (typeof error === 'object' &&
+      error !== null &&
+      ((error as { code?: unknown }).code === 404 ||
+        (error as { name?: unknown }).name === 'NotFound'))
+  );
+}
+
+function namespaceSlugForDocument(result: HydratedKnowledgeDocumentResult): string | undefined {
+  const doc = result.document ?? result;
+  const uri = typeof doc.uri === 'string' ? doc.uri : undefined;
+  return parseKnowledgeUri(uri)?.namespace_slug;
+}
+
+function documentPathForResult(result: HydratedKnowledgeDocumentResult): string | undefined {
+  const doc = result.document ?? result;
+  return typeof doc.path === 'string' ? doc.path : undefined;
+}
+
+async function fetchKnowledgeDocument(
+  ctx: McpContext,
+  ref: {
+    documentId?: string;
+    uri?: string;
+    namespace?: string;
+    path?: string;
+    includeContent?: boolean;
+    version?: string | number;
+  }
+): Promise<HydratedKnowledgeDocumentResult> {
+  const service = getOptionalService(ctx, 'kb/documents');
+  if (!service) throw new Error('Knowledge documents service is not registered');
+  const includeContent = ref.includeContent !== false;
+
+  const documentId = coerceString(ref.documentId);
+  if (documentId) {
+    if (!service.get) throw new Error('kb/documents.get is not available');
+    return (await service.get(
+      documentId,
+      mcpParams(ctx, { include_content: includeContent, version: ref.version })
+    )) as HydratedKnowledgeDocumentResult;
+  }
+
+  const uri = coerceString(ref.uri);
+  if (uri?.startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX)) {
+    const idFromUri = uri.slice(KNOWLEDGE_DOCUMENT_URI_PREFIX.length);
+    if (!service.get) throw new Error('kb/documents.get is not available');
+    return (await service.get(
+      idFromUri,
+      mcpParams(ctx, { include_content: includeContent, version: ref.version })
+    )) as HydratedKnowledgeDocumentResult;
+  }
+
+  const parsedUri = parseKnowledgeUri(uri);
+  const namespace = coerceString(ref.namespace) ?? parsedUri?.namespace_slug;
+  const docPath = coerceString(ref.path) ?? parsedUri?.path;
+  if (!namespace || !docPath) {
+    throw new Error(
+      'Provide documentId, a valid agor://kb/<namespace>/<path> uri, or namespace + path.'
+    );
+  }
+
+  const customResult = await callCustomMethod(
+    service,
+    'getDocument',
+    {
+      uri,
+      namespace_slug: namespace,
+      path: docPath,
+      include_content: includeContent,
+      version: ref.version,
+    },
+    mcpParams(ctx)
+  );
+  if (customResult !== undefined) return customResult as HydratedKnowledgeDocumentResult;
+  throw new Error('kb/documents.getDocument is not available');
+}
+
+function materializationSidecarSubpath(markdownSubpath: string): string {
+  return `${markdownSubpath}.agor-kb.json`;
+}
+
+async function writeKnowledgeMaterializationSidecar(
+  sidecarPath: string,
+  sidecar: Record<string, unknown>
+): Promise<void> {
+  await writeFile(
+    sidecarPath,
+    `${JSON.stringify(sidecar, null, 2)}
+`,
+    'utf-8'
   );
 }
 
@@ -475,6 +608,136 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
   );
 
   server.registerTool(
+    'agor_kb_outline',
+    {
+      description:
+        'Return a markdown heading outline for a Knowledge document, including 1-based line ranges and the current version token. Use this before targeted edits to avoid reading the full document.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
+        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: z.string().optional().describe('Namespace/space slug; use with path'),
+        path: z.string().optional().describe('Document path inside namespace; use with namespace'),
+        version: z
+          .union([z.number(), z.string()])
+          .optional()
+          .describe('Version number or version ID. Omit for current version.'),
+        maxDepth: z.number().int().min(1).max(6).optional().describe('Maximum heading depth'),
+      }),
+    },
+    async (args) => {
+      const result = await fetchKnowledgeDocument(ctx, {
+        documentId: coerceString(args.documentId),
+        uri: coerceString(args.uri),
+        namespace: coerceString(args.namespace),
+        path: coerceString(args.path),
+        version: args.version,
+        includeContent: true,
+      });
+      const content = typeof result.content === 'string' ? result.content : '';
+      const headings = markdownOutline(content, args.maxDepth ?? 6);
+      return textResult(
+        enrichWithReferenceUri({
+          document: result.document ?? result,
+          version: versionToken(result.current_version),
+          lineCount: splitMarkdownLines(content).length,
+          headings,
+        })
+      );
+    }
+  );
+
+  server.registerTool(
+    'agor_kb_get_range',
+    {
+      description:
+        'Read a bounded line range or heading section from a Knowledge document. Returns current version metadata and optional line numbers so agents can edit without loading the full document.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
+        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: z.string().optional().describe('Namespace/space slug; use with path'),
+        path: z.string().optional().describe('Document path inside namespace; use with namespace'),
+        version: z
+          .union([z.number(), z.string()])
+          .optional()
+          .describe('Version number or version ID. Omit for current version.'),
+        startLine: z.number().int().min(1).optional().describe('1-based inclusive start line'),
+        endLine: z.number().int().min(1).optional().describe('1-based inclusive end line'),
+        headingPath: z.string().optional().describe('Heading path from agor_kb_outline'),
+        occurrence: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('Occurrence for duplicate heading paths (default: 1)'),
+        contextLines: z
+          .number()
+          .int()
+          .min(0)
+          .max(20)
+          .optional()
+          .describe('Extra lines before/after the requested range (default: 2)'),
+        includeLineNumbers: z
+          .boolean()
+          .optional()
+          .describe('Include numberedContent for agent-friendly references (default: true)'),
+      }),
+    },
+    async (args) => {
+      const result = await fetchKnowledgeDocument(ctx, {
+        documentId: coerceString(args.documentId),
+        uri: coerceString(args.uri),
+        namespace: coerceString(args.namespace),
+        path: coerceString(args.path),
+        version: args.version,
+        includeContent: true,
+      });
+      const content = typeof result.content === 'string' ? result.content : '';
+      const lines = splitMarkdownLines(content);
+      let startLine = args.startLine;
+      let endLine = args.endLine;
+      const headingPath = coerceString(args.headingPath);
+      if (headingPath) {
+        const heading = resolveHeadingRange(markdownOutline(content), headingPath, args.occurrence);
+        startLine = heading.startLine;
+        endLine = heading.endLine;
+      }
+      if (!startLine || !endLine) {
+        throw new Error('Provide startLine + endLine, or headingPath.');
+      }
+      if (endLine < startLine)
+        throw new Error('endLine must be greater than or equal to startLine');
+      if (endLine > lines.length) throw new Error('Requested range exceeds document length');
+      const contextLines = args.contextLines ?? 2;
+      const contextStartLine = Math.max(1, startLine - contextLines);
+      const contextEndLine = Math.min(lines.length, endLine + contextLines);
+      const contentLines = lines.slice(contextStartLine - 1, contextEndLine);
+      const rangeContent = contentLines.join('\n');
+      const numberedContent =
+        args.includeLineNumbers === false
+          ? undefined
+          : contentLines.map((line, index) => `${contextStartLine + index}: ${line}`).join('\n');
+      return textResult(
+        enrichWithReferenceUri({
+          document: result.document ?? result,
+          version: versionToken(result.current_version),
+          lineCount: lines.length,
+          range: {
+            startLine,
+            endLine,
+            contextStartLine,
+            contextEndLine,
+            content: rangeContent,
+            numberedContent,
+            contentMd5: md5(lines.slice(startLine - 1, endLine).join('\n')),
+          },
+        })
+      );
+    }
+  );
+
+  server.registerTool(
     'agor_kb_put',
     {
       description:
@@ -636,6 +899,355 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         return textResult(await service.create(data, mcpParams(ctx)));
       }
       return knowledgeNotImplementedResult('agor_kb_edit', ['kb/document-edits.create']);
+    }
+  );
+
+  server.registerTool(
+    'agor_kb_materialize',
+    {
+      description:
+        'Write a Knowledge document version to a markdown file inside a branch worktree. Requires branchId + branch-relative subpath (or defaults to .agor/kb/<namespace>/<path>) and verifies the caller has branch session permission.',
+      inputSchema: z.object({
+        documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
+        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: z.string().optional().describe('Namespace/space slug; use with path'),
+        path: z.string().optional().describe('Document path inside namespace; use with namespace'),
+        version: z
+          .union([z.number(), z.string()])
+          .optional()
+          .describe('Version number or version ID. Omit for current version.'),
+        branchId: z.string().describe('Destination branch/worktree ID (UUIDv7 or short ID)'),
+        subpath: z
+          .string()
+          .optional()
+          .describe(
+            'Branch-relative destination markdown path. Default: .agor/kb/<namespace>/<document path>.'
+          ),
+        overwrite: z
+          .boolean()
+          .optional()
+          .describe(
+            'Overwrite the destination file and sidecar if they already exist. Default: false.'
+          ),
+      }),
+    },
+    async (args) => {
+      const result = await fetchKnowledgeDocument(ctx, {
+        documentId: coerceString(args.documentId),
+        uri: coerceString(args.uri),
+        namespace: coerceString(args.namespace),
+        path: coerceString(args.path),
+        version: args.version,
+        includeContent: true,
+      });
+      const content = typeof result.content === 'string' ? result.content : '';
+      const namespaceSlug = namespaceSlugForDocument(result) ?? coerceString(args.namespace);
+      const documentPath = documentPathForResult(result);
+      const defaultSubpath =
+        namespaceSlug && documentPath
+          ? path.join('.agor', 'kb', namespaceSlug, documentPath)
+          : null;
+      const requestedSubpath = coerceString(args.subpath) ?? defaultSubpath;
+      if (!requestedSubpath) {
+        throw new Error('subpath is required when the document namespace/path cannot be inferred');
+      }
+      const branchRepo = new BranchRepository(ctx.db);
+      const workspace = await resolveBranchWorkspacePath({
+        branchRepo,
+        branchId: (await resolveBranchId(ctx, coerceString(args.branchId)!)) as BranchID,
+        subpath: requestedSubpath,
+        userId: ctx.userId,
+        userRole: ctx.authenticatedUser.role as UserRole,
+        requiredPermission: 'session',
+      });
+      const sidecarWorkspace = await resolveBranchWorkspacePath({
+        branchRepo,
+        branchId: workspace.branchId,
+        subpath: materializationSidecarSubpath(workspace.relative),
+        userId: ctx.userId,
+        userRole: ctx.authenticatedUser.role as UserRole,
+        requiredPermission: 'session',
+      });
+      const sidecarPath = sidecarWorkspace.canonical;
+      if (!args.overwrite && (fs.existsSync(workspace.absolute) || fs.existsSync(sidecarPath))) {
+        throw new Error(
+          `Destination already exists: ${workspace.relative} (pass overwrite=true to replace)`
+        );
+      }
+      await mkdir(path.dirname(workspace.absolute), { recursive: true });
+      await writeFile(workspace.absolute, content, 'utf-8');
+      const doc = (result.document ?? result) as Record<string, unknown>;
+      const sidecar = {
+        $schema: 'https://agor.live/schemas/kb-materialization/2026-06-06.json',
+        document_id: doc.document_id,
+        uri: doc.uri,
+        namespace: namespaceSlug,
+        path: documentPath,
+        version_id: result.current_version?.version_id ?? null,
+        version_number: result.current_version?.version_number ?? null,
+        content_sha256: result.current_version?.content_sha256 ?? null,
+        materialized_at: new Date().toISOString(),
+        materialized_by: ctx.userId,
+      };
+      await writeKnowledgeMaterializationSidecar(sidecarPath, sidecar);
+      return textResult(
+        enrichWithReferenceUri({
+          document: doc,
+          version: versionToken(result.current_version),
+          branchId: workspace.branchId,
+          subpath: workspace.relative,
+          destinationPath: workspace.absolute,
+          sidecarPath,
+          bytesWritten: Buffer.byteLength(content, 'utf-8'),
+          instructions:
+            'Edit the markdown file, then call agor_kb_publish_from_worktree with the same branchId/subpath. The sidecar preserves the source document and expected version.',
+        })
+      );
+    }
+  );
+
+  server.registerTool(
+    'agor_kb_publish_from_worktree',
+    {
+      description:
+        'Publish a markdown file from a branch worktree into Knowledge. Requires branchId + branch-relative subpath and branch session permission. If a .agor-kb sidecar exists, it supplies documentId and expectedVersion; otherwise provide documentId or namespace + path. Updating an existing document creates one immutable KB version.',
+      inputSchema: z.object({
+        branchId: z.string().describe('Source branch/worktree ID (UUIDv7 or short ID)'),
+        subpath: z.string().describe('Branch-relative source markdown file path'),
+        documentId: z.string().optional().describe('Knowledge document ID to update'),
+        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: z
+          .string()
+          .optional()
+          .describe('Namespace/space slug. Required with path when creating without sidecar.'),
+        path: z
+          .string()
+          .optional()
+          .describe('Document path. Required with namespace when creating without sidecar.'),
+        expectedVersion: z
+          .union([z.number(), z.string()])
+          .optional()
+          .describe(
+            'Expected current version number or ID. Defaults to sidecar version when present.'
+          ),
+        dryRun: z.boolean().optional().describe('Preview without creating/updating a KB version.'),
+        createNamespace: z
+          .boolean()
+          .optional()
+          .describe('Create namespace if missing when creating a new doc (default: false).'),
+        title: z.string().optional().describe('Optional title for newly-created documents'),
+        firstLineIsTitle: z
+          .boolean()
+          .optional()
+          .describe('Derive title from first markdown heading for newly-created docs.'),
+        kind: KnowledgeDocumentKindSchema.optional().describe(
+          'Document kind for newly-created docs'
+        ),
+        visibility: KnowledgeVisibilitySchema.optional().describe(
+          'Visibility for newly-created docs'
+        ),
+        status: KnowledgeDocumentStatusSchema.optional().describe('Lifecycle status'),
+        editPolicy: KnowledgeEditPolicySchema.optional().describe('Edit policy'),
+        changeSummary: z.string().optional().describe('Version history change summary'),
+      }),
+    },
+    async (args) => {
+      const branchRepo = new BranchRepository(ctx.db);
+      const workspace = await resolveBranchWorkspacePath({
+        branchRepo,
+        branchId: (await resolveBranchId(ctx, coerceString(args.branchId)!)) as BranchID,
+        subpath: coerceString(args.subpath),
+        userId: ctx.userId,
+        userRole: ctx.authenticatedUser.role as UserRole,
+        requiredPermission: 'session',
+      });
+      if (!fs.existsSync(workspace.absolute)) {
+        throw new Error(`File not found in branch worktree: ${workspace.relative}`);
+      }
+      const content = await readFile(workspace.absolute, 'utf-8');
+      const sidecarWorkspace = await resolveBranchWorkspacePath({
+        branchRepo,
+        branchId: workspace.branchId,
+        subpath: materializationSidecarSubpath(workspace.relative),
+        userId: ctx.userId,
+        userRole: ctx.authenticatedUser.role as UserRole,
+        requiredPermission: 'session',
+      });
+      const sidecarPath = sidecarWorkspace.canonical;
+      let sidecar: Record<string, unknown> = {};
+      if (fs.existsSync(sidecarPath)) {
+        try {
+          sidecar = JSON.parse(await readFile(sidecarPath, 'utf-8')) as Record<string, unknown>;
+        } catch (error) {
+          throw new Error(
+            `Failed to parse KB sidecar ${path.relative(workspace.branchRoot, sidecarPath)}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
+
+      const documentId = coerceString(args.documentId) ?? coerceString(sidecar.document_id);
+      const uri = coerceString(args.uri) ?? coerceString(sidecar.uri);
+      const parsedUri = parseKnowledgeUri(uri);
+      const namespace =
+        coerceString(args.namespace) ??
+        parsedUri?.namespace_slug ??
+        coerceString(sidecar.namespace);
+      const docPath = coerceString(args.path) ?? parsedUri?.path ?? coerceString(sidecar.path);
+      const expectedVersion =
+        args.expectedVersion ??
+        coerceString(sidecar.version_id) ??
+        (typeof sidecar.version_number === 'number' ? sidecar.version_number : undefined);
+
+      const documentService = getOptionalService(ctx, 'kb/documents');
+      if (!documentService) {
+        return knowledgeNotImplementedResult('agor_kb_publish_from_worktree', ['kb/documents']);
+      }
+
+      const dryRun = args.dryRun === true;
+      let existing: HydratedKnowledgeDocumentResult | null = null;
+      try {
+        existing = await fetchKnowledgeDocument(ctx, {
+          documentId,
+          uri,
+          namespace,
+          path: docPath,
+          includeContent: true,
+        });
+      } catch (error) {
+        if (documentId || uri || !isNotFoundError(error)) throw error;
+      }
+
+      if (existing?.current_version) {
+        if (!expectedVersion && !dryRun) {
+          throw new Error('expectedVersion is required to publish over an existing KB document');
+        }
+        const baseContent = typeof existing.content === 'string' ? existing.content : '';
+        const lineCount = splitMarkdownLines(baseContent).length;
+        const editService = getOptionalService(ctx, 'kb/document-edits');
+        if (!editService?.create) {
+          return knowledgeNotImplementedResult('agor_kb_publish_from_worktree', [
+            'kb/document-edits.create',
+          ]);
+        }
+        const editResult = (await editService.create(
+          {
+            documentId: coerceString((existing.document ?? existing).document_id) ?? documentId,
+            expectedVersion: expectedVersion ?? existing.current_version.version_number,
+            dryRun,
+            changeSummary: coerceString(args.changeSummary) ?? `Publish from ${workspace.relative}`,
+            ops: [
+              {
+                type: 'replace_line_range',
+                startLine: 1,
+                endLine: lineCount,
+                replacement: content,
+                expectedText: baseContent,
+              },
+            ],
+            returnContent: dryRun ? 'full' : 'none',
+          },
+          mcpParams(ctx)
+        )) as Record<string, unknown>;
+        const newVersion = editResult.newVersion as Record<string, unknown> | undefined;
+        const editedDocument = editResult.document as Record<string, unknown> | undefined;
+        if (!dryRun && newVersion) {
+          await writeKnowledgeMaterializationSidecar(sidecarPath, {
+            ...sidecar,
+            $schema:
+              sidecar.$schema ?? 'https://agor.live/schemas/kb-materialization/2026-06-06.json',
+            document_id: editedDocument?.document_id ?? sidecar.document_id ?? documentId,
+            uri: editedDocument?.uri ?? sidecar.uri ?? uri,
+            namespace,
+            path: docPath,
+            version_id: newVersion.version_id,
+            version_number: newVersion.version_number,
+            content_sha256: newVersion.content_sha256 ?? null,
+            materialized_at: sidecar.materialized_at ?? null,
+            materialized_by: sidecar.materialized_by ?? null,
+            published_at: new Date().toISOString(),
+            published_by: ctx.userId,
+          });
+        }
+        return textResult({
+          ...editResult,
+          sidecarUpdated: !dryRun && Boolean(newVersion),
+          sidecarPath: !dryRun && newVersion ? sidecarPath : undefined,
+        });
+      }
+
+      if (!namespace || !docPath) {
+        throw new Error(
+          'No existing document or sidecar found. Provide namespace + path to create a new KB document.'
+        );
+      }
+      if (dryRun) {
+        return textResult({
+          dryRun: true,
+          create: true,
+          namespace,
+          path: docPath,
+          branchId: workspace.branchId,
+          subpath: workspace.relative,
+          content,
+          diff: createTwoFilesPatch('empty', workspace.relative, '', content, '', ''),
+        });
+      }
+
+      const customResult = await callCustomMethod(
+        documentService,
+        'putDocument',
+        {
+          namespace_slug: namespace,
+          path: docPath,
+          content_text: content,
+          create_namespace: args.createNamespace === true,
+          title: coerceString(args.title),
+          first_line_is_title: args.firstLineIsTitle,
+          kind: (args.kind as KnowledgeDocumentKind | undefined) ?? 'doc',
+          visibility: args.visibility as KnowledgeVisibility | undefined,
+          status: args.status as KnowledgeDocumentStatus | undefined,
+          edit_policy: args.editPolicy as KnowledgeEditPolicy | undefined,
+          change_summary: coerceString(args.changeSummary) ?? `Publish from ${workspace.relative}`,
+        },
+        mcpParams(ctx)
+      );
+      if (customResult !== undefined) {
+        const hydrated = await fetchKnowledgeDocument(ctx, {
+          namespace,
+          path: docPath,
+          includeContent: true,
+        });
+        const doc = (hydrated.document ?? hydrated) as Record<string, unknown>;
+        await writeKnowledgeMaterializationSidecar(sidecarPath, {
+          ...sidecar,
+          $schema:
+            sidecar.$schema ?? 'https://agor.live/schemas/kb-materialization/2026-06-06.json',
+          document_id: doc.document_id,
+          uri: doc.uri,
+          namespace,
+          path: docPath,
+          version_id: hydrated.current_version?.version_id ?? null,
+          version_number: hydrated.current_version?.version_number ?? null,
+          content_sha256: hydrated.current_version?.content_sha256 ?? null,
+          materialized_at: sidecar.materialized_at ?? null,
+          materialized_by: sidecar.materialized_by ?? null,
+          published_at: new Date().toISOString(),
+          published_by: ctx.userId,
+        });
+        return textResult(
+          enrichWithReferenceUri({
+            result: customResult,
+            sidecarUpdated: true,
+            sidecarPath,
+            version: versionToken(hydrated.current_version),
+          })
+        );
+      }
+      return knowledgeNotImplementedResult('agor_kb_publish_from_worktree', [
+        'kb/documents.putDocument',
+      ]);
     }
   );
 

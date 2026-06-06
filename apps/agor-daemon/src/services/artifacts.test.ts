@@ -12,12 +12,14 @@ import { generateId } from '@agor/core';
 import {
   ArtifactRepository,
   BoardRepository,
+  BranchRepository,
   type Database,
+  RepoRepository,
   shortId,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Artifact, BoardID } from '@agor/core/types';
+import type { Artifact, BoardID, BranchID, UUID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { ArtifactsService } from './artifacts';
@@ -40,6 +42,28 @@ async function seedBoard(db: Database) {
     board_id: generateId() as BoardID,
     name: 'Test Board',
     created_by: 'user-owner',
+  });
+}
+
+async function seedRepoAndBranch(db: Database, branchPath: string) {
+  const repo = await new RepoRepository(db).create({
+    repo_id: generateId() as UUID,
+    slug: `artifact-test-${generateId()}`,
+    name: 'Artifact Test Repo',
+    repo_type: 'remote',
+    remote_url: 'https://github.com/test/repo.git',
+    local_path: path.dirname(branchPath),
+    default_branch: 'main',
+  });
+  return new BranchRepository(db).create({
+    branch_id: generateId() as BranchID,
+    repo_id: repo.repo_id,
+    name: `artifact-branch-${generateId()}`,
+    ref: 'refs/heads/artifact-branch',
+    branch_unique_id: 1,
+    path: branchPath,
+    created_by: 'user-owner' as UUID,
+    others_can: 'session',
   });
 }
 
@@ -545,6 +569,50 @@ describe('ArtifactsService.land', () => {
       'console.log("hello")'
     );
   });
+
+  dbTest(
+    'rejects branch-relative publish source that is a symlink to outside the branch',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const branch = await seedRepoAndBranch(db, tmpRoot);
+      const outside = mkdtempSync(path.join(tmpdir(), 'agor-publish-outside-'));
+      try {
+        writeFileSync(path.join(outside, 'index.js'), 'console.log("outside")');
+        symlinkSync(outside, path.join(tmpRoot, 'app'), 'dir');
+
+        await expect(
+          service.checkBuildFromFolder(
+            { branch_id: branch.branch_id, subpath: 'app' },
+            'user-reviewer',
+            'member'
+          )
+        ).rejects.toThrow(/escapes branch root/i);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    }
+  );
+
+  dbTest(
+    'treats registered branches under temp roots as branches before temp-dir allowance',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const branch = await seedRepoAndBranch(db, tmpRoot);
+      const appDir = path.join(tmpRoot, 'app');
+      mkdirSync(appDir, { recursive: true });
+      writeFileSync(path.join(appDir, 'index.js'), 'console.log("branch")');
+
+      await expect(
+        service.checkBuildFromFolder({ folderPath: appDir }, undefined, 'member')
+      ).rejects.toThrow(/Authentication required/i);
+
+      await expect(
+        service.checkBuildFromFolder({ folderPath: appDir }, 'user-reviewer', 'member')
+      ).resolves.toMatchObject({ status: 'success' });
+
+      expect(branch.path).toBe(tmpRoot);
+    }
+  );
 
   dbTest('errors when artifact has no stored files', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());

@@ -250,4 +250,61 @@ describe('Knowledge repositories', () => {
       new Set(['private', 'public'])
     );
   });
+
+  dbTest('search path_prefix accepts trailing folder slashes', async ({ db }) => {
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const documents = new KnowledgeDocumentRepository(db);
+    const search = new KnowledgeSearchRepository(db);
+    const namespace = await namespaces.create({
+      slug: 'path-prefix-test',
+      display_name: 'Path Prefix Test',
+    });
+
+    const guide = await documents.create({
+      namespace_id: namespace.namespace_id,
+      path: 'guides/intro.md',
+      title: 'Intro',
+      content_text: 'prefixneedle guide',
+    });
+    await documents.create({
+      namespace_id: namespace.namespace_id,
+      path: 'notes/intro.md',
+      title: 'Note',
+      content_text: 'prefixneedle note',
+    });
+
+    const withoutSlash = await search.search({
+      q: 'prefixneedle',
+      namespace_slug: namespace.slug,
+      path_prefix: 'guides',
+    });
+    const withSlash = await search.search({
+      q: 'prefixneedle',
+      namespace_slug: namespace.slug,
+      path_prefix: 'guides/',
+    });
+
+    expect(withoutSlash.map((result) => result.document.document_id)).toEqual([guide.document_id]);
+    expect(withSlash.map((result) => result.document.document_id)).toEqual([guide.document_id]);
+  });
+
+  dbTest('namespace kind filtering includes user namespaces', async ({ db }) => {
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const userNamespace = await namespaces.create({
+      slug: 'user-kind-test',
+      display_name: 'User Kind Test',
+      kind: 'user',
+    });
+    await namespaces.create({
+      slug: 'global-kind-test',
+      display_name: 'Global Kind Test',
+      kind: 'global',
+    });
+
+    const userNamespaces = await namespaces.findAll({ kind: 'user' });
+
+    expect(userNamespaces.map((namespace) => namespace.namespace_id)).toEqual([
+      userNamespace.namespace_id,
+    ]);
+  });
 });

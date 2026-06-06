@@ -40,6 +40,7 @@ import {
   KNOWLEDGE_DOCUMENT_URI_PREFIX,
   KNOWLEDGE_EMBEDDING_STATUSES,
   KNOWLEDGE_UNIT_URI_PREFIX,
+  normalizeKnowledgeFolderPath,
   normalizeKnowledgePath,
   parseKnowledgeUri,
   titleFromKnowledgePath,
@@ -1163,8 +1164,10 @@ export class KnowledgeSearchRepository {
     }
     if (namespaceId) conditions.push(eq(kbDocuments.namespace_id, namespaceId));
     if (query.path_prefix) {
-      const prefix = normalizeKnowledgePath(query.path_prefix);
-      conditions.push(or(eq(kbDocuments.path, prefix), like(kbDocuments.path, `${prefix}/%`))!);
+      const prefix = normalizeKnowledgeFolderPath(query.path_prefix);
+      if (prefix) {
+        conditions.push(or(eq(kbDocuments.path, prefix), like(kbDocuments.path, `${prefix}/%`))!);
+      }
     }
     if (query.kind) conditions.push(eq(kbDocuments.kind, query.kind));
     if (query.visibility) conditions.push(eq(kbDocuments.visibility, query.visibility));

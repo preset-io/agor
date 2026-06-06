@@ -62,7 +62,12 @@ import {
 import { DrizzleService } from '../adapters/drizzle.js';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
-import { hasBranchPermission } from '../utils/branch-authorization.js';
+import {
+  canonicalizeExistingPrefix,
+  ensureBranchWorkspaceAccess,
+  matchRegisteredBranchPath,
+  resolveBranchWorkspacePath,
+} from '../utils/branch-workspace-path.js';
 import {
   detectLegacyFormat,
   effectiveTemplateForArtifact,
@@ -70,27 +75,6 @@ import {
   sanitizeSandpackConfig,
 } from '../utils/sandpack-config.js';
 import type { UsersService } from './users.js';
-
-/**
- * Resolve a destination path by canonicalizing the longest existing prefix via
- * `realpath` and re-joining the still-nonexistent tail. Used by `land()` to
- * detect symlinked ancestors that would otherwise defeat a lexical
- * containment check.
- */
-async function canonicalizeExistingPrefix(target: string): Promise<string> {
-  const segments = target.split(path.sep);
-  for (let i = segments.length; i >= 1; i--) {
-    const prefix = segments.slice(0, i).join(path.sep) || path.sep;
-    try {
-      const real = await realpath(prefix);
-      const tail = segments.slice(i).join(path.sep);
-      return tail ? path.join(real, tail) : real;
-    } catch {
-      // prefix does not exist yet — shrink and try again
-    }
-  }
-  return target;
-}
 
 /**
  * Lazily-built data URL carrying the agor-runtime IIFE. Sandpack injects
@@ -202,18 +186,6 @@ function readArtifactSidecar(folderPath: string): ArtifactSidecar | null {
   }
 }
 
-function normalizeBranchSubpath(subpath: string | undefined | null): string {
-  if (!subpath) return '';
-  const normalized = subpath.replace(/\\+/g, '/');
-  const segments = normalized.split('/').filter((segment) => segment.length > 0);
-  for (const segment of segments) {
-    if (segment === '.' || segment === '..') {
-      throw new Error('branch subpath must not include "." or ".." segments');
-    }
-  }
-  return segments.join('/');
-}
-
 export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
   branch_id?: BranchID;
@@ -289,16 +261,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (!branch) {
       throw new Error(`Branch not found: ${branchId}`);
     }
-    if (!userId) {
-      throw new Error('Authentication required to access branch workspace files');
-    }
-    const isOwner = await this.branchRepo.isOwner(branch.branch_id, userId as UserID);
-    const effective = await this.branchRepo.resolveUserPermission(branch, userId as UserID);
-    if (
-      !hasBranchPermission(branch, userId as UserID, isOwner, 'session', userRole, true, effective)
-    ) {
-      throw new Error('Forbidden: branch session permission required to read artifact files');
-    }
+    await ensureBranchWorkspaceAccess(this.branchRepo, branch, userId, userRole, 'session');
   }
 
   private async resolveArtifactSource(
@@ -310,14 +273,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     let hintBranchId: BranchID | null = null;
 
     if (input.branch_id) {
-      const branch = await this.branchRepo.findById(input.branch_id);
-      if (!branch) {
-        throw new Error(`Branch not found: ${input.branch_id}`);
-      }
-      const branchRoot = path.resolve(branch.path);
-      const relative = normalizeBranchSubpath(input.subpath);
-      folderPath = relative ? path.join(branchRoot, relative) : branchRoot;
-      hintBranchId = branch.branch_id as BranchID;
+      const workspace = await resolveBranchWorkspacePath({
+        branchRepo: this.branchRepo,
+        branchId: input.branch_id,
+        subpath: input.subpath,
+        userId,
+        userRole,
+        requiredPermission: 'session',
+      });
+      folderPath = workspace.canonical;
+      hintBranchId = workspace.branchId;
     } else {
       if (input.subpath) {
         throw new Error('branchId is required when subpath is provided');
@@ -328,15 +293,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       folderPath = path.resolve(input.folderPath);
     }
 
-    const matchedBranchId = await this.validatePublishPath(folderPath);
+    const validated = await this.validatePublishPath(folderPath);
+    const matchedBranchId = validated.branchId;
     if (hintBranchId && matchedBranchId && hintBranchId !== matchedBranchId) {
       throw new Error('Resolved branch subpath does not match known branch root');
     }
     const branchId = hintBranchId ?? matchedBranchId;
-    if (branchId) {
+    if (branchId && !hintBranchId) {
       await this.ensureBranchFilesystemAccess(branchId, userId, userRole);
     }
-    return { folderPath, matchedBranchId: branchId };
+    return { folderPath: validated.folderPath, matchedBranchId: branchId };
   }
 
   constructor(db: Database, app: Application) {
@@ -1762,19 +1728,24 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * artifact row for provenance + by-branch filtering); returns null for
    * temp-dir paths.
    */
-  private async validatePublishPath(folderPath: string): Promise<BranchID | null> {
+  private async validatePublishPath(
+    folderPath: string
+  ): Promise<{ folderPath: string; branchId: BranchID | null }> {
     const resolved = path.resolve(folderPath);
-
-    const allowedTempRoots = ['/tmp', '/var/tmp'];
-    for (const root of allowedTempRoots) {
-      if (resolved.startsWith(root + path.sep) || resolved === root) return null;
+    const matchedBranch = await matchRegisteredBranchPath({
+      branchRepo: this.branchRepo,
+      folderPath: resolved,
+    });
+    if (matchedBranch) {
+      return { folderPath: matchedBranch.canonicalFolderPath, branchId: matchedBranch.branchId };
     }
 
-    const branches = await this.branchRepo.findAll();
-    for (const wt of branches) {
-      const wtPath = path.resolve(wt.path);
-      if (resolved.startsWith(wtPath + path.sep) || resolved === wtPath) {
-        return wt.branch_id as BranchID;
+    const canonical = await canonicalizeExistingPrefix(resolved);
+    const allowedTempRoots = ['/tmp', '/var/tmp'];
+    for (const root of allowedTempRoots) {
+      const rootReal = await canonicalizeExistingPrefix(root);
+      if (canonical.startsWith(rootReal + path.sep) || canonical === rootReal) {
+        return { folderPath: canonical, branchId: null };
       }
     }
 
