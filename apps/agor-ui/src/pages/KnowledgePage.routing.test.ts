@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildKnowledgeDocumentRouteUrl,
   buildKnowledgeQueryString,
   resolveActiveKnowledgeDocument,
   shouldDeferKnowledgeUrlMirrorForRoute,
@@ -63,6 +64,17 @@ describe('KnowledgePage routing state helpers', () => {
         activeDocId: pageDoc.document_id,
       })
     ).toBe('?kind=pages&mode=edit');
+  });
+
+  it('preserves the current query string when mirroring the open document route', () => {
+    expect(
+      buildKnowledgeDocumentRouteUrl({
+        routeBasePath: '/knowledge',
+        namespaceSlug: 'global',
+        documentPath: 'untitled.md',
+        currentSearch: '?kind=pages',
+      })
+    ).toBe('/knowledge/global/untitled.md?kind=pages');
   });
 
   it('defers URL mirroring while the route points at a different document', () => {

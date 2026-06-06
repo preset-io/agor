@@ -300,6 +300,17 @@ export function buildKnowledgeQueryString(args: {
   return serialized ? `?${serialized}` : '';
 }
 
+export function buildKnowledgeDocumentRouteUrl(args: {
+  routeBasePath: string;
+  namespaceSlug: string;
+  documentPath: string;
+  currentSearch?: string;
+}): string {
+  return `${buildKnowledgeRoutePath(args.routeBasePath, args.namespaceSlug, args.documentPath)}${
+    args.currentSearch ?? ''
+  }`;
+}
+
 const validateKnowledgePath = (path: string, { allowEmpty = false } = {}): string | null =>
   validateSharedKnowledgePath(path, { allowEmpty });
 
@@ -1080,22 +1091,30 @@ export function KnowledgePage({
       return;
     }
 
-    // Only an OPEN document drives the URL from this effect. When no doc is
-    // open, the namespace portion of the URL is owned solely by the navigation
-    // handlers (changeKnowledgeSpace / goToGraphHome) and read back into state
-    // by the route-reading effect above. Mirroring `activeSpace` into the URL
-    // here as well made the namespace a two-writer value: this effect and the
-    // route-reading effect would leapfrog (each acting on the other's
-    // pre-commit value), ping-ponging the route between namespaces forever.
+    // Only an OPEN document's *path* drives the URL from this effect. Query
+    // params (`q`, `kind`, `mode`, `draft`) are owned by explicit UI navigation
+    // handlers and read back into state by the route-reading effect above.
+    // Rebuilding query params here from local state creates a two-writer value:
+    // after a route change, local state can lag by one render, so this effect
+    // removes the new query param; the route reader then applies the old/new
+    // state in the opposite direction and the URL ping-pongs forever.
+    //
+    // This is the same ownership rule as namespace/path routing: path mirroring
+    // may correct the document route, but it must preserve the URL's current
+    // query string verbatim.
     if (!activeDoc) return;
 
-    const targetUrl = `${buildKnowledgeRoutePath(routeBasePath, namespaceSlugForDocument(activeDoc), activeDoc.path)}${buildKnowledgeSearch()}`;
+    const targetUrl = buildKnowledgeDocumentRouteUrl({
+      routeBasePath,
+      namespaceSlug: namespaceSlugForDocument(activeDoc),
+      documentPath: activeDoc.path,
+      currentSearch: location.search,
+    });
     const currentUrl = `${location.pathname}${location.search}`;
     if (targetUrl !== currentUrl) navigate(targetUrl, { replace: true });
   }, [
     activeDoc,
     activeDocId,
-    buildKnowledgeSearch,
     documents,
     draftDocument,
     location.pathname,
