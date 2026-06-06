@@ -60,6 +60,10 @@ describe('OnboardingWizard', () => {
     expect(screen.getByRole('button', { name: /create your assistant/i })).toBeInTheDocument();
     expect(screen.getByText('Your assistant can help:')).toBeInTheDocument();
     expect(screen.getByText(/connect tools and credentials/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Agor assistant/i })).toHaveAttribute(
+      'href',
+      'https://agor.live/guide/assistants'
+    );
     expect(screen.getByRole('link', { name: /getting started guide/i })).toBeInTheDocument();
     expect(screen.queryByText(/bring your own repository/i)).not.toBeInTheDocument();
 

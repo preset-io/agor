@@ -1245,8 +1245,15 @@ export function OnboardingWizard({
         Welcome to Agor ✨
       </Title>
       <Paragraph style={{ marginBottom: 14, fontSize: 15 }}>
-        Start by creating your Agor assistant: a persistent agent that can help you set up the
-        workspace and keep things moving.
+        Start by creating your{' '}
+        <Typography.Link
+          href="https://agor.live/guide/assistants"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Agor assistant
+        </Typography.Link>
+        : a persistent agent that can help you set up the workspace and keep things moving.
       </Paragraph>
 
       <div
