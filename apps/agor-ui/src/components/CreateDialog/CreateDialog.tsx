@@ -15,7 +15,7 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Modal, Tabs } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
+import type { BranchStorageConfig } from '@/utils/branchStorage';
 import type { AgenticToolOption } from '../../types';
 import type { AssistantTabResult } from './tabs/AssistantTab';
 import { AssistantTab } from './tabs/AssistantTab';

@@ -12,7 +12,14 @@ import yaml from 'js-yaml';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { resolveExecutorHeartbeatConfig } from './executor-heartbeat';
-import type { AgorConfig, UnknownJson } from './types';
+import {
+  type AgorConfig,
+  BRANCH_STORAGE_MODES,
+  type BranchStorageMode,
+  DEFAULT_BRANCH_STORAGE_MODE,
+  type ResolvedBranchStorageConfig,
+  type UnknownJson,
+} from './types';
 
 // ---------------------------------------------------------------------------
 // In-memory cache for the default-path config
@@ -848,10 +855,7 @@ export function isUnixImpersonationEnabled(): boolean {
  * forgot to add `clone` to `allowed_modes`) — load-time normalisation
  * keeps service code from needing to defensively re-validate.
  */
-export function resolveBranchStorageConfig(): {
-  defaultMode: import('./types').BranchStorageMode;
-  allowedModes: import('./types').BranchStorageMode[];
-} {
+export function resolveBranchStorageConfig(): ResolvedBranchStorageConfig {
   let raw: import('./types').AgorBranchStorageSettings | undefined;
   try {
     raw = loadConfigSync().execution?.branch_storage;
@@ -860,9 +864,11 @@ export function resolveBranchStorageConfig(): {
     // the safe legacy default.
     raw = undefined;
   }
-  const allowed: import('./types').BranchStorageMode[] =
-    raw?.allowed_modes && raw.allowed_modes.length > 0 ? raw.allowed_modes : ['worktree', 'clone'];
-  const requestedDefault = raw?.default_mode ?? 'worktree';
+  const allowed: BranchStorageMode[] =
+    raw?.allowed_modes && raw.allowed_modes.length > 0
+      ? raw.allowed_modes
+      : [...BRANCH_STORAGE_MODES];
+  const requestedDefault = raw?.default_mode ?? DEFAULT_BRANCH_STORAGE_MODE;
   // Normalise: if the operator's default_mode isn't in allowed_modes, fall
   // back to the first allowed mode so we never hand out a default that the
   // gate would immediately reject.

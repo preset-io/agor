@@ -23,12 +23,13 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
+import type { BranchStorageConfig } from '@/utils/branchStorage';
+import { normalizeBranchStorageMode } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveToggleButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
-import { BranchFormFields, normalizeBranchStorageMode } from '../BranchFormFields';
+import { BranchFormFields } from '../BranchFormFields';
 import { renderEnvCell } from './BranchEnvColumn';
 
 interface BranchesTableProps {

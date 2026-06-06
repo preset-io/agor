@@ -102,6 +102,7 @@ describe('BranchTab — branch storage policy', { timeout: 10_000 }, () => {
     const result = await formRef.current?.();
     expect(result).toBeTruthy();
     expect(result!.storage_mode).toBe('clone');
+    expect(result!.clone_depth).toBe(100);
   });
 
   it('allows both modes and respects a server default of clone', async () => {

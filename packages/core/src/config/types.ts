@@ -582,7 +582,14 @@ export interface AgorExecutionSettings {
  * - `'clone'` — self-standing `git clone` with its own `.git/` directory;
  *   closes cross-branch credential/config leak vectors.
  */
-export type BranchStorageMode = 'worktree' | 'clone';
+export const BRANCH_STORAGE_MODES = ['worktree', 'clone'] as const;
+export type BranchStorageMode = (typeof BRANCH_STORAGE_MODES)[number];
+export const DEFAULT_BRANCH_STORAGE_MODE: BranchStorageMode = 'worktree';
+
+export interface ResolvedBranchStorageConfig {
+  defaultMode: BranchStorageMode;
+  allowedModes: BranchStorageMode[];
+}
 
 /**
  * Operator gate for which storage modes can be selected at branch-create

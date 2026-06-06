@@ -6,7 +6,7 @@
  * - BranchesTable (create standalone branch)
  */
 
-import type { BranchStorageMode } from '@agor/core/config';
+import { BRANCH_STORAGE_MODES, type BranchStorageMode } from '@agor/core/config/browser';
 import type { Board, Repo } from '@agor-live/client';
 import {
   Checkbox,
@@ -20,7 +20,11 @@ import {
   Typography,
 } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
+import {
+  type BranchStorageConfig,
+  getStorageModeLabel,
+  resolveUiBranchStorageConfig,
+} from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 
 /**
@@ -31,42 +35,6 @@ import { mapToArray } from '@/utils/mapHelpers';
  * a different positive integer.
  */
 const DEFAULT_CLONE_DEPTH = 100;
-
-const BRANCH_STORAGE_MODES: BranchStorageMode[] = ['worktree', 'clone'];
-
-export interface ResolvedBranchStorageConfig {
-  defaultMode: BranchStorageMode;
-  allowedModes: BranchStorageMode[];
-}
-
-export function resolveUiBranchStorageConfig(
-  config?: BranchStorageConfig
-): ResolvedBranchStorageConfig {
-  const allowedModes =
-    config?.allowedModes?.filter((mode): mode is BranchStorageMode =>
-      BRANCH_STORAGE_MODES.includes(mode)
-    ) ?? BRANCH_STORAGE_MODES;
-  const nonEmptyAllowedModes = allowedModes.length > 0 ? allowedModes : BRANCH_STORAGE_MODES;
-  const requestedDefault = config?.defaultMode ?? 'worktree';
-  return {
-    defaultMode: nonEmptyAllowedModes.includes(requestedDefault)
-      ? requestedDefault
-      : nonEmptyAllowedModes[0],
-    allowedModes: nonEmptyAllowedModes,
-  };
-}
-
-export function normalizeBranchStorageMode(
-  mode: BranchStorageMode | undefined,
-  config?: BranchStorageConfig
-): BranchStorageMode {
-  const resolved = resolveUiBranchStorageConfig(config);
-  return mode && resolved.allowedModes.includes(mode) ? mode : resolved.defaultMode;
-}
-
-function getStorageModeLabel(mode: BranchStorageMode): string {
-  return mode === 'worktree' ? 'Worktree' : 'Clone';
-}
 
 export interface BranchFormFieldsProps {
   repoById: Map<string, Repo>;

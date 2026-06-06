@@ -5,11 +5,11 @@
  * Used on app startup to determine if login page should be shown and display instance label.
  */
 
-import type { BranchStorageMode } from '@agor/core/config';
 import type { ManagedEnvExecutionMode } from '@agor/core/environment/webhook';
 import type { DaemonServicesConfig } from '@agor-live/client';
 import { useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
+import type { BranchStorageConfig } from '../utils/branchStorage';
 
 interface AuthConfig {
   requireAuth: boolean;
@@ -37,11 +37,6 @@ interface OnboardingConfig {
   persistedAgentPending?: boolean;
   frameworkRepoUrl?: string;
   systemCredentials?: SystemCredentials;
-}
-
-export interface BranchStorageConfig {
-  defaultMode?: BranchStorageMode;
-  allowedModes?: BranchStorageMode[];
 }
 
 export interface FeaturesConfig {

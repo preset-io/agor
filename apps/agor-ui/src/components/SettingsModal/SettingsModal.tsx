@@ -35,7 +35,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Layout, Menu, Modal, theme } from 'antd';
 import { useMemo, useState } from 'react';
-import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
+import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
 import { BranchModal } from '../BranchModal';

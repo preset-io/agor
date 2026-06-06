@@ -31,7 +31,7 @@ import {
   PanelResizeHandle,
 } from 'react-resizable-panels';
 import { useParams } from 'react-router-dom';
-import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
+import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { AppEntityDataProvider, AppLiveDataProvider } from '../../contexts/AppDataContext';

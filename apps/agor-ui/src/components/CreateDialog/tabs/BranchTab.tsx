@@ -1,9 +1,10 @@
 import type { Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
+import type { BranchStorageConfig } from '@/utils/branchStorage';
+import { normalizeBranchStorageMode } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
-import { BranchFormFields, normalizeBranchStorageMode } from '../../BranchFormFields';
+import { BranchFormFields } from '../../BranchFormFields';
 
 export interface BranchTabConfig {
   repoId: string;
