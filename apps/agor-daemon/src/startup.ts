@@ -446,10 +446,11 @@ export async function startup(ctx: StartupContext): Promise<void> {
   runPostStartJob('daemon-restart-notices', () => injectRestartNotices(ctx, orphanCleanupResult));
 
   // Non-blocking credential spill repair. If an agent/user wrote a PAT into a
-  // managed repo remote URL while the daemon was down, scrub it after the API
-  // is already accepting requests. This is best-effort and deliberately skips
-  // registered local repos to avoid surprising writes outside Agor-managed
-  // storage.
+  // git remote URL while the daemon was down, scrub persisted repo metadata
+  // and Agor-managed repo/worktree git configs after the API is already
+  // accepting requests. This is best-effort; filesystem config scrubbing
+  // deliberately skips registered local repos to avoid surprising writes
+  // outside Agor-managed storage.
   runPostStartJob('git-remote-credential-scrub', () => scrubManagedGitRemoteCredentials(db));
 
   // Log the host IP that will be frozen into env command templates as
