@@ -103,6 +103,11 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Codex')).toBeInTheDocument();
     expect(screen.getByAltText('claude-code logo')).toBeInTheDocument();
     expect(screen.getByAltText('codex logo')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /use a different provider/i })).toBeInTheDocument();
+    expect(screen.queryByText('Other LLM providers')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /use a different provider/i }));
+
     expect(screen.getByText('Other LLM providers')).toBeInTheDocument();
     expect(screen.queryByText('Configure Your Agent')).not.toBeInTheDocument();
   });

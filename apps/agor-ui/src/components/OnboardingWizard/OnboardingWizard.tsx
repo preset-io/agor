@@ -38,6 +38,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Form,
   Input,
   Modal,
@@ -331,6 +332,7 @@ export function OnboardingWizard({
   const [assistantEmoji, setAssistantEmoji] = useState('🤖');
   const [apiKey, setApiKey] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
+  const [useDifferentProvider, setUseDifferentProvider] = useState(false);
   const [testAuthLoading, setTestAuthLoading] = useState(false);
   // Inline feedback from the user clicking "Test Connection" on a typed key.
   // Never flips the panel, never advances, never saves. Wiped on agent
@@ -1211,6 +1213,7 @@ export function OnboardingWizard({
     setAssistantEmoji('🤖');
     setApiKey('');
     setSelectedAgent('claude-code');
+    setUseDifferentProvider(false);
     setTestAuthLoading(false);
     setManualTestResult(null);
     setOverrideDetectedAuth(false);
@@ -1708,6 +1711,7 @@ export function OnboardingWizard({
                   size="small"
                   onClick={() => {
                     setSelectedAgent(option.value);
+                    setUseDifferentProvider(false);
                     setApiKey('');
                     setError(null);
                     setManualTestResult(null);
@@ -1727,13 +1731,6 @@ export function OnboardingWizard({
                         <Text strong>{option.title}</Text>
                         <Tag color={selected ? 'blue' : 'default'}>{option.eyebrow}</Tag>
                       </Space>
-                      {selected && (
-                        <div>
-                          <Text type="success" style={{ fontSize: 12 }}>
-                            Selected
-                          </Text>
-                        </div>
-                      )}
                     </div>
                   </Space>
                 </Card>
@@ -1741,31 +1738,39 @@ export function OnboardingWizard({
             })}
           </div>
 
-          <Form layout="vertical">
-            <Form.Item label="Other LLM providers" style={{ marginBottom: 0 }}>
-              <Select
-                placeholder="Choose another provider"
-                value={RECOMMENDED_AGENT_VALUES.has(selectedAgent) ? undefined : selectedAgent}
-                onChange={(value) => {
-                  setSelectedAgent(value);
-                  setApiKey('');
-                  setError(null);
-                  setManualTestResult(null);
-                  setOverrideDetectedAuth(false);
-                }}
-                options={OTHER_AGENT_OPTIONS}
-                style={{ width: '100%' }}
-                allowClear
-                onClear={() => {
-                  setSelectedAgent('claude-code');
-                  setApiKey('');
-                  setError(null);
-                  setManualTestResult(null);
-                  setOverrideDetectedAuth(false);
-                }}
-              />
-            </Form.Item>
-          </Form>
+          <Checkbox
+            checked={useDifferentProvider}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              setUseDifferentProvider(checked);
+              setSelectedAgent(checked ? OTHER_AGENT_OPTIONS[0].value : 'claude-code');
+              setApiKey('');
+              setError(null);
+              setManualTestResult(null);
+              setOverrideDetectedAuth(false);
+            }}
+          >
+            Use a different provider
+          </Checkbox>
+
+          {useDifferentProvider && (
+            <Form layout="vertical">
+              <Form.Item label="Other LLM providers" style={{ marginBottom: 0 }}>
+                <Select
+                  value={RECOMMENDED_AGENT_VALUES.has(selectedAgent) ? undefined : selectedAgent}
+                  onChange={(value) => {
+                    setSelectedAgent(value);
+                    setApiKey('');
+                    setError(null);
+                    setManualTestResult(null);
+                    setOverrideDetectedAuth(false);
+                  }}
+                  options={OTHER_AGENT_OPTIONS}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Form>
+          )}
         </Space>
 
         {isAuthenticated && !overrideDetectedAuth ? (
