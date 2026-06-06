@@ -24,18 +24,21 @@ import {
   ArrowLeftOutlined,
   DownOutlined,
   EditOutlined,
+  ExperimentOutlined,
   FileAddOutlined,
   FileOutlined,
   FolderAddOutlined,
   FolderOpenOutlined,
   FolderOutlined,
   HistoryOutlined,
+  LoadingOutlined,
   QuestionCircleOutlined,
   ReloadOutlined,
   SaveOutlined,
   SearchOutlined,
   SettingOutlined,
   UpOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -175,50 +178,104 @@ const indexingStateMeta: Record<
   { label: string; color: string; tooltip: string }
 > = {
   empty: {
-    label: 'No index',
+    label: 'No semantic index',
     color: 'default',
     tooltip: 'No indexable units exist for the current version yet.',
   },
   not_configured: {
-    label: 'Embeddings off',
+    label: 'Semantic indexing unavailable',
     color: 'default',
-    tooltip: 'Semantic embeddings are not configured for these chunks.',
+    tooltip: 'Semantic indexing is not configured for these chunks.',
   },
   queued: {
-    label: 'Queued',
-    color: 'processing',
-    tooltip: 'Some chunks are queued for embedding.',
+    label: 'Indexing',
+    color: '#1677ff',
+    tooltip: 'Some chunks are queued for semantic indexing.',
   },
   ready: {
-    label: 'Indexed',
-    color: 'green',
-    tooltip: 'Current chunks have ready embeddings.',
+    label: 'Semantic index ready',
+    color: '#52c41a',
+    tooltip: 'Current chunks are available for semantic search.',
   },
   stale: {
-    label: 'Needs reindex',
-    color: 'gold',
-    tooltip: 'Some chunks are stale and queued for refresh.',
+    label: 'Needs semantic refresh',
+    color: '#faad14',
+    tooltip: 'Some chunks are stale and need semantic index refresh.',
   },
   error: {
-    label: 'Index error',
-    color: 'red',
-    tooltip: 'At least one chunk failed embedding.',
+    label: 'Semantic index error',
+    color: '#ff4d4f',
+    tooltip: 'At least one chunk failed semantic indexing.',
   },
   mixed: {
-    label: 'Partial index',
-    color: 'blue',
-    tooltip: 'Chunks have mixed indexing states.',
+    label: 'Partial semantic index',
+    color: '#1677ff',
+    tooltip: 'Chunks have mixed semantic indexing states.',
   },
+};
+
+const indexingChunkLabels: Record<string, string> = {
+  not_configured: 'not configured',
+  pending: 'queued',
+  ready: 'ready',
+  stale: 'stale',
+  error: 'error',
 };
 
 function indexingTooltip(status: KnowledgeDocumentIndexingStatus): string {
   const counts = Object.entries(status.chunks)
     .filter(([, count]) => Number(count) > 0)
-    .map(([state, count]) => `${state}: ${count}`)
+    .map(([state, count]) => `${indexingChunkLabels[state] ?? state}: ${count}`)
     .join(', ');
   const model = status.embedding_model ? ` · ${status.embedding_model}` : '';
+  const queue = status.queue_depth > 0 ? ` · queue ${status.queue_depth}` : '';
   const error = status.last_error ? ` · ${status.last_error}` : '';
-  return `${indexingStateMeta[status.state].tooltip}${model}${counts ? ` · ${counts}` : ''}${error}`;
+  return `${indexingStateMeta[status.state].tooltip}${model}${queue}${counts ? ` · ${counts}` : ''}${error}`;
+}
+
+function shouldShowIndexingCue(status?: KnowledgeDocumentIndexingStatus | null): boolean {
+  return Boolean(status && status.state !== 'empty' && status.state !== 'not_configured');
+}
+
+function IndexingStatusCue({
+  status,
+  size = 14,
+}: {
+  status?: KnowledgeDocumentIndexingStatus | null;
+  size?: number;
+}) {
+  if (!shouldShowIndexingCue(status) || !status) return null;
+
+  const meta = indexingStateMeta[status.state];
+  const iconStyle = { color: meta.color, fontSize: size };
+  const icon =
+    status.state === 'queued' ? (
+      <LoadingOutlined spin style={iconStyle} />
+    ) : status.state === 'error' ? (
+      <WarningOutlined style={iconStyle} />
+    ) : (
+      <ExperimentOutlined style={iconStyle} />
+    );
+
+  return (
+    <Tooltip title={indexingTooltip(status)}>
+      <span
+        aria-label={meta.label}
+        role="img"
+        style={{
+          alignItems: 'center',
+          display: 'inline-flex',
+          flex: '0 0 auto',
+          height: size + 2,
+          justifyContent: 'center',
+          lineHeight: 1,
+          width: size + 2,
+        }}
+      >
+        {icon}
+      </span>
+    </Tooltip>
+  );
 }
 
 const kindForSegment = (segment: string): KnowledgeDocumentKind | undefined => {
@@ -1619,17 +1676,7 @@ export function KnowledgePage({
             Draft
           </Tag>
         )}
-        {doc.indexing_status && (
-          <Tooltip title={indexingTooltip(doc.indexing_status)}>
-            <Tag
-              color={indexingStateMeta[doc.indexing_status.state].color}
-              bordered={false}
-              style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px' }}
-            >
-              {indexingStateMeta[doc.indexing_status.state].label}
-            </Tag>
-          </Tooltip>
-        )}
+        <IndexingStatusCue status={doc.indexing_status} />
       </button>
     );
   };
@@ -2062,13 +2109,7 @@ export function KnowledgePage({
                       ) : (
                         <Tag color="blue">Published</Tag>
                       )}
-                      {activeDoc.indexing_status && (
-                        <Tooltip title={indexingTooltip(activeDoc.indexing_status)}>
-                          <Tag color={indexingStateMeta[activeDoc.indexing_status.state].color}>
-                            {indexingStateMeta[activeDoc.indexing_status.state].label}
-                          </Tag>
-                        </Tooltip>
-                      )}
+                      <IndexingStatusCue status={activeDoc.indexing_status} size={16} />
                       {isEditing ? (
                         <Select
                           size="small"
