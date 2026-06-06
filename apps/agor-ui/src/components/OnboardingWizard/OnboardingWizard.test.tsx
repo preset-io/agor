@@ -125,6 +125,8 @@ describe('OnboardingWizard', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /use a different provider/i }));
 
     expect(screen.getByText('Other LLM providers')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /use a different provider/i }));
+    expect(codexOption).toBeChecked();
     expect(screen.queryByText('Configure Your Agent')).not.toBeInTheDocument();
   });
 

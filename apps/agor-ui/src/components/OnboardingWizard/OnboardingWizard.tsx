@@ -332,6 +332,7 @@ export function OnboardingWizard({
   const [assistantEmoji, setAssistantEmoji] = useState('🤖');
   const [apiKey, setApiKey] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
+  const [lastRecommendedAgent, setLastRecommendedAgent] = useState<AgenticToolName>('claude-code');
   const [useDifferentProvider, setUseDifferentProvider] = useState(false);
   const [testAuthLoading, setTestAuthLoading] = useState(false);
   // Inline feedback from the user clicking "Test Connection" on a typed key.
@@ -424,6 +425,9 @@ export function OnboardingWizard({
   const selectAgent = useCallback(
     (agent: AgenticToolName, options: { useDifferentProvider?: boolean } = {}) => {
       setSelectedAgent(agent);
+      if (RECOMMENDED_AGENT_VALUES.has(agent)) {
+        setLastRecommendedAgent(agent);
+      }
       setUseDifferentProvider(options.useDifferentProvider ?? !RECOMMENDED_AGENT_VALUES.has(agent));
       resetProviderAuthState();
     },
@@ -1708,7 +1712,7 @@ export function OnboardingWizard({
             checked={useDifferentProvider}
             onChange={(event) => {
               const checked = event.target.checked;
-              selectAgent(checked ? OTHER_AGENT_OPTIONS[0].value : 'claude-code', {
+              selectAgent(checked ? OTHER_AGENT_OPTIONS[0].value : lastRecommendedAgent, {
                 useDifferentProvider: checked,
               });
             }}
