@@ -92,7 +92,7 @@ describe('OnboardingWizard', () => {
   });
 
   it('shows recommended provider cards plus a secondary selector', async () => {
-    renderWizard();
+    const { baseElement } = renderWizard();
 
     fireEvent.click(screen.getByRole('button', { name: /create your assistant/i }));
     fireEvent.click(await screen.findByRole('button', { name: /^continue$/i }));
@@ -103,6 +103,22 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Codex')).toBeInTheDocument();
     expect(screen.getByAltText('claude-code logo')).toBeInTheDocument();
     expect(screen.getByAltText('codex logo')).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: /onboarding progress/i })).toBeInTheDocument();
+    const providerOptions = Array.from(
+      baseElement.querySelectorAll<HTMLInputElement>('input[name="recommended-agent"]')
+    );
+    const claudeOption = providerOptions.find((option) => option.value === 'claude-code');
+    const codexOption = providerOptions.find((option) => option.value === 'codex');
+    expect(claudeOption).toBeInstanceOf(HTMLInputElement);
+    expect(claudeOption).toBeChecked();
+    expect(codexOption).toBeInstanceOf(HTMLInputElement);
+    expect(codexOption).not.toBeChecked();
+    codexOption?.focus();
+    expect(codexOption).toHaveFocus();
+
+    fireEvent.click(codexOption as HTMLInputElement);
+
+    expect(codexOption).toBeChecked();
     expect(screen.getByRole('checkbox', { name: /use a different provider/i })).toBeInTheDocument();
     expect(screen.queryByText('Other LLM providers')).not.toBeInTheDocument();
 
@@ -110,5 +126,23 @@ describe('OnboardingWizard', () => {
 
     expect(screen.getByText('Other LLM providers')).toBeInTheDocument();
     expect(screen.queryByText('Configure Your Agent')).not.toBeInTheDocument();
+  });
+
+  it('detects an existing Cursor credential when selecting Cursor', async () => {
+    renderWizard({
+      user: makeUser({
+        agentic_tools: {
+          cursor: { CURSOR_API_KEY: true },
+        },
+      } as Partial<User>),
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /create your assistant/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^continue$/i }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /use a different provider/i }));
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByText('Cursor SDK (Beta)'));
+
+    expect(await screen.findByText('Cursor SDK is configured')).toBeInTheDocument();
   });
 });

@@ -382,6 +382,7 @@ export function OnboardingWizard({
   const codexFields = user?.agentic_tools?.codex;
   const geminiFields = user?.agentic_tools?.gemini;
   const copilotFields = user?.agentic_tools?.copilot;
+  const cursorFields = user?.agentic_tools?.cursor;
   const hasAnthropicKey = !!(
     claudeFields?.ANTHROPIC_API_KEY ||
     claudeFields?.CLAUDE_CODE_OAUTH_TOKEN ||
@@ -392,6 +393,7 @@ export function OnboardingWizard({
   const hasCopilotToken = !!(
     copilotFields?.COPILOT_GITHUB_TOKEN || user?.env_vars?.COPILOT_GITHUB_TOKEN
   );
+  const hasCursorKey = !!(cursorFields?.CURSOR_API_KEY || user?.env_vars?.CURSOR_API_KEY);
 
   const hasKeyForAgent = (agent: AgenticToolName): boolean => {
     switch (agent) {
@@ -403,12 +405,30 @@ export function OnboardingWizard({
         return hasGeminiKey;
       case 'copilot':
         return hasCopilotToken;
+      case 'cursor':
+        return hasCursorKey;
       case 'opencode':
         return hasAnthropicKey || hasOpenAIKey || hasGeminiKey;
       default:
         return false;
     }
   };
+
+  const resetProviderAuthState = useCallback(() => {
+    setApiKey('');
+    setError(null);
+    setManualTestResult(null);
+    setOverrideDetectedAuth(false);
+  }, []);
+
+  const selectAgent = useCallback(
+    (agent: AgenticToolName, options: { useDifferentProvider?: boolean } = {}) => {
+      setSelectedAgent(agent);
+      setUseDifferentProvider(options.useDifferentProvider ?? !RECOMMENDED_AGENT_VALUES.has(agent));
+      resetProviderAuthState();
+    },
+    [resetProviderAuthState]
+  );
 
   // ─── Resume from prior onboarding state ──────────
   //
@@ -1631,6 +1651,8 @@ export function OnboardingWizard({
 
         <Space direction="vertical" size="middle" style={{ width: '100%', marginBottom: 16 }}>
           <div
+            role="radiogroup"
+            aria-label="Recommended LLM providers"
             style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
@@ -1642,34 +1664,41 @@ export function OnboardingWizard({
               return (
                 <Card
                   key={option.value}
-                  hoverable
                   size="small"
-                  onClick={() => {
-                    setSelectedAgent(option.value);
-                    setUseDifferentProvider(false);
-                    setApiKey('');
-                    setError(null);
-                    setManualTestResult(null);
-                    setOverrideDetectedAuth(false);
-                  }}
                   style={{
-                    cursor: 'pointer',
                     borderColor: selected ? token.colorPrimary : token.colorBorder,
                     background: selected ? token.colorPrimaryBg : undefined,
                   }}
-                  styles={{ body: { padding: 14 } }}
+                  styles={{ body: { padding: 0 } }}
                 >
-                  <Space align="center" size={10} style={{ width: '100%' }}>
-                    <ToolIcon tool={option.value} size={32} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div>
-                        <Text strong>{option.title}</Text>
+                  <label
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      cursor: 'pointer',
+                      padding: 14,
+                    }}
+                  >
+                    <Space align="center" size={10} style={{ width: '100%' }}>
+                      <ToolIcon tool={option.value} size={32} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div>
+                          <Text strong>{option.title}</Text>
+                        </div>
+                        <div>
+                          <Tag color={selected ? 'blue' : 'default'}>{option.eyebrow}</Tag>
+                        </div>
                       </div>
-                      <div>
-                        <Tag color={selected ? 'blue' : 'default'}>{option.eyebrow}</Tag>
-                      </div>
-                    </div>
-                  </Space>
+                      <input
+                        type="radio"
+                        name="recommended-agent"
+                        value={option.value}
+                        checked={selected}
+                        onChange={() => selectAgent(option.value, { useDifferentProvider: false })}
+                        style={{ accentColor: token.colorPrimary }}
+                      />
+                    </Space>
+                  </label>
                 </Card>
               );
             })}
@@ -1679,12 +1708,9 @@ export function OnboardingWizard({
             checked={useDifferentProvider}
             onChange={(event) => {
               const checked = event.target.checked;
-              setUseDifferentProvider(checked);
-              setSelectedAgent(checked ? OTHER_AGENT_OPTIONS[0].value : 'claude-code');
-              setApiKey('');
-              setError(null);
-              setManualTestResult(null);
-              setOverrideDetectedAuth(false);
+              selectAgent(checked ? OTHER_AGENT_OPTIONS[0].value : 'claude-code', {
+                useDifferentProvider: checked,
+              });
             }}
           >
             Use a different provider
@@ -1695,13 +1721,7 @@ export function OnboardingWizard({
               <Form.Item label="Other LLM providers" style={{ marginBottom: 0 }}>
                 <Select
                   value={RECOMMENDED_AGENT_VALUES.has(selectedAgent) ? undefined : selectedAgent}
-                  onChange={(value) => {
-                    setSelectedAgent(value);
-                    setApiKey('');
-                    setError(null);
-                    setManualTestResult(null);
-                    setOverrideDetectedAuth(false);
-                  }}
+                  onChange={(value) => selectAgent(value, { useDifferentProvider: true })}
                   options={OTHER_AGENT_OPTIONS}
                   style={{ width: '100%' }}
                 />
@@ -1874,21 +1894,25 @@ export function OnboardingWizard({
     if (!path || currentStep === 'welcome' || progressItems.length === 0) return null;
 
     return (
-      <div
+      <ol
+        aria-label="Onboarding progress"
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           gap: 10,
           marginBottom: 24,
+          padding: 0,
+          listStyle: 'none',
         }}
       >
         {progressItems.map((item, index) => {
           const isActive = index === currentProgressIndex;
           const color = isActive ? token.colorPrimary : token.colorTextDisabled;
           return (
-            <div
+            <li
               key={item.key}
+              aria-current={isActive ? 'step' : undefined}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1929,10 +1953,10 @@ export function OnboardingWizard({
                   style={{ color: token.colorTextDisabled, opacity: 0.55, fontSize: 12 }}
                 />
               )}
-            </div>
+            </li>
           );
         })}
-      </div>
+      </ol>
     );
   };
 

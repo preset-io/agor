@@ -837,8 +837,10 @@ function AppContent() {
 
     try {
       await handleUpdateUser(currentUser.user_id, { preferences }, { silent: true });
-    } catch {
-      // handleUpdateUser already surfaces the error when not silent; keep restart best-effort.
+    } catch (error) {
+      showError(
+        `Failed to restart onboarding: ${error instanceof Error ? error.message : String(error)}`
+      );
       return;
     }
 
