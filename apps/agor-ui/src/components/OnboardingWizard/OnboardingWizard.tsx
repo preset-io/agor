@@ -1592,12 +1592,12 @@ export function OnboardingWizard({
           <Form.Item
             label="Branch name"
             extra={
-              <>
-                {path === 'assistant'
-                  ? 'Created from '
-                  : 'Used as both the directory name and the new branch name. Forked from '}
-                <Text code>{sourceBranch}</Text>.
-              </>
+              path === 'assistant' ? undefined : (
+                <>
+                  Used as both the directory name and the new branch name. Forked from{' '}
+                  <Text code>{sourceBranch}</Text>.
+                </>
+              )
             }
           >
             <Input
