@@ -63,6 +63,7 @@ import { extractSlugFromPath, slugify } from '../../utils/repoSlug';
 import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
+import { ToolIcon } from '../ToolIcon';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -241,20 +242,16 @@ const RECOMMENDED_AGENT_OPTIONS: Array<{
   value: AgenticToolName;
   title: string;
   eyebrow: string;
-  description: string;
 }> = [
   {
     value: 'claude-code',
     title: 'Claude Code',
     eyebrow: 'Recommended',
-    description:
-      'Best-tested default for Agor assistants, with API key, CLI auth, and Pro/Max token paths.',
   },
   {
     value: 'codex',
-    title: 'Codex (OpenAI)',
+    title: 'Codex',
     eyebrow: 'Recommended',
-    description: 'Strong support for OpenAI API keys and Codex CLI auth inside Agor branches.',
   },
 ];
 
@@ -1689,10 +1686,9 @@ export function OnboardingWizard({
 
     return (
       <div style={{ padding: '16px 0' }}>
-        <Title level={4}>Connect an LLM Provider</Title>
+        <Title level={4}>Choose an LLM Provider</Title>
         <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-          Choose what will power your assistant. Claude Code and Codex are the best-supported
-          onboarding options today; other supported agents are available below.
+          Pick what powers your assistant. You can change this later.
         </Paragraph>
 
         <Space direction="vertical" size="middle" style={{ width: '100%', marginBottom: 16 }}>
@@ -1721,18 +1717,24 @@ export function OnboardingWizard({
                     cursor: 'pointer',
                     borderColor: selected ? token.colorPrimary : token.colorBorder,
                     background: selected ? token.colorPrimaryBg : undefined,
-                    minHeight: 132,
                   }}
+                  styles={{ body: { padding: 14 } }}
                 >
-                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                    <Space align="center">
-                      <Text strong>{option.title}</Text>
-                      <Tag color={selected ? 'blue' : 'default'}>{option.eyebrow}</Tag>
-                    </Space>
-                    <Text type="secondary" style={{ fontSize: 13 }}>
-                      {option.description}
-                    </Text>
-                    {selected && <Text type="success">Selected</Text>}
+                  <Space align="center" size={10} style={{ width: '100%' }}>
+                    <ToolIcon tool={option.value} size={32} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Space size={6} wrap>
+                        <Text strong>{option.title}</Text>
+                        <Tag color={selected ? 'blue' : 'default'}>{option.eyebrow}</Tag>
+                      </Space>
+                      {selected && (
+                        <div>
+                          <Text type="success" style={{ fontSize: 12 }}>
+                            Selected
+                          </Text>
+                        </div>
+                      )}
+                    </div>
                   </Space>
                 </Card>
               );
@@ -1740,9 +1742,9 @@ export function OnboardingWizard({
           </div>
 
           <Form layout="vertical">
-            <Form.Item label="Other supported agents" style={{ marginBottom: 0 }}>
+            <Form.Item label="Other LLM providers" style={{ marginBottom: 0 }}>
               <Select
-                placeholder="Choose another agent"
+                placeholder="Choose another provider"
                 value={RECOMMENDED_AGENT_VALUES.has(selectedAgent) ? undefined : selectedAgent}
                 onChange={(value) => {
                   setSelectedAgent(value);

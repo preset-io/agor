@@ -97,11 +97,13 @@ describe('OnboardingWizard', () => {
     fireEvent.click(screen.getByRole('button', { name: /create your assistant/i }));
     fireEvent.click(await screen.findByRole('button', { name: /^continue$/i }));
 
-    expect(await screen.findByText('Connect an LLM Provider')).toBeInTheDocument();
-    expect(screen.getByText(/best-supported onboarding options today/i)).toBeInTheDocument();
+    expect(await screen.findByText('Choose an LLM Provider')).toBeInTheDocument();
+    expect(screen.getByText(/Pick what powers your assistant/i)).toBeInTheDocument();
     expect(screen.getByText('Claude Code')).toBeInTheDocument();
-    expect(screen.getByText('Codex (OpenAI)')).toBeInTheDocument();
-    expect(screen.getByText('Other supported agents')).toBeInTheDocument();
+    expect(screen.getByText('Codex')).toBeInTheDocument();
+    expect(screen.getByAltText('claude-code logo')).toBeInTheDocument();
+    expect(screen.getByAltText('codex logo')).toBeInTheDocument();
+    expect(screen.getByText('Other LLM providers')).toBeInTheDocument();
     expect(screen.queryByText('Configure Your Agent')).not.toBeInTheDocument();
   });
 });
