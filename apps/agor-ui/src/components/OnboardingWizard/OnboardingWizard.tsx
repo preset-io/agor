@@ -1189,56 +1189,6 @@ export function OnboardingWizard({
     }
   }, [stepIndex, steps, setCurrentStep]);
 
-  // Dev-only: reset the wizard back to the welcome screen so the flows can be
-  // re-tested without DB surgery. Clears persisted onboarding state but leaves
-  // any repos / boards / branches the user already created intact — those
-  // are easy to clean up manually if needed.
-  const handleReset = useCallback(async () => {
-    if (cloneTimeoutRef.current) {
-      clearTimeout(cloneTimeoutRef.current);
-      cloneTimeoutRef.current = null;
-    }
-    if (cloneIntervalRef.current) {
-      clearInterval(cloneIntervalRef.current);
-      cloneIntervalRef.current = null;
-    }
-    setPath(null);
-    setCurrentStep('welcome');
-    setError(null);
-    setLoading(false);
-    setRepoUrl('');
-    setRepoSlug('');
-    setLocalRepoPath('');
-    setRepoMode('remote');
-    setBranchName('');
-    setAssistantDisplayName('My Assistant');
-    setAssistantEmoji('🤖');
-    setApiKey('');
-    setSelectedAgent('claude-code');
-    setUseDifferentProvider(false);
-    setTestAuthLoading(false);
-    setManualTestResult(null);
-    setOverrideDetectedAuth(false);
-    setCreatedRepoId(null);
-    setCreatedBoardId(null);
-    setCreatedBranchId(null);
-    setCloneElapsedSeconds(0);
-    // Do not allow the resume effect to re-run against the still-stale
-    // user.preferences snapshot before the PATCH clearing onboarding state
-    // comes back over the socket. Otherwise Reset(dev) can appear to need
-    // two clicks: first local reset, then stale prefs immediately resume it.
-    resumedRef.current = true;
-    branchNameInitRef.current = false;
-    knownFailedRepoIdsRef.current = new Set();
-
-    if (user) {
-      const prefs = { ...(user.preferences || {}) } as Record<string, unknown>;
-      delete prefs.onboarding;
-      delete prefs.mainBoardId;
-      await onUpdateUser(user.user_id, { preferences: prefs as UserPreferences });
-    }
-  }, [user, onUpdateUser, setCurrentStep]);
-
   // ─── Render Helpers ───────────────────────────────
 
   const renderWelcome = () => (
@@ -1999,26 +1949,8 @@ export function OnboardingWizard({
         </Typography.Link>
       </Space>
 
-      {/* Right: Dev reset + Skip */}
+      {/* Right: Skip */}
       <Space size="small">
-        {import.meta.env.DEV && (
-          <Popconfirm
-            title="Reset wizard?"
-            description={
-              <div style={{ maxWidth: 280 }}>
-                Clears local state and onboarding progress in your user preferences. Repos, boards,
-                and branches you created stay put.
-              </div>
-            }
-            okText="Reset"
-            cancelText="Cancel"
-            onConfirm={handleReset}
-          >
-            <Button type="text" size="small" style={{ color: token.colorTextTertiary }}>
-              Reset (dev)
-            </Button>
-          </Popconfirm>
-        )}
         <Popconfirm
           title="Skip setup?"
           description={
