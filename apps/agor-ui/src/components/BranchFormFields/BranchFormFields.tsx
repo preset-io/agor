@@ -6,7 +6,6 @@
  * - BranchesTable (create standalone branch)
  */
 
-import { BRANCH_STORAGE_MODES, type BranchStorageMode } from '@agor/core/config/browser';
 import type { Board, Repo } from '@agor-live/client';
 import {
   Checkbox,
@@ -21,7 +20,9 @@ import {
 } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BRANCH_STORAGE_MODES,
   type BranchStorageConfig,
+  type BranchStorageMode,
   getStorageModeLabel,
   resolveUiBranchStorageConfig,
 } from '@/utils/branchStorage';

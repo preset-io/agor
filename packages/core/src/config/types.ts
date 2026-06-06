@@ -588,7 +588,7 @@ export const DEFAULT_BRANCH_STORAGE_MODE: BranchStorageMode = 'worktree';
 
 export interface ResolvedBranchStorageConfig {
   defaultMode: BranchStorageMode;
-  allowedModes: BranchStorageMode[];
+  allowedModes: readonly BranchStorageMode[];
 }
 
 /**

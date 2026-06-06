@@ -5,6 +5,7 @@ import {
   type ResolvedBranchStorageConfig,
 } from '@agor/core/config/browser';
 
+export { BRANCH_STORAGE_MODES, type BranchStorageMode };
 export type BranchStorageConfig = Partial<ResolvedBranchStorageConfig>;
 
 export function isBranchStorageMode(value: unknown): value is BranchStorageMode {
