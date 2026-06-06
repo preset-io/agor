@@ -50,6 +50,7 @@ import {
   useSessionActions,
 } from './hooks';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
+import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
@@ -59,23 +60,75 @@ import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLife
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
 
-const AgorApp = lazy(() => import('./components/App').then((module) => ({ default: module.App })));
-const KnowledgePage = lazy(() =>
-  import('./pages/KnowledgePage').then((module) => ({ default: module.KnowledgePage }))
+type RouteModuleKey = RouteSurfaceId | 'mobile';
+
+const loadedRouteModuleKeys = new Set<RouteModuleKey>();
+
+function cacheRouteLoader<TModule, TRouteModule>(
+  moduleKey: RouteModuleKey,
+  importModule: () => Promise<TModule>,
+  selectDefault: (module: TModule) => TRouteModule
+) {
+  let promise: Promise<TRouteModule> | null = null;
+
+  return () => {
+    promise ??= importModule().then((module) => {
+      loadedRouteModuleKeys.add(moduleKey);
+      return selectDefault(module);
+    });
+    return promise;
+  };
+}
+
+const loadAgorApp = cacheRouteLoader(
+  'workspace',
+  () => import('./components/App'),
+  (module) => ({ default: module.App })
 );
-const ArtifactFullscreenPage = lazy(() =>
-  import('./pages/ArtifactFullscreenPage').then((module) => ({
-    default: module.ArtifactFullscreenPage,
-  }))
+const loadKnowledgePage = cacheRouteLoader(
+  'knowledge',
+  () => import('./pages/KnowledgePage'),
+  (module) => ({ default: module.KnowledgePage })
 );
-const MobileApp = lazy(() =>
-  import('./components/mobile/MobileApp').then((module) => ({ default: module.MobileApp }))
+const loadArtifactFullscreenPage = cacheRouteLoader(
+  'artifact-fullscreen',
+  () => import('./pages/ArtifactFullscreenPage'),
+  (module) => ({ default: module.ArtifactFullscreenPage })
 );
-const StreamdownDemoPage = lazy(() =>
-  import('./pages/StreamdownDemoPage').then((module) => ({
-    default: module.StreamdownDemoPage,
-  }))
+const loadMobileApp = cacheRouteLoader(
+  'mobile',
+  () => import('./components/mobile/MobileApp'),
+  (module) => ({ default: module.MobileApp })
 );
+const loadStreamdownDemoPage = cacheRouteLoader(
+  'demo',
+  () => import('./pages/StreamdownDemoPage'),
+  (module) => ({ default: module.StreamdownDemoPage })
+);
+
+const AgorApp = lazy(loadAgorApp);
+const KnowledgePage = lazy(loadKnowledgePage);
+const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
+const MobileApp = lazy(loadMobileApp);
+const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
+
+const routeModuleLoaders = {
+  workspace: loadAgorApp,
+  knowledge: loadKnowledgePage,
+  'artifact-fullscreen': loadArtifactFullscreenPage,
+  demo: loadStreamdownDemoPage,
+  mobile: loadMobileApp,
+} satisfies Record<RouteModuleKey, () => Promise<unknown>>;
+
+function getRouteModuleKey(surfaceId: RouteSurfaceId, pathname: string): RouteModuleKey {
+  if (pathname.startsWith('/m')) return 'mobile';
+  return surfaceId;
+}
+
+function preloadRouteModule(moduleKey: RouteModuleKey): Promise<unknown> {
+  if (loadedRouteModuleKeys.has(moduleKey)) return Promise.resolve();
+  return routeModuleLoaders[moduleKey]();
+}
 
 /**
  * DeviceRouter - Redirects users to mobile or desktop site based on device detection
@@ -133,22 +186,30 @@ function AppContent() {
     location.pathname
   );
   const sharedSurfaceOwnsUserSettings = currentSurface.usesSharedUserSettings;
-
-  const routeFallback = (
-    <div
-      style={{
-        height: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: token.colorBgLayout,
-      }}
-    >
-      <Spin size="large" />
-      <div style={{ marginTop: 16, color: token.colorTextSecondary }}>Loading surface...</div>
-    </div>
+  const routeModuleKey = getRouteModuleKey(currentSurface.id, location.pathname);
+  const [routeModuleReady, setRouteModuleReady] = useState(() =>
+    loadedRouteModuleKeys.has(routeModuleKey)
   );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!loadedRouteModuleKeys.has(routeModuleKey)) {
+      setRouteModuleReady(false);
+    }
+
+    preloadRouteModule(routeModuleKey)
+      .catch(() => {
+        // Let React.lazy/ErrorBoundary surface the route-load failure.
+      })
+      .finally(() => {
+        if (!cancelled) setRouteModuleReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routeModuleKey]);
 
   // Fetch daemon auth and instance configuration
   const {
@@ -268,8 +329,37 @@ function AppContent() {
     loading,
     dataError,
     mustChangePassword,
-    initialLoadComplete,
+    // Treat the route surface chunk as part of the initial load so the loader
+    // only performs its fade-out once. Otherwise the data loader can fade to 0
+    // and then pop back to opacity 1 while the lazy route module finishes.
+    initialLoadComplete: initialLoadComplete && routeModuleReady,
   });
+
+  const workspaceLoadingFallback = (
+    <InitialLoadingScreen
+      phase={loaderPhase === 'done' ? 'fading' : loaderPhase}
+      connecting={connecting}
+      items={initialLoadItems}
+    />
+  );
+
+  const routeFallback = workspaceSurfaceShouldRun ? (
+    workspaceLoadingFallback
+  ) : (
+    <div
+      style={{
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: token.colorBgLayout,
+      }}
+    >
+      <Spin size="large" />
+      <div style={{ marginTop: 16, color: token.colorTextSecondary }}>Loading surface...</div>
+    </div>
+  );
 
   // Get current user from users Map (real-time updates via WebSocket)
   // This ensures we get the latest onboarding_completed status
@@ -506,10 +596,8 @@ function AppContent() {
 
   // Show loading state ONLY on initial load, not during reconnections
   // Once data is loaded, keep UI mounted and show connection status in header instead
-  if (workspaceSurfaceShouldRun && loaderPhase !== 'done') {
-    return (
-      <InitialLoadingScreen phase={loaderPhase} connecting={connecting} items={initialLoadItems} />
-    );
+  if (workspaceSurfaceShouldRun && (loaderPhase !== 'done' || !routeModuleReady)) {
+    return workspaceLoadingFallback;
   }
 
   // Show data error (but not if user needs to change password - let the modal render)

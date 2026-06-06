@@ -17,7 +17,7 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
-import { useNavigate } from 'react-router-dom';
+import { useHref, useNavigate } from 'react-router-dom';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
@@ -147,6 +147,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
+  const knowledgeHref = useHref('/knowledge');
   // Single source of truth for "is the daemon usable right now?". Captures
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.
@@ -299,7 +300,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             type="text"
             icon={<BookOutlined style={{ fontSize: token.fontSizeLG }} />}
             style={headerIconButtonStyle}
-            onClick={() => navigate('/knowledge')}
+            href={knowledgeHref}
+            aria-label="Knowledge"
+            onClick={(event) => {
+              if (event.defaultPrevented) return;
+              if (
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              ) {
+                return;
+              }
+              event.preventDefault();
+              navigate('/knowledge');
+            }}
           />
         </Tooltip>
         <Tooltip title="Documentation" placement="bottom">

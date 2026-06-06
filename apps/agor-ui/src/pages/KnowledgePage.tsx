@@ -68,6 +68,12 @@ import {
 import type { DataNode } from 'antd/es/tree';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ImperativePanelHandle,
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+} from 'react-resizable-panels';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArchiveActionButton } from '../components/ArchiveButton';
 import {
@@ -81,6 +87,7 @@ import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
+import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
 import { useThemedModal } from '../utils/modal';
 
 const { Header, Content } = Layout;
@@ -150,6 +157,17 @@ const DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS: KnowledgeSemanticSettings = {
     concurrency: 1,
   },
 };
+
+const KNOWLEDGE_SIDEBAR_MIN_WIDTH_PX = 280;
+const KNOWLEDGE_SIDEBAR_MAX_WIDTH_PX = 780;
+const KNOWLEDGE_SIDEBAR_DEFAULT_SIZE_PERCENT = 24;
+const KNOWLEDGE_SIDEBAR_MAX_SIZE_PERCENT = 60;
+
+const clampPercent = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const widthToPercent = (widthPx: number, viewportWidth: number) =>
+  (widthPx / Math.max(viewportWidth, 1)) * 100;
 
 const OPENAI_EMBEDDING_MODEL_OPTIONS = [
   {
@@ -586,9 +604,27 @@ export function KnowledgePage({
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsApiKeyDraft, setSettingsApiKeyDraft] = useState('');
   const [settingsForm] = Form.useForm<KnowledgeSemanticSettings>();
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === 'undefined' ? 1440 : window.innerWidth
+  );
+  const [sidebarSize, setSidebarSize] = useUserLocalStorage<number>(
+    currentUser?.user_id,
+    'knowledge:sidebar:size',
+    KNOWLEDGE_SIDEBAR_DEFAULT_SIZE_PERCENT
+  );
+  const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
+  const sidebarResizeDraggingRef = useRef(false);
 
   useEffect(() => {
     document.title = 'Knowledge · Agor';
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   useEffect(() => {
@@ -611,6 +647,31 @@ export function KnowledgePage({
     () => namespaces.find((ns) => ns.slug === activeSpace) ?? namespaces[0] ?? null,
     [namespaces, activeSpace]
   );
+
+  const sidebarMinSize = useMemo(
+    () =>
+      Math.min(
+        KNOWLEDGE_SIDEBAR_MAX_SIZE_PERCENT,
+        widthToPercent(KNOWLEDGE_SIDEBAR_MIN_WIDTH_PX, viewportWidth)
+      ),
+    [viewportWidth]
+  );
+  const sidebarMaxSize = useMemo(
+    () =>
+      Math.max(
+        sidebarMinSize,
+        Math.min(
+          KNOWLEDGE_SIDEBAR_MAX_SIZE_PERCENT,
+          widthToPercent(KNOWLEDGE_SIDEBAR_MAX_WIDTH_PX, viewportWidth)
+        )
+      ),
+    [sidebarMinSize, viewportWidth]
+  );
+  const effectiveSidebarSize = clampPercent(sidebarSize, sidebarMinSize, sidebarMaxSize);
+
+  useEffect(() => {
+    sidebarPanelRef.current?.resize(effectiveSidebarSize);
+  }, [effectiveSidebarSize]);
 
   const namespaceSlugById = useMemo(() => {
     const map = new Map<string, string>();
@@ -1836,7 +1897,6 @@ export function KnowledgePage({
             Draft
           </Tag>
         )}
-        <IndexingStatusCue status={doc.indexing_status} />
       </button>
     );
   };
@@ -2012,9 +2072,16 @@ export function KnowledgePage({
           </Tooltip>
         </Space>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={loadDocuments} loading={loading}>
-            Refresh
-          </Button>
+          <Tooltip title="Refresh Knowledge" placement="bottom">
+            <Button
+              type="text"
+              aria-label="Refresh Knowledge"
+              icon={<ReloadOutlined style={{ fontSize: token.fontSizeLG }} />}
+              onClick={loadDocuments}
+              loading={loading}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            />
+          </Tooltip>
           <Tooltip title="Documentation" placement="bottom">
             <Button
               type="text"
@@ -2044,449 +2111,492 @@ export function KnowledgePage({
         </Space>
       </Header>
 
-      <Content
-        style={{ height: 'calc(100vh - 56px)', display: 'flex', overflow: 'hidden', padding: 0 }}
-      >
-        <aside
-          style={{
-            width: 340,
-            flexShrink: 0,
-            borderRight: `1px solid ${token.colorBorderSecondary}`,
-            background: token.colorBgContainer,
-            padding: 16,
-            overflow: 'auto',
+      <Content style={{ height: 'calc(100vh - 56px)', overflow: 'hidden', padding: 0 }}>
+        <PanelGroup
+          id="knowledge-layout"
+          direction="horizontal"
+          style={{ height: '100%' }}
+          onLayout={(sizes) => {
+            if (sidebarResizeDraggingRef.current && sizes.length >= 2) {
+              setSidebarSize(clampPercent(sizes[0], sidebarMinSize, sidebarMaxSize));
+            }
           }}
         >
-          <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-            {!client && <Alert type="warning" title="Knowledge requires a daemon connection." />}
-            <Space orientation="vertical" size={4} style={{ width: '100%' }}>
-              <Text type="secondary" style={{ fontSize: 11, textTransform: 'uppercase' }}>
-                Space
-              </Text>
-              <Select
-                value={activeSpace}
-                onChange={changeKnowledgeSpace}
-                style={{ width: '100%' }}
-                options={spaceOptions}
-              />
-            </Space>
-            <Input
-              allowClear
-              prefix={<SearchOutlined />}
-              placeholder="Search Knowledge"
-              value={searchQuery}
-              onChange={(event) => {
-                const nextQuery = event.target.value;
-                setSearchQuery(nextQuery);
-                navigate(`${location.pathname}${buildKnowledgeSearch({ query: nextQuery })}`, {
-                  replace: true,
-                });
-              }}
-            />
-            <Segmented
-              block
-              size="small"
-              value={searchMode}
-              onChange={(value) => setSearchMode(value as KnowledgeSearchMode)}
-              options={[
-                { label: 'Text', value: 'text' },
-                { label: 'Semantic', value: 'semantic' },
-                { label: 'Hybrid', value: 'hybrid' },
-              ]}
-            />
-            <Flex gap={8}>
-              <Button
-                block
-                type="primary"
-                icon={<FileAddOutlined />}
-                onClick={() => openCreateModal('doc')}
-                disabled={!client}
-              >
-                New Page
-              </Button>
-              <Button icon={<FolderAddOutlined />} onClick={openFolderModal} />
-            </Flex>
-            <Segmented
-              block
-              size="small"
-              value={kindFilter}
-              onChange={(value) => {
-                const nextKind = String(value);
-                setKindFilter(nextKind);
-                navigate(`${location.pathname}${buildKnowledgeSearch({ kind: nextKind })}`, {
-                  replace: true,
-                });
-              }}
-              options={['All', 'Pages', 'Skills', 'Memories']}
-            />
-            <Spin spinning={loading}>
-              <div
-                style={{
-                  background: token.colorFillQuaternary,
-                  borderRadius: token.borderRadiusLG,
-                  padding: 4,
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={goToGraphHome}
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    minHeight: 30,
-                    margin: '1px 0',
-                    padding: '5px 10px',
-                    border: 0,
-                    borderRadius: token.borderRadius,
-                    background: !activeDoc ? token.colorPrimaryBg : 'transparent',
-                    color: token.colorText,
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    fontWeight: !activeDoc ? 600 : 400,
-                  }}
-                >
-                  <ApartmentOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
-                  <span>Graph</span>
-                </button>
-                {renderRootContents()}
-              </div>
-            </Spin>
-          </Space>
-        </aside>
-
-        <main
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: fillMain ? 'hidden' : 'auto',
-            background: token.colorBgLayout,
-          }}
-        >
-          <div
-            style={{
-              maxWidth: fillMain ? 'none' : 1040,
-              height: fillMain ? '100%' : undefined,
-              margin: fillMain ? 0 : '0 auto',
-              padding: showGraph ? 0 : isEditing ? 24 : '40px 56px',
-              boxSizing: 'border-box',
-              display: fillMain ? 'flex' : undefined,
-              flexDirection: fillMain ? 'column' : undefined,
-              minHeight: 0,
-            }}
+          <Panel
+            id="knowledge-sidebar"
+            order={1}
+            ref={sidebarPanelRef}
+            defaultSize={effectiveSidebarSize}
+            minSize={sidebarMinSize}
+            maxSize={sidebarMaxSize}
+            style={{ minWidth: KNOWLEDGE_SIDEBAR_MIN_WIDTH_PX }}
           >
-            {error && (
-              <Alert
-                type="error"
-                title="Knowledge error"
-                description={error}
-                closable
-                onClose={() => setError(null)}
-                style={{ marginBottom: 16 }}
-              />
-            )}
-
-            {activeDoc ? (
+            <aside
+              style={{
+                height: '100%',
+                boxSizing: 'border-box',
+                borderRight: `1px solid ${token.colorBorderSecondary}`,
+                background: token.colorBgContainer,
+                padding: 16,
+                overflow: 'auto',
+              }}
+            >
+              <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+                {!client && (
+                  <Alert type="warning" title="Knowledge requires a daemon connection." />
+                )}
+                <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                  <Text type="secondary" style={{ fontSize: 11, textTransform: 'uppercase' }}>
+                    Space
+                  </Text>
+                  <Select
+                    value={activeSpace}
+                    onChange={changeKnowledgeSpace}
+                    style={{ width: '100%' }}
+                    options={spaceOptions}
+                  />
+                </Space>
+                <Input
+                  allowClear
+                  prefix={<SearchOutlined />}
+                  placeholder="Search Knowledge"
+                  value={searchQuery}
+                  onChange={(event) => {
+                    const nextQuery = event.target.value;
+                    setSearchQuery(nextQuery);
+                    navigate(`${location.pathname}${buildKnowledgeSearch({ query: nextQuery })}`, {
+                      replace: true,
+                    });
+                  }}
+                />
+                <Segmented
+                  block
+                  size="small"
+                  value={searchMode}
+                  onChange={(value) => setSearchMode(value as KnowledgeSearchMode)}
+                  options={[
+                    { label: 'Text', value: 'text' },
+                    { label: 'Semantic', value: 'semantic' },
+                    { label: 'Hybrid', value: 'hybrid' },
+                  ]}
+                />
+                <Flex gap={8}>
+                  <Button
+                    block
+                    type="primary"
+                    icon={<FileAddOutlined />}
+                    onClick={() => openCreateModal('doc')}
+                    disabled={!client}
+                  >
+                    New Page
+                  </Button>
+                  <Button icon={<FolderAddOutlined />} onClick={openFolderModal} />
+                </Flex>
+                <Segmented
+                  block
+                  size="small"
+                  value={kindFilter}
+                  onChange={(value) => {
+                    const nextKind = String(value);
+                    setKindFilter(nextKind);
+                    navigate(`${location.pathname}${buildKnowledgeSearch({ kind: nextKind })}`, {
+                      replace: true,
+                    });
+                  }}
+                  options={['All', 'Pages', 'Skills', 'Memories']}
+                />
+                <Spin spinning={loading}>
+                  <div
+                    style={{
+                      background: token.colorFillQuaternary,
+                      borderRadius: token.borderRadiusLG,
+                      padding: 4,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={goToGraphHome}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        minHeight: 30,
+                        margin: '1px 0',
+                        padding: '5px 10px',
+                        border: 0,
+                        borderRadius: token.borderRadius,
+                        background: !activeDoc ? token.colorPrimaryBg : 'transparent',
+                        color: token.colorText,
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        fontWeight: !activeDoc ? 600 : 400,
+                      }}
+                    >
+                      <ApartmentOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
+                      <span>Graph</span>
+                    </button>
+                    {renderRootContents()}
+                  </div>
+                </Spin>
+              </Space>
+            </aside>
+          </Panel>
+          <PanelResizeHandle
+            style={{
+              width: '4px',
+              background: token.colorBorderSecondary,
+              cursor: 'col-resize',
+              transition: 'background 0.2s',
+            }}
+            onDragging={(isDragging) => {
+              sidebarResizeDraggingRef.current = isDragging;
+            }}
+            onMouseEnter={(event) => {
+              (event.currentTarget as unknown as HTMLDivElement).style.background =
+                token.colorPrimary;
+            }}
+            onMouseLeave={(event) => {
+              (event.currentTarget as unknown as HTMLDivElement).style.background =
+                token.colorBorderSecondary;
+            }}
+          />
+          <Panel id="knowledge-main" order={2} minSize={30}>
+            <main
+              style={{
+                height: '100%',
+                minWidth: 0,
+                overflow: fillMain ? 'hidden' : 'auto',
+                background: token.colorBgLayout,
+              }}
+            >
               <div
                 style={{
-                  width: '100%',
-                  height: isEditing ? '100%' : undefined,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 20,
+                  maxWidth: fillMain ? 'none' : 1040,
+                  height: fillMain ? '100%' : undefined,
+                  margin: fillMain ? 0 : '0 auto',
+                  padding: showGraph ? 0 : isEditing ? 24 : '40px 56px',
+                  boxSizing: 'border-box',
+                  display: fillMain ? 'flex' : undefined,
+                  flexDirection: fillMain ? 'column' : undefined,
                   minHeight: 0,
                 }}
               >
-                <div
-                  onMouseEnter={() => setTitleActionsVisible(true)}
-                  onMouseLeave={() => setTitleActionsVisible(false)}
-                  onFocus={() => setTitleActionsVisible(true)}
-                  onBlur={(event) => {
-                    const nextTarget = event.relatedTarget as Node | null;
-                    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
-                      setTitleActionsVisible(false);
-                    }
-                  }}
-                  style={{
-                    position: 'relative',
-                    display: isEditing ? 'flex' : 'block',
-                    alignItems: 'flex-start',
-                    gap: 16,
-                  }}
-                >
-                  <Space
-                    orientation="vertical"
-                    size={8}
-                    style={{ width: '100%', minWidth: 0, flex: 1 }}
+                {error && (
+                  <Alert
+                    type="error"
+                    title="Knowledge error"
+                    description={error}
+                    closable
+                    onClose={() => setError(null)}
+                    style={{ marginBottom: 16 }}
+                  />
+                )}
+
+                {activeDoc ? (
+                  <div
+                    style={{
+                      width: '100%',
+                      height: isEditing ? '100%' : undefined,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 20,
+                      minHeight: 0,
+                    }}
                   >
-                    {isEditing && !titleFromContent ? (
-                      <Input
-                        value={titleDraft}
-                        onChange={(event) => setTitleDraft(event.target.value)}
-                        placeholder="Page title"
-                        size="large"
-                        variant="borderless"
-                        style={{ fontSize: 32, fontWeight: 700, paddingInline: 0 }}
-                      />
-                    ) : (
-                      <Title level={1} style={{ margin: 0 }}>
-                        {isEditing ? titleDraft : activeDoc.title}
-                      </Title>
-                    )}
-                    <Space wrap>
-                      {isEditing ? (
-                        <Select
-                          size="small"
-                          value={visibilityDraft}
-                          disabled={!canManageActiveVisibility}
-                          onChange={setVisibilityDraft}
-                          style={{ width: 104 }}
-                          options={[
-                            { label: 'Public', value: 'public' },
-                            { label: 'Private', value: 'private' },
-                          ]}
-                        />
-                      ) : (
-                        <Tag color={activeDoc.visibility === 'public' ? 'green' : 'default'}>
-                          {activeDoc.visibility}
-                        </Tag>
-                      )}
-                      {isEditing ? (
-                        <Select
-                          size="small"
-                          value={statusDraft}
-                          disabled={!canManageActiveVisibility}
-                          onChange={setStatusDraft}
-                          style={{ width: 118 }}
-                          options={[
-                            { label: 'Published', value: 'published' },
-                            { label: 'Draft', value: 'draft' },
-                          ]}
-                        />
-                      ) : activeDoc.status === 'draft' ? (
-                        <Tag color="gold">Draft</Tag>
-                      ) : (
-                        <Tag color="blue">Published</Tag>
-                      )}
-                      <IndexingStatusCue status={activeDoc.indexing_status} size={16} />
-                      {isEditing ? (
-                        <Select
-                          size="small"
-                          value={kindDraft}
-                          onChange={setKindDraft}
-                          style={{ width: 128 }}
-                          options={KNOWLEDGE_DOCUMENT_KINDS.map((kind) => ({
-                            label: kindLabels[kind],
-                            value: kind,
-                          }))}
-                        />
-                      ) : (
-                        <Tag>{kindLabels[activeDoc.kind] ?? activeDoc.kind}</Tag>
-                      )}
-                      <Text type="secondary">{activeDoc.path}</Text>
-                    </Space>
-                    {isEditing && (
-                      <Space orientation="vertical" size={4}>
-                        <Checkbox
-                          checked={titleFromContent}
-                          onChange={(event) => setTitleFromContent(event.target.checked)}
-                        >
-                          Use first heading as title
-                        </Checkbox>
-                        <Checkbox
-                          checked={renamePathOnTitleChange}
-                          disabled={!titleChanged}
-                          onChange={(event) => setRenamePathOnTitleChange(event.target.checked)}
-                        >
-                          Rename page path to match title
-                        </Checkbox>
-                        {titleChanged && (
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            Current path: {activeDoc.path}
-                            {renamePathOnTitleChange && ` → ${suggestedRenamePath}`}
-                          </Text>
+                    <div
+                      onMouseEnter={() => setTitleActionsVisible(true)}
+                      onMouseLeave={() => setTitleActionsVisible(false)}
+                      onFocus={() => setTitleActionsVisible(true)}
+                      onBlur={(event) => {
+                        const nextTarget = event.relatedTarget as Node | null;
+                        if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+                          setTitleActionsVisible(false);
+                        }
+                      }}
+                      style={{
+                        position: 'relative',
+                        display: isEditing ? 'flex' : 'block',
+                        alignItems: 'flex-start',
+                        gap: 16,
+                      }}
+                    >
+                      <Space
+                        orientation="vertical"
+                        size={8}
+                        style={{ width: '100%', minWidth: 0, flex: 1 }}
+                      >
+                        {isEditing && !titleFromContent ? (
+                          <Input
+                            value={titleDraft}
+                            onChange={(event) => setTitleDraft(event.target.value)}
+                            placeholder="Page title"
+                            size="large"
+                            variant="borderless"
+                            style={{ fontSize: 32, fontWeight: 700, paddingInline: 0 }}
+                          />
+                        ) : (
+                          <Title level={1} style={{ margin: 0 }}>
+                            {isEditing ? titleDraft : activeDoc.title}
+                          </Title>
+                        )}
+                        <Space wrap>
+                          {isEditing ? (
+                            <Select
+                              size="small"
+                              value={visibilityDraft}
+                              disabled={!canManageActiveVisibility}
+                              onChange={setVisibilityDraft}
+                              style={{ width: 104 }}
+                              options={[
+                                { label: 'Public', value: 'public' },
+                                { label: 'Private', value: 'private' },
+                              ]}
+                            />
+                          ) : (
+                            <Tag color={activeDoc.visibility === 'public' ? 'green' : 'default'}>
+                              {activeDoc.visibility}
+                            </Tag>
+                          )}
+                          {isEditing ? (
+                            <Select
+                              size="small"
+                              value={statusDraft}
+                              disabled={!canManageActiveVisibility}
+                              onChange={setStatusDraft}
+                              style={{ width: 118 }}
+                              options={[
+                                { label: 'Published', value: 'published' },
+                                { label: 'Draft', value: 'draft' },
+                              ]}
+                            />
+                          ) : activeDoc.status === 'draft' ? (
+                            <Tag color="gold">Draft</Tag>
+                          ) : (
+                            <Tag color="blue">Published</Tag>
+                          )}
+                          <IndexingStatusCue status={activeDoc.indexing_status} size={16} />
+                          {isEditing ? (
+                            <Select
+                              size="small"
+                              value={kindDraft}
+                              onChange={setKindDraft}
+                              style={{ width: 128 }}
+                              options={KNOWLEDGE_DOCUMENT_KINDS.map((kind) => ({
+                                label: kindLabels[kind],
+                                value: kind,
+                              }))}
+                            />
+                          ) : (
+                            <Tag>{kindLabels[activeDoc.kind] ?? activeDoc.kind}</Tag>
+                          )}
+                          <Text type="secondary">{activeDoc.path}</Text>
+                        </Space>
+                        {isEditing && (
+                          <Space orientation="vertical" size={4}>
+                            <Checkbox
+                              checked={titleFromContent}
+                              onChange={(event) => setTitleFromContent(event.target.checked)}
+                            >
+                              Use first heading as title
+                            </Checkbox>
+                            <Checkbox
+                              checked={renamePathOnTitleChange}
+                              disabled={!titleChanged}
+                              onChange={(event) => setRenamePathOnTitleChange(event.target.checked)}
+                            >
+                              Rename page path to match title
+                            </Checkbox>
+                            {titleChanged && (
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                Current path: {activeDoc.path}
+                                {renamePathOnTitleChange && ` → ${suggestedRenamePath}`}
+                              </Text>
+                            )}
+                          </Space>
                         )}
                       </Space>
-                    )}
-                  </Space>
 
-                  <Space
-                    style={
-                      isEditing
-                        ? undefined
-                        : {
-                            position: 'absolute',
-                            top: 0,
-                            right: 0,
-                            zIndex: 2,
-                            padding: 4,
-                            borderRadius: token.borderRadiusLG,
-                            background: token.colorBgContainer,
-                            boxShadow: titleActionsVisible ? token.boxShadowSecondary : undefined,
-                          }
-                    }
-                  >
-                    {!isEditing ? (
-                      <>
-                        {showReadActions && (
+                      <Space
+                        style={
+                          isEditing
+                            ? undefined
+                            : {
+                                position: 'absolute',
+                                top: 0,
+                                right: 0,
+                                zIndex: 2,
+                                padding: 4,
+                                borderRadius: token.borderRadiusLG,
+                                background: token.colorBgContainer,
+                                boxShadow: titleActionsVisible
+                                  ? token.boxShadowSecondary
+                                  : undefined,
+                              }
+                        }
+                      >
+                        {!isEditing ? (
                           <>
-                            <Button
-                              icon={<HistoryOutlined />}
-                              disabled={!client}
-                              onClick={openHistory}
-                            >
-                              History
-                              {editCount > 0 && (
-                                <Tag
-                                  color="blue"
-                                  variant="filled"
-                                  style={{ marginInlineStart: 6, marginInlineEnd: 0 }}
+                            {showReadActions && (
+                              <>
+                                <Button
+                                  icon={<HistoryOutlined />}
+                                  disabled={!client}
+                                  onClick={openHistory}
                                 >
-                                  {editCount}
-                                </Tag>
-                              )}
-                            </Button>
+                                  History
+                                  {editCount > 0 && (
+                                    <Tag
+                                      color="blue"
+                                      variant="filled"
+                                      style={{ marginInlineStart: 6, marginInlineEnd: 0 }}
+                                    >
+                                      {editCount}
+                                    </Tag>
+                                  )}
+                                </Button>
+                                <Button
+                                  icon={<FolderOpenOutlined />}
+                                  disabled={!client}
+                                  onClick={() => {
+                                    setRelocateFolder(parentFolderForPath(activeDoc.path));
+                                    setRelocateModalOpen(true);
+                                  }}
+                                >
+                                  Relocate
+                                </Button>
+                                <ArchiveActionButton
+                                  tooltip=""
+                                  size="middle"
+                                  disabled={!client}
+                                  onClick={archiveActiveDocument}
+                                >
+                                  Archive
+                                </ArchiveActionButton>
+                              </>
+                            )}
                             <Button
-                              icon={<FolderOpenOutlined />}
+                              icon={<EditOutlined />}
                               disabled={!client}
-                              onClick={() => {
-                                setRelocateFolder(parentFolderForPath(activeDoc.path));
-                                setRelocateModalOpen(true);
-                              }}
+                              onClick={() => setKnowledgeEditMode(true)}
                             >
-                              Relocate
+                              Edit
                             </Button>
-                            <ArchiveActionButton
-                              tooltip=""
-                              size="middle"
+                          </>
+                        ) : (
+                          <>
+                            <Button onClick={cancelEdit}>Cancel</Button>
+                            <Button
+                              type="primary"
+                              icon={<SaveOutlined />}
+                              loading={saving}
                               disabled={!client}
-                              onClick={archiveActiveDocument}
+                              onClick={saveActiveDocument}
                             >
-                              Archive
-                            </ArchiveActionButton>
+                              Save
+                            </Button>
                           </>
                         )}
-                        <Button
-                          icon={<EditOutlined />}
-                          disabled={!client}
-                          onClick={() => setKnowledgeEditMode(true)}
-                        >
-                          Edit
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button onClick={cancelEdit}>Cancel</Button>
-                        <Button
-                          type="primary"
-                          icon={<SaveOutlined />}
-                          loading={saving}
-                          disabled={!client}
-                          onClick={saveActiveDocument}
-                        >
-                          Save
-                        </Button>
-                      </>
-                    )}
-                  </Space>
-                </div>
-
-                {isEditing ? (
-                  <Flex gap={16} align="stretch" style={{ flex: 1, minHeight: 0 }}>
-                    <div
-                      style={{
-                        width: '50%',
-                        minWidth: 0,
-                        minHeight: 0,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                      }}
-                    >
-                      <Text strong>Markdown</Text>
-                      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-                        <AutocompleteTextarea
-                          key={activeDoc.document_id}
-                          value={markdownDraft}
-                          onChange={setMarkdownDraft}
-                          client={client}
-                          sessionId={null}
-                          userById={userById}
-                          kbDocs={mentionDocs}
-                          placeholder={
-                            '# Page title\n\nWrite markdown here. Type @ to link a doc or mention a user, : for emoji.'
-                          }
-                          autoSize={{ minRows: 24 }}
-                        />
-                      </div>
+                      </Space>
                     </div>
-                    <div
-                      style={{
-                        width: '50%',
-                        minWidth: 0,
-                        minHeight: 0,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                      }}
-                    >
-                      <Text strong>Preview</Text>
+
+                    {isEditing ? (
+                      <Flex gap={16} align="stretch" style={{ flex: 1, minHeight: 0 }}>
+                        <div
+                          style={{
+                            width: '50%',
+                            minWidth: 0,
+                            minHeight: 0,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 8,
+                          }}
+                        >
+                          <Text strong>Markdown</Text>
+                          <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                            <AutocompleteTextarea
+                              key={activeDoc.document_id}
+                              value={markdownDraft}
+                              onChange={setMarkdownDraft}
+                              client={client}
+                              sessionId={null}
+                              userById={userById}
+                              kbDocs={mentionDocs}
+                              placeholder={
+                                '# Page title\n\nWrite markdown here. Type @ to link a doc or mention a user, : for emoji.'
+                              }
+                              autoSize={{ minRows: 24 }}
+                            />
+                          </div>
+                        </div>
+                        <div
+                          style={{
+                            width: '50%',
+                            minWidth: 0,
+                            minHeight: 0,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 8,
+                          }}
+                        >
+                          <Text strong>Preview</Text>
+                          <div
+                            onClick={handleKbContentClick}
+                            style={{
+                              flex: 1,
+                              minHeight: 0,
+                              overflow: 'auto',
+                              padding: 24,
+                              border: `1px solid ${token.colorBorderSecondary}`,
+                              borderRadius: token.borderRadiusLG,
+                              background: token.colorBgContainer,
+                            }}
+                          >
+                            <MarkdownRenderer content={hydrateKbLinks(markdownDraft)} />
+                          </div>
+                        </div>
+                      </Flex>
+                    ) : (
                       <div
                         onClick={handleKbContentClick}
                         style={{
-                          flex: 1,
-                          minHeight: 0,
-                          overflow: 'auto',
-                          padding: 24,
-                          border: `1px solid ${token.colorBorderSecondary}`,
-                          borderRadius: token.borderRadiusLG,
-                          background: token.colorBgContainer,
+                          padding: '8px 0 80px',
+                          fontSize: 16,
+                          lineHeight: 1.7,
                         }}
                       >
-                        <MarkdownRenderer content={hydrateKbLinks(markdownDraft)} />
+                        <MarkdownRenderer
+                          content={hydrateKbLinks(
+                            titleFromContent
+                              ? stripFirstMarkdownTitleLine(markdownDraft)
+                              : markdownDraft
+                          )}
+                        />
                       </div>
-                    </div>
-                  </Flex>
+                    )}
+                  </div>
                 ) : (
-                  <div
-                    onClick={handleKbContentClick}
-                    style={{
-                      padding: '8px 0 80px',
-                      fontSize: 16,
-                      lineHeight: 1.7,
-                    }}
-                  >
-                    <MarkdownRenderer
-                      content={hydrateKbLinks(
-                        titleFromContent
-                          ? stripFirstMarkdownTitleLine(markdownDraft)
-                          : markdownDraft
-                      )}
+                  <div style={{ flex: 1, minHeight: 0, width: '100%' }}>
+                    <KnowledgeGraph
+                      nodes={graphData?.nodes ?? []}
+                      edges={graphData?.edges ?? []}
+                      activeDocId={activeDocId}
+                      hoverDocId={hoverDocId}
+                      onSelectDoc={openGraphDoc}
+                      onHoverDoc={setHoverDocId}
+                      loading={graphLoading}
+                      emptyText={
+                        activeSpace === 'all'
+                          ? 'Pick a Space to see its document graph.'
+                          : 'No linked documents in this Space yet.'
+                      }
                     />
                   </div>
                 )}
               </div>
-            ) : (
-              <div style={{ flex: 1, minHeight: 0, width: '100%' }}>
-                <KnowledgeGraph
-                  nodes={graphData?.nodes ?? []}
-                  edges={graphData?.edges ?? []}
-                  activeDocId={activeDocId}
-                  hoverDocId={hoverDocId}
-                  onSelectDoc={openGraphDoc}
-                  onHoverDoc={setHoverDocId}
-                  loading={graphLoading}
-                  emptyText={
-                    activeSpace === 'all'
-                      ? 'Pick a Space to see its document graph.'
-                      : 'No linked documents in this Space yet.'
-                  }
-                />
-              </div>
-            )}
-          </div>
-        </main>
+            </main>
+          </Panel>
+        </PanelGroup>
       </Content>
 
       <Drawer

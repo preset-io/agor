@@ -27,7 +27,7 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
   } as unknown as Repo;
 }
 
-describe('BranchTab — source-branch preservation', { timeout: 10_000 }, () => {
+describe('BranchTab — source-branch preservation', () => {
   it('preserves user-typed sourceBranch across `repoById` Map reference churn (WebSocket patches)', () => {
     const formRef: React.MutableRefObject<(() => Promise<BranchTabConfig | null>) | null> = {
       current: null,
@@ -63,7 +63,7 @@ describe('BranchTab — source-branch preservation', { timeout: 10_000 }, () => 
   });
 });
 
-describe('BranchTab — branch storage policy', { timeout: 10_000 }, () => {
+describe('BranchTab — branch storage policy', () => {
   async function renderBranchTab(
     branchStorageConfig?: React.ComponentProps<typeof BranchTab>['branchStorageConfig']
   ) {
