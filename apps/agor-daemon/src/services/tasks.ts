@@ -74,8 +74,6 @@ export type TaskParams = QueryParams<{
 
 interface CompletionCallbackDispatchResult {
   callbackTask?: Task;
-  /** True only for the caller that actually evaluated/attempted dispatch under the lock. */
-  didAttemptDispatch: boolean;
 }
 
 /**
@@ -692,12 +690,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     }
 
-    // Post-callback cleanup: runs independently of whether callback was delivered.
-    // "once" mode: auto-disable callback after first delivery attempt.
+    // Post-callback cleanup: only runs after a callback task was actually
+    // queued. "once" means "after firing" — do not permanently disable a
+    // one-shot callback when delivery was skipped or failed before queueing.
     // Default to "persistent" for backward compat — legacy sessions without
     // callback_mode should continue firing on every completion as they always have.
     const callbackMode = childSession.callback_config?.callback_mode ?? 'persistent';
-    if (dispatchResult.didAttemptDispatch && callbackMode === 'once') {
+    if (dispatchResult.callbackTask && callbackMode === 'once') {
       try {
         await this.app.service('sessions').patch(childSession.session_id, {
           callback_config: {
@@ -773,7 +772,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const existingDispatch = this.completionCallbackDispatches.get(dispatchKey);
     if (existingDispatch) {
       await existingDispatch;
-      return { didAttemptDispatch: false };
+      return {};
     }
 
     const dispatch = (async (): Promise<CompletionCallbackDispatchResult> => {
@@ -782,7 +781,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         console.log(
           `⏭️  [TasksService] Completion callback for task ${shortId(task.task_id)} to ${shortId(targetSessionId)} already dispatched`
         );
-        return { didAttemptDispatch: false };
+        return {};
       }
 
       const queuedCallbackTask = await this.queueCallbackToSession(
@@ -807,7 +806,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         }
       }
 
-      return { callbackTask: queuedCallbackTask, didAttemptDispatch: true };
+      return { callbackTask: queuedCallbackTask };
     })();
 
     this.completionCallbackDispatches.set(dispatchKey, dispatch);

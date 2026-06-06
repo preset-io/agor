@@ -272,8 +272,8 @@ describe('TasksService completion callbacks', () => {
     expect(callbackPrompt).toContain('Final child result');
   });
 
-  it('uses the same single templated callback path for sessions.create callbacks without spawn genealogy', async () => {
-    const { service, createPending, childSession } = makeService({
+  it('uses the same single templated patch completion path for sessions.create callbacks without spawn genealogy', async () => {
+    const { service, createPending, sessionsPatch } = makeService({
       childSession: {
         genealogy: { children: [] },
         callback_config: {
@@ -287,13 +287,11 @@ describe('TasksService completion callbacks', () => {
       },
       task: { full_prompt: 'remote session initial prompt' },
     });
-    const completedTask = makeTask({
+
+    await service.patch(taskId, {
       status: TaskStatus.COMPLETED,
       completed_at: '2026-01-01T00:00:05.000Z',
-      full_prompt: 'remote session initial prompt',
     });
-
-    await (service as any).dispatchCompletionCallbacks(completedTask, childSession, {});
 
     expect(createPending).toHaveBeenCalledTimes(1);
     const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
@@ -301,6 +299,10 @@ describe('TasksService completion callbacks', () => {
     expect(callbackPrompt).toContain('## Original Prompt');
     expect(callbackPrompt).toContain('remote session initial prompt');
     expect(callbackPrompt).toContain('Final child result');
+    expect(sessionsPatch).toHaveBeenCalledWith(
+      childSessionId,
+      expect.objectContaining({ callback_config: expect.objectContaining({ enabled: false }) })
+    );
   });
 
   it('dedupes concurrent completion callback dispatch for the same task target', async () => {
@@ -384,6 +386,26 @@ describe('TasksService completion callbacks', () => {
     await (service as any).dispatchCompletionCallbacks(secondTask, childSession, {});
 
     expect(createPending).not.toHaveBeenCalled();
+  });
+
+  it("callbackMode='once' does not disable when callback queueing fails before firing", async () => {
+    const { service, createPending, sessionsPatch, childSession } = makeService();
+    createPending.mockRejectedValueOnce(new Error('queue failed'));
+    const completedTask = makeTask({
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
+
+    await (service as any).dispatchCompletionCallbacks(completedTask, childSession, {});
+
+    expect(createPending).toHaveBeenCalledTimes(1);
+    expect(
+      sessionsPatch.mock.calls.filter(
+        ([id, updates]) =>
+          id === childSessionId && (updates as Partial<Session>).callback_config?.enabled === false
+      )
+    ).toHaveLength(0);
+    expect(childSession.callback_config?.enabled).toBe(true);
   });
 
   it('does not queue or trigger when callback dispatch metadata already exists', async () => {
