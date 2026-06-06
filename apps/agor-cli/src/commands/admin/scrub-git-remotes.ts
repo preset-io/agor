@@ -31,11 +31,22 @@ export default class ScrubGitRemotes extends Command {
     const branches = await branchRepo.findAll({ includeArchived: true });
 
     const seen = new Set<string>();
-    let unsafeUrls = 0;
+    let unsafeConfigUrls = 0;
     let changedConfigs = 0;
+    let changedDbRows = 0;
+
+    const dbScan = await repoRepo.scanRemoteUrls();
+    const unsafeDbRows = dbScan.findings.length;
+    if (unsafeDbRows > 0) {
+      this.log(chalk.yellow(`persisted repo rows: ${unsafeDbRows} unsafe remote URL(s)`));
+      for (const finding of dbScan.findings) {
+        this.log(`  repo ${finding.slug} (${shortId(finding.repo_id)}): remote_url = <redacted>`);
+      }
+    }
 
     if (flags.write) {
       const dbScrub = await repoRepo.scrubRemoteUrls();
+      changedDbRows = dbScrub.changed;
       if (dbScrub.changed > 0) {
         this.log(
           chalk.green(
@@ -71,7 +82,7 @@ export default class ScrubGitRemotes extends Command {
       });
       if (findings.length === 0) continue;
 
-      unsafeUrls += findings.length;
+      unsafeConfigUrls += findings.length;
       if ('changed' in result && result.changed) {
         changedConfigs += new Set(findings.map((finding) => finding.configPath)).size;
       }
@@ -84,7 +95,7 @@ export default class ScrubGitRemotes extends Command {
       }
     }
 
-    if (unsafeUrls === 0) {
+    if (unsafeDbRows === 0 && unsafeConfigUrls === 0) {
       this.log(chalk.green('No credential-bearing git remote URLs found.'));
       return;
     }
@@ -92,13 +103,13 @@ export default class ScrubGitRemotes extends Command {
     if (flags.write) {
       this.log(
         chalk.green(
-          `Scrubbed ${unsafeUrls} credential-bearing remote URL(s) across ${changedConfigs} config file(s).`
+          `Scrubbed ${changedDbRows} persisted repo row(s) and ${unsafeConfigUrls} credential-bearing remote URL(s) across ${changedConfigs} config file(s).`
         )
       );
     } else {
       this.log(
         chalk.yellow(
-          `Found ${unsafeUrls} credential-bearing remote URL(s). Re-run with --write to remove URL userinfo. Rotate any exposed token(s).`
+          `Found ${unsafeDbRows} persisted repo row(s) and ${unsafeConfigUrls} git config remote URL(s) with credential-bearing HTTP(S) userinfo. Re-run with --write to remove URL userinfo. Rotate any exposed token(s).`
         )
       );
     }

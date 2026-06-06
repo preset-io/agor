@@ -49,6 +49,11 @@ function deriveV1FromV2(env: RepoEnvironment | undefined): RepoEnvironmentConfig
   return v1;
 }
 
+export interface RepoRemoteUrlCredentialFinding {
+  repo_id: UUID;
+  slug: string;
+}
+
 /**
  * Repo repository implementation
  */
@@ -248,6 +253,32 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   }
 
   /**
+   * Find persisted repo.remote_url rows that still contain HTTP(S) userinfo.
+   *
+   * This intentionally reads raw rows rather than `rowToRepo()` because reads
+   * sanitize `remote_url` before returning repo objects.
+   */
+  async scanRemoteUrls(): Promise<{ checked: number; findings: RepoRemoteUrlCredentialFinding[] }> {
+    try {
+      const rows = (await select(this.db).from(repos).all()) as RepoRow[];
+      const findings = rows.flatMap((row) => {
+        const data = row.data as typeof row.data & { remote_url?: unknown };
+        if (typeof data.remote_url !== 'string' || !httpUrlHasUserinfo(data.remote_url)) {
+          return [];
+        }
+        return [{ repo_id: row.repo_id as UUID, slug: row.slug }];
+      });
+
+      return { checked: rows.length, findings };
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to scan repo remote URLs: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Remove HTTP(S) userinfo from persisted repo.remote_url values.
    *
    * `rowToRepo()` sanitizes reads so legacy credential-bearing values are not
@@ -256,29 +287,39 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    */
   async scrubRemoteUrls(): Promise<{ checked: number; changed: number }> {
     try {
-      const rows = await select(this.db).from(repos).all();
+      const scan = await this.scanRemoteUrls();
       let changed = 0;
 
-      for (const row of rows as RepoRow[]) {
-        const data = row.data as typeof row.data & { remote_url?: unknown };
-        if (typeof data.remote_url !== 'string' || !httpUrlHasUserinfo(data.remote_url)) {
-          continue;
-        }
+      for (const finding of scan.findings) {
+        await this.db.transaction(async (tx) => {
+          await lockRowForUpdate(txAsDb(tx), this.db, repos, eq(repos.repo_id, finding.repo_id));
 
-        await update(this.db, repos)
-          .set({
-            updated_at: new Date(),
-            data: {
-              ...data,
-              remote_url: stripHttpUrlUserinfo(data.remote_url),
-            },
-          })
-          .where(eq(repos.repo_id, row.repo_id))
-          .run();
-        changed += 1;
+          const currentRow = await select(txAsDb(tx))
+            .from(repos)
+            .where(eq(repos.repo_id, finding.repo_id))
+            .one();
+          if (!currentRow) return;
+
+          const data = currentRow.data as typeof currentRow.data & { remote_url?: unknown };
+          if (typeof data.remote_url !== 'string' || !httpUrlHasUserinfo(data.remote_url)) {
+            return;
+          }
+
+          await update(txAsDb(tx), repos)
+            .set({
+              updated_at: new Date(),
+              data: {
+                ...data,
+                remote_url: stripHttpUrlUserinfo(data.remote_url),
+              },
+            })
+            .where(eq(repos.repo_id, finding.repo_id))
+            .run();
+          changed += 1;
+        });
       }
 
-      return { checked: rows.length, changed };
+      return { checked: scan.checked, changed };
     } catch (error) {
       throw new RepositoryError(
         `Failed to scrub repo remote URLs: ${error instanceof Error ? error.message : String(error)}`,

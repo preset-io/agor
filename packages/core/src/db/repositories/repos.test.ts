@@ -158,6 +158,9 @@ describe('RepoRepository.create', () => {
       remote_url: 'https://example.com/org/repo.git',
     });
 
+    const scan = await repo.scanRemoteUrls();
+    expect(scan.findings).toEqual([{ repo_id: created.repo_id, slug: 'legacy/remote-url' }]);
+
     const result = await repo.scrubRemoteUrls();
     expect(result.changed).toBe(1);
 
