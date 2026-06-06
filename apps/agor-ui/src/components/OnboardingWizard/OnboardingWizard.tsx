@@ -33,7 +33,6 @@ import {
   FolderOpenOutlined,
   KeyOutlined,
   RobotOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -1243,24 +1242,50 @@ export function OnboardingWizard({
   const renderWelcome = () => (
     <div style={{ padding: '8px 0' }}>
       <Title level={3} style={{ marginBottom: 8 }}>
-        Welcome to Agor
+        Welcome to Agor ✨
       </Title>
-      <Paragraph style={{ marginBottom: 12, fontSize: 15 }}>
-        The best way to get started is with an Agor assistant. Agents in Agor can help connect
-        tools, coordinate other agents, set up your board and workflow, and show you around.
+      <Paragraph style={{ marginBottom: 14, fontSize: 15 }}>
+        Start by creating your Agor assistant: a persistent agent that can help you set up the
+        workspace and keep things moving.
       </Paragraph>
-      <Paragraph type="secondary" style={{ marginBottom: 24, fontSize: 15 }}>
-        This quick wizard will handle setup and introduce your assistant, who can take it from
-        there. Any questions? Ask your assistant.
+
+      <div
+        style={{
+          background: token.colorPrimaryBg,
+          border: `1px solid ${token.colorPrimaryBorder}`,
+          borderRadius: 8,
+          padding: '14px 16px',
+          marginBottom: 16,
+        }}
+      >
+        <Text strong>Your assistant can help:</Text>
+        <ul style={{ margin: '10px 0 0', paddingLeft: 20, color: token.colorTextSecondary }}>
+          <li>🧰 Connect tools and credentials</li>
+          <li>🗺️ Set up your board and workflow</li>
+          <li>🤝 Coordinate other agents and sessions</li>
+          <li>💬 Show you around and answer questions</li>
+        </ul>
+      </div>
+
+      <Paragraph type="secondary" style={{ marginBottom: 24, fontSize: 14 }}>
+        Want the bigger picture first? Read the{' '}
+        <Typography.Link
+          href="https://agor.live/guide/getting-started"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          getting started guide
+        </Typography.Link>
+        .
       </Paragraph>
 
       <Button
         type="primary"
         size="large"
-        icon={<ThunderboltOutlined />}
+        icon={<RobotOutlined />}
         onClick={() => handleSelectPath('assistant')}
       >
-        Get started
+        Create your assistant
       </Button>
     </div>
   );

@@ -56,11 +56,14 @@ describe('OnboardingWizard', () => {
     const onUpdateUser = vi.fn();
     renderWizard({ onUpdateUser });
 
-    expect(screen.getByText('Welcome to Agor')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /get started/i })).toBeInTheDocument();
+    expect(screen.getByText(/Welcome to Agor/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /create your assistant/i })).toBeInTheDocument();
+    expect(screen.getByText('Your assistant can help:')).toBeInTheDocument();
+    expect(screen.getByText(/connect tools and credentials/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /getting started guide/i })).toBeInTheDocument();
     expect(screen.queryByText(/bring your own repository/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /get started/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create your assistant/i }));
 
     expect(await screen.findByText('Name Your Assistant')).toBeInTheDocument();
     expect(onUpdateUser).toHaveBeenCalledWith(
@@ -87,7 +90,7 @@ describe('OnboardingWizard', () => {
   it('shows recommended provider cards plus a secondary selector', async () => {
     renderWizard();
 
-    fireEvent.click(screen.getByRole('button', { name: /get started/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create your assistant/i }));
     fireEvent.click(await screen.findByRole('button', { name: /^continue$/i }));
 
     expect(await screen.findByText('Connect an LLM Provider')).toBeInTheDocument();
