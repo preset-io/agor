@@ -11,6 +11,7 @@ export interface SharedUserSettingsModalProps {
   onClose: () => void;
   onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onRefreshCurrentUser: () => Promise<unknown>;
+  onRestartOnboarding?: () => void | Promise<void>;
 }
 
 /**
@@ -29,6 +30,7 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
   onClose,
   onUpdateUser,
   onRefreshCurrentUser,
+  onRestartOnboarding,
 }) => (
   <UserSettingsModal
     open={open}
@@ -41,5 +43,6 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
       await onUpdateUser(userId, updates);
       await onRefreshCurrentUser();
     }}
+    onRestartOnboarding={onRestartOnboarding}
   />
 );

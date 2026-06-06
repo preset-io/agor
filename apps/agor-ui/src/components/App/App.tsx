@@ -109,6 +109,7 @@ export interface AppProps {
   onSettingsClose?: () => void; // Called when settings modal closes
   openUserSettings?: boolean; // Open user settings modal directly (e.g., from onboarding)
   onUserSettingsClose?: () => void; // Called when user settings modal closes
+  onRestartOnboarding?: () => void | Promise<void>;
   openNewBranchModal?: boolean; // Open new branch modal
   onNewBranchModalClose?: () => void; // Called when new branch modal closes
   suppressLeftPanel?: boolean; // Temporarily hide the assistant/comments panel behind modal-first flows
@@ -278,6 +279,7 @@ export const App: React.FC<AppProps> = ({
   onDeleteComment,
   onLogout,
   onRetryConnection,
+  onRestartOnboarding,
   instanceLabel,
   instanceDescription,
   webTerminalEnabled = false,
@@ -1452,9 +1454,15 @@ export const App: React.FC<AppProps> = ({
                 onUserSettingsClose?.();
               }}
               user={user || null}
+              currentUser={user || null}
               mcpServerById={mcpServerById}
               client={client}
               onUpdate={onUpdateUser}
+              onRestartOnboarding={async () => {
+                setUserSettingsOpen(false);
+                onUserSettingsClose?.();
+                await onRestartOnboarding?.();
+              }}
             />
           </Layout>
         </AppActionsProvider>

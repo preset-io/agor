@@ -30,6 +30,7 @@ import {
   Layout,
   Menu,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Switch,
@@ -77,6 +78,7 @@ export interface UserSettingsModalProps {
   client: AgorClient | null;
   currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
+  onRestartOnboarding?: () => void | Promise<void>;
 }
 
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
@@ -87,6 +89,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   client,
   currentUser,
   onUpdate,
+  onRestartOnboarding,
 }) => {
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState<string>('general');
@@ -614,118 +617,151 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     switch (activeTab) {
       case 'general':
         return (
-          <Form form={form} layout="vertical">
-            <Form.Item label="Name" style={{ marginBottom: 24 }}>
-              <Flex gap={8}>
-                <Form.Item name="emoji" noStyle>
-                  <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
-                </Form.Item>
-                <Form.Item name="name" noStyle style={{ flex: 1 }}>
-                  <Input placeholder="John Doe" style={{ flex: 1 }} />
-                </Form.Item>
-              </Flex>
-            </Form.Item>
+          <>
+            <Form form={form} layout="vertical">
+              <Form.Item label="Name" style={{ marginBottom: 24 }}>
+                <Flex gap={8}>
+                  <Form.Item name="emoji" noStyle>
+                    <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
+                  </Form.Item>
+                  <Form.Item name="name" noStyle style={{ flex: 1 }}>
+                    <Input placeholder="John Doe" style={{ flex: 1 }} />
+                  </Form.Item>
+                </Flex>
+              </Form.Item>
 
-            <Form.Item
-              label="Email"
-              name="email"
-              rules={[
-                { required: true, message: 'Please enter an email' },
-                { type: 'email', message: 'Please enter a valid email' },
-              ]}
-            >
-              <Input placeholder="user@example.com" />
-            </Form.Item>
-
-            <Form.Item
-              label="Unix Username"
-              name="unix_username"
-              help={
-                hasMinimumRole(currentUser?.role, ROLES.ADMIN)
-                  ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
-                  : 'Maintained by administrators'
-              }
-              rules={[
-                {
-                  pattern: /^[a-z0-9_-]+$/,
-                  message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
-                },
-                { max: 32, message: 'Unix username must be 32 characters or less' },
-              ]}
-            >
-              <Input
-                placeholder="johnsmith"
-                maxLength={32}
-                disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}
-              />
-            </Form.Item>
-
-            <Form.Item label="Password" name="password" help="Leave blank to keep current password">
-              <Input.Password placeholder="••••••••" />
-            </Form.Item>
-
-            <Form.Item
-              label={
-                <Space size={4}>
-                  Enable Live Event Stream
-                  <Tag color={token.colorPrimary} style={{ fontSize: 10, marginLeft: 4 }}>
-                    BETA
-                  </Tag>
-                </Space>
-              }
-              name="eventStreamEnabled"
-              valuePropName="checked"
-              tooltip="Show/hide the event stream icon in the navbar. When enabled, you can view live WebSocket events for debugging."
-            >
-              <Switch />
-            </Form.Item>
-
-            <Form.Item
-              label="Role"
-              name="role"
-              rules={[{ required: true, message: 'Please select a role' }]}
-              help={
-                !hasMinimumRole(currentUser?.role, ROLES.ADMIN)
-                  ? 'Maintained by administrators'
-                  : undefined
-              }
-            >
-              <Select
-                disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}
-                options={ROLE_OPTIONS.map((opt) => ({
-                  value: opt.value,
-                  label: opt.label,
-                  title: opt.description,
-                }))}
-              />
-            </Form.Item>
-
-            {isAdmin && (
               <Form.Item
-                label="Groups"
-                name="groupIds"
-                help="Group memberships affect group-aware branch permissions."
+                label="Email"
+                name="email"
+                rules={[
+                  { required: true, message: 'Please enter an email' },
+                  { type: 'email', message: 'Please enter a valid email' },
+                ]}
               >
-                <Select
-                  mode="multiple"
-                  loading={loadingGroups}
-                  disabled={!groupsLoaded && !loadingGroups}
-                  placeholder="Select groups..."
-                  options={groupSelectOptions}
-                  {...searchableSelectProps}
+                <Input placeholder="user@example.com" />
+              </Form.Item>
+
+              <Form.Item
+                label="Unix Username"
+                name="unix_username"
+                help={
+                  hasMinimumRole(currentUser?.role, ROLES.ADMIN)
+                    ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
+                    : 'Maintained by administrators'
+                }
+                rules={[
+                  {
+                    pattern: /^[a-z0-9_-]+$/,
+                    message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
+                  },
+                  { max: 32, message: 'Unix username must be 32 characters or less' },
+                ]}
+              >
+                <Input
+                  placeholder="johnsmith"
+                  maxLength={32}
+                  disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}
                 />
               </Form.Item>
-            )}
 
-            {/* Only show for admins editing other users */}
-            {hasMinimumRole(currentUser?.role, ROLES.ADMIN) &&
-              user &&
-              user.user_id !== currentUser?.user_id && (
-                <Form.Item name="must_change_password" valuePropName="checked">
-                  <Checkbox>Force password change on next login</Checkbox>
+              <Form.Item
+                label="Password"
+                name="password"
+                help="Leave blank to keep current password"
+              >
+                <Input.Password placeholder="••••••••" />
+              </Form.Item>
+
+              <Form.Item
+                label={
+                  <Space size={4}>
+                    Enable Live Event Stream
+                    <Tag color={token.colorPrimary} style={{ fontSize: 10, marginLeft: 4 }}>
+                      BETA
+                    </Tag>
+                  </Space>
+                }
+                name="eventStreamEnabled"
+                valuePropName="checked"
+                tooltip="Show/hide the event stream icon in the navbar. When enabled, you can view live WebSocket events for debugging."
+              >
+                <Switch />
+              </Form.Item>
+
+              <Form.Item
+                label="Role"
+                name="role"
+                rules={[{ required: true, message: 'Please select a role' }]}
+                help={
+                  !hasMinimumRole(currentUser?.role, ROLES.ADMIN)
+                    ? 'Maintained by administrators'
+                    : undefined
+                }
+              >
+                <Select
+                  disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}
+                  options={ROLE_OPTIONS.map((opt) => ({
+                    value: opt.value,
+                    label: opt.label,
+                    title: opt.description,
+                  }))}
+                />
+              </Form.Item>
+
+              {isAdmin && (
+                <Form.Item
+                  label="Groups"
+                  name="groupIds"
+                  help="Group memberships affect group-aware branch permissions."
+                >
+                  <Select
+                    mode="multiple"
+                    loading={loadingGroups}
+                    disabled={!groupsLoaded && !loadingGroups}
+                    placeholder="Select groups..."
+                    options={groupSelectOptions}
+                    {...searchableSelectProps}
+                  />
                 </Form.Item>
               )}
-          </Form>
+
+              {/* Only show for admins editing other users */}
+              {hasMinimumRole(currentUser?.role, ROLES.ADMIN) &&
+                user &&
+                user.user_id !== currentUser?.user_id && (
+                  <Form.Item name="must_change_password" valuePropName="checked">
+                    <Checkbox>Force password change on next login</Checkbox>
+                  </Form.Item>
+                )}
+            </Form>
+
+            {onRestartOnboarding && user?.user_id === currentUser?.user_id && (
+              <div
+                style={{
+                  marginTop: 24,
+                  paddingTop: 20,
+                  borderTop: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                <Typography.Title level={5} style={{ marginTop: 0 }}>
+                  Onboarding
+                </Typography.Title>
+                <Typography.Paragraph type="secondary">
+                  Reopen the assistant setup wizard from the beginning. Existing repos, boards,
+                  branches, and credentials stay in place.
+                </Typography.Paragraph>
+                <Popconfirm
+                  title="Restart onboarding?"
+                  description="This clears saved wizard progress and opens onboarding again."
+                  okText="Restart"
+                  cancelText="Cancel"
+                  onConfirm={onRestartOnboarding}
+                >
+                  <Button>Restart onboarding</Button>
+                </Popconfirm>
+              </div>
+            )}
+          </>
         );
       case 'env-vars':
         return (

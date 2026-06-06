@@ -379,6 +379,7 @@ function AppContent() {
 
   // Onboarding wizard state
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
+  const [onboardingWizardInstance, setOnboardingWizardInstance] = useState(0);
 
   // Trigger wizard when user is loaded and hasn't completed onboarding
   useEffect(() => {
@@ -826,6 +827,24 @@ function AppContent() {
       }
       throw error;
     }
+  };
+
+  const handleRestartOnboarding = async () => {
+    if (!currentUser) return;
+
+    const preferences = { ...(currentUser.preferences ?? {}) } as NonNullable<User['preferences']>;
+    delete preferences.onboarding;
+
+    try {
+      await handleUpdateUser(currentUser.user_id, { preferences }, { silent: true });
+    } catch {
+      // handleUpdateUser already surfaces the error when not silent; keep restart best-effort.
+      return;
+    }
+
+    setOpenUserSettings(false);
+    setOnboardingWizardInstance((value) => value + 1);
+    setOnboardingWizardOpen(true);
   };
 
   // Handle delete user
@@ -1573,6 +1592,7 @@ function AppContent() {
       instanceDescription={instanceConfig?.description}
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
+      onRestartOnboarding={handleRestartOnboarding}
     />
   );
 
@@ -1600,6 +1620,7 @@ function AppContent() {
             mcpServerById={mcpServerById}
             onUpdateUser={handleUpdateUser}
             onRefreshCurrentUser={reAuthenticate}
+            onRestartOnboarding={handleRestartOnboarding}
           />
         )}
 
@@ -1611,7 +1632,7 @@ function AppContent() {
             state, eliminating any chance of one user's onboarding progress
             leaking into another user's session. */}
         <OnboardingWizard
-          key={currentUser?.user_id ?? '__anon__'}
+          key={`${currentUser?.user_id ?? '__anon__'}:${onboardingWizardInstance}`}
           open={onboardingWizardOpen}
           onComplete={handleOnboardingComplete}
           repoById={repoById}
