@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildKnowledgeQueryString,
   resolveActiveKnowledgeDocument,
   shouldDeferKnowledgeUrlMirrorForRoute,
 } from './KnowledgePage';
@@ -41,6 +42,27 @@ describe('KnowledgePage routing state helpers', () => {
         activeDocSnapshot: pageDoc,
       })
     ).toBe(refreshedPage);
+  });
+
+  it('preserves draft page state when rebuilding query params during edit mode', () => {
+    expect(
+      buildKnowledgeQueryString({
+        query: ' onboarding ',
+        kind: 'Skills',
+        editing: true,
+        activeDocId: '__knowledge_draft__',
+      })
+    ).toBe('?q=onboarding&kind=skills&draft=page&mode=edit');
+  });
+
+  it('omits draft state for normal document edit routes', () => {
+    expect(
+      buildKnowledgeQueryString({
+        kind: 'Pages',
+        editing: true,
+        activeDocId: pageDoc.document_id,
+      })
+    ).toBe('?kind=pages&mode=edit');
   });
 
   it('defers URL mirroring while the route points at a different document', () => {

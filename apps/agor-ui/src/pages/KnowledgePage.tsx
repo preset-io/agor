@@ -282,6 +282,24 @@ export function shouldDeferKnowledgeUrlMirrorForRoute(args: {
   return Boolean(args.routeDocumentPath && args.activeDocPath !== args.routeDocumentPath);
 }
 
+export function buildKnowledgeQueryString(args: {
+  query?: string;
+  kind?: string;
+  editing?: boolean;
+  activeDocId?: string | null;
+}): string {
+  const params = new URLSearchParams();
+  const kindParam = kindFilterToUrlParam(args.kind ?? 'All');
+
+  if (args.query?.trim()) params.set('q', args.query.trim());
+  if (kindParam) params.set('kind', kindParam);
+  if (args.editing && args.activeDocId === DRAFT_DOCUMENT_ID) params.set('draft', 'page');
+  if (args.editing && args.activeDocId) params.set('mode', 'edit');
+
+  const serialized = params.toString();
+  return serialized ? `?${serialized}` : '';
+}
+
 const validateKnowledgePath = (path: string, { allowEmpty = false } = {}): string | null =>
   validateSharedKnowledgePath(path, { allowEmpty });
 
@@ -549,20 +567,13 @@ export function KnowledgePage({
   }, [activeDoc, documents, nextDraftTitle]);
 
   const buildKnowledgeSearch = useCallback(
-    (overrides: { query?: string; kind?: string; editing?: boolean } = {}) => {
-      const params = new URLSearchParams();
-      const query = overrides.query ?? searchQuery;
-      const kind = overrides.kind ?? kindFilter;
-      const editing = overrides.editing ?? isEditing;
-      const kindParam = kindFilterToUrlParam(kind);
-
-      if (query.trim()) params.set('q', query.trim());
-      if (kindParam) params.set('kind', kindParam);
-      if (editing && activeDocId) params.set('mode', 'edit');
-
-      const serialized = params.toString();
-      return serialized ? `?${serialized}` : '';
-    },
+    (overrides: { query?: string; kind?: string; editing?: boolean } = {}) =>
+      buildKnowledgeQueryString({
+        query: overrides.query ?? searchQuery,
+        kind: overrides.kind ?? kindFilter,
+        editing: overrides.editing ?? isEditing,
+        activeDocId,
+      }),
     [activeDocId, isEditing, kindFilter, searchQuery]
   );
 
@@ -1364,10 +1375,8 @@ export function KnowledgePage({
     }
   };
 
-  const moveDocumentToFolder = async (documentId: string, folder: string) => {
+  const moveDocumentToFolder = async (doc: KnowledgeDocument, folder: string) => {
     if (!client) return;
-    const doc = documents.find((item) => item.document_id === documentId);
-    if (!doc) return;
 
     const targetFolder = normalizeFolderPath(folder);
     const folderError = validateKnowledgePath(targetFolder, { allowEmpty: true });
@@ -1397,6 +1406,14 @@ export function KnowledgePage({
       setActiveDocId(updated.document_id);
       setSelectedFolder(targetFolder);
       setExpandedTreeKeys((prev) => [...new Set([...prev, `folder:${targetFolder}`])]);
+      navigate(
+        `${buildKnowledgeRoutePath(
+          routeBasePath,
+          namespaceSlugForDocument(updated),
+          updated.path
+        )}${buildKnowledgeSearch({ editing: false })}`,
+        { replace: true }
+      );
     } catch (err) {
       console.error('Failed to move Knowledge document:', err);
       setError(err instanceof Error ? err.message : String(err));
@@ -2529,7 +2546,7 @@ export function KnowledgePage({
         open={relocateModalOpen}
         okText="Move"
         onOk={async () => {
-          if (activeDoc) await moveDocumentToFolder(activeDoc.document_id, relocateFolder);
+          if (activeDoc) await moveDocumentToFolder(activeDoc, relocateFolder);
           setRelocateModalOpen(false);
         }}
         onCancel={() => setRelocateModalOpen(false)}
