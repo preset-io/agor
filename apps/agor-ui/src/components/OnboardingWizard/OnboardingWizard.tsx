@@ -27,9 +27,11 @@ import {
   TOOL_API_KEY_NAMES,
 } from '@agor-live/client';
 import {
+  ApiOutlined,
+  AppstoreOutlined,
+  BranchesOutlined,
   CheckCircleOutlined,
   CloudDownloadOutlined,
-  ExperimentOutlined,
   FolderOpenOutlined,
   KeyOutlined,
   RobotOutlined,
@@ -1498,15 +1500,7 @@ export function OnboardingWizard({
 
   const renderBoard = () => (
     <div style={{ textAlign: 'center', padding: '32px 0' }}>
-      <Title level={4}>Create Your Personal Board</Title>
-      <Paragraph type="secondary">
-        Boards are spatial canvases where you organize branches, sessions, and AI agents. We'll
-        create a personal board for you.
-      </Paragraph>
-
-      {loading ? (
-        <Spin size="large" />
-      ) : error ? (
+      {error ? (
         <>
           <Alert
             type="error"
@@ -1518,25 +1512,18 @@ export function OnboardingWizard({
             Retry
           </Button>
         </>
-      ) : createdBoardId ? (
-        <>
-          <Result
-            icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
-            title="Board Created"
-          />
-          <Button type="primary" onClick={() => setCurrentStep('branch')}>
-            Continue
-          </Button>
-        </>
       ) : (
-        <Button
-          type="primary"
-          size="large"
-          icon={<ExperimentOutlined />}
-          onClick={handleCreateBoard}
-        >
-          Create Board
-        </Button>
+        <>
+          <Spin size="large" />
+          <Title level={4} style={{ marginTop: 16 }}>
+            {path === 'assistant' ? "Setting up your assistant's board" : 'Creating your board'}
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            {path === 'assistant'
+              ? 'Agor is creating a board where your assistant can organize its work.'
+              : 'Agor is creating a personal board for your work.'}
+          </Paragraph>
+        </>
       )}
     </div>
   );
@@ -1918,12 +1905,12 @@ export function OnboardingWizard({
 
     const labelMap: Record<WizardStep, string> = {
       welcome: 'Welcome',
-      identity: 'Identity',
+      identity: 'Assistant',
       'add-repo': 'Repo',
-      clone: path === 'own-repo' ? 'Repo' : 'Clone',
+      clone: path === 'own-repo' ? 'Repo' : 'Setup',
       board: 'Board',
       branch: 'Branch',
-      'api-keys': 'Keys',
+      'api-keys': 'Provider',
     };
 
     const iconMap: Record<WizardStep, React.ReactNode> = {
@@ -1931,17 +1918,30 @@ export function OnboardingWizard({
       identity: <RobotOutlined />,
       'add-repo': <FolderOpenOutlined />,
       clone: <CloudDownloadOutlined />,
-      board: <ExperimentOutlined />,
-      branch: <FolderOpenOutlined />,
-      'api-keys': <KeyOutlined />,
+      board: <AppstoreOutlined />,
+      branch: <BranchesOutlined />,
+      'api-keys': <ApiOutlined />,
     };
 
-    return displaySteps.map((step) => ({
-      key: step,
-      title: labelMap[step],
-      icon: iconMap[step],
-    }));
-  }, [path]);
+    const mappedStep = currentStep === 'clone' && path === 'own-repo' ? 'add-repo' : currentStep;
+    const activeIndex = displaySteps.indexOf(mappedStep);
+
+    return displaySteps.map((step, index) => {
+      const isActive = index === activeIndex;
+      const stepColor = isActive ? token.colorPrimary : token.colorTextDisabled;
+      return {
+        key: step,
+        title: (
+          <span style={{ color: stepColor, fontWeight: isActive ? 600 : undefined }}>
+            {labelMap[step]}
+          </span>
+        ),
+        icon: (
+          <span style={{ color: stepColor, opacity: isActive ? 1 : 0.55 }}>{iconMap[step]}</span>
+        ),
+      };
+    });
+  }, [path, currentStep, token.colorPrimary, token.colorTextDisabled]);
 
   const currentStepDisplay = useMemo(() => {
     if (!path || currentStep === 'welcome') return -1;
