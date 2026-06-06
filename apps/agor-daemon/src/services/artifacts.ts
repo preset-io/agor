@@ -59,10 +59,10 @@ import {
   proxyGrantEnvName,
   ROLES,
 } from '@agor/core/types';
-
 import { DrizzleService } from '../adapters/drizzle.js';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
+import { hasBranchPermission } from '../utils/branch-authorization.js';
 import {
   detectLegacyFormat,
   effectiveTemplateForArtifact,
@@ -202,6 +202,18 @@ function readArtifactSidecar(folderPath: string): ArtifactSidecar | null {
   }
 }
 
+function normalizeBranchSubpath(subpath: string | undefined | null): string {
+  if (!subpath) return '';
+  const normalized = subpath.replace(/\\+/g, '/');
+  const segments = normalized.split('/').filter((segment) => segment.length > 0);
+  for (const segment of segments) {
+    if (segment === '.' || segment === '..') {
+      throw new Error('branch subpath must not include "." or ".." segments');
+    }
+  }
+  return segments.join('/');
+}
+
 export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
   branch_id?: BranchID;
@@ -267,6 +279,65 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       requesterId: string;
     }
   > = new Map();
+
+  private async ensureBranchFilesystemAccess(
+    branchId: BranchID,
+    userId?: string,
+    userRole?: UserRole
+  ): Promise<void> {
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch) {
+      throw new Error(`Branch not found: ${branchId}`);
+    }
+    if (!userId) {
+      throw new Error('Authentication required to access branch workspace files');
+    }
+    const isOwner = await this.branchRepo.isOwner(branch.branch_id, userId as UserID);
+    const effective = await this.branchRepo.resolveUserPermission(branch, userId as UserID);
+    if (
+      !hasBranchPermission(branch, userId as UserID, isOwner, 'session', userRole, true, effective)
+    ) {
+      throw new Error('Forbidden: branch session permission required to read artifact files');
+    }
+  }
+
+  private async resolveArtifactSource(
+    input: { folderPath?: string; branch_id?: string; subpath?: string },
+    userId?: string,
+    userRole?: UserRole
+  ): Promise<{ folderPath: string; matchedBranchId: BranchID | null }> {
+    let folderPath: string;
+    let hintBranchId: BranchID | null = null;
+
+    if (input.branch_id) {
+      const branch = await this.branchRepo.findById(input.branch_id);
+      if (!branch) {
+        throw new Error(`Branch not found: ${input.branch_id}`);
+      }
+      const branchRoot = path.resolve(branch.path);
+      const relative = normalizeBranchSubpath(input.subpath);
+      folderPath = relative ? path.join(branchRoot, relative) : branchRoot;
+      hintBranchId = branch.branch_id as BranchID;
+    } else {
+      if (input.subpath) {
+        throw new Error('branchId is required when subpath is provided');
+      }
+      if (!input.folderPath) {
+        throw new Error('folderPath or branchId + subpath is required');
+      }
+      folderPath = path.resolve(input.folderPath);
+    }
+
+    const matchedBranchId = await this.validatePublishPath(folderPath);
+    if (hintBranchId && matchedBranchId && hintBranchId !== matchedBranchId) {
+      throw new Error('Resolved branch subpath does not match known branch root');
+    }
+    const branchId = hintBranchId ?? matchedBranchId;
+    if (branchId) {
+      await this.ensureBranchFilesystemAccess(branchId, userId, userRole);
+    }
+    return { folderPath, matchedBranchId: branchId };
+  }
 
   constructor(db: Database, app: Application) {
     const artifactRepo = new ArtifactRepository(db);
@@ -382,7 +453,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    */
   async publishArtifact(
     data: {
-      folderPath: string;
+      folderPath?: string;
+      branch_id?: string;
+      subpath?: string;
       board_id?: string;
       name?: string;
       artifact_id?: string;
@@ -397,14 +470,18 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       width?: number;
       height?: number;
     },
-    userId?: string
+    userId?: string,
+    userRole?: UserRole
   ): Promise<Artifact> {
-    const folderPath = path.resolve(data.folderPath);
-
-    // Path containment: only allow reading from branch paths or temp dirs.
-    // The matching branch id (if any) is stored on the row for provenance
-    // + future "list artifacts I published from branch X" filtering.
-    const matchedBranchId = await this.validatePublishPath(folderPath);
+    const { folderPath, matchedBranchId } = await this.resolveArtifactSource(
+      {
+        folderPath: data.folderPath,
+        branch_id: data.branch_id,
+        subpath: data.subpath,
+      },
+      userId,
+      userRole
+    );
 
     if (!fs.existsSync(folderPath)) {
       throw new Error(`Folder not found: ${folderPath}`);
@@ -1519,16 +1596,19 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   // ── Build / status / console / find helpers (mostly unchanged) ──
 
-  async checkBuildFromFolder(folderPath: string): Promise<{
+  async checkBuildFromFolder(
+    input: { folderPath?: string; branch_id?: string; subpath?: string },
+    userId?: string,
+    userRole?: UserRole
+  ): Promise<{
     status: ArtifactBuildStatus;
     errors: string[];
   }> {
-    const resolved = path.resolve(folderPath);
-    await this.validatePublishPath(resolved);
-    if (!fs.existsSync(resolved)) {
+    const { folderPath } = await this.resolveArtifactSource(input, userId, userRole);
+    if (!fs.existsSync(folderPath)) {
       return { status: 'error', errors: [`Folder not found: ${folderPath}`] };
     }
-    const files = this.readFilesRecursive(resolved, resolved);
+    const files = this.readFilesRecursive(folderPath, folderPath);
     return this.validateFiles(files);
   }
 

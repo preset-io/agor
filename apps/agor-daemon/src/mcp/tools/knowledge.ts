@@ -29,6 +29,79 @@ const KnowledgeEditPolicySchema = z.enum(KNOWLEDGE_EDIT_POLICIES);
 const KnowledgeGraphNodeTypeSchema = z.enum(KNOWLEDGE_GRAPH_NODE_TYPES);
 const KnowledgeGraphEdgeTypeSchema = z.enum(KNOWLEDGE_GRAPH_EDGE_TYPES);
 
+const KnowledgeReplaceLineRangeOpSchema = z.object({
+  type: z.literal('replace_line_range'),
+  startLine: z.number().int().min(1),
+  endLine: z.number().int().min(1),
+  replacement: z.string(),
+  expectedText: z.string().optional(),
+  expectedMd5: z.string().optional(),
+});
+
+const KnowledgeInsertAtLineOpSchema = z.object({
+  type: z.literal('insert_at_line'),
+  line: z.number().int().min(1),
+  position: z.enum(['before', 'after']).optional(),
+  content: z.string(),
+  expectedNeighborText: z.string().optional(),
+});
+
+const KnowledgeDeleteLineRangeOpSchema = z.object({
+  type: z.literal('delete_line_range'),
+  startLine: z.number().int().min(1),
+  endLine: z.number().int().min(1),
+  expectedText: z.string().optional(),
+  expectedMd5: z.string().optional(),
+});
+
+const KnowledgeReplaceLiteralOpSchema = z.object({
+  type: z.literal('replace_literal'),
+  find: z.string().min(1),
+  replace: z.string(),
+  expectedCount: z.number().int().min(0),
+});
+
+const KnowledgeEditOpSchema = z.discriminatedUnion('type', [
+  KnowledgeReplaceLineRangeOpSchema,
+  KnowledgeInsertAtLineOpSchema,
+  KnowledgeDeleteLineRangeOpSchema,
+  KnowledgeReplaceLiteralOpSchema,
+]);
+
+const KnowledgeEditRequestSchema = z.object({
+  documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
+  uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
+  namespace: z.string().optional().describe('Namespace/space slug; use with path'),
+  path: z.string().optional().describe('Document path inside namespace; use with namespace'),
+  expectedVersion: z
+    .union([z.number(), z.string()])
+    .optional()
+    .describe(
+      'Optimistic concurrency check: current version number or version ID expected by the caller'
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe('When true, validate and preview without creating a new version'),
+  changeSummary: z.string().optional().describe('Optional change summary for version history'),
+  versionMetadata: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe('Additional metadata to merge into the new version record'),
+  ops: z
+    .array(KnowledgeEditOpSchema)
+    .min(1)
+    .describe(
+      'Deterministic operations to apply in order. Provide the full batch; one successful call creates one immutable KB version.'
+    ),
+  returnContent: z
+    .enum(['none', 'full'])
+    .optional()
+    .describe(
+      'Set to "full" to include the post-edit content in the response (default: exclude content).'
+    ),
+});
+
 const KnowledgeNodeRefSchema = z
   .object({
     nodeId: z.string().optional().describe('Knowledge graph node ID (UUIDv7 or short ID)'),
@@ -529,6 +602,40 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         'kb/documents.patch',
         'kb/documents.create',
       ]);
+    }
+  );
+
+  server.registerTool(
+    'agor_kb_edit',
+    {
+      description:
+        'Apply a batch of deterministic edits to a Knowledge document. One successful call creates exactly one new immutable KB version — collect related micro-edits into a single ops[] batch instead of calling this tool repeatedly. Supports dry-run previews for validation.',
+      annotations: { idempotentHint: false },
+      inputSchema: KnowledgeEditRequestSchema,
+    },
+    async (args) => {
+      const service = getOptionalService(ctx, 'kb/document-edits');
+      if (!service) {
+        return knowledgeNotImplementedResult('agor_kb_edit', ['kb/document-edits']);
+      }
+
+      const data = {
+        documentId: coerceString(args.documentId),
+        uri: coerceString(args.uri),
+        namespace: coerceString(args.namespace),
+        path: coerceString(args.path),
+        expectedVersion: args.expectedVersion,
+        dryRun: args.dryRun === true,
+        changeSummary: coerceString(args.changeSummary),
+        versionMetadata: coerceJsonRecord(args.versionMetadata),
+        ops: args.ops,
+        returnContent: args.returnContent ?? undefined,
+      } as Record<string, unknown>;
+
+      if (service.create) {
+        return textResult(await service.create(data, mcpParams(ctx)));
+      }
+      return knowledgeNotImplementedResult('agor_kb_edit', ['kb/document-edits.create']);
     }
   );
 

@@ -146,6 +146,57 @@ export const KNOWLEDGE_DOCUMENT_URI_PREFIX = 'agor://kb/document/';
  */
 export const KNOWLEDGE_UNIT_URI_PREFIX = 'agor://kb/unit/';
 
+export interface KnowledgeVersionToken {
+  version_id: KnowledgeDocumentVersionID;
+  version_number: number;
+  content_sha256: string | null;
+  etag: string;
+}
+
+export interface KnowledgeEditChangedRange {
+  start_line: number;
+  end_line: number;
+  content: string;
+}
+
+export type KnowledgeEditOp =
+  | {
+      type: 'replace_line_range';
+      startLine: number;
+      endLine: number;
+      replacement: string;
+      expectedText?: string;
+      expectedMd5?: string;
+    }
+  | {
+      type: 'insert_at_line';
+      line: number;
+      position?: 'before' | 'after';
+      content: string;
+      expectedNeighborText?: string;
+    }
+  | {
+      type: 'delete_line_range';
+      startLine: number;
+      endLine: number;
+      expectedText?: string;
+      expectedMd5?: string;
+    }
+  | {
+      type: 'replace_literal';
+      find: string;
+      replace: string;
+      expectedCount: number;
+    };
+
+export interface KnowledgeEditResultSummary {
+  dryRun: boolean;
+  baseVersion: KnowledgeVersionToken;
+  newVersion?: KnowledgeVersionToken;
+  diff: string;
+  changedRanges: KnowledgeEditChangedRange[];
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function buildKnowledgeDocumentUri(documentId: string): string {

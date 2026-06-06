@@ -1045,6 +1045,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
+  safeService('kb/document-edits')?.hooks({
+    before: {
+      all: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'edit knowledge documents')],
+    },
+  });
+
   safeService('kb/versions')?.hooks({
     before: {
       all: [requireAuth],

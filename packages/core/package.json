@@ -298,6 +298,12 @@
       "import": "./dist/unix/index.js",
       "require": "./dist/unix/index.cjs"
     },
+    "./knowledge": {
+      "source": "./src/knowledge/index.ts",
+      "types": "./dist/knowledge/index.d.ts",
+      "import": "./dist/knowledge/index.js",
+      "require": "./dist/knowledge/index.cjs"
+    },
     "./mcp": {
       "source": "./src/mcp/index.ts",
       "types": "./dist/mcp/index.d.ts",

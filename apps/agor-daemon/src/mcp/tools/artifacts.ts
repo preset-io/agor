@@ -113,7 +113,22 @@ IMPORTANT:
 - Missing user env vars render as "" — your app should detect that and surface a "configure SOMETHING in Settings" message rather than calling APIs with empty creds.
 - For node.js / static templates without a dotenv path, env vars are NOT injected; the daemon emits a warning if you declared any.`,
       inputSchema: z.object({
-        folderPath: z.string().describe('Absolute path to folder containing artifact files'),
+        folderPath: z
+          .string()
+          .optional()
+          .describe(
+            'Absolute path to folder containing artifact files. Optional when branchId + subpath are provided.'
+          ),
+        branchId: z
+          .string()
+          .optional()
+          .describe(
+            'Branch ID (UUID or short ID). Prefer this with subpath to publish from a branch worktree.'
+          ),
+        subpath: z
+          .string()
+          .optional()
+          .describe('Branch-relative subpath to the artifact folder (requires branchId).'),
         boardId: z
           .string()
           .optional()
@@ -171,12 +186,23 @@ IMPORTANT:
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const boardIdRaw = coerceString(args.boardId);
       const resolvedBoardId = boardIdRaw ? await resolveBoardId(ctx, boardIdRaw) : undefined;
+      const branchIdRaw = coerceString(args.branchId);
+      const resolvedBranchId = branchIdRaw ? await resolveBranchId(ctx, branchIdRaw) : undefined;
+      const subpath = coerceString(args.subpath);
+      const folderPath = coerceString(args.folderPath);
       const resolvedArtifactId = coerceString(args.artifactId)
         ? await resolveArtifactId(ctx, coerceString(args.artifactId)!)
         : undefined;
+      if (!folderPath && !resolvedBranchId) {
+        throw new Error(
+          'Provide either folderPath or branchId (with optional subpath) to publish artifacts.'
+        );
+      }
       const artifact = await service.publishArtifact(
         {
-          folderPath: coerceString(args.folderPath)!,
+          folderPath,
+          branch_id: resolvedBranchId,
+          subpath,
           board_id: resolvedBoardId,
           name: coerceString(args.name),
           artifact_id: resolvedArtifactId,
@@ -191,7 +217,8 @@ IMPORTANT:
           width: args.width,
           height: args.height,
         },
-        ctx.userId
+        ctx.userId,
+        ctx.authenticatedUser.role as UserRole
       );
 
       const { files: _files, ...artifactSummary } = artifact;
@@ -213,12 +240,42 @@ IMPORTANT:
       inputSchema: z.object({
         folderPath: z
           .string()
-          .describe('Absolute path to the folder containing artifact files to check'),
+          .optional()
+          .describe(
+            'Absolute path to the folder containing artifact files to check. Optional when branchId + subpath are provided.'
+          ),
+        branchId: z
+          .string()
+          .optional()
+          .describe(
+            'Branch ID (UUID or short ID). Prefer this with subpath to check a branch worktree path.'
+          ),
+        subpath: z
+          .string()
+          .optional()
+          .describe('Branch-relative subpath pointing at the artifact folder (requires branchId).'),
       }),
     },
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
-      const result = await service.checkBuildFromFolder(coerceString(args.folderPath)!);
+      const branchIdRaw = coerceString(args.branchId);
+      const resolvedBranchId = branchIdRaw ? await resolveBranchId(ctx, branchIdRaw) : undefined;
+      const folderPath = coerceString(args.folderPath);
+      const subpath = coerceString(args.subpath);
+      if (!folderPath && !resolvedBranchId) {
+        throw new Error(
+          'Provide either folderPath or branchId (with optional subpath) to check artifact files.'
+        );
+      }
+      const result = await service.checkBuildFromFolder(
+        {
+          folderPath,
+          branch_id: resolvedBranchId,
+          subpath,
+        },
+        ctx.userId,
+        ctx.authenticatedUser.role as UserRole
+      );
       // Mirror getStatus shape — `build_status` (not `status`) and `build_errors`
       // (always an array, never undefined) so agents can parse one schema across
       // both tools.

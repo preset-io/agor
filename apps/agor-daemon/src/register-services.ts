@@ -73,6 +73,7 @@ import {
   createGroupsService,
   setupBranchGroupGrantsService,
 } from './services/groups.js';
+import { createKnowledgeDocumentEditsService } from './services/knowledge-document-edits.js';
 import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
 import { createKnowledgeGraphService } from './services/knowledge-graph.js';
 import { createKnowledgeIndexingStatusService } from './services/knowledge-indexing.js';
@@ -364,9 +365,17 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/kb/namespaces', createKnowledgeNamespacesService(db), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove'],
   });
-  app.use('/kb/documents', createKnowledgeDocumentsService(db, app), {
+  const knowledgeDocumentsService = createKnowledgeDocumentsService(db, app);
+  app.use('/kb/documents', knowledgeDocumentsService, {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'getDocument', 'putDocument'],
   });
+  app.use(
+    '/kb/document-edits',
+    createKnowledgeDocumentEditsService(db, app, knowledgeDocumentsService),
+    {
+      methods: ['create'],
+    }
+  );
   app.use('/kb/versions', createKnowledgeVersionsService(db), {
     methods: ['find'],
   });

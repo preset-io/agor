@@ -53,6 +53,7 @@ export default defineConfig({
     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
+    'knowledge/index': 'src/knowledge/index.ts', // Knowledge editing helpers
   },
   format: ['cjs', 'esm'],
   dts: false,
