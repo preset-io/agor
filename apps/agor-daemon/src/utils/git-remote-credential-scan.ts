@@ -4,10 +4,12 @@ import { scrubGitConfigRemoteCredentials } from '@agor/core/git';
 /**
  * Best-effort startup repair for credential-bearing git remote URLs.
  *
- * This runs only against remote repos managed by Agor and their branches. It
- * deliberately skips `repo_type: local` entries because those may point at an
- * operator's pre-existing repository outside `~/.agor`; mutating those configs
- * during daemon boot would be surprising. Local repos still get opportunistic
+ * This repairs persisted repo.remote_url rows for all registered repos, because
+ * those values are Agor-owned metadata. Filesystem .git/config scrubbing runs
+ * only against remote repos managed by Agor and their branches; it deliberately
+ * skips `repo_type: local` entries because those may point at an operator's
+ * pre-existing repository outside `~/.agor`, and mutating those configs during
+ * daemon boot would be surprising. Local repos still get opportunistically
  * scrubbed at Agor git-operation boundaries and can be repaired explicitly via
  * `agor admin scrub-git-remotes --write`.
  */
