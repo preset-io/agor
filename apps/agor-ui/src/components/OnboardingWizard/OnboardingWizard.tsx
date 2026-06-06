@@ -1247,6 +1247,7 @@ export function OnboardingWizard({
       <Paragraph style={{ marginBottom: 14, fontSize: 15 }}>
         Start by creating your{' '}
         <Typography.Link
+          strong
           href="https://agor.live/guide/assistants"
           target="_blank"
           rel="noopener noreferrer"
