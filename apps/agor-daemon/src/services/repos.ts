@@ -614,7 +614,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       repo_id: repo.repo_id,
       slug: repo.slug,
       local_path: repo.local_path,
-      remote_url: repo.remote_url,
+      remote_url: repo.remote_url ? redactGitUrlCredentials(repo.remote_url) : repo.remote_url,
     });
 
     // Check for duplicate branch name in this repo (non-archived only)

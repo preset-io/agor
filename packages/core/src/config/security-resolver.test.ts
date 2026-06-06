@@ -499,6 +499,18 @@ describe('redactUrlUserinfo', () => {
     );
   });
 
+  it('redacts through the last raw @ before the host', () => {
+    expect(redactUrlUserinfo('https://USER:PASS@WORD@host/repo.git')).toBe(
+      'https://<redacted>@host/repo.git'
+    );
+  });
+
+  it('redacts encoded @ in userinfo', () => {
+    expect(redactUrlUserinfo('https://USER:PASS%40WORD@host/repo.git')).toBe(
+      'https://<redacted>@host/repo.git'
+    );
+  });
+
   it('redacts userinfo embedded in a config KEY (the Codex-found case)', () => {
     expect(
       redactUrlUserinfo('url.https://USER:TOK@github.com/.insteadOf=https://github.com/')

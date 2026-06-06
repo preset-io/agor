@@ -181,6 +181,25 @@ export function getKnowledgeUrl(
 // ---------------------------------------------------------------------------
 
 /**
+ * Replace URL userinfo with `<redacted>` for logs/errors.
+ *
+ * This is intentionally string-based rather than `new URL(...)` only:
+ * defensive redaction has to work even when a user pasted a malformed URL
+ * such as one with an unescaped `@` inside the password. The userinfo match is
+ * greedy within the URL authority, so it redacts through the last `@` before a
+ * path/query/hash delimiter.
+ *
+ * SCP-like Git remotes (`git@host:org/repo.git`) do not contain `://`, so they
+ * are left untouched.
+ */
+export function redactUrlUserinfo(input: string): string {
+  return input.replace(
+    /([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s]*@)([^/?#\s]+)/g,
+    (_match, prefix: string, _userinfo: string, host: string) => `${prefix}<redacted>@${host}`
+  );
+}
+
+/**
  * Normalize an optional HTTP(S) URL string.
  *
  * - Trims whitespace

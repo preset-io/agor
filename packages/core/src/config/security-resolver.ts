@@ -14,6 +14,7 @@
  * rather than emitting a subtly-broken header and failing at request time.
  */
 
+import { redactUrlUserinfo as redactUrlUserinfoShared } from '../utils/url';
 import type {
   AgorConfig,
   AgorCorsMode,
@@ -22,6 +23,7 @@ import type {
   AgorSecuritySettings,
 } from './types';
 
+export { redactUrlUserinfo } from '../utils/url';
 export type { AgorGitConfigParametersSettings } from './types';
 
 /**
@@ -547,17 +549,6 @@ export function resolveGitConfigParameters(
   return [...byKey.values()];
 }
 
-/**
- * Replace userinfo in any URL with `<redacted>`. Catches creds embedded in
- * either the value (e.g. `http.proxy=http://USER:TOK@host/`) or the config
- * KEY (git config keys can carry URLs as subsections, e.g.
- * `url."https://USER:TOK@host/".insteadOf=…`). Anchored to `://` so SCP-form
- * `git@host:path` URLs aren't false-positively matched.
- */
-export function redactUrlUserinfo(s: string): string {
-  return s.replace(/:\/\/[^/@\s]+@/g, '://<redacted>@');
-}
-
 /** True when a pair still looks credential-bearing AFTER URL-userinfo redaction. */
 export function gitConfigParameterLooksSecret(pair: string): boolean {
   return /authorization:/i.test(pair);
@@ -571,7 +562,7 @@ export function renderGitConfigParametersForLog(pairs: readonly string[]): strin
   return pairs
     .filter((p) => p.trim().length > 0)
     .map((pair) => {
-      const scrubbed = redactUrlUserinfo(pair);
+      const scrubbed = redactUrlUserinfoShared(pair);
       if (!gitConfigParameterLooksSecret(scrubbed)) return scrubbed;
       return `${gitConfigParameterKey(scrubbed)}=<redacted>`;
     })

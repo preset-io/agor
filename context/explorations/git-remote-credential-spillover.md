@@ -37,7 +37,10 @@ agent/user git commands.
 - Branch creation/restore scrubs the base repo config before `fetch` /
   `worktree add`.
 - Clone-mode branch creation scrubs the new clone's `.git/config` after clone.
-- Daemon startup warns if managed repos/branches contain unsafe remote URLs.
+- Daemon startup launches a best-effort post-start scrub for managed remote
+  repos/branches if they contain unsafe remote URLs. It runs after the API is
+  listening to avoid extending the boot critical path, so it is not a hard
+  pre-listen exposure barrier.
 - CLI repair: `agor admin scrub-git-remotes` scans; add `--write` to remove
   userinfo from remote `url` / `pushurl` entries.
 

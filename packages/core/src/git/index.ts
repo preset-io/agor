@@ -15,6 +15,7 @@ import { simpleGit } from 'simple-git';
 import { getBranchesDir, getReposDir } from '../config/config-manager';
 import type { RepoCloneErrorCategory } from '../types/repo';
 import { escapeShellArg } from '../unix/run-as-user';
+import { redactUrlUserinfo } from '../utils/url';
 
 /**
  * Validate a user-supplied git ref (branch name, tag) before it is passed to
@@ -192,21 +193,24 @@ export function parseHostFromGitUrl(url: string): string | undefined {
 }
 
 /**
- * True when a git URL embeds URL userinfo (`scheme://USER[:PASS]@host/...`).
+ * True when an HTTP(S) git URL embeds URL userinfo
+ * (`https://USER[:PASS]@host/...`).
  *
- * For Agor's purposes any URL userinfo in a persisted remote is unsafe, even
+ * For Agor's purposes HTTP(S) userinfo in a persisted remote is unsafe, even
  * if it is "just" a username: users commonly paste PATs as either the username
  * or password, and shared worktree repos expose `.git/config` to every branch.
- * SCP-like SSH URLs (`git@github.com:org/repo.git`) are intentionally not
- * treated as credential-bearing.
+ * SSH remotes are intentionally not mutated: `ssh://git@host/org/repo.git`
+ * and SCP-like `git@host:org/repo.git` use the userinfo position for the SSH
+ * username and stripping it can break legitimate remotes.
  */
 export function gitUrlHasUserinfo(rawUrl: string): boolean {
-  if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawUrl)) return false;
+  if (!/^https?:\/\//i.test(rawUrl)) return false;
   try {
     const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
     return parsed.username.length > 0 || parsed.password.length > 0;
   } catch {
-    return /:\/\/[^/@\s]+@/.test(rawUrl);
+    return /^https?:\/\/[^/?#\s]*@[^/?#\s]+/i.test(rawUrl);
   }
 }
 
@@ -216,17 +220,19 @@ export function gitUrlHasUserinfo(rawUrl: string): boolean {
  */
 export function redactGitUrlCredentials(rawUrl: string): string {
   if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawUrl)) return rawUrl;
-  return rawUrl.replace(/:\/\/[^/@\s]+@/g, '://<redacted>@');
+  return redactUrlUserinfo(rawUrl);
 }
 
 /**
- * Remove URL userinfo from a git URL before persisting it or handing it to
- * `git clone`. If parsing fails, fall back to a conservative regex scrub.
+ * Remove HTTP(S) URL userinfo from a git URL before persisting it or handing
+ * it to `git clone`. SSH remotes are preserved because `ssh://git@host/...`
+ * uses userinfo for the login name, not an embedded credential.
  */
 export function stripGitUrlCredentials(rawUrl: string): string {
-  if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawUrl)) return rawUrl;
+  if (!/^https?:\/\//i.test(rawUrl)) return rawUrl;
   try {
     const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return rawUrl;
     if (parsed.username || parsed.password) {
       parsed.username = '';
       parsed.password = '';
@@ -234,7 +240,7 @@ export function stripGitUrlCredentials(rawUrl: string): string {
     }
     return rawUrl;
   } catch {
-    return rawUrl.replace(/:\/\/[^/@\s]+@/g, '://');
+    return rawUrl.replace(/^(https?:\/\/)([^/?#\s]*@)([^/?#\s]+)/i, '$1$3');
   }
 }
 
@@ -279,6 +285,7 @@ async function findGitConfigPaths(repoPath: string): Promise<string[]> {
     if (pointer) {
       const gitDir = isAbsolute(pointer) ? pointer : resolve(repoPath, pointer);
       paths.add(join(gitDir, 'config'));
+      paths.add(join(gitDir, 'config.worktree'));
 
       // Git worktrees keep remotes in the common dir's config, while the
       // per-worktree gitdir may also have config.worktree. Check both.
