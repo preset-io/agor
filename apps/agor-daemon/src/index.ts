@@ -65,7 +65,7 @@ import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/static-assets.js';
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
-import { startup } from './startup.js';
+import { runPostStartJob, startup } from './startup.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
 import { registerAllWidgets } from './widgets/index.js';
 
@@ -683,7 +683,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // stale-task watchdog re-started, so a Ctrl-D'd REPL that straddled
   // the restart is detected and the task is closed.
   // --------------------------------------------------------------------------
-  try {
+  runPostStartJob('cli-watcher-rehydrate', async () => {
     const { rehydrateCliWatchers } = await import('./services/claude-cli-integration.js');
     await rehydrateCliWatchers(app, async (branchId) => {
       try {
@@ -693,7 +693,5 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
         return null;
       }
     });
-  } catch (err) {
-    console.warn('[startup] rehydrateCliWatchers failed (non-fatal):', err);
-  }
+  });
 }

@@ -16,7 +16,7 @@ import { SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
 import type { GatewayService } from './services/gateway.js';
-import { createHealthMonitor } from './services/health-monitor.js';
+import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
 import { SchedulerService } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
@@ -97,13 +97,20 @@ async function readAndClearSentinel(): Promise<boolean> {
 // Orphan cleanup
 // ---------------------------------------------------------------------------
 
-async function cleanupOrphans(ctx: StartupContext): Promise<void> {
-  const { app, db, sessionsService } = ctx;
+interface OrphanCleanupResult {
+  wasGraceful: boolean;
+  orphanedTasks: Task[];
+  orphanedSessions: Session[];
+  sessionIdsWithOrphanedTasks: Set<string>;
+}
+
+async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
+  const { app, sessionsService } = ctx;
 
   // Get tasks service from the app (registered during services phase)
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
 
-  console.log('🧹 Cleaning up orphaned tasks and sessions...');
+  console.log('🧹 Cleaning up orphaned task/session state...');
 
   // Determine restart type before touching anything — sentinel is consumed here
   const wasGraceful = await readAndClearSentinel();
@@ -187,109 +194,6 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
     }
   }
 
-  // Inject a system message into every affected session so the user (and the
-  // agent on resume) see an in-transcript explanation — not a toast, a
-  // persistent record in the conversation. Contrast with PR #1116 (filtered
-  // high-frequency SDK lifecycle noise): this is intentional, low-frequency,
-  // and user-meaningful.
-  //
-  // The message MUST be attached to a task: the reactive client drops taskless
-  // messages (ReactiveSessionState groups messages by task_id), so a notice
-  // with no task_id would be silently invisible in the UI.
-  const affectedSessionIds = new Set<string>([
-    ...orphanedSessions.map((s) => s.session_id as string),
-    ...Array.from(sessionIdsWithOrphanedTasks),
-  ]);
-
-  if (affectedSessionIds.size > 0) {
-    const restartType = wasGraceful ? 'daemon_restart' : ('daemon_crash' as const);
-    const messageText = wasGraceful
-      ? 'The Agor daemon was restarted while this session was running. Ask the agent to resume where it left off.'
-      : 'The Agor daemon restarted unexpectedly while this session was running. Ask the agent to resume where it left off.';
-
-    // Build session → last orphaned task map so we can attach notices to a task_id.
-    // Prefer orphaned tasks (they were the active tasks at shutdown); fall back to
-    // querying the session's most-recent task if none was orphaned.
-    const lastOrphanedTaskBySession = new Map<string, Task>();
-    for (const task of orphanedTasks) {
-      const sid = task.session_id as string;
-      const existing = lastOrphanedTaskBySession.get(sid);
-      if (!existing || task.created_at > existing.created_at) {
-        lastOrphanedTaskBySession.set(sid, task);
-      }
-    }
-
-    const sessionRepo = new SessionRepository(db);
-    const messageRepo = new MessagesRepository(db);
-
-    for (const sessionId of affectedSessionIds) {
-      try {
-        // Resolve the task to attach the notice to
-        let attachTask = lastOrphanedTaskBySession.get(sessionId);
-        if (!attachTask) {
-          // Sessions maintain an ordered task-ID list; the last entry is the most
-          // recent task without relying on TasksService.find() sort behavior.
-          const session = await sessionsService.get(sessionId as Id);
-          const latestTaskId = session.tasks?.at(-1);
-          if (latestTaskId) {
-            attachTask = await tasksService.get(latestTaskId);
-          }
-        }
-        if (!attachTask) {
-          // No task exists — message would be invisible (transcript is task-scoped).
-          // This session has never had any work, so there is nothing for the user to resume.
-          console.log(`   ⏭  Session ${shortId(sessionId)} has no tasks — skipping restart notice`);
-          continue;
-        }
-
-        // Idempotency: skip if the last message is already a daemon restart notice
-        // (guards against rapid restart cycles piling up notices before the user responds)
-        const messageCount = await sessionRepo.countMessages(sessionId);
-        if (messageCount > 0) {
-          const lastMessages = await messageRepo.findByRange(
-            sessionId as SessionID,
-            messageCount - 1,
-            messageCount - 1
-          );
-          const last = lastMessages[0];
-          if (last?.type === 'daemon_restart' || last?.type === 'daemon_crash') {
-            console.log(
-              `   ⏭  Session ${shortId(sessionId)} already has a restart notice — skipping`
-            );
-            continue;
-          }
-        }
-
-        const injectedMessage = await appendSystemMessage({
-          app,
-          db,
-          sessionId,
-          taskId: attachTask.task_id,
-          type: restartType,
-          content: messageText,
-          metadata: { source: 'agor' },
-        });
-
-        // Extend the task's message_range.end_index so the notice is counted
-        // and loaded within the task's window in the UI.
-        // Pass only end_index: TaskRepository.update() deep-merges with the live
-        // DB row, preserving fields written by the STOPPED patch (e.g. end_timestamp).
-        if (attachTask.message_range) {
-          await tasksService.patch(attachTask.task_id, {
-            message_range: { end_index: injectedMessage.index } as Task['message_range'],
-          });
-        }
-
-        console.log(`   ✉  Injected ${restartType} notice into session ${shortId(sessionId)}`);
-      } catch (err) {
-        console.warn(
-          `   ⚠️  Failed to inject restart notice into session ${shortId(sessionId)}:`,
-          err
-        );
-      }
-    }
-  }
-
   // Wipe the queue. Running tasks are marked STOPPED above, which invalidates
   // the ordering premise of anything that was waiting behind them — a queued
   // prompt typically depends on whatever was running first. Rather than carry
@@ -313,6 +217,143 @@ async function cleanupOrphans(ctx: StartupContext): Promise<void> {
   if (orphanedTasks.length === 0 && orphanedSessions.length === 0 && queuedTasks.length === 0) {
     console.log('   No orphaned tasks or sessions found');
   }
+
+  return {
+    wasGraceful,
+    orphanedTasks,
+    orphanedSessions,
+    sessionIdsWithOrphanedTasks,
+  };
+}
+
+async function injectRestartNotices(
+  ctx: StartupContext,
+  cleanupResult: OrphanCleanupResult
+): Promise<void> {
+  const { app, db, sessionsService } = ctx;
+  const { wasGraceful, orphanedTasks, orphanedSessions, sessionIdsWithOrphanedTasks } =
+    cleanupResult;
+
+  // Get tasks service from the app (registered during services phase)
+  const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
+
+  // Inject a system message into every affected session so the user (and the
+  // agent on resume) see an in-transcript explanation — not a toast, a
+  // persistent record in the conversation. Contrast with PR #1116 (filtered
+  // high-frequency SDK lifecycle noise): this is intentional, low-frequency,
+  // and user-meaningful.
+  //
+  // The message MUST be attached to a task: the reactive client drops taskless
+  // messages (ReactiveSessionState groups messages by task_id), so a notice
+  // with no task_id would be silently invisible in the UI.
+  const affectedSessionIds = new Set<string>([
+    ...orphanedSessions.map((s) => s.session_id as string),
+    ...Array.from(sessionIdsWithOrphanedTasks),
+  ]);
+
+  if (affectedSessionIds.size === 0) {
+    return;
+  }
+
+  console.log(`🧹 Injecting daemon restart notices for ${affectedSessionIds.size} session(s)...`);
+
+  const restartType = wasGraceful ? ('daemon_restart' as const) : ('daemon_crash' as const);
+  const messageText = wasGraceful
+    ? 'The Agor daemon was restarted while this session was running. Ask the agent to resume where it left off.'
+    : 'The Agor daemon restarted unexpectedly while this session was running. Ask the agent to resume where it left off.';
+
+  // Build session → last orphaned task map so we can attach notices to a task_id.
+  // Prefer orphaned tasks (they were the active tasks at shutdown); fall back to
+  // querying the session's most-recent task if none was orphaned.
+  const lastOrphanedTaskBySession = new Map<string, Task>();
+  for (const task of orphanedTasks) {
+    const sid = task.session_id as string;
+    const existing = lastOrphanedTaskBySession.get(sid);
+    if (!existing || task.created_at > existing.created_at) {
+      lastOrphanedTaskBySession.set(sid, task);
+    }
+  }
+
+  const sessionRepo = new SessionRepository(db);
+  const messageRepo = new MessagesRepository(db);
+
+  for (const sessionId of affectedSessionIds) {
+    try {
+      // Resolve the task to attach the notice to
+      let attachTask = lastOrphanedTaskBySession.get(sessionId);
+      if (!attachTask) {
+        // Sessions maintain an ordered task-ID list; the last entry is the most
+        // recent task without relying on TasksService.find() sort behavior.
+        const session = await sessionsService.get(sessionId as Id);
+        const latestTaskId = session.tasks?.at(-1);
+        if (latestTaskId) {
+          attachTask = await tasksService.get(latestTaskId);
+        }
+      }
+      if (!attachTask) {
+        // No task exists — message would be invisible (transcript is task-scoped).
+        // This session has never had any work, so there is nothing for the user to resume.
+        console.log(`   ⏭  Session ${shortId(sessionId)} has no tasks — skipping restart notice`);
+        continue;
+      }
+
+      // Idempotency: skip if the last message is already a daemon restart notice
+      // (guards against rapid restart cycles piling up notices before the user responds)
+      const messageCount = await sessionRepo.countMessages(sessionId);
+      if (messageCount > 0) {
+        const lastMessages = await messageRepo.findByRange(
+          sessionId as SessionID,
+          messageCount - 1,
+          messageCount - 1
+        );
+        const last = lastMessages[0];
+        if (last?.type === 'daemon_restart' || last?.type === 'daemon_crash') {
+          console.log(
+            `   ⏭  Session ${shortId(sessionId)} already has a restart notice — skipping`
+          );
+          continue;
+        }
+      }
+
+      const injectedMessage = await appendSystemMessage({
+        app,
+        db,
+        sessionId,
+        taskId: attachTask.task_id,
+        type: restartType,
+        content: messageText,
+        metadata: { source: 'agor' },
+      });
+
+      // Extend the task's message_range.end_index so the notice is counted
+      // and loaded within the task's window in the UI.
+      // Pass only end_index: TaskRepository.update() deep-merges with the live
+      // DB row, preserving fields written by the STOPPED patch (e.g. end_timestamp).
+      if (attachTask.message_range) {
+        await tasksService.patch(attachTask.task_id, {
+          message_range: { end_index: injectedMessage.index } as Task['message_range'],
+        });
+      }
+
+      console.log(`   ✉  Injected ${restartType} notice into session ${shortId(sessionId)}`);
+    } catch (err) {
+      console.warn(
+        `   ⚠️  Failed to inject restart notice into session ${shortId(sessionId)}:`,
+        err
+      );
+    }
+  }
+}
+
+export function runPostStartJob(name: string, job: () => Promise<void> | void): void {
+  void Promise.resolve()
+    .then(() => job())
+    .then(() => {
+      console.log(`[startup] post-start job completed: ${name}`);
+    })
+    .catch((error: unknown) => {
+      console.warn(`[startup] post-start job failed: ${name}`, error);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -368,11 +409,14 @@ export async function startup(ctx: StartupContext): Promise<void> {
     terminalsService,
   } = ctx;
 
-  // 1. Cleanup orphaned tasks/sessions from previous daemon instance
-  await cleanupOrphans(ctx);
+  // 1. Correct orphaned task/session state from previous daemon instance.
+  // Keep this blocking so clients never see stale RUNNING/AWAITING states from
+  // a previous process. More expensive UX/audit follow-ups are post-start jobs.
+  const orphanCleanupResult = await cleanupOrphanStatuses(ctx);
 
-  // 2. Initialize Health Monitor for periodic environment health checks
-  const healthMonitor = await createHealthMonitor(app);
+  // 2. Register Health Monitor listeners before serving requests. The initial
+  // full scan of already-running environments is deferred until after listen.
+  const healthMonitor = new HealthMonitor(app);
 
   // 3. Validate/generate master secret for API key encryption
   await ensureMasterSecret(config);
@@ -398,23 +442,24 @@ export async function startup(ctx: StartupContext): Promise<void> {
   console.log(`     - /context`);
   console.log(`     - /users`);
 
+  runPostStartJob('health-monitor-initialize', () => healthMonitor.initialize());
+  runPostStartJob('daemon-restart-notices', () => injectRestartNotices(ctx, orphanCleanupResult));
+
   // Non-blocking credential spill repair. If an agent/user wrote a PAT into a
   // managed repo remote URL while the daemon was down, scrub it after the API
   // is already accepting requests. This is best-effort and deliberately skips
   // registered local repos to avoid surprising writes outside Agor-managed
   // storage.
-  void scrubManagedGitRemoteCredentials(db);
+  runPostStartJob('git-remote-credential-scrub', () => scrubManagedGitRemoteCredentials(db));
 
   // Log the host IP that will be frozen into env command templates as
   // {{host.ip_address}}. Explicit config overrides autodetection.
-  try {
+  runPostStartJob('host-ip-log', async () => {
     const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
     const hostIp = resolveHostIpAddress(config.daemon?.host_ip_address);
     const source = config.daemon?.host_ip_address ? 'config' : hostIp ? 'autodetected' : 'unknown';
     console.log(`🌐 Host IP for env templates: ${hostIp ?? '(none)'} (source: ${source})`);
-  } catch (err) {
-    console.warn('⚠️  Failed to resolve host IP for env templates:', err);
-  }
+  });
 
   // Security warning: web terminal + simple unix mode = daemon-user shell access.
   // `allow_web_terminal` defaults to true, so the check treats undefined as enabled.
