@@ -54,6 +54,7 @@ import {
   Layout,
   List,
   Modal,
+  Popover,
   Segmented,
   Select,
   Space,
@@ -83,6 +84,7 @@ import {
 } from '../components/AutocompleteTextarea';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
+import { HighlightMatch } from '../components/HighlightMatch';
 import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
@@ -439,6 +441,41 @@ export function buildKnowledgeDocumentRouteUrl(args: {
   }`;
 }
 
+export function matchesKnowledgeSidebarFilter(
+  values: Array<string | null | undefined>,
+  query: string
+): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+
+  const haystack = values
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join('\n')
+    .toLowerCase();
+  if (!haystack) return false;
+  if (haystack.includes(normalizedQuery)) return true;
+
+  const terms = normalizedQuery.split(/\s+/).filter(Boolean);
+  return terms.length > 0 && terms.every((term) => haystack.includes(term));
+}
+
+export const buildKnowledgeSearchResultKey = (query: string, mode: KnowledgeSearchMode) =>
+  `${mode}:${query.trim().toLowerCase()}`;
+
+export const areKnowledgeSearchResultsFresh = (args: {
+  resultKey: string | null;
+  query: string;
+  mode: KnowledgeSearchMode;
+}) =>
+  Boolean(args.query.trim()) &&
+  args.resultKey === buildKnowledgeSearchResultKey(args.query, args.mode);
+
+const compactKnowledgeSnippet = (value?: string | null) =>
+  (value ?? '')
+    .replace(/[`*_#>[\]()]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 const validateKnowledgePath = (path: string, { allowEmpty = false } = {}): string | null =>
   validateSharedKnowledgePath(path, { allowEmpty });
 
@@ -566,8 +603,16 @@ export function KnowledgePage({
   const [kindDraft, setKindDraft] = useState<KnowledgeDocumentKind>('doc');
   const [titleFromContent, setTitleFromContent] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState(DEFAULT_MARKDOWN);
-  const [searchQuery, setSearchQuery] = useState(() => routeSearchParams.get('q') ?? '');
-  const [searchMode, setSearchMode] = useState<KnowledgeSearchMode>('text');
+  const [sidebarFilterQuery, setSidebarFilterQuery] = useState('');
+  const [globalSearchQuery, setGlobalSearchQuery] = useState(
+    () => routeSearchParams.get('q') ?? ''
+  );
+  const [globalSearchMode, setGlobalSearchMode] = useState<KnowledgeSearchMode>('text');
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
+  const [globalSearchError, setGlobalSearchError] = useState<string | null>(null);
+  const [globalSearchResults, setGlobalSearchResults] = useState<KnowledgeSearchResult[]>([]);
+  const [globalSearchResultsKey, setGlobalSearchResultsKey] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<string>(() =>
     kindFilterFromUrlParam(routeSearchParams.get('kind'))
   );
@@ -614,6 +659,7 @@ export function KnowledgePage({
   );
   const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
   const sidebarResizeDraggingRef = useRef(false);
+  const globalSearchContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     document.title = 'Knowledge · Agor';
@@ -626,6 +672,19 @@ export function KnowledgePage({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(() => {
+    if (!globalSearchOpen || typeof document === 'undefined') return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && globalSearchContainerRef.current?.contains(target)) return;
+      setGlobalSearchOpen(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true);
+  }, [globalSearchOpen]);
 
   useEffect(() => {
     activeDocIdRef.current = activeDocId;
@@ -752,12 +811,12 @@ export function KnowledgePage({
   const buildKnowledgeSearch = useCallback(
     (overrides: { query?: string; kind?: string; editing?: boolean } = {}) =>
       buildKnowledgeQueryString({
-        query: overrides.query ?? searchQuery,
+        query: overrides.query,
         kind: overrides.kind ?? kindFilter,
         editing: overrides.editing ?? isEditing,
         activeDocId,
       }),
-    [activeDocId, isEditing, kindFilter, searchQuery]
+    [activeDocId, isEditing, kindFilter]
   );
 
   const folderPaths = useMemo(() => {
@@ -884,7 +943,7 @@ export function KnowledgePage({
 
   // Load every readable doc (no namespace/kind filter) so `@` can reference
   // docs across spaces. Kept separate from `documents`, which is scoped by the
-  // sidebar's active namespace, kind, and search query.
+  // sidebar's active namespace and kind. The sidebar text box is only a client-side quick-filter.
   const loadMentionDocs = useCallback(async () => {
     if (!client) return;
     try {
@@ -919,41 +978,74 @@ export function KnowledgePage({
       void loadMentionDocs();
       const kind = kindForSegment(kindFilter);
       const namespaceFilter = activeSpace === 'all' ? undefined : activeSpace;
-      if (searchQuery.trim()) {
-        const result = await client.service('kb/search').find({
-          query: {
-            q: searchQuery.trim(),
-            namespace_slug: namespaceFilter,
-            kind,
-            limit: 50,
-            mode: searchMode,
-            include_indexing: true,
-          },
-        });
-        const rows = normalizeFindResult<KnowledgeSearchResult>(result as KnowledgeSearchResult[]);
-        setDocuments(rows.map((row) => row.document));
-      } else {
-        const result = await client.service('kb/documents').find({
-          query: {
-            namespace_slug: namespaceFilter,
-            kind,
-            archived: false,
-            include_indexing: true,
-          },
-        });
-        setDocuments(normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]));
-      }
+      const result = await client.service('kb/documents').find({
+        query: {
+          namespace_slug: namespaceFilter,
+          kind,
+          archived: false,
+          include_indexing: true,
+        },
+      });
+      setDocuments(normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]));
     } catch (err) {
       console.error('Failed to load Knowledge:', err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [client, activeSpace, kindFilter, searchQuery, searchMode, loadNamespaces, loadMentionDocs]);
+  }, [client, activeSpace, kindFilter, loadNamespaces, loadMentionDocs]);
 
   useEffect(() => {
     loadDocuments();
   }, [loadDocuments]);
+
+  useEffect(() => {
+    const query = globalSearchQuery.trim();
+    if (!client || query.length < 2) {
+      setGlobalSearchLoading(false);
+      setGlobalSearchError(null);
+      setGlobalSearchResults([]);
+      setGlobalSearchResultsKey(null);
+      return;
+    }
+
+    const resultKey = buildKnowledgeSearchResultKey(query, globalSearchMode);
+    setGlobalSearchLoading(true);
+    setGlobalSearchError(null);
+    setGlobalSearchResultsKey(null);
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await client.service('kb/search').find({
+          query: {
+            q: query,
+            mode: globalSearchMode,
+            limit: 8,
+            include_chunks: true,
+          },
+        });
+        if (cancelled) return;
+        setGlobalSearchResults(
+          normalizeFindResult<KnowledgeSearchResult>(result as KnowledgeSearchResult[])
+        );
+        setGlobalSearchResultsKey(resultKey);
+      } catch (err) {
+        if (cancelled) return;
+        console.error('Failed to search Knowledge:', err);
+        setGlobalSearchResults([]);
+        setGlobalSearchResultsKey(resultKey);
+        setGlobalSearchError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setGlobalSearchLoading(false);
+      }
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [client, globalSearchMode, globalSearchQuery]);
   const refreshKnowledgeSettings = useCallback(async () => {
     if (!client) return;
     setSettingsLoading(true);
@@ -1120,7 +1212,7 @@ export function KnowledgePage({
       setActiveDocSnapshot(null);
     }
     if (routeNamespaceSlug && nextSpace !== activeSpace) setActiveSpace(nextSpace);
-    setSearchQuery((current) => (current === nextQuery ? current : nextQuery));
+    setGlobalSearchQuery((current) => (current === nextQuery ? current : nextQuery));
     if (nextKind !== kindFilter) setKindFilter(nextKind);
     const pendingEditMode = pendingEditModeRef.current;
     if (pendingEditMode === null) {
@@ -1790,6 +1882,20 @@ export function KnowledgePage({
     );
   };
 
+  const selectKnowledgeSearchResult = async (result: KnowledgeSearchResult) => {
+    if (!(await confirmDiscardUnsavedChanges())) return;
+    const doc = result.document;
+    clearDraftDocument();
+    setActiveSpace(result.namespace.slug);
+    setActiveDocSnapshot(doc);
+    activeDocIdRef.current = doc.document_id;
+    setActiveDocId(doc.document_id);
+    pendingEditModeRef.current = false;
+    setIsEditing(false);
+    setGlobalSearchOpen(false);
+    navigate(buildKnowledgeRoutePath(routeBasePath, result.namespace.slug, doc.path));
+  };
+
   const goToGraphHome = async () => {
     if (!(await confirmDiscardUnsavedChanges())) return;
     clearDraftDocument();
@@ -1821,7 +1927,7 @@ export function KnowledgePage({
     setActiveDocSnapshot(null);
     const slug = namespaceSlugFromUri(node.uri) ?? activeSpace;
     setKindFilter('All');
-    setSearchQuery('');
+    setSidebarFilterQuery('');
     pendingEditModeRef.current = false;
     setIsEditing(false);
     navigate(buildKnowledgeRoutePath(routeBasePath, slug, node.path));
@@ -1876,18 +1982,34 @@ export function KnowledgePage({
         }}
       >
         <FileOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontWeight: isActive ? 600 : 400,
-          }}
-        >
-          {doc.title}
-        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <span
+            style={{
+              display: 'block',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontWeight: isActive ? 600 : 400,
+            }}
+          >
+            <HighlightMatch text={doc.title} query={sidebarFilterQuery} />
+          </span>
+          {sidebarFilterActive && (
+            <span
+              style={{
+                display: 'block',
+                color: token.colorTextTertiary,
+                fontSize: 11,
+                lineHeight: 1.2,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <HighlightMatch text={doc.path} query={sidebarFilterQuery} />
+            </span>
+          )}
+        </div>
         {doc.status === 'draft' && (
           <Tag
             color="gold"
@@ -1901,21 +2023,35 @@ export function KnowledgePage({
     );
   };
 
+  const sidebarFilterActive = Boolean(sidebarFilterQuery.trim());
+  const documentMatchesSidebarFilter = (doc: KnowledgeDocument) =>
+    matchesKnowledgeSidebarFilter([doc.title, doc.path], sidebarFilterQuery);
+  const folderMatchesSidebarFilter = (folder: FolderSection) =>
+    matchesKnowledgeSidebarFilter([folder.name], sidebarFilterQuery);
+
+  const filteredDocsForFolder = (folder: FolderSection): KnowledgeDocument[] =>
+    sidebarFilterActive ? folder.docs.filter(documentMatchesSidebarFilter) : folder.docs;
+
   const shouldShowFolderInSidebar = (folder: FolderSection): boolean => {
     if (folder.path === ROOT_FOLDER) return true;
-    const searchActive = Boolean(searchQuery.trim());
-    const hasDocuments = folder.docs.length > 0;
+    const matchingDocs = filteredDocsForFolder(folder);
+    const hasDocuments = matchingDocs.length > 0;
     const hasVisibleChildren = folder.children.some(shouldShowFolderInSidebar);
     const isLocalEmptyFolder = localFolders.includes(folder.path);
-    return hasDocuments || hasVisibleChildren || (!searchActive && isLocalEmptyFolder);
+    return (
+      hasDocuments ||
+      hasVisibleChildren ||
+      (sidebarFilterActive ? folderMatchesSidebarFilter(folder) : isLocalEmptyFolder)
+    );
   };
 
   const renderFolderSection = (folder: FolderSection, depth = 0): React.ReactNode => {
     if (!shouldShowFolderInSidebar(folder)) return null;
     const visibleChildren = folder.children.filter(shouldShowFolderInSidebar);
-    const childCount = folder.docs.length + visibleChildren.length;
+    const visibleDocs = filteredDocsForFolder(folder);
+    const childCount = visibleDocs.length + visibleChildren.length;
     const hasChildren = childCount > 0;
-    const collapsed = hasChildren && collapsedFolders.has(folder.path);
+    const collapsed = !sidebarFilterActive && hasChildren && collapsedFolders.has(folder.path);
     const selected = !activeDoc && selectedFolder === folder.path;
     const isEmpty = childCount === 0;
     const showCount = collapsed || isEmpty;
@@ -1965,7 +2101,7 @@ export function KnowledgePage({
               fontWeight: selected ? 600 : 500,
             }}
           >
-            {folder.name}
+            <HighlightMatch text={folder.name} query={sidebarFilterQuery} />
           </span>
           {showCount && (
             <Tag
@@ -1998,20 +2134,141 @@ export function KnowledgePage({
         {!collapsed && (
           <div>
             {visibleChildren.map((child) => renderFolderSection(child, depth + 1))}
-            {folder.docs.map((doc) => renderDocumentRow(doc, depth + 1))}
+            {visibleDocs.map((doc) => renderDocumentRow(doc, depth + 1))}
           </div>
         )}
       </div>
     );
   };
 
-  const renderRootContents = (): React.ReactNode => (
-    <>
-      {folderHierarchy.children
-        .filter(shouldShowFolderInSidebar)
-        .map((child) => renderFolderSection(child, 0))}
-      {folderHierarchy.docs.map((doc) => renderDocumentRow(doc, 0))}
-    </>
+  const renderRootContents = (): React.ReactNode => {
+    const visibleRootChildren = folderHierarchy.children.filter(shouldShowFolderInSidebar);
+    const visibleRootDocs = filteredDocsForFolder(folderHierarchy);
+
+    if (sidebarFilterActive && visibleRootChildren.length === 0 && visibleRootDocs.length === 0) {
+      return (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="No visible docs match this filter"
+          style={{ margin: '12px 0' }}
+        />
+      );
+    }
+
+    return (
+      <>
+        {visibleRootChildren.map((child) => renderFolderSection(child, 0))}
+        {visibleRootDocs.map((doc) => renderDocumentRow(doc, 0))}
+      </>
+    );
+  };
+
+  const trimmedGlobalSearchQuery = globalSearchQuery.trim();
+  const globalSearchResultsFresh = areKnowledgeSearchResultsFresh({
+    resultKey: globalSearchResultsKey,
+    query: trimmedGlobalSearchQuery,
+    mode: globalSearchMode,
+  });
+  const visibleGlobalSearchResults = globalSearchResultsFresh ? globalSearchResults : [];
+
+  const globalSearchContent = (
+    <div style={{ width: 520, maxWidth: 'min(520px, calc(100vw - 48px))' }}>
+      <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+        <Flex justify="space-between" align="center" gap={8}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Searches readable Knowledge titles, paths, and content.
+          </Text>
+          <Segmented
+            size="small"
+            value={globalSearchMode}
+            onChange={(value) => setGlobalSearchMode(value as KnowledgeSearchMode)}
+            options={[
+              { label: 'Text', value: 'text' },
+              { label: 'Semantic', value: 'semantic' },
+              { label: 'Hybrid', value: 'hybrid' },
+            ]}
+          />
+        </Flex>
+        {globalSearchError && (
+          <Alert type="warning" showIcon message={globalSearchError} style={{ padding: 8 }} />
+        )}
+        <Spin spinning={globalSearchLoading}>
+          <div style={{ maxHeight: 420, overflow: 'auto' }}>
+            {trimmedGlobalSearchQuery.length < 2 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="Type at least 2 characters to search all Knowledge."
+              />
+            ) : visibleGlobalSearchResults.length === 0 && !globalSearchLoading ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No Knowledge results" />
+            ) : (
+              <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                {visibleGlobalSearchResults.map((result) => {
+                  const doc = result.document;
+                  const snippet = compactKnowledgeSnippet(
+                    result.chunks?.find((chunk) => chunk.snippet)?.snippet ?? result.snippet
+                  );
+                  return (
+                    <button
+                      key={doc.document_id}
+                      type="button"
+                      onClick={() => selectKnowledgeSearchResult(result)}
+                      style={{
+                        width: '100%',
+                        border: 0,
+                        borderRadius: token.borderRadius,
+                        background: 'transparent',
+                        color: token.colorText,
+                        cursor: 'pointer',
+                        padding: '8px 10px',
+                        textAlign: 'left',
+                      }}
+                      onMouseEnter={(event) => {
+                        event.currentTarget.style.background = token.colorFillQuaternary;
+                      }}
+                      onMouseLeave={(event) => {
+                        event.currentTarget.style.background = 'transparent';
+                      }}
+                    >
+                      <Flex align="baseline" gap={8} style={{ minWidth: 0 }}>
+                        <Text strong style={{ flex: 1, minWidth: 0 }} ellipsis>
+                          <HighlightMatch text={doc.title} query={globalSearchQuery} />
+                        </Text>
+                        <Tag bordered={false} style={{ marginInlineEnd: 0 }}>
+                          {kindLabels[doc.kind] ?? doc.kind}
+                        </Tag>
+                      </Flex>
+                      <Text type="secondary" style={{ display: 'block', fontSize: 12 }} ellipsis>
+                        <HighlightMatch
+                          text={`${result.namespace.display_name || result.namespace.slug} / ${doc.path}`}
+                          query={globalSearchQuery}
+                        />
+                      </Text>
+                      {snippet && (
+                        <Text
+                          type="secondary"
+                          style={{
+                            display: '-webkit-box',
+                            fontSize: 12,
+                            lineHeight: 1.35,
+                            marginTop: 2,
+                            overflow: 'hidden',
+                            WebkitBoxOrient: 'vertical',
+                            WebkitLineClamp: 2,
+                          }}
+                        >
+                          <HighlightMatch text={snippet} query={globalSearchQuery} />
+                        </Text>
+                      )}
+                    </button>
+                  );
+                })}
+              </Space>
+            )}
+          </div>
+        </Spin>
+      </Space>
+    </div>
   );
 
   const spaceOptions = [
@@ -2071,6 +2328,65 @@ export function KnowledgePage({
             </Tag>
           </Tooltip>
         </Space>
+        <div
+          ref={globalSearchContainerRef}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setGlobalSearchOpen(false);
+          }}
+          style={{
+            flex: 1,
+            display: 'flex',
+            justifyContent: 'center',
+            minWidth: 220,
+            padding: '0 20px',
+          }}
+        >
+          <Popover
+            open={globalSearchOpen}
+            onOpenChange={(open) => {
+              // Input focus opens the popover before AntD's click trigger fires;
+              // ignore close toggles from clicking the input/search button so the
+              // dropdown does not flash shut and require a second click. Outside
+              // clicks are handled by the pointerdown listener above.
+              if (open) setGlobalSearchOpen(true);
+            }}
+            trigger="click"
+            placement="bottom"
+            content={globalSearchContent}
+            arrow={false}
+            getPopupContainer={(triggerNode) =>
+              globalSearchContainerRef.current ?? triggerNode.parentElement ?? document.body
+            }
+          >
+            <Input.Search
+              allowClear
+              aria-label="Search all Knowledge"
+              placeholder="Search all Knowledge…"
+              prefix={<SearchOutlined />}
+              value={globalSearchQuery}
+              onClick={() => setGlobalSearchOpen(true)}
+              onFocus={() => setGlobalSearchOpen(true)}
+              onChange={(event) => {
+                setGlobalSearchQuery(event.target.value);
+                setGlobalSearchOpen(true);
+              }}
+              onSearch={(value, _event, info) => {
+                if (info?.source === 'clear' || globalSearchLoading) return;
+                const submittedQuery = value.trim();
+                const submittedResultsFresh = areKnowledgeSearchResultsFresh({
+                  resultKey: globalSearchResultsKey,
+                  query: submittedQuery,
+                  mode: globalSearchMode,
+                });
+                if (!submittedResultsFresh) return;
+                const first = globalSearchResults[0];
+                if (first) void selectKnowledgeSearchResult(first);
+              }}
+              loading={globalSearchLoading}
+              style={{ width: 'min(520px, 100%)' }}
+            />
+          </Popover>
+        </div>
         <Space>
           <Tooltip title="Refresh Knowledge" placement="bottom">
             <Button
@@ -2159,26 +2475,10 @@ export function KnowledgePage({
                 <Input
                   allowClear
                   prefix={<SearchOutlined />}
-                  placeholder="Search Knowledge"
-                  value={searchQuery}
-                  onChange={(event) => {
-                    const nextQuery = event.target.value;
-                    setSearchQuery(nextQuery);
-                    navigate(`${location.pathname}${buildKnowledgeSearch({ query: nextQuery })}`, {
-                      replace: true,
-                    });
-                  }}
-                />
-                <Segmented
-                  block
-                  size="small"
-                  value={searchMode}
-                  onChange={(value) => setSearchMode(value as KnowledgeSearchMode)}
-                  options={[
-                    { label: 'Text', value: 'text' },
-                    { label: 'Semantic', value: 'semantic' },
-                    { label: 'Hybrid', value: 'hybrid' },
-                  ]}
+                  placeholder="Filter visible docs"
+                  aria-label="Filter visible Knowledge docs"
+                  value={sidebarFilterQuery}
+                  onChange={(event) => setSidebarFilterQuery(event.target.value)}
                 />
                 <Flex gap={8}>
                   <Button

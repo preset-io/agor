@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  areKnowledgeSearchResultsFresh,
   buildKnowledgeDocumentRouteUrl,
   buildKnowledgeQueryString,
+  buildKnowledgeSearchResultKey,
+  matchesKnowledgeSidebarFilter,
   resolveActiveKnowledgeDocument,
   shouldDeferKnowledgeUrlMirrorForRoute,
 } from './KnowledgePage';
@@ -91,5 +94,43 @@ describe('KnowledgePage routing state helpers', () => {
         activeDocPath: pageDoc.path,
       })
     ).toBe(false);
+  });
+});
+
+describe('KnowledgePage sidebar quick-filter helpers', () => {
+  it('matches title and path labels without requiring full-content search state', () => {
+    expect(
+      matchesKnowledgeSidebarFilter(['Onboarding Guide', 'pages/team/onboarding.md'], 'team')
+    ).toBe(true);
+    expect(
+      matchesKnowledgeSidebarFilter(
+        ['Onboarding Guide', 'pages/team/onboarding.md'],
+        'onboard guide'
+      )
+    ).toBe(true);
+    expect(
+      matchesKnowledgeSidebarFilter(['Onboarding Guide', 'pages/team/onboarding.md'], 'billing')
+    ).toBe(false);
+  });
+
+  it('treats an empty quick-filter as visible', () => {
+    expect(matchesKnowledgeSidebarFilter(['Any page'], '   ')).toBe(true);
+  });
+});
+
+describe('KnowledgePage global search helpers', () => {
+  it('marks results stale when the query or mode changes', () => {
+    const resultKey = buildKnowledgeSearchResultKey('readme', 'text');
+
+    expect(areKnowledgeSearchResultsFresh({ resultKey, query: ' readme ', mode: 'text' })).toBe(
+      true
+    );
+    expect(areKnowledgeSearchResultsFresh({ resultKey, query: 'billing', mode: 'text' })).toBe(
+      false
+    );
+    expect(areKnowledgeSearchResultsFresh({ resultKey, query: 'readme', mode: 'hybrid' })).toBe(
+      false
+    );
+    expect(areKnowledgeSearchResultsFresh({ resultKey, query: '', mode: 'text' })).toBe(false);
   });
 });
