@@ -1647,8 +1647,8 @@ export function OnboardingWizard({
         // Bash/MCP). Users can flip to bypass per-session in Session Settings.
         return (
           <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-            Paste an <Text code>ANTHROPIC_API_KEY</Text>, run <Text code>claude auth login</Text>,
-            or set up a Pro/Max token in <Text strong>User Settings → Claude Code</Text>.
+            Paste an <Text code>ANTHROPIC_API_KEY</Text>, or run <Text code>claude auth login</Text>{' '}
+            on the host.
           </Paragraph>
         );
       }
@@ -1727,10 +1727,12 @@ export function OnboardingWizard({
                   <Space align="center" size={10} style={{ width: '100%' }}>
                     <ToolIcon tool={option.value} size={32} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <Space size={6} wrap>
+                      <div>
                         <Text strong>{option.title}</Text>
+                      </div>
+                      <div>
                         <Tag color={selected ? 'blue' : 'default'}>{option.eyebrow}</Tag>
-                      </Space>
+                      </div>
                     </div>
                   </Space>
                 </Card>
