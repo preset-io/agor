@@ -31,6 +31,7 @@ import {
   PanelResizeHandle,
 } from 'react-resizable-panels';
 import { useParams } from 'react-router-dom';
+import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
 import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { AppEntityDataProvider, AppLiveDataProvider } from '../../contexts/AppDataContext';
@@ -186,6 +187,7 @@ export interface AppProps {
   instanceDescription?: string;
   /** Whether the web terminal is enabled on this instance (execution.allow_web_terminal) */
   webTerminalEnabled?: boolean;
+  branchStorageConfig?: BranchStorageConfig;
 }
 
 // Stable empty-array sentinel: keeps prop refs equal across renders for the
@@ -279,6 +281,7 @@ export const App: React.FC<AppProps> = ({
   instanceLabel,
   instanceDescription,
   webTerminalEnabled = false,
+  branchStorageConfig,
 }) => {
   const { showWarning } = useThemedMessage();
   const routeParams = useParams<{
@@ -1361,6 +1364,7 @@ export const App: React.FC<AppProps> = ({
               artifactById={artifactById}
               onUpdateArtifact={onUpdateArtifact}
               onDeleteArtifact={onDeleteArtifact}
+              branchStorageConfig={branchStorageConfig}
             />
             {sessionSettingsSession && (
               <SessionSettingsModal
@@ -1430,6 +1434,7 @@ export const App: React.FC<AppProps> = ({
               mcpServerById={mcpServerById}
               currentUser={user}
               client={client}
+              branchStorageConfig={branchStorageConfig}
             />
             {logsModalBranchId && (
               <EnvironmentLogsModal

@@ -10,7 +10,7 @@
  */
 
 import type { Repo } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { BranchTab, type BranchTabConfig } from './BranchTab';
 
@@ -60,5 +60,73 @@ describe('BranchTab — source-branch preservation', { timeout: 10_000 }, () => 
     expect((screen.getByLabelText(/Source Branch/i) as HTMLInputElement).value).toBe(
       'release/2024-q1'
     );
+  });
+});
+
+describe('BranchTab — branch storage policy', { timeout: 10_000 }, () => {
+  async function renderBranchTab(
+    branchStorageConfig?: React.ComponentProps<typeof BranchTab>['branchStorageConfig']
+  ) {
+    const formRef: React.MutableRefObject<(() => Promise<BranchTabConfig | null>) | null> = {
+      current: null,
+    };
+    const repo = makeRepo({ default_branch: 'main' });
+
+    render(
+      <BranchTab
+        repoById={new Map([[repo.repo_id, repo]])}
+        onValidityChange={vi.fn()}
+        formRef={formRef}
+        branchStorageConfig={branchStorageConfig}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByLabelText(/Source Branch/i)).toHaveValue('main'));
+    fireEvent.change(screen.getByLabelText(/Branch Name/i), {
+      target: { value: 'feat-storage' },
+    });
+
+    return { formRef };
+  }
+
+  it('defaults to clone and disables worktree when the server only allows clone', async () => {
+    const { formRef } = await renderBranchTab({
+      defaultMode: 'clone',
+      allowedModes: ['clone'],
+    });
+
+    expect(screen.getByRole('radio', { name: /Clone \(default\)/i })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Worktree/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole('radio', { name: /Worktree/i }));
+    expect(screen.getByRole('radio', { name: /Clone \(default\)/i })).toBeChecked();
+    const result = await formRef.current?.();
+    expect(result).toBeTruthy();
+    expect(result!.storage_mode).toBe('clone');
+  });
+
+  it('allows both modes and respects a server default of clone', async () => {
+    const { formRef } = await renderBranchTab({
+      defaultMode: 'clone',
+      allowedModes: ['worktree', 'clone'],
+    });
+
+    expect(screen.getByRole('radio', { name: /Clone \(default\)/i })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Worktree/i })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Worktree/i }));
+    expect(screen.getByRole('radio', { name: /Worktree/i })).toBeChecked();
+    const result = await formRef.current?.();
+    expect(result).toBeTruthy();
+    expect(result!.storage_mode).toBe('worktree');
+  });
+
+  it('keeps existing/default behavior when branch storage config is absent', async () => {
+    const { formRef } = await renderBranchTab();
+
+    expect(screen.getByRole('radio', { name: /Worktree \(default\)/i })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Clone/i })).not.toBeDisabled();
+    const result = await formRef.current?.();
+    expect(result).toBeTruthy();
+    expect(result!.storage_mode).toBe('worktree');
   });
 });

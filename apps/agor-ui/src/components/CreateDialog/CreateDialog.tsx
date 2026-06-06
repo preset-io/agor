@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Modal, Tabs } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
 import type { AgenticToolOption } from '../../types';
 import type { AssistantTabResult } from './tabs/AssistantTab';
 import { AssistantTab } from './tabs/AssistantTab';
@@ -83,6 +84,7 @@ export interface CreateDialogProps {
     result: AssistantTabResult,
     progress?: CreateDialogProgress
   ) => void | Promise<void>;
+  branchStorageConfig?: BranchStorageConfig;
 }
 
 /** Fire the parent handler and close the dialog. We don't `await` here
@@ -110,6 +112,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   onCreateRepo,
   onCreateLocalRepo,
   onCreateAssistant,
+  branchStorageConfig,
 }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>(defaultTab);
   // Validity is tracked per tab so a sibling tab's empty-form state (or a
@@ -268,6 +271,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             defaultPosition={defaultPosition}
             onValidityChange={handleBranchValid}
             formRef={branchFormRef}
+            branchStorageConfig={branchStorageConfig}
           />
         </div>
       ),

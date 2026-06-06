@@ -6,7 +6,7 @@
  * Extracted from index.ts for maintainability.
  */
 
-import { type AgorConfig, loadConfig } from '@agor/core/config';
+import { type AgorConfig, loadConfig, resolveBranchStorageConfig } from '@agor/core/config';
 import {
   BranchRepository,
   type Database,
@@ -3391,6 +3391,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // cursor_sdk_enabled flag is retained in config for compatibility but
           // no longer gates provider visibility.
           cursorSdk: true,
+          // Resolved branch storage policy. The daemon still enforces this at
+          // create time; the UI uses it to pick the right default and disable
+          // unavailable storage modes before submit.
+          branchStorage: resolveBranchStorageConfig(),
         },
       };
 

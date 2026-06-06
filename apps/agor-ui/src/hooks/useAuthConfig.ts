@@ -5,6 +5,7 @@
  * Used on app startup to determine if login page should be shown and display instance label.
  */
 
+import type { BranchStorageMode } from '@agor/core/config';
 import type { ManagedEnvExecutionMode } from '@agor/core/environment/webhook';
 import type { DaemonServicesConfig } from '@agor-live/client';
 import { useEffect, useState } from 'react';
@@ -38,7 +39,12 @@ interface OnboardingConfig {
   systemCredentials?: SystemCredentials;
 }
 
-interface FeaturesConfig {
+export interface BranchStorageConfig {
+  defaultMode?: BranchStorageMode;
+  allowedModes?: BranchStorageMode[];
+}
+
+export interface FeaturesConfig {
   /**
    * Whether the web terminal is enabled for members (execution.allow_web_terminal).
    * Defaults to true when the daemon config key is unset.
@@ -66,6 +72,12 @@ interface FeaturesConfig {
   multiUser?: boolean;
   /** Experimental Cursor SDK provider enabled on the daemon. */
   cursorSdk?: boolean;
+  /**
+   * Resolved branch storage policy from execution.branch_storage.
+   * Defaults server-side to { defaultMode: 'worktree',
+   * allowedModes: ['worktree', 'clone'] } when unset.
+   */
+  branchStorage?: BranchStorageConfig;
 }
 
 interface HealthResponse {

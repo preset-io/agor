@@ -74,6 +74,27 @@ Sessions, tasks, comments, and artifacts all reference a branch. **The branch is
 
 ---
 
+## Storage modes
+
+When you create a branch, Agor can materialize its working directory in two ways:
+
+- **Worktree** — native `git worktree add`, using the repo's shared `.git` metadata.
+- **Clone** — a self-standing `git clone` with its own `.git/` directory, isolating branch-local git config and credentials from sibling branches.
+
+Operators can choose which modes are available and which one the UI selects by default:
+
+```yaml
+execution:
+  branch_storage:
+    default_mode: clone
+    allowed_modes:
+      - clone
+```
+
+If `branch_storage` is omitted, Agor keeps the backwards-compatible default: `worktree` is selected by default and both `worktree` and `clone` are available. When an operator restricts `allowed_modes`, the create-branch UI disables unavailable options and the daemon rejects disallowed API/MCP requests.
+
+---
+
 ## GitHub-native workflow
 
 Because each branch carries `issue_url` and `pull_request_url`, AI agents have unambiguous context for what they're working on. Zones can use that context directly:

@@ -35,6 +35,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Layout, Menu, Modal, theme } from 'antd';
 import { useMemo, useState } from 'react';
+import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
 import { BranchModal } from '../BranchModal';
@@ -117,6 +118,7 @@ export interface SettingsModalProps {
   artifactById?: Map<string, Artifact>;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
+  branchStorageConfig?: BranchStorageConfig;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -162,6 +164,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   artifactById = new Map(),
   onUpdateArtifact,
   onDeleteArtifact,
+  branchStorageConfig,
 }) => {
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
@@ -387,6 +390,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onStartEnvironment={onStartEnvironment}
             onStopEnvironment={onStopEnvironment}
             onClose={onClose}
+            branchStorageConfig={branchStorageConfig}
           />
         );
       case 'assistants':

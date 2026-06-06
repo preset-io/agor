@@ -23,11 +23,12 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveToggleButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
-import { BranchFormFields } from '../BranchFormFields';
+import { BranchFormFields, normalizeBranchStorageMode } from '../BranchFormFields';
 import { renderEnvCell } from './BranchEnvColumn';
 
 interface BranchesTableProps {
@@ -63,6 +64,7 @@ interface BranchesTableProps {
   /** Close the parent Settings modal. Used by the recenter action so the
    *  canvas isn't obscured by the modal after pan/zoom. */
   onClose?: () => void;
+  branchStorageConfig?: BranchStorageConfig;
 }
 
 export const BranchesTable: React.FC<BranchesTableProps> = ({
@@ -78,6 +80,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   onStartEnvironment,
   onStopEnvironment,
   onClose,
+  branchStorageConfig,
 }) => {
   const repos = mapToArray(repoById);
   const boards = mapToArray(boardById);
@@ -277,7 +280,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         localStorage.setItem('agor:lastUsedBoardId', values.boardId);
       }
 
-      const storageMode: 'worktree' | 'clone' = values.storage_mode ?? 'worktree';
+      const storageMode = normalizeBranchStorageMode(values.storage_mode, branchStorageConfig);
       const cloneDepth =
         storageMode === 'clone' && typeof values.clone_depth === 'number' && values.clone_depth > 0
           ? values.clone_depth
@@ -623,6 +626,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             onFormChange={validateForm}
             useSameBranchName={useSameBranchName}
             onUseSameBranchNameChange={setUseSameBranchName}
+            branchStorageConfig={branchStorageConfig}
           />
         </Form>
       </Modal>

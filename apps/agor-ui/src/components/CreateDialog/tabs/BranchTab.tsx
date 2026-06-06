@@ -1,8 +1,9 @@
 import type { Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { BranchStorageConfig } from '@/hooks/useAuthConfig';
 import { mapToArray } from '@/utils/mapHelpers';
-import { BranchFormFields } from '../../BranchFormFields';
+import { BranchFormFields, normalizeBranchStorageMode } from '../../BranchFormFields';
 
 export interface BranchTabConfig {
   repoId: string;
@@ -32,6 +33,7 @@ export interface BranchTabProps {
   defaultPosition?: { x: number; y: number };
   onValidityChange: (valid: boolean) => void;
   formRef: React.MutableRefObject<(() => Promise<BranchTabConfig | null>) | null>;
+  branchStorageConfig?: BranchStorageConfig;
 }
 
 export const BranchTab: React.FC<BranchTabProps> = ({
@@ -40,6 +42,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
   defaultPosition,
   onValidityChange,
   formRef,
+  branchStorageConfig,
 }) => {
   const [form] = Form.useForm();
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
@@ -98,7 +101,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
     try {
       const values = await form.validateFields();
       const refType = values.refType || 'branch';
-      const storageMode: 'worktree' | 'clone' = values.storage_mode ?? 'worktree';
+      const storageMode = normalizeBranchStorageMode(values.storage_mode, branchStorageConfig);
       const cloneDepth =
         storageMode === 'clone' && typeof values.clone_depth === 'number' && values.clone_depth > 0
           ? values.clone_depth
@@ -138,6 +141,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
         defaultBranch={selectedRepo?.default_branch || 'main'}
         showUrlFields={true}
         onFormChange={handleValuesChange}
+        branchStorageConfig={branchStorageConfig}
       />
     </Form>
   );

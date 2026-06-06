@@ -1466,6 +1466,7 @@ function AppContent() {
       instanceLabel={instanceConfig?.label}
       instanceDescription={instanceConfig?.description}
       webTerminalEnabled={featuresConfig?.webTerminal === true}
+      branchStorageConfig={featuresConfig?.branchStorage}
     />
   );
 
