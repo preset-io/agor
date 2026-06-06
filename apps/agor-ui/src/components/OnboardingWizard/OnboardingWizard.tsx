@@ -28,10 +28,9 @@ import {
 } from '@agor-live/client';
 import {
   ApiOutlined,
-  AppstoreOutlined,
+  ArrowRightOutlined,
   BranchesOutlined,
   CheckCircleOutlined,
-  CloudDownloadOutlined,
   FolderOpenOutlined,
   KeyOutlined,
   RobotOutlined,
@@ -49,7 +48,6 @@ import {
   Select,
   Space,
   Spin,
-  Steps,
   Tag,
   Typography,
   theme,
@@ -1838,72 +1836,105 @@ export function OnboardingWizard({
     }
   };
 
-  // ─── Steps display config ────────────────────────
+  // ─── Progress display config ─────────────────────
 
-  const stepsItems = useMemo(() => {
-    if (!path) return [];
+  const progressItems = useMemo(() => {
+    if (path === 'assistant') {
+      return [
+        { key: 'identity' as const, title: 'Assistant', icon: <RobotOutlined /> },
+        { key: 'api-keys' as const, title: 'LLM Provider', icon: <ApiOutlined /> },
+        { key: 'branch' as const, title: 'Workspace', icon: <BranchesOutlined /> },
+      ];
+    }
 
-    const allSteps = getStepsForPath(path);
-    // Don't include 'welcome' in the steps indicator. For own-repo, also hide
-    // 'clone' since it's visually merged with 'add-repo' (both labelled "Repo").
-    // For assistant there's no 'add-repo' step, so keep 'clone' visible —
-    // otherwise the indicator jumps straight to "Board" while the framework
-    // is still cloning.
-    const displaySteps = allSteps.filter(
-      (s) => s !== 'welcome' && !(path === 'own-repo' && s === 'clone')
-    );
+    if (path === 'own-repo') {
+      return [
+        { key: 'api-keys' as const, title: 'LLM Provider', icon: <ApiOutlined /> },
+        { key: 'add-repo' as const, title: 'Repo', icon: <FolderOpenOutlined /> },
+        { key: 'branch' as const, title: 'Workspace', icon: <BranchesOutlined /> },
+      ];
+    }
 
-    const labelMap: Record<WizardStep, string> = {
-      welcome: 'Welcome',
-      identity: 'Assistant',
-      'add-repo': 'Repo',
-      clone: path === 'own-repo' ? 'Repo' : 'Setup',
-      board: 'Board',
-      branch: 'Branch',
-      'api-keys': 'Provider',
-    };
+    return [];
+  }, [path]);
 
-    const iconMap: Record<WizardStep, React.ReactNode> = {
-      welcome: null,
-      identity: <RobotOutlined />,
-      'add-repo': <FolderOpenOutlined />,
-      clone: <CloudDownloadOutlined />,
-      board: <AppstoreOutlined />,
-      branch: <BranchesOutlined />,
-      'api-keys': <ApiOutlined />,
-    };
-
-    const mappedStep = currentStep === 'clone' && path === 'own-repo' ? 'add-repo' : currentStep;
-    const activeIndex = displaySteps.indexOf(mappedStep);
-
-    return displaySteps.map((step, index) => {
-      const isActive = index === activeIndex;
-      const stepColor = isActive ? token.colorPrimary : token.colorTextDisabled;
-      return {
-        key: step,
-        title: (
-          <span style={{ color: stepColor, fontWeight: isActive ? 600 : undefined }}>
-            {labelMap[step]}
-          </span>
-        ),
-        icon: (
-          <span style={{ color: stepColor, opacity: isActive ? 1 : 0.55 }}>{iconMap[step]}</span>
-        ),
-      };
-    });
-  }, [path, currentStep, token.colorPrimary, token.colorTextDisabled]);
-
-  const currentStepDisplay = useMemo(() => {
+  const currentProgressIndex = useMemo(() => {
     if (!path || currentStep === 'welcome') return -1;
-    // Mirror the filter used by stepsItems: hide 'clone' only for own-repo,
-    // where it's merged into 'add-repo'. Assistant keeps its 'clone' step.
-    const displaySteps = getStepsForPath(path).filter(
-      (s) => s !== 'welcome' && !(path === 'own-repo' && s === 'clone')
-    );
-    // For own-repo, map the internal 'clone' state onto the merged 'add-repo' index.
-    const mappedStep = currentStep === 'clone' && path === 'own-repo' ? 'add-repo' : currentStep;
-    return displaySteps.indexOf(mappedStep);
+    if (path === 'assistant') {
+      if (currentStep === 'identity') return 0;
+      if (currentStep === 'api-keys') return 1;
+      return 2;
+    }
+    if (currentStep === 'api-keys') return 0;
+    if (currentStep === 'add-repo' || currentStep === 'clone') return 1;
+    return 2;
   }, [path, currentStep]);
+
+  const renderProgressIndicator = () => {
+    if (!path || currentStep === 'welcome' || progressItems.length === 0) return null;
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+          marginBottom: 24,
+        }}
+      >
+        {progressItems.map((item, index) => {
+          const isActive = index === currentProgressIndex;
+          const color = isActive ? token.colorPrimary : token.colorTextDisabled;
+          return (
+            <div
+              key={item.key}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                color,
+              }}
+            >
+              <Space direction="vertical" size={4} align="center">
+                <div
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 999,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color,
+                    background: isActive ? token.colorPrimaryBg : token.colorFillTertiary,
+                    border: `1px solid ${isActive ? token.colorPrimary : token.colorBorder}`,
+                    opacity: isActive ? 1 : 0.55,
+                  }}
+                >
+                  {item.icon}
+                </div>
+                <Text
+                  style={{
+                    color,
+                    fontSize: 12,
+                    fontWeight: isActive ? 600 : undefined,
+                    opacity: isActive ? 1 : 0.65,
+                  }}
+                >
+                  {item.title}
+                </Text>
+              </Space>
+              {index < progressItems.length - 1 && (
+                <ArrowRightOutlined
+                  style={{ color: token.colorTextDisabled, opacity: 0.55, fontSize: 12 }}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   // ─── Auto-trigger steps that should auto-start ────
   useEffect(() => {
@@ -1992,15 +2023,8 @@ export function OnboardingWizard({
         },
       }}
     >
-      {/* Steps indicator (only when path is chosen) */}
-      {path && currentStep !== 'welcome' && (
-        <Steps
-          current={currentStepDisplay}
-          size="small"
-          items={stepsItems}
-          style={{ marginBottom: 24 }}
-        />
-      )}
+      {/* Progress indicator (only when path is chosen) */}
+      {renderProgressIndicator()}
 
       {/* Step content */}
       {renderStepContent()}
