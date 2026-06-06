@@ -107,6 +107,20 @@ export class KnowledgeSearchService {
     return parsed;
   }
 
+  private async attachIndexingToResults<T extends KnowledgeSearchResult>(
+    results: T[],
+    query: KnowledgeSearchQuery
+  ): Promise<T[]> {
+    if (query.include_indexing !== true && query.includeIndexing !== true) return results;
+    const docsWithIndexing = (await this.documents.attachIndexingStatus(
+      results.map((result) => result.document)
+    )) as T['document'][];
+    return results.map((result, index) => ({
+      ...result,
+      document: docsWithIndexing[index],
+    }));
+  }
+
   private async semanticSearch(
     rawQuery: KnowledgeSearchQuery,
     user?: User
@@ -305,15 +319,7 @@ export class KnowledgeSearchService {
       });
     }
     const values = [...byDoc.values()].slice(0, rawQuery.limit ?? 25);
-    if (rawQuery.include_indexing === true || rawQuery.includeIndexing === true) {
-      const docsWithIndexing = (await this.documents.attachIndexingStatus(
-        values.map((result) => result.document)
-      )) as (typeof values)[number]['document'][];
-      docsWithIndexing.forEach((doc, index) => {
-        values[index].document = doc;
-      });
-    }
-    return values;
+    return this.attachIndexingToResults(values, rawQuery);
   }
 
   private hybridMerge(
@@ -345,19 +351,12 @@ export class KnowledgeSearchService {
     const textResults = (await this.repo.search({ ...query, mode: 'text' })).filter((result) =>
       this.canRead(result, user)
     );
-    if (query.include_indexing === true || query.includeIndexing === true) {
-      const docsWithIndexing = (await this.documents.attachIndexingStatus(
-        textResults.map((result) => result.document)
-      )) as (typeof textResults)[number]['document'][];
-      docsWithIndexing.forEach((doc, index) => {
-        textResults[index].document = doc;
-      });
-    }
+    const textResultsWithIndexing = await this.attachIndexingToResults(textResults, query);
     if (query.mode === 'hybrid') {
       const semanticResults = await this.semanticSearch(query, user);
-      return this.hybridMerge(textResults, semanticResults).slice(0, query.limit ?? 25);
+      return this.hybridMerge(textResultsWithIndexing, semanticResults).slice(0, query.limit ?? 25);
     }
-    return textResults;
+    return textResultsWithIndexing;
   }
 
   async create(data: KnowledgeSearchQuery, params?: KnowledgeSearchParams) {
@@ -368,19 +367,12 @@ export class KnowledgeSearchService {
     const textResults = (await this.repo.search({ ...query, mode: 'text' })).filter((result) =>
       this.canRead(result, user)
     );
-    if (query.include_indexing === true || query.includeIndexing === true) {
-      const docsWithIndexing = (await this.documents.attachIndexingStatus(
-        textResults.map((result) => result.document)
-      )) as (typeof textResults)[number]['document'][];
-      docsWithIndexing.forEach((doc, index) => {
-        textResults[index].document = doc;
-      });
-    }
+    const textResultsWithIndexing = await this.attachIndexingToResults(textResults, query);
     if (query.mode === 'hybrid') {
       const semanticResults = await this.semanticSearch(query, user);
-      return this.hybridMerge(textResults, semanticResults).slice(0, query.limit ?? 25);
+      return this.hybridMerge(textResultsWithIndexing, semanticResults).slice(0, query.limit ?? 25);
     }
-    return textResults;
+    return textResultsWithIndexing;
   }
 }
 

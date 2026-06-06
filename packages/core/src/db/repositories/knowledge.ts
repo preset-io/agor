@@ -817,6 +817,15 @@ export class KnowledgeDocumentRepository
     return row ? this.rowToDocumentWithUrl(row) : null;
   }
 
+  async findByNamespaceSlugAndPath(
+    namespaceSlug: string,
+    path: string
+  ): Promise<KnowledgeDocument | null> {
+    const namespace = await new KnowledgeNamespaceRepository(this.db).findBySlug(namespaceSlug);
+    if (!namespace) return null;
+    return this.findByNamespaceAndPath(namespace.namespace_id, path);
+  }
+
   async findByUnitId(unitId: string): Promise<KnowledgeDocument | null> {
     const unit = await select(this.db)
       .from(kbDocumentUnits)

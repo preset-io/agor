@@ -221,8 +221,9 @@ export class KnowledgeGraphService {
     const path = ref.path ?? parsed?.path;
     if (!namespaceSlug || !path) return null;
 
-    const docs = await this.documents.findAll({ namespace_slug: namespaceSlug, path });
-    return this.activeDocument(docs[0] ?? null);
+    return this.activeDocument(
+      await this.documents.findByNamespaceSlugAndPath(namespaceSlug, path)
+    );
   }
 
   private async assertCanLinkRef(ref: KnowledgeNodeRef, user?: User): Promise<void> {
@@ -246,11 +247,9 @@ export class KnowledgeGraphService {
     if (unitId) return this.activeDocument(await this.documents.findByUnitId(unitId));
     const parsed = parseKnowledgeUri(node.uri);
     if (!parsed) return null;
-    const docs = await this.documents.findAll({
-      namespace_slug: parsed.namespace_slug,
-      path: parsed.path,
-    });
-    return this.activeDocument(docs[0] ?? null);
+    return this.activeDocument(
+      await this.documents.findByNamespaceSlugAndPath(parsed.namespace_slug, parsed.path)
+    );
   }
 
   private async canReadNode(node: KnowledgeGraphNode, user?: User): Promise<boolean> {

@@ -14,7 +14,7 @@ import {
 } from '@agor/core/db';
 import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type { KnowledgeDocument, User, UserID } from '@agor/core/types';
-import { ROLES } from '@agor/core/types';
+import { parseKnowledgeUri, ROLES } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { KnowledgeDocumentsService } from './knowledge-documents';
@@ -406,6 +406,15 @@ describe('KnowledgeSearchService and KnowledgeVersionsService permissions', () =
         status: 'draft',
       });
 
+      const versions = new KnowledgeVersionsService(db);
+      const draftHistoryByUri = await versions.find(
+        params(other, { uri: draftDoc.uri, include_content: true })
+      );
+      expect(draftHistoryByUri[0]).toMatchObject({
+        document_id: draftDoc.document_id,
+        content_text: 'draftneedle',
+      });
+
       const optedIn = await search.find(
         params(other, { q: 'draftneedle', include_other_user_drafts: true })
       );
@@ -486,6 +495,37 @@ describe('KnowledgeSearchService and KnowledgeVersionsService permissions', () =
 });
 
 describe('KnowledgeGraphService permissions', () => {
+  dbTest('resolves draft document refs by URI and path for graph access', async ({ db }) => {
+    const owner = await seedUser(db, 'owner');
+    const draftDoc = await seedDocument(db, owner, {
+      status: 'draft',
+      visibility: 'public',
+      path: 'draft-graph.md',
+    });
+    const parsed = parseKnowledgeUri(draftDoc.uri);
+    if (!parsed) throw new Error('Expected seeded draft document to have a KB URI');
+    const graph = new KnowledgeGraphService(db);
+
+    await expect(
+      graph.link(
+        {
+          source: { namespace: parsed.namespace_slug, path: parsed.path },
+          target: { externalUri: 'https://example.com/draft-ref', label: 'Draft ref' },
+          edge_type: 'references',
+        },
+        params(owner)
+      )
+    ).resolves.toMatchObject({ edge_type: 'references' });
+
+    await expect(
+      graph.neighbors({ node: { uri: draftDoc.uri }, direction: 'both' }, params(owner))
+    ).resolves.toMatchObject({
+      center: {
+        uri: draftDoc.uri,
+      },
+    });
+  });
+
   dbTest('prevents linking to private documents the caller cannot write', async ({ db }) => {
     const owner = await seedUser(db, 'owner');
     const other = await seedUser(db, 'other');

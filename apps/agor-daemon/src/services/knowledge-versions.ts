@@ -74,8 +74,8 @@ export class KnowledgeVersionsService extends DrizzleService<
       const namespaceSlug = query.namespace_slug ?? query.namespace ?? parsed?.namespace_slug;
       const path = query.path ?? parsed?.path;
       if (namespaceSlug && path) {
-        const docs = await this.documents.findAll({ namespace_slug: namespaceSlug, path });
-        documentId = docs[0]?.document_id;
+        const document = await this.documents.findByNamespaceSlugAndPath(namespaceSlug, path);
+        documentId = document?.document_id;
       }
     }
     if (!documentId) return [];
