@@ -1,9 +1,8 @@
 /**
  * OnboardingWizard - Multi-step wizard for new user onboarding
  *
- * Two paths:
+ * Assistant-first path:
  * - Assistant: identity -> API keys -> clone assistant framework repo -> create board -> create branch/session
- * - Own Repo: API keys -> add repo -> create board -> create branch/session
  *
  * Replaces GettingStartedPopover entirely.
  */
@@ -239,6 +238,38 @@ function findMatchingRepoId(
   return null;
 }
 
+const RECOMMENDED_AGENT_OPTIONS: Array<{
+  value: AgenticToolName;
+  title: string;
+  eyebrow: string;
+  description: string;
+}> = [
+  {
+    value: 'claude-code',
+    title: 'Claude Code',
+    eyebrow: 'Recommended',
+    description:
+      'Best-tested default for Agor assistants, with API key, CLI auth, and Pro/Max token paths.',
+  },
+  {
+    value: 'codex',
+    title: 'Codex (OpenAI)',
+    eyebrow: 'Recommended',
+    description: 'Strong support for OpenAI API keys and Codex CLI auth inside Agor branches.',
+  },
+];
+
+const OTHER_AGENT_OPTIONS: Array<{ value: AgenticToolName; label: string }> = [
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'copilot', label: 'GitHub Copilot' },
+  { value: 'opencode', label: 'OpenCode' },
+  { value: 'cursor', label: 'Cursor SDK (Beta)' },
+];
+
+const RECOMMENDED_AGENT_VALUES = new Set<AgenticToolName>(
+  RECOMMENDED_AGENT_OPTIONS.map((option) => option.value)
+);
+
 const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
   'claude-code': { label: 'console.anthropic.com', url: 'https://console.anthropic.com/' },
   // Claude Code CLI uses the same Anthropic credentials.
@@ -410,6 +441,12 @@ export function OnboardingWizard({
       return;
     }
 
+    // Only the assistant path remains an active onboarding route. Legacy saved
+    // non-assistant path preferences are allowed to keep their data shape, but
+    // they resume at the assistant flow instead of exposing the old path.
+    const savedPath = onboarding.path === 'persisted-agent' ? 'assistant' : onboarding.path;
+    const canResumeAssistantResources = savedPath === 'assistant';
+
     // Resource-ownership validation. The resume-step decisions below jump the
     // wizard past the api-keys / board / repo creation steps based on IDs
     // stored in user.preferences. If those IDs ever point at resources NOT
@@ -421,11 +458,15 @@ export function OnboardingWizard({
     // check is treated as if the preference were unset; the fallback chain
     // then routes the user to the right step (typically api-keys).
     const validBranchId =
-      onboarding.branchId && branchById.get(onboarding.branchId)?.created_by === user.user_id
+      canResumeAssistantResources &&
+      onboarding.branchId &&
+      branchById.get(onboarding.branchId)?.created_by === user.user_id
         ? onboarding.branchId
         : undefined;
     const validBoardId =
-      mainBoardId && boardById.get(mainBoardId)?.created_by === user.user_id
+      canResumeAssistantResources &&
+      mainBoardId &&
+      boardById.get(mainBoardId)?.created_by === user.user_id
         ? mainBoardId
         : undefined;
     // Repos are SHARED resources (no created_by attribution). We require a
@@ -435,7 +476,9 @@ export function OnboardingWizard({
     // as that would let a new user inherit any framework repo cloned by a
     // prior user and skip the clone step.
     const validRepoId =
-      onboarding.repoId && repoById.has(onboarding.repoId) ? onboarding.repoId : undefined;
+      canResumeAssistantResources && onboarding.repoId && repoById.has(onboarding.repoId)
+        ? onboarding.repoId
+        : undefined;
 
     if (
       onboarding.branchId !== validBranchId ||
@@ -449,9 +492,9 @@ export function OnboardingWizard({
       });
     }
 
-    // Map legacy 'persisted-agent' to 'assistant'
-    const resumedPath: WizardPath =
-      onboarding.path === 'persisted-agent' ? 'assistant' : (onboarding.path as WizardPath);
+    // Map every saved onboarding path to the assistant flow. 'persisted-agent'
+    // is the old assistant path name; 'own-repo' is no longer an onboarding path.
+    const resumedPath: WizardPath = 'assistant';
     setPath(resumedPath);
 
     if (resumedPath === 'assistant') {
@@ -1199,65 +1242,26 @@ export function OnboardingWizard({
 
   const renderWelcome = () => (
     <div style={{ padding: '8px 0' }}>
-      <Title level={3} style={{ marginBottom: 6 }}>
+      <Title level={3} style={{ marginBottom: 8 }}>
         Welcome to Agor
       </Title>
+      <Paragraph style={{ marginBottom: 12, fontSize: 15 }}>
+        The best way to get started is with an Agor assistant. Agents in Agor can help connect
+        tools, coordinate other agents, set up your board and workflow, and show you around.
+      </Paragraph>
       <Paragraph type="secondary" style={{ marginBottom: 24, fontSize: 15 }}>
-        Let's get you set up with your first AI session.
+        This quick wizard will handle setup and introduce your assistant, who can take it from
+        there. Any questions? Ask your assistant.
       </Paragraph>
 
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Card
-          hoverable
-          onClick={() => handleSelectPath('assistant')}
-          style={{ cursor: 'pointer', borderColor: token.colorPrimary }}
-        >
-          <Space align="start" size="middle">
-            <ThunderboltOutlined
-              style={{ fontSize: 24, color: token.colorPrimary, marginTop: 2, flexShrink: 0 }}
-            />
-            <div>
-              <Space style={{ marginBottom: 6 }} align="center">
-                <Text strong style={{ fontSize: 15 }}>
-                  Set up your AI assistant
-                </Text>
-                <Tag color="blue">Recommended</Tag>
-              </Space>
-              <Paragraph type="secondary" style={{ marginBottom: 6 }}>
-                Get a persistent AI assistant with memory, task management, and pre-configured
-                workflows.
-              </Paragraph>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                Identity → API key → Clone assistant framework → Board → Branch/session
-              </Text>
-            </div>
-          </Space>
-        </Card>
-
-        <Card hoverable onClick={() => handleSelectPath('own-repo')} style={{ cursor: 'pointer' }}>
-          <Space align="start" size="middle">
-            <FolderOpenOutlined
-              style={{
-                fontSize: 24,
-                color: token.colorTextSecondary,
-                marginTop: 2,
-                flexShrink: 0,
-              }}
-            />
-            <div>
-              <Text strong style={{ fontSize: 15 }}>
-                Bring your own repository
-              </Text>
-              <Paragraph type="secondary" style={{ marginBottom: 6, marginTop: 4 }}>
-                Connect an existing Git repository and start coding with AI agents.
-              </Paragraph>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                API key → Add repository → Board → Branch/session
-              </Text>
-            </div>
-          </Space>
-        </Card>
-      </Space>
+      <Button
+        type="primary"
+        size="large"
+        icon={<ThunderboltOutlined />}
+        onClick={() => handleSelectPath('assistant')}
+      >
+        Get started
+      </Button>
     </div>
   );
 
@@ -1513,8 +1517,12 @@ export function OnboardingWizard({
         <div style={{ textAlign: 'center', padding: '24px 0' }}>
           <Result
             icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
-            title="Branch Created"
-            subTitle="The branch is ready. Create the first session to finish onboarding."
+            title={path === 'assistant' ? 'Assistant Branch Created' : 'Branch Created'}
+            subTitle={
+              path === 'assistant'
+                ? 'Your assistant branch is ready. Create the first session to finish onboarding.'
+                : 'The branch is ready. Create the first session to finish onboarding.'
+            }
           />
           {error && (
             <Alert
@@ -1538,12 +1546,13 @@ export function OnboardingWizard({
 
     return (
       <div style={{ padding: '16px 0' }}>
-        <Title level={4}>Create Your Branch</Title>
+        <Title level={4}>
+          {path === 'assistant' ? 'Create Your Assistant Branch' : 'Create Your Branch'}
+        </Title>
         <Paragraph type="secondary">
-          A branch is an isolated workspace backed by its own git branch.
           {path === 'assistant'
-            ? " We'll set up a branch for your assistant and create its first session."
-            : ' Name it whatever you like. We’ll create the first session after the branch is ready.'}
+            ? 'Your assistant lives in a branch: a safe, isolated workspace where it can use tools, keep setup context, and start helping without mixing with other work.'
+            : 'A branch is an isolated workspace backed by its own git branch. Name it whatever you like. We’ll create the first session after the branch is ready.'}
         </Paragraph>
 
         <Form layout="vertical">
@@ -1551,7 +1560,9 @@ export function OnboardingWizard({
             label="Branch name"
             extra={
               <>
-                Used as both the directory name and the new branch name. Forked from{' '}
+                {path === 'assistant'
+                  ? 'This names the assistant workspace and its underlying git branch. Forked from '
+                  : 'Used as both the directory name and the new branch name. Forked from '}
                 <Text code>{sourceBranch}</Text>.
               </>
             }
@@ -1572,7 +1583,9 @@ export function OnboardingWizard({
           loading={loading}
           disabled={!branchName.trim()}
         >
-          Create Branch & First Session
+          {path === 'assistant'
+            ? 'Create Assistant & First Session'
+            : 'Create Branch & First Session'}
         </Button>
       </div>
     );
@@ -1643,31 +1656,82 @@ export function OnboardingWizard({
 
     return (
       <div style={{ padding: '16px 0' }}>
-        <Title level={4}>Configure Your Agent</Title>
+        <Title level={4}>Connect an LLM Provider</Title>
+        <Paragraph type="secondary" style={{ marginBottom: 16 }}>
+          Choose what will power your assistant. Claude Code and Codex are the best-supported
+          onboarding options today; other supported agents are available below.
+        </Paragraph>
 
-        <Form layout="vertical">
-          <Form.Item label="Agent">
-            <Select
-              value={selectedAgent}
-              onChange={(value) => {
-                setSelectedAgent(value);
-                setApiKey('');
-                setError(null);
-                setManualTestResult(null);
-                setOverrideDetectedAuth(false);
-              }}
-              options={[
-                { value: 'claude-code', label: 'Claude Code (Recommended)' },
-                { value: 'codex', label: 'Codex (OpenAI)' },
-                { value: 'gemini', label: 'Gemini' },
-                { value: 'copilot', label: 'GitHub Copilot' },
-                { value: 'opencode', label: 'OpenCode' },
-                { value: 'cursor', label: 'Cursor SDK (Beta)' },
-              ]}
-              style={{ width: '100%' }}
-            />
-          </Form.Item>
-        </Form>
+        <Space direction="vertical" size="middle" style={{ width: '100%', marginBottom: 16 }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: 12,
+            }}
+          >
+            {RECOMMENDED_AGENT_OPTIONS.map((option) => {
+              const selected = selectedAgent === option.value;
+              return (
+                <Card
+                  key={option.value}
+                  hoverable
+                  size="small"
+                  onClick={() => {
+                    setSelectedAgent(option.value);
+                    setApiKey('');
+                    setError(null);
+                    setManualTestResult(null);
+                    setOverrideDetectedAuth(false);
+                  }}
+                  style={{
+                    cursor: 'pointer',
+                    borderColor: selected ? token.colorPrimary : token.colorBorder,
+                    background: selected ? token.colorPrimaryBg : undefined,
+                    minHeight: 132,
+                  }}
+                >
+                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                    <Space align="center">
+                      <Text strong>{option.title}</Text>
+                      <Tag color={selected ? 'blue' : 'default'}>{option.eyebrow}</Tag>
+                    </Space>
+                    <Text type="secondary" style={{ fontSize: 13 }}>
+                      {option.description}
+                    </Text>
+                    {selected && <Text type="success">Selected</Text>}
+                  </Space>
+                </Card>
+              );
+            })}
+          </div>
+
+          <Form layout="vertical">
+            <Form.Item label="Other supported agents" style={{ marginBottom: 0 }}>
+              <Select
+                placeholder="Choose another agent"
+                value={RECOMMENDED_AGENT_VALUES.has(selectedAgent) ? undefined : selectedAgent}
+                onChange={(value) => {
+                  setSelectedAgent(value);
+                  setApiKey('');
+                  setError(null);
+                  setManualTestResult(null);
+                  setOverrideDetectedAuth(false);
+                }}
+                options={OTHER_AGENT_OPTIONS}
+                style={{ width: '100%' }}
+                allowClear
+                onClear={() => {
+                  setSelectedAgent('claude-code');
+                  setApiKey('');
+                  setError(null);
+                  setManualTestResult(null);
+                  setOverrideDetectedAuth(false);
+                }}
+              />
+            </Form.Item>
+          </Form>
+        </Space>
 
         {isAuthenticated && !overrideDetectedAuth ? (
           <div style={{ textAlign: 'center', padding: '8px 0' }}>

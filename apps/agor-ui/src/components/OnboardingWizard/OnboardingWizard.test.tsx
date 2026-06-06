@@ -1,0 +1,100 @@
+import type { User } from '@agor-live/client';
+import { fireEvent, render, screen } from '@testing-library/react';
+import type { ComponentProps } from 'react';
+import { OnboardingWizard } from './OnboardingWizard';
+
+vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
+  EmojiPickerInput: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
+    <button type="button" onClick={() => onChange(value)} aria-label="emoji picker">
+      {value}
+    </button>
+  ),
+}));
+
+function makeUser(overrides: Partial<User> = {}): User {
+  return {
+    user_id: 'user-1',
+    email: 'new-user@example.com',
+    name: 'New User',
+    role: 'member',
+    onboarding_completed: false,
+    preferences: {},
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  } as unknown as User;
+}
+
+function renderWizard(overrides: Partial<ComponentProps<typeof OnboardingWizard>> = {}) {
+  const reposService = { on: vi.fn(), removeListener: vi.fn() };
+  const client = {
+    io: { on: vi.fn(), off: vi.fn() },
+    service: vi.fn(() => reposService),
+  };
+
+  return render(
+    <OnboardingWizard
+      open={true}
+      onComplete={vi.fn()}
+      repoById={new Map()}
+      branchById={new Map()}
+      boardById={new Map()}
+      user={makeUser()}
+      client={client}
+      onCreateRepo={vi.fn()}
+      onCreateLocalRepo={vi.fn()}
+      onCreateBranch={vi.fn()}
+      onCreateSession={vi.fn()}
+      onUpdateUser={vi.fn()}
+      {...overrides}
+    />
+  );
+}
+
+describe('OnboardingWizard', () => {
+  it('starts onboarding through assistant creation only', async () => {
+    const onUpdateUser = vi.fn();
+    renderWizard({ onUpdateUser });
+
+    expect(screen.getByText('Welcome to Agor')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /get started/i })).toBeInTheDocument();
+    expect(screen.queryByText(/bring your own repository/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /get started/i }));
+
+    expect(await screen.findByText('Name Your Assistant')).toBeInTheDocument();
+    expect(onUpdateUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        preferences: expect.objectContaining({
+          onboarding: expect.objectContaining({ path: 'assistant' }),
+        }),
+      })
+    );
+  });
+
+  it('does not resume legacy own-repo onboarding as an alternate path', async () => {
+    renderWizard({
+      user: makeUser({
+        preferences: { onboarding: { path: 'own-repo' } },
+      } as Partial<User>),
+    });
+
+    expect(await screen.findByText('Name Your Assistant')).toBeInTheDocument();
+    expect(screen.queryByText('Add Your Repository')).not.toBeInTheDocument();
+  });
+
+  it('shows recommended provider cards plus a secondary selector', async () => {
+    renderWizard();
+
+    fireEvent.click(screen.getByRole('button', { name: /get started/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^continue$/i }));
+
+    expect(await screen.findByText('Connect an LLM Provider')).toBeInTheDocument();
+    expect(screen.getByText(/best-supported onboarding options today/i)).toBeInTheDocument();
+    expect(screen.getByText('Claude Code')).toBeInTheDocument();
+    expect(screen.getByText('Codex (OpenAI)')).toBeInTheDocument();
+    expect(screen.getByText('Other supported agents')).toBeInTheDocument();
+    expect(screen.queryByText('Configure Your Agent')).not.toBeInTheDocument();
+  });
+});
