@@ -26,7 +26,10 @@ import { renderTemplate } from '../templates/handlebars-helpers';
 
 const DEFAULT_TEMPLATE = `[Agor] Child session {{childSessionId}} has {{#if (eq status "completed")}}completed{{else}}failed{{/if}}.
 
-{{#if spawnPrompt}}**Task:** {{spawnPrompt}}
+{{#if spawnPrompt}}## Original Prompt
+
+{{spawnPrompt}}
+
 {{/if}}**Status:** {{status}}
 **Stats:** {{messageCount}} messages, {{toolUseCount}} tool uses
 
@@ -44,7 +47,7 @@ export interface ChildCompletionContext {
   childTaskFullId: string; // Full UUIDv7 of task
   parentSessionId: string; // Canonical short ID of callback target (kept for backward compat)
   callbackSessionId: string; // Alias: Canonical short ID of callback target session
-  spawnPrompt?: string; // Original prompt from spawn (truncated to 120 chars, optional based on include_original_prompt)
+  spawnPrompt?: string; // Original prompt from spawn (optional based on include_original_prompt)
   status: string; // Task status (COMPLETED, FAILED, etc.)
   completedAt: string; // ISO timestamp
   messageCount: number;

@@ -856,9 +856,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         targetSession.callback_config?.include_original_prompt ??
         false;
 
-      // Get spawn prompt from task (truncated to 120 chars for the callback template).
+      // Get the original prompt from the completed task. When requested, it is
+      // rendered as a section inside the single templated callback body (never
+      // queued as its own callback/message).
       const spawnPrompt = includeOriginalPrompt
-        ? task.full_prompt?.substring(0, 120) || '(no prompt available)'
+        ? task.full_prompt || '(no prompt available)'
         : undefined;
 
       // Fetch last assistant message from child session (if callback config allows)
