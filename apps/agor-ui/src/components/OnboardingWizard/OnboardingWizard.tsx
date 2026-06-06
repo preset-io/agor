@@ -1550,10 +1550,10 @@ export function OnboardingWizard({
         <div style={{ textAlign: 'center', padding: '24px 0' }}>
           <Result
             icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
-            title={path === 'assistant' ? 'Assistant Branch Created' : 'Branch Created'}
+            title={path === 'assistant' ? 'Assistant Branch Ready' : 'Branch Created'}
             subTitle={
               path === 'assistant'
-                ? 'Your assistant branch is ready. Create the first session to finish onboarding.'
+                ? 'Start your assistant to finish onboarding.'
                 : 'The branch is ready. Create the first session to finish onboarding.'
             }
           />
@@ -1571,7 +1571,7 @@ export function OnboardingWizard({
             onClick={() => launchSessionForBranch(createdBranchId, createdBoardId)}
             loading={loading}
           >
-            Create First Session
+            {path === 'assistant' ? 'Start Assistant' : 'Create First Session'}
           </Button>
         </div>
       );
@@ -1580,11 +1580,11 @@ export function OnboardingWizard({
     return (
       <div style={{ padding: '16px 0' }}>
         <Title level={4}>
-          {path === 'assistant' ? 'Create Your Assistant Branch' : 'Create Your Branch'}
+          {path === 'assistant' ? 'Name Your Assistant Branch' : 'Create Your Branch'}
         </Title>
         <Paragraph type="secondary">
           {path === 'assistant'
-            ? 'Your assistant lives in a branch: a safe, isolated workspace where it can use tools, keep setup context, and start helping without mixing with other work.'
+            ? 'Your assistant works from its own branch: a safe place to use tools and keep setup context.'
             : 'A branch is an isolated workspace backed by its own git branch. Name it whatever you like. We’ll create the first session after the branch is ready.'}
         </Paragraph>
 
@@ -1594,7 +1594,7 @@ export function OnboardingWizard({
             extra={
               <>
                 {path === 'assistant'
-                  ? 'This names the assistant workspace and its underlying git branch. Forked from '
+                  ? 'Created from '
                   : 'Used as both the directory name and the new branch name. Forked from '}
                 <Text code>{sourceBranch}</Text>.
               </>
@@ -1617,7 +1617,7 @@ export function OnboardingWizard({
           disabled={!branchName.trim()}
         >
           {path === 'assistant'
-            ? 'Create Assistant & First Session'
+            ? 'Create Branch & Start Assistant'
             : 'Create Branch & First Session'}
         </Button>
       </div>
