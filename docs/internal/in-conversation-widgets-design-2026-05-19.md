@@ -493,7 +493,7 @@ Scope:
 - Submit handler reuses existing env-var validation (`validateEnvVar`, `isEnvVarAllowed`, regex) and encryption (`encryptApiKey`) — zero net-new logic.
 - **`already_present` short-circuit** (per D4, resolved yes): submit handler checks at request time whether the user already has all `names` in scope. If yes, immediately patches `metadata.widget.status = 'already_present'`, skips the form render, and queues the auto-resume task with a "values were already configured" prompt.
 - Docs: `apps/agor-docs/pages/guide/in-conversation-widgets.mdx` (user-facing) with the env-var section as the canonical example.
-- Storybook story for the widget in pending, submitted, dismissed, and already-present states.
+- RTL/component coverage or live-dev QA cases for the widget in pending, submitted, dismissed, and already-present states.
 
 ### Follow-up PR (separate, validates extensibility): `feat(widgets): confirmation widget`
 

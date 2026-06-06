@@ -96,7 +96,6 @@
       "rollup": ">=4.59.0 <5",
       "smol-toml": ">=1.6.1 <2",
       "socket.io-parser": ">=4.2.6 <5",
-      "storybook": ">=9.1.19 <10",
       "systeminformation": ">=5.31.0 <6",
       "undici": ">=7.25.0 <8",
       "vite": ">=8.0.10 <9",

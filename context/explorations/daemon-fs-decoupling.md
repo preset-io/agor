@@ -398,7 +398,7 @@ The thing that _replaces_ the wall is "operator must set up a k8s cluster with P
 1. **Self-hosted multi-user with strict Unix isolation will continue to need single-host setfacl ACLs** for the foreseeable future. Option D doesn't help self-hosted scale past one host. (If we ever need multi-host self-hosted, you're back at Option B.)
 2. **Per-task ephemeral executor pods are slower than subprocess spawn** by ~5–15 seconds. Hosted gets a small latency tax on every prompt. Mitigation: warm pool of executor pods, or larger-grained work units, or "session-pinned" pods that survive between turns.
 3. **One volume per branch is expensive at scale.** A customer with 200 branches has 200 EBSs. Mitigation: archive idle branches (detach EBS, retain bare repo only).
-4. **The Sandpack / local "live preview" stories** that assume daemon-FS access need a UI-side reshuffle. Probably modest.
+4. **The Sandpack / local "live preview" examples** that assume daemon-FS access need a UI-side reshuffle. Probably modest.
 5. **Two-mode complexity.** Operators pick one. Self-hosted tooling and hosted tooling diverge slightly. Acceptable tax.
 
 ---

@@ -55,30 +55,9 @@ export const TOOL_RENDERERS = new Map<string, ToolRenderer>([
 ]);
 ```
 
-### 3. Create Storybook Stories (Optional)
+### 3. Add Focused Coverage (When Useful)
 
-Create `MyToolRenderer.stories.tsx`:
-
-```typescript
-import type { Meta, StoryObj } from '@storybook/react';
-import { MyToolRenderer } from './MyToolRenderer';
-
-const meta = {
-  title: 'Tool Renderers/MyToolRenderer',
-  component: MyToolRenderer,
-} satisfies Meta<typeof MyToolRenderer>;
-
-export default meta;
-type Story = StoryObj<typeof meta>;
-
-export const Default: Story = {
-  args: {
-    input: {
-      /* example input */
-    },
-  },
-};
-```
+For behavior-heavy renderers, add a colocated Vitest/Testing Library test such as `MyToolRenderer.test.tsx`. For visual polish, validate in the live Agor dev environment.
 
 ## Design Guidelines
 
@@ -115,10 +94,10 @@ See existing renderers:
 
 ## Testing
 
-Run Storybook to preview:
+Run focused tests from the repo root:
 
 ```bash
-cd apps/agor-ui
-pnpm storybook
-# Navigate to: Tool Renderers > [Your Renderer]
+pnpm --filter agor-ui test -- MyToolRenderer
 ```
+
+Use the live Agor dev environment for final visual QA.

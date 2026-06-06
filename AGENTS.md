@@ -451,7 +451,6 @@ Effort is configured per-session via `model_config.effort` and can be changed at
 - React 18 + TypeScript + Vite
 - Ant Design - Component library (dark mode, token-based styling)
 - React Flow - Canvas visualization
-- Storybook - Component development
 
 **CLI:**
 

@@ -7,6 +7,7 @@ Design-only pass. No production code changes yet.
 ## 1. Current scheduling architecture
 
 **Storage (per-worktree, no separate schedule table):**
+
 - `packages/core/src/db/schema.sqlite.ts` (+ `schema.postgres.ts`): worktree columns
   `schedule_enabled`, `schedule_cron`, `schedule_last_triggered_at`,
   `schedule_next_run_at`, and a JSON `schedule` blob with `agentic_tool`,
@@ -14,6 +15,7 @@ Design-only pass. No production code changes yet.
   `mcp_server_ids`, `context_files`.
 
 **Scheduler worker:**
+
 - `apps/agor-daemon/src/services/scheduler.ts` — `SchedulerService`, tick interval
   30s, grace period 2min.
 - Flow: `tick()` → `getEnabledSchedules()` (repo-level, bypasses auth) →
@@ -31,6 +33,7 @@ Design-only pass. No production code changes yet.
   persistent record (row in `sessions` with `scheduled_from_worktree`).
 
 **Schedule UI:**
+
 - `apps/agor-ui/src/components/WorktreeModal/tabs/ScheduleTab.tsx` — a tab
   inside the WorktreeModal (not a standalone drawer). Enable toggle + cron
   picker + prompt template textarea + agent/permission/model/MCP selection.
@@ -38,6 +41,7 @@ Design-only pass. No production code changes yet.
   which PATCHes the worktree.
 
 **Board card actions:**
+
 - `apps/agor-ui/src/components/WorktreeCard/WorktreeCard.tsx` ~L820–895:
   header button row with Pin, Drag, Terminal (CodeOutlined), Edit
   (EditOutlined → opens settings modal), Archive (DeleteOutlined). Hover-
@@ -45,6 +49,7 @@ Design-only pass. No production code changes yet.
   live separately on `SessionItemWithActions`.
 
 **RBAC on schedule edits:**
+
 - `apps/agor-daemon/src/register-hooks.ts` L542–548: patching a worktree
   requires `ensureWorktreePermission('all', ...)` when RBAC is on.
   → Editing a schedule already requires tier `all`.
@@ -52,6 +57,7 @@ Design-only pass. No production code changes yet.
   (`apps/agor-daemon/src/utils/worktree-authorization.ts`).
 
 **Session create endpoint:**
+
 - `app.service('sessions').create(...)` is the canonical path (Feathers).
   Scheduler reuses it directly.
 
@@ -65,6 +71,7 @@ header action row**, next to Edit/Archive. Also surface it in the
 schedule can dry-run it in place).
 
 **Reasoning:**
+
 1. The whole product is worktree-centric and spatial — the board is the
    primary interface, and `WorktreeCard` is where every other worktree-level
    action already lives (Terminal, Edit, Archive). That is the established
@@ -82,6 +89,7 @@ schedule can dry-run it in place).
    introducing one for this feature.
 
 **Visibility/enablement rules on the card button:**
+
 - Only render when `worktree.schedule_enabled === true` **and**
   `worktree.schedule_cron` and `worktree.schedule.prompt_template` exist.
   If the schedule is disabled, don't render (keeps header uncluttered).
@@ -98,18 +106,21 @@ schedule can dry-run it in place).
 **Endpoint:** `POST /worktrees/:worktree_id/execute-schedule-now`
 
 Not `POST /sessions/:id/execute-now` — the issue's original shape is wrong:
-a scheduled run creates a *new* session, it does not act on an existing
+a scheduled run creates a _new_ session, it does not act on an existing
 session. The resource is the worktree (which owns the schedule).
 
 **Request body:** (all optional overrides; server falls back to schedule
 config if omitted — keep the first cut minimal: no overrides)
+
 ```json
 {}
 ```
+
 Future-proof fields we might add later: `prompt_override`, `context`
 overrides. Leave out of v1.
 
 **Response (201):**
+
 ```json
 {
   "session_id": "…",
@@ -122,10 +133,11 @@ overrides. Leave out of v1.
 **Auth:** require tier `all` — matches schedule-edit permission, so anyone
 who could edit the schedule can fire it. This is stricter than `session`
 (creating arbitrary sessions) but is the right match because this action
-spawns a session using the *creator's* Unix identity via the scheduler
+spawns a session using the _creator's_ Unix identity via the scheduler
 path, not the triggerer's.
 
 **Implementation plan (reuse exactly one code path):**
+
 1. Refactor `spawnScheduledSession` in `scheduler.ts`:
    - Extract a new public method `executeScheduleNow(worktreeId, { triggeredBy, manual: true })`.
    - Internally refactor the existing private body into a helper
@@ -150,24 +162,25 @@ path, not the triggerer's.
 
 ## 4. Edge cases
 
-| Case | Handling |
-|---|---|
-| Schedule disabled | Endpoint returns 400 `schedule_disabled`. Card button not rendered. |
-| Cron/template missing | Endpoint returns 400 `schedule_incomplete`. Button disabled with tooltip. |
-| Session already running in worktree | **Do NOT block.** Scheduler itself permits this today; blocking here would surprise users and diverge from scheduled behavior. Document it. (The issue's "no-op with tooltip" guidance is inconsistent with current scheduler semantics; recommend we raise this and align on allowing, matching the existing cron path.) |
-| Rapid double-click | (a) Optimistic UI disables button for ~3s after click. (b) Server dedup: `scheduled_run_at` is minute-rounded, so two triggers within the same minute will hit the existing dedup branch in `spawnScheduledSession` and the second becomes a no-op returning the already-created session. |
-| Concurrent manual + cron collision | Same minute-rounding dedup covers it. If cron fires at 09:00 and user clicks at 09:00:30, both map to `scheduled_run_at=09:00:00` and second call is a no-op. |
-| Creator deleted or missing `unix_username` in strict mode | Scheduler already throws (`resolveCreatorUnixUsername`). Surface as 409 with the existing error message. |
-| RBAC disabled | No permission check needed (same as PATCH behavior); only `requireMinimumRole(MEMBER)` applies. |
-| Non-owner user triggers | Requires `all` tier — for a non-owner, `others_can` must be `all`, which is consistent with being able to edit schedule. |
-| Retention enforcement | Already runs at end of `spawnScheduledSession`; will still run after a manual trigger. No change needed. |
-| Audit | Add a structured `console.log` line including `triggered_manually: true, triggered_by: <userId>` so ops can grep. The session row already carries `scheduled_from_worktree: true`; add a `triggered_manually: true` marker on `custom_context.scheduled_run` (same JSON field already used for snapshot data) — no schema migration. |
+| Case                                                      | Handling                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Schedule disabled                                         | Endpoint returns 400 `schedule_disabled`. Card button not rendered.                                                                                                                                                                                                                                                                  |
+| Cron/template missing                                     | Endpoint returns 400 `schedule_incomplete`. Button disabled with tooltip.                                                                                                                                                                                                                                                            |
+| Session already running in worktree                       | **Do NOT block.** Scheduler itself permits this today; blocking here would surprise users and diverge from scheduled behavior. Document it. (The issue's "no-op with tooltip" guidance is inconsistent with current scheduler semantics; recommend we raise this and align on allowing, matching the existing cron path.)            |
+| Rapid double-click                                        | (a) Optimistic UI disables button for ~3s after click. (b) Server dedup: `scheduled_run_at` is minute-rounded, so two triggers within the same minute will hit the existing dedup branch in `spawnScheduledSession` and the second becomes a no-op returning the already-created session.                                            |
+| Concurrent manual + cron collision                        | Same minute-rounding dedup covers it. If cron fires at 09:00 and user clicks at 09:00:30, both map to `scheduled_run_at=09:00:00` and second call is a no-op.                                                                                                                                                                        |
+| Creator deleted or missing `unix_username` in strict mode | Scheduler already throws (`resolveCreatorUnixUsername`). Surface as 409 with the existing error message.                                                                                                                                                                                                                             |
+| RBAC disabled                                             | No permission check needed (same as PATCH behavior); only `requireMinimumRole(MEMBER)` applies.                                                                                                                                                                                                                                      |
+| Non-owner user triggers                                   | Requires `all` tier — for a non-owner, `others_can` must be `all`, which is consistent with being able to edit schedule.                                                                                                                                                                                                             |
+| Retention enforcement                                     | Already runs at end of `spawnScheduledSession`; will still run after a manual trigger. No change needed.                                                                                                                                                                                                                             |
+| Audit                                                     | Add a structured `console.log` line including `triggered_manually: true, triggered_by: <userId>` so ops can grep. The session row already carries `scheduled_from_worktree: true`; add a `triggered_manually: true` marker on `custom_context.scheduled_run` (same JSON field already used for snapshot data) — no schema migration. |
 
 ---
 
 ## 5. UI change list
 
 **New/modified components:**
+
 1. `apps/agor-ui/src/components/WorktreeCard/WorktreeCard.tsx` — add
    `ThunderboltOutlined` button between Terminal and Edit, gated by
    `schedule_enabled && schedule_cron && prompt_template && canAll`. Hooks
@@ -192,6 +205,7 @@ returns `{ session_id }` and we navigate/open the session panel on success
 
 **Backend unit tests** (`apps/agor-daemon/src/services/scheduler.test.ts` or
 new `scheduler.execute-now.test.ts`):
+
 - Happy path: enabled schedule → manual trigger → session created with
   `scheduled_from_worktree=true` and `custom_context.scheduled_run.triggered_manually=true`.
 - Disabled schedule → 400.
@@ -202,19 +216,22 @@ new `scheduler.execute-now.test.ts`):
   error.
 
 **Authorization tests** (reuse `worktree-authorization.test.ts` pattern):
+
 - `all` owner: allowed.
 - `others_can=all` non-owner: allowed.
 - `others_can=prompt` non-owner: denied.
 - `others_can=session` non-owner: denied.
 - RBAC disabled: only role check applies.
 
-**UI tests** (Storybook or RTL component tests):
+**UI tests** (RTL component tests):
+
 - Button hidden when `schedule_enabled=false`.
 - Button disabled w/ tooltip when cron or template missing.
 - Button disabled after click for 3s.
 - Toast + navigation on success; toast on error.
 
 **Manual QA:**
+
 - Enable a cron that runs in 5 min, click Execute Now, verify a session
   spawns immediately AND the 5-min cron run still fires and is distinct.
 - Click twice in the same minute → exactly one session.
@@ -225,6 +242,7 @@ new `scheduler.execute-now.test.ts`):
 ## 7. Work breakdown
 
 **PR 1 (this feature — single PR):**
+
 - Scheduler refactor (extract `runSchedule` helper, add
   `executeScheduleNow` public method).
 - New endpoint + hooks + RBAC check.
@@ -232,6 +250,7 @@ new `scheduler.execute-now.test.ts`):
 - Tests above.
 
 **Follow-ups (not in this PR):**
+
 - (F1) Dedicated audit-log table for scheduler events (both manual and
   cron). Today it's stdout only; worth promoting once we have two triggers.
 - (F2) Optional "running-now" indicator on the card if a

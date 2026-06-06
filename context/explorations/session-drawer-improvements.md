@@ -222,8 +222,8 @@ Assuming option C + the verdicts above land, the implementation is roughly:
    - New row layout per §2.
    - Expanded status-color mapping per §5.
    - `formatRelativeTime` for the timestamp + `Tooltip` w/ `formatAbsoluteTime`.
-3. **Tests/Storybook:** the drawer has no Storybook today; not adding one
-   unless other comparable drawers do (per CLAUDE.md "don't add features
+3. **Tests:** add RTL coverage only if the implementation touches behavior
+   that is not already covered (per CLAUDE.md "don't add features
    beyond what was asked").
 4. **Smoke test:** docker run + screenshot multi-state drawer, paste in PR.
 5. **PR:** `feat(ui): improve session drawer (sort, timestamp, repo pill, status)`,

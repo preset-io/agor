@@ -1,81 +1,56 @@
 # Agor UI
 
-UI components for Agor - Agent Orchestrator
+React UI for Agor's multiplayer agent workspace.
 
 ## Tech Stack
 
 - **Vite + React + TypeScript** - Fast, modern development
 - **Ant Design** - UI component library
-- **React Flow** - Interactive session tree canvas
-- **Storybook** - Component development and documentation
+- **React Flow** - Interactive board/canvas visualization
+- **Vitest + Testing Library** - Focused component and hook tests
 
 ## Getting Started
 
 ```bash
-# Install dependencies
-npm install
+# Install dependencies from the repo root
+pnpm install
 
-# Run Storybook (component development)
-npm run storybook
+# Start the UI dev server
+pnpm --filter agor-ui dev
 
 # Run type checking
-npm run typecheck
+pnpm --filter agor-ui typecheck
 
 # Run linter
-npm run lint
+pnpm --filter agor-ui lint
 
 # Build for production
-npm run build
+pnpm --filter agor-ui build
 ```
 
 ## Project Structure
 
 ```
 src/
-├── types/          # TypeScript type definitions
-│   ├── session.ts  # Session types
-│   ├── task.ts     # Task types
-│   └── concept.ts  # Concept types
-│
 ├── components/     # React components
-│   ├── TaskListItem/
-│   ├── SessionCard/
-│   └── SessionCanvas/
-│
-└── mocks/          # Mock data for Storybook
-    ├── sessions.ts
-    ├── tasks.ts
-    └── concepts.ts
+├── contexts/       # React context providers
+├── hooks/          # Shared hooks
+├── utils/          # UI utilities
+└── types/          # UI-local types
 ```
-
-## Components
-
-### TaskListItem
-
-Compact task display showing status, description, and metadata.
-
-### SessionCard
-
-Session information card containing tasks, git state, concepts, and genealogy.
-
-### SessionCanvas
-
-Interactive canvas for visualizing session trees with React Flow.
 
 ## Development
 
-- **Storybook**: http://localhost:6006/
-- All components have `.stories.tsx` files for isolated development
-- Mock data available in `src/mocks/`
+We develop and test UI changes against the live Agor dev environment instead of a separate component catalog. Keep reusable components small, prefer Ant Design tokens for styling, and add targeted Vitest/Testing Library coverage for behavior that can regress.
 
 ## Scripts
 
-- `npm run dev` - Start Vite dev server
-- `npm run storybook` - Start Storybook
-- `npm run typecheck` - Run TypeScript type checking
-- `npm run lint` - Run Biome linter
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build
+- `pnpm --filter agor-ui dev` - Start Vite dev server
+- `pnpm --filter agor-ui typecheck` - Run TypeScript type checking
+- `pnpm --filter agor-ui lint` - Run Biome linter
+- `pnpm --filter agor-ui test` - Run Vitest tests
+- `pnpm --filter agor-ui build` - Build for production
+- `pnpm --filter agor-ui preview` - Preview production build
 
 ## Linting
 

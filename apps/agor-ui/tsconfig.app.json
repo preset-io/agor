@@ -32,11 +32,8 @@
   },
   "include": ["src"],
   "exclude": [
-    "src/**/*.stories.tsx",
-    "src/**/*.stories.ts",
     "src/**/*.test.tsx",
     "src/**/*.test.ts",
-    "src/mocks/**",
     "src/components/SettingsModal/ContextTable.tsx",
     "src/components/BranchModal/tabs/ConceptsTab.tsx"
   ]

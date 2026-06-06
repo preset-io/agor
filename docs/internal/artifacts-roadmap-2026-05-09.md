@@ -71,12 +71,14 @@ Shape mirrors `SandpackProviderProps` (`@codesandbox/sandpack-react`'s `types.ts
 Light. The artifact runtime is arbitrary-JS-by-design, so most "unsafe" Sandpack props don't grant new capability beyond what the file map already allows. Block only what affects the parent UI or daemon-controlled rendering:
 
 **Allow:**
+
 - `template`
 - `customSetup.dependencies`, `customSetup.devDependencies`, `customSetup.entry`, `customSetup.environment`
 - `theme`
 - `options.activeFile`, `options.visibleFiles`, `options.layout`, `options.recompileMode`, `options.recompileDelay`, `options.initMode`, `options.autorun`, `options.autoReload`, `options.showNavigator`, `options.showLineNumbers`, `options.showInlineErrors`, `options.showRefreshButton`, `options.showTabs`, `options.showConsole`, `options.showConsoleButton`, `options.closableTabs`, `options.startRoute`, `options.codeEditor`
 
 **Block (Agor-controlled or unsafe):**
+
 - `options.bundlerURL` — Agor sets this.
 - `options.externalResources` — XSS into the iframe (defense in depth, since the file map can already do this).
 - `customSetup.npmRegistries` — defense in depth against confused users assuming "private registry = trusted."
@@ -91,12 +93,12 @@ Array of plain var names (no prefix). Examples: `["OPENAI_KEY", "GITHUB_TOKEN"]`
 
 At payload-fetch time, the daemon looks up the **viewing user's** encrypted `user.env.X` for each name and synthesizes a `.env` file injected into the file map on the way out (never persisted). Each bundler has its own hard-coded allowlist (CRA only inlines `REACT_APP_*`, Vite only inlines `VITE_*`, etc.), so the daemon must prefix per template:
 
-| `SandpackTemplate` | Bundler (sandpack `environment`) | Prefix written to `.env` | App reads as | Status |
-|---|---|---|---|---|
-| `react`, `react-ts` | Create React App | `REACT_APP_` | `process.env.REACT_APP_X` | verified against sandpack-react v2.20.0 |
-| `vue3`, `svelte`, `solid` | (inherited from #1147 — see note) | `VITE_` | `import.meta.env.VITE_X` | **not verified**; mapped as best-effort |
-| `vue`, `angular` | Vue CLI / Angular CLI | none | `process.env.X` | **not verified** (Vue CLI likely wants `VUE_APP_*`) |
-| `vanilla`, `vanilla-ts` | Static / Parcel | n/a (skip injection) | n/a | verified |
+| `SandpackTemplate`        | Bundler (sandpack `environment`)  | Prefix written to `.env` | App reads as              | Status                                              |
+| ------------------------- | --------------------------------- | ------------------------ | ------------------------- | --------------------------------------------------- |
+| `react`, `react-ts`       | Create React App                  | `REACT_APP_`             | `process.env.REACT_APP_X` | verified against sandpack-react v2.20.0             |
+| `vue3`, `svelte`, `solid` | (inherited from #1147 — see note) | `VITE_`                  | `import.meta.env.VITE_X`  | **not verified**; mapped as best-effort             |
+| `vue`, `angular`          | Vue CLI / Angular CLI             | none                     | `process.env.X`           | **not verified** (Vue CLI likely wants `VUE_APP_*`) |
+| `vanilla`, `vanilla-ts`   | Static / Parcel                   | n/a (skip injection)     | n/a                       | verified                                            |
 
 Prefix logic lives in a single helper: `envVarPrefixForTemplate(template: SandpackTemplate): string | null`. Templates without a working dotenv path (`vanilla`, `vanilla-ts`) skip env injection entirely; the daemon emits a warning if such an artifact has a non-empty `required_env_vars`. The lookup table is exhaustive over the `SandpackTemplate` union (`satisfies Record<…>`), so adding a new union member is a compile error until it's mapped here.
 
@@ -108,14 +110,14 @@ The `vue3` / `svelte` / `solid` / `vue` / `angular` mappings were inherited from
 
 Discrete capability flags for daemon-supplied values. Each grant maps to a fixed env var name (with the template-appropriate prefix applied):
 
-| Grant key | Env var name | Behavior |
-|---|---|---|
-| `agor_token: true` | `AGOR_TOKEN` | Mint a 15-min daemon JWT for the **viewer**, inject. |
-| `agor_api_url: true` | `AGOR_API_URL` | Inject the daemon's base URL. |
-| `agor_proxies: ["openai", "anthropic"]` | `AGOR_PROXY_OPENAI`, `AGOR_PROXY_ANTHROPIC` | Inject proxy URLs for listed vendors. |
-| `agor_user_email: true` | `AGOR_USER_EMAIL` | Inject viewer's email. |
-| `agor_artifact_id: true` | `AGOR_ARTIFACT_ID` | Inject this artifact's ID. |
-| `agor_board_id: true` | `AGOR_BOARD_ID` | Inject the artifact's board ID. |
+| Grant key                               | Env var name                                | Behavior                                             |
+| --------------------------------------- | ------------------------------------------- | ---------------------------------------------------- |
+| `agor_token: true`                      | `AGOR_TOKEN`                                | Mint a 15-min daemon JWT for the **viewer**, inject. |
+| `agor_api_url: true`                    | `AGOR_API_URL`                              | Inject the daemon's base URL.                        |
+| `agor_proxies: ["openai", "anthropic"]` | `AGOR_PROXY_OPENAI`, `AGOR_PROXY_ANTHROPIC` | Inject proxy URLs for listed vendors.                |
+| `agor_user_email: true`                 | `AGOR_USER_EMAIL`                           | Inject viewer's email.                               |
+| `agor_artifact_id: true`                | `AGOR_ARTIFACT_ID`                          | Inject this artifact's ID.                           |
+| `agor_board_id: true`                   | `AGOR_BOARD_ID`                             | Inject the artifact's board ID.                      |
 
 Conventional name + explicit declaration. Grants are part of the consent surface; consent rules below treat `agor_token` stricter than informational ones (`agor_artifact_id`, `agor_board_id`) which need no consent at all.
 
@@ -134,6 +136,7 @@ artifact_trust_grants
 ```
 
 **Consent resolution at render time** (in priority order):
+
 1. Author is the viewer → no consent needed.
 2. `agor_grants.agor_token` is requested → require artifact-scoped grant (never author/instance scoped — the JWT is too high-power).
 3. `instance` grant covering the requested set → grant applies.
@@ -160,7 +163,7 @@ Single dialog, renders when the user clicks "Render with secrets" on a not-yet-t
 
 Synchronous one-shot LLM call. No DB session, no worktree, no genealogy. Uses the executor SDK plumbing already in `packages/executor/`. Hardcoded review prompt focused on: secret exfiltration patterns, suspicious `fetch()` destinations, obfuscation, unusual external resource loads.
 
-The endpoint *informs* — it does **not** auto-grant. Concerns surface as inline badges on the file tree in the consent modal. User reads them and decides.
+The endpoint _informs_ — it does **not** auto-grant. Concerns surface as inline badges on the file tree in the consent modal. User reads them and decides.
 
 ### 7. Settings: trusted artifacts & authors page
 
@@ -178,6 +181,7 @@ New section under user settings. Lists every active grant: scope, env vars cover
 ## Migration: backwards-compat is not preserved; old format gets a self-service upgrade prompt
 
 Existing artifacts will have:
+
 - `sandpack.json` files in their `files` map (an Agor-specific sidecar that's no longer parsed).
 - `dependencies` / `entry` populated in DB columns (still readable as cache).
 - `agor.config.js` files with Handlebars syntax (`{{user.env.X}}`, `{{agor.token}}`).
@@ -201,6 +205,7 @@ On artifact read, run a one-time `detectLegacyFormat(artifact)` that returns:
 Render in **safe-degraded mode**: no env vars or grants injected (the old Handlebars rendering is gone, so `{{user.env.X}}` literals will show up in the bundle if the author didn't migrate). Show a banner on the artifact card:
 
 > ⚠ This artifact uses the old format and won't render correctly. Ask your agent to upgrade it:
+>
 > ```
 > Use the agor_artifacts_get tool to read artifact <id>'s files and current
 > required_env_vars. Then use agor_artifacts_publish to republish with:
@@ -219,8 +224,9 @@ Rationale: MCP tools are self-documenting. The upgrade is mechanical enough for 
 ### Schema migration
 
 Drizzle migration:
+
 - ADD `sandpack_config jsonb DEFAULT '{}'`
-- ADD `required_env_vars jsonb DEFAULT '[]'`  (use jsonb on Postgres, text on SQLite)
+- ADD `required_env_vars jsonb DEFAULT '[]'` (use jsonb on Postgres, text on SQLite)
 - ADD `agor_grants jsonb DEFAULT '{}'`
 - DROP `use_local_bundler`
 - KEEP `dependencies` and `entry` columns (denormalized cache)
@@ -240,6 +246,7 @@ agor_artifacts_export_codesandbox(artifactId)
 ```
 
 Implementation:
+
 1. Fetch artifact files map.
 2. Strip leading slash from keys, wrap each value in `{ content }`.
 3. Drop `agor.config.js` if present (will be Handlebars literals, broken on CodeSandbox).
@@ -279,6 +286,7 @@ UI: parallel "Open in CodeSandbox" button on the artifact card.
 ## File-level scope (rough)
 
 **Schema + types:**
+
 - `packages/core/src/db/schema.{sqlite,postgres}.ts` — column changes + `artifact_trust_grants` table
 - `packages/core/src/db/migrations/` — new migration
 - `packages/core/src/types/artifact.ts` — drop `SandpackManifest`, add `SandpackConfig`, `AgorGrants`, `ArtifactTrustGrant`
@@ -286,6 +294,7 @@ UI: parallel "Open in CodeSandbox" button on the artifact card.
 - `packages/core/src/db/repositories/artifact-trust.ts` — new repo
 
 **Daemon:**
+
 - `apps/agor-daemon/src/services/artifacts.ts` — rip `agor.config.js` rendering, rip `sandpack.json` handling, rip `use_local_bundler`, add `.env` synthesis with prefix logic, add `agor_grants` injection, add legacy detection
 - `apps/agor-daemon/src/services/artifact-trust.ts` — new service for grants
 - `apps/agor-daemon/src/mcp/tools/artifacts.ts` — update `publish` + `get` schemas, add `export_codesandbox`, add `review` (or expose via REST)
@@ -293,13 +302,15 @@ UI: parallel "Open in CodeSandbox" button on the artifact card.
 - `apps/agor-daemon/src/utils/sandpack-config.ts` — `sanitizeSandpackConfig`, `envVarPrefixForTemplate`, defaults
 
 **UI:**
+
 - `apps/agor-ui/src/components/SessionCanvas/canvas/ArtifactNode.tsx` — render path uses `sandpack_config` blob, drops `bundlerURL`, shows trust state badge
 - `apps/agor-ui/src/components/ArtifactConsentModal/` — new component (single modal w/ inline file viewer, reuses `FileCollection`)
 - `apps/agor-ui/src/components/SettingsModal/TrustedArtifactsTab.tsx` — new settings tab
 - `apps/agor-ui/src/components/SettingsModal/ArtifactsTable.tsx` — add `required_env_vars` / `agor_grants` editors
-- Storybook stories for the consent modal
+- RTL/component coverage or live-dev QA cases for the consent modal
 
 **Docs:**
+
 - `apps/agor-docs/pages/guide/artifacts.mdx` — rewrite for new format
 - `CLAUDE.md` — update artifact section
 - `context/concepts/` — possibly a new `artifacts.md`

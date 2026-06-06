@@ -12,9 +12,7 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:ui": "vitest --ui",
-    "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "test:ui": "vitest --ui"
   },
   "dependencies": {
     "@agor-live/client": "workspace:*",
@@ -54,13 +52,6 @@
     "streamdown": "^1.5.1"
   },
   "devDependencies": {
-    "@chromatic-com/storybook": "^4.1.1",
-    "@storybook/addon-a11y": "^9.1.10",
-    "@storybook/addon-docs": "^9.1.10",
-    "@storybook/addon-onboarding": "^9.1.10",
-    "@storybook/addon-vitest": "^10.4.2",
-    "@storybook/react": "^9.1.10",
-    "@storybook/react-vite": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/d3-force": "^3.0.10",
@@ -69,7 +60,6 @@
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.0.2",
     "jsdom": "^27.0.0",
-    "storybook": "^9.1.17",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
     "vite-plugin-compression": "^0.5.1",
