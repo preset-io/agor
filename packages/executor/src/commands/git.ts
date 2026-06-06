@@ -1031,7 +1031,9 @@ export async function handleGitBranchAdd(
         createBranch: payload.params.createBranch,
         storageMode: payload.params.storageMode,
         cloneDepth: payload.params.cloneDepth,
-        remoteUrl: payload.params.remoteUrl,
+        remoteUrl: payload.params.remoteUrl
+          ? stripGitUrlCredentials(payload.params.remoteUrl)
+          : payload.params.remoteUrl,
         referencePath: payload.params.referencePath,
       },
     };

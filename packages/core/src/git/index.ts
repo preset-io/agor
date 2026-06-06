@@ -15,7 +15,7 @@ import { simpleGit } from 'simple-git';
 import { getBranchesDir, getReposDir } from '../config/config-manager';
 import type { RepoCloneErrorCategory } from '../types/repo';
 import { escapeShellArg } from '../unix/run-as-user';
-import { redactUrlUserinfo } from '../utils/url';
+import { httpUrlHasUserinfo, redactUrlUserinfo, stripHttpUrlUserinfo } from '../utils/url';
 
 /**
  * Validate a user-supplied git ref (branch name, tag) before it is passed to
@@ -204,14 +204,7 @@ export function parseHostFromGitUrl(url: string): string | undefined {
  * username and stripping it can break legitimate remotes.
  */
 export function gitUrlHasUserinfo(rawUrl: string): boolean {
-  if (!/^https?:\/\//i.test(rawUrl)) return false;
-  try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    return parsed.username.length > 0 || parsed.password.length > 0;
-  } catch {
-    return /^https?:\/\/[^/?#\s]*@[^/?#\s]+/i.test(rawUrl);
-  }
+  return httpUrlHasUserinfo(rawUrl);
 }
 
 /**
@@ -229,19 +222,7 @@ export function redactGitUrlCredentials(rawUrl: string): string {
  * uses userinfo for the login name, not an embedded credential.
  */
 export function stripGitUrlCredentials(rawUrl: string): string {
-  if (!/^https?:\/\//i.test(rawUrl)) return rawUrl;
-  try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return rawUrl;
-    if (parsed.username || parsed.password) {
-      parsed.username = '';
-      parsed.password = '';
-      return parsed.toString();
-    }
-    return rawUrl;
-  } catch {
-    return rawUrl.replace(/^(https?:\/\/)([^/?#\s]*@)([^/?#\s]+)/i, '$1$3');
-  }
+  return stripHttpUrlUserinfo(rawUrl);
 }
 
 export interface GitRemoteCredentialFinding {

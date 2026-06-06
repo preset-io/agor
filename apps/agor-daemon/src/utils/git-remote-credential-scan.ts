@@ -26,6 +26,23 @@ export async function scrubManagedGitRemoteCredentials(db: Database): Promise<vo
   const repairedConfigPaths = new Set<string>();
   let repairedEntries = 0;
 
+  try {
+    const dbScrub = await repoRepo.scrubRemoteUrls();
+    if (dbScrub.changed > 0) {
+      console.warn(
+        `🔒 SECURITY: scrubbed credential-bearing URL userinfo from ${dbScrub.changed} persisted repo remote URL entr${
+          dbScrub.changed === 1 ? 'y' : 'ies'
+        }. Rotate any token(s) that may have been exposed.`
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `[git-remote-scrub] Failed to scrub persisted repo remote URLs: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
   for (const item of [
     ...remoteRepos.map((repo) => ({
       kind: 'repo' as const,

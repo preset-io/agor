@@ -11,13 +11,14 @@ import chalk from 'chalk';
 
 export default class ScrubGitRemotes extends Command {
   static override description =
-    'Scan managed repos/branches for credential-bearing git remote URLs and optionally scrub them.';
+    'Scan registered repos/branches for credential-bearing git remote URLs and optionally scrub them.';
 
   static override flags = {
     write: Flags.boolean({
       char: 'w',
       default: false,
-      description: 'Rewrite unsafe remote URLs in .git/config by removing URL userinfo',
+      description:
+        'Rewrite unsafe remote URLs in .git/config and persisted repo rows by removing URL userinfo',
     }),
   };
 
@@ -32,6 +33,19 @@ export default class ScrubGitRemotes extends Command {
     const seen = new Set<string>();
     let unsafeUrls = 0;
     let changedConfigs = 0;
+
+    if (flags.write) {
+      const dbScrub = await repoRepo.scrubRemoteUrls();
+      if (dbScrub.changed > 0) {
+        this.log(
+          chalk.green(
+            `Scrubbed ${dbScrub.changed} persisted repo remote URL entr${
+              dbScrub.changed === 1 ? 'y' : 'ies'
+            }.`
+          )
+        );
+      }
+    }
 
     for (const item of [
       ...repos.map((repo) => ({

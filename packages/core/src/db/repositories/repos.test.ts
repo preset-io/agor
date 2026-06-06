@@ -5,8 +5,11 @@
  */
 
 import type { UUID } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
+import { select, update } from '../database-wrapper';
+import { repos } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { RepoRepository } from './repos';
@@ -109,6 +112,59 @@ describe('RepoRepository.create', () => {
 
     expect(created.repo_type).toBe('local');
     expect(created.remote_url).toBeUndefined();
+  });
+
+  dbTest('should strip HTTP(S) userinfo from persisted remote_url values', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const created = await repo.create(
+      createRepoData({ remote_url: 'https://user:REDACTED@example.com/org/repo.git' })
+    );
+
+    expect(created.remote_url).toBe('https://example.com/org/repo.git');
+
+    const row = await select(db).from(repos).where(eq(repos.repo_id, created.repo_id)).one();
+    expect((row?.data as { remote_url?: string } | undefined)?.remote_url).toBe(
+      'https://example.com/org/repo.git'
+    );
+  });
+
+  dbTest('should preserve ssh:// remote_url usernames', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const created = await repo.create(
+      createRepoData({ remote_url: 'ssh://git@example.com/org/repo.git' })
+    );
+
+    expect(created.remote_url).toBe('ssh://git@example.com/org/repo.git');
+  });
+
+  dbTest('should scrub legacy credential-bearing remote_url rows', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const created = await repo.create(createRepoData({ slug: 'legacy/remote-url' }));
+    const rawLegacyUrl = 'https://user:REDACTED@example.com/org/repo.git';
+
+    await update(db, repos)
+      .set({
+        data: {
+          name: created.name,
+          remote_url: rawLegacyUrl,
+          local_path: created.local_path,
+          default_branch: created.default_branch,
+        },
+      })
+      .where(eq(repos.repo_id, created.repo_id))
+      .run();
+
+    await expect(repo.findById(created.repo_id)).resolves.toMatchObject({
+      remote_url: 'https://example.com/org/repo.git',
+    });
+
+    const result = await repo.scrubRemoteUrls();
+    expect(result.changed).toBe(1);
+
+    const row = await select(db).from(repos).where(eq(repos.repo_id, created.repo_id)).one();
+    expect((row?.data as { remote_url?: string } | undefined)?.remote_url).toBe(
+      'https://example.com/org/repo.git'
+    );
   });
 
   dbTest('should throw error if repo_type is missing', async ({ db }) => {

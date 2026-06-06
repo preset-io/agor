@@ -894,6 +894,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       // in simple/no-RBAC mode so hosts without passwordless sudoers work
       // (#1140, #1143). Callers no longer duplicate the gate.
       const asUser = await resolveGitImpersonationForUser(this.db, userId);
+      const safeRemoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
 
       spawnExecutorFireAndForget(
         {
@@ -917,7 +918,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             // Branch storage mode (forwarded for the clone-mode code path)
             storageMode,
             ...(cloneDepth !== undefined ? { cloneDepth } : {}),
-            ...(storageMode === 'clone' && repo.remote_url ? { remoteUrl: repo.remote_url } : {}),
+            ...(storageMode === 'clone' && safeRemoteUrl ? { remoteUrl: safeRemoteUrl } : {}),
             // Hand the executor the per-repo base clone as a `--reference`
             // hint only when that object cache is readable by the eventual
             // session identity. In strict mode, per-user sessions need fully

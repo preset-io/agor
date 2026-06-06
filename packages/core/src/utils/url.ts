@@ -199,6 +199,39 @@ export function redactUrlUserinfo(input: string): string {
   );
 }
 
+/** True when an HTTP(S) URL embeds URL userinfo (`https://USER[:PASS]@host/...`). */
+export function httpUrlHasUserinfo(rawUrl: string): boolean {
+  if (!/^https?:\/\//i.test(rawUrl)) return false;
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return parsed.username.length > 0 || parsed.password.length > 0;
+  } catch {
+    return /^https?:\/\/[^/?#\s]*@[^/?#\s]+/i.test(rawUrl);
+  }
+}
+
+/**
+ * Remove userinfo from HTTP(S) URLs. Non-HTTP(S) URLs, including SSH Git
+ * remotes like `ssh://git@host/org/repo.git`, are returned unchanged because
+ * their userinfo position may be a legitimate login name rather than a secret.
+ */
+export function stripHttpUrlUserinfo(rawUrl: string): string {
+  if (!/^https?:\/\//i.test(rawUrl)) return rawUrl;
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return rawUrl;
+    if (parsed.username || parsed.password) {
+      parsed.username = '';
+      parsed.password = '';
+      return parsed.toString();
+    }
+    return rawUrl;
+  } catch {
+    return rawUrl.replace(/^(https?:\/\/)([^/?#\s]*@)([^/?#\s]+)/i, '$1$3');
+  }
+}
+
 /**
  * Normalize an optional HTTP(S) URL string.
  *

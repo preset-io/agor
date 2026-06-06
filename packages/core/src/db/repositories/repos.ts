@@ -8,6 +8,7 @@ import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
+import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import { type RepoInsert, type RepoRow, repos } from '../schema';
@@ -70,6 +71,9 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     };
     const environment = data.environment ?? wrapV1AsV2(data.environment_config);
     const environment_config = data.environment_config ?? deriveV1FromV2(environment);
+    const remote_url =
+      typeof data.remote_url === 'string' ? stripHttpUrlUserinfo(data.remote_url) : data.remote_url;
+
     return {
       repo_id: row.repo_id as UUID,
       slug: row.slug,
@@ -80,6 +84,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         ? new Date(row.updated_at).toISOString()
         : new Date(row.created_at).toISOString(),
       ...data,
+      remote_url,
       environment,
       environment_config,
       clone_status: data.clone_status,
@@ -127,7 +132,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       unix_group: repo.unix_group ?? null,
       data: {
         name: repo.name ?? repo.slug,
-        remote_url: repo.remote_url || undefined,
+        remote_url: repo.remote_url ? stripHttpUrlUserinfo(repo.remote_url) : undefined,
         local_path: repo.local_path,
         default_branch: repo.default_branch,
         environment,
@@ -243,6 +248,46 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   }
 
   /**
+   * Remove HTTP(S) userinfo from persisted repo.remote_url values.
+   *
+   * `rowToRepo()` sanitizes reads so legacy credential-bearing values are not
+   * returned through APIs or reused by daemon/executor code, but this method
+   * repairs the stored rows as a startup/admin hygiene pass.
+   */
+  async scrubRemoteUrls(): Promise<{ checked: number; changed: number }> {
+    try {
+      const rows = await select(this.db).from(repos).all();
+      let changed = 0;
+
+      for (const row of rows as RepoRow[]) {
+        const data = row.data as typeof row.data & { remote_url?: unknown };
+        if (typeof data.remote_url !== 'string' || !httpUrlHasUserinfo(data.remote_url)) {
+          continue;
+        }
+
+        await update(this.db, repos)
+          .set({
+            updated_at: new Date(),
+            data: {
+              ...data,
+              remote_url: stripHttpUrlUserinfo(data.remote_url),
+            },
+          })
+          .where(eq(repos.repo_id, row.repo_id))
+          .run();
+        changed += 1;
+      }
+
+      return { checked: rows.length, changed };
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to scrub repo remote URLs: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Update repo by ID (atomic with database-level transaction)
    *
    * Uses a transaction to ensure read-merge-write is atomic, preventing race conditions
@@ -295,6 +340,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // to `undefined`; without this sync the caller sees the un-coerced
         // null and the type invariant lies.
         merged.clone_error = insertData.data.clone_error;
+        merged.remote_url = insertData.data.remote_url;
         merged.last_updated = newUpdatedAt.toISOString();
         return merged;
       });
@@ -362,6 +408,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // field we explicitly undefined'd in `patch`.
         next.environment = insertData.data.environment;
         next.environment_config = insertData.data.environment_config;
+        next.remote_url = insertData.data.remote_url;
         next.last_updated = newUpdatedAt.toISOString();
         return next;
       });

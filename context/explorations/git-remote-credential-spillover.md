@@ -29,20 +29,25 @@ agent/user git commands.
 
 ## Mitigations added
 
-- Core URL helpers detect, redact, and strip URL userinfo.
+- Core URL helpers redact URL userinfo for logs. Mutation/detection helpers
+  strip **HTTP(S)** userinfo only, so legitimate SSH remotes like
+  `ssh://git@example.com/org/repo.git` remain intact.
 - Core `.git/config` scanner/repair reads config files directly (no git
   subprocess), including worktree pointer files and shared `commondir` configs.
-- Repo clone/metadata paths strip credentials before persisting `remote_url` or
-  invoking `git clone`.
+- Repo clone/metadata paths strip credentials before persisting `remote_url`,
+  returning repo data through APIs, or invoking `git clone`.
 - Branch creation/restore scrubs the base repo config before `fetch` /
   `worktree add`.
 - Clone-mode branch creation scrubs the new clone's `.git/config` after clone.
 - Daemon startup launches a best-effort post-start scrub for managed remote
-  repos/branches if they contain unsafe remote URLs. It runs after the API is
+  repos/branches if they contain unsafe remote URLs. It repairs both persisted
+  repo `remote_url` rows and managed git config files. It runs after the API is
   listening to avoid extending the boot critical path, so it is not a hard
   pre-listen exposure barrier.
-- CLI repair: `agor admin scrub-git-remotes` scans; add `--write` to remove
-  userinfo from remote `url` / `pushurl` entries.
+- CLI repair: `agor admin scrub-git-remotes` scans registered repos/branches;
+  add `--write` to remove userinfo from persisted repo rows and remote
+  `url` / `pushurl` config entries. Unlike daemon startup repair, the explicit
+  admin command includes registered local repos/branches too.
 
 ## Operational guidance
 

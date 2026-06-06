@@ -29,6 +29,7 @@ import {
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { stripGitUrlCredentials } from '@agor/core/git';
 import type {
   AuthenticatedParams,
   BoardID,
@@ -1058,6 +1059,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
         return unarchivedBranch;
       }
+      const safeRemoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
 
       try {
         // Use a service JWT so the executor can patch rendered env command
@@ -1095,7 +1097,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               // storage_mode across archive → delete → unarchive.
               storageMode,
               ...(branch.clone_depth !== undefined ? { cloneDepth: branch.clone_depth } : {}),
-              ...(storageMode === 'clone' && repo.remote_url ? { remoteUrl: repo.remote_url } : {}),
+              ...(storageMode === 'clone' && safeRemoteUrl ? { remoteUrl: safeRemoteUrl } : {}),
               // `--reference` hint: see the create-path call site in
               // ReposService.createBranch for the rationale and strict-mode
               // exception.
