@@ -1,68 +1,78 @@
 import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/core/db';
-import { scanGitConfigRemoteCredentials } from '@agor/core/git';
+import { scrubGitConfigRemoteCredentials } from '@agor/core/git';
 
 /**
- * Startup health check for credential-bearing git remote URLs.
+ * Best-effort startup repair for credential-bearing git remote URLs.
  *
- * This intentionally warns only. Repair is available through the core scrubber
- * and admin CLI; doing unexpected writes during daemon startup would be a
- * surprising side effect for operators.
+ * This runs only against remote repos managed by Agor and their branches. It
+ * deliberately skips `repo_type: local` entries because those may point at an
+ * operator's pre-existing repository outside `~/.agor`; mutating those configs
+ * during daemon boot would be surprising. Local repos still get opportunistic
+ * scrubbed at Agor git-operation boundaries and can be repaired explicitly via
+ * `agor admin scrub-git-remotes --write`.
  */
-export async function warnOnManagedGitRemoteCredentials(db: Database): Promise<void> {
+export async function scrubManagedGitRemoteCredentials(db: Database): Promise<void> {
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);
 
   const repos = await repoRepo.findAll();
-  const branches = await branchRepo.findAll({ includeArchived: true });
-  const scannedConfigPaths = new Set<string>();
-  let unsafeConfigs = 0;
-  let unsafeUrls = 0;
+  const repoById = new Map(repos.map((repo) => [repo.repo_id, repo]));
+  const remoteRepos = repos.filter((repo) => repo.repo_type === 'remote');
+  const remoteRepoIds = new Set(remoteRepos.map((repo) => repo.repo_id));
+  const branches = (await branchRepo.findAll({ includeArchived: true })).filter((branch) =>
+    remoteRepoIds.has(branch.repo_id)
+  );
+
+  const repairedConfigPaths = new Set<string>();
+  let repairedEntries = 0;
 
   for (const item of [
-    ...repos.map((repo) => ({
+    ...remoteRepos.map((repo) => ({
       kind: 'repo' as const,
       label: `${repo.slug} (${shortId(repo.repo_id)})`,
       path: repo.local_path,
     })),
-    ...branches.map((branch) => ({
-      kind: 'branch' as const,
-      label: `${branch.name} (${shortId(branch.branch_id)})`,
-      path: branch.path,
-    })),
+    ...branches.map((branch) => {
+      const repo = repoById.get(branch.repo_id);
+      return {
+        kind: 'branch' as const,
+        label: `${branch.name} (${shortId(branch.branch_id)}, repo=${repo?.slug ?? branch.repo_id})`,
+        path: branch.path,
+      };
+    }),
   ]) {
     if (!item.path) continue;
     try {
-      const result = await scanGitConfigRemoteCredentials(item.path);
-      const newFindings = result.findings.filter((finding) => {
-        const key = `${finding.configPath}\0${finding.remote}\0${finding.key}\0${finding.sanitizedUrl}`;
-        if (scannedConfigPaths.has(key)) return false;
-        scannedConfigPaths.add(key);
-        return true;
-      });
-      if (newFindings.length === 0) continue;
+      const result = await scrubGitConfigRemoteCredentials(item.path);
+      if (result.findings.length === 0) continue;
 
-      unsafeConfigs += new Set(newFindings.map((f) => f.configPath)).size;
-      unsafeUrls += newFindings.length;
-      const details = newFindings
-        .map((finding) => `${finding.remote}.${finding.key}=${finding.redactedUrl}`)
-        .join(', ');
+      const newConfigPaths = result.findings
+        .map((finding) => finding.configPath)
+        .filter((configPath) => {
+          if (repairedConfigPaths.has(configPath)) return false;
+          repairedConfigPaths.add(configPath);
+          return true;
+        });
+
+      repairedEntries += result.findings.length;
       console.warn(
-        `🔒 SECURITY: ${item.kind} ${item.label} has credential-bearing git remote URL(s) in ${newFindings.length} config entr${newFindings.length === 1 ? 'y' : 'ies'}; ${details}. ` +
-          `Remove the embedded credentials and rotate the token(s).`
+        `🔒 SECURITY: scrubbed ${result.findings.length} credential-bearing git remote URL(s) from ${item.kind} ${item.label}. ` +
+          `Affected git config file(s): ${newConfigPaths.length}. Rotate any exposed token(s).`
       );
     } catch (error) {
       console.warn(
-        `[git-remote-scan] Failed to scan ${item.kind} ${item.label}: ${
+        `[git-remote-scrub] Failed to scrub ${item.kind} ${item.label}: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
     }
   }
 
-  if (unsafeUrls > 0) {
+  if (repairedEntries > 0) {
     console.warn(
-      `🔒 SECURITY: found ${unsafeUrls} credential-bearing git remote URL(s) across ${unsafeConfigs} git config file(s). ` +
-        `Run the admin repair utility or remove credentials from remotes manually; rotate any exposed tokens.`
+      `🔒 SECURITY: startup scrub removed URL userinfo from ${repairedEntries} git remote config entr${
+        repairedEntries === 1 ? 'y' : 'ies'
+      }. Rotate any token(s) that may have been exposed.`
     );
   }
 }

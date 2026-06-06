@@ -21,7 +21,7 @@ import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexe
 import { SchedulerService } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
-import { warnOnManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
+import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
 
 // ---------------------------------------------------------------------------
 // Context
@@ -371,16 +371,13 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 1. Cleanup orphaned tasks/sessions from previous daemon instance
   await cleanupOrphans(ctx);
 
-  // 2. Warn on credential-bearing git remote URLs in managed repo/branch configs.
-  await warnOnManagedGitRemoteCredentials(db);
-
-  // 3. Initialize Health Monitor for periodic environment health checks
+  // 2. Initialize Health Monitor for periodic environment health checks
   const healthMonitor = await createHealthMonitor(app);
 
-  // 4. Validate/generate master secret for API key encryption
+  // 3. Validate/generate master secret for API key encryption
   await ensureMasterSecret(config);
 
-  // 5. Start server
+  // 4. Start server
   const server = await app.listen(DAEMON_PORT, DAEMON_HOST);
 
   const displayHost = DAEMON_HOST === '0.0.0.0' ? 'localhost' : DAEMON_HOST;
@@ -400,6 +397,13 @@ export async function startup(ctx: StartupContext): Promise<void> {
   console.log(`     - /config`);
   console.log(`     - /context`);
   console.log(`     - /users`);
+
+  // Non-blocking credential spill repair. If an agent/user wrote a PAT into a
+  // managed repo remote URL while the daemon was down, scrub it after the API
+  // is already accepting requests. This is best-effort and deliberately skips
+  // registered local repos to avoid surprising writes outside Agor-managed
+  // storage.
+  void scrubManagedGitRemoteCredentials(db);
 
   // Log the host IP that will be frozen into env command templates as
   // {{host.ip_address}}. Explicit config overrides autodetection.
