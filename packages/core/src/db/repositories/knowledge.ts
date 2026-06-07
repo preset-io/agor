@@ -174,6 +174,7 @@ export interface KnowledgeSearchQuery {
   limit?: number;
   readable_by_user_id?: UserID;
   readable_as_admin?: boolean;
+  readable_namespace_ids?: KnowledgeNamespaceID[];
 }
 
 function deterministicKnowledgeUnitId(
@@ -1444,6 +1445,10 @@ export class KnowledgeSearchRepository {
     if (!query.include_archived) {
       conditions.push(eq(kbDocuments.archived, false));
       conditions.push(eq(kbNamespaces.archived, false));
+    }
+    if (query.readable_namespace_ids) {
+      if (query.readable_namespace_ids.length === 0) return [];
+      conditions.push(inArray(kbDocuments.namespace_id, query.readable_namespace_ids));
     }
     if (namespaceId) conditions.push(eq(kbDocuments.namespace_id, namespaceId));
     if (query.path_prefix) {

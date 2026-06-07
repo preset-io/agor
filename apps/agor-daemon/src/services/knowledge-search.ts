@@ -83,13 +83,19 @@ export class KnowledgeSearchService {
     }
   }
 
-  private scopedQuery(query: KnowledgeSearchQuery | undefined, user?: User): KnowledgeSearchQuery {
+  private async scopedQuery(
+    query: KnowledgeSearchQuery | undefined,
+    user?: User
+  ): Promise<KnowledgeSearchQuery> {
     this.assertSupportedMode(query);
     const isAdmin = isKnowledgeAdmin(user);
     const rawQuery = (query ?? {}) as KnowledgeSearchQuery & {
       includeMyDrafts?: boolean;
       includeOtherUserDrafts?: boolean;
     };
+    const readableNamespaceIds = isAdmin
+      ? undefined
+      : await this.namespaces.findReadableNamespaceIds(String(user?.user_id ?? ''));
     return {
       ...(query ?? {}),
       include_archived: isAdmin && rawQuery.include_archived === true,
@@ -98,6 +104,7 @@ export class KnowledgeSearchService {
         rawQuery.include_other_user_drafts ?? rawQuery.includeOtherUserDrafts ?? false,
       readable_as_admin: isAdmin,
       readable_by_user_id: user?.user_id,
+      readable_namespace_ids: readableNamespaceIds,
     };
   }
 
@@ -190,15 +197,18 @@ export class KnowledgeSearchService {
     const minSimilarity = this.parseMinSimilarity(rawQuery.min_similarity);
     const includeMyDrafts = rawQuery.include_my_drafts !== false;
     const includeOtherUserDrafts = rawQuery.include_other_user_drafts === true;
-    const readableNamespaceIds = await this.namespaces.findReadableNamespaceIds(
-      String(user?.user_id ?? ''),
-      { isAdmin }
-    );
-    if (readableNamespaceIds.length === 0) return [];
-    const readableNamespaceIdList = sql.join(
-      readableNamespaceIds.map((id) => sql`${id}`),
-      sql`, `
-    );
+    const readableNamespaceIds =
+      rawQuery.readable_namespace_ids ??
+      (isAdmin
+        ? undefined
+        : await this.namespaces.findReadableNamespaceIds(String(user?.user_id ?? '')));
+    if (readableNamespaceIds?.length === 0) return [];
+    const readableNamespaceFilter = readableNamespaceIds
+      ? sql`AND d.namespace_id IN (${sql.join(
+          readableNamespaceIds.map((id) => sql`${id}`),
+          sql`, `
+        )})`
+      : sql``;
 
     const baseUrl = await getBaseUrl();
     const result = await executeRaw(
@@ -249,7 +259,7 @@ export class KnowledgeSearchService {
           AND sp.provider = ${provider}
           AND sp.model = ${model}
           AND sp.dimensions = ${dimensions}
-          AND d.namespace_id IN (${readableNamespaceIdList})
+          ${readableNamespaceFilter}
           AND (${rawQuery.namespace_id ?? null}::text IS NULL OR d.namespace_id = ${rawQuery.namespace_id ?? null})
           AND (${rawQuery.namespace_slug ?? null}::text IS NULL OR ns.slug = ${rawQuery.namespace_slug ?? null})
           AND (${pathPrefix}::text IS NULL OR d.path = ${pathPrefix} OR d.path LIKE (${pathPrefix} || '/%'))
@@ -368,7 +378,7 @@ export class KnowledgeSearchService {
 
   async find(params?: KnowledgeSearchParams) {
     const user = params?.user as User | undefined;
-    const query = this.scopedQuery(params?.query, user);
+    const query = await this.scopedQuery(params?.query, user);
     if ((query.mode ?? 'text') === 'semantic') return this.semanticSearch(query, user);
 
     const textResults = await this.filterReadable(
@@ -385,7 +395,7 @@ export class KnowledgeSearchService {
 
   async create(data: KnowledgeSearchQuery, params?: KnowledgeSearchParams) {
     const user = params?.user as User | undefined;
-    const query = this.scopedQuery(data, user);
+    const query = await this.scopedQuery(data, user);
     if ((query.mode ?? 'text') === 'semantic') return this.semanticSearch(query, user);
 
     const textResults = await this.filterReadable(

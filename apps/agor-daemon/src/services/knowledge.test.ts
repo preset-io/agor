@@ -200,6 +200,10 @@ describe('KnowledgeNamespacesService permissions', () => {
         }),
       ])
     );
+    await expect(service.get(readable.namespace_id, params(reader))).resolves.toMatchObject({
+      namespace_id: readable.namespace_id,
+      effective_permission: 'read',
+    });
   });
 
   dbTest('prevents ACL methods from removing the caller last owner path', async ({ db }) => {
@@ -241,6 +245,44 @@ describe('KnowledgeNamespacesService permissions', () => {
       )
     ).rejects.toBeInstanceOf(BadRequest);
   });
+
+  dbTest(
+    'prevents owner_user_id changes from removing the caller last owner path',
+    async ({ db }) => {
+      const owner = await seedUser(db, 'owner');
+      const replacement = await seedUser(db, 'replacement');
+      const service = new KnowledgeNamespacesService(db);
+      const namespaces = new KnowledgeNamespaceRepository(db);
+      const namespace = await namespaces.create({
+        slug: 'owner-user-self-lock',
+        display_name: 'Owner User Self Lock',
+        others_can: 'none',
+        owner_user_id: owner.user_id as UserID,
+      });
+
+      await expect(
+        service.patch(
+          namespace.namespace_id,
+          { owner_user_id: replacement.user_id as UserID },
+          params(owner)
+        )
+      ).rejects.toBeInstanceOf(BadRequest);
+
+      await namespaces.upsertNamespaceAclEntry({
+        namespace_id: namespace.namespace_id,
+        subject_type: 'user',
+        subject_id: owner.user_id,
+        permission: 'own',
+      });
+      await expect(
+        service.patch(
+          namespace.namespace_id,
+          { owner_user_id: replacement.user_id as UserID },
+          params(owner)
+        )
+      ).resolves.toMatchObject({ owner_user_id: replacement.user_id });
+    }
+  );
 
   dbTest(
     'allows ACL owner changes when the caller keeps owner access through a group',
@@ -558,6 +600,48 @@ describe('KnowledgeDocumentsService permissions', () => {
     const search = new KnowledgeSearchService(db);
     const results = await search.create({ q: 'namespaceneedle' }, params(other));
     expect(results.map((result) => result.namespace.slug)).toEqual(['search-open-namespace']);
+  });
+
+  dbTest('filters text search by readable namespaces before applying row cap', async ({ db }) => {
+    const owner = await seedUser(db, 'owner');
+    const other = await seedUser(db, 'other');
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const openNamespace = await namespaces.create({
+      slug: 'search-starvation-open',
+      display_name: 'Search Starvation Open',
+      others_can: 'read',
+    });
+    const closedNamespace = await namespaces.create({
+      slug: 'search-starvation-closed',
+      display_name: 'Search Starvation Closed',
+      owner_user_id: owner.user_id as UserID,
+      others_can: 'none',
+    });
+    const documents = new KnowledgeDocumentRepository(db);
+    await documents.create({
+      namespace_id: openNamespace.namespace_id,
+      path: 'open-starvation.md',
+      title: 'Open Starvation',
+      visibility: 'public',
+      content_text: 'starvationneedle readable',
+      created_by: owner.user_id as UserID,
+      updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    for (let index = 0; index < 120; index += 1) {
+      await documents.create({
+        namespace_id: closedNamespace.namespace_id,
+        path: `closed-${index}.md`,
+        title: `Closed ${index}`,
+        visibility: 'public',
+        content_text: `starvationneedle closed ${index}`,
+        created_by: owner.user_id as UserID,
+        updated_at: new Date(Date.UTC(2026, 0, 2, 0, 0, index)),
+      });
+    }
+
+    const search = new KnowledgeSearchService(db);
+    const results = await search.create({ q: 'starvationneedle', limit: 10 }, params(other));
+    expect(results.map((result) => result.namespace.slug)).toEqual(['search-starvation-open']);
   });
 });
 

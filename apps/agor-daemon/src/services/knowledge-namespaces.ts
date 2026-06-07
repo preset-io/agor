@@ -96,7 +96,10 @@ export class KnowledgeNamespacesService extends DrizzleService<
     if (!namespace || namespace.archived)
       throw new NotFound(`Knowledge namespace not found: ${id}`);
     await this.assertCanReadNamespace(namespace, params);
-    return namespace;
+    return this.withEffectivePermission(
+      namespace,
+      await this.namespacePermission(namespace, params)
+    );
   }
 
   private isAdmin(user?: User): boolean {
@@ -232,6 +235,25 @@ export class KnowledgeNamespacesService extends DrizzleService<
     return false;
   }
 
+  private async callerOwnsThroughAcl(
+    namespace: KnowledgeNamespace,
+    params: KnowledgeNamespaceParams | undefined
+  ): Promise<boolean> {
+    const userId = params?.user?.user_id as UserID | undefined;
+    if (!userId) return false;
+    const groupIds = new Set<GroupID>(await this.groups.getGroupIdsForUser(userId));
+    const acl = await this.repo.listNamespaceAcl(namespace.namespace_id);
+    for (const entry of acl) {
+      if (entry.permission !== 'own') continue;
+      if (entry.subject_type === 'user' && entry.subject_id === userId) return true;
+      if (groupIds.has(entry.subject_id as GroupID)) {
+        const group = await this.groups.findById(entry.subject_id);
+        if (group && !group.archived) return true;
+      }
+    }
+    return false;
+  }
+
   private async callerDependsOnAclSubject(
     params: KnowledgeNamespaceParams | undefined,
     subjectType: KnowledgeNamespaceSubjectType,
@@ -262,6 +284,20 @@ export class KnowledgeNamespacesService extends DrizzleService<
     ) {
       return;
     }
+    throw new BadRequest('Cannot remove your last owner access to this knowledge namespace');
+  }
+
+  private async assertOwnerUserChangeKeepsCallerOwner(
+    existing: KnowledgeNamespace,
+    data: Partial<KnowledgeNamespace>,
+    params?: KnowledgeNamespaceParams
+  ): Promise<void> {
+    if (data.owner_user_id === undefined || data.owner_user_id === existing.owner_user_id) return;
+    const user = params?.user as User | undefined;
+    if (this.isAdmin(user)) return;
+    const userId = user?.user_id as UserID | undefined;
+    if (!userId || existing.owner_user_id !== userId) return;
+    if (await this.callerOwnsThroughAcl(existing, params)) return;
     throw new BadRequest('Cannot remove your last owner access to this knowledge namespace');
   }
 
@@ -308,6 +344,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge namespace not found: ${id}`);
     await this.assertCanManage(existing, params);
+    await this.assertOwnerUserChangeKeepsCallerOwner(existing, data, params);
     this.assertSlugUnchanged(existing, data);
     const result = await this.repo.update(String(id), {
       ...data,
@@ -328,6 +365,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge namespace not found: ${id}`);
     await this.assertCanManage(existing, params);
+    await this.assertOwnerUserChangeKeepsCallerOwner(existing, data, params);
     this.assertSlugUnchanged(existing, data);
     const result = await this.repo.update(String(id), {
       ...data,
