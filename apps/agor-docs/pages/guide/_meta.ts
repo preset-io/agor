@@ -11,6 +11,7 @@ export default {
   sessions: 'Sessions & Trees',
   boards: 'Boards & Zones',
   assistants: 'Assistants',
+  knowledge: 'Knowledge',
   'internal-mcp': 'Agor MCP Server',
   'rich-chat-ux': 'Rich Chat UX',
   'in-conversation-widgets': 'In-Conversation Widgets',

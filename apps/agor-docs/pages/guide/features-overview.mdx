@@ -1,6 +1,6 @@
 ---
 title: Features Overview
-description: A map of what Agor does — branches, sessions, boards, assistants, MCP server, rich chat UX, multiplayer, environments, scheduler, cards, artifacts, message gateway.
+description: A map of what Agor does — branches, sessions, boards, assistants, Knowledge, MCP server, rich chat UX, multiplayer, environments, scheduler, cards, artifacts, message gateway.
 ---
 
 # Features Overview
@@ -43,7 +43,15 @@ A map of what Agor does. The first three are the foundation everything else buil
 
 **Persistent AI companions that live in your workspace.** Long-lived agents with file-based memory, identity, and skills, running on heartbeat schedules and orchestrating work across boards. Inspired by [OpenClaw](https://openclaw.ai/), adapted for teams.
 
-**Use when:** You want an agent that *remembers* across sessions and proactively manages a project — not a one-off conversation.
+**Use when:** You want an agent that _remembers_ across sessions and proactively manages a project — not a one-off conversation.
+
+---
+
+## 🧠 [Knowledge](/guide/knowledge)
+
+**Built-in context for humans and agents.** A default place to file decisions, runbooks, prompts, assistant memory, and operational notes when there is no obvious home yet. Markdown pages get version history, rich Streamdown rendering, text search by default, optional semantic/hybrid search, and graph links between documents.
+
+**Use when:** Context should be easy for the whole Agor workspace to find, update, link, and reuse across branches, sessions, assistants, and people.
 
 ---
 
@@ -51,7 +59,7 @@ A map of what Agor does. The first three are the foundation everything else buil
 
 **Anything a user can do in Agor, an agent can do too.** The daemon exposes a Model Context Protocol (MCP) server with tools for sessions, branches, boards, zones, users, environments, and more. Every session is auto-issued an MCP token, so agents are self-aware and can act on their own context.
 
-**Use when:** You want agents to *operate* Agor itself — spawn peers, reorganize the board, create branches, prompt other sessions.
+**Use when:** You want agents to _operate_ Agor itself — spawn peers, reorganize the board, create branches, prompt other sessions.
 
 This is the foundational layer that makes assistants, scheduled prompts, message gateway, cards, and artifacts all possible.
 
@@ -101,7 +109,7 @@ This is the foundational layer that makes assistants, scheduled prompts, message
 
 **Live, interactive applications rendered on the board.** Powered by [Sandpack](https://sandpack.codesandbox.io/), agents scaffold a small app via MCP and the board shows it running — no deploy, no preview URL. Custom dashboards, data visualizations, design mockups, calculators, redline viewers.
 
-**Use when:** You need *visual* output during agent collaboration. Agents can build interactive UIs in minutes that would take days to hand-roll.
+**Use when:** You need _visual_ output during agent collaboration. Agents can build interactive UIs in minutes that would take days to hand-roll.
 
 ---
 
