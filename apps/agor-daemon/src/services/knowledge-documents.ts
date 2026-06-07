@@ -24,7 +24,6 @@ import type {
   Id,
   KnowledgeDocument,
   KnowledgeDocumentVersion,
-  KnowledgeNamespaceEffectivePermission,
   KnowledgeNamespaceID,
   NullableId,
   QueryParams,
@@ -34,9 +33,7 @@ import type {
 import {
   buildKnowledgeDocumentUri,
   extractKnowledgeLinks,
-  hasMinimumRole,
   parseKnowledgeUri,
-  ROLES,
   titleFromKnowledgeContent,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
@@ -50,6 +47,13 @@ import {
   knowledgeChunkerOptionsFromConfig,
   knowledgeUnitsForMarkdown,
 } from '../knowledge/units.js';
+import {
+  canReadKnowledgeDocument,
+  canWriteKnowledgeDocument,
+  hasKnowledgeNamespacePermission,
+  isKnowledgeAdmin,
+  resolveKnowledgeNamespacePermission,
+} from './knowledge-access.js';
 
 export type KnowledgeDocumentParams = QueryParams<{
   namespace_id?: KnowledgeNamespaceID;
@@ -108,20 +112,6 @@ type HydrateOptions = Pick<
   'include_content' | 'include_links' | 'include_indexing' | 'includeIndexing' | 'version'
 >;
 
-const NAMESPACE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
-  none: 0,
-  read: 1,
-  write: 2,
-  own: 3,
-};
-
-function hasNamespacePermission(
-  actual: KnowledgeNamespaceEffectivePermission,
-  required: 'read' | 'write' | 'own'
-): boolean {
-  return NAMESPACE_PERMISSION_RANK[actual] >= NAMESPACE_PERMISSION_RANK[required];
-}
-
 function wantsFirstLineTitle(data: KnowledgeDocumentWriteData): boolean {
   if (typeof data.first_line_is_title === 'boolean') return data.first_line_is_title;
   return data.metadata?.title_from_content === true;
@@ -159,42 +149,15 @@ export class KnowledgeDocumentsService extends DrizzleService<
   }
 
   private isAdmin(user?: User): boolean {
-    return hasMinimumRole(user?.role, ROLES.ADMIN);
-  }
-
-  private async namespacePermission(
-    namespaceId: KnowledgeNamespaceID,
-    user?: User
-  ): Promise<KnowledgeNamespaceEffectivePermission> {
-    return this.namespaces.resolveNamespacePermission(namespaceId, String(user?.user_id ?? ''), {
-      isAdmin: this.isAdmin(user),
-    });
-  }
-
-  private documentReadOverlay(document: KnowledgeDocument, user?: User): boolean {
-    return (
-      document.visibility === 'public' ||
-      this.isAdmin(user) ||
-      Boolean(user?.user_id && document.created_by === user.user_id)
-    );
-  }
-
-  private documentEditOverlay(document: KnowledgeDocument, user?: User): boolean {
-    return (
-      this.isAdmin(user) ||
-      Boolean(user?.user_id && document.created_by === user.user_id) ||
-      (document.visibility === 'public' && document.edit_policy === 'public')
-    );
+    return isKnowledgeAdmin(user);
   }
 
   private async canRead(document: KnowledgeDocument, user?: User): Promise<boolean> {
-    const permission = await this.namespacePermission(document.namespace_id, user);
-    return hasNamespacePermission(permission, 'read') && this.documentReadOverlay(document, user);
+    return canReadKnowledgeDocument(this.namespaces, document, user);
   }
 
   private async canEdit(document: KnowledgeDocument, user?: User): Promise<boolean> {
-    const permission = await this.namespacePermission(document.namespace_id, user);
-    return hasNamespacePermission(permission, 'write') && this.documentEditOverlay(document, user);
+    return canWriteKnowledgeDocument(this.namespaces, document, user);
   }
 
   private canManageDocument(document: KnowledgeDocument, user?: User): boolean {
@@ -239,8 +202,12 @@ export class KnowledgeDocumentsService extends DrizzleService<
     namespaceId: KnowledgeNamespaceID,
     user?: User
   ): Promise<void> {
-    const permission = await this.namespacePermission(namespaceId, user);
-    if (!hasNamespacePermission(permission, 'write')) {
+    const permission = await resolveKnowledgeNamespacePermission(
+      this.namespaces,
+      namespaceId,
+      user
+    );
+    if (!hasKnowledgeNamespacePermission(permission, 'write')) {
       throw new Forbidden('You do not have permission to write to this knowledge namespace');
     }
   }

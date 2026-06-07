@@ -18,19 +18,23 @@ import type {
   KnowledgeGraphDocNode,
   KnowledgeGraphEdgeType,
   KnowledgeGraphNode,
-  KnowledgeNamespaceEffectivePermission,
   KnowledgeNamespaceGraph,
   QueryParams,
   User,
   UserID,
 } from '@agor/core/types';
 import {
-  hasMinimumRole,
   KNOWLEDGE_DOCUMENT_URI_PREFIX,
   KNOWLEDGE_UNIT_URI_PREFIX,
   parseKnowledgeUri,
-  ROLES,
 } from '@agor/core/types';
+import {
+  canReadKnowledgeDocument,
+  canWriteKnowledgeDocument,
+  hasKnowledgeNamespacePermission,
+  isKnowledgeAdmin,
+  resolveKnowledgeNamespacePermission,
+} from './knowledge-access.js';
 
 /** Query for the namespace-wide graph view (whole-namespace document graph). */
 export interface KnowledgeNamespaceGraphRequest {
@@ -41,20 +45,6 @@ export interface KnowledgeNamespaceGraphRequest {
   includeMyDrafts?: boolean;
   include_other_user_drafts?: boolean;
   includeOtherUserDrafts?: boolean;
-}
-
-const NAMESPACE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
-  none: 0,
-  read: 1,
-  write: 2,
-  own: 3,
-};
-
-function hasNamespacePermission(
-  actual: KnowledgeNamespaceEffectivePermission,
-  required: 'read' | 'write' | 'own'
-): boolean {
-  return NAMESPACE_PERMISSION_RANK[actual] >= NAMESPACE_PERMISSION_RANK[required];
 }
 
 export type KnowledgeGraphParams = QueryParams<
@@ -108,7 +98,7 @@ export class KnowledgeGraphService {
     }
 
     const namespacePermission = await this.namespacePermission(namespace.namespace_id, user);
-    if (!hasNamespacePermission(namespacePermission, 'read')) {
+    if (!hasKnowledgeNamespacePermission(namespacePermission, 'read')) {
       return { namespace_id: null, nodes: [], edges: [] };
     }
 
@@ -146,37 +136,18 @@ export class KnowledgeGraphService {
     return { namespace_id: namespace.namespace_id, nodes, edges };
   }
 
-  private isAdmin(user?: User): boolean {
-    return hasMinimumRole(user?.role, ROLES.ADMIN);
-  }
-
-  private async namespacePermission(
-    namespaceId: string,
-    user?: User
-  ): Promise<KnowledgeNamespaceEffectivePermission> {
-    return this.namespaces.resolveNamespacePermission(namespaceId, String(user?.user_id ?? ''), {
-      isAdmin: this.isAdmin(user),
-    });
+  private async namespacePermission(namespaceId: string, user?: User) {
+    return resolveKnowledgeNamespacePermission(this.namespaces, namespaceId, user);
   }
 
   private async canRead(document: KnowledgeDocument, user?: User): Promise<boolean> {
     if (document.archived) return false;
-    const namespacePermission = await this.namespacePermission(document.namespace_id, user);
-    const documentReadable =
-      document.visibility === 'public' ||
-      this.isAdmin(user) ||
-      Boolean(user?.user_id && document.created_by === user.user_id);
-    return hasNamespacePermission(namespacePermission, 'read') && documentReadable;
+    return canReadKnowledgeDocument(this.namespaces, document, user);
   }
 
   private async canWrite(document: KnowledgeDocument, user?: User): Promise<boolean> {
     if (document.archived) return false;
-    const namespacePermission = await this.namespacePermission(document.namespace_id, user);
-    const documentWritable =
-      this.isAdmin(user) ||
-      Boolean(user?.user_id && document.created_by === user.user_id) ||
-      (document.visibility === 'public' && document.edit_policy === 'public');
-    return hasNamespacePermission(namespacePermission, 'write') && documentWritable;
+    return canWriteKnowledgeDocument(this.namespaces, document, user);
   }
 
   private async activeDocument(
@@ -294,7 +265,7 @@ export class KnowledgeGraphService {
 
   private attributionUserId(params?: KnowledgeGraphParams, requestedUserId?: UserID | null) {
     const user = params?.user as User | undefined;
-    if (this.isAdmin(user) && requestedUserId) return requestedUserId;
+    if (isKnowledgeAdmin(user) && requestedUserId) return requestedUserId;
     return (user?.user_id as UserID | undefined) ?? null;
   }
 

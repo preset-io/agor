@@ -3,13 +3,15 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, KnowledgeNamespaceRepository } from '@agor/core/db';
+import { type Database, GroupRepository, KnowledgeNamespaceRepository } from '@agor/core/db';
 import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  GroupID,
   Id,
   KnowledgeNamespace,
   KnowledgeNamespaceAclEntry,
+  KnowledgeNamespaceEffectivePermission,
   KnowledgeNamespacePermission,
   KnowledgeNamespaceSubjectType,
   NullableId,
@@ -17,8 +19,8 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { isKnowledgeAdmin } from './knowledge-access.js';
 
 export type KnowledgeNamespaceParams = QueryParams<{
   slug?: string;
@@ -49,6 +51,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
   KnowledgeNamespaceParams
 > {
   private repo: KnowledgeNamespaceRepository;
+  private groups: GroupRepository;
 
   constructor(db: Database) {
     const repo = new KnowledgeNamespaceRepository(db);
@@ -61,19 +64,29 @@ export class KnowledgeNamespacesService extends DrizzleService<
       },
     });
     this.repo = repo;
+    this.groups = new GroupRepository(db);
+  }
+
+  private withEffectivePermission(
+    namespace: KnowledgeNamespace,
+    permission: KnowledgeNamespaceEffectivePermission
+  ): KnowledgeNamespace {
+    return { ...namespace, effective_permission: permission };
   }
 
   async find(params?: KnowledgeNamespaceParams): Promise<KnowledgeNamespace[]> {
     const user = params?.user as User | undefined;
     const namespaces = await this.repo.findAll(params?.query);
-    if (this.isAdmin(user)) return namespaces;
+    if (this.isAdmin(user)) {
+      return namespaces.map((namespace) => this.withEffectivePermission(namespace, 'own'));
+    }
     const userId = user?.user_id;
     if (!userId) return [];
 
     const readable: KnowledgeNamespace[] = [];
     for (const namespace of namespaces) {
       const permission = await this.repo.resolveNamespacePermission(namespace.namespace_id, userId);
-      if (permission !== 'none') readable.push(namespace);
+      if (permission !== 'none') readable.push(this.withEffectivePermission(namespace, permission));
     }
     return readable;
   }
@@ -87,7 +100,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
   }
 
   private isAdmin(user?: User): boolean {
-    return hasMinimumRole(user?.role, ROLES.ADMIN);
+    return isKnowledgeAdmin(user);
   }
 
   private async namespacePermission(
@@ -190,6 +203,66 @@ export class KnowledgeNamespacesService extends DrizzleService<
         created_by: userId,
       },
     ];
+  }
+
+  private async callerOwnsOutsideAclSubject(
+    namespace: KnowledgeNamespace,
+    params: KnowledgeNamespaceParams | undefined,
+    subject: { subject_type: KnowledgeNamespaceSubjectType; subject_id: string }
+  ): Promise<boolean> {
+    const user = params?.user as User | undefined;
+    if (this.isAdmin(user)) return true;
+    const userId = user?.user_id as UserID | undefined;
+    if (!userId) return false;
+    if (namespace.owner_user_id === userId) return true;
+
+    const groupIds = new Set<GroupID>(await this.groups.getGroupIdsForUser(userId));
+    const acl = await this.repo.listNamespaceAcl(namespace.namespace_id);
+    for (const entry of acl) {
+      if (entry.permission !== 'own') continue;
+      if (entry.subject_type === subject.subject_type && entry.subject_id === subject.subject_id) {
+        continue;
+      }
+      if (entry.subject_type === 'user' && entry.subject_id === userId) return true;
+      if (groupIds.has(entry.subject_id as GroupID)) {
+        const group = await this.groups.findById(entry.subject_id);
+        if (group && !group.archived) return true;
+      }
+    }
+    return false;
+  }
+
+  private async callerDependsOnAclSubject(
+    params: KnowledgeNamespaceParams | undefined,
+    subjectType: KnowledgeNamespaceSubjectType,
+    subjectId: string
+  ): Promise<boolean> {
+    const userId = params?.user?.user_id as UserID | undefined;
+    if (!userId) return false;
+    if (subjectType === 'user') return subjectId === userId;
+    const groupIds = await this.groups.getGroupIdsForUser(userId);
+    return groupIds.includes(subjectId as GroupID);
+  }
+
+  private async assertAclChangeKeepsCallerOwner(
+    namespace: KnowledgeNamespace,
+    params: KnowledgeNamespaceParams | undefined,
+    subjectType: KnowledgeNamespaceSubjectType,
+    subjectId: string,
+    nextPermission?: KnowledgeNamespacePermission
+  ): Promise<void> {
+    if (this.isAdmin(params?.user as User | undefined)) return;
+    if (nextPermission === 'own') return;
+    if (!(await this.callerDependsOnAclSubject(params, subjectType, subjectId))) return;
+    if (
+      await this.callerOwnsOutsideAclSubject(namespace, params, {
+        subject_type: subjectType,
+        subject_id: subjectId,
+      })
+    ) {
+      return;
+    }
+    throw new BadRequest('Cannot remove your last owner access to this knowledge namespace');
   }
 
   private async createOne(
@@ -357,6 +430,13 @@ export class KnowledgeNamespacesService extends DrizzleService<
     const namespace = await this.repo.findById(String(namespaceId));
     if (!namespace || namespace.archived) throw new NotFound('Knowledge namespace not found');
     await this.assertCanManage(namespace, params);
+    await this.assertAclChangeKeepsCallerOwner(
+      namespace,
+      params,
+      subjectType,
+      subjectId,
+      data.permission
+    );
     return this.repo.upsertNamespaceAclEntry({
       namespace_id: namespace.namespace_id,
       subject_type: subjectType,
@@ -386,6 +466,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
     const namespace = await this.repo.findById(String(namespaceId));
     if (!namespace || namespace.archived) throw new NotFound('Knowledge namespace not found');
     await this.assertCanManage(namespace, params);
+    await this.assertAclChangeKeepsCallerOwner(namespace, params, subjectType, subjectId);
     return this.repo.removeNamespaceAclEntry(namespace.namespace_id, subjectType, subjectId);
   }
 }

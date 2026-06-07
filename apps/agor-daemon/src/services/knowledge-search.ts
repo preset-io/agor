@@ -18,12 +18,9 @@ import { BadRequest } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
   buildKnowledgeUnitUri,
-  hasMinimumRole,
-  type KnowledgeNamespaceEffectivePermission,
   type KnowledgeSearchResult,
   normalizeKnowledgeFolderPath,
   type QueryParams,
-  ROLES,
   type User,
 } from '@agor/core/types';
 import { getKnowledgeUrl } from '@agor/core/utils/url';
@@ -40,19 +37,9 @@ import {
   getKnowledgePgvectorCapability,
   semanticUnavailableMessage,
 } from '../knowledge/pgvector.js';
+import { canReadKnowledgeSearchResult, isKnowledgeAdmin } from './knowledge-access.js';
 
 export type KnowledgeSearchParams = QueryParams<KnowledgeSearchQuery> & AuthenticatedParams;
-
-const NAMESPACE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
-  none: 0,
-  read: 1,
-  write: 2,
-  own: 3,
-};
-
-function hasNamespaceRead(permission: KnowledgeNamespaceEffectivePermission): boolean {
-  return NAMESPACE_PERMISSION_RANK[permission] >= NAMESPACE_PERMISSION_RANK.read;
-}
 
 export class KnowledgeSearchService {
   private repo: KnowledgeSearchRepository;
@@ -72,16 +59,7 @@ export class KnowledgeSearchService {
     result: Awaited<ReturnType<KnowledgeSearchRepository['search']>>[number],
     user?: User
   ): Promise<boolean> {
-    const namespacePermission = await this.namespaces.resolveNamespacePermission(
-      result.document.namespace_id,
-      String(user?.user_id ?? ''),
-      { isAdmin: hasMinimumRole(user?.role, ROLES.ADMIN) }
-    );
-    const documentReadable =
-      result.document.visibility === 'public' ||
-      hasMinimumRole(user?.role, ROLES.ADMIN) ||
-      Boolean(user?.user_id && result.document.created_by === user.user_id);
-    return hasNamespaceRead(namespacePermission) && documentReadable;
+    return canReadKnowledgeSearchResult(this.namespaces, result, user);
   }
 
   private async filterReadable(
@@ -107,7 +85,7 @@ export class KnowledgeSearchService {
 
   private scopedQuery(query: KnowledgeSearchQuery | undefined, user?: User): KnowledgeSearchQuery {
     this.assertSupportedMode(query);
-    const isAdmin = hasMinimumRole(user?.role, ROLES.ADMIN);
+    const isAdmin = isKnowledgeAdmin(user);
     const rawQuery = (query ?? {}) as KnowledgeSearchQuery & {
       includeMyDrafts?: boolean;
       includeOtherUserDrafts?: boolean;
@@ -204,7 +182,7 @@ export class KnowledgeSearchService {
     );
     const vector = embeddingToPgvector(queryEmbedding.embedding);
     const limit = Math.min(Math.max(rawQuery.rerank_limit ?? rawQuery.limit ?? 25, 1), 100);
-    const isAdmin = hasMinimumRole(user?.role, ROLES.ADMIN);
+    const isAdmin = isKnowledgeAdmin(user);
     const normalizedPathPrefix = rawQuery.path_prefix?.trim()
       ? normalizeKnowledgeFolderPath(rawQuery.path_prefix)
       : '';
@@ -212,6 +190,15 @@ export class KnowledgeSearchService {
     const minSimilarity = this.parseMinSimilarity(rawQuery.min_similarity);
     const includeMyDrafts = rawQuery.include_my_drafts !== false;
     const includeOtherUserDrafts = rawQuery.include_other_user_drafts === true;
+    const readableNamespaceIds = await this.namespaces.findReadableNamespaceIds(
+      String(user?.user_id ?? ''),
+      { isAdmin }
+    );
+    if (readableNamespaceIds.length === 0) return [];
+    const readableNamespaceIdList = sql.join(
+      readableNamespaceIds.map((id) => sql`${id}`),
+      sql`, `
+    );
 
     const baseUrl = await getBaseUrl();
     const result = await executeRaw(
@@ -262,6 +249,8 @@ export class KnowledgeSearchService {
           AND sp.provider = ${provider}
           AND sp.model = ${model}
           AND sp.dimensions = ${dimensions}
+          AND d.namespace_id IN (${readableNamespaceIdList})
+          AND (${rawQuery.namespace_id ?? null}::text IS NULL OR d.namespace_id = ${rawQuery.namespace_id ?? null})
           AND (${rawQuery.namespace_slug ?? null}::text IS NULL OR ns.slug = ${rawQuery.namespace_slug ?? null})
           AND (${pathPrefix}::text IS NULL OR d.path = ${pathPrefix} OR d.path LIKE (${pathPrefix} || '/%'))
           AND (${rawQuery.kind ?? null}::text IS NULL OR d.kind = ${rawQuery.kind ?? null})

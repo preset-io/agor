@@ -3375,7 +3375,7 @@ export function KnowledgePage({
                     <Alert
                       type="info"
                       showIcon
-                      message="Namespaces are the Knowledge RBAC boundary. Use the workspace fallback for broad access; user/group-specific grants are available through the backend and will get a richer UI next."
+                      message="Namespaces are the Knowledge RBAC boundary. Use the workspace fallback for broad access, and add specific user or group grants below when access should be narrower."
                     />
                     {namespaceError && <Alert type="error" showIcon message={namespaceError} />}
                     <Flex justify="space-between" align="center">
@@ -3393,41 +3393,45 @@ export function KnowledgePage({
                       size="small"
                       dataSource={namespaces}
                       locale={{ emptyText: 'No readable namespaces' }}
-                      renderItem={(namespace) => (
-                        <List.Item
-                          actions={[
-                            <Button
-                              key="edit"
-                              size="small"
-                              onClick={() => openNamespaceEditor(namespace)}
-                            >
-                              Edit
-                            </Button>,
-                            <Button
-                              key="archive"
-                              size="small"
-                              danger
-                              disabled={namespace.kind === 'system'}
-                              onClick={() => archiveNamespace(namespace)}
-                            >
-                              Archive
-                            </Button>,
-                          ]}
-                        >
-                          <List.Item.Meta
-                            title={
-                              <Space wrap>
-                                <Text strong>{namespace.display_name || namespace.slug}</Text>
-                                <Tag>{namespace.slug}</Tag>
-                                <Tag color={namespace.others_can === 'none' ? 'default' : 'blue'}>
-                                  others: {namespace.others_can}
-                                </Tag>
-                              </Space>
-                            }
-                            description={namespace.description || 'No description'}
-                          />
-                        </List.Item>
-                      )}
+                      renderItem={(namespace) => {
+                        const canManageNamespace = namespace.effective_permission === 'own';
+                        return (
+                          <List.Item
+                            actions={[
+                              <Button
+                                key="edit"
+                                size="small"
+                                disabled={!canManageNamespace}
+                                onClick={() => openNamespaceEditor(namespace)}
+                              >
+                                Edit
+                              </Button>,
+                              <Button
+                                key="archive"
+                                size="small"
+                                danger
+                                disabled={!canManageNamespace || namespace.kind === 'system'}
+                                onClick={() => archiveNamespace(namespace)}
+                              >
+                                Archive
+                              </Button>,
+                            ]}
+                          >
+                            <List.Item.Meta
+                              title={
+                                <Space wrap>
+                                  <Text strong>{namespace.display_name || namespace.slug}</Text>
+                                  <Tag>{namespace.slug}</Tag>
+                                  <Tag color={namespace.others_can === 'none' ? 'default' : 'blue'}>
+                                    others: {namespace.others_can}
+                                  </Tag>
+                                </Space>
+                              }
+                              description={namespace.description || 'No description'}
+                            />
+                          </List.Item>
+                        );
+                      }}
                     />
                   </Space>
                 ),

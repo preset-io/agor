@@ -9,12 +9,11 @@ import type {
   KnowledgeDocumentVersion,
   KnowledgeEditChangedRange,
   KnowledgeEditOp,
-  KnowledgeNamespaceEffectivePermission,
   KnowledgeVersionToken,
   User,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { createTwoFilesPatch, structuredPatch } from 'diff';
+import { canWriteKnowledgeDocument } from './knowledge-access.js';
 import type { KnowledgeDocumentParams, KnowledgeDocumentsService } from './knowledge-documents.js';
 
 interface KnowledgeDocumentEditInput {
@@ -49,17 +48,6 @@ function versionToToken(version: KnowledgeDocumentVersion): KnowledgeVersionToke
   };
 }
 
-const NAMESPACE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
-  none: 0,
-  read: 1,
-  write: 2,
-  own: 3,
-};
-
-function hasNamespaceWrite(permission: KnowledgeNamespaceEffectivePermission): boolean {
-  return NAMESPACE_PERMISSION_RANK[permission] >= NAMESPACE_PERMISSION_RANK.write;
-}
-
 function extractChangedRanges(
   baseContent: string,
   updatedContent: string
@@ -89,15 +77,7 @@ export class KnowledgeDocumentEditsService {
   ) {}
 
   private async ensureCanEdit(document: KnowledgeDocument, user: User | undefined) {
-    const namespacePermission = await this.namespaceRepo.resolveNamespacePermission(
-      document.namespace_id,
-      String(user?.user_id ?? ''),
-      { isAdmin: hasMinimumRole(user?.role, ROLES.ADMIN) }
-    );
-    const isAdmin = hasMinimumRole(user?.role, ROLES.ADMIN);
-    const isOwner = Boolean(user?.user_id && document.created_by === user.user_id);
-    const publicEditable = document.visibility === 'public' && document.edit_policy === 'public';
-    if (hasNamespaceWrite(namespacePermission) && (isAdmin || isOwner || publicEditable)) return;
+    if (await canWriteKnowledgeDocument(this.namespaceRepo, document, user)) return;
     throw new Forbidden('You do not have permission to edit this knowledge document');
   }
 

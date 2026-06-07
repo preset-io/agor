@@ -401,6 +401,11 @@ export interface KnowledgeNamespace {
   branch_id?: BranchID | null;
   visibility_default: KnowledgeVisibility;
   others_can: KnowledgeNamespaceOthersCan;
+  /**
+   * Request-scoped permission summary populated by services that list or fetch
+   * namespaces for a specific user. Not stored on the namespace row.
+   */
+  effective_permission?: KnowledgeNamespaceEffectivePermission;
   metadata?: Record<string, unknown> | null;
   created_by?: UserID | null;
   created_at: Date;

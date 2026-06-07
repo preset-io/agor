@@ -12,27 +12,14 @@ import {
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
-  hasMinimumRole,
   type KnowledgeDocument,
   type KnowledgeDocumentVersion,
-  type KnowledgeNamespaceEffectivePermission,
   parseKnowledgeUri,
   type QueryParams,
-  ROLES,
   type User,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-
-const NAMESPACE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
-  none: 0,
-  read: 1,
-  write: 2,
-  own: 3,
-};
-
-function hasNamespaceRead(permission: KnowledgeNamespaceEffectivePermission): boolean {
-  return NAMESPACE_PERMISSION_RANK[permission] >= NAMESPACE_PERMISSION_RANK.read;
-}
+import { canReadKnowledgeDocument } from './knowledge-access.js';
 
 export type KnowledgeVersionParams = QueryParams<{
   document_id?: string;
@@ -71,16 +58,7 @@ export class KnowledgeVersionsService extends DrizzleService<
   }
 
   private async canRead(document: KnowledgeDocument, user?: User): Promise<boolean> {
-    const namespacePermission = await this.namespaces.resolveNamespacePermission(
-      document.namespace_id,
-      String(user?.user_id ?? ''),
-      { isAdmin: hasMinimumRole(user?.role, ROLES.ADMIN) }
-    );
-    const documentReadable =
-      document.visibility === 'public' ||
-      hasMinimumRole(user?.role, ROLES.ADMIN) ||
-      Boolean(user?.user_id && document.created_by === user.user_id);
-    return hasNamespaceRead(namespacePermission) && documentReadable;
+    return canReadKnowledgeDocument(this.namespaces, document, user);
   }
 
   async find(params?: KnowledgeVersionParams) {

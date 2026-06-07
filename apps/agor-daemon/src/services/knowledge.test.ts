@@ -5,6 +5,7 @@ import { __resetConfigCacheForTests, type AgorConfig, saveConfig } from '@agor/c
 import type { Database } from '@agor/core/db';
 import {
   eq,
+  GroupRepository,
   generateId,
   KnowledgeDocumentRepository,
   KnowledgeNamespaceRepository,
@@ -164,6 +165,135 @@ describe('KnowledgeNamespacesService permissions', () => {
       ])
     );
   });
+
+  dbTest('reports effective permissions when listing readable namespaces', async ({ db }) => {
+    const owner = await seedUser(db, 'owner');
+    const reader = await seedUser(db, 'reader');
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const readable = await namespaces.create({
+      slug: 'list-readable',
+      display_name: 'List Readable',
+      others_can: 'none',
+      owner_user_id: owner.user_id as UserID,
+    });
+    await namespaces.upsertNamespaceAclEntry({
+      namespace_id: readable.namespace_id,
+      subject_type: 'user',
+      subject_id: reader.user_id,
+      permission: 'read',
+    });
+
+    const service = new KnowledgeNamespacesService(db);
+    await expect(service.find(params(reader))).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          namespace_id: readable.namespace_id,
+          effective_permission: 'read',
+        }),
+      ])
+    );
+    await expect(service.find(params(owner))).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          namespace_id: readable.namespace_id,
+          effective_permission: 'own',
+        }),
+      ])
+    );
+  });
+
+  dbTest('prevents ACL methods from removing the caller last owner path', async ({ db }) => {
+    const owner = await seedUser(db, 'owner');
+    const service = new KnowledgeNamespacesService(db);
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const namespace = await namespaces.create({
+      slug: 'no-self-lock',
+      display_name: 'No Self Lock',
+      others_can: 'none',
+      owner_user_id: null,
+    });
+    await namespaces.upsertNamespaceAclEntry({
+      namespace_id: namespace.namespace_id,
+      subject_type: 'user',
+      subject_id: owner.user_id,
+      permission: 'own',
+    });
+
+    await expect(
+      service.setAcl(
+        {
+          namespace_id: namespace.namespace_id,
+          subject_type: 'user',
+          subject_id: owner.user_id,
+          permission: 'write',
+        },
+        params(owner)
+      )
+    ).rejects.toBeInstanceOf(BadRequest);
+    await expect(
+      service.removeAcl(
+        {
+          namespace_id: namespace.namespace_id,
+          subject_type: 'user',
+          subject_id: owner.user_id,
+        },
+        params(owner)
+      )
+    ).rejects.toBeInstanceOf(BadRequest);
+  });
+
+  dbTest(
+    'allows ACL owner changes when the caller keeps owner access through a group',
+    async ({ db }) => {
+      const owner = await seedUser(db, 'owner');
+      const service = new KnowledgeNamespacesService(db);
+      const namespaces = new KnowledgeNamespaceRepository(db);
+      const groups = new GroupRepository(db);
+      const group = await groups.create({ name: 'Namespace Owners', slug: 'namespace-owners' });
+      await groups.addMember(group.group_id, owner.user_id);
+      const namespace = await namespaces.create({
+        slug: 'group-owned-acl',
+        display_name: 'Group Owned ACL',
+        others_can: 'none',
+        owner_user_id: null,
+      });
+      await namespaces.upsertNamespaceAclEntry({
+        namespace_id: namespace.namespace_id,
+        subject_type: 'user',
+        subject_id: owner.user_id,
+        permission: 'own',
+      });
+      await namespaces.upsertNamespaceAclEntry({
+        namespace_id: namespace.namespace_id,
+        subject_type: 'group',
+        subject_id: group.group_id,
+        permission: 'own',
+      });
+
+      await expect(
+        service.setAcl(
+          {
+            namespace_id: namespace.namespace_id,
+            subject_type: 'user',
+            subject_id: owner.user_id,
+            permission: 'read',
+          },
+          params(owner)
+        )
+      ).resolves.toMatchObject({ permission: 'read' });
+      await expect(
+        service.listAcl({ namespace_id: namespace.namespace_id }, params(owner))
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            subject_type: 'group',
+            subject_id: group.group_id,
+            permission: 'own',
+          }),
+        ])
+      );
+    }
+  );
 });
 
 describe('KnowledgeDocumentsService permissions', () => {
@@ -344,6 +474,51 @@ describe('KnowledgeDocumentsService permissions', () => {
     });
     await expect(
       service.patch(doc.document_id, { content_text: 'v2' }, params(other))
+    ).resolves.toMatchObject({ document_id: doc.document_id });
+  });
+
+  dbTest('enforces group namespace grants through document services', async ({ db }) => {
+    const owner = await seedUser(db, 'owner');
+    const groupMember = await seedUser(db, 'group-member');
+    const groups = new GroupRepository(db);
+    const group = await groups.create({ name: 'KB Editors', slug: 'kb-editors' });
+    await groups.addMember(group.group_id, groupMember.user_id);
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const namespace = await namespaces.create({
+      slug: 'group-gated-docs',
+      display_name: 'Group Gated Docs',
+      owner_user_id: owner.user_id as UserID,
+      others_can: 'none',
+    });
+    const service = new KnowledgeDocumentsService(db);
+    const doc = await service.create(
+      {
+        namespace_id: namespace.namespace_id,
+        path: 'group.md',
+        title: 'Group',
+        visibility: 'public',
+        edit_policy: 'public',
+        content_text: 'v1',
+      },
+      params(owner)
+    );
+
+    await expect(service.get(doc.document_id, params(groupMember))).rejects.toBeInstanceOf(
+      Forbidden
+    );
+
+    await namespaces.upsertNamespaceAclEntry({
+      namespace_id: namespace.namespace_id,
+      subject_type: 'group',
+      subject_id: group.group_id,
+      permission: 'write',
+    });
+
+    await expect(service.get(doc.document_id, params(groupMember))).resolves.toMatchObject({
+      document_id: doc.document_id,
+    });
+    await expect(
+      service.patch(doc.document_id, { content_text: 'v2' }, params(groupMember))
     ).resolves.toMatchObject({ document_id: doc.document_id });
   });
 
