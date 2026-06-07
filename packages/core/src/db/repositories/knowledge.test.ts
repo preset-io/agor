@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
-import type { UserID } from '../../types';
+import type { GroupID, UserID } from '../../types';
 import {
   buildKnowledgeUri,
   normalizeKnowledgePath,
@@ -12,6 +12,7 @@ import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
 import { kbDocumentUnits } from '../schema';
 import { dbTest } from '../test-helpers';
+import { GroupRepository } from './groups';
 import {
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
@@ -46,6 +47,116 @@ describe('Knowledge path and URI helpers', () => {
 });
 
 describe('Knowledge repositories', () => {
+  dbTest(
+    'resolves namespace permissions from others, users, groups, owners, and admins',
+    async ({ db }) => {
+      const owner = await seedUser(db, 'owner');
+      const alice = await seedUser(db, 'alice');
+      const bob = await seedUser(db, 'bob');
+      const carol = await seedUser(db, 'carol');
+      const namespaces = new KnowledgeNamespaceRepository(db);
+      const groups = new GroupRepository(db);
+
+      const namespace = await namespaces.create({
+        slug: 'acl-test',
+        display_name: 'ACL Test',
+        owner_user_id: owner.user_id as UserID,
+        others_can: 'none',
+      });
+      const group = await groups.create({ name: 'KB Writers', slug: 'kb-writers' });
+      await groups.addMember(group.group_id, bob.user_id as UserID);
+
+      expect(
+        await namespaces.resolveNamespacePermission(namespace.namespace_id, alice.user_id)
+      ).toBe('none');
+      expect(
+        await namespaces.resolveNamespacePermission(namespace.namespace_id, owner.user_id)
+      ).toBe('own');
+      expect(
+        await namespaces.resolveNamespacePermission(namespace.namespace_id, carol.user_id, {
+          isAdmin: true,
+        })
+      ).toBe('own');
+
+      await namespaces.upsertNamespaceAclEntry({
+        namespace_id: namespace.namespace_id,
+        subject_type: 'user',
+        subject_id: alice.user_id,
+        permission: 'read',
+      });
+      await namespaces.upsertNamespaceAclEntry({
+        namespace_id: namespace.namespace_id,
+        subject_type: 'group',
+        subject_id: group.group_id as GroupID,
+        permission: 'write',
+      });
+
+      expect(
+        await namespaces.resolveNamespacePermission(namespace.namespace_id, alice.user_id)
+      ).toBe('read');
+      expect(await namespaces.resolveNamespacePermission(namespace.namespace_id, bob.user_id)).toBe(
+        'write'
+      );
+
+      await namespaces.update(namespace.namespace_id, { others_can: 'read' });
+      expect(
+        await namespaces.resolveNamespacePermission(namespace.namespace_id, carol.user_id)
+      ).toBe('read');
+    }
+  );
+
+  dbTest('upserts, lists, removes ACL entries, and reports readable namespaces', async ({ db }) => {
+    const alice = await seedUser(db, 'readable-alice');
+    const bob = await seedUser(db, 'readable-bob');
+    const namespaces = new KnowledgeNamespaceRepository(db);
+
+    const open = await namespaces.create({
+      slug: 'readable-open',
+      display_name: 'Readable Open',
+      others_can: 'read',
+    });
+    const privateNamespace = await namespaces.create({
+      slug: 'readable-private',
+      display_name: 'Readable Private',
+      others_can: 'none',
+    });
+
+    const entry = await namespaces.upsertNamespaceAclEntry({
+      namespace_id: privateNamespace.namespace_id,
+      subject_type: 'user',
+      subject_id: alice.user_id,
+      permission: 'read',
+    });
+    const updated = await namespaces.upsertNamespaceAclEntry({
+      namespace_id: privateNamespace.namespace_id,
+      subject_type: 'user',
+      subject_id: alice.user_id,
+      permission: 'own',
+    });
+
+    expect(updated.namespace_acl_id).toBe(entry.namespace_acl_id);
+    expect(updated.permission).toBe('own');
+    expect(await namespaces.listNamespaceAcl(privateNamespace.namespace_id)).toHaveLength(1);
+
+    const aliceReadable = new Set(await namespaces.findReadableNamespaceIds(alice.user_id));
+    expect(aliceReadable.has(open.namespace_id)).toBe(true);
+    expect(aliceReadable.has(privateNamespace.namespace_id)).toBe(true);
+
+    const bobReadable = new Set(await namespaces.findReadableNamespaceIds(bob.user_id));
+    expect(bobReadable.has(open.namespace_id)).toBe(true);
+    expect(bobReadable.has(privateNamespace.namespace_id)).toBe(false);
+
+    const removed = await namespaces.removeNamespaceAclEntry(
+      privateNamespace.namespace_id,
+      'user',
+      alice.user_id
+    );
+    expect(removed?.permission).toBe('own');
+    expect(
+      await namespaces.resolveNamespacePermission(privateNamespace.namespace_id, alice.user_id)
+    ).toBe('none');
+  });
+
   dbTest('creates markdown documents with version, unit, URI, and browser URL', async ({ db }) => {
     const owner = await seedUser(db, 'kb-owner');
     const namespaces = new KnowledgeNamespaceRepository(db);

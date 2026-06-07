@@ -1029,11 +1029,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create knowledge namespaces')],
-      patch: [requireMinimumRole(ROLES.ADMIN, 'update knowledge namespaces')],
-      update: [requireMinimumRole(ROLES.ADMIN, 'update knowledge namespaces')],
-      remove: [requireMinimumRole(ROLES.ADMIN, 'delete knowledge namespaces')],
+      patch: [requireMinimumRole(ROLES.MEMBER, 'update knowledge namespaces')],
+      update: [requireMinimumRole(ROLES.MEMBER, 'update knowledge namespaces')],
+      remove: [requireMinimumRole(ROLES.MEMBER, 'delete knowledge namespaces')],
+      saveWithAcl: [requireMinimumRole(ROLES.MEMBER, 'save knowledge namespace permissions')],
+      listAcl: [requireMinimumRole(ROLES.MEMBER, 'manage knowledge namespace permissions')],
+      setAcl: [requireMinimumRole(ROLES.MEMBER, 'manage knowledge namespace permissions')],
+      removeAcl: [requireMinimumRole(ROLES.MEMBER, 'manage knowledge namespace permissions')],
     },
-  });
+  } as never);
 
   safeService('kb/documents')?.hooks({
     before: {

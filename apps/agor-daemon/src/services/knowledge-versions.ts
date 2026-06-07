@@ -15,12 +15,24 @@ import {
   hasMinimumRole,
   type KnowledgeDocument,
   type KnowledgeDocumentVersion,
+  type KnowledgeNamespaceEffectivePermission,
   parseKnowledgeUri,
   type QueryParams,
   ROLES,
   type User,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+
+const NAMESPACE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
+  none: 0,
+  read: 1,
+  write: 2,
+  own: 3,
+};
+
+function hasNamespaceRead(permission: KnowledgeNamespaceEffectivePermission): boolean {
+  return NAMESPACE_PERMISSION_RANK[permission] >= NAMESPACE_PERMISSION_RANK.read;
+}
 
 export type KnowledgeVersionParams = QueryParams<{
   document_id?: string;
@@ -58,12 +70,17 @@ export class KnowledgeVersionsService extends DrizzleService<
     this.namespaces = new KnowledgeNamespaceRepository(db);
   }
 
-  private canRead(document: KnowledgeDocument, user?: User): boolean {
-    return (
+  private async canRead(document: KnowledgeDocument, user?: User): Promise<boolean> {
+    const namespacePermission = await this.namespaces.resolveNamespacePermission(
+      document.namespace_id,
+      String(user?.user_id ?? ''),
+      { isAdmin: hasMinimumRole(user?.role, ROLES.ADMIN) }
+    );
+    const documentReadable =
       document.visibility === 'public' ||
       hasMinimumRole(user?.role, ROLES.ADMIN) ||
-      Boolean(user?.user_id && document.created_by === user.user_id)
-    );
+      Boolean(user?.user_id && document.created_by === user.user_id);
+    return hasNamespaceRead(namespacePermission) && documentReadable;
   }
 
   async find(params?: KnowledgeVersionParams) {
@@ -85,7 +102,7 @@ export class KnowledgeVersionsService extends DrizzleService<
     if (document.archived) return [];
     const namespace = await this.namespaces.findById(document.namespace_id);
     if (!namespace || namespace.archived) return [];
-    if (!this.canRead(document, params?.user as User | undefined)) {
+    if (!(await this.canRead(document, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document history');
     }
 

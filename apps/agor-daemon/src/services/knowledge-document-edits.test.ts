@@ -52,16 +52,17 @@ async function seedDocument(
   });
 }
 
+function createServices(db: Parameters<typeof dbTest>[0]['db']) {
+  const documentsService = new KnowledgeDocumentsService(db);
+  const editsService = createKnowledgeDocumentEditsService(db, {} as Application, documentsService);
+  return { documentsService, editsService };
+}
+
 describe('KnowledgeDocumentEditsService', () => {
   dbTest('returns dry-run diff and leaves document unchanged', async ({ db }) => {
     const owner = await seedUser(db, 'owner');
     const document = await seedDocument(db, owner);
-    const documentsService = new KnowledgeDocumentsService(db);
-    const editsService = createKnowledgeDocumentEditsService(
-      db,
-      {} as Application,
-      documentsService
-    );
+    const { editsService } = createServices(db);
 
     const response = await editsService.create(
       {
@@ -93,12 +94,7 @@ describe('KnowledgeDocumentEditsService', () => {
   dbTest('applies edits and creates a new immutable version', async ({ db }) => {
     const owner = await seedUser(db, 'owner');
     const document = await seedDocument(db, owner);
-    const documentsService = new KnowledgeDocumentsService(db);
-    const editsService = createKnowledgeDocumentEditsService(
-      db,
-      {} as Application,
-      documentsService
-    );
+    const { editsService } = createServices(db);
 
     const versionsRepo = new KnowledgeDocumentVersionRepository(db);
     const initialVersion = await versionsRepo.findLatestForDocument(document.document_id);
@@ -140,12 +136,7 @@ describe('KnowledgeDocumentEditsService', () => {
     const owner = await seedUser(db, 'owner');
     const other = await seedUser(db, 'other');
     const document = await seedDocument(db, owner);
-    const documentsService = new KnowledgeDocumentsService(db);
-    const editsService = createKnowledgeDocumentEditsService(
-      db,
-      {} as Application,
-      documentsService
-    );
+    const { editsService } = createServices(db);
 
     await expect(
       editsService.create(
@@ -159,5 +150,61 @@ describe('KnowledgeDocumentEditsService', () => {
         { user: other }
       )
     ).rejects.toThrowError();
+  });
+
+  dbTest('requires namespace write even for public-editable dry runs', async ({ db }) => {
+    const owner = await seedUser(db, 'owner');
+    const other = await seedUser(db, 'other');
+    const namespaceRepo = new KnowledgeNamespaceRepository(db);
+    const namespace = await namespaceRepo.create({
+      slug: `closed-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      display_name: 'Closed KB',
+      owner_user_id: owner.user_id as UserID,
+      others_can: 'none',
+    });
+    const document = await new KnowledgeDocumentRepository(db).create({
+      namespace_id: namespace.namespace_id,
+      path: 'page.md',
+      title: 'Page',
+      visibility: 'public',
+      edit_policy: 'public',
+      content_text: '# Title\nLine 1',
+      created_by: owner.user_id as UserID,
+    });
+    const { editsService } = createServices(db);
+
+    await namespaceRepo.upsertNamespaceAclEntry({
+      namespace_id: namespace.namespace_id,
+      subject_type: 'user',
+      subject_id: other.user_id,
+      permission: 'read',
+    });
+    await expect(
+      editsService.create(
+        {
+          documentId: document.document_id,
+          dryRun: true,
+          ops: [{ type: 'replace_line_range', startLine: 2, endLine: 2, replacement: 'No write' }],
+        },
+        { user: other }
+      )
+    ).rejects.toThrowError();
+
+    await namespaceRepo.upsertNamespaceAclEntry({
+      namespace_id: namespace.namespace_id,
+      subject_type: 'user',
+      subject_id: other.user_id,
+      permission: 'write',
+    });
+    await expect(
+      editsService.create(
+        {
+          documentId: document.document_id,
+          dryRun: true,
+          ops: [{ type: 'replace_line_range', startLine: 2, endLine: 2, replacement: 'Allowed' }],
+        },
+        { user: other }
+      )
+    ).resolves.toMatchObject({ dryRun: true });
   });
 });

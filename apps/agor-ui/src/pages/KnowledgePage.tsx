@@ -2,11 +2,14 @@ import type {
   KnowledgeDocument as CoreKnowledgeDocument,
   KnowledgeIndexingStatus as CoreKnowledgeIndexingStatus,
   KnowledgeNamespace as CoreKnowledgeNamespace,
+  KnowledgeNamespaceAclEntry as CoreKnowledgeNamespaceAclEntry,
   KnowledgeDocumentVersion as CoreKnowledgeVersion,
   KnowledgeDocumentIndexingStatus,
   KnowledgeDocumentKind,
   KnowledgeDocumentStatus,
   KnowledgeNamespaceGraph,
+  KnowledgeNamespacePermission,
+  KnowledgeNamespaceSubjectType,
   KnowledgeSearchMode,
   KnowledgeSemanticSettingsPublic,
 } from '@agor/core/types';
@@ -18,10 +21,11 @@ import {
   titleFromKnowledgeContent,
   validateKnowledgePath as validateSharedKnowledgePath,
 } from '@agor/core/types';
-import type { AgorClient, User } from '@agor-live/client';
+import type { AgorClient, Group, User } from '@agor-live/client';
 import {
   ApartmentOutlined,
   ArrowLeftOutlined,
+  DeleteOutlined,
   DownOutlined,
   EditOutlined,
   ExperimentOutlined,
@@ -37,7 +41,9 @@ import {
   SaveOutlined,
   SearchOutlined,
   SettingOutlined,
+  TeamOutlined,
   UpOutlined,
+  UserOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import {
@@ -60,6 +66,7 @@ import {
   Space,
   Spin,
   Switch,
+  Tabs,
   Tag,
   Tooltip,
   Tree,
@@ -91,6 +98,7 @@ import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
 import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
 import { useThemedModal } from '../utils/modal';
+import { slugify } from '../utils/repoSlug';
 
 const { Header, Content } = Layout;
 const { Text, Title } = Typography;
@@ -124,7 +132,37 @@ interface KnowledgeSearchResult {
 }
 
 type KnowledgeSemanticSettings = KnowledgeSemanticSettingsPublic & { api_key?: string | null };
+
+type KnowledgeNamespaceAclEntry = Pick<
+  CoreKnowledgeNamespaceAclEntry,
+  'namespace_acl_id' | 'namespace_id' | 'subject_type' | 'subject_id' | 'permission'
+>;
+
+interface KnowledgeNamespaceAclDraftEntry {
+  subject_type: KnowledgeNamespaceSubjectType;
+  subject_id: string;
+  permission: KnowledgeNamespacePermission;
+}
+
+type KnowledgeNamespaceFormValues = Pick<
+  KnowledgeNamespace,
+  'slug' | 'display_name' | 'description' | 'kind' | 'visibility_default' | 'others_can'
+>;
 type KnowledgeIndexingStatus = CoreKnowledgeIndexingStatus;
+
+type KnowledgeNamespacesClientService = ReturnType<AgorClient['service']> & {
+  listAcl(data: { namespace_id: string }): Promise<KnowledgeNamespaceAclEntry[]>;
+  saveWithAcl(data: {
+    namespace_id?: string;
+    namespace: Partial<KnowledgeNamespace>;
+    acl: KnowledgeNamespaceAclDraftEntry[];
+  }): Promise<{ namespace: KnowledgeNamespace; acl: KnowledgeNamespaceAclEntry[] }>;
+};
+
+type KnowledgeNamespacesClientServiceWithMethods = KnowledgeNamespacesClientService & {
+  methods?: (...names: string[]) => unknown;
+  __knowledgeNamespaceMethodsRegistered?: boolean;
+};
 
 interface KnowledgePageProps {
   client: AgorClient | null;
@@ -378,6 +416,17 @@ const leafTitleFromPath = (path: string): string => {
 const normalizeFindResult = <T,>(result: T[] | { data?: T[] }): T[] =>
   Array.isArray(result) ? result : (result.data ?? []);
 
+const getKnowledgeNamespacesService = (client: AgorClient): KnowledgeNamespacesClientService => {
+  const service = client.service(
+    'kb/namespaces'
+  ) as unknown as KnowledgeNamespacesClientServiceWithMethods;
+  if (!service.__knowledgeNamespaceMethodsRegistered) {
+    service.methods?.('listAcl', 'setAcl', 'removeAcl', 'saveWithAcl');
+    service.__knowledgeNamespaceMethodsRegistered = true;
+  }
+  return service;
+};
+
 const normalizeFolderPath = (folder?: string | null) => {
   try {
     return normalizeKnowledgeFolderPath(folder);
@@ -495,6 +544,21 @@ const slugifyFileName = (value: string) => {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return `${slug || 'untitled'}.md`;
+};
+
+const encodeNamespaceSubjectValue = (
+  subjectType: KnowledgeNamespaceSubjectType,
+  subjectId: string
+) => `${subjectType}:${subjectId}`;
+
+const parseNamespaceSubjectValue = (
+  value?: string | null
+): { subjectType: KnowledgeNamespaceSubjectType; subjectId: string } | null => {
+  if (!value) return null;
+  const [subjectType, ...rest] = value.split(':');
+  const subjectId = rest.join(':');
+  if ((subjectType !== 'user' && subjectType !== 'group') || !subjectId) return null;
+  return { subjectType, subjectId };
 };
 
 const inferTitleFromMarkdown = (markdown: string, fallback = 'Untitled') =>
@@ -649,6 +713,19 @@ export function KnowledgePage({
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsApiKeyDraft, setSettingsApiKeyDraft] = useState('');
   const [settingsForm] = Form.useForm<KnowledgeSemanticSettings>();
+  const [namespaceEditorOpen, setNamespaceEditorOpen] = useState(false);
+  const [namespaceEditing, setNamespaceEditing] = useState<KnowledgeNamespace | null>(null);
+  const [namespaceSaving, setNamespaceSaving] = useState(false);
+  const [namespaceError, setNamespaceError] = useState<string | null>(null);
+  const [namespaceForm] = Form.useForm<KnowledgeNamespaceFormValues>();
+  const namespaceSlugEditedRef = useRef(false);
+  const [namespaceUsers, setNamespaceUsers] = useState<User[]>([]);
+  const [namespaceGroups, setNamespaceGroups] = useState<Group[]>([]);
+  const [namespaceAclDraft, setNamespaceAclDraft] = useState<KnowledgeNamespaceAclDraftEntry[]>([]);
+  const [namespaceAclLoading, setNamespaceAclLoading] = useState(false);
+  const [namespaceAclSubject, setNamespaceAclSubject] = useState<string | null>(null);
+  const [namespaceAclPermission, setNamespaceAclPermission] =
+    useState<KnowledgeNamespacePermission>('read');
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === 'undefined' ? 1440 : window.innerWidth
   );
@@ -744,6 +821,54 @@ export function KnowledgePage({
       (activeSpace !== 'all' ? activeSpace : selectedNamespace?.slug) ??
       'global',
     [activeSpace, namespaceSlugById, selectedNamespace?.slug]
+  );
+
+  const namespaceAclSubjectOptions = useMemo(() => {
+    const users = new Map(userById);
+    for (const user of namespaceUsers) users.set(user.user_id, user);
+    if (currentUser) users.set(currentUser.user_id, currentUser);
+    return [
+      {
+        label: 'Users',
+        options: [...users.values()]
+          .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email))
+          .map((user) => ({
+            label: `${user.name || user.email}${user.email ? ` <${user.email}>` : ''}`,
+            value: encodeNamespaceSubjectValue('user', user.user_id),
+          })),
+      },
+      {
+        label: 'Groups',
+        options: namespaceGroups
+          .filter((group) => !group.archived)
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((group) => ({
+            label: `${group.name} group`,
+            value: encodeNamespaceSubjectValue('group', group.group_id),
+          })),
+      },
+    ];
+  }, [currentUser, namespaceGroups, namespaceUsers, userById]);
+
+  const namespaceUserById = useMemo(() => {
+    const users = new Map(userById);
+    for (const user of namespaceUsers) users.set(user.user_id, user);
+    if (currentUser) users.set(currentUser.user_id, currentUser);
+    return users;
+  }, [currentUser, namespaceUsers, userById]);
+
+  const namespaceSubjectLabel = useCallback(
+    (entry: KnowledgeNamespaceAclDraftEntry) => {
+      if (entry.subject_type === 'user') {
+        const user = namespaceUserById.get(entry.subject_id);
+        return user
+          ? `${user.name || user.email}${user.email ? ` <${user.email}>` : ''}`
+          : entry.subject_id;
+      }
+      const group = namespaceGroups.find((item) => item.group_id === entry.subject_id);
+      return group ? `${group.name} group` : entry.subject_id;
+    },
+    [namespaceGroups, namespaceUserById]
   );
 
   // Resolve rename-proof `agor://kb/document/<uuid>` links to clickable links for
@@ -1078,12 +1203,38 @@ export function KnowledgePage({
     }
   }, [client, settingsForm]);
 
+  const loadNamespaceGroups = useCallback(async () => {
+    if (!client) return;
+    try {
+      const result = await client.service('groups').findAll({ query: { archived: false } });
+      setNamespaceGroups(normalizeFindResult<Group>(result as Group[]));
+    } catch (err) {
+      console.error('Failed to load Knowledge namespace groups:', err);
+      setNamespaceGroups([]);
+    }
+  }, [client]);
+
+  const loadNamespaceUsers = useCallback(async () => {
+    if (!client) return;
+    try {
+      const result = await client.service('users').findAll({});
+      setNamespaceUsers(normalizeFindResult<User>(result as User[]));
+    } catch (err) {
+      console.error('Failed to load Knowledge namespace users:', err);
+      setNamespaceUsers([]);
+    }
+  }, [client]);
+
   const openKnowledgeSettings = useCallback(() => {
     setKnowledgeSettingsOpen(true);
     setSettingsApiKeyDraft('');
     setSettingsError(null);
+    setNamespaceError(null);
     void refreshKnowledgeSettings();
-  }, [refreshKnowledgeSettings]);
+    void loadNamespaces();
+    void loadNamespaceGroups();
+    void loadNamespaceUsers();
+  }, [loadNamespaceGroups, loadNamespaceUsers, loadNamespaces, refreshKnowledgeSettings]);
 
   const saveKnowledgeSettings = useCallback(async () => {
     if (!client) return;
@@ -1133,6 +1284,202 @@ export function KnowledgePage({
       setSettingsSaving(false);
     }
   }, [client, refreshKnowledgeSettings]);
+
+  const openNamespaceEditor = useCallback(
+    (namespace?: KnowledgeNamespace | null) => {
+      namespaceSlugEditedRef.current = Boolean(namespace);
+      setNamespaceEditing(namespace ?? null);
+      setNamespaceError(null);
+      setNamespaceAclSubject(null);
+      setNamespaceAclPermission('read');
+      setNamespaceAclDraft(
+        !namespace && currentUser?.user_id
+          ? [
+              {
+                subject_type: 'user',
+                subject_id: currentUser.user_id,
+                permission: 'own',
+              },
+            ]
+          : []
+      );
+      namespaceForm.setFieldsValue(
+        namespace
+          ? {
+              slug: namespace.slug,
+              display_name: namespace.display_name,
+              description: namespace.description ?? '',
+              kind: namespace.kind,
+              visibility_default: namespace.visibility_default,
+              others_can: namespace.others_can,
+            }
+          : {
+              slug: '',
+              display_name: '',
+              description: '',
+              kind: 'team',
+              visibility_default: 'public',
+              others_can: 'none',
+            }
+      );
+      setNamespaceEditorOpen(true);
+      if (namespace && client) {
+        setNamespaceAclLoading(true);
+        const service = getKnowledgeNamespacesService(client);
+        service
+          .listAcl({ namespace_id: namespace.namespace_id })
+          .then((entries) => {
+            setNamespaceAclDraft(
+              entries.map((entry) => ({
+                subject_type: entry.subject_type,
+                subject_id: entry.subject_id,
+                permission: entry.permission,
+              }))
+            );
+          })
+          .catch((err) => {
+            console.error('Failed to load Knowledge namespace ACL:', err);
+            setNamespaceError(err instanceof Error ? err.message : String(err));
+          })
+          .finally(() => setNamespaceAclLoading(false));
+      }
+    },
+    [client, currentUser?.user_id, namespaceForm]
+  );
+
+  const handleNamespaceValuesChange = useCallback(
+    (changedValues: Partial<KnowledgeNamespaceFormValues>) => {
+      if (Object.hasOwn(changedValues, 'slug')) {
+        namespaceSlugEditedRef.current = true;
+        return;
+      }
+
+      if (
+        !namespaceEditing &&
+        Object.hasOwn(changedValues, 'display_name') &&
+        !namespaceSlugEditedRef.current
+      ) {
+        namespaceForm.setFieldsValue({ slug: slugify(changedValues.display_name || '') });
+      }
+    },
+    [namespaceEditing, namespaceForm]
+  );
+
+  const addNamespaceAclDraftEntry = useCallback(() => {
+    const parsed = parseNamespaceSubjectValue(namespaceAclSubject);
+    if (!parsed) return;
+    setNamespaceAclDraft((prev) => {
+      const nextEntry: KnowledgeNamespaceAclDraftEntry = {
+        subject_type: parsed.subjectType,
+        subject_id: parsed.subjectId,
+        permission: namespaceAclPermission,
+      };
+      const existingIndex = prev.findIndex(
+        (entry) =>
+          entry.subject_type === parsed.subjectType && entry.subject_id === parsed.subjectId
+      );
+      if (existingIndex === -1) return [...prev, nextEntry];
+      return prev.map((entry, index) => (index === existingIndex ? nextEntry : entry));
+    });
+    setNamespaceAclSubject(null);
+    setNamespaceAclPermission('read');
+  }, [namespaceAclPermission, namespaceAclSubject]);
+
+  const updateNamespaceAclDraftPermission = useCallback(
+    (entry: KnowledgeNamespaceAclDraftEntry, permission: KnowledgeNamespacePermission) => {
+      setNamespaceAclDraft((prev) =>
+        prev.map((item) =>
+          item.subject_type === entry.subject_type && item.subject_id === entry.subject_id
+            ? { ...item, permission }
+            : item
+        )
+      );
+    },
+    []
+  );
+
+  const removeNamespaceAclDraftEntry = useCallback((entry: KnowledgeNamespaceAclDraftEntry) => {
+    setNamespaceAclDraft((prev) =>
+      prev.filter(
+        (item) => item.subject_type !== entry.subject_type || item.subject_id !== entry.subject_id
+      )
+    );
+  }, []);
+
+  const saveNamespace = useCallback(async () => {
+    if (!client) return;
+    setNamespaceSaving(true);
+    setNamespaceError(null);
+    try {
+      const values = await namespaceForm.validateFields();
+      const payload = {
+        ...values,
+        slug: values.slug.trim(),
+        display_name: values.display_name.trim(),
+        description: values.description?.trim() || null,
+      };
+      const service = getKnowledgeNamespacesService(client);
+      const result = await service.saveWithAcl({
+        namespace_id: namespaceEditing?.namespace_id,
+        namespace: namespaceEditing
+          ? {
+              ...payload,
+              slug: namespaceEditing.slug,
+            }
+          : payload,
+        acl: namespaceAclDraft,
+      });
+      setNamespaceAclDraft(
+        result.acl.map((entry) => ({
+          subject_type: entry.subject_type,
+          subject_id: entry.subject_id,
+          permission: entry.permission,
+        }))
+      );
+      if (namespaceEditing) {
+        setNamespaces((prev) =>
+          prev.map((namespace) =>
+            namespace.namespace_id === result.namespace.namespace_id ? result.namespace : namespace
+          )
+        );
+      } else {
+        setNamespaces((prev) => [result.namespace, ...prev]);
+      }
+      await loadNamespaces();
+      setNamespaceEditorOpen(false);
+      setNamespaceEditing(null);
+    } catch (err) {
+      console.error('Failed to save Knowledge namespace:', err);
+      setNamespaceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNamespaceSaving(false);
+    }
+  }, [client, loadNamespaces, namespaceAclDraft, namespaceEditing, namespaceForm]);
+
+  const archiveNamespace = useCallback(
+    (namespace: KnowledgeNamespace) => {
+      if (!client) return;
+      confirm({
+        title: `Archive ${namespace.display_name || namespace.slug}?`,
+        content:
+          'Archiving a namespace also archives its documents. This can disrupt Knowledge links and search.',
+        okText: 'Archive namespace',
+        okButtonProps: { danger: true },
+        onOk: async () => {
+          setNamespaceError(null);
+          try {
+            await client.service('kb/namespaces').remove(namespace.namespace_id);
+            await loadNamespaces();
+            if (activeSpace === namespace.slug) setActiveSpace('all');
+          } catch (err) {
+            console.error('Failed to archive Knowledge namespace:', err);
+            setNamespaceError(err instanceof Error ? err.message : String(err));
+          }
+        },
+      });
+    },
+    [activeSpace, client, confirm, loadNamespaces]
+  );
 
   // The namespace graph is scoped to a single Space; "All Spaces" has no graph.
   const loadGraph = useCallback(async () => {
@@ -3010,152 +3357,394 @@ export function KnowledgePage({
       </Drawer>
 
       <Modal
-        title="Knowledge semantic search"
+        title="Knowledge settings"
         open={knowledgeSettingsOpen}
         onCancel={() => setKnowledgeSettingsOpen(false)}
-        okText="Save settings"
-        onOk={saveKnowledgeSettings}
-        confirmLoading={settingsSaving}
-        width={720}
+        footer={null}
+        width={760}
       >
         <Spin spinning={settingsLoading}>
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            {settingsError && <Alert type="error" showIcon message={settingsError} />}
-            <Alert
-              type="info"
-              showIcon
-              message="Semantic search uses markdown-aware chunks stored in Postgres/pgvector. SQLite can save settings and chunks, but vector search requires Postgres."
-            />
-            {indexingStatus && (
-              <div
-                style={{
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  borderRadius: token.borderRadiusLG,
-                  padding: 12,
-                  background: token.colorFillQuaternary,
-                }}
-              >
-                <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                  <Text strong>Indexing status</Text>
-                  <Text type="secondary">
-                    {indexingStatus.dialect} · pgvector{' '}
-                    {indexingStatus.pgvector_available
-                      ? 'ready'
-                      : indexingStatus.pgvector_extension_installed
-                        ? 'extension installed, storage not ready'
-                        : 'not available'}{' '}
-                    · queue {indexingStatus.queue_depth}
-                  </Text>
-                  <Space wrap>
-                    {Object.entries(indexingStatus.chunks).map(([status, count]) => (
-                      <Tag key={status}>
-                        {status}: {Number(count)}
-                      </Tag>
-                    ))}
+          <Tabs
+            defaultActiveKey="namespaces"
+            items={[
+              {
+                key: 'namespaces',
+                label: 'Namespaces',
+                children: (
+                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Namespaces are the Knowledge RBAC boundary. Use the workspace fallback for broad access; user/group-specific grants are available through the backend and will get a richer UI next."
+                    />
+                    {namespaceError && <Alert type="error" showIcon message={namespaceError} />}
+                    <Flex justify="space-between" align="center">
+                      <Space direction="vertical" size={0}>
+                        <Text strong>Knowledge namespaces</Text>
+                        <Text type="secondary">
+                          Create and manage Knowledge spaces, defaults, and broad workspace access.
+                        </Text>
+                      </Space>
+                      <Button type="primary" onClick={() => openNamespaceEditor(null)}>
+                        New namespace
+                      </Button>
+                    </Flex>
+                    <List
+                      size="small"
+                      dataSource={namespaces}
+                      locale={{ emptyText: 'No readable namespaces' }}
+                      renderItem={(namespace) => (
+                        <List.Item
+                          actions={[
+                            <Button
+                              key="edit"
+                              size="small"
+                              onClick={() => openNamespaceEditor(namespace)}
+                            >
+                              Edit
+                            </Button>,
+                            <Button
+                              key="archive"
+                              size="small"
+                              danger
+                              disabled={namespace.kind === 'system'}
+                              onClick={() => archiveNamespace(namespace)}
+                            >
+                              Archive
+                            </Button>,
+                          ]}
+                        >
+                          <List.Item.Meta
+                            title={
+                              <Space wrap>
+                                <Text strong>{namespace.display_name || namespace.slug}</Text>
+                                <Tag>{namespace.slug}</Tag>
+                                <Tag color={namespace.others_can === 'none' ? 'default' : 'blue'}>
+                                  others: {namespace.others_can}
+                                </Tag>
+                              </Space>
+                            }
+                            description={namespace.description || 'No description'}
+                          />
+                        </List.Item>
+                      )}
+                    />
                   </Space>
-                  {indexingStatus.last_error && (
-                    <Alert type="warning" message={indexingStatus.last_error} />
-                  )}
-                </Space>
-              </div>
-            )}
-            <Form
-              form={settingsForm}
-              layout="vertical"
-              initialValues={knowledgeSettings ?? DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS}
-            >
+                ),
+              },
+              {
+                key: 'semantic',
+                label: 'Semantic search',
+                children: (
+                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    {settingsError && <Alert type="error" showIcon message={settingsError} />}
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Semantic search uses markdown-aware chunks stored in Postgres/pgvector. SQLite can save settings and chunks, but vector search requires Postgres."
+                    />
+                    {indexingStatus && (
+                      <div
+                        style={{
+                          border: `1px solid ${token.colorBorderSecondary}`,
+                          borderRadius: token.borderRadiusLG,
+                          padding: 12,
+                          background: token.colorFillQuaternary,
+                        }}
+                      >
+                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                          <Text strong>Indexing status</Text>
+                          <Text type="secondary">
+                            {indexingStatus.dialect} · pgvector{' '}
+                            {indexingStatus.pgvector_available
+                              ? 'ready'
+                              : indexingStatus.pgvector_extension_installed
+                                ? 'extension installed, storage not ready'
+                                : 'not available'}{' '}
+                            · queue {indexingStatus.queue_depth}
+                          </Text>
+                          <Space wrap>
+                            {Object.entries(indexingStatus.chunks).map(([status, count]) => (
+                              <Tag key={status}>
+                                {status}: {Number(count)}
+                              </Tag>
+                            ))}
+                          </Space>
+                          {indexingStatus.last_error && (
+                            <Alert type="warning" message={indexingStatus.last_error} />
+                          )}
+                        </Space>
+                      </div>
+                    )}
+                    <Form
+                      form={settingsForm}
+                      layout="vertical"
+                      initialValues={knowledgeSettings ?? DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS}
+                    >
+                      <Form.Item
+                        name="enabled"
+                        label="Enable semantic / hybrid search"
+                        valuePropName="checked"
+                      >
+                        <Switch />
+                      </Form.Item>
+                      <Flex gap={12} wrap="wrap">
+                        <Form.Item
+                          name="provider"
+                          label="Provider"
+                          style={{ minWidth: 180, flex: 1 }}
+                        >
+                          <Select options={[{ label: 'OpenAI', value: 'openai' }]} />
+                        </Form.Item>
+                        <Form.Item name="model" label="Model" style={{ minWidth: 240, flex: 2 }}>
+                          <Select
+                            options={OPENAI_EMBEDDING_MODEL_OPTIONS}
+                            onChange={() => settingsForm.setFieldValue('dimensions', 1536)}
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          name="dimensions"
+                          label="Dimensions"
+                          tooltip="Agor V1 indexes 1536-dimensional embeddings. text-embedding-3-large is requested with dimensions=1536."
+                          style={{ width: 140 }}
+                        >
+                          <InputNumber
+                            disabled
+                            min={1536}
+                            max={1536}
+                            precision={0}
+                            style={{ width: '100%' }}
+                          />
+                        </Form.Item>
+                      </Flex>
+                      <Form.Item label="OpenAI API key">
+                        <Input.Password
+                          value={settingsApiKeyDraft}
+                          onChange={(event) => setSettingsApiKeyDraft(event.target.value)}
+                          placeholder={
+                            knowledgeSettings?.api_key_configured
+                              ? 'Configured — enter a new key to replace'
+                              : 'sk-...'
+                          }
+                          autoComplete="off"
+                        />
+                      </Form.Item>
+                      <Flex gap={12} wrap="wrap">
+                        <Form.Item
+                          name={['chunking', 'target_tokens']}
+                          label="Target tokens"
+                          style={{ width: 150 }}
+                        >
+                          <InputNumber min={100} precision={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                        <Form.Item
+                          name={['chunking', 'max_tokens']}
+                          label="Max tokens"
+                          style={{ width: 150 }}
+                        >
+                          <InputNumber min={100} precision={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                        <Form.Item
+                          name={['chunking', 'overlap_tokens']}
+                          label="Overlap"
+                          style={{ width: 130 }}
+                        >
+                          <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                        <Form.Item
+                          name={['chunking', 'min_tokens']}
+                          label="Min tokens"
+                          style={{ width: 130 }}
+                        >
+                          <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                        <Form.Item
+                          name={['indexing', 'batch_size']}
+                          label="Batch size"
+                          style={{ width: 130 }}
+                        >
+                          <InputNumber min={1} max={256} precision={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Flex>
+                    </Form>
+                    <Flex justify="space-between" align="center">
+                      <Text type="secondary">
+                        Reindexing queues current Knowledge chunks and wakes the background indexer.
+                      </Text>
+                      <Space>
+                        <Button onClick={reindexKnowledge} loading={settingsSaving}>
+                          Reindex now
+                        </Button>
+                        <Button
+                          type="primary"
+                          onClick={saveKnowledgeSettings}
+                          loading={settingsSaving}
+                        >
+                          Save semantic settings
+                        </Button>
+                      </Space>
+                    </Flex>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </Spin>
+      </Modal>
+
+      <Modal
+        title={namespaceEditing ? 'Edit namespace' : 'Create namespace'}
+        open={namespaceEditorOpen}
+        onCancel={() => setNamespaceEditorOpen(false)}
+        okText={namespaceEditing ? 'Save namespace' : 'Create namespace'}
+        onOk={saveNamespace}
+        confirmLoading={namespaceSaving}
+        destroyOnHidden
+      >
+        <Form form={namespaceForm} layout="vertical" onValuesChange={handleNamespaceValuesChange}>
+          <Form.Item
+            name="display_name"
+            label="Name"
+            rules={[{ required: true, message: 'Name is required' }]}
+          >
+            <Input placeholder="Team docs" />
+          </Form.Item>
+          <Form.Item
+            name="slug"
+            label="Slug"
+            rules={[
+              { required: true, message: 'Namespace slug is required' },
+              {
+                pattern: /^[a-z0-9][a-z0-9._-]*$/,
+                message: 'Use lowercase letters, numbers, dots, underscores, or dashes',
+              },
+            ]}
+          >
+            <Input disabled={Boolean(namespaceEditing)} placeholder="team-docs" />
+          </Form.Item>
+          <Form.Item name="description" label="Description">
+            <Input.TextArea rows={3} placeholder="What belongs in this namespace?" />
+          </Form.Item>
+          <Form.Item name="kind" hidden>
+            <Input />
+          </Form.Item>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Space direction="vertical" size={0}>
+              <Text strong>Default access</Text>
+              <Text type="secondary">
+                These defaults apply across the namespace before user or group-specific grants.
+              </Text>
+            </Space>
+            <Flex gap={12} wrap="wrap">
               <Form.Item
-                name="enabled"
-                label="Enable semantic / hybrid search"
-                valuePropName="checked"
+                name="visibility_default"
+                label="Default document visibility"
+                style={{ minWidth: 180, flex: 1 }}
               >
-                <Switch />
-              </Form.Item>
-              <Flex gap={12} wrap="wrap">
-                <Form.Item name="provider" label="Provider" style={{ minWidth: 180, flex: 1 }}>
-                  <Select options={[{ label: 'OpenAI', value: 'openai' }]} />
-                </Form.Item>
-                <Form.Item name="model" label="Model" style={{ minWidth: 240, flex: 2 }}>
-                  <Select
-                    options={OPENAI_EMBEDDING_MODEL_OPTIONS}
-                    onChange={() => settingsForm.setFieldValue('dimensions', 1536)}
-                  />
-                </Form.Item>
-                <Form.Item
-                  name="dimensions"
-                  label="Dimensions"
-                  tooltip="Agor V1 indexes 1536-dimensional embeddings. text-embedding-3-large is requested with dimensions=1536."
-                  style={{ width: 140 }}
-                >
-                  <InputNumber
-                    disabled
-                    min={1536}
-                    max={1536}
-                    precision={0}
-                    style={{ width: '100%' }}
-                  />
-                </Form.Item>
-              </Flex>
-              <Form.Item label="OpenAI API key">
-                <Input.Password
-                  value={settingsApiKeyDraft}
-                  onChange={(event) => setSettingsApiKeyDraft(event.target.value)}
-                  placeholder={
-                    knowledgeSettings?.api_key_configured
-                      ? 'Configured — enter a new key to replace'
-                      : 'sk-...'
-                  }
-                  autoComplete="off"
+                <Select
+                  options={[
+                    { label: 'Public in namespace', value: 'public' },
+                    { label: 'Private to creator', value: 'private' },
+                  ]}
                 />
               </Form.Item>
-              <Flex gap={12} wrap="wrap">
-                <Form.Item
-                  name={['chunking', 'target_tokens']}
-                  label="Target tokens"
-                  style={{ width: 150 }}
-                >
-                  <InputNumber min={100} precision={0} style={{ width: '100%' }} />
-                </Form.Item>
-                <Form.Item
-                  name={['chunking', 'max_tokens']}
-                  label="Max tokens"
-                  style={{ width: 150 }}
-                >
-                  <InputNumber min={100} precision={0} style={{ width: '100%' }} />
-                </Form.Item>
-                <Form.Item
-                  name={['chunking', 'overlap_tokens']}
-                  label="Overlap"
-                  style={{ width: 130 }}
-                >
-                  <InputNumber min={0} precision={0} style={{ width: '100%' }} />
-                </Form.Item>
-                <Form.Item
-                  name={['chunking', 'min_tokens']}
-                  label="Min tokens"
-                  style={{ width: 130 }}
-                >
-                  <InputNumber min={0} precision={0} style={{ width: '100%' }} />
-                </Form.Item>
-                <Form.Item
-                  name={['indexing', 'batch_size']}
-                  label="Batch size"
-                  style={{ width: 130 }}
-                >
-                  <InputNumber min={1} max={256} precision={0} style={{ width: '100%' }} />
-                </Form.Item>
-              </Flex>
-            </Form>
-            <Flex justify="space-between" align="center">
-              <Text type="secondary">
-                Reindexing queues current Knowledge chunks and wakes the background indexer.
-              </Text>
-              <Button onClick={reindexKnowledge} loading={settingsSaving}>
-                Reindex now
-              </Button>
+              <Form.Item
+                name="others_can"
+                label="Everyone else in workspace"
+                tooltip="Fallback for users not listed in specific namespace access."
+                style={{ minWidth: 180, flex: 1 }}
+              >
+                <Select
+                  options={[
+                    { label: 'No access', value: 'none' },
+                    { label: 'Read', value: 'read' },
+                    { label: 'Write', value: 'write' },
+                  ]}
+                />
+              </Form.Item>
             </Flex>
           </Space>
-        </Spin>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Space direction="vertical" size={0}>
+              <Text strong>Specific access</Text>
+              <Text type="secondary">
+                Add users or groups that should override the default access above.
+              </Text>
+            </Space>
+            <Flex gap={8} wrap="wrap">
+              <Select
+                showSearch
+                allowClear
+                placeholder="User or group"
+                value={namespaceAclSubject}
+                onChange={(value) => setNamespaceAclSubject(value ?? null)}
+                options={namespaceAclSubjectOptions}
+                optionFilterProp="label"
+                style={{ minWidth: 280, flex: 1 }}
+              />
+              <Select
+                value={namespaceAclPermission}
+                onChange={setNamespaceAclPermission}
+                options={[
+                  { label: 'Read', value: 'read' },
+                  { label: 'Write', value: 'write' },
+                  { label: 'Own', value: 'own' },
+                ]}
+                style={{ width: 120 }}
+              />
+              <Button onClick={addNamespaceAclDraftEntry} disabled={!namespaceAclSubject}>
+                + Add
+              </Button>
+            </Flex>
+            <Spin spinning={namespaceAclLoading}>
+              <List
+                size="small"
+                dataSource={namespaceAclDraft}
+                locale={{ emptyText: 'No specific user or group grants' }}
+                renderItem={(entry) => (
+                  <List.Item
+                    actions={[
+                      <Select
+                        key="permission"
+                        size="small"
+                        value={entry.permission}
+                        onChange={(permission) =>
+                          updateNamespaceAclDraftPermission(entry, permission)
+                        }
+                        options={[
+                          { label: 'Read', value: 'read' },
+                          { label: 'Write', value: 'write' },
+                          { label: 'Own', value: 'own' },
+                        ]}
+                        style={{ width: 110 }}
+                      />,
+                      <Button
+                        key="remove"
+                        type="text"
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        aria-label={`Remove ${namespaceSubjectLabel(entry)}`}
+                        onClick={() => removeNamespaceAclDraftEntry(entry)}
+                      />,
+                    ]}
+                  >
+                    <List.Item.Meta
+                      title={
+                        <Space>
+                          <Tooltip title={entry.subject_type === 'user' ? 'User' : 'Group'}>
+                            {entry.subject_type === 'user' ? <UserOutlined /> : <TeamOutlined />}
+                          </Tooltip>
+                          <Text>{namespaceSubjectLabel(entry)}</Text>
+                        </Space>
+                      }
+                    />
+                  </List.Item>
+                )}
+              />
+            </Spin>
+          </Space>
+        </Form>
       </Modal>
 
       <Modal

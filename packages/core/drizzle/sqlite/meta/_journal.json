@@ -365,6 +365,13 @@
       "when": 1781000000000,
       "tag": "0053_kb_document_status",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1781100000000,
+      "tag": "0054_kb_namespace_rbac",
+      "breakpoints": true
     }
   ]
 }

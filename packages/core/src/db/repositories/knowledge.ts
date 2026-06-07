@@ -9,6 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import type {
+  GroupID,
   KnowledgeDocument,
   KnowledgeDocumentID,
   KnowledgeDocumentIndexingStatus,
@@ -26,8 +27,13 @@ import type {
   KnowledgeGraphNodeID,
   KnowledgeGraphNodeType,
   KnowledgeNamespace,
+  KnowledgeNamespaceAclEntry,
+  KnowledgeNamespaceEffectivePermission,
   KnowledgeNamespaceID,
   KnowledgeNamespaceKind,
+  KnowledgeNamespaceOthersCan,
+  KnowledgeNamespacePermission,
+  KnowledgeNamespaceSubjectType,
   KnowledgeSearchMode,
   KnowledgeSearchResult,
   KnowledgeVisibility,
@@ -52,6 +58,8 @@ import { getKnowledgeUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
 import {
+  groupMemberships,
+  groups,
   type KBDocumentInsert,
   type KBDocumentRow,
   type KBDocumentUnitInsert,
@@ -61,6 +69,8 @@ import {
   type KBGraphEdgeRow,
   type KBGraphNodeInsert,
   type KBGraphNodeRow,
+  type KBNamespaceAclInsert,
+  type KBNamespaceAclRow,
   type KBNamespaceInsert,
   type KBNamespaceRow,
   kbDocuments,
@@ -68,6 +78,7 @@ import {
   kbDocumentVersions,
   kbGraphEdges,
   kbGraphNodes,
+  kbNamespaceAcl,
   kbNamespaces,
 } from '../schema';
 import {
@@ -304,6 +315,32 @@ function knowledgeDraftVisibilityCondition(options: {
   return eq(kbDocuments.status, 'published');
 }
 
+const KNOWLEDGE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
+  none: 0,
+  read: 1,
+  write: 2,
+  own: 3,
+};
+
+function maxKnowledgePermission(
+  permissions: Array<KnowledgeNamespaceEffectivePermission | null | undefined>
+): KnowledgeNamespaceEffectivePermission {
+  return permissions.reduce<KnowledgeNamespaceEffectivePermission>((best, current) => {
+    if (!current) return best;
+    return KNOWLEDGE_PERMISSION_RANK[current] > KNOWLEDGE_PERMISSION_RANK[best] ? current : best;
+  }, 'none');
+}
+
+function othersCanToPermission(
+  othersCan: KnowledgeNamespaceOthersCan
+): KnowledgeNamespaceEffectivePermission {
+  return othersCan === 'none' ? 'none' : othersCan;
+}
+
+export interface ResolveKnowledgeNamespacePermissionOptions {
+  isAdmin?: boolean;
+}
+
 export class KnowledgeNamespaceRepository
   implements BaseRepository<KnowledgeNamespace, Partial<KnowledgeNamespace>>
 {
@@ -320,6 +357,7 @@ export class KnowledgeNamespaceRepository
       repo_id: row.repo_id as KnowledgeNamespace['repo_id'],
       branch_id: row.branch_id as KnowledgeNamespace['branch_id'],
       visibility_default: row.visibility_default as KnowledgeVisibility,
+      others_can: row.others_can as KnowledgeNamespaceOthersCan,
       metadata: row.metadata ?? null,
       created_by: (row.created_by as UserID | null) ?? null,
       created_at: new Date(row.created_at),
@@ -349,6 +387,7 @@ export class KnowledgeNamespaceRepository
       repo_id: data.repo_id ?? null,
       branch_id: data.branch_id ?? null,
       visibility_default: data.visibility_default ?? 'public',
+      others_can: data.others_can ?? 'write',
       metadata: data.metadata ?? null,
       created_by: data.created_by ?? null,
       created_at: data.created_at ? new Date(data.created_at) : new Date(now),
@@ -443,6 +482,250 @@ export class KnowledgeNamespaceRepository
       .returning()
       .one();
     return this.rowToNamespace(row);
+  }
+
+  rowToAclEntry(row: KBNamespaceAclRow): KnowledgeNamespaceAclEntry {
+    return {
+      namespace_acl_id: row.namespace_acl_id as KnowledgeNamespaceAclEntry['namespace_acl_id'],
+      namespace_id: row.namespace_id as KnowledgeNamespaceID,
+      subject_type: row.subject_type as KnowledgeNamespaceSubjectType,
+      subject_id: row.subject_id as UserID | GroupID,
+      permission: row.permission as KnowledgeNamespacePermission,
+      created_by: (row.created_by as UserID | null) ?? null,
+      created_at: new Date(row.created_at),
+      updated_at: row.updated_at ? new Date(row.updated_at) : null,
+    };
+  }
+
+  async listNamespaceAcl(namespaceId: string): Promise<KnowledgeNamespaceAclEntry[]> {
+    const fullId = await this.resolveId(namespaceId);
+    const rows = await select(this.db)
+      .from(kbNamespaceAcl)
+      .where(eq(kbNamespaceAcl.namespace_id, fullId))
+      .all();
+    return rows.map((row: KBNamespaceAclRow) => this.rowToAclEntry(row));
+  }
+
+  async upsertNamespaceAclEntry(data: {
+    namespace_id: string;
+    subject_type: KnowledgeNamespaceSubjectType;
+    subject_id: string;
+    permission: KnowledgeNamespacePermission;
+    created_by?: UserID | null;
+  }): Promise<KnowledgeNamespaceAclEntry> {
+    const fullId = await this.resolveId(data.namespace_id);
+    const now = new Date();
+    const existing = await select(this.db)
+      .from(kbNamespaceAcl)
+      .where(
+        and(
+          eq(kbNamespaceAcl.namespace_id, fullId),
+          eq(kbNamespaceAcl.subject_type, data.subject_type),
+          eq(kbNamespaceAcl.subject_id, data.subject_id)
+        )
+      )
+      .one();
+
+    if (existing) {
+      await update(this.db, kbNamespaceAcl)
+        .set({ permission: data.permission, updated_at: now })
+        .where(eq(kbNamespaceAcl.namespace_acl_id, existing.namespace_acl_id))
+        .run();
+      const updated = await select(this.db)
+        .from(kbNamespaceAcl)
+        .where(eq(kbNamespaceAcl.namespace_acl_id, existing.namespace_acl_id))
+        .one();
+      if (!updated) throw new RepositoryError('Failed to retrieve updated namespace ACL entry');
+      return this.rowToAclEntry(updated as KBNamespaceAclRow);
+    }
+
+    const insertRow: KBNamespaceAclInsert = {
+      namespace_acl_id: generateId(),
+      namespace_id: fullId,
+      subject_type: data.subject_type,
+      subject_id: data.subject_id,
+      permission: data.permission,
+      created_by: data.created_by ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+    const row = await insert(this.db, kbNamespaceAcl).values(insertRow).returning().one();
+    return this.rowToAclEntry(row);
+  }
+
+  async removeNamespaceAclEntry(
+    namespaceId: string,
+    subjectType: KnowledgeNamespaceSubjectType,
+    subjectId: string
+  ): Promise<KnowledgeNamespaceAclEntry | null> {
+    const fullId = await this.resolveId(namespaceId);
+    const existing = await select(this.db)
+      .from(kbNamespaceAcl)
+      .where(
+        and(
+          eq(kbNamespaceAcl.namespace_id, fullId),
+          eq(kbNamespaceAcl.subject_type, subjectType),
+          eq(kbNamespaceAcl.subject_id, subjectId)
+        )
+      )
+      .one();
+    if (!existing) return null;
+    await deleteFrom(this.db, kbNamespaceAcl)
+      .where(eq(kbNamespaceAcl.namespace_acl_id, existing.namespace_acl_id))
+      .run();
+    return this.rowToAclEntry(existing as KBNamespaceAclRow);
+  }
+
+  async replaceNamespaceAcl(
+    namespaceId: string,
+    entries: Array<{
+      subject_type: KnowledgeNamespaceSubjectType;
+      subject_id: string;
+      permission: KnowledgeNamespacePermission;
+      created_by?: UserID | null;
+    }>
+  ): Promise<KnowledgeNamespaceAclEntry[]> {
+    const fullId = await this.resolveId(namespaceId);
+    return this.db.transaction(async (tx) => {
+      return this.replaceNamespaceAclInDb(txAsDb(tx), fullId, entries);
+    });
+  }
+
+  private async replaceNamespaceAclInDb(
+    db: Database,
+    namespaceId: string,
+    entries: Array<{
+      subject_type: KnowledgeNamespaceSubjectType;
+      subject_id: string;
+      permission: KnowledgeNamespacePermission;
+      created_by?: UserID | null;
+    }>
+  ): Promise<KnowledgeNamespaceAclEntry[]> {
+    await deleteFrom(db, kbNamespaceAcl).where(eq(kbNamespaceAcl.namespace_id, namespaceId)).run();
+
+    const now = new Date();
+    const uniqueEntries = new Map<string, (typeof entries)[number]>();
+    for (const entry of entries) {
+      uniqueEntries.set(`${entry.subject_type}:${entry.subject_id}`, entry);
+    }
+
+    for (const entry of uniqueEntries.values()) {
+      await insert(db, kbNamespaceAcl)
+        .values({
+          namespace_acl_id: generateId(),
+          namespace_id: namespaceId,
+          subject_type: entry.subject_type,
+          subject_id: entry.subject_id,
+          permission: entry.permission,
+          created_by: entry.created_by ?? null,
+          created_at: now,
+          updated_at: now,
+        })
+        .run();
+    }
+
+    const rows = await select(db)
+      .from(kbNamespaceAcl)
+      .where(eq(kbNamespaceAcl.namespace_id, namespaceId))
+      .all();
+    return rows.map((row: KBNamespaceAclRow) => this.rowToAclEntry(row));
+  }
+
+  async createWithAcl(
+    data: Partial<KnowledgeNamespace>,
+    entries: Array<{
+      subject_type: KnowledgeNamespaceSubjectType;
+      subject_id: string;
+      permission: KnowledgeNamespacePermission;
+      created_by?: UserID | null;
+    }>
+  ): Promise<{ namespace: KnowledgeNamespace; acl: KnowledgeNamespaceAclEntry[] }> {
+    return this.db.transaction(async (tx) => {
+      const txRepo = new KnowledgeNamespaceRepository(txAsDb(tx));
+      const namespace = await txRepo.create(data);
+      const acl = await txRepo.replaceNamespaceAclInDb(txAsDb(tx), namespace.namespace_id, entries);
+      return { namespace, acl };
+    });
+  }
+
+  async updateWithAcl(
+    id: string,
+    updates: Partial<KnowledgeNamespace>,
+    entries: Array<{
+      subject_type: KnowledgeNamespaceSubjectType;
+      subject_id: string;
+      permission: KnowledgeNamespacePermission;
+      created_by?: UserID | null;
+    }>
+  ): Promise<{ namespace: KnowledgeNamespace; acl: KnowledgeNamespaceAclEntry[] }> {
+    return this.db.transaction(async (tx) => {
+      const txRepo = new KnowledgeNamespaceRepository(txAsDb(tx));
+      const namespace = await txRepo.update(id, updates);
+      const acl = await txRepo.replaceNamespaceAclInDb(txAsDb(tx), namespace.namespace_id, entries);
+      return { namespace, acl };
+    });
+  }
+
+  async resolveNamespacePermission(
+    namespaceId: string,
+    userId: string,
+    options: ResolveKnowledgeNamespacePermissionOptions = {}
+  ): Promise<KnowledgeNamespaceEffectivePermission> {
+    if (options.isAdmin) return 'own';
+    const namespace = await this.findById(namespaceId);
+    if (!namespace || namespace.archived) return 'none';
+
+    const directRows = await select(this.db)
+      .from(kbNamespaceAcl)
+      .where(
+        and(
+          eq(kbNamespaceAcl.namespace_id, namespace.namespace_id),
+          eq(kbNamespaceAcl.subject_type, 'user'),
+          eq(kbNamespaceAcl.subject_id, userId)
+        )
+      )
+      .all();
+
+    const groupRows = await select(this.db)
+      .from(kbNamespaceAcl)
+      .innerJoin(groupMemberships, eq(kbNamespaceAcl.subject_id, groupMemberships.group_id))
+      .innerJoin(groups, eq(groupMemberships.group_id, groups.group_id))
+      .where(
+        and(
+          eq(kbNamespaceAcl.namespace_id, namespace.namespace_id),
+          eq(kbNamespaceAcl.subject_type, 'group'),
+          eq(groupMemberships.user_id, userId),
+          eq(groups.archived, false)
+        )
+      )
+      .all();
+
+    return maxKnowledgePermission([
+      othersCanToPermission(namespace.others_can),
+      namespace.owner_user_id === userId ? 'own' : null,
+      ...directRows.map((row: KBNamespaceAclRow) => row.permission as KnowledgeNamespacePermission),
+      ...groupRows.map(
+        (row: { kb_namespace_acl: KBNamespaceAclRow }) =>
+          row.kb_namespace_acl.permission as KnowledgeNamespacePermission
+      ),
+    ]);
+  }
+
+  async findReadableNamespaceIds(
+    userId: string,
+    options: ResolveKnowledgeNamespacePermissionOptions = {}
+  ): Promise<KnowledgeNamespaceID[]> {
+    const namespaces = await this.findAll({ archived: false });
+    if (options.isAdmin) return namespaces.map((namespace) => namespace.namespace_id);
+
+    const readable: KnowledgeNamespaceID[] = [];
+    for (const namespace of namespaces) {
+      const permission = await this.resolveNamespacePermission(namespace.namespace_id, userId);
+      if (KNOWLEDGE_PERMISSION_RANK[permission] >= KNOWLEDGE_PERMISSION_RANK.read) {
+        readable.push(namespace.namespace_id);
+      }
+    }
+    return readable;
   }
 
   async delete(id: string): Promise<void> {

@@ -1667,6 +1667,9 @@ export const kbNamespaces = pgTable(
     visibility_default: text('visibility_default', { enum: ['public', 'private'] })
       .notNull()
       .default('public'),
+    others_can: text('others_can', { enum: ['none', 'read', 'write'] })
+      .notNull()
+      .default('write'),
     metadata: t.json<Record<string, unknown>>('metadata'),
     created_by: varchar('created_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
@@ -1685,6 +1688,36 @@ export const kbNamespaces = pgTable(
     repoIdx: index('kb_namespaces_repo_idx').on(table.repo_id),
     branchIdx: index('kb_namespaces_branch_idx').on(table.branch_id),
     archivedIdx: index('kb_namespaces_archived_idx').on(table.archived),
+  })
+);
+
+/**
+ * Knowledge namespace ACL entries - explicit user/group grants for namespace RBAC.
+ */
+export const kbNamespaceAcl = pgTable(
+  'kb_namespace_acl',
+  {
+    namespace_acl_id: varchar('namespace_acl_id', { length: 36 }).primaryKey(),
+    namespace_id: varchar('namespace_id', { length: 36 })
+      .notNull()
+      .references(() => kbNamespaces.namespace_id, { onDelete: 'cascade' }),
+    subject_type: text('subject_type', { enum: ['user', 'group'] }).notNull(),
+    subject_id: varchar('subject_id', { length: 36 }).notNull(),
+    permission: text('permission', { enum: ['read', 'write', 'own'] }).notNull(),
+    created_by: varchar('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+  },
+  (table) => ({
+    namespaceIdx: index('kb_namespace_acl_namespace_idx').on(table.namespace_id),
+    subjectIdx: index('kb_namespace_acl_subject_idx').on(table.subject_type, table.subject_id),
+    namespaceSubjectIdx: uniqueIndex('kb_namespace_acl_namespace_subject_idx').on(
+      table.namespace_id,
+      table.subject_type,
+      table.subject_id
+    ),
   })
 );
 
@@ -2062,6 +2095,8 @@ export type SerializedSessionRow = typeof serializedSessions.$inferSelect;
 export type SerializedSessionInsert = typeof serializedSessions.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;
 export type KBNamespaceInsert = typeof kbNamespaces.$inferInsert;
+export type KBNamespaceAclRow = typeof kbNamespaceAcl.$inferSelect;
+export type KBNamespaceAclInsert = typeof kbNamespaceAcl.$inferInsert;
 export type KBDocumentRow = typeof kbDocuments.$inferSelect;
 export type KBDocumentInsert = typeof kbDocuments.$inferInsert;
 export type KBDocumentVersionRow = typeof kbDocumentVersions.$inferSelect;

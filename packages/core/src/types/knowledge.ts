@@ -2,6 +2,7 @@ import type {
   ArtifactID,
   BoardID,
   BranchID,
+  GroupID,
   MessageID,
   RepoID,
   SessionID,
@@ -17,6 +18,7 @@ export type KnowledgeDocumentUnitID = UUID;
 export type KnowledgeEmbeddingSpaceID = UUID;
 export type KnowledgeGraphNodeID = UUID;
 export type KnowledgeGraphEdgeID = UUID;
+export type KnowledgeNamespaceAclEntryID = UUID;
 
 export const KNOWLEDGE_NAMESPACE_KINDS = [
   'system',
@@ -50,6 +52,37 @@ export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[numbe
 
 export const KNOWLEDGE_EDIT_POLICIES = ['owner', 'public', 'admins'] as const;
 export type KnowledgeEditPolicy = (typeof KNOWLEDGE_EDIT_POLICIES)[number];
+
+export const KNOWLEDGE_NAMESPACE_OTHERS_CAN = ['none', 'read', 'write'] as const;
+export type KnowledgeNamespaceOthersCan = (typeof KNOWLEDGE_NAMESPACE_OTHERS_CAN)[number];
+
+export const KNOWLEDGE_NAMESPACE_SUBJECT_TYPES = ['user', 'group'] as const;
+export type KnowledgeNamespaceSubjectType = (typeof KNOWLEDGE_NAMESPACE_SUBJECT_TYPES)[number];
+
+export const KNOWLEDGE_NAMESPACE_PERMISSIONS = ['read', 'write', 'own'] as const;
+export type KnowledgeNamespacePermission = (typeof KNOWLEDGE_NAMESPACE_PERMISSIONS)[number];
+
+export type KnowledgeNamespaceEffectivePermission = KnowledgeNamespacePermission | 'none';
+
+export interface KnowledgeNamespaceAclEntry {
+  namespace_acl_id: KnowledgeNamespaceAclEntryID;
+  namespace_id: KnowledgeNamespaceID;
+  subject_type: KnowledgeNamespaceSubjectType;
+  subject_id: UserID | GroupID;
+  permission: KnowledgeNamespacePermission;
+  created_by?: UserID | null;
+  created_at: Date;
+  updated_at?: Date | null;
+}
+
+export interface KnowledgeNamespacePermissionSummary {
+  effective_permission: KnowledgeNamespaceEffectivePermission;
+  direct_permission?: KnowledgeNamespacePermission | null;
+  group_permission?: KnowledgeNamespacePermission | null;
+  others_can: KnowledgeNamespaceOthersCan;
+  is_admin?: boolean;
+  group_ids?: GroupID[];
+}
 
 /**
  * Internal search/indexing unit. Usually one per document version in V1; can
@@ -367,6 +400,7 @@ export interface KnowledgeNamespace {
   repo_id?: RepoID | null;
   branch_id?: BranchID | null;
   visibility_default: KnowledgeVisibility;
+  others_can: KnowledgeNamespaceOthersCan;
   metadata?: Record<string, unknown> | null;
   created_by?: UserID | null;
   created_at: Date;

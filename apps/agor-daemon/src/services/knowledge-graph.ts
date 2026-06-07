@@ -18,6 +18,7 @@ import type {
   KnowledgeGraphDocNode,
   KnowledgeGraphEdgeType,
   KnowledgeGraphNode,
+  KnowledgeNamespaceEffectivePermission,
   KnowledgeNamespaceGraph,
   QueryParams,
   User,
@@ -40,6 +41,20 @@ export interface KnowledgeNamespaceGraphRequest {
   includeMyDrafts?: boolean;
   include_other_user_drafts?: boolean;
   includeOtherUserDrafts?: boolean;
+}
+
+const NAMESPACE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
+  none: 0,
+  read: 1,
+  write: 2,
+  own: 3,
+};
+
+function hasNamespacePermission(
+  actual: KnowledgeNamespaceEffectivePermission,
+  required: 'read' | 'write' | 'own'
+): boolean {
+  return NAMESPACE_PERMISSION_RANK[actual] >= NAMESPACE_PERMISSION_RANK[required];
 }
 
 export type KnowledgeGraphParams = QueryParams<
@@ -92,6 +107,11 @@ export class KnowledgeGraphService {
       return { namespace_id: null, nodes: [], edges: [] };
     }
 
+    const namespacePermission = await this.namespacePermission(namespace.namespace_id, user);
+    if (!hasNamespacePermission(namespacePermission, 'read')) {
+      return { namespace_id: null, nodes: [], edges: [] };
+    }
+
     const docs = await this.documents.findAll({
       namespace_id: namespace.namespace_id,
       include_my_drafts: request.include_my_drafts ?? request.includeMyDrafts ?? true,
@@ -99,7 +119,10 @@ export class KnowledgeGraphService {
         request.include_other_user_drafts ?? request.includeOtherUserDrafts ?? false,
       draft_filter_user_id: user?.user_id as UserID | undefined,
     });
-    const readable = docs.filter((doc) => this.canRead(doc, user));
+    const readable: KnowledgeDocument[] = [];
+    for (const doc of docs) {
+      if (await this.canRead(doc, user)) readable.push(doc);
+    }
     const readableIds = new Set<string>(readable.map((doc) => doc.document_id));
 
     const nodes: KnowledgeGraphDocNode[] = readable.map((doc) => ({
@@ -127,22 +150,33 @@ export class KnowledgeGraphService {
     return hasMinimumRole(user?.role, ROLES.ADMIN);
   }
 
-  private canRead(document: KnowledgeDocument, user?: User): boolean {
-    return (
-      !document.archived &&
-      (document.visibility === 'public' ||
-        this.isAdmin(user) ||
-        Boolean(user?.user_id && document.created_by === user.user_id))
-    );
+  private async namespacePermission(
+    namespaceId: string,
+    user?: User
+  ): Promise<KnowledgeNamespaceEffectivePermission> {
+    return this.namespaces.resolveNamespacePermission(namespaceId, String(user?.user_id ?? ''), {
+      isAdmin: this.isAdmin(user),
+    });
   }
 
-  private canWrite(document: KnowledgeDocument, user?: User): boolean {
-    return (
-      !document.archived &&
-      (this.isAdmin(user) ||
-        Boolean(user?.user_id && document.created_by === user.user_id) ||
-        (document.visibility === 'public' && document.edit_policy === 'public'))
-    );
+  private async canRead(document: KnowledgeDocument, user?: User): Promise<boolean> {
+    if (document.archived) return false;
+    const namespacePermission = await this.namespacePermission(document.namespace_id, user);
+    const documentReadable =
+      document.visibility === 'public' ||
+      this.isAdmin(user) ||
+      Boolean(user?.user_id && document.created_by === user.user_id);
+    return hasNamespacePermission(namespacePermission, 'read') && documentReadable;
+  }
+
+  private async canWrite(document: KnowledgeDocument, user?: User): Promise<boolean> {
+    if (document.archived) return false;
+    const namespacePermission = await this.namespacePermission(document.namespace_id, user);
+    const documentWritable =
+      this.isAdmin(user) ||
+      Boolean(user?.user_id && document.created_by === user.user_id) ||
+      (document.visibility === 'public' && document.edit_policy === 'public');
+    return hasNamespacePermission(namespacePermission, 'write') && documentWritable;
   }
 
   private async activeDocument(
@@ -233,7 +267,7 @@ export class KnowledgeGraphService {
       throw new NotFound('Knowledge document not found');
     }
     if (!document) return;
-    if (!this.canWrite(document, user)) {
+    if (!(await this.canWrite(document, user))) {
       throw new Forbidden('You do not have permission to link this knowledge document');
     }
   }

@@ -363,7 +363,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   app.use('/kb/namespaces', createKnowledgeNamespacesService(db), {
-    methods: ['find', 'get', 'create', 'update', 'patch', 'remove'],
+    methods: [
+      'find',
+      'get',
+      'create',
+      'update',
+      'patch',
+      'remove',
+      'saveWithAcl',
+      'listAcl',
+      'setAcl',
+      'removeAcl',
+    ],
   });
   const knowledgeDocumentsService = createKnowledgeDocumentsService(db, app);
   app.use('/kb/documents', knowledgeDocumentsService, {

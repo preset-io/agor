@@ -24,6 +24,7 @@ import type {
   Id,
   KnowledgeDocument,
   KnowledgeDocumentVersion,
+  KnowledgeNamespaceEffectivePermission,
   KnowledgeNamespaceID,
   NullableId,
   QueryParams,
@@ -107,6 +108,20 @@ type HydrateOptions = Pick<
   'include_content' | 'include_links' | 'include_indexing' | 'includeIndexing' | 'version'
 >;
 
+const NAMESPACE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
+  none: 0,
+  read: 1,
+  write: 2,
+  own: 3,
+};
+
+function hasNamespacePermission(
+  actual: KnowledgeNamespaceEffectivePermission,
+  required: 'read' | 'write' | 'own'
+): boolean {
+  return NAMESPACE_PERMISSION_RANK[actual] >= NAMESPACE_PERMISSION_RANK[required];
+}
+
 function wantsFirstLineTitle(data: KnowledgeDocumentWriteData): boolean {
   if (typeof data.first_line_is_title === 'boolean') return data.first_line_is_title;
   return data.metadata?.title_from_content === true;
@@ -147,7 +162,16 @@ export class KnowledgeDocumentsService extends DrizzleService<
     return hasMinimumRole(user?.role, ROLES.ADMIN);
   }
 
-  private canRead(document: KnowledgeDocument, user?: User): boolean {
+  private async namespacePermission(
+    namespaceId: KnowledgeNamespaceID,
+    user?: User
+  ): Promise<KnowledgeNamespaceEffectivePermission> {
+    return this.namespaces.resolveNamespacePermission(namespaceId, String(user?.user_id ?? ''), {
+      isAdmin: this.isAdmin(user),
+    });
+  }
+
+  private documentReadOverlay(document: KnowledgeDocument, user?: User): boolean {
     return (
       document.visibility === 'public' ||
       this.isAdmin(user) ||
@@ -155,12 +179,22 @@ export class KnowledgeDocumentsService extends DrizzleService<
     );
   }
 
-  private canEdit(document: KnowledgeDocument, user?: User): boolean {
+  private documentEditOverlay(document: KnowledgeDocument, user?: User): boolean {
     return (
       this.isAdmin(user) ||
       Boolean(user?.user_id && document.created_by === user.user_id) ||
       (document.visibility === 'public' && document.edit_policy === 'public')
     );
+  }
+
+  private async canRead(document: KnowledgeDocument, user?: User): Promise<boolean> {
+    const permission = await this.namespacePermission(document.namespace_id, user);
+    return hasNamespacePermission(permission, 'read') && this.documentReadOverlay(document, user);
+  }
+
+  private async canEdit(document: KnowledgeDocument, user?: User): Promise<boolean> {
+    const permission = await this.namespacePermission(document.namespace_id, user);
+    return hasNamespacePermission(permission, 'write') && this.documentEditOverlay(document, user);
   }
 
   private canManageDocument(document: KnowledgeDocument, user?: User): boolean {
@@ -198,6 +232,16 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const namespace = await this.namespaces.findById(document.namespace_id);
     if (!namespace || namespace.archived) {
       throw new NotFound('Knowledge document not found');
+    }
+  }
+
+  private async assertCanWriteNamespace(
+    namespaceId: KnowledgeNamespaceID,
+    user?: User
+  ): Promise<void> {
+    const permission = await this.namespacePermission(namespaceId, user);
+    if (!hasNamespacePermission(permission, 'write')) {
+      throw new Forbidden('You do not have permission to write to this knowledge namespace');
     }
   }
 
@@ -411,7 +455,10 @@ export class KnowledgeDocumentsService extends DrizzleService<
           draft_filter_user_id: user?.user_id as UserID | undefined,
         };
     const rows = await this.repo.findAll(filters);
-    const readable = rows.filter((doc) => this.canRead(doc, user));
+    const readable: KnowledgeDocument[] = [];
+    for (const doc of rows) {
+      if (await this.canRead(doc, user)) readable.push(doc);
+    }
     if (params?.query?.include_content !== true && params?.query?.include_links !== true) {
       if (params?.query?.include_indexing === true || params?.query?.includeIndexing === true) {
         return this.repo.attachIndexingStatus(readable) as Promise<KnowledgeDocument[]>;
@@ -435,7 +482,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const doc = await this.repo.findById(String(id));
     if (!doc) throw new NotFound(`Knowledge document not found: ${id}`);
     await this.assertActiveDocument(doc);
-    if (!this.canRead(doc, params?.user as User | undefined)) {
+    if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
     return this.hydrateDocument(doc, params?.query);
@@ -448,7 +495,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const doc = await this.resolveDocumentRef(data);
     if (!doc) throw new NotFound('Knowledge document not found');
     await this.assertActiveDocument(doc);
-    if (!this.canRead(doc, params?.user as User | undefined)) {
+    if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
     return this.hydrateDocument(doc, data);
@@ -473,7 +520,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (existing) {
       await this.assertActiveDocument(existing);
       this.assertCanChangeGovernance(existing, data, params?.user as User | undefined);
-      if (!this.canEdit(existing, params?.user as User | undefined)) {
+      if (!(await this.canEdit(existing, params?.user as User | undefined))) {
         throw new Forbidden('You do not have permission to update this knowledge document');
       }
       await this.assertExpectedVersion(existing, data.expected_version);
@@ -510,10 +557,21 @@ export class KnowledgeDocumentsService extends DrizzleService<
         kind: 'global',
         visibility_default: data.visibility ?? 'public',
         created_by: userId,
+        owner_user_id: userId,
       });
+      if (userId) {
+        await this.namespaces.upsertNamespaceAclEntry({
+          namespace_id: namespace.namespace_id,
+          subject_type: 'user',
+          subject_id: userId,
+          permission: 'own',
+          created_by: userId,
+        });
+      }
     }
     if (!namespace) throw new NotFound(`Knowledge namespace not found: ${namespaceSlug}`);
     if (namespace.archived) throw new NotFound(`Knowledge namespace not found: ${namespaceSlug}`);
+    await this.assertCanWriteNamespace(namespace.namespace_id, params?.user as User | undefined);
 
     const result = await this.repo.create(
       this.prepareWriteData({
@@ -544,8 +602,17 @@ export class KnowledgeDocumentsService extends DrizzleService<
       },
       null
     );
+    const namespace = prepared.namespace_id
+      ? await this.namespaces.findById(prepared.namespace_id)
+      : prepared.namespace_slug
+        ? await this.namespaces.findBySlug(prepared.namespace_slug)
+        : null;
+    if (!namespace || namespace.archived) throw new NotFound('Knowledge namespace not found');
+    await this.assertCanWriteNamespace(namespace.namespace_id, params?.user as User | undefined);
     const result = await this.repo.create({
       ...prepared,
+      namespace_id: namespace.namespace_id,
+      namespace_slug: namespace.slug,
     });
     await this.replaceSearchUnitsForContent(result, data.content_text);
     await this.syncGraphReferences(result, data.content_text, userId);
@@ -576,7 +643,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
     await this.assertActiveDocument(existing);
     this.assertCanChangeGovernance(existing, data, params?.user as User | undefined);
-    if (!this.canEdit(existing, params?.user as User | undefined)) {
+    if (!(await this.canEdit(existing, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
     const result = await this.repo.update(String(id), {
@@ -606,7 +673,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
     await this.assertActiveDocument(existing);
     this.assertCanChangeGovernance(existing, data, params?.user as User | undefined);
-    if (!this.canEdit(existing, params?.user as User | undefined)) {
+    if (!(await this.canEdit(existing, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
     const result = await this.repo.update(String(id), {
@@ -632,6 +699,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     const existing = await this.repo.findById(String(id));
     if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
     await this.assertActiveDocument(existing);
+    await this.assertCanWriteNamespace(existing.namespace_id, params?.user as User | undefined);
     if (!this.canManageDocument(existing, params?.user as User | undefined)) {
       throw new Forbidden('You do not have permission to delete this knowledge document');
     }

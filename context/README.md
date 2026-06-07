@@ -52,6 +52,8 @@ Designs that are referenced from code or in flight. Anything here is either stil
 - [`executor-implementation-plan.md`](explorations/executor-implementation-plan.md) — phased plan for executor work.
 - [`env-var-access.md`](explorations/env-var-access.md) — per-user / per-session env var access model (referenced from schemas, types, and migrations).
 - [`kb-agent-targeted-edits.md`](explorations/kb-agent-targeted-edits.md) — design proposal for small, version-checked agent edits to large Knowledge Base markdown documents.
+- [`kb-assistant-framework-integration.md`](explorations/kb-assistant-framework-integration.md) — options for backing Agor Assistant framework memory/docs/skills with Knowledge Base namespaces and tools.
+- [`kb-namespace-rbac-v1.md`](explorations/kb-namespace-rbac-v1.md) — directed V1 plan for Knowledge namespace RBAC and Assistant home namespaces.
 - [`session-sharing.md`](explorations/session-sharing.md) — `dangerously_allow_session_sharing` security contract (referenced from `AGENTS.md` and `apps/agor-docs/pages/security.mdx`).
 - [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
 

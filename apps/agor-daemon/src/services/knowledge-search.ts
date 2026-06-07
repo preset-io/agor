@@ -9,6 +9,7 @@ import {
   executeRaw,
   isPostgresDatabase,
   KnowledgeDocumentRepository,
+  KnowledgeNamespaceRepository,
   type KnowledgeSearchQuery,
   KnowledgeSearchRepository,
   sql,
@@ -18,6 +19,7 @@ import {
   type AuthenticatedParams,
   buildKnowledgeUnitUri,
   hasMinimumRole,
+  type KnowledgeNamespaceEffectivePermission,
   type KnowledgeSearchResult,
   normalizeKnowledgeFolderPath,
   type QueryParams,
@@ -41,27 +43,56 @@ import {
 
 export type KnowledgeSearchParams = QueryParams<KnowledgeSearchQuery> & AuthenticatedParams;
 
+const NAMESPACE_PERMISSION_RANK: Record<KnowledgeNamespaceEffectivePermission, number> = {
+  none: 0,
+  read: 1,
+  write: 2,
+  own: 3,
+};
+
+function hasNamespaceRead(permission: KnowledgeNamespaceEffectivePermission): boolean {
+  return NAMESPACE_PERMISSION_RANK[permission] >= NAMESPACE_PERMISSION_RANK.read;
+}
+
 export class KnowledgeSearchService {
   private repo: KnowledgeSearchRepository;
   private documents: KnowledgeDocumentRepository;
+  private namespaces: KnowledgeNamespaceRepository;
   private variables: AppVariableRepository;
   private embeddingProvider = new OpenAIEmbeddingProvider();
 
   constructor(private db: Database) {
     this.repo = new KnowledgeSearchRepository(db);
     this.documents = new KnowledgeDocumentRepository(db);
+    this.namespaces = new KnowledgeNamespaceRepository(db);
     this.variables = new AppVariableRepository(db);
   }
 
-  private canRead(
+  private async canRead(
     result: Awaited<ReturnType<KnowledgeSearchRepository['search']>>[number],
     user?: User
-  ): boolean {
-    return (
+  ): Promise<boolean> {
+    const namespacePermission = await this.namespaces.resolveNamespacePermission(
+      result.document.namespace_id,
+      String(user?.user_id ?? ''),
+      { isAdmin: hasMinimumRole(user?.role, ROLES.ADMIN) }
+    );
+    const documentReadable =
       result.document.visibility === 'public' ||
       hasMinimumRole(user?.role, ROLES.ADMIN) ||
-      Boolean(user?.user_id && result.document.created_by === user.user_id)
-    );
+      Boolean(user?.user_id && result.document.created_by === user.user_id);
+    return hasNamespaceRead(namespacePermission) && documentReadable;
+  }
+
+  private async filterReadable(
+    results: KnowledgeSearchResult[],
+    user?: User
+  ): Promise<KnowledgeSearchResult[]> {
+    const readable: KnowledgeSearchResult[] = [];
+    for (const result of results) {
+      if (await this.canRead(result, user)) readable.push(result);
+    }
+    return readable;
   }
 
   private assertSupportedMode(query?: KnowledgeSearchQuery): void {
@@ -209,6 +240,7 @@ export class KnowledgeSearchService {
           ns.repo_id AS namespace_repo_id,
           ns.branch_id AS namespace_branch_id,
           ns.visibility_default AS namespace_visibility_default,
+          ns.others_can AS namespace_others_can,
           ns.metadata AS namespace_metadata,
           ns.created_by AS namespace_created_by,
           ns.created_at AS namespace_created_at,
@@ -303,6 +335,7 @@ export class KnowledgeSearchService {
           repo_id: (row.namespace_repo_id as never) ?? null,
           branch_id: (row.namespace_branch_id as never) ?? null,
           visibility_default: row.namespace_visibility_default as never,
+          others_can: row.namespace_others_can as never,
           metadata: (row.namespace_metadata as Record<string, unknown> | null) ?? null,
           created_by: (row.namespace_created_by as never) ?? null,
           created_at: new Date(row.namespace_created_at as string | number | Date),
@@ -319,8 +352,8 @@ export class KnowledgeSearchService {
         chunks: [chunk],
       });
     }
-    const values = [...byDoc.values()].slice(0, rawQuery.limit ?? 25);
-    return this.attachIndexingToResults(values, rawQuery);
+    const values = await this.filterReadable([...byDoc.values()], user);
+    return this.attachIndexingToResults(values.slice(0, rawQuery.limit ?? 25), rawQuery);
   }
 
   private hybridMerge(
@@ -349,8 +382,9 @@ export class KnowledgeSearchService {
     const query = this.scopedQuery(params?.query, user);
     if ((query.mode ?? 'text') === 'semantic') return this.semanticSearch(query, user);
 
-    const textResults = (await this.repo.search({ ...query, mode: 'text' })).filter((result) =>
-      this.canRead(result, user)
+    const textResults = await this.filterReadable(
+      await this.repo.search({ ...query, mode: 'text' }),
+      user
     );
     const textResultsWithIndexing = await this.attachIndexingToResults(textResults, query);
     if (query.mode === 'hybrid') {
@@ -365,8 +399,9 @@ export class KnowledgeSearchService {
     const query = this.scopedQuery(data, user);
     if ((query.mode ?? 'text') === 'semantic') return this.semanticSearch(query, user);
 
-    const textResults = (await this.repo.search({ ...query, mode: 'text' })).filter((result) =>
-      this.canRead(result, user)
+    const textResults = await this.filterReadable(
+      await this.repo.search({ ...query, mode: 'text' }),
+      user
     );
     const textResultsWithIndexing = await this.attachIndexingToResults(textResults, query);
     if (query.mode === 'hybrid') {

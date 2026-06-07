@@ -48,6 +48,7 @@ export const threadSessionMap = schema.threadSessionMap;
 export const userApiKeys = schema.userApiKeys;
 export const serializedSessions = schema.serializedSessions;
 export const kbNamespaces = schema.kbNamespaces;
+export const kbNamespaceAcl = schema.kbNamespaceAcl;
 export const kbDocuments = schema.kbDocuments;
 export const kbDocumentVersions = schema.kbDocumentVersions;
 export const kbDocumentUnits = schema.kbDocumentUnits;
