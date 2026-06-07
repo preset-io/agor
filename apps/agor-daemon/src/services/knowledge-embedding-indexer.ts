@@ -118,6 +118,101 @@ export class KnowledgeEmbeddingIndexer {
     return embeddingSpaceId;
   }
 
+  private rawRows(result: unknown): Array<Record<string, unknown>> {
+    if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
+    const rows = (result as { rows?: unknown[] } | undefined)?.rows;
+    return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+  }
+
+  private mutationCount(result: unknown): number {
+    const rowCount = (result as { rowCount?: unknown } | undefined)?.rowCount;
+    if (typeof rowCount === 'number') return rowCount;
+    const count = (result as { count?: unknown } | undefined)?.count;
+    if (typeof count === 'number') return count;
+    return this.rawRows(result).length;
+  }
+
+  /**
+   * Reattach vector rows for byte-identical normalized chunks before calling
+   * the embedding provider. Reuse is scoped to the exact embedding space id
+   * (provider + model + dimensions + storage/distance), so a model or
+   * provider change leaves chunks pending for fresh embeddings.
+   */
+  private async reuseExistingEmbeddings(params: {
+    embeddingSpaceId: string;
+    model: string;
+    dimensions: number;
+    limit: number;
+  }): Promise<number> {
+    const result = await executeRaw(
+      this.db,
+      sql`WITH pending AS (
+            SELECT unit_id, content_md5
+            FROM kb_document_units
+            WHERE embedding_status IN ('pending', 'stale')
+              AND content_text IS NOT NULL
+              AND content_md5 IS NOT NULL
+            ORDER BY created_at
+            LIMIT ${params.limit}
+          ), candidates AS (
+            SELECT DISTINCT ON (p.unit_id)
+              p.unit_id AS new_unit_id,
+              e.content_sha256,
+              old_u.embedding_hash,
+              e.embedding,
+              e.token_count
+            FROM pending p
+            JOIN kb_document_units old_u
+              ON old_u.content_md5 = p.content_md5
+             AND old_u.unit_id <> p.unit_id
+             AND old_u.embedding_status = 'ready'
+             AND old_u.embedding_model = ${params.model}
+             AND old_u.embedding_dimensions = ${params.dimensions}
+            JOIN kb_unit_embeddings e
+              ON e.unit_id = old_u.unit_id
+             AND e.embedding_space_id = ${params.embeddingSpaceId}
+            ORDER BY p.unit_id, old_u.updated_at DESC NULLS LAST, old_u.created_at DESC
+          ), upserted AS (
+            INSERT INTO kb_unit_embeddings (
+              unit_id,
+              embedding_space_id,
+              content_sha256,
+              embedding,
+              token_count,
+              created_at,
+              updated_at
+            )
+            SELECT
+              new_unit_id,
+              ${params.embeddingSpaceId},
+              content_sha256,
+              embedding,
+              token_count,
+              now(),
+              now()
+            FROM candidates
+            ON CONFLICT (unit_id, embedding_space_id) DO UPDATE SET
+              content_sha256 = EXCLUDED.content_sha256,
+              embedding = EXCLUDED.embedding,
+              token_count = EXCLUDED.token_count,
+              updated_at = now()
+            RETURNING unit_id
+          )
+          UPDATE kb_document_units u
+          SET embedding_status = 'ready',
+              embedding_model = ${params.model},
+              embedding_dimensions = ${params.dimensions},
+              embedding_hash = COALESCE(candidates.embedding_hash, candidates.content_sha256),
+              embedding_error = NULL,
+              updated_at = now()
+          FROM upserted
+          JOIN candidates ON candidates.new_unit_id = upserted.unit_id
+          WHERE u.unit_id = upserted.unit_id
+          RETURNING u.unit_id`
+    );
+    return this.mutationCount(result);
+  }
+
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -167,6 +262,14 @@ export class KnowledgeEmbeddingIndexer {
     const batchSize = Math.min(Math.max(semantic.indexing?.batch_size ?? 32, 1), 128);
     this.lastError = null;
 
+    const embeddingSpaceId = await this.ensureEmbeddingSpace({ provider, model, dimensions });
+    const reused = await this.reuseExistingEmbeddings({
+      embeddingSpaceId,
+      model,
+      dimensions,
+      limit: batchSize,
+    });
+
     const rows = (await select(this.db)
       .from(kbDocumentUnits)
       .where(
@@ -175,9 +278,12 @@ export class KnowledgeEmbeddingIndexer {
       .orderBy(kbDocumentUnits.created_at)
       .limit(batchSize)
       .all()) as PendingUnitRow[];
-    if (rows.length === 0) return this.idle();
+    if (rows.length === 0) {
+      if (reused === 0) return this.idle();
+      this.lastIndexedAt = new Date();
+      return reused;
+    }
 
-    const embeddingSpaceId = await this.ensureEmbeddingSpace({ provider, model, dimensions });
     let results: Awaited<ReturnType<OpenAIEmbeddingProvider['embed']>>;
     try {
       results = await this.provider.embed(
@@ -226,6 +332,7 @@ export class KnowledgeEmbeddingIndexer {
         embedding_status: 'ready',
         embedding_model: model,
         embedding_dimensions: dimensions,
+        embedding_hash: sql`${kbDocumentUnits.content_md5}`,
         embedding_error: null,
         updated_at: new Date(),
       })
@@ -238,6 +345,6 @@ export class KnowledgeEmbeddingIndexer {
       .run();
 
     this.lastIndexedAt = new Date();
-    return results.length;
+    return reused + results.length;
   }
 }

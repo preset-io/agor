@@ -55,6 +55,16 @@ function md5(text: string): string {
   return createHash('md5').update(text).digest('hex');
 }
 
+export function normalizeKnowledgeChunkForHash(text: string): string {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[\t ]+$/g, ''))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function slugify(value: string): string {
   return (
     value
@@ -267,7 +277,12 @@ export function chunkMarkdownForKnowledge(
       if (!content) continue;
       rawChunks.push({
         kind: bodies.length > 1 ? 'auto_split' : 'section',
-        path_anchor: section.headingPath.length > 0 ? slugify(section.headingPath.join('-')) : null,
+        path_anchor:
+          section.headingPath.length > 0
+            ? [slugify(section.headingPath.join('-')), bodies.length > 1 ? `part-${index + 1}` : '']
+                .filter(Boolean)
+                .join('-')
+            : null,
         heading_path: section.headingPath.length > 0 ? section.headingPath.join(' > ') : null,
         content_text: content,
         start_offset: section.startOffset,
@@ -275,6 +290,7 @@ export function chunkMarkdownForKnowledge(
         metadata: {
           chunker_version: opts.chunkerVersion,
           estimated_tokens: estimateTokens(content),
+          hash_normalization: 'line-endings-trailing-space-blank-lines-v1',
           split_index: index,
           split_count: bodies.length,
         },
@@ -288,6 +304,7 @@ export function chunkMarkdownForKnowledge(
     const prior = merged[merged.length - 1];
     const canMerge =
       prior &&
+      prior.heading_path === chunk.heading_path &&
       estimateTokens(chunk.content_text) < opts.minTokens &&
       estimateTokens(`${prior.content_text}\n\n${chunk.content_text}`) <= opts.maxTokens;
     if (canMerge) {
@@ -297,16 +314,27 @@ export function chunkMarkdownForKnowledge(
         ...prior.metadata,
         merged: true,
         estimated_tokens: estimateTokens(prior.content_text),
+        hash_normalization: 'line-endings-trailing-space-blank-lines-v1',
       };
     } else {
       merged.push({ ...chunk });
     }
   }
 
-  return merged.map((chunk, ordinal) => ({
-    ...chunk,
-    ordinal,
-    path_anchor: chunk.path_anchor ? `${chunk.path_anchor}-${ordinal + 1}` : null,
-    content_md5: md5(chunk.content_text),
-  }));
+  const anchorCounts = new Map<string, number>();
+  return merged.map((chunk, ordinal) => {
+    const anchorBase = chunk.path_anchor;
+    const occurrence = anchorBase ? (anchorCounts.get(anchorBase) ?? 0) + 1 : 0;
+    if (anchorBase) anchorCounts.set(anchorBase, occurrence);
+    return {
+      ...chunk,
+      ordinal,
+      path_anchor: anchorBase
+        ? occurrence > 1
+          ? `${anchorBase}-${occurrence}`
+          : anchorBase
+        : null,
+      content_md5: md5(normalizeKnowledgeChunkForHash(chunk.content_text)),
+    };
+  });
 }

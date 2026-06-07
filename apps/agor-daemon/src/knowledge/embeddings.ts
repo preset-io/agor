@@ -35,6 +35,23 @@ export const SUPPORTED_OPENAI_EMBEDDING_MODELS = new Set([
   'text-embedding-3-large',
 ]);
 
+export interface KnowledgeEmbeddingSpaceDescriptor {
+  provider: string;
+  model: string;
+  dimensions: number;
+}
+
+export function isSameKnowledgeEmbeddingSpace(
+  left: KnowledgeEmbeddingSpaceDescriptor,
+  right: KnowledgeEmbeddingSpaceDescriptor
+): boolean {
+  return (
+    left.provider === right.provider &&
+    left.model === right.model &&
+    left.dimensions === right.dimensions
+  );
+}
+
 export const DEFAULT_KNOWLEDGE_CHUNKING = {
   target_tokens: 850,
   max_tokens: 1200,

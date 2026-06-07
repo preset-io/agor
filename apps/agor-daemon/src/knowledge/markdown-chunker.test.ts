@@ -28,4 +28,64 @@ describe('chunkMarkdownForKnowledge', () => {
     expect(chunks[0].content_text).toContain('| Name  | Value |');
     expect(chunks[0].content_text).toContain('| alpha | 1     |');
   });
+
+  it('keeps unchanged section hashes stable when another section is edited', () => {
+    const base = [
+      '# Handbook',
+      '',
+      'Intro paragraph for the handbook.',
+      '',
+      '## Install',
+      '',
+      'Install step one. Install step two. Install step three.',
+      '',
+      '## Configure',
+      '',
+      'Configure alpha. Configure beta. Configure gamma.',
+      '',
+      '## Operate',
+      '',
+      'Operate safely. Watch dashboards. Roll back when needed.',
+      '',
+      '## Troubleshoot',
+      '',
+      'Check logs. Restart workers. Escalate with context.',
+    ].join('\n');
+    const edited = base.replace(
+      'Configure alpha. Configure beta. Configure gamma.',
+      'Configure alpha. Configure beta changed. Configure gamma.'
+    );
+
+    const byHeading = (markdown: string) =>
+      new Map(
+        chunkMarkdownForKnowledge(markdown, { minTokens: 1 }).map((chunk) => [
+          chunk.heading_path,
+          chunk.content_md5,
+        ])
+      );
+
+    const before = byHeading(base);
+    const after = byHeading(edited);
+
+    expect(after.get('Handbook > Install')).toBe(before.get('Handbook > Install'));
+    expect(after.get('Handbook > Operate')).toBe(before.get('Handbook > Operate'));
+    expect(after.get('Handbook > Troubleshoot')).toBe(before.get('Handbook > Troubleshoot'));
+    expect(after.get('Handbook > Configure')).not.toBe(before.get('Handbook > Configure'));
+  });
+
+  it('does not change chunk hashes for trailing-space-only edits', () => {
+    const clean = ['# Page', '', '## Stable', '', 'Line one', '', 'Line two'].join('\n');
+    const trailingSpaces = ['# Page', '', '## Stable', '', 'Line one   ', '', 'Line two\t'].join(
+      '\n'
+    );
+
+    const cleanChunk = chunkMarkdownForKnowledge(clean, { minTokens: 1 }).find(
+      (chunk) => chunk.heading_path === 'Page > Stable'
+    );
+    const spaceChunk = chunkMarkdownForKnowledge(trailingSpaces, { minTokens: 1 }).find(
+      (chunk) => chunk.heading_path === 'Page > Stable'
+    );
+
+    expect(spaceChunk?.content_md5).toBe(cleanChunk?.content_md5);
+  });
 });
