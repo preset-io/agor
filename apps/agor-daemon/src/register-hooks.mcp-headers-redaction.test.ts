@@ -4,10 +4,15 @@ import { describe, expect, it } from 'vitest';
 describe('register-hooks MCP custom header redaction', () => {
   const source = readFileSync(new URL('./register-hooks.ts', import.meta.url), 'utf8');
   const routesSource = readFileSync(new URL('./register-routes.ts', import.meta.url), 'utf8');
+  const utilSource = readFileSync(
+    new URL('./utils/mcp-header-secrets.ts', import.meta.url),
+    'utf8'
+  );
 
   it('redacts MCP custom header values in mcp-servers responses', () => {
     expect(source).toContain('redactMCPHeaderSecrets');
-    expect(source).toContain('redactMCPCustomHeaders(server.headers)');
+    expect(source).toContain('redactMCPServerHeaderSecrets');
+    expect(utilSource).toContain('redactMCPCustomHeaders(server.headers)');
     expect(source).toMatch(/find:\s*\[injectPerUserOAuthTokens,\s*redactMCPHeaderSecrets\]/);
     expect(source).toMatch(/get:\s*\[injectPerUserOAuthTokens,\s*redactMCPHeaderSecrets\]/);
   });
@@ -19,7 +24,8 @@ describe('register-hooks MCP custom header redaction', () => {
   });
 
   it('keeps raw headers available to executor session-token calls', () => {
-    expect(source).toContain("auth?.strategy === 'session-token'");
-    expect(routesSource).toContain("auth?.strategy === 'session-token'");
+    expect(source).toContain('shouldExposeMCPHeaderSecrets(context.params)');
+    expect(routesSource).toContain('shouldExposeMCPHeaderSecrets(params)');
+    expect(utilSource).toContain("params.authentication?.strategy === 'session-token'");
   });
 });

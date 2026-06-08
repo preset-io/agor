@@ -27,6 +27,14 @@ export const RESERVED_MCP_CUSTOM_HEADER_NAMES = new Set([
 
 const HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
+export function isValidMCPHeaderName(name: string): boolean {
+  return HEADER_NAME_RE.test(name);
+}
+
+export function isReservedMCPCustomHeaderName(name: string): boolean {
+  return RESERVED_MCP_CUSTOM_HEADER_NAMES.has(name.toLowerCase());
+}
+
 export function normalizeMCPCustomHeaders(
   headers?: Record<string, string>
 ): Record<string, string> | undefined {
@@ -35,8 +43,8 @@ export function normalizeMCPCustomHeaders(
   const normalized: Record<string, string> = {};
   for (const [rawName, rawValue] of Object.entries(headers)) {
     const name = rawName.trim();
-    if (!name || !HEADER_NAME_RE.test(name)) continue;
-    if (RESERVED_MCP_CUSTOM_HEADER_NAMES.has(name.toLowerCase())) continue;
+    if (!name || !isValidMCPHeaderName(name)) continue;
+    if (isReservedMCPCustomHeaderName(name)) continue;
     if (typeof rawValue !== 'string') continue;
     normalized[name] = rawValue;
   }

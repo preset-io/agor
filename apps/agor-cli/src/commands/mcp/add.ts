@@ -2,6 +2,7 @@
  * `agor mcp add` - Add a new MCP server
  */
 
+import { normalizeMCPCustomHeaders } from '@agor/core/tools/mcp/http-headers';
 import { shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -128,17 +129,30 @@ export default class McpAdd extends BaseCommand {
 
       // Add custom HTTP headers
       if (flags.headers) {
+        if (flags.transport === 'stdio') {
+          this.warn('--headers only applies to http/sse transports; ignoring for stdio');
+        }
         const headerPairs = flags.headers.split(',').map((pair) => pair.trim());
         const headersObject: Record<string, string> = {};
         for (const pair of headerPairs) {
           const [key, ...valueParts] = pair.split('=');
           const value = valueParts.join('=');
-          if (key && value && key.trim().toLowerCase() !== 'authorization') {
+          if (key && value) {
             headersObject[key.trim()] = value.trim();
           }
         }
-        if (Object.keys(headersObject).length > 0) {
-          data.headers = headersObject;
+        const normalizedHeaders =
+          flags.transport === 'stdio' ? undefined : normalizeMCPCustomHeaders(headersObject);
+        const droppedHeaderNames = Object.keys(headersObject).filter(
+          (key) => !normalizedHeaders || !(key.trim() in normalizedHeaders)
+        );
+        if (droppedHeaderNames.length > 0) {
+          this.warn(
+            `Ignoring reserved or invalid custom headers: ${droppedHeaderNames.join(', ')}`
+          );
+        }
+        if (normalizedHeaders && Object.keys(normalizedHeaders).length > 0) {
+          data.headers = normalizedHeaders;
         }
       }
 

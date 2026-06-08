@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isReservedMCPCustomHeaderName,
+  isValidMCPHeaderName,
   MCP_HEADER_REDACTED_SENTINEL,
   mergeMCPRemoteHeaders,
   normalizeMCPCustomHeaders,
@@ -8,6 +10,13 @@ import {
 } from './http-headers';
 
 describe('MCP HTTP header helpers', () => {
+  it('validates custom header names', () => {
+    expect(isValidMCPHeaderName('DD-API-KEY')).toBe(true);
+    expect(isValidMCPHeaderName('bad header')).toBe(false);
+    expect(isReservedMCPCustomHeaderName('Authorization')).toBe(true);
+    expect(isReservedMCPCustomHeaderName('X-Custom')).toBe(false);
+  });
+
   it('filters invalid and reserved custom header names', () => {
     expect(
       normalizeMCPCustomHeaders({

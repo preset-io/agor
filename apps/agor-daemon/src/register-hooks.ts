@@ -46,7 +46,6 @@ import {
   typedValidateQuery,
   userQueryValidator,
 } from '@agor/core/lib/feathers-validation';
-import { redactMCPCustomHeaders } from '@agor/core/tools/mcp/http-headers';
 import type {
   AuthenticatedParams,
   Board,
@@ -104,6 +103,10 @@ import {
 import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
+import {
+  redactMCPServerHeaderSecrets,
+  shouldExposeMCPHeaderSecrets,
+} from './utils/mcp-header-secrets.js';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
@@ -1211,33 +1214,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const shouldExposeMCPHeaderSecrets = (context: HookContext) => {
-    if (!context.params?.provider) return true;
-    const auth = (context.params as Record<string, unknown>).authentication as
-      | { strategy?: string }
-      | undefined;
-    const role = (context.params.user as { role?: string } | undefined)?.role;
-    return auth?.strategy === 'session-token' || role === 'service';
-  };
-
   const redactMCPHeaderSecrets = async (context: HookContext) => {
-    if (shouldExposeMCPHeaderSecrets(context)) return context;
-
-    const redactServer = (server: MCPServer) => {
-      if (!server?.headers || Object.keys(server.headers).length === 0) return server;
-      const headers = redactMCPCustomHeaders(server.headers);
-      return {
-        ...server,
-        headers,
-      };
-    };
+    if (shouldExposeMCPHeaderSecrets(context.params)) return context;
 
     if (Array.isArray(context.result)) {
-      context.result = context.result.map(redactServer);
+      context.result = context.result.map(redactMCPServerHeaderSecrets);
     } else if (context.result?.data && Array.isArray(context.result.data)) {
-      context.result.data = context.result.data.map(redactServer);
+      context.result.data = context.result.data.map(redactMCPServerHeaderSecrets);
     } else if (context.result?.mcp_server_id) {
-      context.result = redactServer(context.result);
+      context.result = redactMCPServerHeaderSecrets(context.result);
     }
 
     return context;

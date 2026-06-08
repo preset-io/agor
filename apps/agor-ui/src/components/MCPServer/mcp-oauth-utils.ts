@@ -1,3 +1,8 @@
+import {
+  isReservedMCPCustomHeaderName,
+  isValidMCPHeaderName,
+} from '@agor/core/tools/mcp/http-headers';
+
 /**
  * OAuth utility functions extracted from MCPServersTable for testability.
  *
@@ -216,7 +221,11 @@ export function validateHeadersJSON(headersValue: unknown): string | undefined {
   }
 
   for (const [key, value] of Object.entries(parsed)) {
-    if (!key.trim()) return 'Custom HTTP header names cannot be empty';
+    const name = key.trim();
+    if (!name) return 'Custom HTTP header names cannot be empty';
+    if (!isValidMCPHeaderName(name)) return `Invalid custom HTTP header name: ${key}`;
+    if (isReservedMCPCustomHeaderName(name))
+      return `Custom HTTP header ${name} is reserved and cannot be configured here`;
     if (typeof value !== 'string') return 'Custom HTTP header values must be strings';
   }
 

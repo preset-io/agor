@@ -242,6 +242,12 @@ describe('validateHeadersJSON', () => {
     expect(validateHeadersJSON('{not json')).toBe('Custom HTTP headers must be valid JSON');
     expect(validateHeadersJSON('[]')).toBe('Custom HTTP headers must be a JSON object');
     expect(validateHeadersJSON('{"": "value"}')).toBe('Custom HTTP header names cannot be empty');
+    expect(validateHeadersJSON('{"bad header": "value"}')).toBe(
+      'Invalid custom HTTP header name: bad header'
+    );
+    expect(validateHeadersJSON('{"Cookie": "session=secret"}')).toBe(
+      'Custom HTTP header Cookie is reserved and cannot be configured here'
+    );
     expect(validateHeadersJSON('{"X-Count": 42}')).toBe(
       'Custom HTTP header values must be strings'
     );
