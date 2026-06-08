@@ -8,7 +8,7 @@ const configMocks = vi.hoisted(() => ({
 
 vi.mock('@agor/core/config', () => configMocks);
 
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { TaskID, UserID } from '@agor/core/types';
 import { ConfigService } from './config.js';
 
@@ -43,6 +43,19 @@ describe('ConfigService.resolveApiKey', () => {
         user: { user_id: 'user-1' },
       } as never)
     ).rejects.toBeInstanceOf(Forbidden);
+
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported key names before resolving secrets', async () => {
+    const service = new ConfigService({} as never);
+
+    await expect(
+      service.resolveApiKey({ taskId: 'task-1' as TaskID, keyName: 'UNRELATED_ENV_VAR' }, {
+        provider: 'socketio',
+        user: { user_id: 'executor-service', _isServiceAccount: true },
+      } as never)
+    ).rejects.toBeInstanceOf(BadRequest);
 
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
   });
