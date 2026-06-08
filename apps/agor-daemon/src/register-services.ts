@@ -31,6 +31,7 @@ import type {
   MCPAuth,
   MCPServerID,
   MessageSource,
+  Params,
   SessionID,
   UserID,
 } from '@agor/core/types';
@@ -443,8 +444,13 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   app.use('/config/resolve-api-key', {
     // biome-ignore lint/suspicious/noExplicitAny: taskId is branded UUID at runtime
-    async create(data: any) {
-      return await configService.resolveApiKey(data);
+    async create(data: any, params?: Params) {
+      return await configService.resolveApiKey(data, params);
+    },
+  });
+  app.service('/config/resolve-api-key').hooks({
+    before: {
+      create: [ctx.requireAuth],
     },
   });
 
