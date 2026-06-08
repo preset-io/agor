@@ -1,65 +1,32 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  DEFAULT_SOCIAL_IMAGE,
+  type FrontMatterLike,
+  getSocialImage,
+  isAbsoluteUrl,
+  SOCIAL_IMAGE_FIELDS,
+} from '../lib/siteMetadata';
 
-const DEFAULT_SITE_URL = 'https://agor.live';
-const DEFAULT_SOCIAL_IMAGE = '/hero.png';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.resolve(__dirname, '..');
 const pagesDir = path.join(appDir, 'pages');
 const publicDir = path.join(appDir, 'public');
-const imageFields = ['ogImage', 'socialImage', 'heroImage', 'image'];
 
-function getSiteUrl() {
-  return (process.env.NEXT_PUBLIC_SITE_URL || DEFAULT_SITE_URL).replace(/\/+$/, '');
-}
+type PageMetadata = {
+  filePath: string;
+  frontMatter: FrontMatterLike;
+};
 
-function getBasePath() {
-  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
-  return basePath ? `/${basePath.replace(/^\/+|\/+$/g, '')}` : '';
-}
-
-function withBasePath(pathname) {
-  const basePath = getBasePath();
-
-  if (!basePath || pathname === basePath || pathname.startsWith(`${basePath}/`)) {
-    return pathname;
-  }
-
-  return `${basePath}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
-}
-
-function isAbsoluteUrl(value) {
-  return /^https?:\/\//i.test(value);
-}
-
-function toAbsoluteUrl(value) {
-  if (isAbsoluteUrl(value)) {
-    return value;
-  }
-
-  const pathname = value.startsWith('/') ? value : `/${value}`;
-  return `${getSiteUrl()}${withBasePath(pathname)}`;
-}
-
-function getSocialImage(frontMatter) {
-  return toAbsoluteUrl(
-    frontMatter.ogImage ||
-      frontMatter.socialImage ||
-      frontMatter.heroImage ||
-      frontMatter.image ||
-      DEFAULT_SOCIAL_IMAGE
-  );
-}
-
-function walk(dir) {
+function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
     const fullPath = path.join(dir, entry);
     return statSync(fullPath).isDirectory() ? walk(fullPath) : [fullPath];
   });
 }
 
-function parseFrontMatter(filePath) {
+function parseFrontMatter(filePath: string): FrontMatterLike {
   const source = readFileSync(filePath, 'utf8');
 
   if (!source.startsWith('---\n')) {
@@ -72,7 +39,7 @@ function parseFrontMatter(filePath) {
     return {};
   }
 
-  const frontMatter = {};
+  const frontMatter: FrontMatterLike = {};
 
   for (const line of source.slice(4, end).split('\n')) {
     const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
@@ -88,7 +55,7 @@ function parseFrontMatter(filePath) {
   return frontMatter;
 }
 
-function assertLocalPublicImageExists(value, filePath, errors) {
+function assertLocalPublicImageExists(value: string, filePath: string, errors: string[]): void {
   if (!value || isAbsoluteUrl(value)) {
     return;
   }
@@ -105,14 +72,14 @@ function assertLocalPublicImageExists(value, filePath, errors) {
   }
 }
 
-const pages = walk(pagesDir)
+const pages: PageMetadata[] = walk(pagesDir)
   .filter((filePath) => filePath.endsWith('.mdx'))
   .map((filePath) => ({
     filePath: path.relative(appDir, filePath),
     frontMatter: parseFrontMatter(filePath),
   }));
 
-const errors = [];
+const errors: string[] = [];
 
 assertLocalPublicImageExists(DEFAULT_SOCIAL_IMAGE, 'default social image', errors);
 
@@ -123,7 +90,7 @@ for (const page of pages) {
     errors.push(`${page.filePath}: generated social image is not absolute: ${socialImage}`);
   }
 
-  for (const field of imageFields) {
+  for (const field of SOCIAL_IMAGE_FIELDS) {
     const value = page.frontMatter[field];
 
     if (typeof value === 'string') {

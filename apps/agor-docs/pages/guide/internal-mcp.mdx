@@ -23,7 +23,7 @@ This is the foundational layer: [assistants](/guide/assistants), [scheduled prom
 ## Key Ideas
 
 - **Agents as first-class users:** Every MCP tool wraps a FeathersJS service. Sessions, branches, boards, zones, users, environments — anything you can click or `agor`-CLI is available as JSON-RPC.
-- **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows _which_ session, branch, and board it's in — and can act on that context.
+- **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows *which* session, branch, and board it's in — and can act on that context.
 - **No separate server:** MCP is part of the daemon. Nothing to install, nothing extra to run.
 - **Remote access:** External agents and dashboards can connect over HTTP to drive Agor (create boards, branches, or even invite new users).
 
@@ -31,15 +31,15 @@ This is the foundational layer: [assistants](/guide/assistants), [scheduled prom
 
 ## Capabilities At a Glance
 
-| Domain                | What agents can do                                                                                      |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| **Sessions**          | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
-| **Repositories**      | List repositories, clone remote repos, register local repos, manage repo metadata                       |
-| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards spatially   |
-| **Board Zones**       | Create zones on boards, update zone properties (position, size, color), manage zone triggers            |
-| **Tasks & Reports**   | Fetch task history, create follow-up tasks, log progress, generate reports                              |
-| **Users & Teams**     | Create users, update profiles or avatars, assign roles, invite collaborators                            |
-| **Context Resources** | Enumerate context files, load concept docs, ingest repo metadata                                        |
+| Domain                 | What agents can do                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Sessions**           | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
+| **Repositories**       | List repositories, clone remote repos, register local repos, manage repo metadata                       |
+| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards spatially  |
+| **Board Zones**        | Create zones on boards, update zone properties (position, size, color), manage zone triggers            |
+| **Tasks & Reports**    | Fetch task history, create follow-up tasks, log progress, generate reports                              |
+| **Users & Teams**      | Create users, update profiles or avatars, assign roles, invite collaborators                            |
+| **Context Resources**  | Enumerate context files, load concept docs, ingest repo metadata                                        |
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to—real-time updates appear instantly for everyone watching the board.
 
@@ -138,16 +138,16 @@ already allowed to act as that creator:
 ```yaml
 execution:
   # Token lifetime — keep short to cap the damage from a leak.
-  mcp_token_expiration_ms: 86400000 # 24h (default)
+  mcp_token_expiration_ms: 86400000            # 24h (default)
 ```
 
 ### Troubleshooting
 
-| Symptom                               | Likely cause                       | Fix                                          |
-| ------------------------------------- | ---------------------------------- | -------------------------------------------- |
-| `token rejected: expired`             | Token past its `exp`               | Session will re-mint on next `GET /sessions` |
-| `token rejected: session … not found` | Token's session was deleted        | Expected — token can no longer be used       |
-| `token rejected: missing jti`         | Pre-rollout token (no `jti`/`exp`) | Re-prompt / restart the session to re-mint   |
+| Symptom                                            | Likely cause                                               | Fix                                           |
+|----------------------------------------------------|------------------------------------------------------------|-----------------------------------------------|
+| `token rejected: expired`                          | Token past its `exp`                                       | Session will re-mint on next `GET /sessions`  |
+| `token rejected: session … not found`              | Token's session was deleted                                | Expected — token can no longer be used        |
+| `token rejected: missing jti`                      | Pre-rollout token (no `jti`/`exp`)                         | Re-prompt / restart the session to re-mint    |
 
 ## Related Reading
 

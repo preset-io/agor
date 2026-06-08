@@ -16,7 +16,7 @@ services:
     environment:
       # Used by canonical, Open Graph, Twitter, and sitemap URLs while
       # previewing docs from Agor's managed dev environment.
-      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3001}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:${PORT:-3001}}
       NEXT_PUBLIC_BASE_PATH: ${NEXT_PUBLIC_BASE_PATH:-}
     volumes:
       # Bind-mount source for hot reload.

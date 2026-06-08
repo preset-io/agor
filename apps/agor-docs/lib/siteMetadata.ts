@@ -5,6 +5,8 @@ export const DEFAULT_DESCRIPTION =
 
 export const DEFAULT_SOCIAL_IMAGE = '/hero.png';
 
+export const SOCIAL_IMAGE_FIELDS = ['ogImage', 'socialImage', 'heroImage', 'image'] as const;
+
 export type FrontMatterLike = {
   canonical?: string;
   description?: string;
@@ -36,7 +38,7 @@ export function getBasePath(): string {
   return `/${basePath.replace(/^\/+|\/+$/g, '')}`;
 }
 
-function isAbsoluteUrl(value: string): boolean {
+export function isAbsoluteUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
@@ -74,11 +76,7 @@ export function getCanonicalUrl(pathname: string, canonical?: string): string {
 
 export function getSocialImage(frontMatter: FrontMatterLike): string {
   const image =
-    frontMatter.ogImage ||
-    frontMatter.socialImage ||
-    frontMatter.heroImage ||
-    frontMatter.image ||
-    DEFAULT_SOCIAL_IMAGE;
+    SOCIAL_IMAGE_FIELDS.map((field) => frontMatter[field]).find(Boolean) || DEFAULT_SOCIAL_IMAGE;
 
   return toAbsoluteUrl(String(image));
 }

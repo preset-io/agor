@@ -12,7 +12,11 @@ This page covers the **four deployment modes** Agor supports, what each enforces
 
 > **Status:** Agor is pre-1.0. The core auth/authorization and execution model are solid; some features (message gateway, web terminal in simple mode) trade safety for ergonomics by design and must be opted into knowingly.
 
-<img src="/security_audit.png" alt="Security audit conducted using Agor itself" width="400" />
+<img
+  src="/security_audit.png"
+  alt="Security audit conducted using Agor itself"
+  width="400"
+/>
 
 ---
 
@@ -20,19 +24,19 @@ This page covers the **four deployment modes** Agor supports, what each enforces
 
 Agor has four canonical modes. Choose based on **who shares the daemon** and **how much you trust them**.
 
-| Mode           | `branch_rbac` | `unix_user_mode` | Who's it for?                                                |
-| -------------- | ------------- | ---------------- | ------------------------------------------------------------ |
-| **Dev / Solo** | `false`       | `simple`         | Personal machine, trusted team of one                        |
-| **Local Team** | `true`        | `simple`         | Small team, RBAC for organization, no Unix isolation         |
-| **Insulated**  | `true`        | `insulated`      | Shared dev box, filesystem protection, no per-user processes |
-| **Strict**     | `true`        | `strict`         | Production / compliance — full per-user OS isolation         |
+| Mode | `branch_rbac` | `unix_user_mode` | Who's it for? |
+|---|---|---|---|
+| **Dev / Solo** | `false` | `simple` | Personal machine, trusted team of one |
+| **Local Team** | `true` | `simple` | Small team, RBAC for organization, no Unix isolation |
+| **Insulated** | `true` | `insulated` | Shared dev box, filesystem protection, no per-user processes |
+| **Strict** | `true` | `strict` | Production / compliance — full per-user OS isolation |
 
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  branch_rbac: false # default: false
-  unix_user_mode: simple # simple | insulated | strict
-  executor_unix_user: agor_executor # required for insulated
+  branch_rbac: false        # default: false
+  unix_user_mode: simple       # simple | insulated | strict
+  executor_unix_user: agor_executor   # required for insulated
 ```
 
 The full setup guide for **Insulated** and **Strict** is in **[Full Multiplayer Mode](/guide/multiplayer-unix-isolation)**.
@@ -50,7 +54,6 @@ execution:
 **What it is:** Open access. All authenticated users can act on all branches. Everything runs as the daemon user.
 
 **What's enforced:**
-
 - ✅ Authentication — REST and WebSocket calls require a JWT
 - ✅ Role checks — privileged endpoints (terminals, env controls) require `admin`
 - ✅ Encrypted credentials at rest (AES-256-GCM with `AGOR_MASTER_SECRET`)
@@ -58,7 +61,6 @@ execution:
 - ✅ Body size limits (10MB)
 
 **What's NOT enforced:**
-
 - ❌ Per-branch permissions
 - ❌ Filesystem isolation between users
 - ❌ Process isolation (everything is the daemon user)
@@ -80,13 +82,11 @@ execution:
 App-layer permission checks for branch ownership and access tiers. No OS-level isolation — all execution still runs as the daemon user.
 
 **Adds:**
-
 - ✅ Branch owners + `others_can` permission tiers (see below)
 - ✅ Settings UI for managing access
 - ✅ API enforcement of view/session/prompt/all permissions
 
 **Still missing:**
-
 - ❌ Filesystem ownership (all files are daemon-owned)
 - ❌ Process identity (sessions don't run as the user who created them)
 - ❌ Credential isolation (one user's API keys are reachable by an admin)
@@ -107,13 +107,11 @@ execution:
 Adds per-branch Unix groups (`agor_wt_*`) and a dedicated executor user. Filesystem permissions naturally enforce branch boundaries.
 
 **Adds (on top of Mode 2):**
-
 - ✅ Per-branch Unix groups, scoped filesystem access
 - ✅ Executors run as a dedicated, less-privileged user
 - ✅ Sessions can't reach files outside their branch
 
 **Still missing:**
-
 - ❌ Per-user identity for processes (everything still runs as the executor user)
 
 **Requires:** [Sudoers configuration](/guide/multiplayer-unix-isolation), executor Unix user.
@@ -133,7 +131,6 @@ execution:
 Each Agor user must have a `unix_username`. Sessions execute as that user. Per-user `$HOME`, SSH keys, GitHub tokens, API credentials.
 
 **Adds (on top of Mode 3):**
-
 - ✅ Each user gets their own Unix account (`agor_alice`, `agor_bob`, …)
 - ✅ Sessions run as the session creator's Unix user
 - ✅ Per-user credential isolation (`~/.ssh/`, `~/.gitconfig`, etc.)
@@ -150,19 +147,19 @@ Each Agor user must have a `unix_username`. Sessions execute as that user. Per-u
 
 When `branch_rbac: true` is set, every branch has owners plus an `others_can` tier that controls what non-owners may do:
 
-| Tier                    | What others can do                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------------------- |
-| `none`                  | No access — completely private to owners                                                          |
-| `view`                  | Read branches, sessions, tasks, messages                                                          |
-| **`session`** (default) | Create _their own_ sessions; prompt their own sessions only                                       |
-| `prompt`                | Prompt **any** session, including others' (but each session still runs as its creator's identity) |
-| `all`                   | Full control (create/update/delete sessions, change permissions)                                  |
+| Tier | What others can do |
+|---|---|
+| `none` | No access — completely private to owners |
+| `view` | Read branches, sessions, tasks, messages |
+| **`session`** (default) | Create *their own* sessions; prompt their own sessions only |
+| `prompt` | Prompt **any** session, including others' (but each session still runs as its creator's identity) |
+| `all` | Full control (create/update/delete sessions, change permissions) |
 
 The `session` tier is the safe default — collaborators can work independently without impersonating each other's OS identity.
 
 ### Session Sharing (`dangerously_allow_session_sharing`)
 
-A branch-level toggle, **off by default**. When OFF, spawning/forking attributes the new child to the _caller_ — it runs as the caller's Unix user. When ON (legacy behavior), children inherit the parent's `created_by`, meaning a collaborator can effectively spawn agents that execute as the original session owner.
+A branch-level toggle, **off by default**. When OFF, spawning/forking attributes the new child to the *caller* — it runs as the caller's Unix user. When ON (legacy behavior), children inherit the parent's `created_by`, meaning a collaborator can effectively spawn agents that execute as the original session owner.
 
 Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See `context/explorations/session-sharing.md` for the full discussion.
 
