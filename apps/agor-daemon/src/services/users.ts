@@ -46,6 +46,7 @@ import type {
 } from '@agor/core/types';
 import {
   extractAgenticToolsPublicValues,
+  hasMinimumRole,
   normalizeRole,
   ROLES,
   toAgenticToolsStatus,
@@ -62,6 +63,54 @@ function queryString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
+
+export interface LocalAuthenticationLookupParams extends Params {
+  [LOCAL_AUTH_LOOKUP_PARAM]?: true;
+}
+
+export function markLocalAuthenticationLookup(params: Params): void {
+  (params as LocalAuthenticationLookupParams)[LOCAL_AUTH_LOOKUP_PARAM] = true;
+}
+
+export function isLocalAuthenticationLookup(params: Params | undefined): boolean {
+  return (
+    (params as LocalAuthenticationLookupParams | undefined)?.[LOCAL_AUTH_LOOKUP_PARAM] === true
+  );
+}
+
+function isServiceAccount(params: Params | undefined): boolean {
+  return !!(params as AuthenticatedParams | undefined)?.user?._isServiceAccount;
+}
+
+function isAdmin(params: Params | undefined): boolean {
+  return hasMinimumRole((params as AuthenticatedParams | undefined)?.user?.role, ROLES.ADMIN);
+}
+
+function isSelfEmailLookup(params: Params | undefined, email: string): boolean {
+  const requesterEmail = (params as AuthenticatedParams | undefined)?.user?.email;
+  return !!requesterEmail && requesterEmail.toLowerCase() === email.toLowerCase();
+}
+
+function ensureCanExactEmailLookup(params: Params | undefined, email: string): void {
+  // Internal service calls are trusted and may perform exact-email lookups for
+  // auth/session bootstrap paths. External callers need an authenticated admin,
+  // service account, or a self lookup. The Feathers local strategy is the lone
+  // unauthenticated external path; it receives the password hash only inside the
+  // authentication pipeline and must never be exposed by /users responses.
+  if (!params?.provider || isLocalAuthenticationLookup(params)) return;
+
+  if (!(params as AuthenticatedParams | undefined)?.user) {
+    throw new NotAuthenticated('Authentication required');
+  }
+
+  if (isServiceAccount(params) || isAdmin(params) || isSelfEmailLookup(params, email)) {
+    return;
+  }
+
+  throw new Forbidden('Exact email user lookup is restricted');
 }
 
 /**
@@ -159,7 +208,8 @@ export class UsersService {
    * Find all users.
    *
    * Supports:
-   * - `email` exact lookup for authentication (includes password, legacy behavior)
+   * - `email` exact lookup for authorized callers; password is included only
+   *   for the internal local-authentication lookup marker
    * - `search` / `query` / `q` case-insensitive substring lookup across
    *   name, email, and unix_username
    * - Feathers-style `$limit` / `$skip`, plus plain `limit` / `skip` /
@@ -169,15 +219,16 @@ export class UsersService {
     const rawQuery = (params?.query ?? {}) as Record<string, unknown>;
 
     // Check if filtering by email (for authentication)
-    const email = rawQuery.email as string | undefined;
-    const includePassword = !!email; // Include password when looking up by email (for authentication)
+    const email = queryString(rawQuery.email);
+    const includePassword = !!email && isLocalAuthenticationLookup(params);
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
 
     let rows: (typeof users.$inferSelect)[];
     if (email) {
-      // Find by email (for LocalStrategy)
+      ensureCanExactEmailLookup(params, email);
+      // Find by email (for LocalStrategy / authorized exact lookup)
       const row = await select(this.db).from(users).where(eq(users.email, email)).one();
       rows = row ? [row] : [];
     } else {

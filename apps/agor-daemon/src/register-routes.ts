@@ -89,6 +89,7 @@ import {
 } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
+import { markLocalAuthenticationLookup } from './services/users.js';
 import { registerProxies } from './setup/proxies.js';
 import { applyTierHooks } from './setup/service-tiers.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
@@ -122,6 +123,13 @@ import {
   enforceTotalUploadSize,
 } from './utils/upload.js';
 import { resolveWidget } from './widgets/submissions.js';
+
+export class AgorLocalStrategy extends LocalStrategy {
+  async findEntity(username: string, params: Params) {
+    markLocalAuthenticationLookup(params);
+    return super.findEntity(username, params);
+  }
+}
 
 /**
  * Extended Params with route ID parameter.
@@ -285,7 +293,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   // Register authentication strategies
   authentication.register('jwt', new ServiceJWTStrategy());
-  authentication.register('local', new LocalStrategy());
+  authentication.register('local', new AgorLocalStrategy());
 
   // Register API key authentication strategy
   const { ApiKeyStrategy } = await import('./auth/api-key-strategy.js');

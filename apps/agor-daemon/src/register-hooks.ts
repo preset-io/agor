@@ -69,6 +69,7 @@ import { gatewayRouteHook } from './hooks/gateway-route.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
+import { isLocalAuthenticationLookup } from './services/users.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import { applySessionConfigDefaults } from './utils/apply-session-config-defaults.js';
 import {
@@ -1599,8 +1600,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           }
 
           const query = params.query || {};
-          if (query.email) {
-            // Allow local authentication lookup, ensure we only return minimal results
+          if (query.email && isLocalAuthenticationLookup(params)) {
+            // Allow only the Feathers local authentication pipeline to perform
+            // unauthenticated exact-email lookup. Direct external /users?email
+            // calls are denied below so hashes/private auth fields cannot leak
+            // through lookup/enumeration responses.
             params.query = { ...query, $limit: 1 };
             return context;
           }
