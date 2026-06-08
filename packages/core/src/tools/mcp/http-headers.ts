@@ -7,7 +7,23 @@
  * OAuth/JWT/bearer credentials.
  */
 
-export const RESERVED_MCP_CUSTOM_HEADER_NAMES = new Set(['authorization']);
+export const MCP_HEADER_REDACTED_SENTINEL = '••••••••';
+
+export const RESERVED_MCP_CUSTOM_HEADER_NAMES = new Set([
+  'authorization',
+  // Hop-by-hop / transport-controlled headers. These are managed by fetch,
+  // the MCP SDK transport, or the auth configuration and should not be stored
+  // as custom MCP service-account headers.
+  'connection',
+  'content-length',
+  'cookie',
+  'host',
+  'mcp-session-id',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
 
 const HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
@@ -26,6 +42,33 @@ export function normalizeMCPCustomHeaders(
   }
 
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+export function redactMCPCustomHeaders(
+  headers?: Record<string, string>
+): Record<string, string> | undefined {
+  const normalized = normalizeMCPCustomHeaders(headers);
+  if (!normalized) return undefined;
+  return Object.fromEntries(
+    Object.keys(normalized).map((key) => [key, MCP_HEADER_REDACTED_SENTINEL])
+  );
+}
+
+export function restoreRedactedMCPCustomHeaders(options: {
+  current?: Record<string, string>;
+  next?: Record<string, string>;
+}): Record<string, string> | undefined {
+  if (!options.next) return undefined;
+
+  const restored: Record<string, string> = {};
+  for (const [key, value] of Object.entries(options.next)) {
+    restored[key] =
+      value === MCP_HEADER_REDACTED_SENTINEL && options.current?.[key] !== undefined
+        ? options.current[key]
+        : value;
+  }
+
+  return normalizeMCPCustomHeaders(restored);
 }
 
 export function mergeMCPRemoteHeaders(options: {

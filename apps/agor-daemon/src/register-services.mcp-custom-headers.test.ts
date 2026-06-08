@@ -19,6 +19,12 @@ describe('register-services /mcp-servers/discover custom headers wiring', () => 
     expect(discoverBlock).toContain('serverConfig.headers = resolution.resolved.headers');
   });
 
+  it('restores redacted edit-form header values from the saved server before probing', () => {
+    expect(discoverBlock).toContain('restoreRedactedMCPCustomHeaders');
+    expect(discoverBlock).toContain('current: server.headers');
+    expect(discoverBlock).toContain('next: data.headers');
+  });
+
   it('passes merged custom/auth headers to Streamable HTTP transport', () => {
     expect(discoverBlock).toContain('mergeMCPRemoteHeaders');
     expect(discoverBlock).toContain('requestInit: { headers: connHeaders }');

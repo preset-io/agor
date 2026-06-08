@@ -122,6 +122,12 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       showError('Connection test is not available for stdio transport');
       return;
     }
+    try {
+      await form.validateFields(['headers']);
+    } catch {
+      showError('Please fix custom HTTP headers before testing');
+      return;
+    }
 
     setTesting(true);
     setTestResult(null);

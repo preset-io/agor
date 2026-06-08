@@ -20,7 +20,7 @@ import {
 } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
-import { extractOAuthConfigForTesting } from './mcp-oauth-utils';
+import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
 
 const { TextArea } = Input;
 
@@ -458,6 +458,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             label="Custom HTTP Headers"
             name="headers"
             tooltip="JSON object of additional headers for HTTP/SSE transports. Values support templates like {{ user.env.DATADOG_API_KEY }}. Authorization is configured via Auth Type, not here."
+            rules={[
+              {
+                validator: async (_, value) => {
+                  const error = validateHeadersJSON(value);
+                  if (error) throw new Error(error);
+                },
+              },
+            ]}
           >
             <TextArea
               placeholder='{"DD-API-KEY": "{{ user.env.DATADOG_API_KEY }}", "X-Datadog-Parent-Org-Id": "123"}'

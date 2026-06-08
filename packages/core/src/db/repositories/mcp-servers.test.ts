@@ -8,6 +8,7 @@
 import type { MCPServer, MCPServerID, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
+import { MCP_HEADER_REDACTED_SENTINEL } from '../../tools/mcp/http-headers';
 import { dbTest } from '../test-helpers';
 import { EntityNotFoundError } from './base';
 import { MCPServerRepository } from './mcp-servers';
@@ -339,6 +340,8 @@ describe('MCPServerRepository custom headers', () => {
         headers: {
           'DD-API-KEY': '{{ user.env.DD_API_KEY }}',
           'X-Datadog-Parent-Org-Id': '1234',
+          Authorization: 'Bearer should-not-persist',
+          Cookie: 'session=should-not-persist',
         },
       })
     );
@@ -349,6 +352,23 @@ describe('MCPServerRepository custom headers', () => {
       'DD-API-KEY': '{{ user.env.DD_API_KEY }}',
       'X-Datadog-Parent-Org-Id': '1234',
     });
+  });
+
+  dbTest('should drop custom headers for stdio servers', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        name: 'filesystem',
+        transport: 'stdio',
+        headers: {
+          'X-Should-Not-Persist': 'value',
+        },
+      })
+    );
+
+    const found = await repo.findById(created.mcp_server_id);
+
+    expect(found?.headers).toBeUndefined();
   });
 
   dbTest(
@@ -369,7 +389,7 @@ describe('MCPServerRepository custom headers', () => {
 
       const updated = await repo.update(created.mcp_server_id, {
         headers: {
-          'DD-API-KEY': '••••••••',
+          'DD-API-KEY': MCP_HEADER_REDACTED_SENTINEL,
           'X-Datadog-Parent-Org-Id': '5678',
         },
       });
@@ -380,4 +400,25 @@ describe('MCPServerRepository custom headers', () => {
       });
     }
   );
+
+  dbTest('should clear custom headers when updating to stdio transport', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        name: 'datadog',
+        transport: 'http',
+        url: 'https://mcp.datadog.example/mcp',
+        headers: {
+          'DD-API-KEY': 'secret-value',
+        },
+      })
+    );
+
+    const updated = await repo.update(created.mcp_server_id, {
+      transport: 'stdio',
+      command: 'npx',
+    });
+
+    expect(updated.headers).toBeUndefined();
+  });
 });

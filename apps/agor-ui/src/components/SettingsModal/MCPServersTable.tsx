@@ -157,6 +157,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       showError('Connection test is not available for stdio transport');
       return;
     }
+    try {
+      await createForm.validateFields(['headers']);
+    } catch {
+      showError('Please fix custom HTTP headers before testing');
+      return;
+    }
 
     setTesting(true);
     setTestResult(null);

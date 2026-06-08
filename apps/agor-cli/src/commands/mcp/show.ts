@@ -87,8 +87,8 @@ export default class McpShow extends BaseCommand {
 
       if (server.headers && Object.keys(server.headers).length > 0) {
         this.log(`${chalk.cyan('Custom HTTP Headers')}:`);
-        for (const [key, value] of Object.entries(server.headers)) {
-          this.log(`  ${key}: ${value}`);
+        for (const key of Object.keys(server.headers)) {
+          this.log(`  ${key}: ••••••••`);
         }
       }
 

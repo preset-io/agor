@@ -46,6 +46,7 @@ import {
   typedValidateQuery,
   userQueryValidator,
 } from '@agor/core/lib/feathers-validation';
+import { redactMCPCustomHeaders } from '@agor/core/tools/mcp/http-headers';
 import type {
   AuthenticatedParams,
   Board,
@@ -1224,9 +1225,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
     const redactServer = (server: MCPServer) => {
       if (!server?.headers || Object.keys(server.headers).length === 0) return server;
+      const headers = redactMCPCustomHeaders(server.headers);
       return {
         ...server,
-        headers: Object.fromEntries(Object.keys(server.headers).map((key) => [key, '••••••••'])),
+        headers,
       };
     };
 

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { mergeMCPRemoteHeaders, normalizeMCPCustomHeaders } from './http-headers';
+import {
+  MCP_HEADER_REDACTED_SENTINEL,
+  mergeMCPRemoteHeaders,
+  normalizeMCPCustomHeaders,
+  redactMCPCustomHeaders,
+  restoreRedactedMCPCustomHeaders,
+} from './http-headers';
 
 describe('MCP HTTP header helpers', () => {
   it('filters invalid and reserved custom header names', () => {
@@ -7,6 +13,8 @@ describe('MCP HTTP header helpers', () => {
       normalizeMCPCustomHeaders({
         'DD-API-KEY': 'dummy-api-key',
         Authorization: 'Bearer custom-should-not-win',
+        Cookie: 'session=secret',
+        'Mcp-Session-Id': 'session-id',
         'bad header': 'nope',
         '': 'empty',
       })
@@ -24,6 +32,37 @@ describe('MCP HTTP header helpers', () => {
       Accept: 'application/json',
       'DD-API-KEY': 'dummy-api-key',
       Authorization: 'Bearer auth',
+    });
+  });
+
+  it('redacts custom header values while preserving names', () => {
+    expect(
+      redactMCPCustomHeaders({
+        'DD-API-KEY': 'dummy-api-key',
+        'X-Datadog-Parent-Org-Id': '1234',
+      })
+    ).toEqual({
+      'DD-API-KEY': MCP_HEADER_REDACTED_SENTINEL,
+      'X-Datadog-Parent-Org-Id': MCP_HEADER_REDACTED_SENTINEL,
+    });
+  });
+
+  it('restores redacted values from existing headers and normalizes the result', () => {
+    expect(
+      restoreRedactedMCPCustomHeaders({
+        current: {
+          'DD-API-KEY': 'secret-value',
+          'X-Datadog-Parent-Org-Id': '1234',
+        },
+        next: {
+          'DD-API-KEY': MCP_HEADER_REDACTED_SENTINEL,
+          'X-Datadog-Parent-Org-Id': '5678',
+          Authorization: 'Bearer should-not-persist',
+        },
+      })
+    ).toEqual({
+      'DD-API-KEY': 'secret-value',
+      'X-Datadog-Parent-Org-Id': '5678',
     });
   });
 });

@@ -15,6 +15,10 @@ import type {
 } from '@agor/core/types';
 import { and, eq, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import {
+  normalizeMCPCustomHeaders,
+  restoreRedactedMCPCustomHeaders,
+} from '../../tools/mcp/http-headers';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type MCPServerInsert, type MCPServerRow, mcpServers } from '../schema';
@@ -26,8 +30,6 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-
-const REDACTED_SENTINEL = '••••••••';
 
 /**
  * MCP Server repository implementation
@@ -84,6 +86,10 @@ export class MCPServerRepository
     const now = Date.now();
     const serverId =
       'mcp_server_id' in data && data.mcp_server_id ? data.mcp_server_id : generateId();
+    const headers =
+      data.transport === 'stdio'
+        ? undefined
+        : normalizeMCPCustomHeaders('headers' in data ? data.headers : undefined);
 
     return {
       mcp_server_id: serverId as string,
@@ -110,7 +116,7 @@ export class MCPServerRepository
         command: data.command,
         args: data.args,
         url: data.url,
-        headers: 'headers' in data ? data.headers : undefined,
+        headers,
         env: data.env,
         auth: 'auth' in data ? data.auth : undefined,
         tools: 'tools' in data ? data.tools : undefined,
@@ -253,15 +259,11 @@ export class MCPServerRepository
       }
 
       const merged = { ...current, ...updates };
-      if (updates.headers && current.headers) {
-        merged.headers = Object.fromEntries(
-          Object.entries(updates.headers).map(([key, value]) => [
-            key,
-            value === REDACTED_SENTINEL && current.headers?.[key] !== undefined
-              ? current.headers[key]
-              : value,
-          ])
-        );
+      if ('headers' in updates) {
+        merged.headers = restoreRedactedMCPCustomHeaders({
+          current: current.headers,
+          next: updates.headers,
+        });
       }
       const insertData = this.mcpServerToInsert(merged);
 

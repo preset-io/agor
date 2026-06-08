@@ -2172,7 +2172,9 @@ async function registerMCPServices(
           '@modelcontextprotocol/sdk/client/streamableHttp.js'
         );
         const { resolveMCPAuthHeaders } = await import('@agor/core/tools/mcp/jwt-auth');
-        const { mergeMCPRemoteHeaders } = await import('@agor/core/tools/mcp/http-headers');
+        const { mergeMCPRemoteHeaders, restoreRedactedMCPCustomHeaders } = await import(
+          '@agor/core/tools/mcp/http-headers'
+        );
         const { hasMinimumRole, ROLES } = await import('@agor/core/types');
 
         const mcpServerRepo = new MCPServerRepository(db);
@@ -2242,6 +2244,10 @@ async function registerMCPServices(
                   error: 'Access denied: admin role required to update session-scoped MCP servers',
                 };
             }
+            serverConfig.headers = restoreRedactedMCPCustomHeaders({
+              current: server.headers,
+              next: data.headers,
+            });
             serverId = data.mcp_server_id;
           }
         } else if (data.mcp_server_id) {

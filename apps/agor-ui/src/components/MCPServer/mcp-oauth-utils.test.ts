@@ -5,6 +5,7 @@ import {
   extractOAuthConfigForTesting,
   isTemplateValue,
   parseEnvJSON,
+  validateHeadersJSON,
 } from './mcp-oauth-utils';
 
 describe('isTemplateValue', () => {
@@ -227,5 +228,22 @@ describe('parseHeadersJSON', () => {
       'DD-API-KEY': '{{ user.env.DD_API_KEY }}',
       'X-Org': '123',
     });
+  });
+});
+
+describe('validateHeadersJSON', () => {
+  it('accepts empty and valid object input', () => {
+    expect(validateHeadersJSON(undefined)).toBeUndefined();
+    expect(validateHeadersJSON('')).toBeUndefined();
+    expect(validateHeadersJSON('{"DD-API-KEY": "{{ user.env.DD_API_KEY }}"}')).toBeUndefined();
+  });
+
+  it('rejects invalid JSON, non-object input, empty names, and non-string values', () => {
+    expect(validateHeadersJSON('{not json')).toBe('Custom HTTP headers must be valid JSON');
+    expect(validateHeadersJSON('[]')).toBe('Custom HTTP headers must be a JSON object');
+    expect(validateHeadersJSON('{"": "value"}')).toBe('Custom HTTP header names cannot be empty');
+    expect(validateHeadersJSON('{"X-Count": 42}')).toBe(
+      'Custom HTTP header values must be strings'
+    );
   });
 });

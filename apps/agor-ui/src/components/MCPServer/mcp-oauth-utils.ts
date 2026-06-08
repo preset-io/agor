@@ -200,3 +200,25 @@ export function parseHeadersJSON(headersValue: unknown): Record<string, string> 
     return undefined;
   }
 }
+
+export function validateHeadersJSON(headersValue: unknown): string | undefined {
+  if (typeof headersValue !== 'string' || !headersValue.trim()) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(headersValue);
+  } catch {
+    return 'Custom HTTP headers must be valid JSON';
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return 'Custom HTTP headers must be a JSON object';
+  }
+
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!key.trim()) return 'Custom HTTP header names cannot be empty';
+    if (typeof value !== 'string') return 'Custom HTTP header values must be strings';
+  }
+
+  return undefined;
+}

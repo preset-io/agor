@@ -34,10 +34,12 @@ import {
   NotFound,
 } from '@agor/core/feathers';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
+import { redactMCPCustomHeaders } from '@agor/core/tools/mcp/http-headers';
 import type {
   AuthenticatedParams,
   DaemonServicesConfig,
   HookContext,
+  MCPServer,
   Message,
   MessageSource,
   Paginated,
@@ -218,6 +220,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   } = ctx;
 
   const usersService = app.service('users');
+
+  const shouldExposeMCPHeaderSecrets = (params?: RouteParams) => {
+    if (!params?.provider) return true;
+    const auth = (params as Record<string, unknown>).authentication as
+      | { strategy?: string }
+      | undefined;
+    const role = (params.user as { role?: string } | undefined)?.role;
+    return auth?.strategy === 'session-token' || role === 'service';
+  };
+
+  const redactMCPServerHeaderSecrets = (server: MCPServer): MCPServer => {
+    if (!server.headers || Object.keys(server.headers).length === 0) return server;
+    return {
+      ...server,
+      headers: redactMCPCustomHeaders(server.headers),
+    };
+  };
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
   const reposService = app.service('repos') as unknown as ReposServiceImpl;
 
@@ -3108,11 +3127,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (!id) throw new Error('Session ID required');
           const enabledOnly =
             params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
-          return sessionMCPServersService.listServers(
+          const servers = await sessionMCPServersService.listServers(
             id as import('@agor/core/types').SessionID,
             enabledOnly,
             params
           );
+          return shouldExposeMCPHeaderSecrets(params)
+            ? servers
+            : servers.map(redactMCPServerHeaderSecrets);
         },
         async create(data: { mcpServerId: string }, params: RouteParams) {
           const id = params.route?.id;
