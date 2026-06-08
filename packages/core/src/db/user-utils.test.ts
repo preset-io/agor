@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import { dbTest } from './test-helpers';
 import {
+  assertUsableBootstrapAdminPassword,
   type CreateUserData,
   createDefaultAdminUser,
   createUser,
@@ -434,6 +435,26 @@ describe('DEVELOPMENT_DEFAULT_ADMIN_USER', () => {
   it('should be a const object', () => {
     expect(DEVELOPMENT_DEFAULT_ADMIN_USER).toBeDefined();
     expect(typeof DEVELOPMENT_DEFAULT_ADMIN_USER).toBe('object');
+  });
+});
+
+// ============================================================================
+// assertUsableBootstrapAdminPassword
+// ============================================================================
+
+describe('assertUsableBootstrapAdminPassword', () => {
+  it('rejects the development default password', () => {
+    expect(() => assertUsableBootstrapAdminPassword('admin')).toThrow(
+      /legacy fixed default password/
+    );
+  });
+
+  it('rejects too-short passwords', () => {
+    expect(() => assertUsableBootstrapAdminPassword('short')).toThrow(/at least 8 characters/);
+  });
+
+  it('accepts a usable password', () => {
+    expect(() => assertUsableBootstrapAdminPassword('explicit-secret')).not.toThrow();
   });
 });
 

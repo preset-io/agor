@@ -16,6 +16,16 @@ vi.mock('@agor/core/db', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
+    assertUsableBootstrapAdminPassword:
+      actual.assertUsableBootstrapAdminPassword ??
+      ((password: string, label: string = 'Bootstrap admin password') => {
+        if (password === 'admin') {
+          throw new Error(`${label} must not be the legacy fixed default password.`);
+        }
+        if (password.length < 8) {
+          throw new Error(`${label} must be at least 8 characters.`);
+        }
+      }),
     bootstrapFirstRunAdmin: vi.fn(),
     createUser: vi.fn(),
   };

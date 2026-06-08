@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 import type { AgorConfig } from '@agor/core/config';
 import {
   type AdminBootstrapResult,
+  assertUsableBootstrapAdminPassword,
   BOOTSTRAP_ADMIN_EMAIL,
   bootstrapFirstRunAdmin,
   createUser,
@@ -34,22 +35,10 @@ const closeP = promisify(close);
 const unlinkP = promisify(unlink);
 
 const ADMIN_CREDENTIALS_FILENAME = 'admin-credentials';
-const MIN_BOOTSTRAP_PASSWORD_LENGTH = 8;
 
 /** Where the generated admin password is persisted on first run. */
 export function getAdminCredentialsPath(baseDir: string = join(homedir(), '.agor')): string {
   return join(baseDir, ADMIN_CREDENTIALS_FILENAME);
-}
-
-function assertUsableBootstrapPassword(password: string): void {
-  if (password === 'admin') {
-    throw new Error('AGOR_ADMIN_PASSWORD must not be the legacy fixed default password.');
-  }
-  if (password.length < MIN_BOOTSTRAP_PASSWORD_LENGTH) {
-    throw new Error(
-      `AGOR_ADMIN_PASSWORD must be at least ${MIN_BOOTSTRAP_PASSWORD_LENGTH} characters.`
-    );
-  }
 }
 
 /**
@@ -167,7 +156,7 @@ export async function runFirstRunAdminBootstrap(
     // 1) Env-var path: use the operator-provided password verbatim. No file
     // touch, no rollback to worry about.
     if (envPassword && envPassword.length > 0) {
-      assertUsableBootstrapPassword(envPassword);
+      assertUsableBootstrapAdminPassword(envPassword, 'AGOR_ADMIN_PASSWORD');
       return await createUser(db, {
         email: BOOTSTRAP_ADMIN_EMAIL,
         password: envPassword,

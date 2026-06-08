@@ -5,6 +5,7 @@
 import { join } from 'node:path';
 import { getConfigPath } from '@agor/core/config';
 import {
+  assertUsableBootstrapAdminPassword,
   createDatabase,
   createDefaultAdminUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
@@ -99,10 +100,11 @@ export default class UserCreateAdmin extends Command {
             name: 'password',
             message: 'Admin password:',
             validate: (input: string) => {
-              if (!input) return 'Password is required';
-              if (input.length < 8) return 'Password must be at least 8 characters';
-              if (input === DEVELOPMENT_DEFAULT_ADMIN_USER.password) {
-                return 'Use --dev-default for development-only default credentials';
+              try {
+                if (!input) return 'Password is required';
+                assertUsableBootstrapAdminPassword(input, 'Admin password');
+              } catch (error) {
+                return error instanceof Error ? error.message : String(error);
               }
               return true;
             },

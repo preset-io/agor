@@ -151,6 +151,20 @@ export const DEVELOPMENT_DEFAULT_ADMIN_USER = {
   unix_username: 'admin',
 };
 
+export const MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH = 8;
+
+export function assertUsableBootstrapAdminPassword(
+  password: string,
+  label: string = 'Bootstrap admin password'
+): void {
+  if (password === DEVELOPMENT_DEFAULT_ADMIN_USER.password) {
+    throw new Error(`${label} must not be the legacy fixed default password.`);
+  }
+  if (password.length < MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH) {
+    throw new Error(`${label} must be at least ${MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH} characters.`);
+  }
+}
+
 export interface CreateDefaultAdminUserOptions {
   email?: string;
   password?: string;
@@ -185,10 +199,8 @@ export async function createDefaultAdminUser(
       'Refusing to create admin with fixed default credentials. Pass an explicit password, or set allowDevelopmentDefault only in development/test.'
     );
   }
-  if (options.password === DEVELOPMENT_DEFAULT_ADMIN_USER.password && !useDevelopmentDefault) {
-    throw new Error(
-      'Refusing to create admin with the legacy fixed default password. Use a unique password or allowDevelopmentDefault only in development/test.'
-    );
+  if (options.password && !useDevelopmentDefault) {
+    assertUsableBootstrapAdminPassword(options.password);
   }
   if (useDevelopmentDefault && process.env.NODE_ENV === 'production') {
     throw new Error('Refusing development default admin credentials when NODE_ENV=production');

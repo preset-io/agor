@@ -18,7 +18,7 @@
  */
 
 import { randomInt } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { User } from '../types';
 import type { Database } from './client';
 import { select, update } from './database-wrapper';
@@ -107,8 +107,8 @@ export async function reattributeLegacyAnonymousRows(
 
 /**
  * Find an admin to use as the legacy-row attribution target. Prefers the
- * oldest admin (stable across runs); falls back to the oldest user when no
- * admins exist. Returns null only on a completely empty users table.
+ * oldest superadmin/admin (stable across runs); falls back to the oldest user
+ * when no admins exist. Returns null only on a completely empty users table.
  */
 async function findFallbackAdmin(db: Database): Promise<User | null> {
   const byCreatedAtAsc = (a: UserRow, b: UserRow) => {
@@ -118,7 +118,7 @@ async function findFallbackAdmin(db: Database): Promise<User | null> {
   };
   const adminRows = (await select(db)
     .from(users)
-    .where(eq(users.role, 'admin'))
+    .where(inArray(users.role, ['superadmin', 'admin']))
     .all()) as UserRow[];
   const pool: UserRow[] =
     adminRows.length > 0 ? adminRows : ((await select(db).from(users).all()) as UserRow[]);
