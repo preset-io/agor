@@ -123,6 +123,17 @@ interface KnowledgeSearchResult {
   chunks?: Array<{ unit_id: string; snippet?: string | null; score?: number }>;
 }
 
+interface KnowledgeEmbeddingReuseIntoNext {
+  targetVersionId: string;
+  embeddingSpaceId?: string;
+  provider?: string;
+  model?: string;
+  dimensions?: number;
+  reusedChunks: number;
+  totalChunks: number;
+  updatedAt?: string;
+}
+
 type KnowledgeSemanticSettings = KnowledgeSemanticSettingsPublic & { api_key?: string | null };
 type KnowledgeIndexingStatus = CoreKnowledgeIndexingStatus;
 
@@ -255,6 +266,33 @@ function indexingTooltip(status: KnowledgeDocumentIndexingStatus): string {
 
 function shouldShowIndexingCue(status?: KnowledgeDocumentIndexingStatus | null): boolean {
   return Boolean(status && status.state !== 'empty' && status.state !== 'not_configured');
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function embeddingReuseIntoNext(version: KnowledgeVersion): KnowledgeEmbeddingReuseIntoNext | null {
+  const metadata = metadataRecord(version.metadata);
+  const reuse = metadataRecord(metadata?.embedding_reuse_into_next);
+  if (!reuse) return null;
+  const reusedChunks = Number(reuse.reused_chunks);
+  const totalChunks = Number(reuse.total_chunks);
+  if (!Number.isFinite(reusedChunks) || !Number.isFinite(totalChunks) || totalChunks <= 0) {
+    return null;
+  }
+  return {
+    targetVersionId: String(reuse.target_version_id ?? ''),
+    embeddingSpaceId: reuse.embedding_space_id ? String(reuse.embedding_space_id) : undefined,
+    provider: reuse.provider ? String(reuse.provider) : undefined,
+    model: reuse.model ? String(reuse.model) : undefined,
+    dimensions: Number.isFinite(Number(reuse.dimensions)) ? Number(reuse.dimensions) : undefined,
+    reusedChunks,
+    totalChunks,
+    updatedAt: reuse.updated_at ? String(reuse.updated_at) : undefined,
+  };
 }
 
 function IndexingStatusCue({
@@ -2940,35 +2978,74 @@ export function KnowledgePage({
             <List
               dataSource={versions}
               locale={{ emptyText: <Empty description="No version history yet" /> }}
-              renderItem={(version, index) => (
-                <List.Item
-                  onClick={() => setSelectedVersionId(version.version_id)}
-                  style={{
-                    cursor: 'pointer',
-                    borderRadius: token.borderRadiusLG,
-                    padding: 12,
-                    background:
-                      selectedVersion?.version_id === version.version_id
-                        ? token.colorPrimaryBg
-                        : 'transparent',
-                  }}
-                >
-                  <List.Item.Meta
-                    title={
-                      <Space>
-                        <Text strong>v{version.version_number}</Text>
-                        {index === 0 && <Tag color="green">Current</Tag>}
-                      </Space>
-                    }
-                    description={
-                      <Space orientation="vertical" size={2}>
-                        <Text type="secondary">{formatTimestamp(version.created_at)}</Text>
-                        {version.change_summary && <Text>{version.change_summary}</Text>}
-                      </Space>
-                    }
-                  />
-                </List.Item>
-              )}
+              renderItem={(version, index) => {
+                const reuse = embeddingReuseIntoNext(version);
+                const targetVersion = reuse?.targetVersionId
+                  ? versions.find((item) => item.version_id === reuse.targetVersionId)
+                  : null;
+                return (
+                  <List.Item
+                    onClick={() => setSelectedVersionId(version.version_id)}
+                    style={{
+                      cursor: 'pointer',
+                      borderRadius: token.borderRadiusLG,
+                      padding: 12,
+                      background:
+                        selectedVersion?.version_id === version.version_id
+                          ? token.colorPrimaryBg
+                          : 'transparent',
+                    }}
+                  >
+                    <List.Item.Meta
+                      title={
+                        <Space wrap>
+                          <Text strong>v{version.version_number}</Text>
+                          {index === 0 && <Tag color="green">Current</Tag>}
+                          {reuse && (
+                            <Popover
+                              content={
+                                <Space orientation="vertical" size={4}>
+                                  <Text>
+                                    When{' '}
+                                    {targetVersion
+                                      ? `v${targetVersion.version_number}`
+                                      : 'the next version'}{' '}
+                                    was indexed, Agor reused {reuse.reusedChunks} of{' '}
+                                    {reuse.totalChunks} chunk embeddings from matching normalized
+                                    chunk hashes.
+                                  </Text>
+                                  {(reuse.model || reuse.dimensions) && (
+                                    <Text type="secondary">
+                                      {[reuse.model, reuse.dimensions && `${reuse.dimensions}d`]
+                                        .filter(Boolean)
+                                        .join(' · ')}
+                                    </Text>
+                                  )}
+                                  {reuse.updatedAt && (
+                                    <Text type="secondary">
+                                      Recorded {formatTimestamp(reuse.updatedAt)}
+                                    </Text>
+                                  )}
+                                </Space>
+                              }
+                            >
+                              <Tag color="green">
+                                ♻️ {`${reuse.reusedChunks}/${reuse.totalChunks}`}
+                              </Tag>
+                            </Popover>
+                          )}
+                        </Space>
+                      }
+                      description={
+                        <Space orientation="vertical" size={2}>
+                          <Text type="secondary">{formatTimestamp(version.created_at)}</Text>
+                          {version.change_summary && <Text>{version.change_summary}</Text>}
+                        </Space>
+                      }
+                    />
+                  </List.Item>
+                );
+              }}
             />
           </div>
 
