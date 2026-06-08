@@ -24,6 +24,10 @@ import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-u
 
 const { TextArea } = Input;
 
+function isRemoteTransportValue(transport?: 'stdio' | 'http' | 'sse'): boolean {
+  return transport !== 'stdio';
+}
+
 export interface MCPServerFormFieldsProps {
   mode: 'create' | 'edit';
   transport?: 'stdio' | 'http' | 'sse';
@@ -106,7 +110,12 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const watchedClientSecret = Form.useWatch('oauth_client_secret', form);
   const watchedOauthMode = Form.useWatch('oauth_mode', form);
   const watchedEnv = Form.useWatch('env', form);
+  const watchedHeaders = Form.useWatch('headers', form);
   const hasEnvConfigured = typeof watchedEnv === 'string' && watchedEnv.trim().length > 0;
+  const hasHeadersConfigured =
+    isRemoteTransportValue(transport) &&
+    typeof watchedHeaders === 'string' &&
+    watchedHeaders.trim().length > 0;
   const hasCustomizedAdvanced =
     [
       watchedAuthorizationUrl,
@@ -325,7 +334,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     }
   };
 
-  const isRemoteTransport = transport !== 'stdio';
+  const isRemoteTransport = isRemoteTransportValue(transport);
   const showAdvancedSection = isRemoteTransport && authType === 'oauth';
 
   // ── Basic Information section ──────────────────────────────────────
@@ -452,25 +461,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             tooltip="Server URL. Supports templates like {{ user.env.MCP_URL }}"
           >
             <Input placeholder="https://mcp.example.com" />
-          </Form.Item>
-
-          <Form.Item
-            label="Custom HTTP Headers"
-            name="headers"
-            tooltip="JSON object of additional headers for HTTP/SSE transports. Values support templates like {{ user.env.DATADOG_API_KEY }}. Authorization is configured via Auth Type, not here."
-            rules={[
-              {
-                validator: async (_, value) => {
-                  const error = validateHeadersJSON(value);
-                  if (error) throw new Error(error);
-                },
-              },
-            ]}
-          >
-            <TextArea
-              placeholder='{"DD-API-KEY": "{{ user.env.DATADOG_API_KEY }}", "X-Datadog-Parent-Org-Id": "123"}'
-              rows={3}
-            />
           </Form.Item>
 
           <Form.Item
@@ -831,30 +821,54 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       children: connectionChildren,
     },
     {
-      key: 'env-vars',
+      key: 'advanced-config',
       label: (
         <Space size={8}>
-          <Typography.Text strong>Environment variables</Typography.Text>
+          <Typography.Text strong>Advanced Configuration</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            (JSON, supports {`{{ user.env.VAR }}`} templates)
+            (headers and environment variables)
           </Typography.Text>
-          {hasEnvConfigured && (
-            <Tooltip title="One or more environment variables configured">
+          {(hasHeadersConfigured || hasEnvConfigured) && (
+            <Tooltip title="Advanced configuration set">
               <Badge color="orange" />
             </Tooltip>
           )}
         </Space>
       ),
       children: (
-        <Form.Item
-          name="env"
-          tooltip="JSON object of environment variables. Values support templates like {{ user.env.VAR_NAME }}"
-        >
-          <TextArea
-            placeholder='{"GITHUB_TOKEN": "{{ user.env.GITHUB_TOKEN }}", "ALLOWED_PATHS": "/path"}'
-            rows={3}
-          />
-        </Form.Item>
+        <>
+          {isRemoteTransport && (
+            <Form.Item
+              label="Custom HTTP Headers"
+              name="headers"
+              tooltip="JSON object of additional headers for HTTP/SSE transports. Values support templates like {{ user.env.DATADOG_API_KEY }}. Authorization is configured via Auth Type, not here."
+              rules={[
+                {
+                  validator: async (_, value) => {
+                    const error = validateHeadersJSON(value);
+                    if (error) throw new Error(error);
+                  },
+                },
+              ]}
+            >
+              <TextArea
+                placeholder='{"DD-API-KEY": "{{ user.env.DATADOG_API_KEY }}", "X-Datadog-Parent-Org-Id": "123"}'
+                rows={3}
+              />
+            </Form.Item>
+          )}
+
+          <Form.Item
+            label="Environment Variables"
+            name="env"
+            tooltip="JSON object of environment variables. Values support templates like {{ user.env.VAR_NAME }}"
+          >
+            <TextArea
+              placeholder='{"GITHUB_TOKEN": "{{ user.env.GITHUB_TOKEN }}", "ALLOWED_PATHS": "/path"}'
+              rows={3}
+            />
+          </Form.Item>
+        </>
       ),
     },
   ];
