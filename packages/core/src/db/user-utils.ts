@@ -137,10 +137,13 @@ export async function getUserByEmail(db: Database, email: string): Promise<User 
 }
 
 /**
- * Default admin user credentials
- * Used by both init and user create-admin commands
+ * Development-only admin user credentials.
+ *
+ * Never use this in production/bootstrap paths. Production first-run setup
+ * should use an operator-provided password or a generated one-time credential
+ * file (see first-run-bootstrap / daemon setup).
  */
-export const DEFAULT_ADMIN_USER = {
+export const DEVELOPMENT_DEFAULT_ADMIN_USER = {
   email: 'admin@agor.live',
   password: 'admin',
   name: 'Admin',
@@ -148,23 +151,69 @@ export const DEFAULT_ADMIN_USER = {
   unix_username: 'admin',
 };
 
+export interface CreateDefaultAdminUserOptions {
+  email?: string;
+  password?: string;
+  name?: string;
+  unix_username?: string;
+  /**
+   * Explicitly opt into the legacy admin@agor.live/admin credential for
+   * development/test ergonomics. Refused when NODE_ENV=production.
+   */
+  allowDevelopmentDefault?: boolean;
+}
+
 /**
- * Create default admin user (admin@agor.live / admin)
+ * Create bootstrap admin user.
  *
- * This is a convenience function for creating the default admin user
- * with hardcoded credentials. Use createUser() if you need custom credentials.
+ * Production callers must pass an explicit password. The fixed
+ * admin@agor.live/admin credential is available only behind an explicit
+ * development/test gate.
  *
  * @param db - Database instance
+ * @param options - Admin identity/password options
  * @returns Created user
  * @throws Error if admin user already exists
  */
-export async function createDefaultAdminUser(db: Database): Promise<User> {
-  // Check if admin user already exists
-  const existing = await getUserByEmail(db, DEFAULT_ADMIN_USER.email);
-
-  if (existing) {
-    throw new Error(`Admin user already exists (email: ${DEFAULT_ADMIN_USER.email})`);
+export async function createDefaultAdminUser(
+  db: Database,
+  options: CreateDefaultAdminUserOptions = {}
+): Promise<User> {
+  const useDevelopmentDefault = options.allowDevelopmentDefault === true;
+  if (!options.password && !useDevelopmentDefault) {
+    throw new Error(
+      'Refusing to create admin with fixed default credentials. Pass an explicit password, or set allowDevelopmentDefault only in development/test.'
+    );
+  }
+  if (options.password === DEVELOPMENT_DEFAULT_ADMIN_USER.password && !useDevelopmentDefault) {
+    throw new Error(
+      'Refusing to create admin with the legacy fixed default password. Use a unique password or allowDevelopmentDefault only in development/test.'
+    );
+  }
+  if (useDevelopmentDefault && process.env.NODE_ENV === 'production') {
+    throw new Error('Refusing development default admin credentials when NODE_ENV=production');
   }
 
-  return createUser(db, DEFAULT_ADMIN_USER);
+  const adminData = {
+    ...DEVELOPMENT_DEFAULT_ADMIN_USER,
+    ...options,
+    password: options.password ?? DEVELOPMENT_DEFAULT_ADMIN_USER.password,
+    role: 'superadmin' as const,
+  };
+
+  // Check if admin user already exists
+  const existing = await getUserByEmail(db, adminData.email);
+
+  if (existing) {
+    throw new Error(`Admin user already exists (email: ${adminData.email})`);
+  }
+
+  return createUser(db, {
+    email: adminData.email,
+    password: adminData.password,
+    name: adminData.name,
+    role: adminData.role,
+    unix_username: adminData.unix_username,
+    must_change_password: !useDevelopmentDefault,
+  });
 }

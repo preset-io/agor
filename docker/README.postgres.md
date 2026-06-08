@@ -22,6 +22,9 @@ docker compose up
 
 ### Users
 
+These credentials are created only by the development/testing entrypoint and
+must not be used for production deployments.
+
 - **admin@agor.live** (password: `admin`)
   - Role: Admin
   - Default system administrator

@@ -12,7 +12,7 @@ import {
   type CreateUserData,
   createDefaultAdminUser,
   createUser,
-  DEFAULT_ADMIN_USER,
+  DEVELOPMENT_DEFAULT_ADMIN_USER,
   getUserByEmail,
   userExists,
 } from './user-utils';
@@ -419,21 +419,21 @@ describe('getUserByEmail', () => {
 });
 
 // ============================================================================
-// DEFAULT_ADMIN_USER constant
+// DEVELOPMENT_DEFAULT_ADMIN_USER constant
 // ============================================================================
 
-describe('DEFAULT_ADMIN_USER', () => {
-  it('should have expected default values', () => {
-    expect(DEFAULT_ADMIN_USER.email).toBe('admin@agor.live');
-    expect(DEFAULT_ADMIN_USER.password).toBe('admin');
-    expect(DEFAULT_ADMIN_USER.name).toBe('Admin');
-    expect(DEFAULT_ADMIN_USER.role).toBe('superadmin');
-    expect(DEFAULT_ADMIN_USER.unix_username).toBe('admin');
+describe('DEVELOPMENT_DEFAULT_ADMIN_USER', () => {
+  it('should have expected development-only default values', () => {
+    expect(DEVELOPMENT_DEFAULT_ADMIN_USER.email).toBe('admin@agor.live');
+    expect(DEVELOPMENT_DEFAULT_ADMIN_USER.password).toBe('admin');
+    expect(DEVELOPMENT_DEFAULT_ADMIN_USER.name).toBe('Admin');
+    expect(DEVELOPMENT_DEFAULT_ADMIN_USER.role).toBe('superadmin');
+    expect(DEVELOPMENT_DEFAULT_ADMIN_USER.unix_username).toBe('admin');
   });
 
   it('should be a const object', () => {
-    expect(DEFAULT_ADMIN_USER).toBeDefined();
-    expect(typeof DEFAULT_ADMIN_USER).toBe('object');
+    expect(DEVELOPMENT_DEFAULT_ADMIN_USER).toBeDefined();
+    expect(typeof DEVELOPMENT_DEFAULT_ADMIN_USER).toBe('object');
   });
 });
 
@@ -442,8 +442,23 @@ describe('DEFAULT_ADMIN_USER', () => {
 // ============================================================================
 
 describe('createDefaultAdminUser', () => {
-  dbTest('should create admin user with default credentials', async ({ db }) => {
-    const admin = await createDefaultAdminUser(db);
+  dbTest('should refuse fixed defaults unless explicitly development-gated', async ({ db }) => {
+    await expect(createDefaultAdminUser(db)).rejects.toThrow(
+      /Refusing to create admin with fixed default credentials/
+    );
+  });
+
+  dbTest(
+    'should refuse the legacy fixed default password as an explicit password',
+    async ({ db }) => {
+      await expect(createDefaultAdminUser(db, { password: 'admin' })).rejects.toThrow(
+        /legacy fixed default password/
+      );
+    }
+  );
+
+  dbTest('should create admin user with explicit credentials', async ({ db }) => {
+    const admin = await createDefaultAdminUser(db, { password: 'explicit-secret' });
 
     expect(admin.email).toBe('admin@agor.live');
     expect(admin.name).toBe('Admin');
@@ -453,8 +468,8 @@ describe('createDefaultAdminUser', () => {
     expect(admin.user_id).toBeDefined();
   });
 
-  dbTest('should hash default password', async ({ db }) => {
-    await createDefaultAdminUser(db);
+  dbTest('should hash explicit password', async ({ db }) => {
+    await createDefaultAdminUser(db, { password: 'explicit-secret' });
 
     const result = await (db as any).query.users.findFirst({
       where: (users: any, { eq }: any) => eq(users.email, 'admin@agor.live'),
@@ -463,14 +478,14 @@ describe('createDefaultAdminUser', () => {
     expect(result?.password).not.toBe('admin');
     expect(result?.password).toMatch(/^\$2[aby]\$\d{2}\$/);
 
-    const isValid = await bcrypt.compare('admin', result!.password);
+    const isValid = await bcrypt.compare('explicit-secret', result!.password);
     expect(isValid).toBe(true);
   });
 
   dbTest('should throw error if admin user already exists', async ({ db }) => {
-    await createDefaultAdminUser(db);
+    await createDefaultAdminUser(db, { password: 'explicit-secret' });
 
-    await expect(createDefaultAdminUser(db)).rejects.toThrow(
+    await expect(createDefaultAdminUser(db, { password: 'different-secret' })).rejects.toThrow(
       'Admin user already exists (email: admin@agor.live)'
     );
   });
@@ -484,11 +499,13 @@ describe('createDefaultAdminUser', () => {
       role: 'member',
     });
 
-    await expect(createDefaultAdminUser(db)).rejects.toThrow('Admin user already exists');
+    await expect(createDefaultAdminUser(db, { password: 'explicit-secret' })).rejects.toThrow(
+      'Admin user already exists'
+    );
   });
 
   dbTest('should use createUser internally', async ({ db }) => {
-    const admin = await createDefaultAdminUser(db);
+    const admin = await createDefaultAdminUser(db, { password: 'explicit-secret' });
 
     // Should have all the same properties as any user created via createUser
     expect(admin.preferences).toEqual({});
@@ -498,9 +515,9 @@ describe('createDefaultAdminUser', () => {
   });
 
   dbTest('should be idempotent check (fails on second call)', async ({ db }) => {
-    const admin1 = await createDefaultAdminUser(db);
+    const admin1 = await createDefaultAdminUser(db, { password: 'explicit-secret' });
 
-    await expect(createDefaultAdminUser(db)).rejects.toThrow();
+    await expect(createDefaultAdminUser(db, { password: 'different-secret' })).rejects.toThrow();
 
     // Verify original admin still exists unchanged
     const found = await getUserByEmail(db, 'admin@agor.live');
@@ -568,7 +585,7 @@ describe('User utilities integration', () => {
 
   dbTest('should work alongside default admin user', async ({ db }) => {
     // Create default admin
-    const admin = await createDefaultAdminUser(db);
+    const admin = await createDefaultAdminUser(db, { allowDevelopmentDefault: true });
 
     // Create regular users
     const user1 = await createUser(db, createUserData({ email: 'user1@example.com' }));

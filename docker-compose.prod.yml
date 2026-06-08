@@ -15,6 +15,10 @@ services:
       - DAEMON_PORT=${DAEMON_PORT:-3030}
       - DAEMON_HOST=0.0.0.0
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      # Optional first-run bootstrap password. If unset on an empty database,
+      # Agor writes a random password to /home/agor/.agor/admin-credentials
+      # (mode 0600) and logs only that file path.
+      - AGOR_ADMIN_PASSWORD=${AGOR_ADMIN_PASSWORD:-}
 
       # Pass through API keys from host (if set)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

@@ -10,7 +10,13 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, setConfigValue } from '@agor/core/config';
-import { createDatabase, createUser, runMigrations, seedInitialData } from '@agor/core/db';
+import {
+  createDatabase,
+  createUser,
+  DEVELOPMENT_DEFAULT_ADMIN_USER,
+  runMigrations,
+  seedInitialData,
+} from '@agor/core/db';
 import { isDaemonRunning } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -342,23 +348,32 @@ export default class Init extends Command {
     if (!skipPrompts) {
       await this.promptAdminSetup(dbPath);
     } else {
-      // --force: create default admin (admin@agor.live / admin) and warn.
+      // --force: preserve local/dev ergonomics, but refuse to create the
+      // legacy fixed credential in production. Production first-run setup is
+      // owned by the daemon bootstrap, which uses AGOR_ADMIN_PASSWORD or a
+      // generated 0600 credentials file.
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error(
+          [
+            'Refusing to create fixed default admin credentials in production.',
+            'Create an admin explicitly or use daemon first-run bootstrap with AGOR_ADMIN_PASSWORD.',
+          ].join(' ')
+        );
+      }
       try {
         const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
-        const defaultEmail = 'admin@agor.live';
-        const defaultPassword = 'admin';
 
         await createUser(db, {
-          email: defaultEmail,
-          password: defaultPassword,
-          name: 'Admin',
+          email: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
+          password: DEVELOPMENT_DEFAULT_ADMIN_USER.password,
+          name: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
           role: 'admin',
         });
 
-        this.log(`${chalk.green('   ✓')} Default admin user created`);
-        this.log(chalk.dim(`     Email: ${defaultEmail}`));
-        this.log(chalk.dim(`     Password: ${defaultPassword}`));
-        this.log(chalk.yellow(`     ⚠️  Change this password after first login!`));
+        this.log(`${chalk.green('   ✓')} Development admin user created`);
+        this.log(chalk.dim(`     Email: ${DEVELOPMENT_DEFAULT_ADMIN_USER.email}`));
+        this.log(chalk.dim(`     Password: ${DEVELOPMENT_DEFAULT_ADMIN_USER.password}`));
+        this.log(chalk.yellow(`     ⚠️  Development/test credential only.`));
       } catch (error) {
         // Admin user might already exist, which is fine
         if (error instanceof Error && !error.message.includes('UNIQUE constraint failed')) {

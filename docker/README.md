@@ -112,21 +112,26 @@ docker run --rm -v agor_agor-home:/data -v $(pwd):/backup \
   alpine tar xzf /backup/agor-backup.tar.gz -C /data
 ```
 
-## Default Credentials (Production)
+## First-Run Admin Bootstrap (Production)
 
-On first startup, production mode creates a default admin user:
+Production images do **not** create a fixed default password.
 
-```
-Email:    admin@agor.live
-Password: admin
-```
+On first startup with an empty users table, the daemon creates
+`admin@agor.live` as the bootstrap superadmin using one of these paths:
 
-**IMPORTANT:** Change this password immediately after first login!
+1. Set `AGOR_ADMIN_PASSWORD` in the container environment. Agor uses that
+   operator-provided password and does not print it.
+2. Leave `AGOR_ADMIN_PASSWORD` unset. Agor generates a random password and
+   writes it to `/home/agor/.agor/admin-credentials` with mode `0600`; logs
+   only point at that file path.
+
+The bootstrap admin is forced to change its password on first login.
 
 ```bash
-# From inside the container
+# Retrieve generated credentials from inside the container when
+# AGOR_ADMIN_PASSWORD was not provided.
 docker compose -f docker-compose.prod.yml exec agor-prod \
-  agor user update admin@agor.live --password <new-password>
+  cat /home/agor/.agor/admin-credentials
 ```
 
 ## Building Images
@@ -327,7 +332,7 @@ Expected image sizes:
 
 - **Development**: Edit code in your editor, changes hot-reload automatically
 - **Production**: Deploy to your server, configure reverse proxy (nginx/caddy)
-- **Security**: Change default admin password, configure HTTPS, set CORS_ORIGIN
+- **Security**: Secure bootstrap credentials, configure HTTPS, set CORS_ORIGIN
 - **Monitoring**: Check `/health` endpoint, monitor logs, set up alerts
 
 ## Architecture Notes

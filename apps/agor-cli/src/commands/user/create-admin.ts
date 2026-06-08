@@ -1,5 +1,5 @@
 /**
- * `agor user create-admin` - Create default admin user (admin@agor.live / admin)
+ * `agor user create-admin` - Create bootstrap admin user
  */
 
 import { join } from 'node:path';
@@ -7,20 +7,50 @@ import { getConfigPath } from '@agor/core/config';
 import {
   createDatabase,
   createDefaultAdminUser,
-  DEFAULT_ADMIN_USER,
+  DEVELOPMENT_DEFAULT_ADMIN_USER,
   getUserByEmail,
   runMigrations,
   shortId,
 } from '@agor/core/db';
-import { Command } from '@oclif/core';
+import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import inquirer from 'inquirer';
 
 export default class UserCreateAdmin extends Command {
-  static description = 'Create default admin user (admin@agor.live / admin)';
+  static description = 'Create a bootstrap superadmin user';
 
-  static examples = ['<%= config.bin %> <%= command.id %>'];
+  static examples = [
+    '<%= config.bin %> <%= command.id %> --password <password>',
+    '<%= config.bin %> <%= command.id %> --dev-default',
+  ];
+
+  static flags = {
+    email: Flags.string({
+      description: 'Admin email address',
+      default: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
+    }),
+    password: Flags.string({
+      description: 'Admin password. If omitted, prompts interactively.',
+      required: false,
+    }),
+    name: Flags.string({
+      description: 'Admin display name',
+      default: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
+    }),
+    'unix-username': Flags.string({
+      description: 'Unix username for shell access',
+      default: DEVELOPMENT_DEFAULT_ADMIN_USER.unix_username,
+    }),
+    'dev-default': Flags.boolean({
+      description:
+        'Development/test only: use admin@agor.live / admin. Refused when NODE_ENV=production.',
+      default: false,
+    }),
+  };
 
   async run(): Promise<void> {
+    const { flags } = await this.parse(UserCreateAdmin);
+
     try {
       // Get database connection URL
       // Priority: DATABASE_URL env var > default SQLite file path
@@ -43,41 +73,82 @@ export default class UserCreateAdmin extends Command {
       await runMigrations(db);
 
       // Check if admin user already exists
-      const existingAdmin = await getUserByEmail(db, DEFAULT_ADMIN_USER.email);
+      const existingAdmin = await getUserByEmail(db, flags.email);
 
       if (existingAdmin) {
         this.log(chalk.yellow('⚠ Admin user already exists'));
         this.log('');
-        this.log(`  Email: ${chalk.cyan(DEFAULT_ADMIN_USER.email)}`);
+        this.log(`  Email: ${chalk.cyan(flags.email)}`);
         this.log(`  Name:  ${chalk.cyan(existingAdmin.name || '(not set)')}`);
         this.log(`  Role:  ${chalk.cyan(existingAdmin.role)}`);
         this.log(`  ID:    ${chalk.gray(shortId(existingAdmin.user_id))}`);
         this.log('');
         this.log(
           chalk.gray(
-            `To reset password, use: agor user update ${DEFAULT_ADMIN_USER.email} --password newpassword`
+            `To reset password, use: agor user update ${flags.email} --password newpassword`
           )
         );
         process.exit(0);
       }
 
-      // Create default admin user
+      let password = flags.password;
+      if (!password && !flags['dev-default']) {
+        const passwordAnswer = await inquirer.prompt<{ password: string }>([
+          {
+            type: 'password' as const,
+            name: 'password',
+            message: 'Admin password:',
+            validate: (input: string) => {
+              if (!input) return 'Password is required';
+              if (input.length < 8) return 'Password must be at least 8 characters';
+              if (input === DEVELOPMENT_DEFAULT_ADMIN_USER.password) {
+                return 'Use --dev-default for development-only default credentials';
+              }
+              return true;
+            },
+            mask: '*',
+          },
+        ]);
+        await inquirer.prompt<{ confirmPassword: string }>([
+          {
+            type: 'password' as const,
+            name: 'confirmPassword',
+            message: 'Confirm password:',
+            validate: (input: string) => {
+              if (input !== passwordAnswer.password) return 'Passwords do not match';
+              return true;
+            },
+            mask: '*',
+          },
+        ]);
+        password = passwordAnswer.password;
+      }
+
+      // Create admin user
       this.log(chalk.gray('Creating admin user...'));
-      const user = await createDefaultAdminUser(db);
+      const user = await createDefaultAdminUser(db, {
+        email: flags.email,
+        password,
+        name: flags.name,
+        unix_username: flags['unix-username'],
+        allowDevelopmentDefault: flags['dev-default'],
+      });
 
       this.log(`${chalk.green('✓')} Admin user created successfully`);
       this.log('');
-      this.log(`  Email:    ${chalk.cyan(DEFAULT_ADMIN_USER.email)}`);
-      this.log(`  Password: ${chalk.cyan(DEFAULT_ADMIN_USER.password)}`);
+      this.log(`  Email:    ${chalk.cyan(flags.email)}`);
+      if (flags['dev-default']) {
+        this.log(`  Password: ${chalk.cyan(DEVELOPMENT_DEFAULT_ADMIN_USER.password)}`);
+        this.log(chalk.yellow('  ⚠ Development-only default credential enabled'));
+      } else {
+        this.log('  Password: (provided; not printed)');
+      }
       this.log(`  Name:     ${chalk.cyan(user.name)}`);
       this.log(`  Role:     ${chalk.cyan(user.role)}`);
       this.log(`  ID:       ${chalk.gray(shortId(user.user_id))}`);
-      this.log('');
-      this.log(chalk.yellow('⚠ SECURITY WARNING'));
-      this.log(chalk.gray('  Change the password immediately using:'));
-      this.log(
-        chalk.gray(`  agor user update ${DEFAULT_ADMIN_USER.email} --password <new-password>`)
-      );
+      if (user.must_change_password) {
+        this.log(`  ${chalk.yellow('⚠')} User must change password on first login`);
+      }
 
       process.exit(0);
     } catch (error) {

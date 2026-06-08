@@ -185,6 +185,19 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
     await expect(fs.access(credentialsPath)).rejects.toThrow();
   });
 
+  it('rejects the legacy fixed default password from AGOR_ADMIN_PASSWORD', async () => {
+    process.env.AGOR_ADMIN_PASSWORD = 'admin';
+
+    const { bootstrapFirstRunAdmin } = await loadMocks();
+    bootstrapFirstRunAdmin.mockImplementation(
+      async (_db: unknown, factory: () => Promise<unknown>) => factory()
+    );
+
+    await expect(
+      runFirstRunAdminBootstrap({} as unknown as never, { credentialsBaseDir: tempDir })
+    ).rejects.toThrow(/legacy fixed default password/);
+  });
+
   it('falls back to file-based generation when AGOR_ADMIN_PASSWORD is absent', async () => {
     const { bootstrapFirstRunAdmin, createUser } = await loadMocks();
     bootstrapFirstRunAdmin.mockImplementation(

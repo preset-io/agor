@@ -18,18 +18,26 @@ agor init \
   --daemon-port "${DAEMON_PORT:-3030}" \
   --daemon-host "${DAEMON_HOST:-0.0.0.0}"
 
-# Create/update admin user (idempotent: safe to run multiple times)
-# This will skip if admin user already exists
-echo "👤 Ensuring admin user exists..."
-agor user create-admin 2>/dev/null || true
+# Run schema migrations before daemon startup. The production entrypoint creates
+# /home/agor/.agor before `agor init`, so init is intentionally idempotent and
+# may skip DB creation; this migration step replaces the old create-admin side
+# effect that used to run migrations.
+echo "🔄 Running database migrations..."
+agor db migrate --yes
 
-# SECURITY: do not echo the default admin credentials to stdout — container
-# log aggregators ingest stdout and make it searchable across the org.
-# Emit a short warning to stderr only, and only once per container start.
-# Operators can retrieve the bootstrap credentials via an authenticated
-# `agor user ...` CLI invocation inside the container.
->&2 printf '\033[1;31m%s\033[0m\n' "⚠️  Admin user exists with the default bootstrap password."
->&2 printf '\033[1;31m%s\033[0m\n' "⚠️  ROTATE IT NOW via the UI or: docker exec <container> agor user set-password"
+# Do NOT create a fixed default admin here.
+#
+# On first daemon start, the daemon's first-run bootstrap creates the initial
+# superadmin only when the users table is empty:
+#   - If AGOR_ADMIN_PASSWORD is set, that operator-provided password is used
+#     and is never echoed back to logs.
+#   - Otherwise, a random password is written to
+#     /home/agor/.agor/admin-credentials with mode 0600, and logs only point
+#     at that file path.
+#
+# This keeps production images idempotent without shipping a takeover-grade
+# admin@agor.live/admin credential in every fresh deployment.
+echo "👤 Admin bootstrap will be handled by daemon first-run setup."
 
 # Start daemon in foreground (this keeps container alive)
 echo "🚀 Starting daemon on port ${DAEMON_PORT:-3030}..."

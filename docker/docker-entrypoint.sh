@@ -194,8 +194,8 @@ if [ "$AGOR_SET_RBAC_FLAG" = "true" ] || [ -n "$AGOR_SET_UNIX_MODE" ]; then
 fi
 
 # Always create/update admin user (safe: only upserts)
-echo "👤 Ensuring default admin user exists..."
-ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --force 2>&1)
+echo "👤 Ensuring development admin user exists..."
+ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --dev-default 2>&1)
 echo "$ADMIN_OUTPUT"
 
 # In strict mode the daemon validates that a session creator's unix_username exists as a
