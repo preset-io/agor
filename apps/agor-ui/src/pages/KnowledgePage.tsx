@@ -123,8 +123,7 @@ interface KnowledgeSearchResult {
   chunks?: Array<{ unit_id: string; snippet?: string | null; score?: number }>;
 }
 
-interface KnowledgeReuseIntoNext {
-  kind: 'embedding' | 'chunk';
+interface KnowledgeEmbeddingReuseIntoNext {
   targetVersionId: string;
   embeddingSpaceId?: string;
   provider?: string;
@@ -275,10 +274,9 @@ function metadataRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function parseReuseMetadata(
-  reuse: Record<string, unknown> | null,
-  kind: KnowledgeReuseIntoNext['kind']
-): KnowledgeReuseIntoNext | null {
+function embeddingReuseIntoNext(version: KnowledgeVersion): KnowledgeEmbeddingReuseIntoNext | null {
+  const metadata = metadataRecord(version.metadata);
+  const reuse = metadataRecord(metadata?.embedding_reuse_into_next);
   if (!reuse) return null;
   const reusedChunks = Number(reuse.reused_chunks);
   const totalChunks = Number(reuse.total_chunks);
@@ -286,7 +284,6 @@ function parseReuseMetadata(
     return null;
   }
   return {
-    kind,
     targetVersionId: String(reuse.target_version_id ?? ''),
     embeddingSpaceId: reuse.embedding_space_id ? String(reuse.embedding_space_id) : undefined,
     provider: reuse.provider ? String(reuse.provider) : undefined,
@@ -296,14 +293,6 @@ function parseReuseMetadata(
     totalChunks,
     updatedAt: reuse.updated_at ? String(reuse.updated_at) : undefined,
   };
-}
-
-function reuseIntoNext(version: KnowledgeVersion): KnowledgeReuseIntoNext | null {
-  const metadata = metadataRecord(version.metadata);
-  return (
-    parseReuseMetadata(metadataRecord(metadata?.embedding_reuse_into_next), 'embedding') ??
-    parseReuseMetadata(metadataRecord(metadata?.chunk_reuse_into_next), 'chunk')
-  );
 }
 
 function IndexingStatusCue({
@@ -2990,7 +2979,7 @@ export function KnowledgePage({
               dataSource={versions}
               locale={{ emptyText: <Empty description="No version history yet" /> }}
               renderItem={(version, index) => {
-                const reuse = reuseIntoNext(version);
+                const reuse = embeddingReuseIntoNext(version);
                 const targetVersion = reuse?.targetVersionId
                   ? versions.find((item) => item.version_id === reuse.targetVersionId)
                   : null;
@@ -3017,21 +3006,13 @@ export function KnowledgePage({
                               content={
                                 <Space orientation="vertical" size={4}>
                                   <Text>
-                                    {reuse.kind === 'embedding'
-                                      ? `When ${
-                                          targetVersion
-                                            ? `v${targetVersion.version_number}`
-                                            : 'the next version'
-                                        } was indexed, Agor reused ${reuse.reusedChunks} of ${
-                                          reuse.totalChunks
-                                        } chunk embeddings from matching normalized chunk hashes.`
-                                      : `When ${
-                                          targetVersion
-                                            ? `v${targetVersion.version_number}`
-                                            : 'the next version'
-                                        } was chunked, ${reuse.reusedChunks} of ${
-                                          reuse.totalChunks
-                                        } chunks matched this version's normalized chunk hashes. Embedding reuse telemetry appears after semantic indexing runs.`}
+                                    When{' '}
+                                    {targetVersion
+                                      ? `v${targetVersion.version_number}`
+                                      : 'the next version'}{' '}
+                                    was indexed, Agor reused {reuse.reusedChunks} of{' '}
+                                    {reuse.totalChunks} chunk embeddings from matching normalized
+                                    chunk hashes.
                                   </Text>
                                   {(reuse.model || reuse.dimensions) && (
                                     <Text type="secondary">
@@ -3048,7 +3029,7 @@ export function KnowledgePage({
                                 </Space>
                               }
                             >
-                              <Tag color={reuse.kind === 'embedding' ? 'green' : 'blue'}>
+                              <Tag color="green">
                                 ♻️ {`${reuse.reusedChunks}/${reuse.totalChunks}`}
                               </Tag>
                             </Popover>
