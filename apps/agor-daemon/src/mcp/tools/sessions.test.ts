@@ -57,7 +57,10 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
 /** Cfg captured alongside the handler — includes inputSchema for tests that
  * exercise Zod validation/coercion (the fake server below bypasses the SDK's
  * automatic schema parsing). */
-type CapturedTool = { cfg: { inputSchema?: { parse: (v: unknown) => unknown } }; cb: ToolHandler };
+type CapturedTool = {
+  cfg: { inputSchema?: { parse: (v: unknown) => unknown; safeParse: (v: unknown) => any } };
+  cb: ToolHandler;
+};
 
 async function registerAndCaptureTools(
   ctx: {
@@ -582,6 +585,61 @@ describe('agor_sessions_prompt (subsession mode)', () => {
   });
 });
 
+describe('MCP session input validation clarity', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('rejects missing required ids with field-specific messages', async () => {
+    const tools = await registerAndCaptureTools(
+      { app: {}, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_get']
+    );
+
+    const result = tools.agor_sessions_get.cfg.inputSchema!.safeParse({});
+
+    expect(result.success).toBe(false);
+    expect(String(result.error.message)).toMatch(/sessionId is required and must be a string/);
+  });
+
+  it('rejects empty required prompts and optional titles when provided', async () => {
+    const tools = await registerAndCaptureTools(
+      { app: {}, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_prompt']
+    );
+
+    const emptyPrompt = tools.agor_sessions_prompt.cfg.inputSchema!.safeParse({
+      sessionId: 'sess-target',
+      mode: 'continue',
+      prompt: '',
+    });
+    expect(emptyPrompt.success).toBe(false);
+    expect(String(emptyPrompt.error.message)).toMatch(/prompt cannot be empty/);
+
+    const emptyTitle = tools.agor_sessions_prompt.cfg.inputSchema!.safeParse({
+      sessionId: 'sess-target',
+      mode: 'fork',
+      prompt: 'do work',
+      title: '',
+    });
+    expect(emptyTitle.success).toBe(false);
+    expect(String(emptyTitle.error.message)).toMatch(/title cannot be empty/);
+  });
+
+  it('rejects invalid pagination limits before handlers run', async () => {
+    const tools = await registerAndCaptureTools(
+      { app: {}, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_list']
+    );
+
+    const result = tools.agor_sessions_list.cfg.inputSchema!.safeParse({ limit: 0 });
+
+    expect(result.success).toBe(false);
+    expect(String(result.error.message)).toMatch(/limit must be greater than 0/);
+  });
+});
+
 describe('modelConfig schema (string shorthand coercion)', () => {
   // The MCP-tool boundary historically required `modelConfig` as a structured
   // `{ mode, model, effort, provider }` object. Several MCP clients silently
@@ -603,7 +661,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
     }) as Record<string, unknown>;
 
     // Schema validates but does NOT transform — coercion happens in handlers
-    // so the JSON Schema export (used by `agor_search_tools(detail:"full")`)
+    // so the JSON Schema export (used by `agor_get_tool_details`)
     // doesn't blow up on a Zod transform.
     expect(parsed.modelConfig).toBe('claude-opus-4-6');
   });
@@ -749,7 +807,7 @@ describe('inputSchema → JSON Schema conversion (MCP discovery)', () => {
   // ("Transforms cannot be represented in JSON Schema"). The catch in
   // `mcp/server.ts` then degraded the *entire* containing tool's schema to
   // `{ type: 'object' }`, hiding every parameter from MCP clients calling
-  // `agor_search_tools(detail:"full")`. Keep this test green to ensure the
+  // `agor_get_tool_details`. Keep this test green to ensure the
   // string-or-object union stays JSON-Schema-representable.
   it('produces a non-empty JSON Schema for tools that accept modelConfig', async () => {
     const { toJSONSchema } = await import('zod/v4-mini');

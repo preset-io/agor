@@ -13,6 +13,14 @@ import {
   resolveScheduleId,
   resolveUserId,
 } from '../resolve-ids.js';
+import {
+  mcpLimit,
+  mcpOptionalId,
+  mcpOptionalNonNegativeInt,
+  mcpOptionalString,
+  mcpRequiredId,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
@@ -21,11 +29,11 @@ const agenticToolConfigSchema = z
     agentic_tool: z
       .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
       .describe('Agent to spawn for runs of this schedule.'),
-    permission_mode: z.string().optional().describe("Permission mode (e.g., 'auto', 'ask')."),
+    permission_mode: mcpOptionalString('permission_mode', "Permission mode (e.g., 'auto', 'ask')."),
     model_config: z
       .object({
         mode: z.enum(['alias', 'exact']).optional(),
-        model: z.string().optional(),
+        model: mcpOptionalString('model_config.model', 'Model name override.'),
         effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
       })
       .optional()
@@ -33,10 +41,13 @@ const agenticToolConfigSchema = z
         'Optional model override (canonical DefaultModelConfig shape). Omit to inherit the agent default; set { model } to override; set { mode, model, effort } for full control.'
       ),
     mcp_server_ids: z
-      .array(z.string())
+      .array(mcpRequiredId('mcp_server_ids[]', 'MCP server'))
       .optional()
       .describe("MCP servers to attach to spawned sessions. Defaults to ['agor']."),
-    context_files: z.array(z.string()).optional().describe('Additional context files to load.'),
+    context_files: z
+      .array(mcpRequiredString('context_files[]', 'Context file path'))
+      .optional()
+      .describe('Additional context files to load.'),
   })
   .describe(
     'Agentic-tool configuration. Bundles the fields that change together (agent + permission + model + MCPs + context).'
@@ -50,18 +61,16 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
       description:
         'List schedules accessible to the current user. Filter by branch, board, creator, or enabled status. Returns rows in newest-first order.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        branchId: z.string().optional().describe('Filter to schedules on this branch'),
-        boardId: z
-          .string()
-          .optional()
-          .describe('Filter to schedules whose branch belongs to this board'),
-        createdBy: z.string().optional().describe('Filter to schedules created by this user'),
+      inputSchema: z.strictObject({
+        branchId: mcpOptionalId('branchId', 'Branch', 'Filter to schedules on this branch'),
+        boardId: mcpOptionalId(
+          'boardId',
+          'Board',
+          'Filter to schedules whose branch belongs to this board'
+        ),
+        createdBy: mcpOptionalId('createdBy', 'User', 'Filter to schedules created by this user'),
         enabled: z.boolean().optional().describe('Filter by enabled flag'),
-        limit: z
-          .number()
-          .optional()
-          .describe('Maximum number of schedules to return (default: 50)'),
+        limit: mcpLimit(50).describe('Maximum number of schedules to return (default: 50)'),
       }),
     },
     async (args) => {
@@ -98,8 +107,8 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
       description:
         'Get a single schedule by ID. Returns full configuration including cron, timezone, agentic_tool_config, last/next run timestamps, and the linked last_run_session_id.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        scheduleId: z.string().describe('Schedule ID (UUIDv7 or short ID)'),
+      inputSchema: z.strictObject({
+        scheduleId: mcpRequiredId('scheduleId', 'Schedule'),
       }),
     },
     async (args) => {
@@ -115,31 +124,32 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     {
       description:
         "Create a new schedule on a branch. A branch can hold multiple schedules (e.g. 'hourly heartbeat' + 'daily summary'). Cron + prompt + agentic_tool_config are required.",
-      inputSchema: z.object({
-        branchId: z.string().describe('Branch this schedule belongs to'),
-        name: z.string().min(1).describe("Display name, e.g. 'Hourly heartbeat'"),
-        description: z.string().optional().describe('Freeform description'),
-        cron_expression: z.string().describe("Cron expression (5/6 fields), e.g. '0 9 * * 1-5'"),
+      inputSchema: z.strictObject({
+        branchId: mcpRequiredId('branchId', 'Branch', 'Branch this schedule belongs to'),
+        name: mcpRequiredString('name', "Display name, e.g. 'Hourly heartbeat'"),
+        description: mcpOptionalString('description', 'Freeform description'),
+        cron_expression: mcpRequiredString(
+          'cron_expression',
+          "Cron expression (5/6 fields), e.g. '0 9 * * 1-5'"
+        ),
         timezone_mode: z
           .enum(['local', 'utc'])
           .describe("'local' uses `timezone`; 'utc' fires in UTC."),
-        timezone: z
-          .string()
-          .optional()
-          .describe(
-            "IANA timezone (required when timezone_mode='local'), e.g. 'America/Los_Angeles'"
-          ),
-        prompt: z.string().min(1).describe('Handlebars prompt template'),
+        timezone: mcpOptionalString(
+          'timezone',
+          "IANA timezone (required when timezone_mode='local'), e.g. 'America/Los_Angeles'"
+        ),
+        prompt: mcpRequiredString('prompt', 'Handlebars prompt template'),
         agentic_tool_config: agenticToolConfigSchema,
         enabled: z.boolean().optional().describe('Whether to fire (default: true)'),
         allow_concurrent_runs: z
           .boolean()
           .optional()
           .describe('Allow runs to overlap (default: false)'),
-        retention: z
-          .number()
-          .optional()
-          .describe('Number of sessions to keep; 0 = keep all (default: 5)'),
+        retention: mcpOptionalNonNegativeInt(
+          'retention',
+          'Number of sessions to keep; 0 = keep all (default: 5)'
+        ),
       }),
     },
     async (args) => {
@@ -171,18 +181,21 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     {
       description:
         'Patch a schedule. Only the supplied fields are changed; everything else is preserved. Cron / timezone / prompt changes are re-validated.',
-      inputSchema: z.object({
-        scheduleId: z.string().describe('Schedule ID (UUIDv7 or short ID)'),
-        name: z.string().optional(),
-        description: z.string().optional(),
-        cron_expression: z.string().optional(),
+      inputSchema: z.strictObject({
+        scheduleId: mcpRequiredId('scheduleId', 'Schedule'),
+        name: mcpOptionalString('name', 'Display name'),
+        description: mcpOptionalString('description', 'Freeform description'),
+        cron_expression: mcpOptionalString('cron_expression', 'Cron expression (5/6 fields)'),
         timezone_mode: z.enum(['local', 'utc']).optional(),
-        timezone: z.string().optional(),
-        prompt: z.string().optional(),
+        timezone: mcpOptionalString('timezone', 'IANA timezone'),
+        prompt: mcpOptionalString('prompt', 'Handlebars prompt template'),
         agentic_tool_config: agenticToolConfigSchema.optional(),
         enabled: z.boolean().optional(),
         allow_concurrent_runs: z.boolean().optional(),
-        retention: z.number().optional(),
+        retention: mcpOptionalNonNegativeInt(
+          'retention',
+          'Number of sessions to keep; 0 = keep all'
+        ),
       }),
     },
     async (args) => {
@@ -202,8 +215,8 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
       description:
         'Delete a schedule. Sessions linked via schedule_id are NOT deleted; the FK is SET NULL so historical runs are preserved as orphaned scheduled sessions.',
       annotations: { destructiveHint: true },
-      inputSchema: z.object({
-        scheduleId: z.string().describe('Schedule ID (UUIDv7 or short ID)'),
+      inputSchema: z.strictObject({
+        scheduleId: mcpRequiredId('scheduleId', 'Schedule'),
       }),
     },
     async (args) => {
@@ -219,8 +232,8 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     {
       description:
         "Trigger a manual run of a schedule. Reuses the cron-tick spawn path so the resulting session is indistinguishable from a scheduled run, except for a 'triggered_manually' marker in custom_context. Requires branch-tier 'all' permission. Returns the new session.",
-      inputSchema: z.object({
-        scheduleId: z.string().describe('Schedule ID (UUIDv7 or short ID)'),
+      inputSchema: z.strictObject({
+        scheduleId: mcpRequiredId('scheduleId', 'Schedule'),
       }),
     },
     async (args) => {

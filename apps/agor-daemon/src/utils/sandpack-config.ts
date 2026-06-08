@@ -382,6 +382,6 @@ function renderUpgradeInstructions(input: {
     `  - required_env_vars: ${envVarsLine}`,
     `  - agor_grants: ${grantsLine}`,
     '',
-    'Use agor_search_tools for the full publish/get tool schemas.',
+    'Use agor_get_tool_details for the exact publish/get tool schemas.',
   ].join('\n');
 }

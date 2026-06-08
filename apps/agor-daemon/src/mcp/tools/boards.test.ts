@@ -9,7 +9,11 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
 
 type ToolConfig = {
   inputSchema?: {
-    safeParse: (value: unknown) => { success: boolean };
+    safeParse: (
+      value: unknown
+    ) =>
+      | { success: true; data: unknown }
+      | { success: false; error: { issues: Array<{ message: string }> } };
   };
 };
 
@@ -335,8 +339,47 @@ describe('agor_boards_get', () => {
       config.inputSchema?.safeParse({
         boardId: 'board-1',
         includeEntities: true,
+        entitiesLimit: 0,
+      }).success
+    ).toBe(false);
+    expect(
+      config.inputSchema?.safeParse({
+        boardId: 'board-1',
+        includeEntities: true,
         entitiesSkip: 10001,
       }).success
     ).toBe(false);
+  });
+
+  it('rejects empty required boardId with a clear field-specific message', () => {
+    const { app } = makeApp();
+    const config = registerAndCaptureConfig('agor_boards_get', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = config.inputSchema?.safeParse({ boardId: '' });
+
+    expect(result?.success).toBe(false);
+    if (result?.success === false) {
+      expect(result.error.issues[0]?.message).toMatch(/boardId cannot be empty/i);
+    }
+  });
+});
+
+describe('agor_boards_create schema', () => {
+  it('rejects an empty required board name with a clear message', () => {
+    const config = registerAndCaptureConfig('agor_boards_create', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    const result = config.inputSchema?.safeParse({ name: '' });
+
+    expect(result?.success).toBe(false);
+    if (result?.success === false) {
+      expect(result.error.issues[0]?.message).toMatch(/name cannot be empty/i);
+    }
   });
 });

@@ -1,6 +1,7 @@
 import { ROLES, type User } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { mcpOptionalString, mcpRequiredId, mcpRequiredString } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
@@ -50,36 +51,25 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       description:
         'List users in the system with pagination and optional case-insensitive search across name, email, and unix_username. Returns compact rows by default; pass lean:false for detailed user payloads.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         limit: z
-          .number()
-          .int()
-          .nonnegative()
-          .max(USER_QUERY_LIMIT_MAX)
+          .number({ error: 'limit must be a positive integer when provided.' })
+          .int('limit must be an integer.')
+          .positive('limit must be greater than 0.')
+          .max(USER_QUERY_LIMIT_MAX, `limit must be less than or equal to ${USER_QUERY_LIMIT_MAX}.`)
           .optional()
           .describe('Maximum number of results (default: 50)'),
         skip: z
-          .number()
-          .int()
-          .nonnegative()
-          .max(USER_QUERY_LIMIT_MAX)
+          .number({ error: 'skip must be a non-negative integer when provided.' })
+          .int('skip must be an integer.')
+          .nonnegative('skip must be greater than or equal to 0.')
+          .max(USER_QUERY_LIMIT_MAX, `skip must be less than or equal to ${USER_QUERY_LIMIT_MAX}.`)
           .optional()
           .describe('Number of results to skip'),
-        offset: z
-          .number()
-          .int()
-          .nonnegative()
-          .max(USER_QUERY_LIMIT_MAX)
-          .optional()
-          .describe('Alias for skip'),
-        search: z
-          .string()
-          .optional()
-          .describe('Case-insensitive search across name, email, and unix_username'),
-        query: z
-          .string()
-          .optional()
-          .describe('Alias for search; case-insensitive name/email/unix_username lookup'),
+        search: mcpOptionalString(
+          'search',
+          'Case-insensitive search across name, email, and unix_username'
+        ),
         lean: z
           .boolean()
           .optional()
@@ -93,10 +83,9 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const query: Record<string, unknown> = {
         $limit: args.limit ?? 50,
-        $skip: args.skip ?? args.offset ?? 0,
+        $skip: args.skip ?? 0,
       };
       if (args.search) query.search = args.search;
-      if (args.query) query.search = args.query;
 
       const users = (await ctx.app.service('users').find({
         query,
@@ -114,29 +103,28 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       description:
         'Find users by name, email, or unix_username. Useful before admin updates: returns compact matching rows with user_id. Pass email when available; matching is case-insensitive substring.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        search: z
-          .string()
-          .optional()
-          .describe('Case-insensitive search across name, email, and unix_username'),
-        query: z.string().optional().describe('Alias for search'),
-        email: z.string().optional().describe('Email to search for (case-insensitive substring)'),
-        name: z.string().optional().describe('Name to search for (case-insensitive substring)'),
-        unix_username: z
-          .string()
-          .optional()
-          .describe('Unix username to search for (case-insensitive substring)'),
+      inputSchema: z.strictObject({
+        search: mcpOptionalString(
+          'search',
+          'Case-insensitive search across name, email, and unix_username'
+        ),
+        email: mcpOptionalString('email', 'Email to search for (case-insensitive substring)'),
+        name: mcpOptionalString('name', 'Name to search for (case-insensitive substring)'),
+        unix_username: mcpOptionalString(
+          'unix_username',
+          'Unix username to search for (case-insensitive substring)'
+        ),
         limit: z
-          .number()
-          .int()
-          .nonnegative()
-          .max(USER_QUERY_LIMIT_MAX)
+          .number({ error: 'limit must be a positive integer when provided.' })
+          .int('limit must be an integer.')
+          .positive('limit must be greater than 0.')
+          .max(USER_QUERY_LIMIT_MAX, `limit must be less than or equal to ${USER_QUERY_LIMIT_MAX}.`)
           .optional()
           .describe('Maximum number of matches (default: 10)'),
       }),
     },
     async (args) => {
-      const genericTerms = [args.search, args.query].filter(
+      const genericTerms = [args.search].filter(
         (term): term is string => typeof term === 'string' && term.trim().length > 0
       );
       const fieldFilters = (
@@ -153,7 +141,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       const searchTerm = genericTerms[0] ?? firstFieldTerm;
 
       if (!searchTerm) {
-        throw new Error('Provide search, query, email, name, or unix_username');
+        throw new Error('Provide one of: search, email, name, or unix_username');
       }
 
       const requestedLimit = args.limit ?? 10;
@@ -191,8 +179,8 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     {
       description: 'Get detailed information about a specific user',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        userId: z.string().describe('User ID (UUIDv7)'),
+      inputSchema: z.strictObject({
+        userId: mcpRequiredId('userId', 'User', 'User ID (UUIDv7 or short ID)'),
       }),
     },
     async (args) => {
@@ -208,7 +196,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       description:
         'Get information about the current authenticated user (the user associated with this MCP session)',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({}),
+      inputSchema: z.strictObject({}),
     },
     async () => {
       const user = await ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams);
@@ -223,10 +211,10 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       description:
         'Update the current user profile (name, emoji, avatar, preferences). Can only update own profile.',
       annotations: { idempotentHint: true },
-      inputSchema: z.object({
-        name: z.string().optional().describe('Display name'),
-        emoji: z.string().optional().describe('User emoji (single emoji character)'),
-        avatar: z.string().optional().describe('Avatar URL'),
+      inputSchema: z.strictObject({
+        name: mcpOptionalString('name', 'Display name'),
+        emoji: mcpOptionalString('emoji', 'User emoji (single emoji character)'),
+        avatar: mcpOptionalString('avatar', 'Avatar URL'),
         preferences: z
           .object({})
           .passthrough()
@@ -254,27 +242,27 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       description:
         'Update any user account (admin operation). Only updates fields that are provided. Can update email, name, role, password, unix_username, must_change_password, emoji, avatar, and preferences.',
       annotations: { idempotentHint: true },
-      inputSchema: z.object({
-        userId: z.string().describe('User ID to update (UUIDv7 or short ID)'),
-        email: z.string().optional().describe('New email address (optional)'),
-        name: z.string().optional().describe('New display name (optional)'),
-        password: z.string().optional().describe('New password (optional, will be hashed)'),
+      inputSchema: z.strictObject({
+        userId: mcpRequiredId('userId', 'User', 'User ID to update (UUIDv7 or short ID)'),
+        email: mcpOptionalString('email', 'New email address (optional)'),
+        name: mcpOptionalString('name', 'New display name (optional)'),
+        password: mcpOptionalString('password', 'New password (optional, will be hashed)'),
         role: z
           .enum([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.MEMBER, ROLES.VIEWER])
           .optional()
           .describe(
             'New user role (optional). superadmin=full system access + branch RBAC bypass, admin=manage resources, member=standard user, viewer=read-only'
           ),
-        unix_username: z
-          .string()
-          .optional()
-          .describe('New Unix username for shell access (optional)'),
+        unix_username: mcpOptionalString(
+          'unix_username',
+          'New Unix username for shell access (optional)'
+        ),
         must_change_password: z
           .boolean()
           .optional()
           .describe('Force user to change password on next login (optional)'),
-        emoji: z.string().optional().describe('User emoji (optional, single emoji character)'),
-        avatar: z.string().optional().describe('Avatar URL (optional)'),
+        emoji: mcpOptionalString('emoji', 'User emoji (optional, single emoji character)'),
+        avatar: mcpOptionalString('avatar', 'Avatar URL (optional)'),
         preferences: z
           .object({})
           .passthrough()
@@ -296,7 +284,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       if (args.preferences !== undefined) updateData.preferences = args.preferences;
 
       if (Object.keys(updateData).length === 0) {
-        throw new Error('at least one field must be provided to update');
+        throw new Error('Provide at least one update field.');
       }
 
       const updatedUser = await ctx.app
@@ -312,21 +300,19 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     {
       description:
         'Create a new user account. Requires email and password. Optionally set name, emoji, avatar, unix_username, must_change_password, and role.',
-      inputSchema: z.object({
-        email: z.string().describe('User email address (must be unique)'),
-        password: z.string().describe('User password (will be hashed)'),
-        name: z.string().optional().describe('Display name (optional)'),
-        emoji: z
-          .string()
-          .optional()
-          .describe('User emoji for visual identity (optional, single emoji character)'),
-        avatar: z.string().optional().describe('Avatar URL (optional)'),
-        unix_username: z
-          .string()
-          .optional()
-          .describe(
-            'Unix username for shell access (optional, defaults to email prefix if not specified)'
-          ),
+      inputSchema: z.strictObject({
+        email: mcpRequiredString('email', 'User email address (must be unique)'),
+        password: mcpRequiredString('password', 'User password (will be hashed)'),
+        name: mcpOptionalString('name', 'Display name (optional)'),
+        emoji: mcpOptionalString(
+          'emoji',
+          'User emoji for visual identity (optional, single emoji character)'
+        ),
+        avatar: mcpOptionalString('avatar', 'Avatar URL (optional)'),
+        unix_username: mcpOptionalString(
+          'unix_username',
+          'Unix username for shell access (optional, defaults to email prefix if not specified)'
+        ),
         must_change_password: z
           .boolean()
           .optional()

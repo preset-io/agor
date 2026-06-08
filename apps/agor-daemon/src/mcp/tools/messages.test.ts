@@ -62,12 +62,17 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
 }>;
 
-async function registerAndGetHandler(ctx: { userId: string; role?: string }): Promise<ToolHandler> {
+type CapturedTool = {
+  cfg: { inputSchema?: { parse: (v: unknown) => unknown; safeParse: (v: unknown) => any } };
+  cb: ToolHandler;
+};
+
+async function registerAndGetTool(ctx: { userId: string; role?: string }): Promise<CapturedTool> {
   const { registerMessageTools } = await import('./messages.js');
-  let captured: ToolHandler | undefined;
+  let captured: CapturedTool | undefined;
   const fakeServer = {
-    registerTool: (_name: string, _cfg: unknown, cb: ToolHandler) => {
-      captured = cb;
+    registerTool: (_name: string, cfg: unknown, cb: ToolHandler) => {
+      captured = { cfg: cfg as CapturedTool['cfg'], cb };
     },
   } as unknown as McpServer;
 
@@ -84,6 +89,10 @@ async function registerAndGetHandler(ctx: { userId: string; role?: string }): Pr
   return captured;
 }
 
+async function registerAndGetHandler(ctx: { userId: string; role?: string }): Promise<ToolHandler> {
+  return (await registerAndGetTool(ctx)).cb;
+}
+
 describe('agor_messages_list MCP tool', () => {
   beforeEach(() => {
     mockIsBranchRbacEnabled.mockReset();
@@ -97,6 +106,31 @@ describe('agor_messages_list MCP tool', () => {
 
   afterEach(() => {
     vi.resetModules();
+  });
+
+  it('surfaces clearer validation for malformed ids and pagination', async () => {
+    const tool = await registerAndGetTool({ userId: 'user-1' });
+    const schema = tool.cfg.inputSchema!;
+
+    const badSessionId = schema.safeParse({ sessionId: 123 });
+    expect(badSessionId.success).toBe(false);
+    expect(String(badSessionId.error.message)).toMatch(/sessionId must be a string/);
+
+    const badLimit = schema.safeParse({ search: 'secret', limit: -1 });
+    expect(badLimit.success).toBe(false);
+    expect(String(badLimit.error.message)).toMatch(/limit must be greater than 0/);
+
+    const badOffset = schema.safeParse({ search: 'secret', offset: -1 });
+    expect(badOffset.success).toBe(false);
+    expect(String(badOffset.error.message)).toMatch(/offset must be greater than or equal to 0/);
+  });
+
+  it('keeps the handler-level search scope check actionable', async () => {
+    const handler = await registerAndGetHandler({ userId: 'user-1' });
+
+    await expect(handler({})).rejects.toThrow(
+      /At least one of sessionId, taskId, or search must be provided as a non-empty string/
+    );
   });
 
   it('does not enforce RBAC when branch_rbac is disabled', async () => {

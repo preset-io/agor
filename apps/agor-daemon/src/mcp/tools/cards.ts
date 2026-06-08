@@ -4,6 +4,15 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { CardsService } from '../../services/cards.js';
 import { resolveBoardId, resolveCardId } from '../resolve-ids.js';
+import {
+  mcpLimit,
+  mcpOffset,
+  mcpOptionalId,
+  mcpOptionalString,
+  mcpRequiredId,
+  mcpRequiredNumber,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -15,16 +24,16 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       description:
         'Create a new card on a board. Creates both the card entity and its board placement in one operation. If zoneId is provided, the card is placed directly in that zone with automatic positioning.',
       inputSchema: z.object({
-        boardId: z.string().describe('Board ID where the card will be created'),
-        title: z.string().describe('Card title'),
-        cardTypeId: z.string().optional().describe('Card type ID (optional)'),
-        zoneId: z.string().optional().describe('Zone ID to place the card in (optional)'),
-        url: z.string().optional().describe('URL associated with the card (optional)'),
-        description: z.string().optional().describe('Card description (optional)'),
-        note: z.string().optional().describe('Card note (optional)'),
+        boardId: mcpRequiredId('boardId', 'Board', 'Board ID where the card will be created'),
+        title: mcpRequiredString('title', 'Card title'),
+        cardTypeId: mcpOptionalId('cardTypeId', 'Card type', 'Card type ID (optional)'),
+        zoneId: mcpOptionalId('zoneId', 'Zone', 'Zone ID to place the card in (optional)'),
+        url: mcpOptionalString('url', 'URL associated with the card (optional)'),
+        description: mcpOptionalString('description', 'Card description (optional)'),
+        note: mcpOptionalString('note', 'Card note (optional)'),
         data: z.object({}).passthrough().optional().describe('Custom data object (optional)'),
-        colorOverride: z.string().optional().describe('Color override (optional)'),
-        emojiOverride: z.string().optional().describe('Emoji override (optional)'),
+        colorOverride: mcpOptionalString('colorOverride', 'Color override (optional)'),
+        emojiOverride: mcpOptionalString('emojiOverride', 'Emoji override (optional)'),
       }),
     },
     async (args) => {
@@ -73,7 +82,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       description: 'Get detailed information about a specific card, including its card type.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        cardId: z.string().describe('Card ID (UUIDv7 or short ID)'),
+        cardId: mcpRequiredId('cardId', 'Card'),
       }),
     },
     async (args) => {
@@ -92,13 +101,13 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         'List cards with optional filtering by board, card type, zone, search query, or archive status.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        boardId: z.string().optional().describe('Filter by board ID'),
-        cardTypeId: z.string().optional().describe('Filter by card type ID'),
-        zoneId: z.string().optional().describe('Filter by zone ID (requires boardId)'),
-        search: z.string().optional().describe('Search query for card titles/descriptions'),
+        boardId: mcpOptionalId('boardId', 'Board', 'Filter by board ID'),
+        cardTypeId: mcpOptionalId('cardTypeId', 'Card type', 'Filter by card type ID'),
+        zoneId: mcpOptionalId('zoneId', 'Zone', 'Filter by zone ID (requires boardId)'),
+        search: mcpOptionalString('search', 'Search query for card titles/descriptions'),
         archived: z.boolean().optional().describe('Filter by archive status'),
-        limit: z.number().optional().describe('Maximum number of results (default: 50)'),
-        offset: z.number().optional().describe('Number of results to skip (default: 0)'),
+        limit: mcpLimit(50),
+        offset: mcpOffset(0),
       }),
     },
     async (args) => {
@@ -151,27 +160,25 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       description: "Update a card's metadata.",
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        cardId: z.string().describe('Card ID to update'),
-        title: z.string().optional().describe('New title'),
-        url: z.string().nullable().optional().describe('New URL (null to clear)'),
-        description: z.string().nullable().optional().describe('New description (null to clear)'),
-        note: z.string().nullable().optional().describe('New note (null to clear)'),
+        cardId: mcpRequiredId('cardId', 'Card', 'Card ID to update'),
+        title: mcpOptionalString('title', 'New title'),
+        url: mcpOptionalString('url', 'New URL (null to clear)').nullable(),
+        description: mcpOptionalString('description', 'New description (null to clear)').nullable(),
+        note: mcpOptionalString('note', 'New note (null to clear)').nullable(),
         data: z
           .object({})
           .passthrough()
           .nullable()
           .optional()
           .describe('New data object (null to clear)'),
-        colorOverride: z
-          .string()
-          .nullable()
-          .optional()
-          .describe('New color override (null to clear)'),
-        emojiOverride: z
-          .string()
-          .nullable()
-          .optional()
-          .describe('New emoji override (null to clear)'),
+        colorOverride: mcpOptionalString(
+          'colorOverride',
+          'New color override (null to clear)'
+        ).nullable(),
+        emojiOverride: mcpOptionalString(
+          'emojiOverride',
+          'New emoji override (null to clear)'
+        ).nullable(),
       }),
     },
     async (args) => {
@@ -197,7 +204,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       description: 'Permanently delete a card and its board placement.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        cardId: z.string().describe('Card ID to delete'),
+        cardId: mcpRequiredId('cardId', 'Card', 'Card ID to delete'),
       }),
     },
     async (args) => {
@@ -213,7 +220,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       description: 'Archive a card (soft delete).',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        cardId: z.string().describe('Card ID to archive'),
+        cardId: mcpRequiredId('cardId', 'Card', 'Card ID to archive'),
       }),
     },
     async (args) => {
@@ -230,7 +237,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     {
       description: 'Restore a previously archived card.',
       inputSchema: z.object({
-        cardId: z.string().describe('Card ID to unarchive'),
+        cardId: mcpRequiredId('cardId', 'Card', 'Card ID to unarchive'),
       }),
     },
     async (args) => {
@@ -248,12 +255,12 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       description:
         'Move a card to a different zone (or unpin from zone). Updates board_objects placement.',
       inputSchema: z.object({
-        cardId: z.string().describe('Card ID to move'),
-        zoneId: z
-          .string()
-          .nullable()
-          .optional()
-          .describe('Target zone ID (null to unpin from zone)'),
+        cardId: mcpRequiredId('cardId', 'Card', 'Card ID to move'),
+        zoneId: mcpOptionalId(
+          'zoneId',
+          'Zone',
+          'Target zone ID (null to unpin from zone)'
+        ).nullable(),
       }),
     },
     async (args) => {
@@ -282,9 +289,9 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       description: 'Set the exact position of a card on its board.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        cardId: z.string().describe('Card ID to reposition'),
-        x: z.number().describe('X coordinate'),
-        y: z.number().describe('Y coordinate'),
+        cardId: mcpRequiredId('cardId', 'Card', 'Card ID to reposition'),
+        x: mcpRequiredNumber('x', 'X coordinate'),
+        y: mcpRequiredNumber('y', 'Y coordinate'),
       }),
     },
     async (args) => {
@@ -310,21 +317,22 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       description:
         'Create multiple cards on a board in one operation. Each card gets its own board placement.',
       inputSchema: z.object({
-        boardId: z.string().describe('Board ID where cards will be created'),
+        boardId: mcpRequiredId('boardId', 'Board', 'Board ID where cards will be created'),
         cards: z
           .array(
             z.object({
-              title: z.string().describe('Card title'),
-              cardTypeId: z.string().optional().describe('Card type ID'),
-              zoneId: z.string().optional().describe('Zone ID to place the card in'),
-              url: z.string().optional().describe('URL'),
-              description: z.string().optional().describe('Description'),
-              note: z.string().optional().describe('Note'),
+              title: mcpRequiredString('cards[].title', 'Card title'),
+              cardTypeId: mcpOptionalId('cards[].cardTypeId', 'Card type', 'Card type ID'),
+              zoneId: mcpOptionalId('cards[].zoneId', 'Zone', 'Zone ID to place the card in'),
+              url: mcpOptionalString('cards[].url', 'URL'),
+              description: mcpOptionalString('cards[].description', 'Description'),
+              note: mcpOptionalString('cards[].note', 'Note'),
               data: z.object({}).passthrough().optional().describe('Custom data'),
-              colorOverride: z.string().optional().describe('Color override'),
-              emojiOverride: z.string().optional().describe('Emoji override'),
+              colorOverride: mcpOptionalString('cards[].colorOverride', 'Color override'),
+              emojiOverride: mcpOptionalString('cards[].emojiOverride', 'Emoji override'),
             })
           )
+          .min(1, 'cards must contain at least one card.')
           .describe('Array of cards to create'),
       }),
     },
@@ -381,16 +389,23 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         updates: z
           .array(
             z.object({
-              cardId: z.string().describe('Card ID to update'),
-              title: z.string().optional().describe('New title'),
-              url: z.string().nullable().optional().describe('New URL'),
-              description: z.string().nullable().optional().describe('New description'),
-              note: z.string().nullable().optional().describe('New note'),
+              cardId: mcpRequiredId('updates[].cardId', 'Card', 'Card ID to update'),
+              title: mcpOptionalString('updates[].title', 'New title'),
+              url: mcpOptionalString('updates[].url', 'New URL').nullable(),
+              description: mcpOptionalString('updates[].description', 'New description').nullable(),
+              note: mcpOptionalString('updates[].note', 'New note').nullable(),
               data: z.object({}).passthrough().nullable().optional().describe('New data'),
-              colorOverride: z.string().nullable().optional().describe('New color override'),
-              emojiOverride: z.string().nullable().optional().describe('New emoji override'),
+              colorOverride: mcpOptionalString(
+                'updates[].colorOverride',
+                'New color override'
+              ).nullable(),
+              emojiOverride: mcpOptionalString(
+                'updates[].emojiOverride',
+                'New emoji override'
+              ).nullable(),
             })
           )
+          .min(1, 'updates must contain at least one update.')
           .describe('Array of card updates'),
       }),
     },
@@ -430,10 +445,15 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         moves: z
           .array(
             z.object({
-              cardId: z.string().describe('Card ID to move'),
-              zoneId: z.string().nullable().optional().describe('Target zone ID (null to unpin)'),
+              cardId: mcpRequiredId('moves[].cardId', 'Card', 'Card ID to move'),
+              zoneId: mcpOptionalId(
+                'moves[].zoneId',
+                'Zone',
+                'Target zone ID (null to unpin)'
+              ).nullable(),
             })
           )
+          .min(1, 'moves must contain at least one move.')
           .describe('Array of card moves'),
       }),
     },

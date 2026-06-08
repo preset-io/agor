@@ -112,10 +112,11 @@ export function sessionContextRequiredResult() {
 /** Server instructions shown to agents when tool search is enabled. */
 const SERVER_INSTRUCTIONS = `Agor is a multiplayer canvas for orchestrating AI coding agents. It manages branches (isolated workspaces backed by git branches), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
 
-This server uses progressive tool discovery. Only 2 tools are listed directly — use them to discover and call all available tools:
+This server uses progressive tool discovery. Only 3 tools are listed directly — use them to discover and call all available tools:
 
-- agor_search_tools: Browse/search tools by keyword, domain, or annotation. Call with no args for a domains overview.
-- agor_execute_tool: Call any discovered tool by name with arguments.
+- agor_search_tools: Browse domains and search concise tool summaries. Call with no args for a domain overview.
+- agor_get_tool_details: Get the exact input schema for one selected tool.
+- agor_execute_tool: Call one discovered tool by name with arguments matching its schema.
 
 Domains:
 - sessions: Agent conversations with genealogy (fork/spawn), task tracking, and message history
@@ -145,7 +146,7 @@ Delegate a subtask to a child agent:
 Continue or fork an existing session:
 1. agor_sessions_prompt(sessionId, prompt, mode:"continue"|"fork"|"subsession")
 
-Discover tools: search (list detail) → search (full detail for schemas) → execute`;
+Discover tools: search domains/summaries → get details for one tool → execute`;
 
 /**
  * One-time-per-caller deprecation warning for clients that still send the

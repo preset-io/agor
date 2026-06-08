@@ -193,7 +193,7 @@ describe('user MCP tools in sessionless context', () => {
     });
 
     if (!handler) throw new Error('agor_users_find was not registered');
-    const result = await handler({ query: 'Reed' });
+    const result = await handler({ search: 'Reed' });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(findUsers).toHaveBeenCalledWith({
@@ -264,5 +264,49 @@ describe('user MCP tools in sessionless context', () => {
     expect(parsed.total).toBe(1);
     expect(parsed.limit).toBe(5);
     expect(parsed.data.map((user: { user_id: string }) => user.user_id)).toEqual(['user-2']);
+  });
+});
+
+describe('user MCP input schemas', () => {
+  it('rejects aliases and malformed required fields with caller-oriented messages', () => {
+    const configs = new Map<string, { inputSchema: { safeParse: (args: unknown) => unknown } }>();
+    const fakeServer = {
+      registerTool: (
+        name: string,
+        cfg: { inputSchema: { safeParse: (args: unknown) => unknown } },
+        _cb: ToolHandler
+      ) => {
+        configs.set(name, cfg);
+      },
+    } as unknown as McpServer;
+
+    registerUserTools(fakeServer, {
+      app: { service: () => ({}) } as any,
+      db: {} as any,
+      userId: 'admin-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'admin-1', email: 'admin@example.com', role: 'admin' } as any,
+      baseServiceParams: {},
+    });
+
+    const listWithAlias = configs.get('agor_users_list')?.inputSchema.safeParse({ query: 'reed' });
+    expect(listWithAlias).toMatchObject({ success: false });
+    expect(JSON.stringify(listWithAlias)).toContain('query');
+
+    const badLimit = configs
+      .get('agor_users_find')
+      ?.inputSchema.safeParse({ search: 'reed', limit: 0 });
+    expect(badLimit).toMatchObject({ success: false });
+    expect(JSON.stringify(badLimit)).toContain('limit must be greater than 0');
+
+    const emptyCreateEmail = configs
+      .get('agor_user_create')
+      ?.inputSchema.safeParse({ email: '', password: 'secret' });
+    expect(emptyCreateEmail).toMatchObject({ success: false });
+    expect(JSON.stringify(emptyCreateEmail)).toContain('email cannot be empty');
+
+    const emptyUserId = configs.get('agor_users_get')?.inputSchema.safeParse({ userId: '' });
+    expect(emptyUserId).toMatchObject({ success: false });
+    expect(JSON.stringify(emptyUserId)).toContain('userId cannot be empty');
   });
 });

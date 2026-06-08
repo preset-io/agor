@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { resolveSessionId } from '../resolve-ids.js';
+import { mcpLimit, mcpOptionalId, mcpRequiredId } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
@@ -12,8 +13,8 @@ export function registerTaskTools(server: McpServer, ctx: McpContext): void {
       description: 'List tasks (user prompts) in a session',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        sessionId: z.string().optional().describe('Session ID to get tasks from'),
-        limit: z.number().optional().describe('Maximum number of results (default: 50)'),
+        sessionId: mcpOptionalId('sessionId', 'Session', 'Session ID to get tasks from'),
+        limit: mcpLimit(50),
       }),
     },
     async (args) => {
@@ -32,7 +33,7 @@ export function registerTaskTools(server: McpServer, ctx: McpContext): void {
       description: 'Get detailed information about a specific task',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        taskId: z.string().describe('Task ID (UUIDv7 or short ID)'),
+        taskId: mcpRequiredId('taskId', 'Task'),
       }),
     },
     async (args) => {

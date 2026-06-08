@@ -1,6 +1,7 @@
 import type { MCPServer } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { mcpRequiredId } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
 
@@ -114,7 +115,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       description:
         'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, custom-header presence, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         includeDisabled: z
           .boolean()
           .optional()
@@ -159,8 +160,12 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       description:
         'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated. If NOT authenticated, returns instructions for the user to complete OAuth via Settings → MCP Servers. Use agor_mcp_servers_list to get server IDs.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        mcpServerId: z.string().describe('MCP server ID to check (UUIDv7 or short ID)'),
+      inputSchema: z.strictObject({
+        mcpServerId: mcpRequiredId(
+          'mcpServerId',
+          'MCP server',
+          'MCP server ID to check (UUIDv7 or short ID)'
+        ),
       }),
     },
     async (args) => {

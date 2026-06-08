@@ -36,6 +36,14 @@ import {
 } from '../../knowledge/markdown-outline.js';
 import { resolveBranchWorkspacePath } from '../../utils/branch-workspace-path.js';
 import { resolveBranchId } from '../resolve-ids.js';
+import {
+  mcpLimit,
+  mcpOptionalId,
+  mcpOptionalPositiveInt,
+  mcpOptionalString,
+  mcpRequiredId,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceJsonRecord, coerceString, textResult } from '../server.js';
 
@@ -46,36 +54,83 @@ const KnowledgeEditPolicySchema = z.enum(KNOWLEDGE_EDIT_POLICIES);
 const KnowledgeGraphNodeTypeSchema = z.enum(KNOWLEDGE_GRAPH_NODE_TYPES);
 const KnowledgeGraphEdgeTypeSchema = z.enum(KNOWLEDGE_GRAPH_EDGE_TYPES);
 
+function mcpRequiredPositiveInt(fieldName: string, description: string) {
+  return z
+    .number({
+      error: `${fieldName} is required and must be a positive integer.`,
+    })
+    .int(`${fieldName} must be an integer.`)
+    .positive(`${fieldName} must be greater than 0.`)
+    .describe(description);
+}
+
+function mcpOptionalNonEmptyString(fieldName: string, description: string) {
+  return mcpOptionalString(fieldName, description).refine(
+    (value) => value === undefined || value.trim().length > 0,
+    `${fieldName} cannot be empty.`
+  );
+}
+
+function mcpOptionalVersionToken(fieldName: string, description: string) {
+  return z
+    .union([
+      z.number({
+        error: `${fieldName} must be a version number or version ID when provided.`,
+      }),
+      z
+        .string({
+          error: `${fieldName} must be a version number or version ID when provided.`,
+        })
+        .min(1, `${fieldName} cannot be empty.`),
+    ])
+    .optional()
+    .describe(description);
+}
+
 const KnowledgeReplaceLineRangeOpSchema = z.object({
   type: z.literal('replace_line_range'),
-  startLine: z.number().int().min(1),
-  endLine: z.number().int().min(1),
-  replacement: z.string(),
-  expectedText: z.string().optional(),
-  expectedMd5: z.string().optional(),
+  startLine: mcpRequiredPositiveInt('startLine', '1-based inclusive start line'),
+  endLine: mcpRequiredPositiveInt('endLine', '1-based inclusive end line'),
+  replacement: z.string({
+    error: 'replacement is required and must be a string.',
+  }),
+  expectedText: mcpOptionalString('expectedText', 'Expected text for optimistic edit checks'),
+  expectedMd5: mcpOptionalString('expectedMd5', 'Expected MD5 for optimistic edit checks'),
 });
 
 const KnowledgeInsertAtLineOpSchema = z.object({
   type: z.literal('insert_at_line'),
-  line: z.number().int().min(1),
+  line: mcpRequiredPositiveInt('line', '1-based line number'),
   position: z.enum(['before', 'after']).optional(),
-  content: z.string(),
-  expectedNeighborText: z.string().optional(),
+  content: z.string({
+    error: 'content is required and must be a string.',
+  }),
+  expectedNeighborText: mcpOptionalString(
+    'expectedNeighborText',
+    'Expected adjacent text for optimistic edit checks'
+  ),
 });
 
 const KnowledgeDeleteLineRangeOpSchema = z.object({
   type: z.literal('delete_line_range'),
-  startLine: z.number().int().min(1),
-  endLine: z.number().int().min(1),
-  expectedText: z.string().optional(),
-  expectedMd5: z.string().optional(),
+  startLine: mcpRequiredPositiveInt('startLine', '1-based inclusive start line'),
+  endLine: mcpRequiredPositiveInt('endLine', '1-based inclusive end line'),
+  expectedText: mcpOptionalString('expectedText', 'Expected text for optimistic edit checks'),
+  expectedMd5: mcpOptionalString('expectedMd5', 'Expected MD5 for optimistic edit checks'),
 });
 
 const KnowledgeReplaceLiteralOpSchema = z.object({
   type: z.literal('replace_literal'),
-  find: z.string().min(1),
-  replace: z.string(),
-  expectedCount: z.number().int().min(0),
+  find: mcpRequiredString('find', 'Literal text to replace'),
+  replace: z.string({
+    error: 'replace is required and must be a string.',
+  }),
+  expectedCount: z
+    .number({
+      error: 'expectedCount is required and must be a non-negative integer.',
+    })
+    .int('expectedCount must be an integer.')
+    .nonnegative('expectedCount must be greater than or equal to 0.'),
 });
 
 const KnowledgeEditOpSchema = z.discriminatedUnion('type', [
@@ -86,21 +141,19 @@ const KnowledgeEditOpSchema = z.discriminatedUnion('type', [
 ]);
 
 const KnowledgeEditRequestSchema = z.object({
-  documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
-  uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
-  namespace: z.string().optional().describe('Namespace/space slug; use with path'),
-  path: z.string().optional().describe('Document path inside namespace; use with namespace'),
-  expectedVersion: z
-    .union([z.number(), z.string()])
-    .optional()
-    .describe(
-      'Optimistic concurrency check: current version number or version ID expected by the caller'
-    ),
+  documentId: mcpOptionalId('documentId', 'Knowledge document'),
+  uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+  namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
+  path: mcpOptionalNonEmptyString('path', 'Document path inside namespace; use with namespace'),
+  expectedVersion: mcpOptionalVersionToken(
+    'expectedVersion',
+    'Optimistic concurrency check: current version number or version ID expected by the caller'
+  ),
   dryRun: z
     .boolean()
     .optional()
     .describe('When true, validate and preview without creating a new version'),
-  changeSummary: z.string().optional().describe('Optional change summary for version history'),
+  changeSummary: mcpOptionalString('changeSummary', 'Optional change summary for version history'),
   versionMetadata: z
     .record(z.string(), z.unknown())
     .optional()
@@ -120,29 +173,37 @@ const KnowledgeEditRequestSchema = z.object({
 });
 
 const KnowledgeNodeRefSchema = z
-  .object({
-    nodeId: z.string().optional().describe('Knowledge graph node ID (UUIDv7 or short ID)'),
-    uri: z
-      .string()
-      .optional()
-      .describe('Canonical node/document URI, e.g. agor://kb/global/architecture.md'),
-    nodeType: KnowledgeGraphNodeTypeSchema.optional().describe(
-      'Node type to resolve or create when nodeId/uri is not enough.'
-    ),
-    documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
-    namespace: z.string().optional().describe('Knowledge namespace/space slug'),
-    path: z.string().optional().describe('Document path inside namespace'),
-    externalUri: z.string().optional().describe('External URL or URI for external nodes'),
-    branchId: z.string().optional().describe('Branch ID (UUIDv7 or short ID)'),
-    sessionId: z.string().optional().describe('Session ID (UUIDv7 or short ID)'),
-    taskId: z.string().optional().describe('Task ID (UUIDv7 or short ID)'),
-    messageId: z.string().optional().describe('Message ID (UUIDv7 or short ID)'),
-    artifactId: z.string().optional().describe('Artifact ID (UUIDv7 or short ID)'),
-    repoId: z.string().optional().describe('Repository ID (UUIDv7 or short ID)'),
-    boardId: z.string().optional().describe('Board ID (UUIDv7 or short ID)'),
-    userId: z.string().optional().describe('User ID (UUIDv7 or short ID)'),
-    label: z.string().optional().describe('Optional label for newly-created graph nodes'),
-  })
+  .object(
+    {
+      nodeId: mcpOptionalId('nodeId', 'Knowledge graph node'),
+      uri: mcpOptionalNonEmptyString(
+        'uri',
+        'Canonical node/document URI, e.g. agor://kb/global/architecture.md'
+      ),
+      nodeType: KnowledgeGraphNodeTypeSchema.optional().describe(
+        'Node type to resolve or create when nodeId/uri is not enough.'
+      ),
+      documentId: mcpOptionalId('documentId', 'Knowledge document'),
+      namespace: mcpOptionalNonEmptyString('namespace', 'Knowledge namespace/space slug'),
+      path: mcpOptionalNonEmptyString('path', 'Document path inside namespace'),
+      externalUri: mcpOptionalNonEmptyString(
+        'externalUri',
+        'External URL or URI for external nodes'
+      ),
+      branchId: mcpOptionalId('branchId', 'Branch'),
+      sessionId: mcpOptionalId('sessionId', 'Session'),
+      taskId: mcpOptionalId('taskId', 'Task'),
+      messageId: mcpOptionalId('messageId', 'Message'),
+      artifactId: mcpOptionalId('artifactId', 'Artifact'),
+      repoId: mcpOptionalId('repoId', 'Repository'),
+      boardId: mcpOptionalId('boardId', 'Board'),
+      userId: mcpOptionalId('userId', 'User'),
+      label: mcpOptionalString('label', 'Optional label for newly-created graph nodes'),
+    },
+    {
+      error: 'node reference is required and must be an object.',
+    }
+  )
   .describe(
     'Reference to an existing or creatable knowledge graph node. Prefer nodeId or uri; use typed IDs for links to Agor core objects.'
   );
@@ -359,7 +420,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       description: 'List Knowledge namespaces/spaces available to the current user.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        slug: z.string().optional().describe('Filter by namespace/space slug'),
+        slug: mcpOptionalNonEmptyString('slug', 'Filter by namespace/space slug'),
         kind: z
           .enum(['system', 'global', 'user', 'repo', 'branch', 'team'])
           .optional()
@@ -388,10 +449,10 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         'Create or update a Knowledge namespace/space by slug. Namespaces appear in agor://kb/<namespace>/<path> URIs.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        namespaceId: z.string().optional().describe('Existing namespace ID to update'),
-        slug: z.string().describe('Namespace slug used in agor://kb/<slug>/... URIs'),
-        displayName: z.string().optional().describe('Human-readable display name'),
-        description: z.string().optional().describe('Namespace description'),
+        namespaceId: mcpOptionalId('namespaceId', 'Knowledge namespace'),
+        slug: mcpRequiredString('slug', 'Namespace slug used in agor://kb/<slug>/... URIs'),
+        displayName: mcpOptionalString('displayName', 'Human-readable display name'),
+        description: mcpOptionalString('description', 'Namespace description'),
         kind: z
           .enum(['system', 'global', 'user', 'repo', 'branch', 'team'])
           .optional()
@@ -408,7 +469,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         return knowledgeNotImplementedResult('agor_kb_namespace_put', ['kb/namespaces']);
 
       const slug = coerceString(args.slug);
-      if (!slug) throw new Error('slug is required');
+      if (!slug) throw new Error('slug is required and must be a non-empty string.');
       const data = {
         slug,
         display_name: coerceString(args.displayName),
@@ -452,9 +513,17 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         'Search Agor Knowledge documents. Supports text, semantic, and hybrid modes when Knowledge embeddings are enabled/configured. Each result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        query: z.string().describe('Search text. Use an empty string to browse with filters.'),
-        namespace: z.string().optional().describe('Filter by namespace/space slug'),
-        pathPrefix: z.string().optional().describe('Filter to document paths under this prefix'),
+        query: z
+          .string({
+            error:
+              'query is required and must be a string. Use an empty string to browse with filters.',
+          })
+          .describe('Search text. Use an empty string to browse with filters.'),
+        namespace: mcpOptionalNonEmptyString('namespace', 'Filter by namespace/space slug'),
+        pathPrefix: mcpOptionalNonEmptyString(
+          'pathPrefix',
+          'Filter to document paths under this prefix'
+        ),
         kind: KnowledgeDocumentKindSchema.optional().describe('Filter by document kind'),
         visibility: KnowledgeVisibilitySchema.optional().describe('Filter by visibility'),
         status: KnowledgeDocumentStatusSchema.optional().describe(
@@ -480,7 +549,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .boolean()
           .optional()
           .describe('Include archived documents (default: false)'),
-        limit: z.number().optional().describe('Maximum number of results (default: 20)'),
+        limit: mcpLimit(20),
         mode: z
           .enum(['text', 'semantic', 'hybrid'])
           .optional()
@@ -521,14 +590,17 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         'Get a Knowledge document by documentId, canonical URI, or namespace + path. Returns the current version content by default when the backend supports includeContent. The result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
-        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: z.string().optional().describe('Namespace/space slug; use with path'),
-        path: z.string().optional().describe('Document path inside namespace; use with namespace'),
-        version: z
-          .union([z.number(), z.string()])
-          .optional()
-          .describe('Version number or version ID. Omit for current version.'),
+        documentId: mcpOptionalId('documentId', 'Knowledge document'),
+        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonEmptyString(
+          'path',
+          'Document path inside namespace; use with namespace'
+        ),
+        version: mcpOptionalVersionToken(
+          'version',
+          'Version number or version ID. Omit for current version.'
+        ),
         includeContent: z
           .boolean()
           .optional()
@@ -614,15 +686,26 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         'Return a markdown heading outline for a Knowledge document, including 1-based line ranges and the current version token. Use this before targeted edits to avoid reading the full document.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
-        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: z.string().optional().describe('Namespace/space slug; use with path'),
-        path: z.string().optional().describe('Document path inside namespace; use with namespace'),
-        version: z
-          .union([z.number(), z.string()])
+        documentId: mcpOptionalId('documentId', 'Knowledge document'),
+        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonEmptyString(
+          'path',
+          'Document path inside namespace; use with namespace'
+        ),
+        version: mcpOptionalVersionToken(
+          'version',
+          'Version number or version ID. Omit for current version.'
+        ),
+        maxDepth: z
+          .number({
+            error: 'maxDepth must be a positive integer between 1 and 6 when provided.',
+          })
+          .int('maxDepth must be an integer.')
+          .min(1, 'maxDepth must be greater than 0.')
+          .max(6, 'maxDepth must be less than or equal to 6.')
           .optional()
-          .describe('Version number or version ID. Omit for current version.'),
-        maxDepth: z.number().int().min(1).max(6).optional().describe('Maximum heading depth'),
+          .describe('Maximum heading depth'),
       }),
     },
     async (args) => {
@@ -654,28 +737,31 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         'Read a bounded line range or heading section from a Knowledge document. Returns current version metadata and optional line numbers so agents can edit without loading the full document.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
-        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: z.string().optional().describe('Namespace/space slug; use with path'),
-        path: z.string().optional().describe('Document path inside namespace; use with namespace'),
-        version: z
-          .union([z.number(), z.string()])
-          .optional()
-          .describe('Version number or version ID. Omit for current version.'),
-        startLine: z.number().int().min(1).optional().describe('1-based inclusive start line'),
-        endLine: z.number().int().min(1).optional().describe('1-based inclusive end line'),
-        headingPath: z.string().optional().describe('Heading path from agor_kb_outline'),
-        occurrence: z
-          .number()
-          .int()
-          .min(1)
-          .optional()
-          .describe('Occurrence for duplicate heading paths (default: 1)'),
+        documentId: mcpOptionalId('documentId', 'Knowledge document'),
+        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonEmptyString(
+          'path',
+          'Document path inside namespace; use with namespace'
+        ),
+        version: mcpOptionalVersionToken(
+          'version',
+          'Version number or version ID. Omit for current version.'
+        ),
+        startLine: mcpOptionalPositiveInt('startLine', '1-based inclusive start line'),
+        endLine: mcpOptionalPositiveInt('endLine', '1-based inclusive end line'),
+        headingPath: mcpOptionalNonEmptyString('headingPath', 'Heading path from agor_kb_outline'),
+        occurrence: mcpOptionalPositiveInt(
+          'occurrence',
+          'Occurrence for duplicate heading paths (default: 1)'
+        ),
         contextLines: z
-          .number()
-          .int()
-          .min(0)
-          .max(20)
+          .number({
+            error: 'contextLines must be a non-negative integer between 0 and 20 when provided.',
+          })
+          .int('contextLines must be an integer.')
+          .min(0, 'contextLines must be greater than or equal to 0.')
+          .max(20, 'contextLines must be less than or equal to 20.')
           .optional()
           .describe('Extra lines before/after the requested range (default: 2)'),
         includeLineNumbers: z
@@ -744,24 +830,24 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         'Create or update a markdown Knowledge document. Idempotent upsert keyed by documentId, URI, or namespace + path when the backend implements putDocument. To build the knowledge graph, embed links to other KB docs in the markdown — each resolvable link becomes a "references" edge automatically on save. Prefer the rename-proof form [label](agor://kb/document/<documentId>); [label](agor://kb/<namespace>/<path>) also works but breaks if the target moves. Get a doc\'s reference_uri from agor_kb_search or agor_kb_get.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        documentId: z.string().optional().describe('Existing Knowledge document ID to update'),
-        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: z
-          .string()
-          .optional()
-          .describe('Namespace/space slug; required with path for new docs'),
-        path: z
-          .string()
-          .optional()
-          .describe('Document path inside namespace; required with namespace for new docs'),
-        title: z
-          .string()
-          .optional()
-          .describe(
-            'Optional explicit title. Prefer omitting this when `content` starts with an H1; Agor will derive the title from that heading and hide the duplicate heading in the viewer. Only provide a title when `firstLineIsTitle:false` or the content has no title heading.'
-          ),
+        documentId: mcpOptionalId('documentId', 'Existing Knowledge document'),
+        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonEmptyString(
+          'namespace',
+          'Namespace/space slug; required with path for new docs'
+        ),
+        path: mcpOptionalNonEmptyString(
+          'path',
+          'Document path inside namespace; required with namespace for new docs'
+        ),
+        title: mcpOptionalString(
+          'title',
+          'Optional explicit title. Prefer omitting this when `content` starts with an H1; Agor will derive the title from that heading and hide the duplicate heading in the viewer. Only provide a title when `firstLineIsTitle:false` or the content has no title heading.'
+        ),
         content: z
-          .string()
+          .string({
+            error: 'content is required and must be a string.',
+          })
           .describe(
             'Markdown content for the new version. Embed [label](agor://kb/document/<documentId>) links to other KB docs to create graph edges between them.'
           ),
@@ -783,10 +869,10 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .boolean()
           .optional()
           .describe('Create the namespace if it does not already exist (default: false).'),
-        namespaceDisplayName: z
-          .string()
-          .optional()
-          .describe('Display name to use when createNamespace is true.'),
+        namespaceDisplayName: mcpOptionalString(
+          'namespaceDisplayName',
+          'Display name to use when createNamespace is true.'
+        ),
         frontmatter: z
           .record(z.string(), z.unknown())
           .optional()
@@ -795,13 +881,11 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .record(z.string(), z.unknown())
           .optional()
           .describe('Document/version metadata'),
-        changeSummary: z.string().optional().describe('Short summary for version history'),
-        expectedVersion: z
-          .union([z.number(), z.string()])
-          .optional()
-          .describe(
-            'Optional optimistic concurrency check: current version number or version ID expected by the caller'
-          ),
+        changeSummary: mcpOptionalString('changeSummary', 'Short summary for version history'),
+        expectedVersion: mcpOptionalVersionToken(
+          'expectedVersion',
+          'Optional optimistic concurrency check: current version number or version ID expected by the caller'
+        ),
       }),
     },
     async (args) => {
@@ -809,7 +893,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (!service) return knowledgeNotImplementedResult('agor_kb_put', ['kb/documents']);
 
       const content = typeof args.content === 'string' ? args.content : undefined;
-      if (content === undefined) throw new Error('content is required');
+      if (content === undefined) throw new Error('content is required and must be a string.');
 
       const uri = coerceString(args.uri);
       const parsedUri = parseKnowledgeUri(uri);
@@ -908,21 +992,22 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       description:
         'Write a Knowledge document version to a markdown file inside a branch worktree. Requires branchId + branch-relative subpath (or defaults to .agor/kb/<namespace>/<path>) and verifies the caller has branch session permission.',
       inputSchema: z.object({
-        documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
-        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: z.string().optional().describe('Namespace/space slug; use with path'),
-        path: z.string().optional().describe('Document path inside namespace; use with namespace'),
-        version: z
-          .union([z.number(), z.string()])
-          .optional()
-          .describe('Version number or version ID. Omit for current version.'),
-        branchId: z.string().describe('Destination branch/worktree ID (UUIDv7 or short ID)'),
-        subpath: z
-          .string()
-          .optional()
-          .describe(
-            'Branch-relative destination markdown path. Default: .agor/kb/<namespace>/<document path>.'
-          ),
+        documentId: mcpOptionalId('documentId', 'Knowledge document'),
+        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonEmptyString(
+          'path',
+          'Document path inside namespace; use with namespace'
+        ),
+        version: mcpOptionalVersionToken(
+          'version',
+          'Version number or version ID. Omit for current version.'
+        ),
+        branchId: mcpRequiredId('branchId', 'Destination branch/worktree'),
+        subpath: mcpOptionalNonEmptyString(
+          'subpath',
+          'Branch-relative destination markdown path. Default: .agor/kb/<namespace>/<document path>.'
+        ),
         overwrite: z
           .boolean()
           .optional()
@@ -1012,30 +1097,28 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       description:
         'Publish a markdown file from a branch worktree into Knowledge. Requires branchId + branch-relative subpath and branch session permission. If a .agor-kb sidecar exists, it supplies documentId and expectedVersion; otherwise provide documentId or namespace + path. Updating an existing document creates one immutable KB version.',
       inputSchema: z.object({
-        branchId: z.string().describe('Source branch/worktree ID (UUIDv7 or short ID)'),
-        subpath: z.string().describe('Branch-relative source markdown file path'),
-        documentId: z.string().optional().describe('Knowledge document ID to update'),
-        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: z
-          .string()
-          .optional()
-          .describe('Namespace/space slug. Required with path when creating without sidecar.'),
-        path: z
-          .string()
-          .optional()
-          .describe('Document path. Required with namespace when creating without sidecar.'),
-        expectedVersion: z
-          .union([z.number(), z.string()])
-          .optional()
-          .describe(
-            'Expected current version number or ID. Defaults to sidecar version when present.'
-          ),
+        branchId: mcpRequiredId('branchId', 'Source branch/worktree'),
+        subpath: mcpRequiredString('subpath', 'Branch-relative source markdown file path'),
+        documentId: mcpOptionalId('documentId', 'Knowledge document'),
+        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonEmptyString(
+          'namespace',
+          'Namespace/space slug. Required with path when creating without sidecar.'
+        ),
+        path: mcpOptionalNonEmptyString(
+          'path',
+          'Document path. Required with namespace when creating without sidecar.'
+        ),
+        expectedVersion: mcpOptionalVersionToken(
+          'expectedVersion',
+          'Expected current version number or ID. Defaults to sidecar version when present.'
+        ),
         dryRun: z.boolean().optional().describe('Preview without creating/updating a KB version.'),
         createNamespace: z
           .boolean()
           .optional()
           .describe('Create namespace if missing when creating a new doc (default: false).'),
-        title: z.string().optional().describe('Optional title for newly-created documents'),
+        title: mcpOptionalString('title', 'Optional title for newly-created documents'),
         firstLineIsTitle: z
           .boolean()
           .optional()
@@ -1048,7 +1131,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         ),
         status: KnowledgeDocumentStatusSchema.optional().describe('Lifecycle status'),
         editPolicy: KnowledgeEditPolicySchema.optional().describe('Edit policy'),
-        changeSummary: z.string().optional().describe('Version history change summary'),
+        changeSummary: mcpOptionalString('changeSummary', 'Version history change summary'),
       }),
     },
     async (args) => {
@@ -1257,15 +1340,18 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       description: 'List version history for a Knowledge document.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        documentId: z.string().optional().describe('Knowledge document ID (UUIDv7 or short ID)'),
-        uri: z.string().optional().describe('Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: z.string().optional().describe('Namespace/space slug; use with path'),
-        path: z.string().optional().describe('Document path inside namespace; use with namespace'),
+        documentId: mcpOptionalId('documentId', 'Knowledge document'),
+        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonEmptyString(
+          'path',
+          'Document path inside namespace; use with namespace'
+        ),
         includeContent: z
           .boolean()
           .optional()
           .describe('Include content text for each version (default: false)'),
-        limit: z.number().optional().describe('Maximum number of versions (default: 20)'),
+        limit: mcpLimit(20).describe('Maximum number of versions (default: 20)'),
       }),
     },
     async (args) => {
@@ -1313,7 +1399,14 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         source: KnowledgeNodeRefSchema,
         target: KnowledgeNodeRefSchema,
         edgeType: KnowledgeGraphEdgeTypeSchema.describe('Relationship type'),
-        confidence: z.number().optional().describe('Optional confidence score from 0 to 1'),
+        confidence: z
+          .number({
+            error: 'confidence must be a number between 0 and 1 when provided.',
+          })
+          .min(0, 'confidence must be greater than or equal to 0.')
+          .max(1, 'confidence must be less than or equal to 1.')
+          .optional()
+          .describe('Optional confidence score from 0 to 1'),
         properties: z
           .record(z.string(), z.unknown())
           .optional()
@@ -1360,8 +1453,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .array(KnowledgeGraphNodeTypeSchema)
           .optional()
           .describe('Optional neighbor node types to include'),
-        depth: z.number().optional().describe('Traversal depth (default: 1; V1 may cap at 2)'),
-        limit: z.number().optional().describe('Maximum neighbors/edges to return (default: 50)'),
+        depth: mcpOptionalPositiveInt('depth', 'Traversal depth (default: 1; V1 may cap at 2)'),
+        limit: mcpLimit(50).describe('Maximum neighbors/edges to return (default: 50)'),
         includeArchived: z
           .boolean()
           .optional()

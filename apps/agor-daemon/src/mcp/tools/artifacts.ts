@@ -28,6 +28,15 @@ import { z } from 'zod';
 import type { ArtifactsService } from '../../services/artifacts.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
 import { resolveArtifactId, resolveBoardId, resolveBranchId } from '../resolve-ids.js';
+import {
+  mcpLimit,
+  mcpOptionalId,
+  mcpOptionalNumber,
+  mcpOptionalPositiveInt,
+  mcpOptionalString,
+  mcpRequiredId,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -50,11 +59,19 @@ const SandpackConfigSchema = z
       .object({
         dependencies: z.record(z.string(), z.string()).optional(),
         devDependencies: z.record(z.string(), z.string()).optional(),
-        entry: z.string().optional(),
-        environment: z.string().optional(),
+        entry: mcpOptionalString('sandpackConfig.customSetup.entry', 'Custom Sandpack entry file'),
+        environment: mcpOptionalString(
+          'sandpackConfig.customSetup.environment',
+          'Custom Sandpack environment'
+        ),
       })
       .optional(),
-    theme: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+    theme: z
+      .union([
+        mcpRequiredString('sandpackConfig.theme', 'Sandpack theme name'),
+        z.record(z.string(), z.unknown()),
+      ])
+      .optional(),
     options: z.record(z.string(), z.unknown()).optional(),
   })
   .passthrough()
@@ -67,7 +84,9 @@ const AgorGrantsSchema = z
     agor_user_email: z.boolean().optional(),
     agor_artifact_id: z.boolean().optional(),
     agor_board_id: z.boolean().optional(),
-    agor_proxies: z.array(z.string()).optional(),
+    agor_proxies: z
+      .array(mcpRequiredString('agorGrants.agor_proxies[]', 'Configured proxy vendor slug'))
+      .optional(),
   })
   .optional();
 
@@ -114,38 +133,33 @@ IMPORTANT:
 - Missing user env vars render as "" — your app should detect that and surface a "configure SOMETHING in Settings" message rather than calling APIs with empty creds.
 - For node.js / static templates without a dotenv path, env vars are NOT injected; the daemon emits a warning if you declared any.`,
       inputSchema: z.object({
-        folderPath: z
-          .string()
-          .optional()
-          .describe(
-            'Legacy absolute path to folder containing artifact files. Prefer branchId + subpath. If this resolves inside a registered branch, branch session permission is required.'
-          ),
-        branchId: z
-          .string()
-          .optional()
-          .describe(
-            'Branch ID (UUID or short ID). Prefer this with subpath to publish from a branch worktree.'
-          ),
-        subpath: z
-          .string()
-          .optional()
-          .describe('Branch-relative subpath to the artifact folder (required with branchId).'),
-        boardId: z
-          .string()
-          .optional()
-          .describe(
-            'Board to place the artifact on. REQUIRED when creating. IGNORED when updating (artifactId given) — to move an artifact between boards use agor_artifacts_update.'
-          ),
-        name: z
-          .string()
-          .optional()
-          .describe(
-            'Artifact display name. REQUIRED when creating; on update (artifactId given) defaults to the existing name if omitted. PASSING A DIFFERENT NAME ON UPDATE WILL RENAME THE ARTIFACT.'
-          ),
-        artifactId: z
-          .string()
-          .optional()
-          .describe('If provided, update existing artifact (must be owned by you)'),
+        folderPath: mcpOptionalString(
+          'folderPath',
+          'Legacy absolute path to folder containing artifact files. Prefer branchId + subpath. If this resolves inside a registered branch, branch session permission is required.'
+        ),
+        branchId: mcpOptionalId(
+          'branchId',
+          'Branch',
+          'Branch ID (UUID or short ID). Prefer this with subpath to publish from a branch worktree.'
+        ),
+        subpath: mcpOptionalString(
+          'subpath',
+          'Branch-relative subpath to the artifact folder (required with branchId).'
+        ),
+        boardId: mcpOptionalId(
+          'boardId',
+          'Board',
+          'Board to place the artifact on. REQUIRED when creating. IGNORED when updating (artifactId given) — to move an artifact between boards use agor_artifacts_update.'
+        ),
+        name: mcpOptionalString(
+          'name',
+          'Artifact display name. REQUIRED when creating; on update (artifactId given) defaults to the existing name if omitted. PASSING A DIFFERENT NAME ON UPDATE WILL RENAME THE ARTIFACT.'
+        ),
+        artifactId: mcpOptionalId(
+          'artifactId',
+          'Artifact',
+          'If provided, update existing artifact (must be owned by you)'
+        ),
         template: z
           .enum(SANDPACK_TEMPLATES)
           .optional()
@@ -160,7 +174,7 @@ IMPORTANT:
           'Author-controlled Sandpack provider config (sanitized on write).'
         ),
         requiredEnvVars: z
-          .array(z.string())
+          .array(mcpRequiredString('requiredEnvVars[]', 'Env var name without template prefix'))
           .optional()
           .describe(
             'Env var NAMES (no prefix) the artifact needs. Daemon synthesizes a per-viewer .env at render time.'
@@ -171,12 +185,9 @@ IMPORTANT:
         agorRuntime: AgorRuntimeSchema.describe(
           'Controls injection of the daemon-side `agor-runtime.js` (which powers agent DOM introspection via agor_artifacts_query_dom). Default: enabled.'
         ),
-        x: z.number().optional().describe('X position on board (default: 0, only used on create)'),
-        y: z.number().optional().describe('Y position on board (default: 0, only used on create)'),
-        width: z
-          .number()
-          .optional()
-          .describe('Width in pixels (default: 600, only used on create)'),
+        x: mcpOptionalNumber('x', 'X position on board (default: 0, only used on create)'),
+        y: mcpOptionalNumber('y', 'Y position on board (default: 0, only used on create)'),
+        width: mcpOptionalNumber('width', 'Width in pixels (default: 600, only used on create)'),
         height: z
           .number()
           .optional()
@@ -239,24 +250,19 @@ IMPORTANT:
       description:
         'Check build readiness of artifact files in a branch-relative folder (branchId + subpath preferred) or legacy absolute folderPath. Verifies source files exist and are non-empty (does not run a real build or syntax check). Use this before publishing to verify basic structure.',
       inputSchema: z.object({
-        folderPath: z
-          .string()
-          .optional()
-          .describe(
-            'Legacy absolute path to the folder containing artifact files to check. Prefer branchId + subpath. If this resolves inside a registered branch, branch session permission is required.'
-          ),
-        branchId: z
-          .string()
-          .optional()
-          .describe(
-            'Branch ID (UUID or short ID). Prefer this with subpath to check a branch worktree path.'
-          ),
-        subpath: z
-          .string()
-          .optional()
-          .describe(
-            'Branch-relative subpath pointing at the artifact folder (required with branchId).'
-          ),
+        folderPath: mcpOptionalString(
+          'folderPath',
+          'Legacy absolute path to the folder containing artifact files to check. Prefer branchId + subpath. If this resolves inside a registered branch, branch session permission is required.'
+        ),
+        branchId: mcpOptionalId(
+          'branchId',
+          'Branch',
+          'Branch ID (UUID or short ID). Prefer this with subpath to check a branch worktree path.'
+        ),
+        subpath: mcpOptionalString(
+          'subpath',
+          'Branch-relative subpath pointing at the artifact folder (required with branchId).'
+        ),
       }),
     },
     async (args) => {
@@ -307,7 +313,7 @@ Fields:
 NOTE: sandpack_error and console_logs require a browser to be viewing the artifact. They are scoped to the calling user's render — you only see your own console output, never another viewer's.`,
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID'),
+        artifactId: mcpRequiredId('artifactId', 'Artifact', 'Artifact ID'),
       }),
     },
     async (args) => {
@@ -325,7 +331,7 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
         "Delete an artifact. Owner or admin only — calling as a different user returns 'Forbidden'. Removes database record and board placement. Does not touch the filesystem.",
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID to delete'),
+        artifactId: mcpRequiredId('artifactId', 'Artifact', 'Artifact ID to delete'),
       }),
     },
     async (args) => {
@@ -356,7 +362,11 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
         'Get a single artifact by ID, including its full file map (path → content) and declarative metadata (sandpack_config, required_env_vars, agor_grants). Use this to read artifact source code from another branch without filesystem access. Respects visibility: public artifacts are readable by anyone; private artifacts are only readable by their creator.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
+        artifactId: mcpRequiredId(
+          'artifactId',
+          'Artifact',
+          'Artifact ID (full UUID or short prefix)'
+        ),
       }),
     },
     async (args) => {
@@ -397,24 +407,28 @@ Placement (x, y, width, height) is preserved across board moves unless you expli
 
 Caller must own the artifact (or be an admin).`,
       inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID to update (full UUID or short prefix)'),
-        boardId: z.string().optional().describe('Move the artifact to a different board'),
-        name: z.string().optional().describe('Rename the artifact'),
-        description: z.string().optional().describe('Update the description'),
+        artifactId: mcpRequiredId(
+          'artifactId',
+          'Artifact',
+          'Artifact ID to update (full UUID or short prefix)'
+        ),
+        boardId: mcpOptionalId('boardId', 'Board', 'Move the artifact to a different board'),
+        name: mcpOptionalString('name', 'Rename the artifact'),
+        description: mcpOptionalString('description', 'Update the description'),
         public: z
           .boolean()
           .optional()
           .describe('Change visibility (true = visible to all board viewers, false = owner only)'),
         archived: z.boolean().optional().describe('Archive or unarchive the artifact'),
-        x: z.number().optional().describe('New X position on board'),
-        y: z.number().optional().describe('New Y position on board'),
-        width: z.number().optional().describe('New width in pixels'),
-        height: z.number().optional().describe('New height in pixels'),
+        x: mcpOptionalNumber('x', 'New X position on board'),
+        y: mcpOptionalNumber('y', 'New Y position on board'),
+        width: mcpOptionalNumber('width', 'New width in pixels'),
+        height: mcpOptionalNumber('height', 'New height in pixels'),
         sandpackConfig: SandpackConfigSchema.describe(
           "Replace the artifact's sandpack_config (sanitized on write)."
         ),
         requiredEnvVars: z
-          .array(z.string())
+          .array(mcpRequiredString('requiredEnvVars[]', 'Env var name without template prefix'))
           .optional()
           .describe("Replace the artifact's required_env_vars list."),
         agorGrants: AgorGrantsSchema.describe("Replace the artifact's agor_grants object."),
@@ -477,14 +491,20 @@ Safety:
 
 Visibility: public artifacts are readable by anyone; private artifacts are only landable by their owner.`,
       inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID to materialize (full UUID or short prefix)'),
-        branchId: z.string().describe('Destination branch ID (full UUID or short prefix)'),
-        subpath: z
-          .string()
-          .optional()
-          .describe(
-            'Branch-relative path for the destination folder. Default: .agor/artifacts/<slug>-<short-id> derived from the artifact name. Must not be absolute or escape the branch.'
-          ),
+        artifactId: mcpRequiredId(
+          'artifactId',
+          'Artifact',
+          'Artifact ID to materialize (full UUID or short prefix)'
+        ),
+        branchId: mcpRequiredId(
+          'branchId',
+          'Branch',
+          'Destination branch ID (full UUID or short prefix)'
+        ),
+        subpath: mcpOptionalString(
+          'subpath',
+          'Branch-relative path for the destination folder. Default: .agor/artifacts/<slug>-<short-id> derived from the artifact name. Must not be absolute or escape the branch.'
+        ),
         overwrite: z
           .boolean()
           .optional()
@@ -568,8 +588,8 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         'List artifacts, optionally filtered by board. Respects visibility: shows public artifacts plus private artifacts owned by you.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        boardId: z.string().optional().describe('Filter by board ID'),
-        limit: z.number().optional().describe('Maximum number of results (default: 50)'),
+        boardId: mcpOptionalId('boardId', 'Board', 'Filter by board ID'),
+        limit: mcpLimit(50),
       }),
     },
     async (args) => {
@@ -603,7 +623,11 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
 
 CAVEAT: daemon-supplied capabilities (\`AGOR_TOKEN\`, \`AGOR_PROXY_*\`, etc.) won't work on CodeSandbox. The exported sandbox can read \`required_env_vars\` from CodeSandbox's "Secret Keys" UI — the names match because both sides use the same prefix-per-template convention (Vite → \`VITE_\`, CRA → \`REACT_APP_\`, etc.).`,
       inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID to export (full UUID or short prefix)'),
+        artifactId: mcpRequiredId(
+          'artifactId',
+          'Artifact',
+          'Artifact ID to export (full UUID or short prefix)'
+        ),
       }),
     },
     async (args) => {
@@ -641,22 +665,27 @@ Use cases:
 - "Get the full document" — use \`{ selector: 'html' }\`, or call \`agor_artifacts_query_document_html\` for an unstructured dump of the entire \`document.documentElement.outerHTML\`.`,
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
-        selector: z
-          .string()
-          .describe('CSS selector to match (e.g. "h1", ".card", "[data-test=\'submit\']")'),
+        artifactId: mcpRequiredId(
+          'artifactId',
+          'Artifact',
+          'Artifact ID (full UUID or short prefix)'
+        ),
+        selector: mcpRequiredString(
+          'selector',
+          'CSS selector to match (e.g. "h1", ".card", "[data-test=\'submit\']")'
+        ),
         multiple: z
           .boolean()
           .optional()
           .describe('querySelectorAll vs querySelector. Default: false (single match).'),
-        maxNodes: z
-          .number()
-          .optional()
-          .describe('Max nodes to return (capped at 50 by the runtime). Default: 50.'),
-        timeoutMs: z
-          .number()
-          .optional()
-          .describe('How long to wait for the browser to answer (500-30000). Default: 5000.'),
+        maxNodes: mcpOptionalPositiveInt(
+          'maxNodes',
+          'Max nodes to return (capped at 50 by the runtime). Default: 50.'
+        ),
+        timeoutMs: mcpOptionalPositiveInt(
+          'timeoutMs',
+          'How long to wait for the browser to answer (500-30000). Default: 5000.'
+        ),
       }),
     },
     async (args) => {
@@ -694,11 +723,15 @@ Same round-trip as agor_artifacts_query_dom: requires \`agor_runtime.enabled\` a
 Capped at 200KB. Truncated output ends with \`... [truncated]\`. For targeted queries prefer agor_artifacts_query_dom with a CSS selector — this tool is the "give me everything" escape hatch when you don't know what to look for yet.`,
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
-        timeoutMs: z
-          .number()
-          .optional()
-          .describe('How long to wait for the browser to answer (500-30000). Default: 5000.'),
+        artifactId: mcpRequiredId(
+          'artifactId',
+          'Artifact',
+          'Artifact ID (full UUID or short prefix)'
+        ),
+        timeoutMs: mcpOptionalPositiveInt(
+          'timeoutMs',
+          'How long to wait for the browser to answer (500-30000). Default: 5000.'
+        ),
       }),
     },
     async (args) => {

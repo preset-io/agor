@@ -2,6 +2,7 @@ import type { BranchID } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BranchesServiceImpl, ReposServiceImpl } from '../../declarations.js';
+import { mcpOptionalString, mcpRequiredId } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 import { assertValidVariant } from './_environment-helpers.js';
@@ -15,7 +16,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         'Start the environment for a branch using its configured start action (shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
+        branchId: mcpRequiredId('branchId', 'Branch'),
       }),
     },
     async (args) => {
@@ -50,7 +51,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         'Stop the environment for a branch using its configured stop action (shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
+        branchId: mcpRequiredId('branchId', 'Branch'),
       }),
     },
     async (args) => {
@@ -79,7 +80,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         'Check the health status of a branch environment by running its configured health command. Returns started_at timestamp and uptime_seconds when environment is starting or running.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
+        branchId: mcpRequiredId('branchId', 'Branch'),
       }),
     },
     async (args) => {
@@ -114,7 +115,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         'Fetch recent logs from a branch environment (non-streaming, last ~100 lines; shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
+        branchId: mcpRequiredId('branchId', 'Branch'),
       }),
     },
     async (args) => {
@@ -132,7 +133,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
       description: 'Open the application URL for a branch environment in the browser',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
+        branchId: mcpRequiredId('branchId', 'Branch'),
       }),
     },
     async (args) => {
@@ -176,14 +177,12 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         'Omit variant to re-render the branch with its current variant (useful for picking up template_overrides changes).',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
-        variant: z
-          .string()
-          .optional()
-          .describe(
-            'Environment variant name to set. Must be a key in the repo environment config variants. ' +
-              "When omitted, re-renders using the branch's current variant (or the repo default if unset)."
-          ),
+        branchId: mcpRequiredId('branchId', 'Branch'),
+        variant: mcpOptionalString(
+          'variant',
+          'Environment variant name to set. Must be a key in the repo environment config variants. ' +
+            "When omitted, re-renders using the branch's current variant (or the repo default if unset)."
+        ),
         andStart: z
           .boolean()
           .optional()
@@ -284,7 +283,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         'Nuke the environment for a branch (destructive operation - typically removes volumes and all data; shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
+        branchId: mcpRequiredId('branchId', 'Branch'),
       }),
     },
     async (args) => {

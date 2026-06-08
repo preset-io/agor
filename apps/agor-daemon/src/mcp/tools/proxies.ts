@@ -15,6 +15,7 @@
 import { getBaseUrl, loadConfig, type ResolvedProxy, resolveProxies } from '@agor/core/config';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { mcpRequiredString } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -143,9 +144,10 @@ Always check r.ok before JSON.parse, and surface the error JSON to the user — 
         'Get details for a single configured HTTP proxy by vendor slug. Returns 404 if the vendor is not configured.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        vendor: z
-          .string()
-          .describe('Vendor slug as it appears in the route path, e.g. "shortcut" or "linear".'),
+        vendor: mcpRequiredString(
+          'vendor',
+          'Vendor slug as it appears in the route path, e.g. "shortcut" or "linear".'
+        ),
       }),
     },
     async (args) => {

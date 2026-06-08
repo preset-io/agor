@@ -34,6 +34,15 @@ import {
   resolveMcpServerId,
   resolveSessionId,
 } from '../resolve-ids.js';
+import {
+  mcpLimit,
+  mcpOptionalId,
+  mcpOptionalNonEmptyString,
+  mcpOptionalPositiveInt,
+  mcpOptionalString,
+  mcpRequiredId,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { sessionContextRequiredResult, textResult } from '../server.js';
 import { listAttachedMcpServers } from './mcp-servers.js';
@@ -57,7 +66,7 @@ import { listAttachedMcpServers } from './mcp-servers.js';
  *
  * IMPORTANT — no `.transform()` here. Zod's JSON-Schema converter
  * (`zod/v4-mini`'s `toJSONSchema`, used in `mcp/server.ts` to populate the
- * cached registry consumed by `agor_search_tools(detail:"full")`) throws on
+ * cached registry consumed by `agor_get_tool_details`) throws on
  * transforms with "Transforms cannot be represented in JSON Schema". The
  * catch in `server.ts` then degrades the WHOLE containing tool schema to
  * `{ type: 'object' }`, hiding every input parameter from MCP clients. So
@@ -70,25 +79,26 @@ const modelConfigObjectSchema = z.object({
   mode: z.enum(['alias', 'exact']).optional().describe("Model selection mode (default: 'alias')"),
   // .min(1): reject empty-string model explicitly so callers don't silently
   // fall through to user defaults when they meant to pin a specific model.
-  model: z
-    .string()
-    .min(1)
-    .describe("Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"),
+  model: mcpRequiredString(
+    'modelConfig.model',
+    "Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"
+  ),
   effort: z
     .enum(['low', 'medium', 'high', 'max'])
     .optional()
     .describe('Reasoning effort level (default: high)'),
-  provider: z.string().optional().describe("Provider ID (OpenCode only, e.g. 'anthropic')"),
+  provider: mcpOptionalString(
+    'modelConfig.provider',
+    "Provider ID (OpenCode only, e.g. 'anthropic')"
+  ),
 });
 
 const modelConfigInputSchema = z
   .union([
-    z
-      .string()
-      .min(1)
-      .describe(
-        "Shorthand: just the model ID string (e.g. 'claude-opus-4-6'). Equivalent to { model: <id> }."
-      ),
+    mcpRequiredString(
+      'modelConfig',
+      "Shorthand: just the model ID string (e.g. 'claude-opus-4-6'). Equivalent to { model: <id> }."
+    ),
     modelConfigObjectSchema,
   ])
   .optional()
@@ -147,13 +157,17 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         'List all sessions accessible to the current user. Each session includes a `url` field with a clickable link to view the session in the UI.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        limit: z.number().optional().describe('Maximum number of sessions to return (default: 50)'),
+        limit: mcpLimit(50),
         status: z
           .enum(['idle', 'running', 'completed', 'failed'])
           .optional()
           .describe('Filter by session status'),
-        boardId: z.string().optional().describe('Filter sessions by board ID (UUIDv7 or short ID)'),
-        branchId: z.string().optional().describe('Filter sessions by branch ID'),
+        boardId: mcpOptionalId(
+          'boardId',
+          'Board',
+          'Filter sessions by board ID (UUIDv7 or short ID)'
+        ),
+        branchId: mcpOptionalId('branchId', 'Branch', 'Filter sessions by branch ID'),
         includeArchived: z
           .boolean()
           .optional()
@@ -229,7 +243,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         'Get detailed information about a specific session, including genealogy, current state, and the MCP servers currently attached to it (with OAuth status — check `attached_mcp_servers[].oauth_authenticated` to spot servers needing auth). The response includes a `url` field with a clickable link to view the session in the UI.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        sessionId: z.string().describe('Session ID (UUIDv7 or short ID like 01a1b2c3)'),
+        sessionId: mcpRequiredId(
+          'sessionId',
+          'Session',
+          'Session ID (UUIDv7 or short ID like 01a1b2c3)'
+        ),
       }),
     },
     async (args) => {
@@ -516,11 +534,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       description:
         'Spawn a child session (subsession) for delegating work to another agent. Inherits the current branch and tracks parent-child genealogy. Use for subtasks like "run tests", "review this code", or "fix linting errors". Configuration is inherited from parent (same agent) or user defaults (different agent).',
       inputSchema: z.object({
-        prompt: z.string().describe('The prompt/task for the subsession agent to execute'),
-        title: z
-          .string()
-          .optional()
-          .describe('Optional title for the session (defaults to first 100 chars of prompt)'),
+        prompt: mcpRequiredString('prompt', 'The prompt/task for the subsession agent to execute'),
+        title: mcpOptionalNonEmptyString(
+          'title',
+          'Optional title for the session (defaults to first 100 chars of prompt)'
+        ),
         agenticTool: z
           .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'cursor'])
           .optional()
@@ -537,13 +555,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .boolean()
           .optional()
           .describe('Include original spawn prompt in callback (default: false)'),
-        extraInstructions: z
-          .string()
-          .optional()
-          .describe('Extra instructions appended to spawn prompt'),
-        taskId: z.string().optional().describe('Optional task ID to link the spawned session to'),
+        extraInstructions: mcpOptionalString(
+          'extraInstructions',
+          'Extra instructions appended to spawn prompt'
+        ),
+        taskId: mcpOptionalId('taskId', 'Task', 'Optional task ID to link the spawned session to'),
         mcpServerIds: z
-          .array(z.string())
+          .array(mcpRequiredId('mcpServerIds[]', 'MCP server'))
           .optional()
           .describe(
             'MCP server IDs to attach. Overrides parent session inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
@@ -599,8 +617,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       description:
         'Prompt an existing session to continue work. Supports four modes: continue (append to conversation), fork (branch at decision point), subsession (delegate to child agent), or btw (ephemeral fork — ask a side question without disrupting the target session, even if running). Configuration is inherited from parent session or user defaults.',
       inputSchema: z.object({
-        sessionId: z.string().describe('Session ID to prompt (UUIDv7 or short ID)'),
-        prompt: z.string().describe('The prompt/task to execute'),
+        sessionId: mcpRequiredId(
+          'sessionId',
+          'Session',
+          'Session ID to prompt (UUIDv7 or short ID)'
+        ),
+        prompt: mcpRequiredString('prompt', 'The prompt/task to execute'),
         mode: z
           .enum(['continue', 'fork', 'subsession', 'btw'])
           .describe(
@@ -612,10 +634,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Agent for subsession (subsession mode only, defaults to parent agent). Fork mode always uses parent agent.'
           ),
-        title: z.string().optional().describe('Session title (for fork/subsession only)'),
-        taskId: z.string().optional().describe('Fork/spawn point task ID (optional)'),
+        title: mcpOptionalNonEmptyString('title', 'Session title (for fork/subsession only)'),
+        taskId: mcpOptionalId('taskId', 'Task', 'Fork/spawn point task ID (optional)'),
         mcpServerIds: z
-          .array(z.string())
+          .array(mcpRequiredId('mcpServerIds[]', 'MCP server'))
           .optional()
           .describe(
             'MCP server IDs for subsession mode. Overrides parent inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
@@ -764,32 +786,35 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       description:
         'Create a new session in an existing branch. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID where the session will run (required)'),
+        branchId: mcpRequiredId(
+          'branchId',
+          'Branch',
+          'Branch ID where the session will run (required)'
+        ),
         agenticTool: z
           .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'cursor'])
           .describe('Which agent to use for this session (required)'),
-        title: z.string().optional().describe('Session title (optional)'),
-        description: z.string().optional().describe('Session description (optional)'),
+        title: mcpOptionalNonEmptyString('title', 'Session title (optional)'),
+        description: mcpOptionalString('description', 'Session description (optional)'),
         contextFiles: z
-          .array(z.string())
+          .array(mcpRequiredString('contextFiles[]', 'Context file path'))
           .optional()
           .describe('Context file paths to load (optional)'),
-        initialPrompt: z
-          .string()
-          .optional()
-          .describe('Initial prompt to execute immediately after creating the session (optional)'),
+        initialPrompt: mcpRequiredString(
+          'initialPrompt',
+          'Initial prompt to execute immediately after creating the session (optional)'
+        ).optional(),
         enableCallback: z
           .boolean()
           .optional()
           .describe(
             'Enable callback to the creating session when the new session completes (default: false). When true, the creating session will receive a completion notification.'
           ),
-        callbackSessionId: z
-          .string()
-          .optional()
-          .describe(
-            'Session ID to notify on completion (defaults to the current/creating session when enableCallback is true)'
-          ),
+        callbackSessionId: mcpOptionalId(
+          'callbackSessionId',
+          'Session',
+          'Session ID to notify on completion (defaults to the current/creating session when enableCallback is true)'
+        ),
         includeLastMessage: z
           .boolean()
           .optional()
@@ -807,7 +832,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'Callback firing mode: "once" (default) fires on first completion then auto-disables, "persistent" fires on every completion'
           ),
         mcpServerIds: z
-          .array(z.string())
+          .array(mcpRequiredId('mcpServerIds[]', 'MCP server'))
           .optional()
           .describe(
             'MCP server IDs to attach. Overrides branch and user default inheritance. Omit to use branch config > user defaults.'
@@ -988,9 +1013,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         'Update session metadata (title, description, status, archived, callback config). Useful for agents to self-document their work or manage callback settings.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        sessionId: z.string().describe('Session ID to update (UUIDv7 or short ID)'),
-        title: z.string().optional().describe('New session title (optional)'),
-        description: z.string().optional().describe('New session description (optional)'),
+        sessionId: mcpRequiredId(
+          'sessionId',
+          'Session',
+          'Session ID to update (UUIDv7 or short ID)'
+        ),
+        title: mcpOptionalString('title', 'New session title (optional)'),
+        description: mcpOptionalString('description', 'New session description (optional)'),
         status: z
           .enum(['idle', 'running', 'completed', 'failed'])
           .optional()
@@ -1059,7 +1088,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. By default, all child sessions (forks and subsessions) are also archived. Set includeChildren to false to archive only the target session.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        sessionId: z.string().describe('Session ID to archive (UUIDv7 or short ID)'),
+        sessionId: mcpRequiredId(
+          'sessionId',
+          'Session',
+          'Session ID to archive (UUIDv7 or short ID)'
+        ),
         includeChildren: z
           .boolean()
           .optional()
@@ -1116,7 +1149,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       description:
         'Restore a previously archived session. By default, all child sessions are also unarchived. Set includeChildren to false to unarchive only the target session.',
       inputSchema: z.object({
-        sessionId: z.string().describe('Session ID to unarchive (UUIDv7 or short ID)'),
+        sessionId: mcpRequiredId(
+          'sessionId',
+          'Session',
+          'Session ID to unarchive (UUIDv7 or short ID)'
+        ),
         includeChildren: z
           .boolean()
           .optional()
@@ -1180,19 +1217,18 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .describe(
             "Filter by session type. 'gateway' = messaging integrations, 'scheduled' = cron-triggered, 'agent' = manually created."
           ),
-        olderThanDays: z
-          .number()
-          .int()
-          .positive()
-          .max(365)
-          .optional()
-          .describe('Only archive sessions last updated more than this many days ago'),
+        olderThanDays: mcpOptionalPositiveInt(
+          'olderThanDays',
+          'Only archive sessions last updated more than this many days ago'
+        ).refine((value) => value === undefined || value <= 365, {
+          message: 'olderThanDays must be less than or equal to 365.',
+        }),
         status: z
           .enum(['idle', 'running', 'completed', 'failed'])
           .optional()
           .describe('Only archive sessions with this status'),
-        boardId: z.string().optional().describe('Only archive sessions on this board'),
-        branchId: z.string().optional().describe('Only archive sessions in this branch'),
+        boardId: mcpOptionalId('boardId', 'Board', 'Only archive sessions on this board'),
+        branchId: mcpOptionalId('branchId', 'Branch', 'Only archive sessions in this branch'),
         dryRun: z
           .boolean()
           .optional()
@@ -1299,13 +1335,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         'Stop a running session. Kills the executor process and sets the session to idle. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, awaiting_permission, stopping).',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        sessionId: z.string().describe('Session ID to stop (UUIDv7 or short ID)'),
-        reason: z
-          .string()
-          .optional()
-          .describe(
-            'Audit log reason for the stop (e.g. "timeout", "user requested", "safety gate")'
-          ),
+        sessionId: mcpRequiredId('sessionId', 'Session', 'Session ID to stop (UUIDv7 or short ID)'),
+        reason: mcpOptionalString(
+          'reason',
+          'Audit log reason for the stop (e.g. "timeout", "user requested", "safety gate")'
+        ),
       }),
     },
     async (args) => {

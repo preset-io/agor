@@ -7,6 +7,16 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
   isError?: boolean;
 }>;
 
+type ToolConfig = {
+  inputSchema?: {
+    safeParse: (
+      value: unknown
+    ) =>
+      | { success: true; data: unknown }
+      | { success: false; error: { issues: Array<{ message: string }> } };
+  };
+};
+
 function registerAndCaptureHandler(
   toolName: string,
   ctx: {
@@ -38,6 +48,39 @@ function registerAndCaptureHandler(
 
   if (!handler) throw new Error(`${toolName} was not registered`);
   return handler;
+}
+
+function registerAndCaptureConfig(
+  toolName: string,
+  ctx: {
+    app: unknown;
+    userId: string;
+    sessionId?: string;
+    baseServiceParams?: Record<string, unknown>;
+  }
+): ToolConfig {
+  let config: ToolConfig | undefined;
+  const fakeServer = {
+    registerTool: (name: string, cfg: ToolConfig, _cb: ToolHandler) => {
+      if (name === toolName) config = cfg;
+    },
+  } as unknown as McpServer;
+
+  registerBranchTools(fakeServer, {
+    app: ctx.app as Parameters<typeof registerBranchTools>[1]['app'],
+    db: {} as Parameters<typeof registerBranchTools>[1]['db'],
+    userId: ctx.userId as Parameters<typeof registerBranchTools>[1]['userId'],
+    sessionId: ctx.sessionId as Parameters<typeof registerBranchTools>[1]['sessionId'],
+    authenticatedUser: { user_id: ctx.userId, role: 'member' } as Parameters<
+      typeof registerBranchTools
+    >[1]['authenticatedUser'],
+    baseServiceParams: (ctx.baseServiceParams ?? {}) as Parameters<
+      typeof registerBranchTools
+    >[1]['baseServiceParams'],
+  });
+
+  if (!config) throw new Error(`${toolName} was not registered`);
+  return config;
 }
 
 function registerAndCaptureUpdate(ctx: {
@@ -100,6 +143,43 @@ describe('agor_branches_update', () => {
     expect(parsed.error).toMatch(/requires current Agor session context/i);
     expect(parsed.error).toMatch(/X-Agor-Session-Id/);
     expect(sessionsGet).not.toHaveBeenCalled();
+  });
+});
+
+describe('branch MCP input schemas', () => {
+  it('rejects empty required IDs/names with field-specific messages', () => {
+    const config = registerAndCaptureConfig('agor_branches_create', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    const result = config.inputSchema?.safeParse({
+      repoId: '',
+      branchName: '',
+      boardId: '',
+    });
+
+    expect(result?.success).toBe(false);
+    if (result?.success === false) {
+      expect(result.error.issues.map((issue) => issue.message)).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/repoId cannot be empty/i),
+          expect.stringMatching(/branchName cannot be empty/i),
+          expect.stringMatching(/boardId cannot be empty/i),
+        ])
+      );
+    }
+  });
+
+  it('rejects malformed pagination values before handler execution', () => {
+    const config = registerAndCaptureConfig('agor_branches_cleanup_candidates', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(config.inputSchema?.safeParse({ limit: 0 }).success).toBe(false);
+    expect(config.inputSchema?.safeParse({ skip: -1 }).success).toBe(false);
+    expect(config.inputSchema?.safeParse({ limit: 1, skip: 0 }).success).toBe(true);
   });
 });
 

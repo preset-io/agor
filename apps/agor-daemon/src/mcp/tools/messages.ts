@@ -16,6 +16,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveSessionId, resolveTaskId } from '../resolve-ids.js';
+import { mcpLimit, mcpOffset, mcpOptionalId, mcpOptionalString } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -28,17 +29,16 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
         'Page through session conversation messages or search across sessions by keyword. When sessionId is provided, returns messages chronologically (like reading a transcript). When search is provided without sessionId, finds messages across all sessions. Tool calls are filtered out by default for cleaner output.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        sessionId: z
-          .string()
-          .optional()
-          .describe('Session ID to scope messages to (optional when using search)'),
-        taskId: z.string().optional().describe('Task ID to scope messages to (optional)'),
-        search: z
-          .string()
-          .optional()
-          .describe(
-            'Keyword search across message content. Space-separated terms are AND\'d, pipe (|) for OR. Example: "OAuth middleware" requires both; "OAuth | JWT" matches either.'
-          ),
+        sessionId: mcpOptionalId(
+          'sessionId',
+          'Session',
+          'Session ID to scope messages to (optional when using search)'
+        ),
+        taskId: mcpOptionalId('taskId', 'Task', 'Task ID to scope messages to (optional)'),
+        search: mcpOptionalString(
+          'search',
+          'Keyword search across message content. Space-separated terms are AND\'d, pipe (|) for OR. Example: "OAuth middleware" requires both; "OAuth | JWT" matches either.'
+        ),
         includeToolCalls: z
           .boolean()
           .optional()
@@ -51,8 +51,8 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Content detail level. "preview" returns first 200 chars (default). "full" returns complete text content.'
           ),
-        limit: z.number().optional().describe('Maximum number of messages to return (default: 20)'),
-        offset: z.number().optional().describe('Skip first N messages (default: 0)'),
+        limit: mcpLimit(20),
+        offset: mcpOffset(0),
         order: z
           .enum(['asc', 'desc'])
           .optional()
@@ -68,7 +68,9 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       const search = coerceString(args.search);
 
       if (!sessionIdRaw && !taskIdRaw && !search) {
-        throw new Error('at least one of sessionId, taskId, or search is required');
+        throw new Error(
+          'At least one of sessionId, taskId, or search must be provided as a non-empty string. Example: { "sessionId": "01abcdef" } or { "search": "OAuth middleware" }.'
+        );
       }
 
       const sessionId = sessionIdRaw ? await resolveSessionId(ctx, sessionIdRaw) : undefined;

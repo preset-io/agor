@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { mcpLimit, mcpOptionalString, mcpRequiredId, mcpRequiredString } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -11,9 +12,9 @@ export function registerCardTypeTools(server: McpServer, ctx: McpContext): void 
       description:
         'Create a new card type (global, usable on any board). Card types define default emoji, color, and optional JSON Schema for data validation.',
       inputSchema: z.object({
-        name: z.string().describe('Card type name'),
-        emoji: z.string().optional().describe('Default emoji for cards of this type'),
-        color: z.string().optional().describe('Default color for cards of this type (hex format)'),
+        name: mcpRequiredString('name', 'Card type name'),
+        emoji: mcpOptionalString('emoji', 'Default emoji for cards of this type'),
+        color: mcpOptionalString('color', 'Default color for cards of this type (hex format)'),
         jsonSchema: z
           .object({})
           .passthrough()
@@ -44,7 +45,7 @@ export function registerCardTypeTools(server: McpServer, ctx: McpContext): void 
       description: 'Get detailed information about a specific card type.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        cardTypeId: z.string().describe('Card type ID (UUIDv7 or short ID)'),
+        cardTypeId: mcpRequiredId('cardTypeId', 'Card type'),
       }),
     },
     async (args) => {
@@ -62,7 +63,7 @@ export function registerCardTypeTools(server: McpServer, ctx: McpContext): void 
       description: 'List all available card types.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        limit: z.number().optional().describe('Maximum number of results (default: 50)'),
+        limit: mcpLimit(50),
       }),
     },
     async (args) => {
@@ -82,10 +83,10 @@ export function registerCardTypeTools(server: McpServer, ctx: McpContext): void 
       description: "Update a card type's metadata.",
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        cardTypeId: z.string().describe('Card type ID to update'),
-        name: z.string().optional().describe('New name'),
-        emoji: z.string().nullable().optional().describe('New emoji (null to clear)'),
-        color: z.string().nullable().optional().describe('New color (null to clear)'),
+        cardTypeId: mcpRequiredId('cardTypeId', 'Card type', 'Card type ID to update'),
+        name: mcpOptionalString('name', 'New name'),
+        emoji: mcpOptionalString('emoji', 'New emoji (null to clear)').nullable(),
+        color: mcpOptionalString('color', 'New color (null to clear)').nullable(),
         jsonSchema: z
           .object({})
           .passthrough()
@@ -115,7 +116,7 @@ export function registerCardTypeTools(server: McpServer, ctx: McpContext): void 
       description: 'Permanently delete a card type.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        cardTypeId: z.string().describe('Card type ID to delete'),
+        cardTypeId: mcpRequiredId('cardTypeId', 'Card type', 'Card type ID to delete'),
       }),
     },
     async (args) => {

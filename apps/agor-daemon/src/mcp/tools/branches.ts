@@ -24,6 +24,15 @@ import {
   resolveRepoId,
   resolveSessionId,
 } from '../resolve-ids.js';
+import {
+  mcpLimit,
+  mcpOptionalId,
+  mcpOptionalNonNegativeInt,
+  mcpOptionalPositiveInt,
+  mcpOptionalString,
+  mcpRequiredId,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, sessionContextRequiredResult, textResult } from '../server.js';
 import { assertValidVariant } from './_environment-helpers.js';
@@ -134,7 +143,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'Get detailed information about a branch, including path, git ref, and git state',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID (UUIDv7 or short ID)'),
+        branchId: mcpRequiredId('branchId', 'Branch'),
       }),
     },
     async (args) => {
@@ -161,8 +170,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'pull_request_url, issue_url, board_object_id, and position when set.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        repoId: z.string().optional().describe('Repository ID to filter by'),
-        limit: z.number().optional().describe('Maximum number of results (default: 50)'),
+        repoId: mcpOptionalId('repoId', 'Repository', 'Repository ID to filter by'),
+        limit: mcpLimit(50),
         includeArchived: z
           .boolean()
           .optional()
@@ -175,13 +184,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Filter to show ONLY archived branches. When true, returns only archived branches. Overrides includeArchived.'
           ),
-        zoneId: z
-          .string()
-          .optional()
-          .describe(
-            'Filter results to branches in a specific board zone (e.g. "zone-1776863814461"). ' +
-              'Avoids the need to call agor_branches_get on each branch to check zone membership.'
-          ),
+        zoneId: mcpOptionalString(
+          'zoneId',
+          'Filter results to branches in a specific board zone (e.g. "zone-1776863814461"). ' +
+            'Avoids the need to call agor_branches_get on each branch to check zone membership.'
+        ),
       }),
     },
     async (args) => {
@@ -213,21 +220,15 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'filesystem/storage status, path, and a path_exists boolean computed from the recorded branch path only.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        repoId: z.string().optional().describe('Repository ID to filter by'),
-        archivedBefore: z
-          .string()
-          .optional()
-          .describe(
-            'Only include branches archived before this ISO-8601 date/time. Overrides the default archivedOlderThanDays=7 cutoff.'
-          ),
-        archivedOlderThanDays: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe(
-            'Only include branches archived more than this many days ago. Must be at least 1. Default: 7. Ignored when archivedBefore is provided.'
-          ),
+        repoId: mcpOptionalId('repoId', 'Repository', 'Repository ID to filter by'),
+        archivedBefore: mcpOptionalString(
+          'archivedBefore',
+          'Only include branches archived before this ISO-8601 date/time. Overrides the default archivedOlderThanDays=7 cutoff.'
+        ),
+        archivedOlderThanDays: mcpOptionalPositiveInt(
+          'archivedOlderThanDays',
+          'Only include branches archived more than this many days ago. Must be at least 1. Default: 7. Ignored when archivedBefore is provided.'
+        ),
         filesystemStatus: z
           .enum(CLEANUP_CANDIDATE_FILESYSTEM_STATUSES)
           .optional()
@@ -258,18 +259,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Filter by whether the recorded branch path currently exists. This checks the exact stored path; it does not scan the filesystem.'
           ),
-        limit: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe('Maximum number of results (default: 50)'),
-        skip: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .describe('Number of filtered candidates to skip (default: 0)'),
+        limit: mcpLimit(50),
+        skip: mcpOptionalNonNegativeInt(
+          'skip',
+          'Number of filtered candidates to skip (default: 0)'
+        ),
       }),
     },
     async (args) => {
@@ -399,27 +393,28 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'Use zoneId to place the branch in a specific zone (pin only, no trigger). ' +
         'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation.',
       inputSchema: z.object({
-        repoId: z.string().describe('Repository ID where the branch will be created'),
-        branchName: z
-          .string()
-          .describe(
-            'Slug name for the branch directory (lowercase letters, numbers, hyphens). ' +
-              'If the name conflicts with an existing branch, a numeric suffix is auto-appended (e.g., "my-feature-2"). ' +
-              'Set autoSuffix=false to get an error on conflict instead.'
-          ),
-        boardId: z
-          .string()
-          .describe(
-            'Board ID to place the branch on (positions to default coordinates). Required to ensure branches are visible in the UI.'
-          ),
-        ref: z
-          .string()
-          .optional()
-          .describe(
-            'Git ref name to create or checkout. Defaults to branchName when creating a new git branch. ' +
-              'Set this to create a git branch with a different name than the branch directory. ' +
-              'Example: branchName="review-1", ref="issue-282-review-1" creates directory "review-1" on git branch "issue-282-review-1".'
-          ),
+        repoId: mcpRequiredId(
+          'repoId',
+          'Repository',
+          'Repository ID where the branch will be created'
+        ),
+        branchName: mcpRequiredString(
+          'branchName',
+          'Slug name for the branch directory (lowercase letters, numbers, hyphens). ' +
+            'If the name conflicts with an existing branch, a numeric suffix is auto-appended (e.g., "my-feature-2"). ' +
+            'Set autoSuffix=false to get an error on conflict instead.'
+        ),
+        boardId: mcpRequiredId(
+          'boardId',
+          'Board',
+          'Board ID to place the branch on (positions to default coordinates). Required to ensure branches are visible in the UI.'
+        ),
+        ref: mcpOptionalString(
+          'ref',
+          'Git ref name to create or checkout. Defaults to branchName when creating a new git branch. ' +
+            'Set this to create a git branch with a different name than the branch directory. ' +
+            'Example: branchName="review-1", ref="issue-282-review-1" creates directory "review-1" on git branch "issue-282-review-1".'
+        ),
         refType: z
           .enum(['branch', 'tag'])
           .optional()
@@ -437,14 +432,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Pull latest from remote before creating the branch (defaults to true for new branches).'
           ),
-        sourceBranch: z
-          .string()
-          .optional()
-          .describe(
-            'Base branch to fork from when creating a new branch (defaults to the repo default branch, usually "main"). ' +
-              'The new branch will be created from the tip of this branch. ' +
-              'Must exist on the remote (origin) or locally.'
-          ),
+        sourceBranch: mcpOptionalString(
+          'sourceBranch',
+          'Base branch to fork from when creating a new branch (defaults to the repo default branch, usually "main"). ' +
+            'The new branch will be created from the tip of this branch. ' +
+            'Must exist on the remote (origin) or locally.'
+        ),
         autoSuffix: z
           .boolean()
           .optional()
@@ -452,19 +445,17 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             'If branchName conflicts with an existing branch, automatically append a numeric suffix ' +
               '(e.g., "my-feature" → "my-feature-2", "my-feature-3"). Defaults to true. Set to false to get an error on conflict instead.'
           ),
-        zoneId: z
-          .string()
-          .optional()
-          .describe(
-            'Zone ID to pin the branch to (e.g., "zone-1770152859108"). ' +
-              'Places the branch inside the zone with automatic positioning (pin only, no trigger). ' +
-              'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation.'
-          ),
-        issueUrl: z.string().optional().describe('Issue URL to associate with the branch.'),
-        pullRequestUrl: z
-          .string()
-          .optional()
-          .describe('Pull request URL to associate with the branch.'),
+        zoneId: mcpOptionalString(
+          'zoneId',
+          'Zone ID to pin the branch to (e.g., "zone-1770152859108"). ' +
+            'Places the branch inside the zone with automatic positioning (pin only, no trigger). ' +
+            'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation.'
+        ),
+        issueUrl: mcpOptionalString('issueUrl', 'Issue URL to associate with the branch.'),
+        pullRequestUrl: mcpOptionalString(
+          'pullRequestUrl',
+          'Pull request URL to associate with the branch.'
+        ),
         // RBAC fields (optional, sensible defaults, safe to ignore for single-user setups)
         othersCan: z
           .enum(BRANCH_PERMISSION_LEVELS)
@@ -485,22 +476,20 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               'Has no effect in simple mode. Single-user setups can ignore this.'
           ),
         ownerIds: z
-          .array(z.string())
+          .array(mcpRequiredId('ownerIds[]', 'User', 'User ID'))
           .optional()
           .describe(
             'Additional user IDs to add as owners of this branch. ' +
               'The creating user is always added as owner automatically. ' +
               'Owners have full access regardless of othersCan/othersFsAccess settings.'
           ),
-        variant: z
-          .string()
-          .optional()
-          .describe(
-            'Environment variant name to use for this branch. ' +
-              'Must be a key in the repo environment config variants. ' +
-              'When omitted, the repo default variant is used. ' +
-              'Use agor_environment_set later to switch variants on an existing branch.'
-          ),
+        variant: mcpOptionalString(
+          'variant',
+          'Environment variant name to use for this branch. ' +
+            'Must be a key in the repo environment config variants. ' +
+            'When omitted, the repo default variant is used. ' +
+            'Use agor_environment_set later to switch variants on an existing branch.'
+        ),
         storage_mode: z
           .enum(['worktree', 'clone'])
           .optional()
@@ -512,17 +501,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               'closes cross-branch credential/config leak vectors. ' +
               'See context/explorations/clone-redesign.md.'
           ),
-        clone_depth: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe(
-            'Shallow-clone depth (only meaningful when storage_mode="clone"). ' +
-              'Positive integer → `git clone --depth N`. Omit for a full clone. ' +
-              'Common shallow value: 100. Trade-off: smaller disk footprint, but ' +
-              '`git log` past N commits is broken and some rebase operations fail.'
-          ),
+        clone_depth: mcpOptionalPositiveInt(
+          'clone_depth',
+          'Shallow-clone depth (only meaningful when storage_mode="clone"). ' +
+            'Positive integer → `git clone --depth N`. Omit for a full clone. ' +
+            'Common shallow value: 100. Trade-off: smaller disk footprint, but ' +
+            '`git log` past N commits is broken and some rebase operations fail.'
+        ),
       }),
     },
     async (args) => {
@@ -680,33 +665,32 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'Update metadata for an existing branch (issue/PR URLs, notes, board placement, custom context, RBAC permissions, owners)',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        branchId: z
-          .string()
-          .optional()
-          .describe(
-            'Branch ID to update. Optional when calling from a session with a bound branch.'
-          ),
+        branchId: mcpOptionalId(
+          'branchId',
+          'Branch',
+          'Branch ID to update. Optional when calling from a session with a bound branch.'
+        ),
         issueUrl: z
-          .string()
+          .string({ error: 'issueUrl must be a string or null when provided.' })
           .nullable()
           .optional()
           .describe('Issue URL to associate. Pass null to clear. Must be http(s) when provided.'),
         pullRequestUrl: z
-          .string()
+          .string({ error: 'pullRequestUrl must be a string or null when provided.' })
           .nullable()
           .optional()
           .describe(
             'Pull request URL to associate. Pass null to clear. Must be http(s) when provided.'
           ),
         notes: z
-          .string()
+          .string({ error: 'notes must be a string or null when provided.' })
           .nullable()
           .optional()
           .describe(
             'Freeform notes about the branch (markdown supported). Pass null or empty string to clear.'
           ),
         boardId: z
-          .string()
+          .string({ error: 'boardId must be a string or null when provided.' })
           .nullable()
           .optional()
           .describe('Board ID to place this branch on. Pass null to remove from any board.'),
@@ -718,7 +702,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             'Custom context object for templates and automations. Pass null to clear existing context.'
           ),
         mcpServerIds: z
-          .array(z.string())
+          .array(mcpRequiredId('mcpServerIds[]', 'MCP server', 'MCP server ID'))
           .nullable()
           .optional()
           .describe(
@@ -744,7 +728,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               'Has no effect in simple mode. Single-user setups can ignore this.'
           ),
         addOwnerIds: z
-          .array(z.string())
+          .array(mcpRequiredId('addOwnerIds[]', 'User', 'User ID'))
           .optional()
           .describe(
             'User IDs to ADD as owners of this branch. ' +
@@ -752,7 +736,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               'Idempotent — adding an existing owner is a no-op.'
           ),
         removeOwnerIds: z
-          .array(z.string())
+          .array(mcpRequiredId('removeOwnerIds[]', 'User', 'User ID'))
           .optional()
           .describe(
             'User IDs to REMOVE as owners of this branch. ' +
@@ -904,14 +888,20 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       description:
         "Pin a branch to a zone on a board and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session.",
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID to pin to the zone (UUIDv7 or short ID)'),
-        zoneId: z.string().describe('Zone ID to pin the branch to (e.g., "zone-1770152859108")'),
-        targetSessionId: z
-          .string()
-          .optional()
-          .describe(
-            'Session ID to send the zone trigger prompt to (required if triggerTemplate is true)'
-          ),
+        branchId: mcpRequiredId(
+          'branchId',
+          'Branch',
+          'Branch ID to pin to the zone (UUIDv7 or short ID)'
+        ),
+        zoneId: mcpRequiredString(
+          'zoneId',
+          'Zone ID to pin the branch to (e.g., "zone-1770152859108")'
+        ),
+        targetSessionId: mcpOptionalId(
+          'targetSessionId',
+          'Session',
+          'Session ID to send the zone trigger prompt to (required if triggerTemplate is true)'
+        ),
         triggerTemplate: z
           .boolean()
           .optional()
@@ -1154,7 +1144,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'Archive a branch (soft delete). Stops the environment if running, optionally cleans or deletes the filesystem, archives the branch metadata and all its sessions, and removes it from the board. Use agor_branches_unarchive to restore.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID to archive (UUIDv7 or short ID)'),
+        branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to archive (UUIDv7 or short ID)'),
         filesystemAction: z
           .enum(['preserved', 'cleaned', 'deleted'])
           .optional()
@@ -1188,8 +1178,16 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       description:
         'Restore a previously archived branch. Optionally place it back on a board. Also unarchives all sessions that were archived as part of the branch archival.',
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID to unarchive (UUIDv7 or short ID)'),
-        boardId: z.string().optional().describe('Board ID to restore the branch onto (optional)'),
+        branchId: mcpRequiredId(
+          'branchId',
+          'Branch',
+          'Branch ID to unarchive (UUIDv7 or short ID)'
+        ),
+        boardId: mcpOptionalId(
+          'boardId',
+          'Board',
+          'Board ID to restore the branch onto (optional)'
+        ),
       }),
     },
     async (args) => {
@@ -1218,7 +1216,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'Permanently delete a branch and all its sessions, messages, and tasks. This action cannot be undone. Stops the environment if running and optionally removes files from disk.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        branchId: z.string().describe('Branch ID to delete (UUIDv7 or short ID)'),
+        branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to delete (UUIDv7 or short ID)'),
         filesystemAction: z
           .enum(['preserved', 'deleted'])
           .optional()
@@ -1252,8 +1250,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         "List all assistants (long-lived agents with schedules). Returns each assistant's name, description, schedule status, and last activity timestamp. Use this to discover other assistants on the platform.",
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        repoId: z.string().optional().describe('Filter assistants by repository ID'),
-        limit: z.number().optional().describe('Maximum number of branches to scan (default: 200)'),
+        repoId: mcpOptionalId('repoId', 'Repository', 'Filter assistants by repository ID'),
+        limit: mcpLimit(200),
       }),
     },
     async (args) => {

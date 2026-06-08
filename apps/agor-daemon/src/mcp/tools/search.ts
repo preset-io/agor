@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { mcpLimit, mcpRequiredString } from '../schema.js';
 import { coerceJsonRecord, textResult } from '../server.js';
 import { ToolRegistry } from '../tool-registry.js';
 
@@ -14,6 +15,9 @@ interface RegisteredTool {
   };
   handler: (args: unknown, extra: unknown) => Promise<unknown>;
 }
+
+const DISCOVERY_HINT =
+  'Discover tool names with agor_search_tools (call with no args for domains, or with { "query": "sessions" }). Get an exact schema with agor_get_tool_details({ "tool_name": "..." }).';
 
 /**
  * Resolve tool arguments for the agor_execute_tool proxy.
@@ -72,12 +76,27 @@ function resolveToolArgs(
   return toolArgs;
 }
 
+function resolveProxyToolName(args: Record<string, unknown>): string {
+  const toolName = typeof args.tool_name === 'string' ? args.tool_name : undefined;
+  if (!toolName) {
+    const keys = Object.keys(args);
+    throw new Error(
+      `Missing required agor_execute_tool field "tool_name". ` +
+        `Use { "tool_name": "agor_branches_list", "arguments": { ... } }. ` +
+        `${DISCOVERY_HINT} ` +
+        `Received top-level keys: ${keys.length > 0 ? keys.join(', ') : '(none)'}.`
+    );
+  }
+
+  return toolName;
+}
+
 export function registerSearchTools(server: McpServer, registry: ToolRegistry): void {
   server.registerTool(
     'agor_search_tools',
     {
       description:
-        'Search and browse available Agor MCP tools. Call with no args to see domains overview. Filter by domain, keyword, or annotation. Use detail="full" to get input schemas before calling agor_execute_tool.',
+        'Search and browse available Agor MCP tools. Call with no args to see domain overview. Use query/domain filters to find matching tools. Returns concise tool summaries by default; use agor_get_tool_details for exact input schemas.',
       inputSchema: z.object({
         query: z
           .string()
@@ -95,11 +114,11 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
           .enum(['list', 'full'])
           .optional()
           .describe(
-            'Detail level: "list" returns name+description (default), "full" includes inputSchema and annotations'
+            'Detail level. Prefer "list" (default) for concise results. "full" is retained for compatibility; prefer agor_get_tool_details for exact schemas.'
           ),
         read_only: z.boolean().optional().describe('Filter to read-only tools only'),
         destructive: z.boolean().optional().describe('Filter to destructive tools only'),
-        max_results: z.number().optional().describe('Max results to return (default: 10)'),
+        max_results: mcpLimit(10).describe('Max results to return (default: 10)'),
       }),
       annotations: { readOnlyHint: true },
     },
@@ -117,7 +136,7 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
         return textResult({
           total_available: registry.size,
           domains,
-          hint: 'Use domain or query params to discover specific tools. Use detail="full" to get input schemas.',
+          hint: 'Use query/domain params to find specific tools. Then call agor_get_tool_details with the selected tool_name for the exact schema.',
         });
       }
 
@@ -128,13 +147,68 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
         destructive: args.destructive,
       });
 
-      const tools = detail === 'full' ? results : ToolRegistry.toSummaries(results);
+      const fullDetailsRequested = detail === 'full';
+      const fullDetailsReturned = fullDetailsRequested && results.length === 1;
+      const tools = fullDetailsReturned ? results : ToolRegistry.toSummaries(results);
 
       return textResult({
         total_available: registry.size,
         domains,
         results_count: results.length,
         tools,
+        hint:
+          fullDetailsRequested && !fullDetailsReturned
+            ? 'detail:"full" only returns schemas after the result set is narrowed to one tool. Use max_results:1 or, preferably, agor_get_tool_details({ tool_name }) for one exact schema at a time.'
+            : fullDetailsReturned
+              ? 'Use agor_execute_tool with this tool_name and arguments matching inputSchema.'
+              : 'Call agor_get_tool_details({ tool_name }) for the exact input schema before executing.',
+      });
+    }
+  );
+
+  server.registerTool(
+    'agor_get_tool_details',
+    {
+      description:
+        'Get exact details for one Agor MCP tool, including its input schema and annotations. Use this after agor_search_tools selects a tool and before agor_execute_tool calls it.',
+      inputSchema: z.object({
+        tool_name: mcpRequiredString(
+          'tool_name',
+          'The tool name to inspect (e.g. "agor_sessions_list")',
+          {
+            example: '{ "tool_name": "agor_sessions_list" }',
+          }
+        ),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      const tool = registry.get(args.tool_name);
+      if (!tool) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                error: `Tool "${args.tool_name}" not found.`,
+                how_to_find_tools:
+                  'Call agor_search_tools with no args for domains, or with { "query": "keyword" } / { "domain": "sessions" } to find tool names.',
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      return textResult({
+        tool,
+        usage: {
+          execute_with: {
+            tool_name: tool.name,
+            arguments: '<object matching inputSchema>',
+          },
+          note: 'Call agor_execute_tool with this tool_name and arguments matching inputSchema.',
+        },
       });
     }
   );
@@ -143,10 +217,17 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
     'agor_execute_tool',
     {
       description:
-        'Execute an Agor MCP tool by name. Use agor_search_tools first to discover available tools and their input schemas, then call this to invoke them.',
+        'Execute one Agor MCP tool by name. Expected shape: { "tool_name": "agor_sessions_list", "arguments": { ... } }. Use agor_search_tools to find tools and agor_get_tool_details for the exact schema.',
       inputSchema: z
         .object({
-          tool_name: z.string().describe('The tool name to execute (e.g. "agor_branches_list")'),
+          tool_name: mcpRequiredString(
+            'tool_name',
+            'The tool name to execute (e.g. "agor_branches_list")',
+            {
+              example:
+                '{ "tool_name": "agor_branches_list", "arguments": { ... } }. Use agor_search_tools to find tool names and agor_get_tool_details for schemas.',
+            }
+          ),
           arguments: z
             .preprocess(
               // Some MCP clients double-serialize nested objects as JSON strings.
@@ -160,29 +241,34 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
         .passthrough(),
     },
     async (args) => {
-      const toolName = args.tool_name;
-
-      const registeredTools = (
-        server as unknown as { _registeredTools: Record<string, RegisteredTool> }
-      )._registeredTools;
-
-      const tool = registeredTools[toolName];
-      if (!tool) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: `Tool "${toolName}" not found. Use agor_search_tools to discover available tools.`,
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
+      const proxyArgs = args as Record<string, unknown>;
+      let toolName: string | undefined;
 
       try {
-        const toolArgs = resolveToolArgs(args as Record<string, unknown>, tool, toolName);
+        toolName = resolveProxyToolName(proxyArgs);
+
+        const registeredTools = (
+          server as unknown as { _registeredTools: Record<string, RegisteredTool> }
+        )._registeredTools;
+
+        const tool = registeredTools[toolName];
+        if (!tool) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  error: `Tool "${toolName}" not found.`,
+                  how_to_find_tools:
+                    'Call agor_search_tools with no args for domains, or with { "query": "keyword" } / { "domain": "sessions" }. Then call agor_get_tool_details({ "tool_name": "..." }) for the exact schema.',
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const toolArgs = resolveToolArgs(proxyArgs, tool, toolName);
         const result = await tool.handler(toolArgs, {});
         return result as { content: Array<{ type: 'text'; text: string }> };
       } catch (error) {
@@ -192,7 +278,7 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
               type: 'text' as const,
               text: JSON.stringify({
                 error: error instanceof Error ? error.message : String(error),
-                tool: toolName,
+                ...(toolName && { tool: toolName }),
               }),
             },
           ],

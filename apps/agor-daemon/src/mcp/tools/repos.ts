@@ -2,6 +2,7 @@ import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/confi
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ReposServiceImpl } from '../../declarations.js';
+import { mcpLimit, mcpOptionalString, mcpRequiredId, mcpRequiredString } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -13,8 +14,8 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       description: 'List all repositories accessible to the current user',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        slug: z.string().optional().describe('Filter by repository slug'),
-        limit: z.number().optional().describe('Maximum number of results (default: 50)'),
+        slug: mcpOptionalString('slug', 'Filter by repository slug'),
+        limit: mcpLimit(50),
       }),
     },
     async (args) => {
@@ -39,7 +40,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         'in Settings → API Keys (or it has expired/lost access).',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        repoId: z.string().describe('Repository ID (UUIDv7 or short ID)'),
+        repoId: mcpRequiredId('repoId', 'Repository'),
       }),
     },
     async (args) => {
@@ -61,31 +62,24 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         '"auth_failed"`. Retrying after a failed clone is supported — the previous failed row ' +
         'is replaced.',
       inputSchema: z.object({
-        url: z
-          .string()
-          .describe(
-            'Git remote URL (https://github.com/user/repo.git or git@github.com:user/repo.git)'
-          ),
-        slug: z
-          .string()
-          .optional()
-          .describe(
-            'URL-friendly slug for the repository in org/name format (e.g., "myorg/myapp"). Required.'
-          ),
-        name: z
-          .string()
-          .optional()
-          .describe(
-            'Human-readable name for the repository. If not provided, defaults to the slug.'
-          ),
-        default_branch: z
-          .string()
-          .optional()
-          .describe(
-            "Pin a non-default branch as the repo's default (overrides origin/HEAD). " +
-              'Used when the repository\'s "default" should be a long-lived feature branch ' +
-              "rather than whatever the remote's HEAD points at."
-          ),
+        url: mcpRequiredString(
+          'url',
+          'Git remote URL (https://github.com/user/repo.git or git@github.com:user/repo.git)'
+        ),
+        slug: mcpOptionalString(
+          'slug',
+          'URL-friendly slug for the repository in org/name format (e.g., "myorg/myapp"). Required.'
+        ),
+        name: mcpOptionalString(
+          'name',
+          'Human-readable name for the repository. If not provided, defaults to the slug.'
+        ),
+        default_branch: mcpOptionalString(
+          'default_branch',
+          "Pin a non-default branch as the repo's default (overrides origin/HEAD). " +
+            'Used when the repository\'s "default" should be a long-lived feature branch ' +
+            "rather than whatever the remote's HEAD points at."
+        ),
       }),
     },
     async (args) => {
@@ -120,15 +114,14 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
     {
       description: 'Register an existing local git repository with Agor',
       inputSchema: z.object({
-        path: z
-          .string()
-          .describe('Absolute path to the local git repository. Supports ~ for home directory.'),
-        slug: z
-          .string()
-          .optional()
-          .describe(
-            'URL-friendly slug for the repository (e.g., "local/myapp"). If not provided, will be auto-derived from the repository name.'
-          ),
+        path: mcpRequiredString(
+          'path',
+          'Absolute path to the local git repository. Supports ~ for home directory.'
+        ),
+        slug: mcpOptionalString(
+          'slug',
+          'URL-friendly slug for the repository (e.g., "local/myapp"). If not provided, will be auto-derived from the repository name.'
+        ),
       }),
     },
     async (args) => {
@@ -156,28 +149,26 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         'Note: changing `slug` updates the DB only; the on-disk directory at ' +
         '~/.agor/repos/<slug> is NOT moved.',
       inputSchema: z.object({
-        repoId: z.string().describe('Repository ID (UUIDv7 or short ID)'),
-        name: z.string().optional().describe('Human-readable name'),
-        slug: z
-          .string()
-          .optional()
-          .describe('URL-friendly slug in org/name format. Must be unique across all repos.'),
+        repoId: mcpRequiredId('repoId', 'Repository'),
+        name: mcpOptionalString('name', 'Human-readable name'),
+        slug: mcpOptionalString(
+          'slug',
+          'URL-friendly slug in org/name format. Must be unique across all repos.'
+        ),
         repo_type: z
           .enum(['remote', 'local'])
           .optional()
           .describe(
             'Repository management type. Switching to "remote" requires `remote_url` (in this patch or already set on the repo).'
           ),
-        remote_url: z
-          .string()
-          .optional()
-          .describe('Git remote URL. Required when `repo_type` is "remote".'),
-        default_branch: z
-          .string()
-          .optional()
-          .describe(
-            'Default branch name used as the source for new branches that do not specify a sourceBranch.'
-          ),
+        remote_url: mcpOptionalString(
+          'remote_url',
+          'Git remote URL. Required when `repo_type` is "remote".'
+        ),
+        default_branch: mcpOptionalString(
+          'default_branch',
+          'Default branch name used as the source for new branches that do not specify a sourceBranch.'
+        ),
       }),
     },
     async (args) => {

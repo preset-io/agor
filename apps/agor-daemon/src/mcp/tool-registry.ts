@@ -48,6 +48,7 @@ const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   environment: 'Start/stop/health/logs/nuke for branch dev environments',
   boards: 'Spatial canvases with zones for organizing branches and cards',
   cards: 'Kanban-style cards and card type definitions on boards',
+  artifacts: 'Live Sandpack-style apps and DOM inspection/materialization for board artifacts',
   users: 'User accounts, profiles, preferences, and administration',
   analytics: 'Usage and cost tracking leaderboard',
   'mcp-servers': 'External MCP server configuration and OAuth management',
@@ -55,10 +56,11 @@ const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   widgets:
     'In-conversation interactive widgets — agents render small forms/buttons inline in the transcript to capture user input that never enters the LLM context',
   knowledge: 'DB-backed markdown knowledge documents, version history, search, and graph links',
+  schedules: 'Cron-based branch schedules that create sessions from prompt templates',
 };
 
 /** Tools always visible in `tools/list` even when search mode is enabled. */
-const ALWAYS_VISIBLE = new Set(['agor_search_tools', 'agor_execute_tool']);
+const ALWAYS_VISIBLE = new Set(['agor_search_tools', 'agor_get_tool_details', 'agor_execute_tool']);
 
 export class ToolRegistry {
   private tools: Map<string, ToolEntry> = new Map();
@@ -75,6 +77,10 @@ export class ToolRegistry {
 
   get size(): number {
     return this.tools.size;
+  }
+
+  get(name: string): ToolEntry | undefined {
+    return this.tools.get(name);
   }
 
   /** Return only the always-visible tools (for filtered tools/list). */

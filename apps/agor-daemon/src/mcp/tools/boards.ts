@@ -2,6 +2,14 @@ import type { Board, BoardEntityType, BoardObject, BoardObjectType } from '@agor
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
+import {
+  mcpLimit,
+  mcpOptionalNonNegativeInt,
+  mcpOptionalPositiveInt,
+  mcpOptionalString,
+  mcpRequiredId,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -40,7 +48,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         'Set includeEntities=true to include positioned branch/card entities, optionally filtered by entityZoneId/entityType and paginated with entitiesLimit/entitiesSkip.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        boardId: z.string().describe('Board ID (UUIDv7 or short ID)'),
+        boardId: mcpRequiredId('boardId', 'Board'),
         objectTypes: z
           .array(z.enum(BOARD_OBJECT_TYPES))
           .optional()
@@ -53,33 +61,35 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Include positioned entities (branches, cards) with their x/y coordinates and zone assignments (default: false). Enable when you need to know where branches are placed on the canvas.'
           ),
-        entityZoneId: z
-          .string()
-          .optional()
-          .describe(
-            'When includeEntities=true, only return positioned entities pinned to this board zone ID.'
-          ),
+        entityZoneId: mcpOptionalString(
+          'entityZoneId',
+          'When includeEntities=true, only return positioned entities pinned to this board zone ID.'
+        ),
         entityType: z
           .enum(BOARD_ENTITY_TYPES)
           .optional()
           .describe(
             'When includeEntities=true, only return positioned entities of this type ("branch" or "card").'
           ),
-        entitiesLimit: z
-          .number()
-          .int()
-          .min(0)
-          .max(10000)
-          .optional()
+        entitiesLimit: mcpOptionalPositiveInt(
+          'entitiesLimit',
+          'When includeEntities=true, maximum number of positioned entities to return. Omit to preserve legacy behavior returning all matched entities.'
+        )
+          .refine(
+            (value) => value === undefined || value <= 10000,
+            'entitiesLimit must be less than or equal to 10000.'
+          )
           .describe(
             'When includeEntities=true, maximum number of positioned entities to return. Omit to preserve legacy behavior returning all matched entities.'
           ),
-        entitiesSkip: z
-          .number()
-          .int()
-          .min(0)
-          .max(10000)
-          .optional()
+        entitiesSkip: mcpOptionalNonNegativeInt(
+          'entitiesSkip',
+          'When includeEntities=true, number of matched positioned entities to skip for pagination (default: 0).'
+        )
+          .refine(
+            (value) => value === undefined || value <= 10000,
+            'entitiesSkip must be less than or equal to 10000.'
+          )
           .describe(
             'When includeEntities=true, number of matched positioned entities to skip for pagination (default: 0).'
           ),
@@ -136,7 +146,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         'List all boards accessible to the current user. Each board includes a `url` field with a clickable link to view the board in the UI. By default, archived boards are excluded.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        limit: z.number().optional().describe('Maximum number of results (default: 50)'),
+        limit: mcpLimit(50),
         includeArchived: z
           .boolean()
           .optional()
@@ -172,22 +182,20 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         'Update board metadata and manage zones/objects. Can update name, icon, background, and create/update zones for organizing branches. Zone objects have: type="zone", x, y, width, height, label, borderColor, backgroundColor, borderStyle (optional), trigger (optional: "always_new" auto-creates sessions, "show_picker" shows agent selection). Text objects have: type="text", x, y, text, fontSize, color. Markdown objects have: type="markdown", x, y, width, height, content.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
-        boardId: z.string().describe('Board ID (UUIDv7 or short ID)'),
-        name: z.string().optional().describe('Board name (optional)'),
-        description: z.string().optional().describe('Board description (optional)'),
-        icon: z.string().optional().describe('Board icon/emoji (optional)'),
-        color: z.string().optional().describe('Board color (hex format, optional)'),
-        backgroundColor: z
-          .string()
-          .optional()
-          .describe('Board background color (hex format, optional)'),
-        customCss: z
-          .string()
-          .optional()
-          .describe(
-            'Custom CSS for board canvas animations (@keyframes, animation, background-size, etc.). Rendered in a scoped <style> tag. Dangerous patterns like url(), expression(), @import are blocked.'
-          ),
-        slug: z.string().optional().describe('URL-friendly slug (optional)'),
+        boardId: mcpRequiredId('boardId', 'Board'),
+        name: mcpOptionalString('name', 'Board name (optional)'),
+        description: mcpOptionalString('description', 'Board description (optional)'),
+        icon: mcpOptionalString('icon', 'Board icon/emoji (optional)'),
+        color: mcpOptionalString('color', 'Board color (hex format, optional)'),
+        backgroundColor: mcpOptionalString(
+          'backgroundColor',
+          'Board background color (hex format, optional)'
+        ),
+        customCss: mcpOptionalString(
+          'customCss',
+          'Custom CSS for board canvas animations (@keyframes, animation, background-size, etc.). Rendered in a scoped <style> tag. Dangerous patterns like url(), expression(), @import are blocked.'
+        ),
+        slug: mcpOptionalString('slug', 'URL-friendly slug (optional)'),
         customContext: z
           .object({})
           .passthrough()
@@ -201,7 +209,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
             'Board objects to upsert (zones, text, markdown). Keys are object IDs, values are object data.'
           ),
         removeObjects: z
-          .array(z.string())
+          .array(mcpRequiredString('removeObjects[]', 'Board object ID to remove'))
           .optional()
           .describe('Array of object IDs to remove from the board'),
       }),
@@ -262,24 +270,22 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     {
       description: 'Create a new board. Returns the created board object with its ID and URL.',
       inputSchema: z.object({
-        name: z.string().describe('Board name (required)'),
-        slug: z
-          .string()
-          .optional()
-          .describe('URL-friendly slug (optional, auto-derived from name if not provided)'),
-        description: z.string().optional().describe('Board description (optional)'),
-        icon: z.string().optional().describe('Board icon/emoji (optional, e.g. "📋")'),
-        color: z.string().optional().describe('Board color in hex format (optional)'),
-        backgroundColor: z
-          .string()
-          .optional()
-          .describe('Board background color in hex format (optional)'),
-        customCss: z
-          .string()
-          .optional()
-          .describe(
-            'Custom CSS for board canvas animations (@keyframes, animation, etc.). Optional.'
-          ),
+        name: mcpRequiredString('name', 'Board name (required)'),
+        slug: mcpOptionalString(
+          'slug',
+          'URL-friendly slug (optional, auto-derived from name if not provided)'
+        ),
+        description: mcpOptionalString('description', 'Board description (optional)'),
+        icon: mcpOptionalString('icon', 'Board icon/emoji (optional, e.g. "📋")'),
+        color: mcpOptionalString('color', 'Board color in hex format (optional)'),
+        backgroundColor: mcpOptionalString(
+          'backgroundColor',
+          'Board background color in hex format (optional)'
+        ),
+        customCss: mcpOptionalString(
+          'customCss',
+          'Custom CSS for board canvas animations (@keyframes, animation, etc.). Optional.'
+        ),
       }),
     },
     async (args) => {
@@ -311,7 +317,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         'Archive a board (soft delete). Archived boards are hidden from listings by default. Use agor_boards_unarchive to restore.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
-        boardId: z.string().describe('Board ID to archive (UUIDv7 or short ID)'),
+        boardId: mcpRequiredId('boardId', 'Board', 'Board ID to archive (UUIDv7 or short ID)'),
       }),
     },
     async (args) => {
@@ -332,7 +338,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     {
       description: 'Restore a previously archived board. The board will appear in listings again.',
       inputSchema: z.object({
-        boardId: z.string().describe('Board ID to unarchive (UUIDv7 or short ID)'),
+        boardId: mcpRequiredId('boardId', 'Board', 'Board ID to unarchive (UUIDv7 or short ID)'),
       }),
     },
     async (args) => {
