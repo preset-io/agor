@@ -436,7 +436,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           'sourceBranch',
           'Base branch to fork from when creating a new branch (defaults to the repo default branch, usually "main"). ' +
             'The new branch will be created from the tip of this branch. ' +
-            'Must exist on the remote (origin) or locally.'
+            'Must exist on the remote (origin) for clone storage mode; worktree storage mode may also use local refs.'
         ),
         autoSuffix: z
           .boolean()

@@ -11,6 +11,7 @@ import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  assertRemoteRefVisibleForClone,
   categorizeGitError,
   cloneRepo,
   createBranch,
@@ -1310,6 +1311,28 @@ describe('createBranchAsClone', () => {
     await git.commit('feature marker');
     await git.push('origin', 'feature-x');
   }
+
+  describe('assertRemoteRefVisibleForClone', () => {
+    it('accepts branches visible from the clone remote', async () => {
+      await seedRemoteWithBranches();
+
+      await expect(
+        assertRemoteRefVisibleForClone({ remoteUrl: remoteDir, ref: 'feature-x' })
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects local-only branches before clone-mode materialization', async () => {
+      await seedRemoteWithBranches();
+      const sourceDir = path.join(tempDir, 'local-only-source');
+      await simpleGit().clone(remoteDir, sourceDir);
+      const git = simpleGit(sourceDir);
+      await git.checkoutLocalBranch('local-only');
+
+      await expect(
+        assertRemoteRefVisibleForClone({ remoteUrl: remoteDir, ref: 'local-only' })
+      ).rejects.toThrow(/Clone mode cannot clone local-only or missing branch 'local-only'/);
+    });
+  });
 
   it('clones the requested branch into targetPath with a real .git/ directory', async () => {
     await seedRemoteWithBranches();

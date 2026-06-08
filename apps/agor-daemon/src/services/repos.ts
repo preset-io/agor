@@ -26,6 +26,7 @@ import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
+  assertRemoteRefVisibleForClone,
   getBranchPath,
   getDefaultBranch,
   getRemoteUrl,
@@ -649,11 +650,34 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         );
       }
     }
-    if (storageMode === 'clone' && !repo.remote_url) {
-      throw new Error(
-        `Cannot create a clone-mode branch for repo '${repo.slug}': repo has no remote_url. ` +
-          `Use storage_mode='worktree' or register the repo with a remote first.`
-      );
+    // Auth hooks (`requireMinimumRole`) guarantee `params.user` exists by
+    // the time we get here. Resolve it before clone preflight so private
+    // remotes can use the same per-user git credentials the executor will
+    // use for the eventual clone.
+    const userId = (params as AuthenticatedParams).user!.user_id as UserID;
+
+    if (storageMode === 'clone') {
+      if (!repo.remote_url) {
+        throw new Error(
+          `Cannot create a clone-mode branch for repo '${repo.slug}': repo has no remote_url. ` +
+            `Use storage_mode='worktree' or register the repo with a remote first.`
+        );
+      }
+      const cloneRemoteUrl = repo.remote_url;
+      const cloneRef = data.createBranch ? data.sourceBranch || data.ref : data.ref;
+      const usersService = this.app.service('users') as unknown as {
+        getGitEnvironment(
+          data: { userId: string },
+          params?: RepoParams
+        ): Promise<Record<string, string>>;
+      };
+      const gitEnv = await usersService.getGitEnvironment({ userId }, params);
+      await assertRemoteRefVisibleForClone({
+        remoteUrl: cloneRemoteUrl,
+        ref: cloneRef,
+        refType: data.refType || 'branch',
+        env: gitEnv,
+      });
     }
 
     if (repo.local_path) {
@@ -665,10 +689,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
     }
 
-    // NOTE: Filesystem / git-state preflights (target-dir-exists, source-ref
-    // existence, branch-already-checked-out) used to live here. They have
-    // moved to the executor / core helpers — they're git/filesystem facts,
-    // not DB facts. The executor surfaces failures via
+    // NOTE: Filesystem preflights (target-dir-exists,
+    // branch-already-checked-out) live in the executor / core helpers —
+    // they're filesystem facts, not DB facts. Clone-mode remote-ref
+    // visibility is deliberately checked above before persisting, because
+    // clone-mode cannot materialize local-only base branches and the async
+    // executor failure path otherwise leaves confusing placeholder state.
+    // The executor surfaces other materialization failures via
     // `filesystem_status='failed'` + `error_message`, which the UI already
     // renders cleanly. Daemon stays focused on DB/auth/config validation.
     // See `core.createBranch` / `createBranchAsClone` for the equivalent
@@ -711,10 +738,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       branchPath,
       repoLocalPath: repo.local_path,
     });
-
-    // Auth hooks (`requireMinimumRole`) guarantee `params.user` exists by
-    // the time we get here. Asserting non-null rather than re-checking.
-    const userId = (params as AuthenticatedParams).user!.user_id as UserID;
 
     // Get ALL used unique IDs (including archived branches) to avoid collisions.
     // Previously this queried via Feathers which excluded archived branches by default,

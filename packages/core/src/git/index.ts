@@ -35,21 +35,29 @@ import { httpUrlHasUserinfo, redactUrlUserinfo, stripHttpUrlUserinfo } from '../
  * Callers must await this and bail out on rejection.
  */
 export async function validateGitRef(ref: unknown): Promise<void> {
+  await validateNamespacedGitRef(ref, 'heads', 'Invalid git ref');
+}
+
+async function validateNamespacedGitRef(
+  ref: unknown,
+  namespace: 'heads' | 'tags',
+  errorPrefix: string
+): Promise<void> {
   if (typeof ref !== 'string') {
-    throw new Error(`Invalid git ref: expected string, got ${typeof ref}`);
+    throw new Error(`${errorPrefix}: expected string, got ${typeof ref}`);
   }
   if (ref.length === 0) {
-    throw new Error('Invalid git ref: empty string');
+    throw new Error(`${errorPrefix}: empty string`);
   }
   if (ref.startsWith('-')) {
     throw new Error(
-      `Invalid git ref: refs starting with '-' are rejected to prevent option injection`
+      `${errorPrefix}: refs starting with '-' are rejected to prevent option injection`
     );
   }
   // Whitespace, newlines, NUL — none of these are valid in refs, and a
   // newline in particular lets an attacker smuggle a second command.
   if (/[\s\0]/.test(ref)) {
-    throw new Error('Invalid git ref: contains whitespace, newline, or NUL byte');
+    throw new Error(`${errorPrefix}: contains whitespace, newline, or NUL byte`);
   }
 
   // Final authoritative check: ask git itself.
@@ -66,9 +74,9 @@ export async function validateGitRef(ref: unknown): Promise<void> {
   // out of what is meant to be a pure syntactic check.
   const { git } = createGit();
   try {
-    await git.raw(['check-ref-format', `refs/heads/${ref}`]);
+    await git.raw(['check-ref-format', `refs/${namespace}/${ref}`]);
   } catch {
-    throw new Error(`Invalid git ref: rejected by git check-ref-format: ${ref}`);
+    throw new Error(`${errorPrefix}: rejected by git check-ref-format: ${ref}`);
   }
 }
 
@@ -1309,6 +1317,65 @@ export interface CreateBranchAsCloneResult {
    * `newBranchName` when set (post-checkout); otherwise equal to `ref`.
    */
   ref: string;
+}
+
+export interface AssertRemoteRefVisibleForCloneOptions {
+  /** Remote URL/path that clone-mode will pass to `git clone`. */
+  remoteUrl: string;
+  /** Branch/tag name that clone-mode will pass to `git clone --branch`. */
+  ref: string;
+  /** Which namespace to check. Defaults to branch refs. */
+  refType?: 'branch' | 'tag';
+  /** Per-user environment variables (GITHUB_TOKEN, GH_TOKEN, …). */
+  env?: Record<string, string>;
+}
+
+/**
+ * Preflight a clone-mode base ref before Agor persists any branch/session
+ * records. Clone mode can only materialise refs visible from the clone remote
+ * (typically `origin`); a local-only branch in the daemon's base clone is not
+ * cloneable via `git clone --branch`.
+ */
+export async function assertRemoteRefVisibleForClone(
+  options: AssertRemoteRefVisibleForCloneOptions
+): Promise<void> {
+  const remoteUrl = stripGitUrlCredentials(options.remoteUrl);
+  const refType = options.refType ?? 'branch';
+  const ref = options.ref;
+
+  if (!remoteUrl) {
+    throw new Error('remoteUrl is required');
+  }
+  if (refType === 'branch') {
+    await validateGitRef(ref);
+  } else {
+    await validateNamespacedGitRef(ref, 'tags', 'Invalid git tag ref');
+  }
+
+  const { git } = createGitForRemote(remoteUrl, options.env);
+  const namespace = refType === 'tag' ? 'refs/tags' : 'refs/heads';
+  let output: string;
+  try {
+    output = await git.listRemote([
+      refType === 'tag' ? '--tags' : '--heads',
+      remoteUrl,
+      `${namespace}/${ref}`,
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot validate clone-mode ${refType} '${ref}' against remote ` +
+        `${redactGitUrlCredentials(remoteUrl)}: ${message}`
+    );
+  }
+
+  if (output.trim().length === 0) {
+    throw new Error(
+      `Clone mode cannot clone local-only or missing ${refType} '${ref}' because it is not visible on ` +
+        `the remote ${redactGitUrlCredentials(remoteUrl)}. Push '${ref}' to origin, choose a remote ` +
+        `${refType}, or use storage_mode='worktree' if it is enabled.`
+    );
+  }
 }
 
 /**
