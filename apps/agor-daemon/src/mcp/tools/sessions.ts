@@ -133,6 +133,18 @@ function filterSessionsByBranch<T extends { branch_id?: string }>(
   return { ...result, data, total: data.length };
 }
 
+function filterSessionsByBoard<T extends { branch_board_id?: string | null }>(
+  result: T[] | { data: T[]; total?: number; [key: string]: unknown },
+  boardId: string
+): T[] | { data: T[]; total?: number; [key: string]: unknown } {
+  if (Array.isArray(result)) {
+    return result.filter((session) => session.branch_board_id === boardId);
+  }
+
+  const data = result.data.filter((session) => session.branch_board_id === boardId);
+  return { ...result, data, total: data.length };
+}
+
 function redactSessionForMcp<T extends { mcp_token?: unknown }>(session: T): Omit<T, 'mcp_token'> {
   const { mcp_token: _mcpToken, ...safeSession } = session;
   return safeSession;
@@ -190,12 +202,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const query: Record<string, unknown> = {};
-      // When sessionType is set, skip service-level pagination (it runs before our filter)
-      // and apply the requested limit ourselves after filtering.
+      // When sessionType or boardId is set, skip service-level pagination
+      // (it runs before our post-query filters) and apply the requested limit
+      // ourselves after filtering.
       const requestedLimit = args.limit;
-      if (!args.sessionType && requestedLimit) query.$limit = requestedLimit;
+      const boardId = args.boardId ? await resolveBoardId(ctx, args.boardId) : undefined;
+      const needsPostQueryLimit = Boolean(args.sessionType || boardId);
+      if (!needsPostQueryLimit && requestedLimit) query.$limit = requestedLimit;
       if (args.status) query.status = args.status;
-      if (args.boardId) query.board_id = await resolveBoardId(ctx, args.boardId);
       const branchId = args.branchId ? await resolveBranchId(ctx, args.branchId) : undefined;
       if (branchId) query.branch_id = branchId;
       if (args.archived === true) {
@@ -203,35 +217,44 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       } else if (!args.includeArchived) {
         query.archived = false;
       }
-      const result = await ctx.app.service('sessions').find({ query, ...ctx.baseServiceParams });
+      const result = await ctx.app.service('sessions').find({
+        query: needsPostQueryLimit ? { ...query, $limit: 10000 } : query,
+        ...ctx.baseServiceParams,
+      });
 
       // Defense-in-depth: the sessions service normally handles branch_id in
       // its query filter, but MCP callers rely on this tool contract. Keep the
       // response scoped even if an adapter/hook layer drops or rewrites the
       // query before it reaches the repository.
       const branchScopedResult = branchId ? filterSessionsByBranch(result, branchId) : result;
+      const boardScopedResult = boardId
+        ? filterSessionsByBoard(branchScopedResult, boardId)
+        : branchScopedResult;
 
-      // Apply sessionType filter (post-query since custom_context/scheduled_from_branch aren't in query schema)
-      if (args.sessionType) {
-        const targetType = args.sessionType as SessionType;
-        const filterFn = (s: Session) => getSessionType(s) === targetType;
-        const allData: Session[] = Array.isArray(branchScopedResult)
-          ? branchScopedResult
-          : branchScopedResult.data;
-        const filtered = allData.filter(filterFn);
+      // Apply post-query filters. sessionType is derived from fields that are
+      // not in the query schema. boardId is exposed on Session as
+      // branch_board_id via the branch join, not sessions.board_id (legacy
+      // column is null for branch-backed sessions).
+      if (needsPostQueryLimit) {
+        const allData: Session[] = Array.isArray(boardScopedResult)
+          ? boardScopedResult
+          : boardScopedResult.data;
+        const filtered = args.sessionType
+          ? allData.filter((s) => getSessionType(s) === (args.sessionType as SessionType))
+          : allData;
         const limited = requestedLimit ? filtered.slice(0, requestedLimit) : filtered;
 
-        if (Array.isArray(branchScopedResult)) {
+        if (Array.isArray(boardScopedResult)) {
           return textResult(limited.map(redactSessionForMcp));
         }
         return textResult({
-          ...branchScopedResult,
+          ...boardScopedResult,
           data: limited.map(redactSessionForMcp),
           total: filtered.length,
         });
       }
 
-      return textResult(redactSessionFindResult(branchScopedResult));
+      return textResult(redactSessionFindResult(boardScopedResult));
     }
   );
 
@@ -1243,7 +1266,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Build service query for non-archived sessions
       const query: Record<string, unknown> = { archived: false };
       if (args.status) query.status = args.status;
-      if (args.boardId) query.board_id = await resolveBoardId(ctx, args.boardId);
+      const boardId = args.boardId ? await resolveBoardId(ctx, args.boardId) : undefined;
       if (args.branchId) query.branch_id = await resolveBranchId(ctx, args.branchId);
 
       // Fetch all matching sessions (paginate through all results)
@@ -1267,6 +1290,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         : null;
 
       const toArchive = allSessions.filter((s) => {
+        if (boardId && s.branch_board_id !== boardId) return false;
         if (args.sessionType && getSessionType(s) !== args.sessionType) return false;
         if (cutoffDate) {
           const lastUpdated = new Date(s.last_updated || s.created_at);

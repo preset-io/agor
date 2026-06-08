@@ -189,6 +189,55 @@ describe('agor_sessions_list', () => {
     expect(parsed.data[0].session_id).toBe('sess-target');
     expect(parsed.data[0]).not.toHaveProperty('mcp_token');
   });
+
+  it('filters boardId using session.branch_board_id instead of legacy sessions.board_id', async () => {
+    const findCalls: unknown[] = [];
+    const app = makeFakeApp({
+      sessions: {
+        find: async (params: unknown) => {
+          findCalls.push(params);
+          return {
+            total: 2,
+            limit: 10000,
+            skip: 0,
+            data: [
+              {
+                session_id: 'sess-on-board',
+                branch_id: 'wt-1',
+                branch_board_id: 'board-1',
+                status: 'idle',
+                mcp_token: 'tok1',
+              },
+              {
+                session_id: 'sess-other-board',
+                branch_id: 'wt-2',
+                branch_board_id: 'board-2',
+                status: 'idle',
+                mcp_token: 'tok2',
+              },
+            ],
+          };
+        },
+      },
+    });
+
+    const { agor_sessions_list } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_list']
+    );
+
+    const result = await agor_sessions_list({ boardId: 'board-1', limit: 10 });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(findCalls[0]).toMatchObject({
+      query: { archived: false, $limit: 10000 },
+    });
+    expect(findCalls[0]).not.toMatchObject({ query: { board_id: 'board-1' } });
+    expect(parsed.total).toBe(1);
+    expect(parsed.data).toHaveLength(1);
+    expect(parsed.data[0].session_id).toBe('sess-on-board');
+    expect(parsed.data[0]).not.toHaveProperty('mcp_token');
+  });
 });
 
 describe('agor_sessions_get', () => {

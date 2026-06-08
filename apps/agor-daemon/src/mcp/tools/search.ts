@@ -62,7 +62,15 @@ function resolveToolArgs(
   if (tool.inputSchema && typeof tool.inputSchema.safeParse === 'function') {
     const parseResult = tool.inputSchema.safeParse(toolArgs);
     if (parseResult.success) {
-      return parseResult.data as Record<string, unknown>;
+      const parsedArgs = parseResult.data as Record<string, unknown>;
+      const unknownArgs = Object.keys(toolArgs).filter((key) => !Object.hasOwn(parsedArgs, key));
+      if (unknownArgs.length > 0) {
+        throw new Error(
+          `Invalid arguments for tool ${toolName}: unknown argument${unknownArgs.length === 1 ? '' : 's'} ${unknownArgs.map((arg) => `"${arg}"`).join(', ')}. ` +
+            `Call agor_get_tool_details({ "tool_name": "${toolName}" }) for the exact schema.`
+        );
+      }
+      return parsedArgs;
     }
     // Surface validation errors instead of letting them manifest as
     // confusing downstream failures (e.g. "Board not found: undefined").

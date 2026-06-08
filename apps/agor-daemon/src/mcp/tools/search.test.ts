@@ -148,6 +148,24 @@ describe('agor_execute_tool', () => {
     expect(parsed.how_to_find_tools).toMatch(/agor_search_tools/);
     expect(parsed.how_to_find_tools).toMatch(/agor_get_tool_details/);
   });
+
+  it('rejects unknown target-tool arguments instead of silently stripping them', async () => {
+    const { handler, targetHandler } = captureExecuteTool();
+
+    const result = await handler({
+      tool_name: 'agor_sessions_list',
+      arguments: {
+        limit: 1,
+        definitelyNotAParam: 'typo',
+      },
+    });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(parsed.error).toMatch(/unknown argument "definitelyNotAParam"/);
+    expect(parsed.error).toMatch(/agor_get_tool_details/);
+    expect(targetHandler).not.toHaveBeenCalled();
+  });
 });
 
 describe('agor_get_tool_details', () => {
