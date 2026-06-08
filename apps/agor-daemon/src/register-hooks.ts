@@ -104,8 +104,8 @@ import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
-  redactMCPServerHeaderSecrets,
-  shouldExposeMCPHeaderSecrets,
+  redactMCPServerSecrets,
+  shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
@@ -1214,15 +1214,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const redactMCPHeaderSecrets = async (context: HookContext) => {
-    if (shouldExposeMCPHeaderSecrets(context.params)) return context;
+  const redactMCPServerSecretFields = async (context: HookContext) => {
+    if (shouldExposeMCPServerSecrets(context.params)) return context;
 
     if (Array.isArray(context.result)) {
-      context.result = context.result.map(redactMCPServerHeaderSecrets);
+      context.result = context.result.map(redactMCPServerSecrets);
     } else if (context.result?.data && Array.isArray(context.result.data)) {
-      context.result.data = context.result.data.map(redactMCPServerHeaderSecrets);
+      context.result.data = context.result.data.map(redactMCPServerSecrets);
     } else if (context.result?.mcp_server_id) {
-      context.result = redactMCPServerHeaderSecrets(context.result);
+      context.result = redactMCPServerSecrets(context.result);
     }
 
     return context;
@@ -1239,11 +1239,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
     },
     after: {
-      find: [injectPerUserOAuthTokens, redactMCPHeaderSecrets],
-      get: [injectPerUserOAuthTokens, redactMCPHeaderSecrets],
-      create: [redactMCPHeaderSecrets],
-      patch: [redactMCPHeaderSecrets],
-      update: [redactMCPHeaderSecrets],
+      find: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
+      get: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
+      create: [redactMCPServerSecretFields],
+      patch: [redactMCPServerSecretFields],
+      update: [redactMCPServerSecretFields],
     },
   });
 
@@ -1259,7 +1259,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
     after: {
-      find: [injectPerUserOAuthTokens],
+      find: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
     },
   });
 

@@ -191,32 +191,32 @@ export class FeathersSessionMCPServersRepository {
    * @returns Array of MCPServer objects
    */
   async listServers(sessionId: SessionID, enabledOnly?: boolean): Promise<MCPServer[]> {
-    // Get session-mcp-server join records
-    const query: Record<string, unknown> = {
-      session_id: sessionId,
-      $limit: 1000,
-    };
+    const service = this.client.service(`/sessions/${sessionId}/mcp-servers`);
+    const query: Record<string, unknown> = {};
 
     if (enabledOnly) {
-      query.enabled = true;
+      query.enabledOnly = true;
     }
 
-    const sessionMCPService = this.client.service('session-mcp-servers');
-    const result = await sessionMCPService.find({ query });
-    const sessionMCPServers = (Array.isArray(result) ? result : result.data) as SessionMCPServer[];
+    const result = await service.find({ query });
+    return (Array.isArray(result) ? result : result.data) as MCPServer[];
+  }
 
-    // Get full MCPServer objects for each join record
-    const mcpServerService = this.client.service('mcp-servers');
-    const servers: MCPServer[] = [];
+  /**
+   * List the effective MCP servers for a session (global + session-assigned).
+   * Executors use the session-scoped route so session-token callers can receive
+   * the raw config needed to launch only their own session's MCP servers.
+   */
+  async listEffectiveServers(sessionId: SessionID, enabledOnly?: boolean): Promise<MCPServer[]> {
+    const service = this.client.service(`/sessions/${sessionId}/mcp-servers`);
+    const query: Record<string, unknown> = { includeGlobal: true };
 
-    for (const link of sessionMCPServers) {
-      try {
-        const server = await mcpServerService.get(link.mcp_server_id);
-        servers.push(server);
-      } catch (_error) {}
+    if (enabledOnly) {
+      query.enabledOnly = true;
     }
 
-    return servers;
+    const result = await service.find({ query });
+    return (Array.isArray(result) ? result : result.data) as MCPServer[];
   }
 
   /**

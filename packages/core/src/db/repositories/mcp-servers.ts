@@ -15,6 +15,7 @@ import type {
 } from '@agor/core/types';
 import { and, eq, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import { restoreRedactedMCPAuthSecrets } from '../../tools/mcp/auth-secrets';
 import {
   normalizeMCPCustomHeaders,
   restoreRedactedMCPCustomHeaders,
@@ -263,6 +264,12 @@ export class MCPServerRepository
         merged.headers = restoreRedactedMCPCustomHeaders({
           current: current.headers,
           next: updates.headers,
+        });
+      }
+      if ('auth' in updates) {
+        merged.auth = restoreRedactedMCPAuthSecrets({
+          current: current.auth,
+          next: updates.auth,
         });
       }
       const insertData = this.mcpServerToInsert(merged);

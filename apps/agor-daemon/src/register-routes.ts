@@ -108,8 +108,8 @@ import {
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
 import {
-  redactMCPServerHeaderSecrets,
-  shouldExposeMCPHeaderSecrets,
+  redactMCPServerSecrets,
+  shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
 import { canControlCliSession } from './utils/mcp-token-authorization.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
@@ -3098,6 +3098,29 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     );
   }
 
+  // Route-side wrapper for session-scoped runtime configuration. These
+  // settings can influence what a session process receives, so branch-level
+  // read/write tiers are not enough: only the session creator or a global
+  // admin/superadmin may read or mutate them.
+  const requireSessionScopedConfigOwnerOrAdmin = async (
+    sessionId: string,
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+    params: any
+  ): Promise<void> => {
+    const user = params?.user;
+    if (!user) {
+      throw new NotAuthenticated('Authentication required');
+    }
+    // Fast-path for service accounts — skip the session lookup entirely.
+    if (user._isServiceAccount) return;
+
+    const session = await sessionsService.get(sessionId, { provider: undefined });
+    if (!session) {
+      throw new NotFound(`Session not found: ${sessionId}`);
+    }
+    checkSessionOwnerOrAdmin(user, session, superadminOpts);
+  };
+
   // ============================================================================
   // Session MCP servers routes
   // ============================================================================
@@ -3110,21 +3133,70 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         async find(_data: unknown, params: RouteParams) {
           const id = params.route?.id;
           if (!id) throw new Error('Session ID required');
+          await requireSessionScopedConfigOwnerOrAdmin(id, params);
           const enabledOnly =
             params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
-          const servers = await sessionMCPServersService.listServers(
+          const includeGlobal =
+            params.query?.includeGlobal === 'true' || params.query?.includeGlobal === true;
+          const sessionServerRefs = await sessionMCPServersService.listServers(
             id as import('@agor/core/types').SessionID,
             enabledOnly,
             params
           );
-          return shouldExposeMCPHeaderSecrets(params)
+          const mcpService = app.service('mcp-servers');
+          const userId = params.user?.user_id;
+          const rawLookupParams = {
+            ...params,
+            provider: undefined,
+            query: {
+              ...(userId ? { forUserId: userId } : {}),
+            },
+          };
+          const sessionServers = await Promise.all(
+            sessionServerRefs.map(async (server) => {
+              try {
+                return await mcpService.get(server.mcp_server_id, rawLookupParams);
+              } catch (_error) {
+                return server;
+              }
+            })
+          );
+          const globalQuery = {
+            scope: 'global',
+            ...(enabledOnly ? { enabled: true } : {}),
+            ...(userId ? { forUserId: userId } : {}),
+            $limit: 1000,
+          };
+          const globalResult = includeGlobal
+            ? await mcpService.find({
+                ...params,
+                provider: undefined,
+                query: globalQuery,
+              })
+            : [];
+          const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
+          const servers = includeGlobal
+            ? [
+                ...new Map(
+                  [...globalServers, ...sessionServers].map((server) => [
+                    server.mcp_server_id,
+                    server,
+                  ])
+                ).values(),
+              ]
+            : sessionServers;
+          return shouldExposeMCPServerSecrets(params, {
+            allowSessionToken: true,
+            sessionId: id,
+          })
             ? servers
-            : servers.map(redactMCPServerHeaderSecrets);
+            : servers.map(redactMCPServerSecrets);
         },
         async create(data: { mcpServerId: string }, params: RouteParams) {
           const id = params.route?.id;
           if (!id) throw new Error('Session ID required');
           if (!data.mcpServerId) throw new Error('MCP Server ID required');
+          await requireSessionScopedConfigOwnerOrAdmin(id, params);
 
           await sessionMCPServersService.addServer(
             id as import('@agor/core/types').SessionID,
@@ -3146,6 +3218,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const id = params.route?.id;
           if (!id) throw new Error('Session ID required');
           if (!mcpId) throw new Error('MCP Server ID required');
+          await requireSessionScopedConfigOwnerOrAdmin(id, params);
 
           await sessionMCPServersService.removeServer(
             id as import('@agor/core/types').SessionID,
@@ -3166,6 +3239,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (!id) throw new Error('Session ID required');
           if (!mcpId) throw new Error('MCP Server ID required');
           if (typeof data.enabled !== 'boolean') throw new Error('enabled field required');
+          await requireSessionScopedConfigOwnerOrAdmin(id, params);
           return sessionMCPServersService.toggleServer(
             id as import('@agor/core/types').SessionID,
             mcpId as import('@agor/core/types').MCPServerID,
@@ -3197,29 +3271,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Branch `all` permission does NOT grant access — selections expose the
   // creator's private credentials to the executor process.
   // ============================================================================
-
-  // Route-side RBAC wrapper: loads the session, then delegates to the shared
-  // `checkSessionOwnerOrAdmin` helper used by the Feathers hook. Keeps the
-  // policy in a single place (see `utils/branch-authorization.ts`) and
-  // respects the daemon's configured `allowSuperadmin` via `superadminOpts`.
-  const requireSessionOwnerOrAdmin = async (
-    sessionId: string,
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
-    params: any
-  ): Promise<void> => {
-    const user = params?.user;
-    if (!user) {
-      throw new NotAuthenticated('Authentication required');
-    }
-    // Fast-path for service accounts — skip the session lookup entirely.
-    if (user._isServiceAccount) return;
-
-    const session = await sessionsService.get(sessionId, { provider: undefined });
-    if (!session) {
-      throw new NotFound(`Session not found: ${sessionId}`);
-    }
-    checkSessionOwnerOrAdmin(user, session, superadminOpts);
-  };
 
   // Validate + normalize an `envVarNames` payload: every entry must be a
   // non-empty string, with leading/trailing whitespace trimmed and duplicates
@@ -3256,7 +3307,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
         // Read permission: session creator OR admin (no branch tier).
-        await requireSessionOwnerOrAdmin(id, params);
+        await requireSessionScopedConfigOwnerOrAdmin(id, params);
         const rows = await sessionEnvSelectionsService.list(id as SessionID, params);
         return rows.map((r) => r.env_var_name);
       },
@@ -3268,7 +3319,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         const name = data.envVarName.trim();
         if (!name) throw new BadRequest('envVarName must be non-empty');
-        await requireSessionOwnerOrAdmin(id, params);
+        await requireSessionScopedConfigOwnerOrAdmin(id, params);
         await sessionEnvSelectionsService.add(id as SessionID, name, params);
         const relationship = {
           session_id: id,
@@ -3285,7 +3336,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
         if (!name) throw new BadRequest('env var name required');
-        await requireSessionOwnerOrAdmin(id, params);
+        await requireSessionScopedConfigOwnerOrAdmin(id, params);
         await sessionEnvSelectionsService.remove(id as SessionID, name, params);
         const relationship = {
           session_id: id,
@@ -3302,7 +3353,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
         const envVarNames = normalizeEnvVarNames(data?.envVarNames);
-        await requireSessionOwnerOrAdmin(id, params);
+        await requireSessionScopedConfigOwnerOrAdmin(id, params);
         await sessionEnvSelectionsService.setAll(id as SessionID, envVarNames, params);
         try {
           app

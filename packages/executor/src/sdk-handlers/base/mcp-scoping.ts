@@ -85,49 +85,52 @@ export async function getMcpServersForSession(
     // Track seen server IDs to prevent duplicates
     const seenServerIds = new Set<string>();
 
-    // STEP 1: Get ALL global-scoped MCP servers (available to all sessions)
-    // Pass forUserId for per-user OAuth token injection
-    console.log(`   [MCP Scoping] Calling findAll with forUserId: ${deps.forUserId || 'NOT SET'}`);
-    const globalServers = await deps.mcpServerRepo.findAll(
-      {
-        scope: 'global',
-        enabled: true,
-      },
-      deps.forUserId
-    );
-
-    console.log(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
-
-    for (const server of globalServers ?? []) {
+    const addServer = (server: MCPServer, source: MCPServerWithSource['source']) => {
       if (!seenServerIds.has(server.mcp_server_id)) {
         seenServerIds.add(server.mcp_server_id);
-        servers.push({
-          server,
-          source: 'global',
-        });
-      } else {
-        console.warn(
-          `   ⚠️  Skipping duplicate global MCP server: ${server.name} (${server.mcp_server_id})`
-        );
+        servers.push({ server, source });
+        return;
       }
-    }
 
-    // STEP 2: Get session-scoped MCP servers assigned to this specific session
-    const sessionServers = await deps.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
+      console.warn(
+        `   ⚠️  Skipping duplicate ${source} MCP server: ${server.name} (${server.mcp_server_id})`
+      );
+    };
 
-    console.log(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
+    if (typeof deps.sessionMCPRepo.listEffectiveServers === 'function') {
+      const effectiveServers = await deps.sessionMCPRepo.listEffectiveServers(sessionId, true);
+      console.log(`   📍 Effective session scope: ${effectiveServers.length} server(s)`);
 
-    for (const server of sessionServers) {
-      if (!seenServerIds.has(server.mcp_server_id)) {
-        seenServerIds.add(server.mcp_server_id);
-        servers.push({
-          server,
-          source: 'session-assigned',
-        });
-      } else {
-        console.warn(
-          `   ⚠️  Skipping duplicate session-assigned MCP server: ${server.name} (${server.mcp_server_id})`
-        );
+      for (const server of effectiveServers) {
+        addServer(server, server.scope === 'global' ? 'global' : 'session-assigned');
+      }
+    } else {
+      // STEP 1: Get ALL global-scoped MCP servers (available to all sessions)
+      // Pass forUserId for per-user OAuth token injection
+      console.log(
+        `   [MCP Scoping] Calling findAll with forUserId: ${deps.forUserId || 'NOT SET'}`
+      );
+      const globalServers = await deps.mcpServerRepo.findAll(
+        {
+          scope: 'global',
+          enabled: true,
+        },
+        deps.forUserId
+      );
+
+      console.log(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
+
+      for (const server of globalServers ?? []) {
+        addServer(server, 'global');
+      }
+
+      // STEP 2: Get session-scoped MCP servers assigned to this specific session
+      const sessionServers = await deps.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
+
+      console.log(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
+
+      for (const server of sessionServers) {
+        addServer(server, 'session-assigned');
       }
     }
 

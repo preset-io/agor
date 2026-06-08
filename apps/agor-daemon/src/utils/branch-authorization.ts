@@ -1454,9 +1454,8 @@ export function checkSessionOwnerOrAdmin(
   }
 
   throw new Forbidden(
-    "Only the session's creator or an admin can modify this session's env var selections. " +
-      "Branch 'all' permission does NOT grant access — session env selections expose the " +
-      "creator's private credentials to the executor process."
+    "Only the session's creator or an admin can access this session-scoped runtime configuration. " +
+      "Branch 'all' permission does NOT grant access."
   );
 }
 
