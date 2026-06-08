@@ -34,6 +34,79 @@ interface PendingUnitRow {
   content_md5: string | null;
 }
 
+export interface KnowledgeEmbeddingReuseSqlParams {
+  embeddingSpaceId: string;
+  model: string;
+  dimensions: number;
+  limit: number;
+}
+
+export function buildKnowledgeEmbeddingReuseSql(params: KnowledgeEmbeddingReuseSqlParams) {
+  return sql`WITH pending AS (
+            SELECT unit_id, content_md5
+            FROM kb_document_units
+            WHERE embedding_status IN ('pending', 'stale')
+              AND content_text IS NOT NULL
+              AND content_md5 IS NOT NULL
+            ORDER BY created_at
+            LIMIT ${params.limit}
+          ), candidates AS (
+            SELECT DISTINCT ON (p.unit_id)
+              p.unit_id AS new_unit_id,
+              e.content_sha256,
+              old_u.embedding_hash,
+              e.embedding,
+              e.token_count
+            FROM pending p
+            JOIN kb_document_units old_u
+              ON old_u.content_md5 = p.content_md5
+             AND old_u.unit_id <> p.unit_id
+             AND old_u.embedding_status = 'ready'
+             AND old_u.embedding_model = ${params.model}
+             AND old_u.embedding_dimensions = ${params.dimensions}
+            JOIN kb_unit_embeddings e
+              ON e.unit_id = old_u.unit_id
+             AND e.embedding_space_id = ${params.embeddingSpaceId}
+            ORDER BY p.unit_id, old_u.updated_at DESC NULLS LAST, old_u.created_at DESC
+          ), upserted AS (
+            INSERT INTO kb_unit_embeddings (
+              unit_id,
+              embedding_space_id,
+              content_sha256,
+              embedding,
+              token_count,
+              created_at,
+              updated_at
+            )
+            SELECT
+              new_unit_id,
+              ${params.embeddingSpaceId},
+              content_sha256,
+              embedding,
+              token_count,
+              now(),
+              now()
+            FROM candidates
+            ON CONFLICT (unit_id, embedding_space_id) DO UPDATE SET
+              content_sha256 = EXCLUDED.content_sha256,
+              embedding = EXCLUDED.embedding,
+              token_count = EXCLUDED.token_count,
+              updated_at = now()
+            RETURNING unit_id
+          )
+          UPDATE kb_document_units u
+          SET embedding_status = 'ready',
+              embedding_model = ${params.model},
+              embedding_dimensions = ${params.dimensions},
+              embedding_hash = COALESCE(candidates.embedding_hash, candidates.content_sha256),
+              embedding_error = NULL,
+              updated_at = now()
+          FROM upserted
+          JOIN candidates ON candidates.new_unit_id = upserted.unit_id
+          WHERE u.unit_id = upserted.unit_id
+          RETURNING u.unit_id`;
+}
+
 export class KnowledgeEmbeddingIndexer {
   private intervalHandle?: NodeJS.Timeout;
   private running = false;
@@ -137,6 +210,11 @@ export class KnowledgeEmbeddingIndexer {
    * the embedding provider. Reuse is scoped to the exact embedding space id
    * (provider + model + dimensions + storage/distance), so a model or
    * provider change leaves chunks pending for fresh embeddings.
+   *
+   * `kb_unit_embeddings.content_sha256` records the exact text that produced
+   * the stored vector. During normalized-hash reuse this may intentionally
+   * differ from the new unit's byte-level content while `embedding_hash` keeps
+   * the normalized chunk hash used for reuse/staleness decisions.
    */
   private async reuseExistingEmbeddings(params: {
     embeddingSpaceId: string;
@@ -144,72 +222,7 @@ export class KnowledgeEmbeddingIndexer {
     dimensions: number;
     limit: number;
   }): Promise<number> {
-    const result = await executeRaw(
-      this.db,
-      sql`WITH pending AS (
-            SELECT unit_id, content_md5
-            FROM kb_document_units
-            WHERE embedding_status IN ('pending', 'stale')
-              AND content_text IS NOT NULL
-              AND content_md5 IS NOT NULL
-            ORDER BY created_at
-            LIMIT ${params.limit}
-          ), candidates AS (
-            SELECT DISTINCT ON (p.unit_id)
-              p.unit_id AS new_unit_id,
-              e.content_sha256,
-              old_u.embedding_hash,
-              e.embedding,
-              e.token_count
-            FROM pending p
-            JOIN kb_document_units old_u
-              ON old_u.content_md5 = p.content_md5
-             AND old_u.unit_id <> p.unit_id
-             AND old_u.embedding_status = 'ready'
-             AND old_u.embedding_model = ${params.model}
-             AND old_u.embedding_dimensions = ${params.dimensions}
-            JOIN kb_unit_embeddings e
-              ON e.unit_id = old_u.unit_id
-             AND e.embedding_space_id = ${params.embeddingSpaceId}
-            ORDER BY p.unit_id, old_u.updated_at DESC NULLS LAST, old_u.created_at DESC
-          ), upserted AS (
-            INSERT INTO kb_unit_embeddings (
-              unit_id,
-              embedding_space_id,
-              content_sha256,
-              embedding,
-              token_count,
-              created_at,
-              updated_at
-            )
-            SELECT
-              new_unit_id,
-              ${params.embeddingSpaceId},
-              content_sha256,
-              embedding,
-              token_count,
-              now(),
-              now()
-            FROM candidates
-            ON CONFLICT (unit_id, embedding_space_id) DO UPDATE SET
-              content_sha256 = EXCLUDED.content_sha256,
-              embedding = EXCLUDED.embedding,
-              token_count = EXCLUDED.token_count,
-              updated_at = now()
-            RETURNING unit_id
-          )
-          UPDATE kb_document_units u
-          SET embedding_status = 'ready',
-              embedding_model = ${params.model},
-              embedding_dimensions = ${params.dimensions},
-              embedding_hash = COALESCE(candidates.embedding_hash, candidates.content_sha256),
-              embedding_error = NULL,
-              updated_at = now()
-          FROM upserted
-          JOIN candidates ON candidates.new_unit_id = upserted.unit_id
-          WHERE u.unit_id = upserted.unit_id
-          RETURNING u.unit_id`
-    );
+    const result = await executeRaw(this.db, buildKnowledgeEmbeddingReuseSql(params));
     return this.mutationCount(result);
   }
 

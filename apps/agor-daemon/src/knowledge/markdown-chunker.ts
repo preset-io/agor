@@ -42,7 +42,7 @@ const DEFAULTS: Required<MarkdownChunkerOptions> = {
   minTokens: 80,
   includeHeadingPath: true,
   includeDocumentTitle: true,
-  chunkerVersion: 'agor-markdown-remark-v1',
+  chunkerVersion: 'agor-markdown-remark-v2',
 };
 
 function estimateTokens(text: string): number {
@@ -56,13 +56,47 @@ function md5(text: string): string {
 }
 
 export function normalizeKnowledgeChunkForHash(text: string): string {
-  return text
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((line) => line.replace(/[\t ]+$/g, ''))
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const normalized: string[] = [];
+  let inFence: { marker: '`' | '~'; length: number } | null = null;
+  let pendingBlankLines = 0;
+
+  const flushOutsideBlankLines = () => {
+    if (pendingBlankLines === 0) return;
+    normalized.push(...Array.from({ length: Math.min(pendingBlankLines, 2) }, () => ''));
+    pendingBlankLines = 0;
+  };
+
+  for (const line of lines) {
+    if (inFence) {
+      normalized.push(line);
+      const close = line.match(/^ {0,3}([`~]{3,})\s*$/);
+      if (close?.[1]?.startsWith(inFence.marker) && close[1].length >= inFence.length) {
+        inFence = null;
+      }
+      continue;
+    }
+
+    const trimmedLine = line.replace(/[\t ]+$/g, '');
+    const open = trimmedLine.match(/^ {0,3}([`~]{3,})/);
+    if (open?.[1]) {
+      flushOutsideBlankLines();
+      normalized.push(trimmedLine);
+      inFence = { marker: open[1][0] as '`' | '~', length: open[1].length };
+      continue;
+    }
+
+    if (trimmedLine.length === 0) {
+      pendingBlankLines += 1;
+      continue;
+    }
+
+    flushOutsideBlankLines();
+    normalized.push(trimmedLine);
+  }
+
+  flushOutsideBlankLines();
+  return normalized.join('\n').trim();
 }
 
 function slugify(value: string): string {
@@ -290,7 +324,7 @@ export function chunkMarkdownForKnowledge(
         metadata: {
           chunker_version: opts.chunkerVersion,
           estimated_tokens: estimateTokens(content),
-          hash_normalization: 'line-endings-trailing-space-blank-lines-v1',
+          hash_normalization: 'markdown-fence-aware-v1',
           split_index: index,
           split_count: bodies.length,
         },
@@ -314,7 +348,7 @@ export function chunkMarkdownForKnowledge(
         ...prior.metadata,
         merged: true,
         estimated_tokens: estimateTokens(prior.content_text),
-        hash_normalization: 'line-endings-trailing-space-blank-lines-v1',
+        hash_normalization: 'markdown-fence-aware-v1',
       };
     } else {
       merged.push({ ...chunk });

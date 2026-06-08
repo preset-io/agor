@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chunkMarkdownForKnowledge } from './markdown-chunker';
+import { chunkMarkdownForKnowledge, normalizeKnowledgeChunkForHash } from './markdown-chunker';
 
 describe('chunkMarkdownForKnowledge', () => {
   it('honors chunking limits for oversized single-line content', () => {
@@ -87,5 +87,61 @@ describe('chunkMarkdownForKnowledge', () => {
     );
 
     expect(spaceChunk?.content_md5).toBe(cleanChunk?.content_md5);
+  });
+
+  it('keeps hashes stable for excessive blank lines outside fenced code', () => {
+    const compact = ['# Page', '', '## Stable', '', 'Line one', '', 'Line two'].join('\n');
+    const spaced = ['# Page', '', '## Stable', '', 'Line one', '', '', '', 'Line two'].join('\n');
+
+    const compactChunk = chunkMarkdownForKnowledge(compact, { minTokens: 1 }).find(
+      (chunk) => chunk.heading_path === 'Page > Stable'
+    );
+    const spacedChunk = chunkMarkdownForKnowledge(spaced, { minTokens: 1 }).find(
+      (chunk) => chunk.heading_path === 'Page > Stable'
+    );
+
+    expect(spacedChunk?.content_md5).toBe(compactChunk?.content_md5);
+  });
+
+  it('does not collapse blank lines inside fenced code for hashing', () => {
+    const oneBlank = [
+      '# Page',
+      '',
+      '## Code',
+      '',
+      '```js',
+      'const x = 1;',
+      '',
+      'const y = 2;',
+      '```',
+    ].join('\n');
+    const manyBlanks = [
+      '# Page',
+      '',
+      '## Code',
+      '',
+      '```js',
+      'const x = 1;',
+      '',
+      '',
+      '',
+      'const y = 2;',
+      '```',
+    ].join('\n');
+
+    const oneBlankChunk = chunkMarkdownForKnowledge(oneBlank, { minTokens: 1 }).find(
+      (chunk) => chunk.heading_path === 'Page > Code'
+    );
+    const manyBlanksChunk = chunkMarkdownForKnowledge(manyBlanks, { minTokens: 1 }).find(
+      (chunk) => chunk.heading_path === 'Page > Code'
+    );
+
+    expect(manyBlanksChunk?.content_md5).not.toBe(oneBlankChunk?.content_md5);
+  });
+
+  it('preserves trailing whitespace inside fenced code for direct hash normalization', () => {
+    expect(normalizeKnowledgeChunkForHash('```\nvalue\n```')).not.toBe(
+      normalizeKnowledgeChunkForHash('```\nvalue  \n```')
+    );
   });
 });
