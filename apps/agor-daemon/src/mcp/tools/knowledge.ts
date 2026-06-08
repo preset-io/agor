@@ -39,9 +39,11 @@ import { resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
   mcpOptionalId,
+  mcpOptionalNonBlankString,
   mcpOptionalPositiveInt,
   mcpOptionalString,
   mcpRequiredId,
+  mcpRequiredPositiveInt,
   mcpRequiredString,
 } from '../schema.js';
 import type { McpContext } from '../server.js';
@@ -53,23 +55,6 @@ const KnowledgeVisibilitySchema = z.enum(KNOWLEDGE_VISIBILITIES);
 const KnowledgeEditPolicySchema = z.enum(KNOWLEDGE_EDIT_POLICIES);
 const KnowledgeGraphNodeTypeSchema = z.enum(KNOWLEDGE_GRAPH_NODE_TYPES);
 const KnowledgeGraphEdgeTypeSchema = z.enum(KNOWLEDGE_GRAPH_EDGE_TYPES);
-
-function mcpRequiredPositiveInt(fieldName: string, description: string) {
-  return z
-    .number({
-      error: `${fieldName} is required and must be a positive integer.`,
-    })
-    .int(`${fieldName} must be an integer.`)
-    .positive(`${fieldName} must be greater than 0.`)
-    .describe(description);
-}
-
-function mcpOptionalNonEmptyString(fieldName: string, description: string) {
-  return mcpOptionalString(fieldName, description).refine(
-    (value) => value === undefined || value.trim().length > 0,
-    `${fieldName} cannot be empty.`
-  );
-}
 
 function mcpOptionalVersionToken(fieldName: string, description: string) {
   return z
@@ -142,9 +127,9 @@ const KnowledgeEditOpSchema = z.discriminatedUnion('type', [
 
 const KnowledgeEditRequestSchema = z.object({
   documentId: mcpOptionalId('documentId', 'Knowledge document'),
-  uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
-  namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
-  path: mcpOptionalNonEmptyString('path', 'Document path inside namespace; use with namespace'),
+  uri: mcpOptionalNonBlankString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+  namespace: mcpOptionalNonBlankString('namespace', 'Namespace/space slug; use with path'),
+  path: mcpOptionalNonBlankString('path', 'Document path inside namespace; use with namespace'),
   expectedVersion: mcpOptionalVersionToken(
     'expectedVersion',
     'Optimistic concurrency check: current version number or version ID expected by the caller'
@@ -176,7 +161,7 @@ const KnowledgeNodeRefSchema = z
   .object(
     {
       nodeId: mcpOptionalId('nodeId', 'Knowledge graph node'),
-      uri: mcpOptionalNonEmptyString(
+      uri: mcpOptionalNonBlankString(
         'uri',
         'Canonical node/document URI, e.g. agor://kb/global/architecture.md'
       ),
@@ -184,9 +169,9 @@ const KnowledgeNodeRefSchema = z
         'Node type to resolve or create when nodeId/uri is not enough.'
       ),
       documentId: mcpOptionalId('documentId', 'Knowledge document'),
-      namespace: mcpOptionalNonEmptyString('namespace', 'Knowledge namespace/space slug'),
-      path: mcpOptionalNonEmptyString('path', 'Document path inside namespace'),
-      externalUri: mcpOptionalNonEmptyString(
+      namespace: mcpOptionalNonBlankString('namespace', 'Knowledge namespace/space slug'),
+      path: mcpOptionalNonBlankString('path', 'Document path inside namespace'),
+      externalUri: mcpOptionalNonBlankString(
         'externalUri',
         'External URL or URI for external nodes'
       ),
@@ -420,7 +405,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       description: 'List Knowledge namespaces/spaces available to the current user.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        slug: mcpOptionalNonEmptyString('slug', 'Filter by namespace/space slug'),
+        slug: mcpOptionalNonBlankString('slug', 'Filter by namespace/space slug'),
         kind: z
           .enum(['system', 'global', 'user', 'repo', 'branch', 'team'])
           .optional()
@@ -519,8 +504,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
               'query is required and must be a string. Use an empty string to browse with filters.',
           })
           .describe('Search text. Use an empty string to browse with filters.'),
-        namespace: mcpOptionalNonEmptyString('namespace', 'Filter by namespace/space slug'),
-        pathPrefix: mcpOptionalNonEmptyString(
+        namespace: mcpOptionalNonBlankString('namespace', 'Filter by namespace/space slug'),
+        pathPrefix: mcpOptionalNonBlankString(
           'pathPrefix',
           'Filter to document paths under this prefix'
         ),
@@ -591,9 +576,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
-        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
-        path: mcpOptionalNonEmptyString(
+        uri: mcpOptionalNonBlankString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonBlankString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonBlankString(
           'path',
           'Document path inside namespace; use with namespace'
         ),
@@ -687,9 +672,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
-        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
-        path: mcpOptionalNonEmptyString(
+        uri: mcpOptionalNonBlankString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonBlankString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonBlankString(
           'path',
           'Document path inside namespace; use with namespace'
         ),
@@ -738,9 +723,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
-        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
-        path: mcpOptionalNonEmptyString(
+        uri: mcpOptionalNonBlankString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonBlankString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonBlankString(
           'path',
           'Document path inside namespace; use with namespace'
         ),
@@ -750,7 +735,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         ),
         startLine: mcpOptionalPositiveInt('startLine', '1-based inclusive start line'),
         endLine: mcpOptionalPositiveInt('endLine', '1-based inclusive end line'),
-        headingPath: mcpOptionalNonEmptyString('headingPath', 'Heading path from agor_kb_outline'),
+        headingPath: mcpOptionalNonBlankString('headingPath', 'Heading path from agor_kb_outline'),
         occurrence: mcpOptionalPositiveInt(
           'occurrence',
           'Occurrence for duplicate heading paths (default: 1)'
@@ -831,12 +816,12 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Existing Knowledge document'),
-        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: mcpOptionalNonEmptyString(
+        uri: mcpOptionalNonBlankString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonBlankString(
           'namespace',
           'Namespace/space slug; required with path for new docs'
         ),
-        path: mcpOptionalNonEmptyString(
+        path: mcpOptionalNonBlankString(
           'path',
           'Document path inside namespace; required with namespace for new docs'
         ),
@@ -993,9 +978,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         'Write a Knowledge document version to a markdown file inside a branch worktree. Requires branchId + branch-relative subpath (or defaults to .agor/kb/<namespace>/<path>) and verifies the caller has branch session permission.',
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
-        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
-        path: mcpOptionalNonEmptyString(
+        uri: mcpOptionalNonBlankString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonBlankString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonBlankString(
           'path',
           'Document path inside namespace; use with namespace'
         ),
@@ -1004,7 +989,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           'Version number or version ID. Omit for current version.'
         ),
         branchId: mcpRequiredId('branchId', 'Destination branch/worktree'),
-        subpath: mcpOptionalNonEmptyString(
+        subpath: mcpOptionalNonBlankString(
           'subpath',
           'Branch-relative destination markdown path. Default: .agor/kb/<namespace>/<document path>.'
         ),
@@ -1100,12 +1085,12 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         branchId: mcpRequiredId('branchId', 'Source branch/worktree'),
         subpath: mcpRequiredString('subpath', 'Branch-relative source markdown file path'),
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
-        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: mcpOptionalNonEmptyString(
+        uri: mcpOptionalNonBlankString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonBlankString(
           'namespace',
           'Namespace/space slug. Required with path when creating without sidecar.'
         ),
-        path: mcpOptionalNonEmptyString(
+        path: mcpOptionalNonBlankString(
           'path',
           'Document path. Required with namespace when creating without sidecar.'
         ),
@@ -1341,9 +1326,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
-        uri: mcpOptionalNonEmptyString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
-        namespace: mcpOptionalNonEmptyString('namespace', 'Namespace/space slug; use with path'),
-        path: mcpOptionalNonEmptyString(
+        uri: mcpOptionalNonBlankString('uri', 'Canonical URI, e.g. agor://kb/global/foo.md'),
+        namespace: mcpOptionalNonBlankString('namespace', 'Namespace/space slug; use with path'),
+        path: mcpOptionalNonBlankString(
           'path',
           'Document path inside namespace; use with namespace'
         ),

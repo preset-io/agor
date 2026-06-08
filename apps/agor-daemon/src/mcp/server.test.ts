@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { coerceJsonRecord, setupMCPRoutes } from './server.js';
+import { buildRegistry, coerceJsonRecord, setupMCPRoutes } from './server.js';
 
 describe('coerceJsonRecord', () => {
   it('passes through a plain object unchanged', () => {
@@ -57,6 +57,44 @@ describe('coerceJsonRecord', () => {
 
   it('returns non-JSON string unchanged', () => {
     expect(coerceJsonRecord('hello world')).toBe('hello world');
+  });
+});
+
+describe('MCP tool registry', () => {
+  it('mirrors runtime read-only service tier filtering', () => {
+    const registry = buildRegistry({ boards: 'readonly' });
+
+    expect(registry.get('agor_boards_get')).toBeDefined();
+    expect(registry.get('agor_boards_list')).toBeDefined();
+    expect(registry.get('agor_boards_update')).toBeUndefined();
+    expect(registry.get('agor_boards_create')).toBeUndefined();
+  });
+
+  it('keeps representative tool detail schemas from degrading to bare object schemas', () => {
+    const registry = buildRegistry();
+    const expectedPropertiesByTool: Record<string, string[]> = {
+      agor_sessions_prompt: ['sessionId', 'prompt', 'mode'],
+      agor_boards_get: ['boardId'],
+      agor_branches_create: ['repoId', 'branchName', 'boardId'],
+      agor_kb_get: ['uri', 'namespace', 'path'],
+      agor_execute_tool: ['tool_name', 'arguments'],
+    };
+
+    for (const [toolName, expectedProperties] of Object.entries(expectedPropertiesByTool)) {
+      const schema = registry.get(toolName)?.inputSchema;
+      expect(schema, `${toolName} should be registered`).toBeDefined();
+      expect(schema, `${toolName} should not degrade to { type: "object" }`).toMatchObject({
+        type: 'object',
+        properties: expect.any(Object),
+      });
+
+      for (const property of expectedProperties) {
+        expect(
+          (schema?.properties as Record<string, unknown> | undefined)?.[property],
+          `${toolName} should expose ${property} in JSON schema`
+        ).toBeDefined();
+      }
+    }
   });
 });
 

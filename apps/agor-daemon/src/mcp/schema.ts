@@ -55,6 +55,19 @@ export function mcpOptionalNonEmptyString(fieldName: string, description: string
     .describe(description);
 }
 
+/**
+ * Optional string that must contain non-whitespace text when present.
+ */
+export function mcpOptionalNonBlankString(fieldName: string, description: string) {
+  return z
+    .string({
+      error: `${fieldName} must be a string when provided.`,
+    })
+    .refine((value) => value.trim().length > 0, `${fieldName} cannot be blank when provided.`)
+    .optional()
+    .describe(description);
+}
+
 export function mcpRequiredId(fieldName: string, entityName: string, description?: string) {
   return mcpRequiredString(fieldName, description ?? `${entityName} ID (UUIDv7 or short ID)`, {
     example: `{ "${fieldName}": "01abcdef" }`,
@@ -85,6 +98,16 @@ export function mcpRequiredNumber(fieldName: string, description: string) {
     .number({
       error: `${fieldName} is required and must be a number.`,
     })
+    .describe(description);
+}
+
+export function mcpRequiredPositiveInt(fieldName: string, description: string) {
+  return z
+    .number({
+      error: `${fieldName} is required and must be a positive integer.`,
+    })
+    .int(`${fieldName} must be an integer.`)
+    .positive(`${fieldName} must be greater than 0.`)
     .describe(description);
 }
 

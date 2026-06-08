@@ -40,7 +40,7 @@ export interface SearchOptions {
 }
 
 /** Domain descriptions for the domain listing. */
-const DOMAIN_DESCRIPTIONS: Record<string, string> = {
+export const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   sessions: 'Agent conversations with genealogy (fork/spawn), task tracking, and message history',
   repos: 'Repository registration and management',
   branches:
@@ -58,6 +58,12 @@ const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   knowledge: 'DB-backed markdown knowledge documents, version history, search, and graph links',
   schedules: 'Cron-based branch schedules that create sessions from prompt templates',
 };
+
+export function formatDomainDescriptionsForInstructions(): string {
+  return Object.entries(DOMAIN_DESCRIPTIONS)
+    .map(([domain, description]) => `- ${domain}: ${description}`)
+    .join('\n');
+}
 
 /** Tools always visible in `tools/list` even when search mode is enabled. */
 const ALWAYS_VISIBLE = new Set(['agor_search_tools', 'agor_get_tool_details', 'agor_execute_tool']);

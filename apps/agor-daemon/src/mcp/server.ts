@@ -28,7 +28,7 @@ import { toJSONSchema } from 'zod/v4-mini';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
 import { wrapRegisterTool } from './register-tool-proxy.js';
 import { validateSessionToken } from './tokens.js';
-import { ToolRegistry } from './tool-registry.js';
+import { formatDomainDescriptionsForInstructions, ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
 import { registerArtifactTools } from './tools/artifacts.js';
 import { registerBoardTools } from './tools/boards.js';
@@ -119,18 +119,7 @@ This server uses progressive tool discovery. Only 3 tools are listed directly �
 - agor_execute_tool: Call one discovered tool by name with arguments matching its schema.
 
 Domains:
-- sessions: Agent conversations with genealogy (fork/spawn), task tracking, and message history
-- repos: Repository registration and management
-- branches: Branches with isolated git refs, board placement, zone pinning, and assistant discovery.
-- environment: Start/stop/health/logs for branch dev environments
-- boards: Spatial canvases with zones for organizing branches and cards
-- cards: Kanban-style cards and card type definitions on boards
-- users: User accounts, profiles, preferences, and administration
-- analytics: Usage and cost tracking leaderboard
-- mcp-servers: External MCP server configuration and OAuth management
-- schedules: First-class CRUD for branch schedules — cron-based prompts that spawn sessions
-- widgets: In-conversation interactive widgets (forms/buttons rendered inline; values never enter your context)
-- knowledge: DB-backed markdown knowledge documents, version history, and graph links
+${formatDomainDescriptionsForInstructions()}
 
 Common workflows:
 
@@ -180,12 +169,61 @@ function logQueryParamDeprecation(req: Request): void {
 let cachedRegistry: ToolRegistry | null = null;
 let cachedToolsList: { tools: Array<Record<string, unknown>> } | null = null;
 
+type DomainToolRegistrar = {
+  domain: string;
+  register: (server: McpServer, ctx: McpContext) => void;
+};
+
+const DOMAIN_TOOL_REGISTRARS: DomainToolRegistrar[] = [
+  {
+    domain: 'sessions',
+    register: (server, ctx) => {
+      registerSessionTools(server, ctx);
+      registerTaskTools(server, ctx);
+      registerMessageTools(server, ctx);
+    },
+  },
+  { domain: 'widgets', register: registerWidgetTools },
+  { domain: 'repos', register: registerRepoTools },
+  { domain: 'branches', register: registerBranchTools },
+  { domain: 'environment', register: registerEnvironmentTools },
+  { domain: 'boards', register: registerBoardTools },
+  {
+    domain: 'cards',
+    register: (server, ctx) => {
+      registerCardTools(server, ctx);
+      registerCardTypeTools(server, ctx);
+    },
+  },
+  { domain: 'artifacts', register: registerArtifactTools },
+  { domain: 'proxies', register: registerProxyTools },
+  { domain: 'users', register: registerUserTools },
+  { domain: 'analytics', register: registerAnalyticsTools },
+  { domain: 'mcp-servers', register: registerMcpServerTools },
+  { domain: 'knowledge', register: registerKnowledgeTools },
+  { domain: 'schedules', register: registerScheduleTools },
+];
+
+function registerDomainTools(
+  server: McpServer,
+  ctx: McpContext,
+  servicesConfig?: DaemonServicesConfig,
+  beforeRegister?: (domain: string) => void
+): void {
+  for (const { domain, register } of DOMAIN_TOOL_REGISTRARS) {
+    const access = getDomainAccess(domain, servicesConfig);
+    if (!access) continue;
+    beforeRegister?.(domain);
+    register(access === 'readonly' ? readOnlyProxy(server) : server, ctx);
+  }
+}
+
 /**
  * Build the tool registry by registering tools against a temporary server.
  * Captures metadata (name, description, JSON Schema, annotations, domain)
  * without creating real handlers. Called once, cached forever.
  */
-function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
+export function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
   const registry = new ToolRegistry();
 
   // Create a throwaway server just to run the registration code.
@@ -230,81 +268,13 @@ function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
 
   // Register all domain tools with domain tracking.
   // Handlers receive a dummy context — they won't be called.
-  // Only register tools for enabled service domains.
+  // The registry uses the same service-tier filtering as runtime registration,
+  // including read-only proxying, so search/details never advertise tools that
+  // agor_execute_tool cannot actually call in this server configuration.
   const dummyCtx = {} as McpContext;
-
-  if (isDomainEnabled('sessions', servicesConfig)) {
-    registry.setCurrentDomain('sessions');
-    registerSessionTools(tempServer, dummyCtx);
-    registerTaskTools(tempServer, dummyCtx);
-    registerMessageTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('widgets', servicesConfig)) {
-    registry.setCurrentDomain('widgets');
-    registerWidgetTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('repos', servicesConfig)) {
-    registry.setCurrentDomain('repos');
-    registerRepoTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('branches', servicesConfig)) {
-    registry.setCurrentDomain('branches');
-    registerBranchTools(tempServer, dummyCtx);
-    registry.setCurrentDomain('environment');
-    registerEnvironmentTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('boards', servicesConfig)) {
-    registry.setCurrentDomain('boards');
-    registerBoardTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('cards', servicesConfig)) {
-    registry.setCurrentDomain('cards');
-    registerCardTools(tempServer, dummyCtx);
-    registerCardTypeTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('artifacts', servicesConfig)) {
-    registry.setCurrentDomain('artifacts');
-    registerArtifactTools(tempServer, dummyCtx);
-  }
-
-  // 'proxies' is always registered when 'artifacts' domain is on — the two
-  // are tightly coupled (proxies exist to serve artifacts). Read-only by
-  // construction, so registering them here is safe regardless of tier.
-  if (isDomainEnabled('artifacts', servicesConfig)) {
-    registry.setCurrentDomain('proxies');
-    registerProxyTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('users', servicesConfig)) {
-    registry.setCurrentDomain('users');
-    registerUserTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('analytics', servicesConfig)) {
-    registry.setCurrentDomain('analytics');
-    registerAnalyticsTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('mcp-servers', servicesConfig)) {
-    registry.setCurrentDomain('mcp-servers');
-    registerMcpServerTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('knowledge', servicesConfig)) {
-    registry.setCurrentDomain('knowledge');
-    registerKnowledgeTools(tempServer, dummyCtx);
-  }
-
-  if (isDomainEnabled('schedules', servicesConfig)) {
-    registry.setCurrentDomain('schedules');
-    registerScheduleTools(tempServer, dummyCtx);
-  }
+  registerDomainTools(tempServer, dummyCtx, servicesConfig, (domain) =>
+    registry.setCurrentDomain(domain)
+  );
 
   // Search/execute tools always registered (meta-tools)
   registry.setCurrentDomain('discovery');
@@ -362,11 +332,6 @@ function getDomainAccess(
   return 'full'; // unknown domain = full access
 }
 
-/** Backwards-compatible wrapper */
-function isDomainEnabled(domain: string, servicesConfig?: DaemonServicesConfig): boolean {
-  return getDomainAccess(domain, servicesConfig) !== false;
-}
-
 /**
  * Create a proxy McpServer that silently skips tools without
  * `readOnlyHint: true`. Backs the read-only service tier where mutating
@@ -405,37 +370,7 @@ function createMcpServer(
   // 'off' / 'internal': no MCP tools
   // 'readonly': only tools with readOnlyHint: true
   // 'on': all tools
-  const domainRegister = (domain: string, fn: (s: McpServer, c: McpContext) => void) => {
-    const access = getDomainAccess(domain, servicesConfig);
-    if (!access) return;
-    fn(access === 'readonly' ? readOnlyProxy(server) : server, ctx);
-  };
-
-  domainRegister('sessions', (s, c) => {
-    registerSessionTools(s, c);
-    registerTaskTools(s, c);
-    registerMessageTools(s, c);
-  });
-  domainRegister('widgets', registerWidgetTools);
-  domainRegister('repos', registerRepoTools);
-  domainRegister('branches', (s, c) => {
-    registerBranchTools(s, c);
-    registerEnvironmentTools(s, c);
-  });
-  domainRegister('boards', registerBoardTools);
-  domainRegister('cards', (s, c) => {
-    registerCardTools(s, c);
-    registerCardTypeTools(s, c);
-  });
-  domainRegister('artifacts', (s, c) => {
-    registerArtifactTools(s, c);
-    registerProxyTools(s, c);
-  });
-  domainRegister('users', registerUserTools);
-  domainRegister('analytics', registerAnalyticsTools);
-  domainRegister('mcp-servers', registerMcpServerTools);
-  domainRegister('knowledge', registerKnowledgeTools);
-  domainRegister('schedules', registerScheduleTools);
+  registerDomainTools(server, ctx, servicesConfig);
 
   if (toolSearchEnabled) {
     const { registry, toolsList } = getRegistry(servicesConfig);
