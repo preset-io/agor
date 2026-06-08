@@ -1,4 +1,4 @@
-import type { BranchRepository, SessionRepository, UsersRepository } from '@agor/core/db';
+import type { BranchRepository, SessionRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -24,7 +24,6 @@ type RealtimePublishOptions = {
   branchRbacEnabled: boolean;
   branchRepository: BranchRepository;
   sessionsRepository: SessionRepository;
-  usersRepository: UsersRepository;
   allowSuperadmin?: boolean;
 };
 

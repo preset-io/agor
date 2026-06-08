@@ -1827,7 +1827,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     branchRbacEnabled,
     branchRepository,
     sessionsRepository,
-    usersRepository,
     allowSuperadmin: superadminOpts.allowSuperadmin,
   });
 

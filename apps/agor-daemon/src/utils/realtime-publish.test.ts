@@ -1,4 +1,4 @@
-import type { BranchRepository, SessionRepository, UsersRepository } from '@agor/core/db';
+import type { BranchRepository, SessionRepository } from '@agor/core/db';
 import type { Branch, Session, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -52,7 +52,6 @@ function session(id: string, branchId: string): Session {
 function repos(options: {
   branch: Branch;
   session?: Session | null;
-  users: User[];
   permissions: Record<string, Branch['others_can']>;
 }) {
   const branchRepository = {
@@ -68,16 +67,13 @@ function repos(options: {
       options.session?.session_id === id ? options.session : null
     ),
   } as unknown as SessionRepository;
-  const usersRepository = {
-    findAll: vi.fn(async () => options.users),
-  } as unknown as UsersRepository;
-  return { branchRepository, sessionsRepository, usersRepository };
+  return { branchRepository, sessionsRepository };
 }
 
 describe('configureRealtimePublish', () => {
   it('preserves legacy authenticated broadcast when branch RBAC is disabled', async () => {
     const app = makeApp([{ user: user('u1') }, { user: user('u2') }]);
-    const r = repos({ branch: branch('b1'), users: [], permissions: {} });
+    const r = repos({ branch: branch('b1'), permissions: {} });
     configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
 
     const channel = await app.runPublish(
@@ -86,7 +82,6 @@ describe('configureRealtimePublish', () => {
     );
 
     expect(channel.connections).toHaveLength(2);
-    expect(r.usersRepository.findAll).not.toHaveBeenCalled();
   });
 
   it('filters branch events to users with view access when RBAC is enabled', async () => {
@@ -96,7 +91,6 @@ describe('configureRealtimePublish', () => {
     const app = makeApp([{ user: allowed }, { user: denied }, { user: admin }]);
     const r = repos({
       branch: branch('b1', 'none'),
-      users: [allowed, denied, admin],
       permissions: { allowed: 'view', denied: 'none' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -114,7 +108,6 @@ describe('configureRealtimePublish', () => {
     const app = makeApp([{ user: admin }]);
     const r = repos({
       branch: branch('b1', 'none'),
-      users: [admin],
       permissions: { admin: 'none' },
     });
     configureRealtimePublish({
@@ -140,7 +133,6 @@ describe('configureRealtimePublish', () => {
     const r = repos({
       branch: branch('b1', 'none'),
       session: session('s1', 'b1'),
-      users: [allowed, denied],
       permissions: { allowed: 'session', denied: 'none' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -161,7 +153,6 @@ describe('configureRealtimePublish', () => {
     const r = repos({
       branch: branch('b1', 'none'),
       session: session('s1', 'b1'),
-      users: [allowed, denied],
       permissions: { allowed: 'view', denied: 'none' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -182,7 +173,6 @@ describe('configureRealtimePublish', () => {
     const r = repos({
       branch: branch('b1', 'none'),
       session: session('s1', 'b1'),
-      users: [allowed, denied],
       permissions: { allowed: 'view', denied: 'none' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -205,7 +195,6 @@ describe('configureRealtimePublish', () => {
     const r = repos({
       branch: branch('b1', 'none'),
       session: session('s1', 'b1'),
-      users: [allowed, denied],
       permissions: { allowed: 'view', denied: 'none' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -228,7 +217,6 @@ describe('configureRealtimePublish', () => {
     const r = repos({
       branch: branch('b1', 'none'),
       session: session('s1', 'b1'),
-      users: [allowed, denied],
       permissions: { allowed: 'view', denied: 'none' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -248,7 +236,6 @@ describe('configureRealtimePublish', () => {
     const app = makeApp([{ user: allowed }, { user: denied }]);
     const r = repos({
       branch: branch('b1', 'none'),
-      users: [allowed, denied],
       permissions: { allowed: 'view', denied: 'none' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -267,7 +254,6 @@ describe('configureRealtimePublish', () => {
     const app = makeApp([{ user: allowed }, { user: denied }]);
     const r = repos({
       branch: branch('b1', 'none'),
-      users: [allowed, denied],
       permissions: { allowed: 'view', denied: 'none' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -288,7 +274,6 @@ describe('configureRealtimePublish', () => {
     const app = makeApp([{ user: creator }, { user: other }, { user: admin }, service]);
     const r = repos({
       branch: branch('b1', 'none'),
-      users: [creator, other, admin],
       permissions: { creator: 'none', other: 'none', admin: 'none' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -305,7 +290,7 @@ describe('configureRealtimePublish', () => {
     const allowed = user('allowed');
     const service = { user: { _isServiceAccount: true, role: 'service' } };
     const app = makeApp([{ user: allowed }, service]);
-    const r = repos({ branch: branch('b1'), users: [allowed], permissions: { allowed: 'view' } });
+    const r = repos({ branch: branch('b1'), permissions: { allowed: 'view' } });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
 
     const channel = await app.runPublish(
@@ -320,7 +305,7 @@ describe('configureRealtimePublish', () => {
     const allowed = user('allowed');
     const service = { user: { _isServiceAccount: true, role: 'service' } };
     const app = makeApp([{ user: allowed }, service]);
-    const r = repos({ branch: branch('b1'), users: [allowed], permissions: { allowed: 'view' } });
+    const r = repos({ branch: branch('b1'), permissions: { allowed: 'view' } });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
 
     const channel = await app.runPublish(
