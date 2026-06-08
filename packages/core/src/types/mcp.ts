@@ -135,6 +135,12 @@ export interface MCPServer {
 
   // HTTP/SSE config
   url?: string; // e.g., "https://mcp.sentry.dev/mcp"
+  /**
+   * Custom HTTP headers for remote HTTP/SSE transports. Values may be
+   * secret-bearing and can use templates such as {{ user.env.DATADOG_API_KEY }}.
+   * Not applied to stdio transports. Authorization is reserved for auth.*.
+   */
+  headers?: Record<string, string>;
 
   // Environment variables
   env?: Record<string, string>; // e.g., { "ALLOWED_PATHS": "/Users/me/projects" }
@@ -197,6 +203,7 @@ export interface CreateMCPServerInput {
   command?: string;
   args?: string[];
   url?: string;
+  headers?: Record<string, string>;
   env?: Record<string, string>;
   auth?: MCPAuth;
   scope: MCPScope;
@@ -215,6 +222,7 @@ export interface UpdateMCPServerInput {
   command?: string;
   args?: string[];
   url?: string;
+  headers?: Record<string, string>;
   env?: Record<string, string>;
   auth?: MCPAuth;
   scope?: MCPScope;
@@ -246,6 +254,7 @@ export interface MCPConfigFile {
       args?: string[];
       transport?: 'http' | 'sse';
       url?: string;
+      headers?: Record<string, string>;
       env?: Record<string, string>;
     };
   };
@@ -262,6 +271,7 @@ export type MCPServersConfig = Record<
     command?: string;
     args?: string[];
     url?: string;
+    headers?: Record<string, string>;
     env?: Record<string, string>;
   }
 >;

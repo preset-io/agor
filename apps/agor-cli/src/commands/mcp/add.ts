@@ -66,6 +66,10 @@ export default class McpAdd extends BaseCommand {
       char: 'e',
       description: 'Environment variables (key=value pairs, comma-separated)',
     }),
+    headers: Flags.string({
+      description:
+        'Custom HTTP headers for remote transports (key=value pairs, comma-separated). Authorization is configured via auth, not here.',
+    }),
   };
 
   async run(): Promise<void> {
@@ -122,6 +126,22 @@ export default class McpAdd extends BaseCommand {
         }
       }
 
+      // Add custom HTTP headers
+      if (flags.headers) {
+        const headerPairs = flags.headers.split(',').map((pair) => pair.trim());
+        const headersObject: Record<string, string> = {};
+        for (const pair of headerPairs) {
+          const [key, ...valueParts] = pair.split('=');
+          const value = valueParts.join('=');
+          if (key && value && key.trim().toLowerCase() !== 'authorization') {
+            headersObject[key.trim()] = value.trim();
+          }
+        }
+        if (Object.keys(headersObject).length > 0) {
+          data.headers = headersObject;
+        }
+      }
+
       // Add scope-specific IDs
       if (flags['session-id']) data.session_id = flags['session-id'];
 
@@ -151,6 +171,10 @@ export default class McpAdd extends BaseCommand {
       if (server.env) {
         const envKeys = Object.keys(server.env);
         this.log(`  ${chalk.cyan('Environment')}: ${envKeys.join(', ')}`);
+      }
+      if (server.headers) {
+        const headerKeys = Object.keys(server.headers);
+        this.log(`  ${chalk.cyan('Custom Headers')}: ${headerKeys.join(', ')}`);
       }
 
       this.log('');

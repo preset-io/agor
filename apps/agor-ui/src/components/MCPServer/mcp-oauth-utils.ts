@@ -181,3 +181,22 @@ export function parseEnvJSON(envValue: unknown): Record<string, string> | undefi
     return undefined;
   }
 }
+
+/**
+ * Parse the custom HTTP headers JSON textarea value. Returns undefined for
+ * empty / invalid input and strips Authorization because auth config owns it.
+ */
+export function parseHeadersJSON(headersValue: unknown): Record<string, string> | undefined {
+  if (typeof headersValue !== 'string' || !headersValue.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(headersValue) as Record<string, unknown>;
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key.toLowerCase() === 'authorization') continue;
+      if (typeof value === 'string') headers[key] = value;
+    }
+    return headers;
+  } catch {
+    return undefined;
+  }
+}

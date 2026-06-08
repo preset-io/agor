@@ -30,6 +30,7 @@ import { shortId } from '@agor/core/db';
 import type { CodexOptions, Thread, ThreadItem } from '@agor/core/sdk';
 import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { CodexSandboxMode, ContextUsageSnapshot, EffortLevel } from '@agor/core/types';
 import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
@@ -588,8 +589,15 @@ export class CodexPromptService {
       // an env var. Non-bearer schemes log a warning since Codex's CLI
       // only supports bearer auth.
       try {
-        const headers = await resolveMCPAuthHeaders(server.auth, server.url);
+        const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+        const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
         const authHeader = headers?.Authorization;
+        const customHeaders = headers ? { ...headers } : undefined;
+        if (customHeaders) delete customHeaders.Authorization;
+        if (customHeaders && Object.keys(customHeaders).length > 0) {
+          serverConfig.headers = customHeaders;
+          console.log(`      custom headers: ${Object.keys(customHeaders).length} header(s)`);
+        }
         if (authHeader) {
           const bearerToken = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1];
           if (bearerToken) {

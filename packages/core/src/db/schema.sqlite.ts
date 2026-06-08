@@ -1157,6 +1157,7 @@ export const mcpServers = sqliteTable(
         command?: string;
         args?: string[];
         url?: string;
+        headers?: Record<string, string>;
         env?: Record<string, string>;
 
         // Authentication config (for HTTP/SSE transports)

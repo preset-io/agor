@@ -15,6 +15,8 @@
  */
 
 import { generateId, shortId } from '@agor/core';
+import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import type { Part as OpenCodePart } from '@opencode-ai/sdk';
@@ -257,10 +259,8 @@ export class OpenCodeTool implements ITool {
                 query: branchPath ? { directory: branchPath } : undefined,
               });
             } else if (server.transport === 'http' || server.transport === 'sse') {
-              const headers: Record<string, string> = {};
-              if (server.auth?.token) {
-                headers.Authorization = `Bearer ${server.auth.token}`;
-              }
+              const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+              const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
               await client.mcp.add({
                 body: {
                   name: sanitizedName,
@@ -268,7 +268,7 @@ export class OpenCodeTool implements ITool {
                     type: 'remote' as const,
                     url: server.url!,
                     enabled: true,
-                    headers: Object.keys(headers).length > 0 ? headers : undefined,
+                    headers,
                   },
                 },
                 query: branchPath ? { directory: branchPath } : undefined,

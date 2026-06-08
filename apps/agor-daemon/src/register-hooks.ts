@@ -1210,6 +1210,37 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  const shouldExposeMCPHeaderSecrets = (context: HookContext) => {
+    if (!context.params?.provider) return true;
+    const auth = (context.params as Record<string, unknown>).authentication as
+      | { strategy?: string }
+      | undefined;
+    const role = (context.params.user as { role?: string } | undefined)?.role;
+    return auth?.strategy === 'session-token' || role === 'service';
+  };
+
+  const redactMCPHeaderSecrets = async (context: HookContext) => {
+    if (shouldExposeMCPHeaderSecrets(context)) return context;
+
+    const redactServer = (server: MCPServer) => {
+      if (!server?.headers || Object.keys(server.headers).length === 0) return server;
+      return {
+        ...server,
+        headers: Object.fromEntries(Object.keys(server.headers).map((key) => [key, '••••••••'])),
+      };
+    };
+
+    if (Array.isArray(context.result)) {
+      context.result = context.result.map(redactServer);
+    } else if (context.result?.data && Array.isArray(context.result.data)) {
+      context.result.data = context.result.data.map(redactServer);
+    } else if (context.result?.mcp_server_id) {
+      context.result = redactServer(context.result);
+    }
+
+    return context;
+  };
+
   // NOTE: mcp-servers is global admin-managed configuration. These rows are
   // not branch- or session-scoped, so no RBAC find() scoping is applied.
   // Creation/update/removal remain gated by requireMinimumRole(ADMIN).
@@ -1221,8 +1252,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
     },
     after: {
-      find: [injectPerUserOAuthTokens],
-      get: [injectPerUserOAuthTokens],
+      find: [injectPerUserOAuthTokens, redactMCPHeaderSecrets],
+      get: [injectPerUserOAuthTokens, redactMCPHeaderSecrets],
+      create: [redactMCPHeaderSecrets],
+      patch: [redactMCPHeaderSecrets],
+      update: [redactMCPHeaderSecrets],
     },
   });
 

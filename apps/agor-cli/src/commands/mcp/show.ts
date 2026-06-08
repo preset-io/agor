@@ -85,6 +85,13 @@ export default class McpShow extends BaseCommand {
         this.log(`${chalk.cyan('URL')}: ${server.url}`);
       }
 
+      if (server.headers && Object.keys(server.headers).length > 0) {
+        this.log(`${chalk.cyan('Custom HTTP Headers')}:`);
+        for (const [key, value] of Object.entries(server.headers)) {
+          this.log(`  ${key}: ${value}`);
+        }
+      }
+
       if (server.env && Object.keys(server.env).length > 0) {
         this.log(`${chalk.cyan('Environment Variables')}:`);
         for (const [key, value] of Object.entries(server.env)) {

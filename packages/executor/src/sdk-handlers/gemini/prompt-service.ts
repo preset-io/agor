@@ -16,6 +16,7 @@ import * as path from 'node:path';
 import type { GenAI } from '@agor/core/sdk';
 import { Gemini } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 
 type ResumedSessionData = Gemini.ResumedSessionData;
@@ -718,7 +719,8 @@ export class GeminiPromptService {
         for (const { server } of serversWithSource) {
           let headers: Record<string, string> | undefined;
           try {
-            headers = await resolveMCPAuthHeaders(server.auth);
+            const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
           } catch (error) {
             console.warn(
               `   ⚠️  Failed to resolve MCP auth headers for ${server.name}:`,
@@ -759,7 +761,9 @@ export class GeminiPromptService {
           }
 
           if (headers && server.transport !== 'stdio') {
-            console.log(`     🔐 Added Authorization header for ${server.name}`);
+            console.log(
+              `     🔐 Added ${Object.keys(headers).length} HTTP header(s) for ${server.name}`
+            );
           }
         }
 

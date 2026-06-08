@@ -209,3 +209,23 @@ describe('parseEnvJSON', () => {
     expect(parseEnvJSON('{not json')).toBeUndefined();
   });
 });
+
+describe('parseHeadersJSON', () => {
+  it('parses string-valued custom headers and drops Authorization', async () => {
+    const { parseHeadersJSON } = await import('./mcp-oauth-utils');
+
+    expect(
+      parseHeadersJSON(
+        JSON.stringify({
+          'DD-API-KEY': '{{ user.env.DD_API_KEY }}',
+          Authorization: 'Bearer should-not-persist-here',
+          'X-Org': '123',
+          Count: 42,
+        })
+      )
+    ).toEqual({
+      'DD-API-KEY': '{{ user.env.DD_API_KEY }}',
+      'X-Org': '123',
+    });
+  });
+});

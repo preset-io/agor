@@ -210,6 +210,8 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 - User-defined MCP servers injected per-session from Agor UI
 - OpenCode tries Streamable HTTP first, then falls back to SSE for remote servers
 
+**Remote MCP headers:** For HTTP/SSE MCP servers that require service-account headers (for example `DD-API-KEY`), configure **Custom HTTP Headers** in Settings → MCP Servers. Header values can be literals or templates such as `{{ user.env.DATADOG_API_KEY }}`. Values are treated as secrets in UI/API responses, and `Authorization` is reserved for the Auth Type field so bearer/JWT/OAuth headers cannot be accidentally overridden.
+
 **See [Architecture Guide: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server) for details on using MCP with all agents.**
 
 ---

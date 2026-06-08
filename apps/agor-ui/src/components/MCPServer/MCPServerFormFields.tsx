@@ -455,6 +455,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           </Form.Item>
 
           <Form.Item
+            label="Custom HTTP Headers"
+            name="headers"
+            tooltip="JSON object of additional headers for HTTP/SSE transports. Values support templates like {{ user.env.DATADOG_API_KEY }}. Authorization is configured via Auth Type, not here."
+          >
+            <TextArea
+              placeholder='{"DD-API-KEY": "{{ user.env.DATADOG_API_KEY }}", "X-Datadog-Parent-Org-Id": "123"}'
+              rows={3}
+            />
+          </Form.Item>
+
+          <Form.Item
             label="Auth Type"
             name="auth_type"
             initialValue="none"

@@ -7,6 +7,7 @@
  * Templatable fields:
  * - `url` - Server URL (for HTTP/SSE transport)
  * - `env.*` - Environment variables
+ * - `headers.*` - Custom HTTP headers for remote transports
  * - `auth.token` - Bearer token
  * - `auth.api_url` - JWT API URL
  * - `auth.api_token` - JWT API token
@@ -22,6 +23,9 @@
  *   "url": "https://mcp.example.com/{{ user.env.TENANT_ID }}",
  *   "env": {
  *     "GITHUB_TOKEN": "{{ user.env.GITHUB_TOKEN }}"
+ *   },
+ *   "headers": {
+ *     "DD-API-KEY": "{{ user.env.DATADOG_API_KEY }}"
  *   },
  *   "auth": {
  *     "type": "bearer",
@@ -198,6 +202,7 @@ export function resolveMcpServerEnv(
  * Resolves templates in these fields:
  * - `url` - Server URL
  * - `env.*` - Environment variables
+ * - `headers.*` - Custom HTTP headers for remote transports
  * - `auth.token` - Bearer token
  * - `auth.api_url` - JWT API URL
  * - `auth.api_token` - JWT API token
@@ -245,6 +250,21 @@ export function resolveMcpServerTemplates(
       }
     }
     resolved.env = Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined;
+  }
+
+  // Resolve custom HTTP headers (track individual unresolved vars)
+  if (server.headers) {
+    const resolvedHeaders: Record<string, string> = {};
+    for (const [key, templateValue] of Object.entries(server.headers)) {
+      const hadTemplate = containsTemplate(templateValue);
+      const resolvedValue = resolveStringValue(`headers.${key}`, templateValue, context);
+      if (resolvedValue !== undefined) {
+        resolvedHeaders[key] = resolvedValue;
+      } else if (hadTemplate) {
+        unresolvedFields.push(`headers.${key}`);
+      }
+    }
+    resolved.headers = Object.keys(resolvedHeaders).length > 0 ? resolvedHeaders : undefined;
   }
 
   // Resolve auth fields
@@ -354,6 +374,8 @@ export function resolveMcpServerTemplates(
           originalValue = server.url;
         } else if (f.startsWith('env.')) {
           originalValue = server.env?.[f.slice(4)];
+        } else if (f.startsWith('headers.')) {
+          originalValue = server.headers?.[f.slice(8)];
         } else if (f.startsWith('auth.') && server.auth) {
           const authKey = f.slice(5) as keyof MCPAuth;
           const authValue = server.auth[authKey];

@@ -16,7 +16,7 @@ import { useEffect, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
-import { buildAuthFromValues, parseEnvJSON } from '../MCPServer/mcp-oauth-utils';
+import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
@@ -82,6 +82,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       data.args = (values.args as string)?.split(',').map((arg: string) => arg.trim()) || [];
     } else {
       data.url = values.url as string;
+      const headers = parseHeadersJSON(values.headers);
+      if (headers) data.headers = headers;
     }
 
     const auth = buildAuthFromValues(values);
@@ -164,6 +166,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         url: values.url,
         transport: values.transport || 'http',
         auth: buildAuthFromValues(values),
+        headers: parseHeadersJSON(values.headers),
       })) as {
         success: boolean;
         error?: string;
@@ -478,6 +481,14 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             )}
             {viewingServer.url && (
               <Descriptions.Item label="URL">{viewingServer.url}</Descriptions.Item>
+            )}
+
+            {viewingServer.headers && Object.keys(viewingServer.headers).length > 0 && (
+              <Descriptions.Item label="Custom HTTP Headers">
+                <pre style={{ margin: 0, fontSize: 12 }}>
+                  {JSON.stringify(viewingServer.headers, null, 2)}
+                </pre>
+              </Descriptions.Item>
             )}
 
             {viewingServer.env && Object.keys(viewingServer.env).length > 0 && (

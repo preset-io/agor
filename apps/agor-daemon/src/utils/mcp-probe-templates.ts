@@ -23,6 +23,7 @@ export interface ProbeServerConfig {
   url: string;
   transport: MCPTransport;
   auth?: MCPAuth;
+  headers?: Record<string, string>;
   name?: string;
   /** Optional MCP server id (when probing an existing saved server). */
   mcpServerId?: string;
@@ -62,6 +63,7 @@ export function resolveProbeServerTemplates(
     transport: serverConfig.transport,
     url: serverConfig.url,
     auth: serverConfig.auth,
+    headers: serverConfig.headers,
     scope: 'global',
     source: 'user',
     enabled: true,
@@ -85,7 +87,9 @@ export function resolveProbeServerTemplates(
   // Test Connection a templated `oauth_client_secret` that resolves to
   // empty still means the OAuth flow is about to fail upstream with a
   // confusing error, so detect those locally and add them to the list.
-  const unresolvedAuth = [...result.unresolvedFields.filter((f) => f.startsWith('auth.'))];
+  const unresolvedAuth = [
+    ...result.unresolvedFields.filter((f) => f.startsWith('auth.') || f.startsWith('headers.')),
+  ];
   if (serverConfig.auth?.type === 'oauth') {
     const oauthTemplatedFields = [
       'oauth_token_url',
@@ -113,6 +117,7 @@ export function resolveProbeServerTemplates(
     resolved: {
       ...serverConfig,
       auth: result.server.auth,
+      headers: result.server.headers,
       url: result.server.url ?? serverConfig.url,
     },
   };

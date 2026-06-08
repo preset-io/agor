@@ -19,6 +19,7 @@ export interface McpServerSummary {
   auth_type: string;
   oauth_mode?: string;
   oauth_authenticated: boolean;
+  has_custom_headers: boolean;
   enabled: boolean;
 }
 
@@ -67,6 +68,7 @@ export async function summarizeMcpServer(
     auth_type: authType,
     oauth_mode: oauthMode,
     oauth_authenticated: authenticated,
+    has_custom_headers: !!mcpServer.headers && Object.keys(mcpServer.headers).length > 0,
     enabled: mcpServer.enabled,
   };
 }
@@ -110,7 +112,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_list',
     {
       description:
-        'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`.',
+        'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, custom-header presence, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         includeDisabled: z

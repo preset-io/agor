@@ -10,6 +10,7 @@ import * as fs from 'node:fs/promises';
 import { shortId, validateDirectory } from '@agor/core';
 import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 
 const { query } = Claude;
@@ -558,10 +559,13 @@ export async function setupQuery(
 
           try {
             // Pass mcpUrl for OAuth token cache lookup
-            const headers = await resolveMCPAuthHeaders(server.auth, server.url);
+            const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (headers && transport !== 'stdio') {
               serverConfig.headers = headers;
-              console.log(`     🔐 Added Authorization header for ${server.name}`);
+              console.log(
+                `     🔐 Added ${Object.keys(headers).length} HTTP header(s) for ${server.name}`
+              );
             } else if (server.auth?.type === 'oauth' && transport !== 'stdio') {
               // OAuth server but no token - track for notification
               console.warn(

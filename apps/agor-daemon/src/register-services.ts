@@ -2162,6 +2162,7 @@ async function registerMCPServices(
           oauth_grant_type?: string;
           oauth_mode?: 'per_user' | 'shared';
         };
+        headers?: Record<string, string>;
       },
       params?: AuthenticatedParams
     ) {
@@ -2171,6 +2172,7 @@ async function registerMCPServices(
           '@modelcontextprotocol/sdk/client/streamableHttp.js'
         );
         const { resolveMCPAuthHeaders } = await import('@agor/core/tools/mcp/jwt-auth');
+        const { mergeMCPRemoteHeaders } = await import('@agor/core/tools/mcp/http-headers');
         const { hasMinimumRole, ROLES } = await import('@agor/core/types');
 
         const mcpServerRepo = new MCPServerRepository(db);
@@ -2202,6 +2204,7 @@ async function registerMCPServices(
           url: string;
           transport: 'http' | 'sse' | 'stdio';
           auth?: MCPAuth;
+          headers?: Record<string, string>;
           name?: string;
           scope?: string;
           owner_user_id?: string;
@@ -2217,6 +2220,7 @@ async function registerMCPServices(
             url: data.url!,
             transport: data.transport || 'http',
             auth: data.auth,
+            headers: data.headers,
             name: 'inline-test',
           };
           if (data.mcp_server_id) {
@@ -2267,6 +2271,7 @@ async function registerMCPServices(
             url: server.url || '',
             transport: (server.transport as 'http' | 'sse') || (server.url ? 'http' : 'stdio'),
             auth: server.auth,
+            headers: server.headers,
             name: server.name,
             scope: server.scope,
             owner_user_id: server.owner_user_id,
@@ -2309,6 +2314,7 @@ async function registerMCPServices(
             url: serverConfig.url,
             transport: serverConfig.transport,
             auth: serverConfig.auth,
+            headers: serverConfig.headers,
             name: serverConfig.name,
             mcpServerId: serverId,
           },
@@ -2320,6 +2326,7 @@ async function registerMCPServices(
         }
 
         serverConfig.auth = resolution.resolved.auth;
+        serverConfig.headers = resolution.resolved.headers;
         // Re-validate whenever the input URL was templated, even if the
         // resolved string happens to match the input (e.g., a user env
         // value that itself looks like the template). Pre-resolution
@@ -2339,7 +2346,10 @@ async function registerMCPServices(
           try {
             const probeResponse = await fetch(mcpUrl, {
               method: 'GET',
-              headers: { Accept: 'application/json' },
+              headers: mergeMCPRemoteHeaders({
+                base: { Accept: 'application/json' },
+                custom: serverConfig.headers,
+              }) ?? { Accept: 'application/json' },
             });
             const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
             if (probeResponse.status !== 401) return undefined;
@@ -2416,8 +2426,11 @@ async function registerMCPServices(
           if (cachedToken) authHeaders = { Authorization: `Bearer ${cachedToken}` };
         }
 
-        const headers: Record<string, string> = { Accept: 'application/json, text/event-stream' };
-        if (authHeaders) Object.assign(headers, authHeaders);
+        const headers = mergeMCPRemoteHeaders({
+          base: { Accept: 'application/json, text/event-stream' },
+          custom: serverConfig.headers,
+          auth: authHeaders,
+        }) ?? { Accept: 'application/json, text/event-stream' };
 
         const createMCPConnection = (connHeaders: Record<string, string>) => {
           let sessionId: string | undefined;
@@ -2469,10 +2482,11 @@ async function registerMCPServices(
               clearOAuth21Token(serverConfig.url);
               const freshToken = await probeAndAcquireOAuthToken(serverConfig.url);
               if (freshToken) {
-                const freshHeaders: Record<string, string> = {
-                  Accept: 'application/json, text/event-stream',
-                  Authorization: `Bearer ${freshToken}`,
-                };
+                const freshHeaders = mergeMCPRemoteHeaders({
+                  base: { Accept: 'application/json, text/event-stream' },
+                  custom: serverConfig.headers,
+                  auth: { Authorization: `Bearer ${freshToken}` },
+                }) ?? { Accept: 'application/json, text/event-stream' };
                 const retry = createMCPConnection(freshHeaders);
                 httpTransport = retry.transport;
                 client = retry.client;

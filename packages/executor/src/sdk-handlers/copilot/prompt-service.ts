@@ -13,6 +13,8 @@
 
 import { shortId } from '@agor/core/db';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { CopilotSession } from '@github/copilot-sdk';
 import { CopilotClient } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
@@ -176,12 +178,9 @@ export class CopilotPromptService {
           tools: ['*'],
         };
 
-        // Add auth headers for bearer token
-        if (server.auth?.type === 'bearer' && server.auth.token) {
-          serverConfig.headers = {
-            Authorization: `Bearer ${server.auth.token}`,
-          };
-        }
+        const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+        const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
+        if (headers) serverConfig.headers = headers;
 
         copilotMcpServers[serverName] = serverConfig;
         console.log(`   📝 [Copilot MCP] Configured HTTP server: ${server.name}`);

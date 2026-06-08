@@ -27,6 +27,8 @@ import {
   resolveByShortIdPrefix,
 } from './base';
 
+const REDACTED_SENTINEL = '••••••••';
+
 /**
  * MCP Server repository implementation
  */
@@ -58,6 +60,7 @@ export class MCPServerRepository
       command: row.data.command,
       args: row.data.args,
       url: row.data.url,
+      headers: row.data.headers,
       env: row.data.env,
       auth: row.data.auth,
 
@@ -107,6 +110,7 @@ export class MCPServerRepository
         command: data.command,
         args: data.args,
         url: data.url,
+        headers: 'headers' in data ? data.headers : undefined,
         env: data.env,
         auth: 'auth' in data ? data.auth : undefined,
         tools: 'tools' in data ? data.tools : undefined,
@@ -249,6 +253,16 @@ export class MCPServerRepository
       }
 
       const merged = { ...current, ...updates };
+      if (updates.headers && current.headers) {
+        merged.headers = Object.fromEntries(
+          Object.entries(updates.headers).map(([key, value]) => [
+            key,
+            value === REDACTED_SENTINEL && current.headers?.[key] !== undefined
+              ? current.headers[key]
+              : value,
+          ])
+        );
+      }
       const insertData = this.mcpServerToInsert(merged);
 
       await update(this.db, mcpServers)

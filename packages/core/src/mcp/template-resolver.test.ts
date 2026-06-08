@@ -165,6 +165,26 @@ describe('resolveMcpServerTemplates', () => {
     expect(result.server.auth?.token).toBe('bearer_xyz');
   });
 
+  it('should resolve custom HTTP header templates', () => {
+    const server = createTestServer({
+      name: 'datadog',
+      transport: 'http',
+      url: 'https://mcp.example.com',
+      headers: {
+        'DD-API-KEY': '{{ user.env.BEARER_TOKEN }}',
+        'X-Static': 'static',
+      },
+    });
+
+    const result = resolveMcpServerTemplates(server, context);
+
+    expect(result.isValid).toBe(true);
+    expect(result.server.headers).toEqual({
+      'DD-API-KEY': 'bearer_xyz',
+      'X-Static': 'static',
+    });
+  });
+
   it('should mark server as invalid when required url template fails to resolve', () => {
     const server = createTestServer({
       name: 'broken-server',

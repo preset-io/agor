@@ -10,6 +10,7 @@
 
 import { generateId, shortId } from '@agor/core/db';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
+import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type {
   ContentBlock,
@@ -229,7 +230,8 @@ async function buildCursorMcpServers(args: {
     }
 
     if ((server.transport === 'http' || server.transport === 'sse') && server.url) {
-      const headers = await resolveMCPAuthHeaders(server.auth, server.url);
+      const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+      const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
       mcpServers[name] = {
         type: server.transport,
         url: server.url,

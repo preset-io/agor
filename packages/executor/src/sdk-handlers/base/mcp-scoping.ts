@@ -156,7 +156,9 @@ export async function getMcpServersForSession(
 
       // Check if any templatable field contains templates
       const envValues = Object.values(original.env ?? {}) as string[];
+      const headerValues = Object.values(original.headers ?? {}) as string[];
       const hasEnvTemplates = envValues.some(containsTemplate);
+      const hasHeaderTemplates = headerValues.some(containsTemplate);
       const hasUrlTemplate = containsTemplate(original.url);
       const hasAuthTemplates =
         containsTemplate(original.auth?.token) ||
@@ -164,7 +166,7 @@ export async function getMcpServersForSession(
         containsTemplate(original.auth?.api_token) ||
         containsTemplate(original.auth?.api_secret);
 
-      if (hasEnvTemplates || hasUrlTemplate || hasAuthTemplates) {
+      if (hasEnvTemplates || hasHeaderTemplates || hasUrlTemplate || hasAuthTemplates) {
         const result = resolveMcpServerTemplates(original, templateContext);
 
         if (!result.isValid) {

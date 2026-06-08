@@ -262,6 +262,12 @@
       "import": "./dist/client/claude-system-suppression.js",
       "require": "./dist/client/claude-system-suppression.cjs"
     },
+    "./tools/mcp/http-headers": {
+      "source": "./src/tools/mcp/http-headers.ts",
+      "types": "./dist/tools/mcp/http-headers.d.ts",
+      "import": "./dist/tools/mcp/http-headers.js",
+      "require": "./dist/tools/mcp/http-headers.cjs"
+    },
     "./tools/mcp/jwt-auth": {
       "source": "./src/tools/mcp/jwt-auth.ts",
       "types": "./dist/tools/mcp/jwt-auth.d.ts",

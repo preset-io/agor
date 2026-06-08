@@ -327,3 +327,57 @@ describe('MCPServerRepository scope model', () => {
     expect(user2Servers[0].name).toBe('user2-fs');
   });
 });
+
+describe('MCPServerRepository custom headers', () => {
+  dbTest('should store and retrieve custom HTTP headers', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        name: 'datadog',
+        transport: 'http',
+        url: 'https://mcp.datadog.example/mcp',
+        headers: {
+          'DD-API-KEY': '{{ user.env.DD_API_KEY }}',
+          'X-Datadog-Parent-Org-Id': '1234',
+        },
+      })
+    );
+
+    const found = await repo.findById(created.mcp_server_id);
+
+    expect(found?.headers).toEqual({
+      'DD-API-KEY': '{{ user.env.DD_API_KEY }}',
+      'X-Datadog-Parent-Org-Id': '1234',
+    });
+  });
+
+  dbTest(
+    'should preserve existing header values when update sends redacted sentinel',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const created = await repo.create(
+        createMCPServerData({
+          name: 'datadog',
+          transport: 'http',
+          url: 'https://mcp.datadog.example/mcp',
+          headers: {
+            'DD-API-KEY': 'secret-value',
+            'X-Datadog-Parent-Org-Id': '1234',
+          },
+        })
+      );
+
+      const updated = await repo.update(created.mcp_server_id, {
+        headers: {
+          'DD-API-KEY': '••••••••',
+          'X-Datadog-Parent-Org-Id': '5678',
+        },
+      });
+
+      expect(updated.headers).toEqual({
+        'DD-API-KEY': 'secret-value',
+        'X-Datadog-Parent-Org-Id': '5678',
+      });
+    }
+  );
+});
