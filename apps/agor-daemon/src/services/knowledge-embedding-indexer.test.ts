@@ -30,6 +30,10 @@ describe('buildKnowledgeEmbeddingReuseSql', () => {
     expect(text).toContain('old_u.embedding_model = ');
     expect(text).toContain('old_u.embedding_dimensions = ');
     expect(text).toContain('e.embedding_space_id = ');
+    expect(text).toContain('p.content_md5 AS new_embedding_hash');
+    expect(text).toContain('embedding_hash = candidates.new_embedding_hash');
+    expect(text).not.toContain('old_u.embedding_hash');
+    expect(text).not.toContain('embedding_hash = COALESCE');
     expect(text).toContain('ON CONFLICT (unit_id, embedding_space_id)');
 
     expect(sqlParams(query as never)).toEqual(

@@ -54,7 +54,7 @@ export function buildKnowledgeEmbeddingReuseSql(params: KnowledgeEmbeddingReuseS
             SELECT DISTINCT ON (p.unit_id)
               p.unit_id AS new_unit_id,
               e.content_sha256,
-              old_u.embedding_hash,
+              p.content_md5 AS new_embedding_hash,
               e.embedding,
               e.token_count
             FROM pending p
@@ -98,7 +98,7 @@ export function buildKnowledgeEmbeddingReuseSql(params: KnowledgeEmbeddingReuseS
           SET embedding_status = 'ready',
               embedding_model = ${params.model},
               embedding_dimensions = ${params.dimensions},
-              embedding_hash = COALESCE(candidates.embedding_hash, candidates.content_sha256),
+              embedding_hash = candidates.new_embedding_hash,
               embedding_error = NULL,
               updated_at = now()
           FROM upserted
@@ -213,8 +213,9 @@ export class KnowledgeEmbeddingIndexer {
    *
    * `kb_unit_embeddings.content_sha256` records the exact text that produced
    * the stored vector. During normalized-hash reuse this may intentionally
-   * differ from the new unit's byte-level content while `embedding_hash` keeps
-   * the normalized chunk hash used for reuse/staleness decisions.
+   * differ from the new unit's byte-level content. `embedding_hash` is always
+   * set to the pending unit's normalized chunk hash (`content_md5`) so reused
+   * and freshly embedded units have consistent staleness metadata.
    */
   private async reuseExistingEmbeddings(params: {
     embeddingSpaceId: string;
