@@ -14,18 +14,27 @@ class FakeChannel {
   }
 }
 
-function makeApp(connections: unknown[]) {
+function makeApp(
+  connections: unknown[],
+  services: Record<string, { get: (id: string) => Promise<unknown> }> = {}
+) {
   let publishFn: ((data: unknown, context: any) => unknown) | undefined;
-  return {
+  const app = {
     channel: vi.fn(() => new FakeChannel(connections)),
     publish: vi.fn((fn) => {
       publishFn = fn;
     }),
+    service: vi.fn((path: string) => {
+      const service = services[path];
+      if (!service) throw new Error(`Unexpected service: ${path}`);
+      return service;
+    }),
     async runPublish(data: unknown, context: any) {
       if (!publishFn) throw new Error('publish not configured');
-      return (await publishFn(data, context)) as FakeChannel;
+      return (await publishFn(data, { ...context, app })) as FakeChannel;
     },
   } as any;
+  return app;
 }
 
 function user(id: string, role = ROLES.MEMBER): User {
@@ -100,6 +109,29 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }, { user: admin }]);
   });
 
+  it('honors allowSuperadmin=false for branch events', async () => {
+    const admin = user('admin', ROLES.SUPERADMIN);
+    const app = makeApp([{ user: admin }]);
+    const r = repos({
+      branch: branch('b1', 'none'),
+      users: [admin],
+      permissions: { admin: 'none' },
+    });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: true,
+      allowSuperadmin: false,
+      ...r,
+    });
+
+    const channel = await app.runPublish(
+      { branch_id: 'b1' },
+      { path: 'branches', method: 'patch', event: 'patched' }
+    );
+
+    expect(channel.connections).toEqual([]);
+  });
+
   it('resolves task/message events through session_id before filtering', async () => {
     const allowed = user('allowed');
     const denied = user('denied');
@@ -143,6 +175,73 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }]);
   });
 
+  it('resolves board comment events through session_id when branch_id is absent', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const app = makeApp([{ user: allowed }, { user: denied }]);
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      users: [allowed, denied],
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { comment_id: 'c1', session_id: 's1' },
+      { path: 'board-comments', method: 'create', event: 'created' }
+    );
+
+    expect(r.sessionsRepository.findById).toHaveBeenCalledWith('s1');
+    expect(channel.connections).toEqual([{ user: allowed }]);
+  });
+
+  it('resolves board comment events through task_id when branch_id is absent', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const app = makeApp([{ user: allowed }, { user: denied }], {
+      tasks: { get: vi.fn(async () => ({ session_id: 's1' })) },
+    });
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      users: [allowed, denied],
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { comment_id: 'c1', task_id: 't1' },
+      { path: 'board-comments', method: 'create', event: 'created' }
+    );
+
+    expect(app.service('tasks').get).toHaveBeenCalledWith('t1', { provider: undefined });
+    expect(channel.connections).toEqual([{ user: allowed }]);
+  });
+
+  it('resolves board comment events through message_id when branch_id is absent', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const app = makeApp([{ user: allowed }, { user: denied }], {
+      messages: { get: vi.fn(async () => ({ session_id: 's1' })) },
+    });
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      users: [allowed, denied],
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { comment_id: 'c1', message_id: 'm1' },
+      { path: 'board-comments', method: 'create', event: 'created' }
+    );
+
+    expect(app.service('messages').get).toHaveBeenCalledWith('m1', { provider: undefined });
+    expect(channel.connections).toEqual([{ user: allowed }]);
+  });
+
   it('filters optional branch-scoped events when they carry branch_id', async () => {
     const allowed = user('allowed');
     const denied = user('denied');
@@ -179,6 +278,42 @@ describe('configureRealtimePublish', () => {
     );
 
     expect(channel.connections).toEqual([{ user: allowed }, { user: denied }]);
+  });
+
+  it('keeps null-branch artifact events scoped to creator/admin/service connections', async () => {
+    const creator = user('creator');
+    const other = user('other');
+    const admin = user('admin', ROLES.ADMIN);
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([{ user: creator }, { user: other }, { user: admin }, service]);
+    const r = repos({
+      branch: branch('b1', 'none'),
+      users: [creator, other, admin],
+      permissions: { creator: 'none', other: 'none', admin: 'none' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { artifact_id: 'a1', branch_id: null, created_by: 'creator', public: false },
+      { path: 'artifacts', method: 'patch', event: 'patched' }
+    );
+
+    expect(channel.connections).toEqual([{ user: creator }, { user: admin }, service]);
+  });
+
+  it('fails closed for null-branch artifact events without a creator', async () => {
+    const allowed = user('allowed');
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([{ user: allowed }, service]);
+    const r = repos({ branch: branch('b1'), users: [allowed], permissions: { allowed: 'view' } });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { artifact_id: 'a1', branch_id: null, public: false },
+      { path: 'artifacts', method: 'patch', event: 'patched' }
+    );
+
+    expect(channel.connections).toEqual([service]);
   });
 
   it('fails closed for scoped events without a resolvable session or branch', async () => {
