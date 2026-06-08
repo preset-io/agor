@@ -1,6 +1,8 @@
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://agor.live';
+
 /** @type {import('next-sitemap').IConfig} */
 module.exports = {
-  siteUrl: 'https://agor.live',
+  siteUrl,
   generateRobotsTxt: false, // We use custom robots.txt in public/
   outDir: './out',
   changefreq: 'weekly',

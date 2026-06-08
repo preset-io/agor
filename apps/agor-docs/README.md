@@ -30,6 +30,30 @@ pages/
     └── index.mdx
 ```
 
+## Page metadata and social previews
+
+All page-level social metadata is centralized in `theme.config.tsx`. Authors should set
+frontmatter instead of adding ad hoc `<Head>` tags:
+
+```mdx
+---
+title: Cards
+description: Generic workflow cards that give you spatial oversight of any agentic workflow.
+heroImage: '/screenshots/cards-hero.png'
+---
+```
+
+- `image` is the existing blog-post hero/card image convention.
+- `heroImage` is the docs/feature-page convention for pages with a visible hero screenshot.
+- `socialImage` or `ogImage` may be used only when the social preview should intentionally
+  differ from the visible hero image.
+
+Local image paths must live under `public/` and start with `/`. The metadata layer turns
+them into absolute `og:image` and `twitter:image` URLs using `NEXT_PUBLIC_SITE_URL` plus
+`NEXT_PUBLIC_BASE_PATH` when configured. Pages without any image field fall back to
+`/hero.png`. Add `imageWidth` and `imageHeight` only when you know the exact image
+dimensions.
+
 ## Phase 1 (Complete)
 
 - ✅ Nextra setup with dark mode

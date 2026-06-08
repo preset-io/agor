@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build && next-sitemap --config next-sitemap.config.cjs",
-    "start": "next start"
+    "start": "next start",
+    "typecheck": "tsc --noEmit --incremental false",
+    "validate:social-metadata": "node scripts/validate-social-metadata.mjs"
   },
   "dependencies": {
     "@theguild/remark-mermaid": "^0.3.0",

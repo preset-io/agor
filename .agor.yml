@@ -3,7 +3,8 @@ environment:
   variants:
     docs:
       start: >-
-        PORT={{add 7000 branch.unique_id}} docker compose -f apps/agor-docs/docker-compose.yml -p
+        PORT={{add 7000 branch.unique_id}} NEXT_PUBLIC_SITE_URL=http://{{host.ip_address}}:{{add
+        7000 branch.unique_id}} docker compose -f apps/agor-docs/docker-compose.yml -p
         agor-docs-{{branch.name}} up -d --build
       stop: docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{branch.name}} down
       description: >-

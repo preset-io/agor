@@ -1,0 +1,84 @@
+const DEFAULT_SITE_URL = 'https://agor.live';
+
+export const DEFAULT_DESCRIPTION =
+  'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.';
+
+export const DEFAULT_SOCIAL_IMAGE = '/hero.png';
+
+export type FrontMatterLike = {
+  canonical?: string;
+  description?: string;
+  heroImage?: string;
+  image?: string;
+  imageHeight?: number | string;
+  imageWidth?: number | string;
+  ogImage?: string;
+  socialImage?: string;
+  title?: string;
+  [key: string]: unknown;
+};
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+export function getSiteUrl(): string {
+  return trimTrailingSlash(process.env.NEXT_PUBLIC_SITE_URL || DEFAULT_SITE_URL);
+}
+
+export function getBasePath(): string {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+
+  if (!basePath) {
+    return '';
+  }
+
+  return `/${basePath.replace(/^\/+|\/+$/g, '')}`;
+}
+
+function isAbsoluteUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function withBasePath(path: string): string {
+  const basePath = getBasePath();
+
+  if (!basePath) {
+    return path;
+  }
+
+  if (path === basePath || path.startsWith(`${basePath}/`)) {
+    return path;
+  }
+
+  return `${basePath}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+export function toAbsoluteUrl(value: string): string {
+  if (isAbsoluteUrl(value)) {
+    return value;
+  }
+
+  const path = value.startsWith('/') ? value : `/${value}`;
+  return `${getSiteUrl()}${withBasePath(path)}`;
+}
+
+export function getCanonicalUrl(pathname: string, canonical?: string): string {
+  if (canonical) {
+    return toAbsoluteUrl(canonical);
+  }
+
+  const cleanPathname = pathname === '/' ? '' : pathname;
+  return toAbsoluteUrl(cleanPathname || '/');
+}
+
+export function getSocialImage(frontMatter: FrontMatterLike): string {
+  const image =
+    frontMatter.ogImage ||
+    frontMatter.socialImage ||
+    frontMatter.heroImage ||
+    frontMatter.image ||
+    DEFAULT_SOCIAL_IMAGE;
+
+  return toAbsoluteUrl(String(image));
+}

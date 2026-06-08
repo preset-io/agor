@@ -3,10 +3,16 @@ import type { DocsThemeConfig } from 'nextra-theme-docs';
 import { useConfig } from 'nextra-theme-docs';
 import { NavbarCloudCTA } from './components/NavbarCloudCTA';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from './lib/links';
+import {
+  DEFAULT_DESCRIPTION,
+  getBasePath,
+  getCanonicalUrl,
+  getSiteUrl,
+  getSocialImage,
+} from './lib/siteMetadata';
 
-const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
-const defaultSiteUrl = 'https://agor.live';
-const defaultOgImage = `${defaultSiteUrl}/hero.png`;
+const basePath = getBasePath();
+const siteUrl = getSiteUrl();
 
 const config: DocsThemeConfig = {
   logo: (
@@ -79,21 +85,20 @@ const config: DocsThemeConfig = {
     const { asPath } = useRouter();
 
     const pathname = asPath?.split('#')[0]?.split('?')[0] ?? '/';
-    const siteUrl = frontMatter.canonical ?? `${defaultSiteUrl}${pathname === '/' ? '' : pathname}`;
+    const canonicalUrl = getCanonicalUrl(pathname, frontMatter.canonical);
 
     const pageTitle = frontMatter.title ?? title ?? 'agor';
-    const description =
-      frontMatter.description ||
-      'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.';
+    const description = frontMatter.description || DEFAULT_DESCRIPTION;
     const fullTitle =
       pageTitle === 'agor'
         ? 'agor – Team command center for all things agentic'
         : `${pageTitle} – agor`;
-    const rawOgImage = frontMatter.ogImage || frontMatter.image || defaultOgImage;
-    const ogImage = rawOgImage.startsWith('http') ? rawOgImage : `${defaultSiteUrl}${rawOgImage}`;
+    const socialImage = getSocialImage(frontMatter);
     const ogType = frontMatter.date ? 'article' : 'website';
     const publishedTime = frontMatter.date ? new Date(frontMatter.date).toISOString() : undefined;
     const gaId = process.env.NEXT_PUBLIC_GA_ID;
+    const imageWidth = frontMatter.imageWidth ? String(frontMatter.imageWidth) : undefined;
+    const imageHeight = frontMatter.imageHeight ? String(frontMatter.imageHeight) : undefined;
 
     return (
       <>
@@ -133,22 +138,22 @@ const config: DocsThemeConfig = {
         <meta property="og:site_name" content="agor" />
         <meta property="og:title" content={fullTitle} />
         <meta property="og:description" content={description} />
-        <meta property="og:image" content={ogImage} />
-        <meta property="og:image:width" content="1200" />
-        <meta property="og:image:height" content="630" />
-        <meta property="og:url" content={siteUrl} />
+        <meta property="og:image" content={socialImage} />
+        {imageWidth && <meta property="og:image:width" content={imageWidth} />}
+        {imageHeight && <meta property="og:image:height" content={imageHeight} />}
+        <meta property="og:url" content={canonicalUrl} />
         {publishedTime && <meta property="article:published_time" content={publishedTime} />}
 
         {/* Twitter Card */}
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content={fullTitle} />
         <meta name="twitter:description" content={description} />
-        <meta name="twitter:image" content={ogImage} />
+        <meta name="twitter:image" content={socialImage} />
 
         {/* Additional Meta */}
         <meta name="theme-color" content="#2e9a92" />
         <link rel="icon" type="image/png" href={`${basePath}/favicon.png`} />
-        <link rel="canonical" href={siteUrl} />
+        <link rel="canonical" href={canonicalUrl} />
 
         {/* JSON-LD Structured Data */}
         <script
@@ -162,8 +167,8 @@ const config: DocsThemeConfig = {
                     '@type': 'BlogPosting',
                     headline: pageTitle,
                     description,
-                    image: ogImage,
-                    url: siteUrl,
+                    image: socialImage,
+                    url: canonicalUrl,
                     datePublished: new Date(frontMatter.date).toISOString(),
                     author: {
                       '@type': 'Person',
@@ -174,7 +179,7 @@ const config: DocsThemeConfig = {
                       name: 'Agor',
                       logo: {
                         '@type': 'ImageObject',
-                        url: `${defaultSiteUrl}/logo.png`,
+                        url: `${siteUrl}${basePath}/logo.png`,
                       },
                     },
                   }
@@ -182,8 +187,7 @@ const config: DocsThemeConfig = {
                     '@context': 'https://schema.org',
                     '@type': 'SoftwareApplication',
                     name: 'agor',
-                    description:
-                      'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.',
+                    description: DEFAULT_DESCRIPTION,
                     applicationCategory: 'DeveloperApplication',
                     operatingSystem: 'macOS, Linux, Windows',
                     offers: {
@@ -191,13 +195,13 @@ const config: DocsThemeConfig = {
                       price: '0',
                       priceCurrency: 'USD',
                     },
-                    url: siteUrl,
+                    url: canonicalUrl,
                     codeRepository: 'https://github.com/preset-io/agor',
                     author: {
                       '@type': 'Person',
                       name: 'Maxime Beauchemin',
                     },
-                    screenshot: ogImage,
+                    screenshot: socialImage,
                   }
             ),
           }}
@@ -217,7 +221,7 @@ const config: DocsThemeConfig = {
                     '@type': 'ListItem',
                     position: 1,
                     name: 'Home',
-                    item: defaultSiteUrl,
+                    item: `${siteUrl}${basePath || ''}`,
                   },
                   ...pathname
                     .split('/')
@@ -229,7 +233,7 @@ const config: DocsThemeConfig = {
                         index === arr.length - 1
                           ? pageTitle
                           : segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' '),
-                      item: `${defaultSiteUrl}/${arr.slice(0, index + 1).join('/')}`,
+                      item: `${siteUrl}${basePath}/${arr.slice(0, index + 1).join('/')}`,
                     })),
                 ],
               }),
