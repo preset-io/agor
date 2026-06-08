@@ -10,13 +10,18 @@ import {
   AppVariableRepository,
   type CreateKnowledgeDocumentInput,
   type Database,
+  eq,
   isPostgresDatabase,
   type KnowledgeDocumentFilters,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
   KnowledgeGraphRepository,
   KnowledgeNamespaceRepository,
+  kbDocumentUnits,
+  kbDocumentVersions,
+  select,
   type UpdateKnowledgeDocumentInput,
+  update,
 } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type {
@@ -79,6 +84,36 @@ type KnowledgeDocumentWriteData = (CreateKnowledgeDocumentInput | UpdateKnowledg
   namespace_display_name?: string | null;
   expected_version?: string | number;
 };
+
+const CHUNK_REUSE_INTO_NEXT_METADATA_KEY = 'chunk_reuse_into_next';
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function countChunkHashOverlap(
+  previousHashes: Array<string | null | undefined>,
+  nextHashes: Array<string | null | undefined>
+): number {
+  const remaining = new Map<string, number>();
+  for (const hash of previousHashes) {
+    if (!hash) continue;
+    remaining.set(hash, (remaining.get(hash) ?? 0) + 1);
+  }
+
+  let reused = 0;
+  for (const hash of nextHashes) {
+    if (!hash) continue;
+    const count = remaining.get(hash) ?? 0;
+    if (count <= 0) continue;
+    reused += 1;
+    if (count === 1) remaining.delete(hash);
+    else remaining.set(hash, count - 1);
+  }
+  return reused;
+}
 
 type KnowledgeDocumentRef = {
   document_id?: string;
@@ -262,9 +297,48 @@ export class KnowledgeDocumentsService extends DrizzleService<
     );
   }
 
+  private async recordChunkReuseIntoNext(params: {
+    previousVersionId?: string | null;
+    targetVersionId: string;
+    nextChunkHashes: Array<string | null | undefined>;
+  }): Promise<void> {
+    if (!params.previousVersionId || params.previousVersionId === params.targetVersionId) return;
+    const [previousVersion, previousUnits] = await Promise.all([
+      this.versions.findById(params.previousVersionId),
+      select(this.db, { content_md5: kbDocumentUnits.content_md5 })
+        .from(kbDocumentUnits)
+        .where(eq(kbDocumentUnits.version_id, params.previousVersionId))
+        .all() as Promise<Array<{ content_md5: string | null }>>,
+    ]);
+    if (!previousVersion) return;
+
+    const metadata = metadataRecord(previousVersion.metadata);
+    const reusedChunks = countChunkHashOverlap(
+      previousUnits.map((unit) => unit.content_md5),
+      params.nextChunkHashes
+    );
+
+    await update(this.db, kbDocumentVersions)
+      .set({
+        metadata: {
+          ...metadata,
+          [CHUNK_REUSE_INTO_NEXT_METADATA_KEY]: {
+            target_version_id: params.targetVersionId,
+            basis: 'content_md5_overlap',
+            reused_chunks: reusedChunks,
+            total_chunks: params.nextChunkHashes.length,
+            updated_at: new Date().toISOString(),
+          },
+        },
+      })
+      .where(eq(kbDocumentVersions.version_id, params.previousVersionId))
+      .run();
+  }
+
   private async replaceSearchUnitsForContent(
     doc: KnowledgeDocument,
-    content?: string | null
+    content?: string | null,
+    previousVersionId?: string | null
   ): Promise<void> {
     if (typeof content !== 'string' || !doc.current_version_id) return;
     const config = await loadConfig();
@@ -275,6 +349,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
     );
     await this.repo.replaceUnitsForVersion(doc.current_version_id, chunks, {
       embeddingConfigured: await this.isEmbeddingConfigured(),
+    });
+    await this.recordChunkReuseIntoNext({
+      previousVersionId,
+      targetVersionId: doc.current_version_id,
+      nextChunkHashes: chunks.map((chunk) => chunk.content_md5),
     });
     const indexer = (this.app as unknown as { get?: (key: string) => unknown } | undefined)?.get?.(
       'knowledgeEmbeddingIndexer'
@@ -490,7 +569,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
           existing
         )
       );
-      await this.replaceSearchUnitsForContent(result, data.content_text);
+      await this.replaceSearchUnitsForContent(
+        result,
+        data.content_text,
+        existing.current_version_id
+      );
       await this.syncGraphReferences(result, data.content_text, userId);
       this.emit?.('patched', result, params);
       return result;
@@ -586,7 +669,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
     });
     await this.replaceSearchUnitsForContent(
       result,
-      (data as KnowledgeDocumentWriteData).content_text
+      (data as KnowledgeDocumentWriteData).content_text,
+      existing.current_version_id
     );
     await this.syncGraphReferences(
       result,
@@ -616,7 +700,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
     });
     await this.replaceSearchUnitsForContent(
       result,
-      (data as KnowledgeDocumentWriteData).content_text
+      (data as KnowledgeDocumentWriteData).content_text,
+      existing.current_version_id
     );
     await this.syncGraphReferences(
       result,
