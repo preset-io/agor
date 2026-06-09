@@ -1,6 +1,6 @@
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { executorRuntimeScopeGuard } from './executor-runtime-scope';
+import { executorRuntimeScopeGuard, scopeExecutorRuntimeAuth } from './executor-runtime-scope';
 
 const payload = {
   type: 'executor-session',
@@ -160,6 +160,47 @@ describe('executorRuntimeScopeGuard', () => {
     });
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+      /not valid for this endpoint/
+    );
+  });
+
+  it('allows scoped read-only session MCP server resolution', async () => {
+    const context = ctx({
+      path: 'sessions/:id/mcp-servers',
+      method: 'find',
+      params: { authentication: { payload }, query: {}, route: { id: 'session-1' } },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it('rejects session MCP server writes under executor token auth', async () => {
+    const context = ctx({
+      path: 'sessions/:id/mcp-servers',
+      method: 'create',
+      params: { authentication: { payload }, query: {}, route: { id: 'session-1' } },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+      /not valid for this endpoint/
+    );
+  });
+
+  it('rejects session MCP server reads for another session', async () => {
+    const context = ctx({
+      path: 'sessions/:id/mcp-servers',
+      method: 'find',
+      params: { authentication: { payload }, query: {}, route: { id: 'session-2' } },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/session scope/);
+  });
+
+  it('wraps auth hooks with executor runtime scope validation', async () => {
+    const requireAuth = async (context: HookContext) => context;
+    const context = ctx({ path: 'config/resolve-api-key', method: 'create' });
+
+    await expect(scopeExecutorRuntimeAuth(requireAuth)(context)).rejects.toThrow(
       /not valid for this endpoint/
     );
   });

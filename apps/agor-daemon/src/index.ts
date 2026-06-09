@@ -46,6 +46,7 @@ import { getServiceTier, isServiceEnabled } from '@agor/core/types';
 import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
+import { scopeExecutorRuntimeAuth } from './auth/executor-runtime-scope.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
@@ -189,7 +190,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   // Auth configuration
   // --------------------------------------------------------------------------
-  const requireAuth = authenticate({ strategies: ['api-key', 'jwt'] });
+  const requireAuth = scopeExecutorRuntimeAuth(authenticate({ strategies: ['api-key', 'jwt'] }));
 
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;

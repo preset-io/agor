@@ -59,6 +59,10 @@ function routeId(context: HookContext): string | undefined {
   return (context.params as Params & { route?: { id?: string } }).route?.id;
 }
 
+function routeSessionId(context: HookContext): string | undefined {
+  return routeId(context) ?? (typeof context.id === 'string' ? context.id : undefined);
+}
+
 function recordsFromData(data: unknown): Record<string, unknown>[] {
   if (Array.isArray(data)) {
     return data.map((item) => {
@@ -96,6 +100,25 @@ function scopeStreamingEnvelope(data: unknown, scope: Scope): void {
     throw new Forbidden('Executor token requires scoped streaming event data');
   }
   scopeTaskRecord(eventData, scope);
+}
+
+function requireMatchingSessionRoute(context: HookContext, scope: Scope): void {
+  const sessionId = expectClaim(scope.sessionId, 'session');
+  const query = ((context.params as Params).query ?? {}) as Record<string, unknown>;
+  const requestedSessionId = routeSessionId(context) ?? query.session_id;
+  expectMatch(sessionId, requestedSessionId, 'session');
+  if (requestedSessionId === undefined || requestedSessionId === null) {
+    throw new Forbidden('Executor token session scope is required for this request');
+  }
+}
+
+type AuthHook = (context: HookContext) => Promise<HookContext>;
+
+export function scopeExecutorRuntimeAuth(requireAuth: AuthHook): AuthHook {
+  return async (context: HookContext): Promise<HookContext> => {
+    const authenticated = await requireAuth(context);
+    return executorRuntimeScopeGuard()(authenticated);
+  };
 }
 
 /**
@@ -199,11 +222,12 @@ export function executorRuntimeScopeGuard() {
       }
       scopeStreamingEnvelope(context.data, scope);
     } else if (path === 'sessions/:id/genealogy' || path === 'sessions/genealogy') {
-      const sessionId = expectClaim(scope.sessionId, 'session');
-      expectMatch(sessionId, routeId(context) ?? id ?? query.session_id, 'session');
-      if (routeId(context) === undefined && id === undefined && query.session_id === undefined) {
-        throw new Forbidden('Executor token session scope is required for this request');
+      requireMatchingSessionRoute(context, scope);
+    } else if (path === 'sessions/:id/mcp-servers' || path === 'sessions/mcp-servers') {
+      if (context.method !== 'find') {
+        throw new Forbidden('Executor token is not valid for this endpoint');
       }
+      requireMatchingSessionRoute(context, scope);
     } else {
       throw new Forbidden('Executor token is not valid for this endpoint');
     }

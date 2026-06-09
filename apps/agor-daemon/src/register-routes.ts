@@ -47,6 +47,7 @@ import type {
   ServiceGroupName,
   ServiceTier,
   SessionID,
+  SessionMCPServer,
   StreamingEventType,
   Task,
   TaskID,
@@ -66,7 +67,6 @@ import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
-import { executorRuntimeScopeGuard } from './auth/executor-runtime-scope.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
 import {
   issueRuntimeToken,
@@ -210,7 +210,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     svcTier,
     jwtSecret,
     branchRbacEnabled,
-    requireAuth: baseRequireAuth,
+    requireAuth,
     enforcePasswordChange,
     superadminOpts,
     DB_PATH,
@@ -229,11 +229,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionEnvSelectionsService,
     terminalsService: _terminalsService,
   } = ctx;
-
-  const requireAuth = async (context: HookContext): Promise<HookContext> => {
-    const authenticated = await baseRequireAuth(context);
-    return executorRuntimeScopeGuard()(authenticated);
-  };
 
   const usersService = app.service('users');
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
@@ -3152,11 +3147,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
           const includeGlobal =
             params.query?.includeGlobal === 'true' || params.query?.includeGlobal === true;
-          const sessionServerRefs = await sessionMCPServersService.listServers(
-            id as import('@agor/core/types').SessionID,
-            enabledOnly,
-            params
-          );
+          const includeMetadata =
+            params.query?.includeMetadata === 'true' || params.query?.includeMetadata === true;
           const mcpService = app.service('mcp-servers');
           const userId = params.user?.user_id;
           const rawLookupParams = {
@@ -3166,6 +3158,40 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               ...(userId ? { forUserId: userId } : {}),
             },
           };
+          if (includeMetadata) {
+            const linksResult = await app.service('session-mcp-servers').find({
+              ...params,
+              provider: undefined,
+              query: {
+                session_id: id,
+                ...(enabledOnly ? { enabled: true } : {}),
+                $limit: 1000,
+              },
+            });
+            const links = (Array.isArray(linksResult) ? linksResult : linksResult.data) as Array<
+              SessionMCPServer & { added_at: Date | string | number }
+            >;
+            const withMetadata = await Promise.all(
+              links.map(async (link) => {
+                try {
+                  const server = await mcpService.get(link.mcp_server_id, rawLookupParams);
+                  return {
+                    server,
+                    added_at: new Date(link.added_at).getTime(),
+                    enabled: Boolean(link.enabled),
+                  };
+                } catch (_error) {
+                  return null;
+                }
+              })
+            );
+            return withMetadata.filter((entry) => entry !== null);
+          }
+          const sessionServerRefs = await sessionMCPServersService.listServers(
+            id as import('@agor/core/types').SessionID,
+            enabledOnly,
+            params
+          );
           const sessionServers = await Promise.all(
             sessionServerRefs.map(async (server) => {
               try {
