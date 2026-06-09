@@ -60,7 +60,7 @@ export class SessionTokenService {
   async generateToken(
     sessionId: string,
     userId: string,
-    scope: { taskId?: string; branchId?: string } = {}
+    scope: { taskId?: string; branchId?: string; maxUses?: number } = {}
   ): Promise<string> {
     if (!this.jwtSecret) {
       throw new Error('SessionTokenService: JWT secret not set. Call setJwtSecret() first.');
@@ -100,7 +100,7 @@ export class SessionTokenService {
       user_id: userId,
       created_at: now,
       expires_at: expiresAt,
-      max_uses: this.config.max_uses,
+      max_uses: scope.maxUses ?? this.config.max_uses,
       use_count: 0,
     });
 

@@ -32,4 +32,30 @@ describe('SessionTokenService runtime scoping', () => {
       service.validateToken(token, { sessionId: 'session-1', taskId: 'task-1' })
     ).resolves.toBeNull();
   });
+
+  it('can issue reusable scoped runtime tokens when per-call max-use counting is not suitable', async () => {
+    const service = new SessionTokenService({ expiration_ms: 60_000, max_uses: 1 });
+    service.setJwtSecret('session-token-test-secret');
+
+    const token = await service.generateToken('session-1', 'user-1', {
+      taskId: 'task-1',
+      branchId: 'branch-1',
+      maxUses: -1,
+    });
+
+    await expect(
+      service.validateToken(token, {
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        branchId: 'branch-1',
+      })
+    ).resolves.toMatchObject({ session_id: 'session-1', task_id: 'task-1' });
+    await expect(
+      service.validateToken(token, {
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        branchId: 'branch-1',
+      })
+    ).resolves.toMatchObject({ session_id: 'session-1', task_id: 'task-1' });
+  });
 });

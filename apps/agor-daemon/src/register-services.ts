@@ -662,7 +662,16 @@ function createExecuteHandler(
     const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
       sessionId,
       (params as AuthenticatedParams).user!.user_id,
-      { taskId: data.taskId, branchId: session.branch_id }
+      {
+        taskId: data.taskId,
+        branchId: session.branch_id,
+        // Executor JWTs authenticate on every daemon API call over the runtime
+        // connection, so low per-call max-use limits make normal execution
+        // fail after startup. Keep expiry + in-memory revocation for these
+        // scoped runtime credentials; revisit max-use semantics once they can
+        // be counted per connection/task instead of per service method.
+        maxUses: -1,
+      }
     );
 
     const taskId = data.taskId;
