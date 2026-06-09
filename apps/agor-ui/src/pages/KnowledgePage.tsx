@@ -97,6 +97,13 @@ import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
 import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
+import {
+  buildKnowledgeRoutePath,
+  decodeKnowledgeRoutePath,
+  getKnowledgeRouteBase,
+  namespaceSlugFromUri,
+  safeDecodeURIComponent,
+} from '../utils/knowledgeRoutes';
 import { useThemedModal } from '../utils/modal';
 import { slugify } from '../utils/repoSlug';
 
@@ -393,51 +400,6 @@ const kindFilterFromUrlParam = (value: string | null) => {
   if (value === 'skills') return 'Skills';
   if (value === 'memories') return 'Memories';
   return 'All';
-};
-
-const safeDecodeURIComponent = (value: string) => {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-};
-
-const decodeKnowledgeRoutePath = (value?: string) =>
-  (value ?? '').split('/').filter(Boolean).map(safeDecodeURIComponent).join('/');
-
-const encodeKnowledgeRoutePath = (path: string) =>
-  path
-    .split('/')
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment))
-    .join('/');
-
-const getKnowledgeRouteBase = (pathname: string) =>
-  pathname.startsWith('/knowledge') ? '/knowledge' : '/kb';
-
-const buildKnowledgeRoutePath = (
-  basePath: string,
-  namespaceSlug?: string | null,
-  documentPath?: string | null
-) => {
-  if (!namespaceSlug || namespaceSlug === 'all') return basePath;
-  const encodedNamespace = encodeURIComponent(namespaceSlug);
-  const encodedDocumentPath = documentPath ? encodeKnowledgeRoutePath(documentPath) : '';
-  return encodedDocumentPath
-    ? `${basePath}/${encodedNamespace}/${encodedDocumentPath}`
-    : `${basePath}/${encodedNamespace}`;
-};
-
-// Non-throwing slug extraction from a `agor://kb/<slug>/<path>` URI. Unlike
-// parseKnowledgeUri (which normalizes/validates the path and throws), this only
-// pulls the namespace slug so one malformed doc can't break the mention list.
-const namespaceSlugFromUri = (uri?: string | null): string | null => {
-  const prefix = 'agor://kb/';
-  if (!uri?.startsWith(prefix)) return null;
-  const rest = uri.slice(prefix.length);
-  const slash = rest.indexOf('/');
-  return slash > 0 ? rest.slice(0, slash) : null;
 };
 
 // Non-throwing leaf title used only as a fallback when a doc has no title.
