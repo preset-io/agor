@@ -182,11 +182,22 @@ export function executorRuntimeScopeGuard() {
     } else if (path === 'messages') {
       const taskId = expectClaim(scope.taskId, 'task');
       if (context.method === 'find') {
-        expectMatch(taskId, query.task_id, 'task');
-        setIfAbsent(query, 'task_id', taskId);
-        if (scope.sessionId) {
-          expectMatch(scope.sessionId, query.session_id, 'session');
-          setIfAbsent(query, 'session_id', scope.sessionId);
+        const hasTaskQuery = query.task_id !== undefined && query.task_id !== null;
+        const hasSessionQuery = query.session_id !== undefined && query.session_id !== null;
+        if (hasTaskQuery) {
+          expectMatch(taskId, query.task_id, 'task');
+          if (scope.sessionId) {
+            expectMatch(scope.sessionId, query.session_id, 'session');
+            setIfAbsent(query, 'session_id', scope.sessionId);
+          }
+        } else if (hasSessionQuery) {
+          const sessionId = expectClaim(scope.sessionId, 'session');
+          expectMatch(sessionId, query.session_id, 'session');
+        } else {
+          setIfAbsent(query, 'task_id', taskId);
+          if (scope.sessionId) {
+            setIfAbsent(query, 'session_id', scope.sessionId);
+          }
         }
       } else if (context.method === 'create') {
         for (const record of recordsFromData(context.data)) {

@@ -31,6 +31,40 @@ describe('executorRuntimeScopeGuard', () => {
     });
   });
 
+  it('allows session-wide message history reads for the scoped session', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'find',
+      params: { authentication: { payload }, query: { session_id: 'session-1' } },
+    });
+
+    await executorRuntimeScopeGuard()(context);
+
+    expect(context.params.query).toEqual({ session_id: 'session-1' });
+  });
+
+  it('rejects session-wide message reads for another session', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'find',
+      params: { authentication: { payload }, query: { session_id: 'session-2' } },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/session scope/);
+  });
+
+  it('keeps explicit message task reads scoped to the executor task', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'find',
+      params: { authentication: { payload }, query: { task_id: 'task-1' } },
+    });
+
+    await executorRuntimeScopeGuard()(context);
+
+    expect(context.params.query).toEqual({ task_id: 'task-1', session_id: 'session-1' });
+  });
+
   it('rejects find queries that request a different scoped object', async () => {
     const context = ctx({
       path: 'tasks',
