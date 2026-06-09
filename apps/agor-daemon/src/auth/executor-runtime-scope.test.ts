@@ -109,6 +109,46 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/messages request/);
   });
 
+  it('allows message patch when the existing message belongs to the scoped task', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'patch',
+      id: 'message-1',
+      data: { content_preview: 'done' },
+      service: {
+        messagesRepo: {
+          findById: async () => ({
+            message_id: 'message-1',
+            task_id: 'task-1',
+            session_id: 'session-1',
+          }),
+        },
+      },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it('rejects message patch when the existing message belongs to another task', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'patch',
+      id: 'message-1',
+      data: { content_preview: 'done' },
+      service: {
+        messagesRepo: {
+          findById: async () => ({
+            message_id: 'message-1',
+            task_id: 'task-2',
+            session_id: 'session-1',
+          }),
+        },
+      },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
+  });
+
   it('rejects executor tokens on unrecognized endpoints', async () => {
     const context = ctx({ path: 'repos', method: 'find' });
 

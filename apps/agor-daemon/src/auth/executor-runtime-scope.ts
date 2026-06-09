@@ -102,6 +102,20 @@ function scopeStreamingEnvelope(data: unknown, scope: Scope): void {
   scopeTaskRecord(eventData, scope);
 }
 
+async function loadMessageRecord(
+  context: HookContext,
+  id: string
+): Promise<Record<string, unknown>> {
+  const service = context.service as unknown as {
+    messagesRepo?: { findById(id: string): Promise<unknown> };
+  };
+  const record = asRecord(await service.messagesRepo?.findById(id));
+  if (!record) {
+    throw new Forbidden('Executor token message scope is required for this request');
+  }
+  return record;
+}
+
 function requireMatchingSessionRoute(context: HookContext, scope: Scope): void {
   const sessionId = expectClaim(scope.sessionId, 'session');
   const query = ((context.params as Params).query ?? {}) as Record<string, unknown>;
@@ -205,6 +219,17 @@ export function executorRuntimeScopeGuard() {
           setIfAbsent(record, 'task_id', taskId);
           if (scope.sessionId)
             expectMatch(scope.sessionId, record.session_id ?? query.session_id, 'session');
+        }
+      } else if (context.method === 'patch') {
+        if (!id) {
+          throw new Forbidden('Executor token message scope is required for this request');
+        }
+        const existing = await loadMessageRecord(context, id);
+        expectMatch(taskId, existing.task_id, 'task');
+        expectMatch(taskId, data.task_id ?? query.task_id, 'task');
+        if (scope.sessionId) {
+          expectMatch(scope.sessionId, existing.session_id, 'session');
+          expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
         }
       } else {
         throw new Forbidden('Executor token is not valid for this messages request');
