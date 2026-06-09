@@ -11,6 +11,7 @@ import type {
   BranchGroupGrantWithGroup,
   BranchID,
   BranchPermissionLevel,
+  EffectiveBranchAccess,
   Group,
   GroupMembership,
   HookContext,
@@ -254,6 +255,69 @@ export function setupBranchGroupGrantsService(
       remove: [(context: HookContext) => requireBranchGrantManager(branchRepo, context)],
     },
   });
+}
+
+export function setupBranchEffectiveAccessService(
+  app: import('@agor/core/feathers').Application,
+  branchRepo: BranchRepository
+) {
+  app.use(
+    'branches/:id/effective-access',
+    {
+      async find(params?: Params): Promise<EffectiveBranchAccess> {
+        const authParams = params as
+          | (Params & { user?: { user_id: string; role: string; _isServiceAccount?: boolean } })
+          | undefined;
+        if (authParams?.provider && authParams.user?._isServiceAccount) {
+          return { can: 'all', is_owner: false, source: 'superadmin' };
+        }
+
+        const user = authParams?.user;
+        if (!user) throw new NotAuthenticated('Authentication required');
+
+        const branchId = paramsRoute(params)?.id;
+        if (!branchId) throw new BadRequest('Branch ID is required');
+
+        const branch = await branchRepo.findById(branchId);
+        if (!branch) throw new BadRequest(`Branch not found: ${branchId}`);
+
+        if (hasMinimumRole(user.role, ROLES.ADMIN)) {
+          return { can: 'all', is_owner: false, source: 'superadmin' };
+        }
+
+        const userId = user.user_id as UserID;
+        const isOwner = await branchRepo.isOwner(branch.branch_id as BranchID, userId);
+        if (isOwner) {
+          return { can: 'all', is_owner: true, source: 'owner' };
+        }
+
+        const groupGrant = await branchRepo.getBestGroupGrantForUser(
+          branch.branch_id as BranchID,
+          userId
+        );
+        const others = branch.others_can ?? 'session';
+        const can =
+          groupGrant && PERMISSION_RANK[groupGrant.can] >= PERMISSION_RANK[others]
+            ? groupGrant.can
+            : others;
+
+        if (PERMISSION_RANK[can] < PERMISSION_RANK.view) {
+          throw new Forbidden('You need view permission to see branch access');
+        }
+
+        return groupGrant && can === groupGrant.can
+          ? {
+              can,
+              fs_access: undefined,
+              is_owner: false,
+              source: 'group',
+              group_ids: groupGrant.groupIds as EffectiveBranchAccess['group_ids'],
+            }
+          : { can, fs_access: branch.others_fs_access, is_owner: false, source: 'others' };
+      },
+    },
+    { methods: ['find'] }
+  );
 }
 
 export const groupsHooks = {

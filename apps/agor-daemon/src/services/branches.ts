@@ -40,13 +40,13 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { isAssistant, ROLES } from '@agor/core/types';
+import { isAssistant } from '@agor/core/types';
 import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
-import { ensureCanTriggerManagedEnv, ensureMinimumRole } from '../utils/authorization.js';
+import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
@@ -118,16 +118,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
-   * Enforce `execution.managed_envs_minimum_role` on env command triggers.
-   * Canonical enforcement point — runs for REST, WebSocket, *and* MCP callers
-   * since all trigger paths reach this service class.
+   * Canonical control gate for managed environment custom methods.
+   * Runs for REST, WebSocket, and MCP callers since all trigger paths reach
+   * this service class.
    */
   private async ensureCanTriggerEnv(
+    id: BranchID,
     params: BranchParams | undefined,
     action: string
   ): Promise<void> {
-    const config = await loadConfig();
-    ensureCanTriggerManagedEnv(config.execution?.managed_envs_minimum_role, params, action);
+    await ensureCanControlBranchEnvironment(this.branchRepo, id, params, action);
   }
 
   private async getManagedEnvExecutionMode(): Promise<ManagedEnvExecutionMode> {
@@ -1306,7 +1306,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Start environment
    */
   async startEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(params, 'start branch environments');
+    await this.ensureCanTriggerEnv(id, params, 'start branch environments');
     const branch = await this.get(id, params);
 
     // Validate static start command exists
@@ -1474,7 +1474,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Stop environment
    */
   async stopEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(params, 'stop branch environments');
+    await this.ensureCanTriggerEnv(id, params, 'stop branch environments');
     const branch = await this.get(id, params);
 
     // Set status to 'stopping'
@@ -1589,6 +1589,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     id: BranchID,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
+    await this.ensureCanTriggerEnv(id, params, 'restart branch environments');
     const branch = await this.get(id, params);
 
     // Stop if running
@@ -1607,7 +1608,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Nuke environment (destructive operation)
    */
   async nukeEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(params, 'nuke branch environments');
+    await this.ensureCanTriggerEnv(id, params, 'nuke branch environments');
     const branch = await this.get(id, params);
 
     // Require nuke_command to be configured
@@ -1859,7 +1860,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     error?: string;
     truncated?: boolean;
   }> {
-    await this.ensureCanTriggerEnv(params, 'fetch branch environment logs');
+    await this.ensureCanTriggerEnv(id, params, 'fetch branch environment logs');
     const branch = await this.get(id, params);
 
     // Check if static logs command is configured
@@ -1998,11 +1999,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * `environment` config and persist the result onto the branch.
    *
    * When no `variant` is supplied, the repo's default variant is used.
-   * Re-rendering with the currently-selected variant is allowed for any
-   * trigger-capable role (see `execution.managed_envs_minimum_role`); changing
-   * the variant requires admin since it replaces executable command strings
-   * that run as the system user (same rationale as `requireAdminForEnvConfig`
-   * in authorization.ts).
+   * Re-rendering and variant changes require effective `all` branch
+   * permission or admin access because the rendered fields are executable command strings. Direct
+   * field edits remain admin-only via `requireAdminForEnvConfig`.
    *
    * Returns the updated branch (with new `environment_variant`, `start_command`,
    * `stop_command`, etc).
@@ -2012,7 +2011,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: { variant?: string } | undefined,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(params, 'render branch environment');
+    await this.ensureCanTriggerEnv(id, params, 'render branch environment');
 
     const branch = await this.get(id, params);
     const reposService = this.app.service('repos');
@@ -2026,15 +2025,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const requestedVariant = data?.variant ?? env.default;
     const currentVariant = branch.environment_variant;
 
-    // Variant change (including first-time assignment against an existing
-    // branch) replaces executable commands → require admin.
     if (requestedVariant !== currentVariant) {
-      ensureMinimumRole(
-        params,
-        ROLES.ADMIN,
-        `change branch environment variant to "${requestedVariant}"`
-      );
-
       // Refuse to swap variants while the env is live. The current process
       // was started with the old command strings; replacing them out from
       // under it would leave us unable to stop/restart cleanly. This guard

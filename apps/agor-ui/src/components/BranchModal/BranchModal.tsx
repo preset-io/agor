@@ -201,6 +201,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
           client={client}
           onUpdateRepo={onUpdateRepo}
           onUpdateBranch={onUpdateBranch}
+          canControlEnvironment={form.canControlEnvironment}
         />
       ),
     },

@@ -23,6 +23,7 @@ import type {
   Branch,
   BranchGroupGrantWithGroup,
   BranchPermissionLevel,
+  EffectiveBranchAccess,
   Group,
   User,
 } from '@agor-live/client';
@@ -109,6 +110,7 @@ export interface BranchModalFormApi {
   // Permissions used for gating UI
   canEditGeneral: boolean;
   canEditPermissions: boolean;
+  canControlEnvironment: boolean;
 
   // Aggregate state
   hasChanges: boolean;
@@ -167,6 +169,7 @@ export function useBranchModalForm({
   const [loadingOwners, setLoadingOwners] = useState<boolean>(true);
   const [groupGrantsStatus, setGroupGrantsStatus] = useState<GroupGrantsStatus>('loading');
   const [groupGrantsError, setGroupGrantsError] = useState<Error | null>(null);
+  const [effectiveAccess, setEffectiveAccess] = useState<EffectiveBranchAccess | null>(null);
   const [ownersLoadError, setOwnersLoadError] = useState<Error | null>(null);
 
   const [saving, setSaving] = useState(false);
@@ -274,10 +277,21 @@ export function useBranchModalForm({
         setOwnersLoadError(null);
         setGroupGrantsStatus('loading');
         setGroupGrantsError(null);
+        setEffectiveAccess(null);
+        const effectiveAccessPromise = client
+          .service('branches/:id/effective-access')
+          .find({ route: { id: branchId } })
+          .catch((error: unknown) => {
+            console.warn('Failed to load effective branch access:', error);
+            return null;
+          });
         const ownersResponse = await client
           .service('branches/:id/owners')
           .find({ route: { id: branchId } });
         if (cancelled) return;
+        const resolvedEffectiveAccess = await effectiveAccessPromise;
+        if (cancelled) return;
+        setEffectiveAccess(resolvedEffectiveAccess as EffectiveBranchAccess | null);
         const ownersData = ownersResponse as User[];
         setOwners(ownersData);
         setRbacEnabled(true);
@@ -427,6 +441,13 @@ export function useBranchModalForm({
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isSuperAdmin = hasMinimumRole(currentUser?.role, ROLES.SUPERADMIN);
   const isOwner = owners.some((o) => o.user_id === currentUserId);
+  const isCreator = branch?.created_by === currentUserId;
+  const canControlEnvironment =
+    isAdmin ||
+    effectiveAccess?.can === 'all' ||
+    isOwner ||
+    branch?.others_can === 'all' ||
+    (!rbacEnabled && isCreator);
   const canViewPermissions = rbacEnabled && (isAdmin || loadingOwners || isOwner);
 
   // Backend branch mutations are authorized by branch ownership or superadmin
@@ -653,6 +674,7 @@ export function useBranchModalForm({
     ownersLoadError,
     canEditGeneral,
     canEditPermissions,
+    canControlEnvironment,
     hasChanges,
     saving,
     save,

@@ -2672,11 +2672,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      // Role is enforced at the service layer via managed_envs_minimum_role
-      // (default: member). This route-level gate is just "authenticated", so
-      // it accepts the lowest authenticated role (viewer). The service gate
-      // is the single source of truth for whether the user can actually
-      // trigger the command.
+      // Branch `all`/admin control is enforced at the service layer. This
+      // route-level gate is just "authenticated" so the service remains
+      // the single source of truth across REST, WebSocket, and MCP.
       create: { role: ROLES.VIEWER, action: 'start branch environments' },
     },
     requireAuth
@@ -2693,7 +2691,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      // Service-layer enforcement via managed_envs_minimum_role
+      // Branch `all`/admin control is enforced at the service layer.
       create: { role: ROLES.VIEWER, action: 'stop branch environments' },
     },
     requireAuth
@@ -2713,7 +2711,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      // Service-layer enforcement via managed_envs_minimum_role
+      // Branch `all`/admin control is enforced at the service layer.
       create: { role: ROLES.VIEWER, action: 'restart branch environments' },
     },
     requireAuth
@@ -2730,7 +2728,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      // Service-layer enforcement via managed_envs_minimum_role
+      // Branch `all`/admin control is enforced at the service layer.
       create: { role: ROLES.VIEWER, action: 'nuke branch environments' },
     },
     requireAuth
@@ -2751,8 +2749,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
     },
     {
-      // Baseline trigger gate via managed_envs_minimum_role; variant changes
-      // are additionally admin-gated inside the service method.
+      // Branch `all`/admin control is enforced at the service layer.
       create: { role: ROLES.VIEWER, action: 'render branch environment' },
     },
     requireAuth
@@ -2770,7 +2767,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
-      find: { role: ROLES.MEMBER, action: 'check branch health' },
+      find: { role: ROLES.VIEWER, action: 'check branch health' },
     },
     requireAuth
   );
@@ -3077,7 +3074,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
     {
-      // Service-layer enforcement via managed_envs_minimum_role
+      // Branch `all`/admin control is enforced at the service layer.
       find: { role: ROLES.VIEWER, action: 'view branch logs' },
     },
     requireAuth
@@ -3436,10 +3433,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
           webTerminal: config.execution?.allow_web_terminal !== false,
-          // Minimum role required to trigger managed environment commands
-          // (start / stop / nuke / logs). UI uses this to disable + tooltip
-          // the trigger buttons for users below the threshold. The server-side
-          // gate in services/branches.ts is the source of truth.
+          // Legacy managed-environment minimum-role value retained for
+          // compatibility with older clients. Current environment control
+          // authorization is enforced by the branches service from effective
+          // branch `all` permission or admin access.
           // Value: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin'.
           // Defaults to 'member' when unset.
           managedEnvsMinimumRole: config.execution?.managed_envs_minimum_role ?? 'member',

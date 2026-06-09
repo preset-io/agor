@@ -3,7 +3,7 @@
  *
  * Layout matches `docs/designs/env-command-variants.md` §4:
  *   - Top editor: repo-level `environment` (variants + default). Admin-only to edit.
- *   - Variant picker + Render button (members+ via `managed_envs_minimum_role`).
+ *   - Variant picker + Render button (branch `all`/admins).
  *   - Bottom editor: rendered snapshot on the branch (start, stop, ...).
  *     Admin-only to edit; members see read-only.
  *
@@ -67,6 +67,7 @@ interface EnvironmentTabProps {
   client: AgorClient | null;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => void;
+  canControlEnvironment?: boolean;
 }
 
 /**
@@ -108,27 +109,23 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   client,
   onUpdateRepo,
   onUpdateBranch,
+  canControlEnvironment,
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const { confirm } = useThemedModal();
   const confirmNuke = useConfirmNukeEnvironment();
-  const { isAdmin, hasRole } = usePermissions();
+  const { isAdmin } = usePermissions();
   const { featuresConfig } = useAuthConfig();
 
   // ----- Permission gating -----
-  const managedEnvsMinimumRole = featuresConfig?.managedEnvsMinimumRole ?? 'member';
   const managedEnvsExecutionMode: ManagedEnvExecutionMode =
     featuresConfig?.managedEnvsExecutionMode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
   const isWebhookMode = managedEnvsExecutionMode === 'webhook-only';
-  const canTriggerEnv =
-    managedEnvsMinimumRole !== 'none' &&
-    hasRole(managedEnvsMinimumRole as Exclude<typeof managedEnvsMinimumRole, 'none'>);
+  const canTriggerEnv = canControlEnvironment ?? isAdmin;
   const triggerDisabledTooltip = canTriggerEnv
     ? undefined
-    : managedEnvsMinimumRole === 'none'
-      ? 'Managed environments are disabled on this instance'
-      : `Requires ${managedEnvsMinimumRole} role or higher`;
+    : "Requires branch 'all' permission or admin access";
   const lifecycleFieldHelp = isWebhookMode
     ? 'This instance uses webhook-managed environments. Use public http(s) URLs for start, stop, nuke, and logs.'
     : 'This instance supports shell commands and URL webhooks for start, stop, nuke, and logs.';
@@ -281,18 +278,15 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     !canTriggerEnv ||
     !repo.environment ||
     !selectedVariant ||
-    (variantChanged && !isAdmin) ||
     (variantChanged && envIsActive) ||
     isRendering;
   const renderDisabledTooltip = !canTriggerEnv
     ? triggerDisabledTooltip
     : !repo.environment
       ? 'Configure repo environment variants first'
-      : variantChanged && !isAdmin
-        ? 'Only admins can change the branch variant'
-        : variantChanged && envIsActive
-          ? `Stop the environment before switching variants (currently ${envStatus})`
-          : undefined;
+      : variantChanged && envIsActive
+        ? `Stop the environment before switching variants (currently ${envStatus})`
+        : undefined;
 
   const performRender = async () => {
     if (!client) return;
@@ -691,11 +685,13 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 size="small"
                 icon={<FileTextOutlined />}
                 onClick={() => setLogsModalOpen(true)}
-                disabled={!branch.logs_command}
+                disabled={!canTriggerEnv || !branch.logs_command}
                 title={
-                  !branch.logs_command
-                    ? 'Configure a logs command in the variant to enable'
-                    : undefined
+                  !canTriggerEnv
+                    ? triggerDisabledTooltip
+                    : !branch.logs_command
+                      ? 'Configure a logs command in the variant to enable'
+                      : undefined
                 }
               >
                 View Logs

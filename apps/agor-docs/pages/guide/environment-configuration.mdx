@@ -264,7 +264,7 @@ The Environment tab has two stacked editors:
 | **Repo editor** (top) | Admins only | `version`, `environment.variants`, `environment.default`, `template_overrides` as YAML |
 | **Branch editor** (bottom) | Admins only | The 6 rendered commands for this branch |
 
-Members see both editors **read-only**. The controls members can use are the **Variant picker** and the **Render** button in between them.
+Members see both editors **read-only**. Users with branch `all` permission and admins can use the **Variant picker** and the **Render** button in between them.
 
 ### The Render flow
 
@@ -302,21 +302,14 @@ Two orthogonal axes govern access: **who can edit what**, and **who can run Star
 | Edit `environment.variants` / `environment.default` | ❌ | ✅ |
 | Edit `template_overrides` | ❌ | ✅ |
 | Import / export `.agor.yml` | ❌ | ✅ |
-| Pick variant + Render to branch | ✅ | ✅ |
+| Pick variant + Render to branch | Requires branch `all` | ✅ |
 | Hand-edit branch rendered commands | ❌ | ✅ |
 
-The reason members **cannot** hand-edit rendered commands: admins curate the set of commands that can run (the variants), members pick from that list. This makes the variant library the effective allowlist and complements the execution-time deny-list guard.
+The reason members **cannot** hand-edit rendered commands: admins curate the set of commands that can run (the variants), and users with branch `all` permission pick from that list. This makes the variant library the effective allowlist and complements the execution-time deny-list guard.
 
 ### Execution permissions
 
-Start, Stop, Nuke, and Logs buttons are gated separately by the existing daemon config flag:
-
-```yaml
-# ~/.agor/config.yaml
-managed_envs_minimum_role: member   # or 'admin', 'viewer', …
-```
-
-This is **orthogonal** to the edit permissions above — you can grant members Render rights but still require admin role to actually Start an environment, or vice versa.
+Start, Stop, Restart, Nuke, Logs, and Render controls require branch `all` permission or admin access. Health/status reads can remain available to users who can view the branch because they do not run the configured shell/log commands.
 
 ---
 

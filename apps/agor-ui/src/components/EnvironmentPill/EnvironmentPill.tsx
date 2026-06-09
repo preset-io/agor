@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Space, Spin, Tooltip, theme } from 'antd';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
+import { usePermissions } from '../../hooks/usePermissions';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
@@ -24,6 +25,7 @@ interface EnvironmentPillProps {
   onStopEnvironment?: (branchId: string) => void;
   onNukeEnvironment?: (branchId: string) => void;
   onViewLogs?: (branchId: string) => void;
+  canControlEnvironment?: boolean;
   connectionDisabled?: boolean; // Disable actions when disconnected
 }
 
@@ -35,13 +37,20 @@ export function EnvironmentPill({
   onStopEnvironment,
   onNukeEnvironment,
   onViewLogs,
+  canControlEnvironment,
   connectionDisabled = false,
 }: EnvironmentPillProps) {
   const { token } = theme.useToken();
+  const { isAdmin } = usePermissions();
   const confirmNuke = useConfirmNukeEnvironment();
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
+  const resolvedCanControlEnvironment =
+    canControlEnvironment ?? (isAdmin || branch.others_can === 'all');
+  const controlDisabledTooltip = resolvedCanControlEnvironment
+    ? undefined
+    : "Requires branch 'all' permission or admin access";
 
   // Get static app_url (user-editable, initialized from template)
   const environmentUrl = branch.app_url;
@@ -109,13 +118,19 @@ export function EnvironmentPill({
   const canStop = status === 'running' || status === 'starting';
   const startDisabled =
     connectionDisabled ||
+    !resolvedCanControlEnvironment ||
     !hasConfig ||
     !onStartEnvironment ||
     isStarting ||
     isStopping ||
     isRunning;
   const stopDisabled =
-    connectionDisabled || !hasConfig || !onStopEnvironment || isStopping || !canStop;
+    connectionDisabled ||
+    !resolvedCanControlEnvironment ||
+    !hasConfig ||
+    !onStopEnvironment ||
+    isStopping ||
+    !canStop;
 
   // Build helpful tooltip based on inferred state
   const getTooltipText = () => {
@@ -240,7 +255,12 @@ export function EnvironmentPill({
             }}
           >
             {onStartEnvironment && (
-              <Tooltip title={status === 'running' ? 'Environment running' : 'Start environment'}>
+              <Tooltip
+                title={
+                  controlDisabledTooltip ??
+                  (status === 'running' ? 'Environment running' : 'Start environment')
+                }
+              >
                 <Button
                   type="text"
                   size="small"
@@ -264,13 +284,14 @@ export function EnvironmentPill({
             {onStopEnvironment && (
               <Tooltip
                 title={
-                  status === 'running'
+                  controlDisabledTooltip ??
+                  (status === 'running'
                     ? 'Stop environment'
                     : status === 'starting'
                       ? 'Stop environment (cancel startup)'
                       : status === 'stopping'
                         ? 'Environment is stopping'
-                        : 'Environment not running'
+                        : 'Environment not running')
                 }
               >
                 <Button
@@ -296,7 +317,10 @@ export function EnvironmentPill({
             {onViewLogs && (
               <Tooltip
                 title={
-                  !effectiveEnv.logs ? 'Configure logs command to enable' : 'View environment logs'
+                  controlDisabledTooltip ??
+                  (!effectiveEnv.logs
+                    ? 'Configure logs command to enable'
+                    : 'View environment logs')
                 }
               >
                 <Button
@@ -305,11 +329,11 @@ export function EnvironmentPill({
                   icon={<FileTextOutlined />}
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (effectiveEnv.logs) {
+                    if (resolvedCanControlEnvironment && effectiveEnv.logs) {
                       onViewLogs(branch.branch_id);
                     }
                   }}
-                  disabled={!effectiveEnv.logs}
+                  disabled={!resolvedCanControlEnvironment || !effectiveEnv.logs}
                   style={{
                     height: 22,
                     width: 22,
@@ -320,7 +344,12 @@ export function EnvironmentPill({
               </Tooltip>
             )}
             {onNukeEnvironment && branch.nuke_command && (
-              <Tooltip title="Nuke environment (destructive - removes all data and volumes)">
+              <Tooltip
+                title={
+                  controlDisabledTooltip ??
+                  'Nuke environment (destructive - removes all data and volumes)'
+                }
+              >
                 <Button
                   type="text"
                   size="small"
@@ -329,9 +358,11 @@ export function EnvironmentPill({
                   icon={<FireOutlined />}
                   onClick={(event) => {
                     event.stopPropagation();
-                    confirmNuke(() => onNukeEnvironment(branch.branch_id));
+                    if (resolvedCanControlEnvironment && !connectionDisabled) {
+                      confirmNuke(() => onNukeEnvironment(branch.branch_id));
+                    }
                   }}
-                  disabled={connectionDisabled}
+                  disabled={connectionDisabled || !resolvedCanControlEnvironment}
                   style={{
                     height: 22,
                     width: 22,

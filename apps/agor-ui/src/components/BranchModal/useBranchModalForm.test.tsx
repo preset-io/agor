@@ -446,6 +446,31 @@ describe('useBranchModalForm — unified save', () => {
     expect(result.current.canEditPermissions).toBe(false);
   });
 
+  it('allows environment control from server-resolved effective all permission', async () => {
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'member' });
+    const bob = makeUser({ user_id: 'user-2', email: 'bob@example.com', role: 'member' });
+    const branch = makeBranch({
+      created_by: 'user-2',
+      others_can: 'view',
+    });
+    const { client } = makeStubClient({
+      owners: [bob],
+      users: [alice, bob],
+      effectiveAccess: { can: 'all', is_owner: false, source: 'group' },
+    });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.loadingOwners).toBe(false));
+
+    expect(result.current.canViewPermissions).toBe(false);
+    expect(result.current.canEditPermissions).toBe(false);
+    expect(result.current.canControlEnvironment).toBe(true);
+  });
+
   it('shows permissions for assistant branches when the current admin is an owner', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
     const branch = makeAssistantBranch();

@@ -480,3 +480,99 @@ describe('BranchesService.renderEnvironment running-guard', () => {
     );
   });
 });
+
+describe('BranchesService managed environment control authorization', () => {
+  const branchId = 'wt-auth' as BranchID;
+  const allUserId = 'user-all';
+  const otherId = 'user-other';
+
+  function paramsFor(
+    user_id: string,
+    role: 'viewer' | 'member' | 'admin' | 'superadmin' = 'member'
+  ) {
+    return {
+      provider: 'rest',
+      user: { user_id, role },
+    } as never;
+  }
+
+  function createAuthHarness(
+    effectivePermission: 'all' | 'prompt' | 'session' | 'view' = 'session'
+  ) {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'wt-auth',
+      path: '/tmp/wt-auth',
+      branch_unique_id: 1,
+      environment_instance: { status: 'stopped' },
+    };
+    const branchRepo = {
+      findById: vi.fn(async () => branch),
+      resolveUserPermission: vi.fn(async () => effectivePermission),
+    };
+    (service as unknown as { branchRepo: typeof branchRepo }).branchRepo = branchRepo;
+    const getSpy = vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    return { service, branchRepo, getSpy };
+  }
+
+  it('denies non-owner members before starting an environment', async () => {
+    const { service, getSpy } = createAuthHarness('session');
+
+    await expect(service.startEnvironment(branchId, paramsFor(otherId, 'member'))).rejects.toThrow(
+      /'all' branch permission or admin access/
+    );
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('allows users with effective all permission through the control gate', async () => {
+    const { service } = createAuthHarness('all');
+
+    await expect(
+      service.startEnvironment(branchId, paramsFor(allUserId, 'member'))
+    ).rejects.toThrow(/No start command configured/);
+  });
+
+  it('allows admins and superadmins through the control gate', async () => {
+    const adminHarness = createAuthHarness('session');
+    await expect(
+      adminHarness.service.startEnvironment(branchId, paramsFor(otherId, 'admin'))
+    ).rejects.toThrow(/No start command configured/);
+    expect(adminHarness.branchRepo.findById).not.toHaveBeenCalled();
+
+    const superHarness = createAuthHarness('session');
+    await expect(
+      superHarness.service.startEnvironment(branchId, paramsFor(otherId, 'superadmin'))
+    ).rejects.toThrow(/No start command configured/);
+    expect(superHarness.branchRepo.findById).not.toHaveBeenCalled();
+  });
+
+  it('denies non-owner members before rendering environment commands', async () => {
+    const { service, getSpy } = createAuthHarness('session');
+
+    await expect(
+      service.renderEnvironment(branchId, { variant: 'dev' }, paramsFor(otherId, 'member'))
+    ).rejects.toThrow(/'all' branch permission or admin access/);
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('allows users with effective all permission through the render control gate', async () => {
+    const { service } = createAuthHarness('all');
+
+    await expect(
+      service.renderEnvironment(branchId, { variant: 'dev' }, paramsFor(allUserId, 'member'))
+    ).rejects.toThrow(/Repo has no v2 environment config/);
+  });
+
+  it('keeps health checks available without the control gate', async () => {
+    const { service, branchRepo } = createAuthHarness('session');
+
+    await expect(
+      service.checkHealth(branchId, paramsFor(otherId, 'viewer'))
+    ).resolves.toMatchObject({
+      branch_id: branchId,
+    });
+    expect(branchRepo.findById).not.toHaveBeenCalled();
+  });
+});

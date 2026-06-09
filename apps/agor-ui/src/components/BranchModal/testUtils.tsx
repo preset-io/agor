@@ -20,6 +20,7 @@ export interface ServiceCall {
 export interface StubClientOptions {
   owners?: User[];
   users?: User[];
+  effectiveAccess?: unknown;
   rbac404?: boolean;
   groupGrants404?: boolean;
   groupGrants?: unknown[];
@@ -65,6 +66,9 @@ export function makeStubClient(opts: StubClientOptions = {}): {
           }
           if (path === 'branches/:id/group-grants') {
             return opts.groupGrants ?? [];
+          }
+          if (path === 'branches/:id/effective-access') {
+            return opts.effectiveAccess ?? { can: 'session', is_owner: false, source: 'others' };
           }
           return [];
         },

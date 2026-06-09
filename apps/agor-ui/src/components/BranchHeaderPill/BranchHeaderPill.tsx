@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Spin, Tooltip, theme } from 'antd';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
+import { usePermissions } from '../../hooks/usePermissions';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
@@ -31,6 +32,7 @@ interface BranchHeaderPillProps {
   onStopEnvironment?: (branchId: string) => void;
   onNukeEnvironment?: (branchId: string) => void;
   onViewLogs?: (branchId: string) => void;
+  canControlEnvironment?: boolean;
   connectionDisabled?: boolean;
   /** Show environment status/controls and environment shortcut. Defaults to true. */
   showEnvButtons?: boolean;
@@ -56,17 +58,24 @@ export function BranchHeaderPill({
   onStopEnvironment,
   onNukeEnvironment,
   onViewLogs,
+  canControlEnvironment,
   connectionDisabled = false,
   showEnvButtons = true,
   compact = false,
 }: BranchHeaderPillProps) {
   const { token } = theme.useToken();
+  const { isAdmin } = usePermissions();
   const confirmNuke = useConfirmNukeEnvironment();
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
   const inferredState = getEnvironmentState(env);
   const environmentUrl = branch.app_url;
+  const resolvedCanControlEnvironment =
+    canControlEnvironment ?? (isAdmin || branch.others_can === 'all');
+  const controlDisabledTooltip = resolvedCanControlEnvironment
+    ? undefined
+    : "Requires branch 'all' permission or admin access";
 
   const status = env?.status || 'stopped';
   const isRunning = status === 'running';
@@ -75,13 +84,19 @@ export function BranchHeaderPill({
   const canStop = status === 'running' || status === 'starting';
   const startDisabled =
     connectionDisabled ||
+    !resolvedCanControlEnvironment ||
     !hasConfig ||
     !onStartEnvironment ||
     isStarting ||
     isStopping ||
     isRunning;
   const stopDisabled =
-    connectionDisabled || !hasConfig || !onStopEnvironment || isStopping || !canStop;
+    connectionDisabled ||
+    !resolvedCanControlEnvironment ||
+    !hasConfig ||
+    !onStopEnvironment ||
+    isStopping ||
+    !canStop;
 
   const openTab = (tab: BranchModalTab) => (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -262,7 +277,12 @@ export function BranchHeaderPill({
 
               {/* Play button */}
               {onStartEnvironment && (
-                <Tooltip title={isRunning ? 'Environment running' : 'Start environment'}>
+                <Tooltip
+                  title={
+                    controlDisabledTooltip ??
+                    (isRunning ? 'Environment running' : 'Start environment')
+                  }
+                >
                   <Button
                     type="text"
                     size="small"
@@ -282,13 +302,14 @@ export function BranchHeaderPill({
               {onStopEnvironment && (
                 <Tooltip
                   title={
-                    isRunning
+                    controlDisabledTooltip ??
+                    (isRunning
                       ? 'Stop environment'
                       : isStarting
                         ? 'Cancel startup'
                         : isStopping
                           ? 'Stopping...'
-                          : 'Not running'
+                          : 'Not running')
                   }
                 >
                   <Button
@@ -308,7 +329,7 @@ export function BranchHeaderPill({
 
               {/* Logs button */}
               {onViewLogs && effectiveEnv.logs && (
-                <Tooltip title="View logs">
+                <Tooltip title={controlDisabledTooltip ?? 'View logs'}>
                   <Button
                     type="text"
                     size="small"
@@ -316,8 +337,9 @@ export function BranchHeaderPill({
                     icon={<FileTextOutlined />}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onViewLogs(branch.branch_id);
+                      if (resolvedCanControlEnvironment) onViewLogs(branch.branch_id);
                     }}
+                    disabled={!resolvedCanControlEnvironment}
                     style={iconButtonStyle}
                   />
                 </Tooltip>
@@ -325,7 +347,7 @@ export function BranchHeaderPill({
 
               {/* Nuke button */}
               {onNukeEnvironment && branch.nuke_command && (
-                <Tooltip title="Nuke environment (destructive)">
+                <Tooltip title={controlDisabledTooltip ?? 'Nuke environment (destructive)'}>
                   <Button
                     type="text"
                     size="small"
@@ -334,9 +356,11 @@ export function BranchHeaderPill({
                     icon={<FireOutlined />}
                     onClick={(e) => {
                       e.stopPropagation();
-                      confirmNuke(() => onNukeEnvironment(branch.branch_id));
+                      if (resolvedCanControlEnvironment && !connectionDisabled) {
+                        confirmNuke(() => onNukeEnvironment(branch.branch_id));
+                      }
                     }}
-                    disabled={connectionDisabled}
+                    disabled={connectionDisabled || !resolvedCanControlEnvironment}
                     style={iconButtonStyle}
                   />
                 </Tooltip>

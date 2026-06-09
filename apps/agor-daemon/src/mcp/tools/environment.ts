@@ -171,7 +171,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         "Set the environment variant for a branch and persist it. Re-renders the branch's " +
         'environment commands (start/stop/nuke/logs/health/app) from the repo config so subsequent ' +
         'agor_environment_start/stop/etc. operate on the new variant. ' +
-        'Variant changes require admin permission (rendered commands run as the system user). ' +
+        'Variant changes require effective branch `all` permission or admin access. ' +
         'Refuses to switch variant when the environment is running or starting — stop it first. ' +
         'Pass andStart=true to start the environment after setting; otherwise call agor_environment_start separately. ' +
         'Omit variant to re-render the branch with its current variant (useful for picking up template_overrides changes).',

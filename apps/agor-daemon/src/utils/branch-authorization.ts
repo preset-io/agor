@@ -17,8 +17,16 @@ import type {
 } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
-import type { Branch, BranchPermissionLevel, HookContext, Session, UUID } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS, ROLES } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  Branch,
+  BranchID,
+  BranchPermissionLevel,
+  HookContext,
+  Session,
+  UUID,
+} from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -115,6 +123,51 @@ export function resolveBranchPermission(
     return 'all';
   }
   return effectivePermission ?? branch.others_can ?? 'session';
+}
+
+/**
+ * Ensure the caller can control or mutate a branch's managed environment.
+ *
+ * Managed environment controls may run shell/webhook actions with impact tied
+ * to the branch rather than the triggering user. Keep these controls limited
+ * to users with effective `all` permission on the branch and global admins.
+ * Internal daemon/service-account calls bypass so health loops and executor
+ * plumbing can continue to operate.
+ */
+export async function ensureCanControlBranchEnvironment(
+  branchRepo: BranchRepository,
+  branchId: BranchID,
+  params: AuthenticatedParams | undefined,
+  action: string = 'control this branch environment'
+): Promise<void> {
+  if (!params?.provider) {
+    return;
+  }
+
+  const user = params.user;
+  if (!user) {
+    throw new NotAuthenticated('Authentication required');
+  }
+
+  if (user._isServiceAccount) {
+    return;
+  }
+
+  if (hasMinimumRole(user.role, ROLES.ADMIN)) {
+    return;
+  }
+
+  const branch = await branchRepo.findById(branchId);
+  if (!branch) {
+    throw new Forbidden(`Branch not found: ${branchId}`);
+  }
+
+  const effectivePermission = await branchRepo.resolveUserPermission(branch, user.user_id as UUID);
+  if (effectivePermission === 'all') {
+    return;
+  }
+
+  throw new Forbidden(`You need 'all' branch permission or admin access to ${action}`);
 }
 
 /**
