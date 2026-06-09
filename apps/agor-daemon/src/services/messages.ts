@@ -7,7 +7,14 @@
 
 import { PAGINATION } from '@agor/core/config';
 import { type Database, MessagesRepository } from '@agor/core/db';
-import type { Message, Paginated, QueryParams, SessionID, TaskID } from '@agor/core/types';
+import type {
+  Message,
+  MessageID,
+  Paginated,
+  QueryParams,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 /**
@@ -118,6 +125,14 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
    */
   async findByTask(taskId: TaskID): Promise<Message[]> {
     return this.messagesRepo.findByTaskId(taskId);
+  }
+
+  /**
+   * Internal helper for auth/scope checks that need to validate the current
+   * owner fields of a message before allowing a partial update.
+   */
+  async findByIdForScopeCheck(messageId: MessageID): Promise<Message | null> {
+    return this.messagesRepo.findById(messageId);
   }
 
   /**

@@ -103,10 +103,38 @@ describe('executorRuntimeScopeGuard', () => {
     expect(context.params.query).toMatchObject({ branch_id: 'branch-1' });
   });
 
-  it('rejects message get by opaque message id under executor token auth', async () => {
-    const context = ctx({ path: 'messages', method: 'get', id: 'message-1' });
+  it('allows message get when the existing message belongs to the scoped session', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'get',
+      id: 'message-1',
+      service: {
+        findByIdForScopeCheck: async () => ({
+          message_id: 'message-1',
+          task_id: 'previous-task',
+          session_id: 'session-1',
+        }),
+      },
+    });
 
-    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/messages request/);
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it('rejects message get when the existing message belongs to another session', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'get',
+      id: 'message-1',
+      service: {
+        findByIdForScopeCheck: async () => ({
+          message_id: 'message-1',
+          task_id: 'task-1',
+          session_id: 'session-2',
+        }),
+      },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/session scope/);
   });
 
   it('allows message patch when the existing message belongs to the scoped task', async () => {
@@ -116,13 +144,11 @@ describe('executorRuntimeScopeGuard', () => {
       id: 'message-1',
       data: { content_preview: 'done' },
       service: {
-        messagesRepo: {
-          findById: async () => ({
-            message_id: 'message-1',
-            task_id: 'task-1',
-            session_id: 'session-1',
-          }),
-        },
+        findByIdForScopeCheck: async () => ({
+          message_id: 'message-1',
+          task_id: 'task-1',
+          session_id: 'session-1',
+        }),
       },
     });
 
@@ -136,13 +162,28 @@ describe('executorRuntimeScopeGuard', () => {
       id: 'message-1',
       data: { content_preview: 'done' },
       service: {
-        messagesRepo: {
-          findById: async () => ({
-            message_id: 'message-1',
-            task_id: 'task-2',
-            session_id: 'session-1',
-          }),
-        },
+        findByIdForScopeCheck: async () => ({
+          message_id: 'message-1',
+          task_id: 'task-2',
+          session_id: 'session-1',
+        }),
+      },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
+  });
+
+  it('rejects message patch when the existing message has no task scope', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'patch',
+      id: 'message-1',
+      data: { content_preview: 'done' },
+      service: {
+        findByIdForScopeCheck: async () => ({
+          message_id: 'message-1',
+          session_id: 'session-1',
+        }),
       },
     });
 

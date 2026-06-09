@@ -80,6 +80,12 @@ function recordsFromData(data: unknown): Record<string, unknown>[] {
   return [record];
 }
 
+function expectExistingMatch(claim: string, value: unknown, label: string): void {
+  if (String(value) !== claim) {
+    throw new Forbidden(`Executor token ${label} scope does not match this request`);
+  }
+}
+
 function scopeTaskRecord(record: Record<string, unknown>, scope: Scope): void {
   const taskId = expectClaim(scope.taskId, 'task');
   expectMatch(taskId, record.task_id, 'task');
@@ -107,9 +113,9 @@ async function loadMessageRecord(
   id: string
 ): Promise<Record<string, unknown>> {
   const service = context.service as unknown as {
-    messagesRepo?: { findById(id: string): Promise<unknown> };
+    findByIdForScopeCheck?: (id: string) => Promise<unknown>;
   };
-  const record = asRecord(await service.messagesRepo?.findById(id));
+  const record = asRecord(await service.findByIdForScopeCheck?.(id));
   if (!record) {
     throw new Forbidden('Executor token message scope is required for this request');
   }
@@ -124,6 +130,22 @@ function requireMatchingSessionRoute(context: HookContext, scope: Scope): void {
   if (requestedSessionId === undefined || requestedSessionId === null) {
     throw new Forbidden('Executor token session scope is required for this request');
   }
+}
+
+async function requireMessageReadScope(
+  context: HookContext,
+  id: string,
+  scope: Scope
+): Promise<void> {
+  const existing = await loadMessageRecord(context, id);
+
+  if (scope.sessionId) {
+    expectExistingMatch(scope.sessionId, existing.session_id, 'session');
+    return;
+  }
+
+  const taskId = expectClaim(scope.taskId, 'task');
+  expectExistingMatch(taskId, existing.task_id, 'task');
 }
 
 type AuthHook = (context: HookContext) => Promise<HookContext>;
@@ -220,15 +242,20 @@ export function executorRuntimeScopeGuard() {
           if (scope.sessionId)
             expectMatch(scope.sessionId, record.session_id ?? query.session_id, 'session');
         }
+      } else if (context.method === 'get') {
+        if (!id) {
+          throw new Forbidden('Executor token message scope is required for this request');
+        }
+        await requireMessageReadScope(context, id, scope);
       } else if (context.method === 'patch') {
         if (!id) {
           throw new Forbidden('Executor token message scope is required for this request');
         }
         const existing = await loadMessageRecord(context, id);
-        expectMatch(taskId, existing.task_id, 'task');
+        expectExistingMatch(taskId, existing.task_id, 'task');
         expectMatch(taskId, data.task_id ?? query.task_id, 'task');
         if (scope.sessionId) {
-          expectMatch(scope.sessionId, existing.session_id, 'session');
+          expectExistingMatch(scope.sessionId, existing.session_id, 'session');
           expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
         }
       } else {
