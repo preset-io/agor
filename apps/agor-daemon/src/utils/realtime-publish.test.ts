@@ -106,6 +106,52 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }, { user: admin }]);
   });
 
+  it('scopes nested branch permission service events through the route branch id', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const app = makeApp([{ user: allowed }, { user: denied }]);
+    const r = repos({
+      branch: branch('b1', 'none'),
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { user_id: 'owner-user' },
+      {
+        path: 'branches/:id/owners',
+        method: 'create',
+        event: 'created',
+        params: { route: { id: 'b1' } },
+      }
+    );
+
+    expect(channel.connections).toEqual([{ user: allowed }]);
+  });
+
+  it('scopes nested branch group grant events through the route branch id', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const app = makeApp([{ user: allowed }, { user: denied }]);
+    const r = repos({
+      branch: branch('b1', 'none'),
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { group_id: 'g1', can: 'view' },
+      {
+        path: 'branches/:id/group-grants',
+        method: 'create',
+        event: 'created',
+        params: { route: { id: 'b1' } },
+      }
+    );
+
+    expect(channel.connections).toEqual([{ user: allowed }]);
+  });
+
   it('broadcasts broadly visible branch events without explicit user expansion', async () => {
     const u1 = user('u1');
     const u2 = user('u2');

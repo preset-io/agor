@@ -9,7 +9,7 @@ import {
   RealtimeAccessCache,
 } from './realtime-access-cache.js';
 
-type PublishContext = Pick<HookContext, 'path' | 'method' | 'id' | 'event' | 'app'>;
+type PublishContext = Pick<HookContext, 'path' | 'method' | 'id' | 'event' | 'app' | 'params'>;
 
 type ConnectionLike = {
   user?: (Partial<User> & { _isServiceAccount?: boolean }) | undefined;
@@ -34,6 +34,7 @@ type PublishScope =
   | { kind: 'serviceOnly' };
 
 const BRANCH_ID_SCOPED_PATHS = new Set(['branches', 'schedules']);
+const ROUTE_BRANCH_ID_SCOPED_PATHS = new Set(['branches/:id/owners', 'branches/:id/group-grants']);
 const SESSION_ID_SCOPED_PATHS = new Set([
   'tasks',
   'messages',
@@ -66,6 +67,15 @@ function pickString(obj: Record<string, unknown> | null, ...keys: string[]): str
 
 function extractBranchId(data: unknown, context: PublishContext): string | undefined {
   const record = asRecord(data);
+  const routeBranchId = (context.params as { route?: { id?: unknown } } | undefined)?.route?.id;
+  if (
+    ROUTE_BRANCH_ID_SCOPED_PATHS.has(context.path ?? '') &&
+    typeof routeBranchId === 'string' &&
+    routeBranchId.length > 0
+  ) {
+    return routeBranchId;
+  }
+
   if (context.path === 'branches') {
     return (
       pickString(record, 'branch_id', 'branchId') ??
@@ -194,7 +204,7 @@ async function resolvePublishScope(
 ): Promise<PublishScope> {
   if (!context.path) return { kind: 'global' };
 
-  if (BRANCH_ID_SCOPED_PATHS.has(context.path)) {
+  if (BRANCH_ID_SCOPED_PATHS.has(context.path) || ROUTE_BRANCH_ID_SCOPED_PATHS.has(context.path)) {
     const branchId = extractBranchId(data, context);
     return { kind: 'branch', branchId: (branchId as BranchID | undefined) ?? null };
   }
