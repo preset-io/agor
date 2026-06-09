@@ -1022,8 +1022,6 @@ export const App: React.FC<AppProps> = ({
               currentBoardId={currentBoardId}
               onBoardChange={navigation.goToBoard}
               onHomeClick={() => {
-                setSelectedSessionId(null);
-                setCurrentBoardIdInternal('');
                 navigation.goHome();
               }}
               branchById={branchById}
