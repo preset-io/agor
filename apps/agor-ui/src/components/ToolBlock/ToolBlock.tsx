@@ -45,7 +45,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
 
   const statusColor =
     status === 'error'
-      ? token.colorError
+      ? token.colorWarning
       : status === 'pending'
         ? token.colorTextQuaternary
         : status === 'stale'
