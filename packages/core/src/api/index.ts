@@ -452,6 +452,15 @@ export interface BranchesService extends AgorService<Branch> {
   ): Promise<{ unixGroup: string }>;
 
   /**
+   * Create or repair the primary Knowledge namespace for an assistant branch.
+   * API/UI-only; not exposed through assistant MCP config mutation tools.
+   */
+  ensureAssistantKnowledgeNamespace(
+    data: { branchId?: string; branch_id?: string } | string,
+    params?: Params
+  ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }>;
+
+  /**
    * Find branch by repo_id and name
    */
   findByRepoAndName(repoId: string, name: string, params?: Params): Promise<Branch | null>;
@@ -807,7 +816,7 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods('initializeUnixGroup');
+    branchesService.methods('initializeUnixGroup', 'ensureAssistantKnowledgeNamespace');
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }

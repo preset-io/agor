@@ -48,6 +48,20 @@ const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = [
 ] as const satisfies readonly CleanupCandidateFilesystemStatus[];
 const CLEANUP_CANDIDATE_STORAGE_MODES = ['worktree', 'clone'] as const;
 
+function containsAssistantKnowledgeConfigMutation(customContext: unknown): boolean {
+  if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
+    return false;
+  }
+  const record = customContext as Record<string, unknown>;
+  for (const key of ['assistant', 'agent']) {
+    const value = record[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      if (Object.hasOwn(value as Record<string, unknown>, 'kb')) return true;
+    }
+  }
+  return false;
+}
+
 function normalizeFilesystemStatus(branch: Branch): CleanupCandidateFilesystemStatus {
   return branch.filesystem_status ?? 'ready';
 }
@@ -807,6 +821,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         updates.board_id = boardIdStr ? await resolveBoardId(ctx, boardIdStr) : null;
       }
       if (args.customContext !== undefined) {
+        if (containsAssistantKnowledgeConfigMutation(args.customContext)) {
+          throw new Error(
+            'Assistant Knowledge namespace configuration cannot be changed through MCP. Use the BranchModal Knowledge tab or API-only assistant Knowledge config endpoint.'
+          );
+        }
         fieldsProvided++;
         updates.custom_context = args.customContext === null ? null : args.customContext;
       }

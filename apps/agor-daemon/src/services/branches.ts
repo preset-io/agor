@@ -35,6 +35,7 @@ import type {
   BoardID,
   Branch,
   BranchID,
+  KnowledgeNamespace,
   QueryParams,
   Repo,
   UserID,
@@ -51,6 +52,8 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { generateSessionToken, getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
+import { ensureAssistantKnowledgeNamespace as ensureAssistantKnowledgeNamespaceForBranch } from './assistant-knowledge.js';
+import { isKnowledgeAdmin } from './knowledge-access.js';
 import type { InternalEnrichmentParams } from './sessions';
 
 /**
@@ -66,6 +69,7 @@ export type BranchParams = QueryParams<{
   include_sessions?: boolean | 'true' | 'false'; // Opt-in session activity enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
 }> &
+  AuthenticatedParams &
   InternalEnrichmentParams & {
     /** Root-level include_sessions flag (bypasses Feathers query filtering, used by internal service calls) */
     _include_sessions?: boolean | 'true' | 'false';
@@ -429,17 +433,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         data.map((item) => this.applyBranchCreateDefaults(item))
       );
       const created = (await super.create(withDefaults, params)) as Branch[];
-      await Promise.all(created.map((branch) => this.maybeSetBoardPrimaryAssistant(branch)));
-      for (const branch of created) {
+      const readyBranches = await Promise.all(
+        created.map((branch) => this.maybeEnsureAssistantKnowledgeNamespace(branch, params))
+      );
+      await Promise.all(readyBranches.map((branch) => this.maybeSetBoardPrimaryAssistant(branch)));
+      for (const branch of readyBranches) {
         this.trackBranchCreated(branch);
       }
-      return created;
+      return readyBranches;
     }
     const withDefaults = await this.applyBranchCreateDefaults(data);
     const created = (await super.create(withDefaults, params)) as Branch;
-    await this.maybeSetBoardPrimaryAssistant(created);
-    this.trackBranchCreated(created);
-    return created;
+    const readyBranch = await this.maybeEnsureAssistantKnowledgeNamespace(created, params);
+    await this.maybeSetBoardPrimaryAssistant(readyBranch);
+    this.trackBranchCreated(readyBranch);
+    return readyBranch;
   }
 
   private trackBranchCreated(branch: Branch): void {
@@ -465,6 +473,74 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         error instanceof Error ? error.message : String(error)
       );
     }
+  }
+
+  private async maybeEnsureAssistantKnowledgeNamespace(
+    branch: Branch,
+    params?: BranchParams
+  ): Promise<Branch> {
+    if (!isAssistant(branch)) return branch;
+    const userId = (params?.user?.user_id as UserID | undefined) ?? (branch.created_by as UserID);
+    const result = await ensureAssistantKnowledgeNamespaceForBranch(
+      this.db,
+      branch.branch_id,
+      userId
+    );
+    return result.branch;
+  }
+
+  private async assertCanManageAssistantKnowledge(branch: Branch, params?: BranchParams) {
+    const user = params?.user;
+    const userId = user?.user_id as UserID | undefined;
+    if (isKnowledgeAdmin(user as never)) return;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    if (branch.created_by === userId) return;
+    if (await this.branchRepo.isOwner(branch.branch_id, userId)) {
+      return;
+    }
+    throw new Forbidden('Only branch owners or admins can manage assistant knowledge');
+  }
+
+  private containsAssistantKnowledgeConfigMutation(data: Partial<Branch>): boolean {
+    if (!Object.hasOwn(data, 'custom_context')) return false;
+    const customContext = data.custom_context;
+    if (customContext === null) return true;
+    if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
+      return false;
+    }
+    for (const key of ['assistant', 'agent']) {
+      const value = customContext[key];
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        if (Object.hasOwn(value as Record<string, unknown>, 'kb')) return true;
+      }
+    }
+    return false;
+  }
+
+  private async assertCanMutateAssistantKnowledgeConfig(
+    branch: Branch,
+    data: Partial<Branch>,
+    params?: BranchParams
+  ): Promise<void> {
+    if (!this.containsAssistantKnowledgeConfigMutation(data)) return;
+    await this.assertCanManageAssistantKnowledge(branch, params);
+  }
+
+  async ensureAssistantKnowledgeNamespace(
+    data: { branchId?: string; branch_id?: string } | string,
+    params?: BranchParams
+  ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }> {
+    const branchId = String(typeof data === 'string' ? data : (data.branchId ?? data.branch_id));
+    if (!branchId || branchId === 'undefined') throw new BadRequest('branchId is required');
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch) throw new BadRequest(`Branch not found: ${branchId}`);
+    if (!isAssistant(branch)) throw new BadRequest('Branch is not an assistant');
+    await this.assertCanManageAssistantKnowledge(branch, params);
+    return ensureAssistantKnowledgeNamespaceForBranch(
+      this.db,
+      branch.branch_id,
+      (params?.user?.user_id as UserID | undefined) ?? (branch.created_by as UserID)
+    );
   }
 
   private isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -588,6 +664,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<BranchWithZoneAndSessions> {
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
+    await this.assertCanMutateAssistantKnowledgeConfig(currentBranch, data, params);
     this.assertAssistantKindIsStable(currentBranch, data);
 
     const oldBoardId = currentBranch.board_id;
@@ -656,6 +733,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     return withZone as BranchWithZoneAndSessions;
+  }
+
+  async update(id: BranchID, data: Partial<Branch>, params?: BranchParams): Promise<Branch> {
+    const currentBranch = await super.get(id, params);
+    await this.assertCanMutateAssistantKnowledgeConfig(currentBranch, data, params);
+    this.assertAssistantKindIsStable(currentBranch, data);
+    return super.update(id, data, params) as Promise<Branch>;
   }
 
   /**

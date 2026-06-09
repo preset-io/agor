@@ -1,5 +1,6 @@
 // src/types/branch.ts
 import type { BoardID, BranchID, UUID } from './id';
+import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
 
 /**
@@ -681,6 +682,28 @@ export type RepoEnvironmentConfig = RepoEnvironmentConfigV1;
 
 // ===== Assistants =====
 
+export type AssistantKnowledgeGrantAccess = 'none' | 'read' | 'write';
+export interface AssistantKnowledgeGrant {
+  namespace_id: KnowledgeNamespaceID;
+  namespace_slug: string;
+  access: AssistantKnowledgeGrantAccess;
+}
+
+export interface AssistantKnowledgeConfig {
+  primary_namespace_id: KnowledgeNamespaceID;
+  primary_namespace_slug: string;
+  memory_path_template: 'memory/{{YYYY-MM-DD}}.md';
+  default_visibility: KnowledgeVisibility;
+  /**
+   * Assistant-tool policy for namespaces not listed in `grants`.
+   *
+   * This is an assistant-specific ceiling; effective access is still
+   * intersected with the calling user's Knowledge namespace permission.
+   */
+  global_access?: AssistantKnowledgeGrantAccess;
+  grants?: AssistantKnowledgeGrant[];
+}
+
 /**
  * Configuration for an assistant, stored in branch.custom_context.assistant
  *
@@ -700,6 +723,8 @@ export interface AssistantConfig {
   frameworkVersion?: string;
   /** Whether this was created via the onboarding wizard */
   createdViaOnboarding?: boolean;
+  /** Knowledge Base namespace and grant config for assistant memory/context. */
+  kb?: AssistantKnowledgeConfig;
 }
 
 /** @deprecated Use AssistantConfig instead */

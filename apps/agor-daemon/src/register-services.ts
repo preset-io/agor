@@ -316,7 +316,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   app.use('/branches', createBranchesService(db, app), {
-    methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'initializeUnixGroup'],
+    methods: [
+      'find',
+      'get',
+      'create',
+      'update',
+      'patch',
+      'remove',
+      'initializeUnixGroup',
+      'ensureAssistantKnowledgeNamespace',
+    ],
   });
 
   console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
