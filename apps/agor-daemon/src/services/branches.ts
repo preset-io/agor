@@ -522,6 +522,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch>,
     params?: BranchParams
   ): Promise<void> {
+    if (!isAssistant(branch)) return;
     if (!this.containsAssistantKnowledgeConfigMutation(data)) return;
     await this.assertCanManageAssistantKnowledge(branch, params);
   }

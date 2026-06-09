@@ -578,7 +578,10 @@ describe('createClient', () => {
       const branchesService = client.service('branches') as unknown as {
         methods: MockedFunction<(...names: string[]) => unknown>;
       };
-      expect(branchesService.methods).toHaveBeenCalledWith('initializeUnixGroup');
+      expect(branchesService.methods).toHaveBeenCalledWith(
+        'initializeUnixGroup',
+        'ensureAssistantKnowledgeNamespace'
+      );
     });
 
     it('does not register custom methods on services without any', () => {
