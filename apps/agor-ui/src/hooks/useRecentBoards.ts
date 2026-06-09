@@ -14,6 +14,7 @@ export function useRecentBoards(
   currentBoardId: string
 ): {
   recentBoards: Board[];
+  recentBoardIds: string[];
   trackBoardVisit: (boardId: string) => void;
 } {
   const [recentIds, setRecentIds] = useLocalStorage<string[]>(STORAGE_KEY, []);
@@ -36,5 +37,5 @@ export function useRecentBoards(
       .slice(0, 3);
   }, [recentIds, currentBoardId, boards]);
 
-  return { recentBoards, trackBoardVisit };
+  return { recentBoards, recentBoardIds: recentIds, trackBoardVisit };
 }

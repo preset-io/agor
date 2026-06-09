@@ -1,0 +1,200 @@
+import './styles.css';
+
+document.body.innerHTML = `
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div>
+        <div class="brand-name">Agor</div>
+        <div class="instance">Preset instance</div>
+      </div>
+    </div>
+    <div class="board-picker-placeholder">[Board Picker]</div>
+    <div class="search">Search boards, sessions, branches, Knowledge…</div>
+    <div class="top-actions">
+      <button>Knowledge</button>
+      <button>Settings</button>
+      <div class="avatar">M</div>
+    </div>
+  </header>
+
+  <button class="floating-add" aria-label="Create">+</button>
+
+  <main class="home">
+    <div class="grid">
+      <section class="main-column">
+        <div class="section-title">
+          <h2>Boards</h2>
+          <button class="info" data-tip="All accessible boards, ranked by activity/recency. Navbar already has the board switcher + 3 recent shortcuts; this section is the broader scrollable board browser.">i</button>
+          <div class="filters"><span>All boards</span><span>Mine</span><span>Active</span><span>Assistants</span></div>
+        </div>
+        <div class="board-grid">
+          <article class="board-card active">
+            <div class="board-header">
+              <h3><span class="emoji">🚢</span> Shipping pipeline</h3>
+            </div>
+            <p><strong>Review Bot</strong> · prompted by Anna 12 min ago</p>
+            <div class="stats"><span>18 branches</span><span>42 sessions</span></div>
+            <div class="faces"><span>A</span><span>M</span><span>J</span></div>
+          </article>
+          <article class="board-card">
+            <div class="board-header">
+              <h3><span class="emoji">🧪</span> Experiments</h3>
+            </div>
+            <p>No primary assistant · parallel prototypes and model comparisons.</p>
+            <div class="stats"><span>9 branches</span><span>12 sessions</span></div>
+            <div class="faces"><span>M</span></div>
+          </article>
+          <article class="board-card">
+            <div class="board-header">
+              <h3><span class="emoji">🤖</span> Assistants</h3>
+            </div>
+            <p><strong>Ops Bot</strong> · scheduled audit needs permission.</p>
+            <div class="stats"><span>5 branches</span><span>31 sessions</span></div>
+            <div class="faces"><span>K</span><span>A</span></div>
+          </article>
+          <article class="board-card">
+            <div class="board-header">
+              <h3><span class="emoji">📣</span> Marketing</h3>
+            </div>
+            <p><strong>Marketing Bot</strong> · prompted by Anna 8 min ago</p>
+            <div class="stats"><span>6 branches</span><span>19 sessions</span></div>
+            <div class="faces"><span>A</span><span>S</span></div>
+          </article>
+          <article class="board-card">
+            <div class="board-header">
+              <h3><span class="emoji">🐞</span> Bug triage</h3>
+            </div>
+            <p>No active sessions · latest branch created yesterday.</p>
+            <div class="stats"><span>12 branches</span><span>27 sessions</span></div>
+            <div class="faces"><span>J</span></div>
+          </article>
+        </div>
+
+        <div class="section-title sessions-title">
+          <h2>Your sessions</h2>
+          <button class="info" data-tip="Sessions created or last prompted by you, sorted by last prompt/update. Attention states are promoted. Empty state: start a session from any board.">i</button>
+          <div class="filters"><span>Recent</span><span>Needs input</span><span>Running</span></div>
+        </div>
+        <section class="card list-card">
+          <div class="session-row">
+            <div class="tool codex">C</div>
+            <div class="row-main">
+              <strong>Review home page IA and mocks</strong>
+              <span>last prompted by you · Shipping pipeline · 2 min ago</span>
+            </div>
+            <span class="status running">running</span>
+          </div>
+          <div class="session-row">
+            <div class="tool claude">◇</div>
+            <div class="row-main">
+              <strong>Update RBAC docs after review</strong>
+              <span>last prompted by you · Ops Bot · awaiting permission</span>
+            </div>
+            <span class="status waiting">permission</span>
+          </div>
+          <div class="session-row">
+            <div class="tool gemini">G</div>
+            <div class="row-main">
+              <strong>Compare onboarding copy variants</strong>
+              <span>last prompted by you · Experiments · completed 18 min ago</span>
+            </div>
+            <span class="status done">done</span>
+          </div>
+          <div class="session-row">
+            <div class="tool codex">C</div>
+            <div class="row-main">
+              <strong>Generate release-note draft</strong>
+              <span>last prompted by you · Shipping pipeline · 41 min ago</span>
+            </div>
+            <span class="status done">done</span>
+          </div>
+          <div class="session-row">
+            <div class="tool claude">◇</div>
+            <div class="row-main">
+              <strong>Investigate flaky onboarding test</strong>
+              <span>last prompted by you · Bug triage · 1 hr ago</span>
+            </div>
+            <span class="status running">running</span>
+          </div>
+          <div class="session-row">
+            <div class="tool gemini">G</div>
+            <div class="row-main">
+              <strong>Summarize Marketing Bot prompts</strong>
+              <span>last prompted by you · Marketing · 2 hr ago</span>
+            </div>
+            <span class="status done">done</span>
+          </div>
+          <div class="session-row">
+            <div class="tool codex">C</div>
+            <div class="row-main">
+              <strong>Prototype board activity selector</strong>
+              <span>last prompted by you · Experiments · 3 hr ago</span>
+            </div>
+            <span class="status waiting">input</span>
+          </div>
+          <div class="session-row">
+            <div class="tool claude">◇</div>
+            <div class="row-main">
+              <strong>Draft branch cleanup plan</strong>
+              <span>last prompted by you · Assistants · yesterday</span>
+            </div>
+            <span class="status done">done</span>
+          </div>
+          <div class="session-row">
+            <div class="tool codex">C</div>
+            <div class="row-main">
+              <strong>Audit artifact rendering errors</strong>
+              <span>last prompted by you · Bug triage · yesterday</span>
+            </div>
+            <span class="status done">done</span>
+          </div>
+          <div class="session-row">
+            <div class="tool gemini">G</div>
+            <div class="row-main">
+              <strong>Explore assistant assignment UX</strong>
+              <span>last prompted by you · Assistants · Jun 8</span>
+            </div>
+            <span class="status done">done</span>
+          </div>
+        </section>
+      </section>
+
+      <aside class="right-rail">
+        <section class="card activity">
+          <div class="section-title compact"><h2>Team activity</h2><button class="info" data-tip="Curated, not raw CRUD: branch created, assistant created/assigned/prompted, artifact published, and mentions. Later: unioned activity summary query with grouping.">i</button></div>
+          <div class="activity-item"><span class="dot green"></span><a href="#">Anna</a> created branch <a href="#">Checkout refactor</a></div>
+          <div class="activity-item"><span class="dot blue"></span><a href="#">Jordan</a> published <a href="#">Signup flow mock</a></div>
+          <div class="activity-item"><span class="dot amber"></span><a href="#">Max</a> created <a href="#">Marketing Bot</a></div>
+          <div class="activity-item"><span class="dot purple"></span><a href="#">Anna</a> prompted <a href="#">Marketing Bot</a> 3 times</div>
+          <div class="activity-item"><span class="dot green"></span><a href="#">Sam</a> assigned <a href="#">Review Bot</a> to <a href="#">Shipping pipeline</a></div>
+          <div class="activity-item"><span class="dot amber"></span><a href="#">Ops Bot</a> requested permission on <a href="#">Assistants</a></div>
+          <div class="activity-item"><span class="dot blue"></span><a href="#">Mina</a> commented on <a href="#">Bug triage</a></div>
+          <div class="activity-item"><span class="dot purple"></span><a href="#">Jordan</a> prompted <a href="#">Review Bot</a></div>
+          <div class="activity-item"><span class="dot green"></span><a href="#">Ana</a> created branch <a href="#">Onboarding polish</a></div>
+          <div class="activity-item"><span class="dot blue"></span><a href="#">Max</a> published <a href="#">Home page mock</a></div>
+          <div class="activity-item"><span class="dot amber"></span><a href="#">QA Bot</a> failed audit on <a href="#">Bug triage</a></div>
+          <div class="activity-item"><span class="dot purple"></span><a href="#">Sam</a> mentioned you on <a href="#">Shipping pipeline</a></div>
+        </section>
+
+        <section class="card knowledge">
+          <div class="section-title compact"><h2>Recent Knowledge</h2><button class="info" data-tip="Readable Knowledge docs sorted by updated_at. Data: kb/documents with namespace/path/kind. Empty state: create a Knowledge page or open Knowledge.">i</button><a href="#">Open</a></div>
+          <div class="doc-row"><strong>Home page product notes</strong><span>global/pages · updated today</span></div>
+          <div class="doc-row"><strong>Session drawer improvements</strong><span>decisions · yesterday</span></div>
+          <div class="doc-row"><strong>Assistant memory plan</strong><span>explorations · May 28</span></div>
+          <div class="doc-row"><strong>Board switcher behavior</strong><span>guide/boards · Jun 7</span></div>
+          <div class="doc-row"><strong>Activity feed event taxonomy</strong><span>decisions · Jun 6</span></div>
+          <div class="doc-row"><strong>Knowledge namespace RBAC</strong><span>explorations · Jun 4</span></div>
+          <div class="doc-row"><strong>Assistant assignment UX</strong><span>pages/assistants · Jun 2</span></div>
+          <div class="doc-row"><strong>Theme token guidelines</strong><span>guidelines · May 31</span></div>
+          <div class="doc-row"><strong>Branch card anatomy</strong><span>guide/branches · May 29</span></div>
+          <div class="doc-row"><strong>Onboarding empty states</strong><span>decisions · May 26</span></div>
+        </section>
+
+
+      </aside>
+    </div>
+  </main>
+</div>
+`;

@@ -71,6 +71,8 @@ export interface AppNavigation {
   goToArtifact: (artifactId: string, opts?: NavigationOpts) => void;
   /** Navigate to a board (no session). Pushes `/b/<slug-or-short>/`. */
   goToBoard: (boardId: string, opts?: NavigationOpts) => void;
+  /** Navigate to Home (`/`) with no board selected. */
+  goHome: (opts?: NavigationOpts) => void;
 }
 
 /** Normalize a path to its trailing-slash canonical form so equality
@@ -126,6 +128,13 @@ export function useAppNavigation({
   const goToBoard = useCallback(
     (boardId: string, opts?: NavigationOpts) => {
       pushPath(buildBoardPath(boardId, boardByIdRef.current), opts);
+    },
+    [pushPath]
+  );
+
+  const goHome = useCallback(
+    (opts?: NavigationOpts) => {
+      pushPath('/', opts);
     },
     [pushPath]
   );
@@ -189,7 +198,7 @@ export function useAppNavigation({
   );
 
   return useMemo(
-    () => ({ goToSession, goToBranch, goToArtifact, goToBoard }),
-    [goToSession, goToBranch, goToArtifact, goToBoard]
+    () => ({ goToSession, goToBranch, goToArtifact, goToBoard, goHome }),
+    [goToSession, goToBranch, goToArtifact, goToBoard, goHome]
   );
 }

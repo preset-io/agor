@@ -53,6 +53,7 @@ export interface AppHeaderProps {
   boards?: Board[];
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
+  onHomeClick?: () => void;
   branchById: Map<string, Branch>;
   boardById: Map<string, Board>; // For looking up board names; required because GlobalSearch hands it to useAppNavigation for slug-aware path building
   onUserClick?: (
@@ -135,6 +136,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   boards = [],
   currentBoardId,
   onBoardChange,
+  onHomeClick,
   branchById,
   boardById,
   onUserClick,
@@ -170,17 +172,33 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       }}
     >
       <Space size={16} align="center">
-        <img
-          src={`${import.meta.env.BASE_URL}favicon.png`}
-          alt="Agor logo"
+        <button
+          type="button"
+          aria-label="Go to Home"
+          onClick={onHomeClick}
           style={{
-            height: 50,
-            borderRadius: '50%',
-            objectFit: 'cover',
-            display: 'block',
+            height: 54,
+            padding: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            background: 'transparent',
+            border: 0,
+            cursor: 'pointer',
           }}
-        />
-        <BrandLogo level={3} style={{ marginTop: -6 }} />
+        >
+          <img
+            src={`${import.meta.env.BASE_URL}favicon.png`}
+            alt="Agor logo"
+            style={{
+              height: 50,
+              borderRadius: '50%',
+              objectFit: 'cover',
+              display: 'block',
+            }}
+          />
+          <BrandLogo level={3} style={{ marginTop: -6 }} />
+        </button>
         {instanceLabel &&
           (instanceDescription ? (
             <Popover
@@ -210,33 +228,32 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             RecentBoardPills, theme, external doc link, presence display)
             stays fully alive — those never depend on the daemon.
             See docs/disconnected-state-design.md. */}
-        {currentBoardId && boards.length > 0 && (
-          <>
-            {currentBoardName && (
-              <Tooltip title="Toggle board panel" placement="bottom">
-                <Button
-                  type="text"
-                  icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
-                  style={headerIconButtonStyle}
-                  onClick={onMenuClick}
-                  disabled={mutationDisabled}
-                />
-              </Tooltip>
-            )}
-            <div style={{ minWidth: 200 }}>
-              <BoardSwitcher
-                boards={boards}
-                currentBoardId={currentBoardId}
-                onBoardChange={onBoardChange || (() => {})}
-                branchById={branchById}
-              />
-            </div>
-            <RecentBoardPills
-              recentBoards={recentBoards}
-              onBoardChange={onBoardChange || (() => {})}
-              token={token}
+        {currentBoardName && (
+          <Tooltip title="Toggle board panel" placement="bottom">
+            <Button
+              type="text"
+              icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
+              style={headerIconButtonStyle}
+              onClick={onMenuClick}
+              disabled={mutationDisabled}
             />
-          </>
+          </Tooltip>
+        )}
+        <div style={{ minWidth: 200 }}>
+          <BoardSwitcher
+            boards={boards}
+            currentBoardId={currentBoardId}
+            onBoardChange={onBoardChange || (() => {})}
+            onHomeClick={onHomeClick}
+            branchById={branchById}
+          />
+        </div>
+        {boards.length > 0 && (
+          <RecentBoardPills
+            recentBoards={recentBoards}
+            onBoardChange={onBoardChange || (() => {})}
+            token={token}
+          />
         )}
         {currentBoardName && (
           <Badge
@@ -268,7 +285,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         />
         <GlobalPresenceFacepile
           client={presenceClient}
-          currentBoardId={(currentBoardId as BoardID | undefined) ?? null}
+          currentBoardId={currentBoardId ? (currentBoardId as BoardID) : null}
           users={presenceUsers}
           currentUser={user}
           boardById={boardById}

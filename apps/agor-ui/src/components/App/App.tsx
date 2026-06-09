@@ -30,7 +30,7 @@ import {
   PanelGroup,
   PanelResizeHandle,
 } from 'react-resizable-panels';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
@@ -63,6 +63,7 @@ import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
+import { HomePage } from '../HomePage';
 import { NewSessionButton } from '../NewSessionButton';
 import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
@@ -286,6 +287,7 @@ export const App: React.FC<AppProps> = ({
   branchStorageConfig,
 }) => {
   const { showWarning } = useThemedMessage();
+  const location = useLocation();
   const routeParams = useParams<{
     sessionShortId?: string;
     branchShortId?: string;
@@ -367,6 +369,10 @@ export const App: React.FC<AppProps> = ({
   // Handle external user settings modal control (e.g., from onboarding "Configure API Keys")
   const effectiveUserSettingsOpen = userSettingsOpen || !!openUserSettings;
 
+  // Initialize current board only from explicit route/bootstrap state. Home (`/`)
+  // is a valid no-board route, so do not auto-select localStorage/first board.
+  const [currentBoardId, setCurrentBoardIdInternal] = useState(() => initialBoardId || '');
+
   // Initialize comments panel state from localStorage (collapsed by default)
   const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useLocalStorage<boolean>(
     'agor:commentsPanelCollapsed',
@@ -380,7 +386,10 @@ export const App: React.FC<AppProps> = ({
     24
   );
 
-  const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel;
+  const currentBoard = boardById.get(currentBoardId);
+  const isHomeSurface = !currentBoard && !hasExplicitEntityTarget && location.pathname === '/';
+
+  const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel || isHomeSurface;
 
   // Ref for programmatically controlling the comments panel
   const commentsPanelRef = useRef<ImperativePanelHandle>(null);
@@ -421,18 +430,11 @@ export const App: React.FC<AppProps> = ({
     true
   );
 
-  // Initialize current board from localStorage or fallback to first board or initialBoardId
-  const [currentBoardId, setCurrentBoardIdInternal] = useState(() => {
-    const stored = localStorage.getItem('agor:currentBoardId');
-    if (stored && boardById.has(stored)) {
-      return stored;
-    }
-    const firstBoard = mapToArray(boardById)[0];
-    return initialBoardId || firstBoard?.board_id || '';
-  });
-
   // Track recent boards (single instance — passed down to AppHeader as props)
-  const { recentBoards, trackBoardVisit } = useRecentBoards(mapToArray(boardById), currentBoardId);
+  const { recentBoards, recentBoardIds, trackBoardVisit } = useRecentBoards(
+    mapToArray(boardById),
+    currentBoardId
+  );
 
   // Persist current board to localStorage when it changes
   useEffect(() => {
@@ -826,7 +828,6 @@ export const App: React.FC<AppProps> = ({
   }, [selectedSessionId, sessionById]);
 
   const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
-  const currentBoard = boardById.get(currentBoardId);
   const primaryAssistantId = currentBoard?.primary_assistant_id ?? null;
   const primaryAssistantBranch = primaryAssistantId
     ? branchById.get(primaryAssistantId)
@@ -1020,6 +1021,11 @@ export const App: React.FC<AppProps> = ({
               boards={mapToArray(boardById)}
               currentBoardId={currentBoardId}
               onBoardChange={navigation.goToBoard}
+              onHomeClick={() => {
+                setSelectedSessionId(null);
+                setCurrentBoardIdInternal('');
+                navigation.goHome();
+              }}
               branchById={branchById}
               boardById={boardById}
               onUserClick={(
@@ -1173,49 +1179,69 @@ export const App: React.FC<AppProps> = ({
                       minSize={20}
                     >
                       <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
-                        <SessionCanvas
-                          ref={sessionCanvasRef}
-                          board={currentBoard || null}
-                          client={client}
-                          sessionById={sessionById}
-                          sessionsByBranch={sessionsByBranch}
-                          userById={userById}
-                          repoById={repoById}
-                          branches={boardBranches}
-                          primaryAssistantId={primaryAssistantId}
-                          branchById={branchById}
-                          boardObjectById={boardObjectById}
-                          commentById={commentById}
-                          cardById={cardById}
-                          currentUserId={user?.user_id}
-                          selectedSessionId={effectiveSelectedSessionId}
-                          activeUrlTargetBranchId={activeUrlTargetBranchId}
-                          activeUrlTargetArtifactId={activeUrlTargetArtifactId}
-                          availableAgents={availableAgents}
-                          mcpServerById={mcpServerById}
-                          sessionMcpServerIds={sessionMcpServerIds}
-                          onSessionClick={handleSessionClick}
-                          onSessionUpdate={onUpdateSession}
-                          onSessionDelete={onDeleteSession}
-                          onForkSession={onForkSession}
-                          onSpawnSession={onSpawnSession}
-                          onUpdateSessionMcpServers={onUpdateSessionMcpServers}
-                          onOpenSettings={setSessionSettingsId}
-                          onCreateSessionForBranch={setNewSessionBranchId}
-                          onOpenBranch={setBranchModalBranchId}
-                          onArchiveOrDeleteBranch={onArchiveOrDeleteBranch}
-                          onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
-                          onStartEnvironment={onStartEnvironment}
-                          onStopEnvironment={onStopEnvironment}
-                          onViewLogs={setLogsModalBranchId}
-                          onNukeEnvironment={onNukeEnvironment}
-                          onOpenCommentsPanel={handleOpenCommentsPanel}
-                          onCommentHover={setHoveredCommentId}
-                          onCommentSelect={handleCommentSelect}
-                        />
+                        {isHomeSurface ? (
+                          <HomePage
+                            client={client}
+                            currentUser={user}
+                            connected={connected}
+                            boardById={boardById}
+                            recentBoardIds={recentBoardIds}
+                            branchById={branchById}
+                            repoById={repoById}
+                            sessionById={sessionById}
+                            sessionsByBranch={sessionsByBranch}
+                            userById={userById}
+                            onBoardClick={navigation.goToBoard}
+                            onBranchClick={navigation.goToBranch}
+                            onSessionClick={handleSessionClick}
+                          />
+                        ) : (
+                          <SessionCanvas
+                            ref={sessionCanvasRef}
+                            board={currentBoard || null}
+                            client={client}
+                            sessionById={sessionById}
+                            sessionsByBranch={sessionsByBranch}
+                            userById={userById}
+                            repoById={repoById}
+                            branches={boardBranches}
+                            primaryAssistantId={primaryAssistantId}
+                            branchById={branchById}
+                            boardObjectById={boardObjectById}
+                            commentById={commentById}
+                            cardById={cardById}
+                            currentUserId={user?.user_id}
+                            selectedSessionId={effectiveSelectedSessionId}
+                            activeUrlTargetBranchId={activeUrlTargetBranchId}
+                            activeUrlTargetArtifactId={activeUrlTargetArtifactId}
+                            availableAgents={availableAgents}
+                            mcpServerById={mcpServerById}
+                            sessionMcpServerIds={sessionMcpServerIds}
+                            onSessionClick={handleSessionClick}
+                            onSessionUpdate={onUpdateSession}
+                            onSessionDelete={onDeleteSession}
+                            onForkSession={onForkSession}
+                            onSpawnSession={onSpawnSession}
+                            onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+                            onOpenSettings={setSessionSettingsId}
+                            onCreateSessionForBranch={setNewSessionBranchId}
+                            onOpenBranch={setBranchModalBranchId}
+                            onArchiveOrDeleteBranch={onArchiveOrDeleteBranch}
+                            onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
+                            onStartEnvironment={onStartEnvironment}
+                            onStopEnvironment={onStopEnvironment}
+                            onViewLogs={setLogsModalBranchId}
+                            onNukeEnvironment={onNukeEnvironment}
+                            onOpenCommentsPanel={handleOpenCommentsPanel}
+                            onCommentHover={setHoveredCommentId}
+                            onCommentSelect={handleCommentSelect}
+                          />
+                        )}
                         <NewSessionButton
                           onClick={() => {
-                            const center = sessionCanvasRef.current?.getViewportCenter();
+                            const center = isHomeSurface
+                              ? null
+                              : sessionCanvasRef.current?.getViewportCenter();
                             setNewBranchDefaultPosition(center || null);
                             setCreateDialogDefaultTab('assistant');
                             setCreateDialogOpen(true);

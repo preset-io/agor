@@ -11,7 +11,7 @@
  * up its current board, and switches if needed. This keeps shared
  * links stable across board moves.
  *
- *   /                              — root (redirects to first board)
+ *   /                              — Home (no board selected)
  *   /b/<boardSlugOrShort>/         — board view
  *   /s/<sessionShort>/             — session conversation
  *   /w/<branchShort>/            — branch (board switch + recenter)
@@ -282,10 +282,16 @@ export function useUrlState(options: UseUrlStateOptions) {
       urlParamsResolvedRef.current.artifact;
     if (!urlParamsChanged && fullyResolved) return;
 
-    // No URL params at all → fall back to state→URL
+    // No URL params at all → Home/no-board state. Do not self-heal back
+    // to the last board; `/` is a valid workspace surface.
     if (!urlBoardParam && !urlSessionShortId && !urlBranchShortId && !urlArtifactShortId) {
-      if (currentBoardIdRef.current && boardById.size > 0 && !isSettingsRoute) {
-        updateUrlFromState();
+      if (!isSettingsRoute && currentBoardIdRef.current) {
+        syncingRef.current = true;
+        onBoardChange('');
+        if (currentSessionIdRef.current) onSessionChange(null);
+        setTimeout(() => {
+          syncingRef.current = false;
+        }, 0);
       }
       // Stale highlight cleanup: when the URL drops the deep-link
       // segment, drop the active target too so the previously-targeted
@@ -427,7 +433,6 @@ export function useUrlState(options: UseUrlStateOptions) {
     onBoardChange,
     onSessionChange,
     onActiveUrlTargetChange,
-    updateUrlFromState,
     isSettingsRoute,
     recenterMap,
   ]);
@@ -451,7 +456,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     urlSessionShortId,
     urlBranchShortId,
     urlArtifactShortId,
-    updateUrlFromState,
     isSettingsRoute,
+    updateUrlFromState,
   ]);
 }
