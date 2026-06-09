@@ -153,16 +153,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
             key: 'knowledge',
             label: 'Knowledge',
             children: (
-              <KnowledgeTab
-                branch={branch}
-                client={client}
-                canEdit={form.canEditGeneral}
-                onBranchUpdated={(updatedBranch) =>
-                  onUpdateBranch?.(updatedBranch.branch_id, {
-                    custom_context: updatedBranch.custom_context,
-                  })
-                }
-              />
+              <KnowledgeTab branch={branch} client={client} canEdit={form.canEditGeneral} />
             ),
           },
         ]
