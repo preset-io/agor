@@ -89,6 +89,9 @@ describe('BranchHeaderPill', () => {
   it('hides the destructive nuke action in compact mode', () => {
     render(<BranchHeaderPill {...defaultProps} compact />);
 
+    expect(screen.getByRole('button', { name: 'Start environment' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop environment' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View environment logs' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Nuke environment' })).not.toBeInTheDocument();
   });
 

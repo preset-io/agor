@@ -36,7 +36,10 @@ interface BranchHeaderPillProps {
   connectionDisabled?: boolean;
   /** Show environment status/controls and environment shortcut. Defaults to true. */
   showEnvButtons?: boolean;
-  /** Compact identity section for constrained side panels. Hides the repo slug but keeps it in the tooltip. */
+  /**
+   * Compact rendering for constrained side panels.
+   * Hides the repo slug in the identity section and omits destructive environment actions.
+   */
   compact?: boolean;
 }
 
