@@ -66,6 +66,7 @@ import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import { executorRuntimeScopeGuard } from './auth/executor-runtime-scope.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
 import {
   issueRuntimeToken,
@@ -209,7 +210,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     svcTier,
     jwtSecret,
     branchRbacEnabled,
-    requireAuth,
+    requireAuth: baseRequireAuth,
     enforcePasswordChange,
     superadminOpts,
     DB_PATH,
@@ -228,6 +229,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionEnvSelectionsService,
     terminalsService: _terminalsService,
   } = ctx;
+
+  const requireAuth = async (context: HookContext): Promise<HookContext> => {
+    const authenticated = await baseRequireAuth(context);
+    return executorRuntimeScopeGuard()(authenticated);
+  };
 
   const usersService = app.service('users');
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;

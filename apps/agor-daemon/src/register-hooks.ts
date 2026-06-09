@@ -307,7 +307,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     svcEnabled,
     jwtSecret,
     branchRbacEnabled,
-    requireAuth,
+    requireAuth: baseRequireAuth,
     superadminOpts,
     sessionsService,
     boardsService,
@@ -315,6 +315,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     usersRepository,
     sessionsRepository,
   } = ctx;
+
+  const requireAuth = async (context: HookContext): Promise<HookContext> => {
+    const authenticated = await baseRequireAuth(context);
+    return executorRuntimeScopeGuard()(authenticated);
+  };
 
   // Helper: safely get a service (returns undefined if not registered due to tier=off)
   const safeService = (path: string) => {

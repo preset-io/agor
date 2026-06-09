@@ -6,10 +6,15 @@
  */
 
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams } from '@agor/core/types';
+import type { AuthenticatedParams, HookContext } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { ensureCanTriggerManagedEnv, ensureMinimumRole, requireMinimumRole } from './authorization';
+import {
+  ensureCanTriggerManagedEnv,
+  ensureMinimumRole,
+  registerAuthenticatedRoute,
+  requireMinimumRole,
+} from './authorization';
 
 /** Helper to create authenticated params for a given role and provider */
 function makeParams(role: string, provider: string | undefined = 'rest'): AuthenticatedParams {
@@ -220,5 +225,50 @@ describe('requireMinimumRole (hook factory)', () => {
     } as import('@agor/core/types').HookContext;
 
     expect(() => hook(context)).toThrow(Forbidden);
+  });
+});
+
+describe('registerAuthenticatedRoute', () => {
+  it('installs executor runtime scope validation on custom routes', async () => {
+    const installed: { before?: Record<string, Array<(context: HookContext) => unknown>> } = {};
+    const app = {
+      use: () => undefined,
+      service: () => ({
+        hooks: (hooks: { before: Record<string, Array<(context: HookContext) => unknown>> }) => {
+          installed.before = hooks.before;
+        },
+      }),
+    };
+    const requireAuth = async (context: HookContext) => context;
+
+    registerAuthenticatedRoute(
+      app,
+      '/messages/bulk',
+      { async create() {} },
+      { create: { role: ROLES.MEMBER, action: 'create messages' } },
+      requireAuth
+    );
+
+    const context = {
+      path: 'messages/bulk',
+      method: 'create',
+      data: [{ task_id: 'other-task' }],
+      params: {
+        provider: 'rest',
+        user: { user_id: 'u1', email: 'a@b.c', role: ROLES.MEMBER },
+        authentication: {
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            session_id: 'session-1',
+            task_id: 'task-1',
+          },
+        },
+      },
+    } as HookContext;
+
+    const hooks = installed.before?.create ?? [];
+    expect(hooks).toHaveLength(3);
+    await expect(hooks[1](context)).rejects.toThrow(/task scope/);
   });
 });

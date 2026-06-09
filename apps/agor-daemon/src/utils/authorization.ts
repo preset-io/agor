@@ -6,6 +6,7 @@ import type { ManagedEnvsMinimumRole } from '@agor/core/config';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, UserRole } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { executorRuntimeScopeGuard } from '../auth/executor-runtime-scope.js';
 
 export type Role = UserRole;
 
@@ -185,7 +186,11 @@ export function registerAuthenticatedRoute(
   > = {};
 
   for (const [method, config] of Object.entries(authConfig)) {
-    hooks[method] = [requireAuth, requireMinimumRole(config.role, config.action)];
+    hooks[method] = [
+      requireAuth,
+      executorRuntimeScopeGuard(),
+      requireMinimumRole(config.role, config.action),
+    ];
   }
 
   // Apply hooks

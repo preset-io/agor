@@ -74,4 +74,93 @@ describe('executorRuntimeScopeGuard', () => {
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/messages request/);
   });
+
+  it('rejects executor tokens on unrecognized endpoints', async () => {
+    const context = ctx({ path: 'repos', method: 'find' });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+      /not valid for this endpoint/
+    );
+  });
+
+  it('validates every bulk message payload item against task scope', async () => {
+    const context = ctx({
+      path: 'messages/bulk',
+      method: 'create',
+      data: [
+        { message_id: 'message-1', task_id: 'task-1', session_id: 'session-1' },
+        { message_id: 'message-2' },
+      ],
+    });
+
+    await executorRuntimeScopeGuard()(context);
+
+    expect(context.data).toEqual([
+      { message_id: 'message-1', task_id: 'task-1', session_id: 'session-1' },
+      { message_id: 'message-2', task_id: 'task-1', session_id: 'session-1' },
+    ]);
+  });
+
+  it('rejects bulk message payloads for another task', async () => {
+    const context = ctx({
+      path: 'messages/bulk',
+      method: 'create',
+      data: [{ message_id: 'message-1', task_id: 'task-2', session_id: 'session-1' }],
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
+  });
+
+  it('validates streaming event payload scope', async () => {
+    const context = ctx({
+      path: 'tasks/streaming',
+      method: 'create',
+      data: {
+        event: 'thinking:chunk',
+        data: { task_id: 'task-1', session_id: 'session-1', text: 'chunk' },
+      },
+    });
+
+    await executorRuntimeScopeGuard()(context);
+
+    expect((context.data as { data: Record<string, unknown> }).data).toMatchObject({
+      task_id: 'task-1',
+      session_id: 'session-1',
+    });
+  });
+
+  it('rejects streaming events for another session', async () => {
+    const context = ctx({
+      path: 'messages/streaming',
+      method: 'create',
+      data: {
+        event: 'message:chunk',
+        data: { task_id: 'task-1', session_id: 'session-2' },
+      },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/session scope/);
+  });
+
+  it('allows scoped session genealogy route only for the scoped session', async () => {
+    const context = ctx({
+      path: 'sessions/:id/genealogy',
+      method: 'find',
+      params: { authentication: { payload }, query: {}, route: { id: 'session-1' } },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it('rejects session custom routes that are not explicitly allowed', async () => {
+    const context = ctx({
+      path: 'sessions/:id/fork',
+      method: 'create',
+      params: { authentication: { payload }, query: {}, route: { id: 'session-1' } },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+      /not valid for this endpoint/
+    );
+  });
 });

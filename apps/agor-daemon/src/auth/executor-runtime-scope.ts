@@ -10,6 +10,12 @@ type ExecutorTokenPayload = {
   branch_id?: string;
 };
 
+type Scope = {
+  sessionId?: string;
+  taskId?: string;
+  branchId?: string;
+};
+
 function scopedPayload(context: HookContext): ExecutorTokenPayload | null {
   const payload = (context.params as AuthenticatedParams).authentication?.payload as
     | ExecutorTokenPayload
@@ -39,6 +45,59 @@ function setIfAbsent(target: Record<string, unknown>, key: string, value: string
   if (target[key] === undefined || target[key] === null) target[key] = value;
 }
 
+function normalizePath(path: string | undefined): string {
+  return (path ?? '').replace(/^\/+/, '');
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function routeId(context: HookContext): string | undefined {
+  return (context.params as Params & { route?: { id?: string } }).route?.id;
+}
+
+function recordsFromData(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) {
+    return data.map((item) => {
+      const record = asRecord(item);
+      if (!record) {
+        throw new Forbidden('Executor token requires scoped object payloads');
+      }
+      return record;
+    });
+  }
+  const record = asRecord(data);
+  if (!record) {
+    throw new Forbidden('Executor token requires a scoped object payload');
+  }
+  return [record];
+}
+
+function scopeTaskRecord(record: Record<string, unknown>, scope: Scope): void {
+  const taskId = expectClaim(scope.taskId, 'task');
+  expectMatch(taskId, record.task_id, 'task');
+  setIfAbsent(record, 'task_id', taskId);
+  if (scope.sessionId) {
+    expectMatch(scope.sessionId, record.session_id, 'session');
+    setIfAbsent(record, 'session_id', scope.sessionId);
+  }
+}
+
+function scopeStreamingEnvelope(data: unknown, scope: Scope): void {
+  const envelope = asRecord(data);
+  if (!envelope) {
+    throw new Forbidden('Executor token requires a scoped streaming payload');
+  }
+  const eventData = asRecord(envelope.data);
+  if (!eventData) {
+    throw new Forbidden('Executor token requires scoped streaming event data');
+  }
+  scopeTaskRecord(eventData, scope);
+}
+
 /**
  * Restrict executor-session JWTs to the resource claims minted for the
  * executor turn. Normal user/API-key/service auth is intentionally ignored.
@@ -61,8 +120,9 @@ export function executorRuntimeScopeGuard() {
     const query = ((context.params as Params).query ?? {}) as Record<string, unknown>;
     (context.params as Params).query = query;
     const id = typeof context.id === 'string' ? context.id : undefined;
+    const path = normalizePath(context.path);
 
-    if (context.path === 'sessions') {
+    if (path === 'sessions') {
       const sessionId = expectClaim(scope.sessionId, 'session');
       if (context.method === 'find') {
         expectMatch(sessionId, query.session_id, 'session');
@@ -79,7 +139,7 @@ export function executorRuntimeScopeGuard() {
         if (scope.branchId)
           expectMatch(scope.branchId, data.branch_id ?? query.branch_id, 'branch');
       }
-    } else if (context.path === 'tasks') {
+    } else if (path === 'tasks') {
       const taskId = expectClaim(scope.taskId, 'task');
       if (context.method === 'find') {
         expectMatch(taskId, query.task_id, 'task');
@@ -96,7 +156,7 @@ export function executorRuntimeScopeGuard() {
         if (scope.sessionId)
           expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
       }
-    } else if (context.path === 'messages') {
+    } else if (path === 'messages') {
       const taskId = expectClaim(scope.taskId, 'task');
       if (context.method === 'find') {
         expectMatch(taskId, query.task_id, 'task');
@@ -106,14 +166,16 @@ export function executorRuntimeScopeGuard() {
           setIfAbsent(query, 'session_id', scope.sessionId);
         }
       } else if (context.method === 'create') {
-        expectMatch(taskId, data.task_id ?? query.task_id, 'task');
-        setIfAbsent(data, 'task_id', taskId);
-        if (scope.sessionId)
-          expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
+        for (const record of recordsFromData(context.data)) {
+          expectMatch(taskId, record.task_id ?? query.task_id, 'task');
+          setIfAbsent(record, 'task_id', taskId);
+          if (scope.sessionId)
+            expectMatch(scope.sessionId, record.session_id ?? query.session_id, 'session');
+        }
       } else {
         throw new Forbidden('Executor token is not valid for this messages request');
       }
-    } else if (context.path === 'branches') {
+    } else if (path === 'branches') {
       const branchId = expectClaim(scope.branchId, 'branch');
       if (context.method === 'find') {
         expectMatch(branchId, query.branch_id, 'branch');
@@ -124,6 +186,26 @@ export function executorRuntimeScopeGuard() {
           throw new Forbidden('Executor token branch scope is required for this request');
         }
       }
+    } else if (path === 'messages/bulk') {
+      if (context.method !== 'create') {
+        throw new Forbidden('Executor token is not valid for this endpoint');
+      }
+      for (const record of recordsFromData(context.data)) {
+        scopeTaskRecord(record, scope);
+      }
+    } else if (path === 'messages/streaming' || path === 'tasks/streaming') {
+      if (context.method !== 'create') {
+        throw new Forbidden('Executor token is not valid for this endpoint');
+      }
+      scopeStreamingEnvelope(context.data, scope);
+    } else if (path === 'sessions/:id/genealogy' || path === 'sessions/genealogy') {
+      const sessionId = expectClaim(scope.sessionId, 'session');
+      expectMatch(sessionId, routeId(context) ?? id ?? query.session_id, 'session');
+      if (routeId(context) === undefined && id === undefined && query.session_id === undefined) {
+        throw new Forbidden('Executor token session scope is required for this request');
+      }
+    } else {
+      throw new Forbidden('Executor token is not valid for this endpoint');
     }
 
     return context;
