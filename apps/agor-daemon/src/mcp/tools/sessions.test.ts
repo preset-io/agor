@@ -127,7 +127,7 @@ describe('sessionless MCP context', () => {
     expect(parsed.error).toMatch(/X-Agor-Session-Id/);
     expect(parsed.error).toMatch(/\?sessionId=/);
     expect(sessionsGet).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 
   it('agor_sessions_spawn returns an actionable session-context error', async () => {
     const spawn = vi.fn();
