@@ -661,7 +661,8 @@ function createExecuteHandler(
     // Hook chain enforces auth before we get here.
     const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
       sessionId,
-      (params as AuthenticatedParams).user!.user_id
+      (params as AuthenticatedParams).user!.user_id,
+      { taskId: data.taskId, branchId: session.branch_id }
     );
 
     const taskId = data.taskId;

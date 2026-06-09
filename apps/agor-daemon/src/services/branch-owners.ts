@@ -256,7 +256,10 @@ export function setupBranchOwnersService(
           // Fire-and-forget sync to executor
           // Syncing the branch will pick up the new owner from the DB
           console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner added`);
-          const serviceToken = createServiceToken(config.jwtSecret);
+          const serviceToken = createServiceToken(config.jwtSecret, undefined, {
+            branch_id: branchId,
+            command: 'unix.sync-branch',
+          });
           spawnExecutorFireAndForget(
             {
               command: 'unix.sync-branch',
@@ -287,7 +290,10 @@ export function setupBranchOwnersService(
           // Fire-and-forget sync to executor
           // Syncing the branch will handle the removed owner
           console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner removed`);
-          const serviceToken = createServiceToken(config.jwtSecret);
+          const serviceToken = createServiceToken(config.jwtSecret, undefined, {
+            branch_id: branchId,
+            command: 'unix.sync-branch',
+          });
           spawnExecutorFireAndForget(
             {
               command: 'unix.sync-branch',

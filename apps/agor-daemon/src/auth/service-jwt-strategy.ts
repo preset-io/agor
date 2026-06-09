@@ -12,6 +12,7 @@
 
 import { JWTStrategy } from '@agor/core/feathers';
 import type { Params } from '@agor/core/types';
+import type { SessionTokenService } from '../services/session-token-service.js';
 
 /**
  * Extended JWT Strategy that handles service tokens
@@ -20,6 +21,9 @@ import type { Params } from '@agor/core/types';
  * for privileged operations (unix.sync-*, git.*, etc.)
  */
 export class ServiceJWTStrategy extends JWTStrategy {
+  constructor(private sessionTokenService?: SessionTokenService) {
+    super();
+  }
   /**
    * Override getEntity to handle service tokens
    *
@@ -55,9 +59,22 @@ export class ServiceJWTStrategy extends JWTStrategy {
     const result = await super.authenticate(authentication, params);
 
     // Check if this is a service token by looking at the decoded payload
-    const payload = result.authentication?.payload as { sub?: string; type?: string } | undefined;
+    const payload = result.authentication?.payload as
+      | {
+          sub?: string;
+          type?: string;
+          session_id?: string;
+          sessionId?: string;
+          task_id?: string;
+          branch_id?: string;
+          purpose?: string;
+        }
+      | undefined;
 
     if (payload?.type === 'service' && payload?.sub === 'executor-service') {
+      if (payload.purpose !== undefined && payload.purpose !== 'executor-service') {
+        throw new Error('Invalid service token purpose');
+      }
       // Override user in result with service account
       return {
         ...result,
@@ -68,6 +85,38 @@ export class ServiceJWTStrategy extends JWTStrategy {
           _isServiceAccount: true,
         },
       };
+    }
+
+    if (payload?.type === 'executor-session') {
+      if (payload.purpose !== 'executor-task') {
+        throw new Error('Invalid executor token purpose');
+      }
+      const token = authentication?.accessToken;
+      if (!token || !this.sessionTokenService) {
+        throw new Error('Executor token validation unavailable');
+      }
+      const sessionId = payload.session_id ?? payload.sessionId;
+      const sessionInfo = await this.sessionTokenService.validateToken(token, {
+        sessionId,
+        taskId: payload.task_id,
+        branchId: payload.branch_id,
+      });
+      if (!sessionInfo) {
+        throw new Error('Invalid or expired executor token');
+      }
+      return {
+        ...result,
+        session_id: sessionInfo.session_id,
+        task_id: sessionInfo.task_id,
+        branch_id: sessionInfo.branch_id,
+      };
+    }
+
+    if (
+      payload?.type !== undefined &&
+      !['access', 'refresh', 'service', 'executor-session'].includes(payload.type)
+    ) {
+      throw new Error('JWT type is not valid for daemon API authentication');
     }
 
     return result;

@@ -292,7 +292,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const { ServiceJWTStrategy } = await import('./auth/service-jwt-strategy.js');
 
   // Register authentication strategies
-  authentication.register('jwt', new ServiceJWTStrategy());
+  authentication.register('jwt', new ServiceJWTStrategy(sessionTokenService));
   authentication.register('local', new AgorLocalStrategy());
 
   // Register API key authentication strategy

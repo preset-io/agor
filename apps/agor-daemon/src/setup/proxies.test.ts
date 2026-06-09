@@ -29,6 +29,17 @@ const VALID_TOKEN = jwt.sign({ sub: 'user-abc', type: 'access' }, JWT_SECRET, {
   issuer: 'agor',
   audience: 'https://agor.dev',
 });
+const ARTIFACT_SHORTCUT_TOKEN = jwt.sign(
+  {
+    sub: 'user-abc',
+    type: 'artifact',
+    purpose: 'artifact-runtime',
+    artifact_id: 'artifact-1',
+    proxies: ['shortcut'],
+  },
+  JWT_SECRET,
+  { issuer: 'agor', audience: 'agor:artifact-runtime', expiresIn: '15m' }
+);
 
 /**
  * Build a test app with a stub `app.service('users').get()` so the proxy's
@@ -178,5 +189,22 @@ describe('registerProxies — request gating', () => {
     });
     expect(r.status).toBe(405);
     expect(r.headers.allow).toBe('GET');
+  });
+
+  it('accepts artifact-runtime tokens only for vendors in token scope', async () => {
+    const app = makeProxyApp({
+      proxies: {
+        shortcut: { upstream: 'https://api.app.shortcut.com', allowed_methods: ['POST'] },
+        linear: { upstream: 'https://api.linear.app', allowed_methods: ['POST'] },
+      },
+    });
+    const accepted = await call(app, 'GET', '/proxies/shortcut/x', {
+      Authorization: `Bearer ${ARTIFACT_SHORTCUT_TOKEN}`,
+    });
+    expect(accepted.status).toBe(405);
+    const rejected = await call(app, 'GET', '/proxies/linear/x', {
+      Authorization: `Bearer ${ARTIFACT_SHORTCUT_TOKEN}`,
+    });
+    expect(rejected.status).toBe(401);
   });
 });

@@ -759,14 +759,17 @@ export function getDaemonUrl(): string {
  */
 export function createServiceToken(
   jwtSecret: string,
-  expiresIn?: SignOptions['expiresIn']
+  expiresIn?: SignOptions['expiresIn'],
+  scope: Record<string, unknown> = {}
 ): string {
   return issueRuntimeToken(
     {
       sub: 'executor-service',
       type: 'service',
+      purpose: 'executor-service',
       // Service tokens can perform privileged operations
       role: 'service',
+      ...scope,
     },
     jwtSecret,
     expiresIn || '5m'

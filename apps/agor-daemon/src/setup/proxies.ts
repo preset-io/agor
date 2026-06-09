@@ -32,7 +32,11 @@ import type { UUID } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
-import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
+import {
+  ARTIFACT_RUNTIME_JWT_AUDIENCE,
+  RUNTIME_JWT_AUDIENCE,
+  RUNTIME_JWT_ISSUER,
+} from '../auth/runtime-tokens.js';
 
 /**
  * Default per-(user, vendor) rate limit. In-memory bucket; no redis.
@@ -97,6 +101,8 @@ const RESPONSE_HEADER_STRIP = new Set([
 
 interface AuthedUser {
   user_id: string;
+  token_type?: 'access' | 'artifact';
+  proxies?: string[];
 }
 
 /**
@@ -121,22 +127,32 @@ async function authenticateRequest(
   if (!header || typeof header !== 'string') return null;
   const match = header.match(/^Bearer\s+(.+)$/i);
   if (!match) return null;
-  let decoded: { sub?: string; type?: string };
+  let decoded: { sub?: string; type?: string; purpose?: string; proxies?: unknown };
   try {
     decoded = jwt.verify(match[1], jwtSecret, {
       issuer: RUNTIME_JWT_ISSUER,
-      audience: RUNTIME_JWT_AUDIENCE,
+      audience: [RUNTIME_JWT_AUDIENCE, ARTIFACT_RUNTIME_JWT_AUDIENCE],
     }) as { sub?: string; type?: string };
   } catch {
     return null;
   }
-  // Reject service tokens; only end-user access tokens are accepted here.
-  if (decoded.type !== undefined && decoded.type !== 'access') return null;
+  // Browser artifacts may use either the legacy short-lived access token or
+  // the newer artifact-runtime token. Service/executor tokens are not accepted
+  // by this proxy path.
+  if (decoded.type === 'artifact') {
+    if (decoded.purpose !== 'artifact-runtime') return null;
+  } else if (decoded.type !== undefined && decoded.type !== 'access') {
+    return null;
+  }
   if (!decoded.sub) return null;
   try {
     const user = await app.service('users').get(decoded.sub as UUID);
     if (!user) return null;
-    return { user_id: decoded.sub };
+    return {
+      user_id: decoded.sub,
+      token_type: decoded.type === 'artifact' ? 'artifact' : 'access',
+      proxies: Array.isArray(decoded.proxies) ? decoded.proxies.map(String) : undefined,
+    };
   } catch {
     // User not found / lookup error → reject the request.
     return null;
@@ -281,6 +297,11 @@ export function registerProxies(
     const proxy = byVendor.get(vendor);
     if (!proxy) {
       res.status(404).json({ error: 'unknown_vendor', vendor });
+      return;
+    }
+
+    if (user.token_type === 'artifact' && !user.proxies?.includes(vendor)) {
+      res.status(401).json({ error: 'unauthorized' });
       return;
     }
 

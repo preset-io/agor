@@ -20,6 +20,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Artifact, BoardID, BranchID, UUID } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { ArtifactsService } from './artifacts';
@@ -31,7 +32,11 @@ import { ArtifactsService } from './artifacts';
  */
 function makeFakeApp(): Application {
   const service = () => ({ emit: () => {} });
-  return { service } as unknown as Application;
+  return {
+    service,
+    get: (key: string) =>
+      key === 'authentication' ? { secret: 'artifact-test-secret' } : undefined,
+  } as unknown as Application;
 }
 
 /** Create a board directly via the repository, since the artifacts service
@@ -656,6 +661,37 @@ describe('ArtifactsService.getPayload trust + .env synthesis', () => {
     // .env is synthesized even though the user has no env var stored — value is empty.
     // `react` template is CRA-backed, so the prefix is `REACT_APP_`.
     expect(payload.files['/.env']).toMatch(/REACT_APP_OPENAI_KEY=/);
+  });
+
+  dbTest('agor_token renders as artifact-runtime scoped token for author', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'scoped-token-render',
+      template: 'react',
+      files: { '/index.js': 'console.log("token")' },
+      agor_grants: { agor_token: true, agor_proxies: ['shortcut'] },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const payload = await service.getPayload(created.artifact_id, 'user-owner' as never);
+    const env = payload.files['/.env'];
+    const token = String(env)
+      .match(/REACT_APP_AGOR_TOKEN=(.+)/)?.[1]
+      ?.replace(/^"|"$/g, '');
+    expect(token).toBeTruthy();
+    const decoded = jwt.verify(token!, 'artifact-test-secret', {
+      issuer: 'agor',
+      audience: 'agor:artifact-runtime',
+    }) as jwt.JwtPayload;
+    expect(decoded.type).toBe('artifact');
+    expect(decoded.purpose).toBe('artifact-runtime');
+    expect(decoded.artifact_id).toBe(created.artifact_id);
+    expect(decoded.proxies).toEqual(['shortcut']);
   });
 
   dbTest(

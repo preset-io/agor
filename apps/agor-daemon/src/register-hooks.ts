@@ -135,6 +135,59 @@ function itemHasAnyField(item: Record<string, unknown>, fields: readonly string[
   return fields.some((field) => Object.hasOwn(item, field));
 }
 
+type ExecutorTokenPayload = {
+  type?: string;
+  purpose?: string;
+  session_id?: string;
+  sessionId?: string;
+  task_id?: string;
+  branch_id?: string;
+};
+
+function executorRuntimeScopeGuard() {
+  return async (context: HookContext): Promise<HookContext> => {
+    const payload = (context.params as AuthenticatedParams).authentication?.payload as
+      | ExecutorTokenPayload
+      | undefined;
+    if (payload?.type !== 'executor-session') return context;
+
+    if (payload.purpose !== 'executor-task') {
+      throw new Forbidden('Executor token is not valid for this request');
+    }
+
+    const scope = {
+      sessionId: payload.session_id ?? payload.sessionId,
+      taskId: payload.task_id,
+      branchId: payload.branch_id,
+    };
+    const data = (context.data ?? {}) as Record<string, unknown>;
+    const query = ((context.params as Params).query ?? {}) as Record<string, unknown>;
+    const id = typeof context.id === 'string' ? context.id : undefined;
+
+    const expectMatch = (claim: string | undefined, value: unknown, label: string) => {
+      if (!claim || value === undefined || value === null) return;
+      if (String(value) !== claim) {
+        throw new Forbidden(`Executor token ${label} scope does not match this request`);
+      }
+    };
+
+    if (context.path === 'sessions') {
+      expectMatch(scope.sessionId, id ?? data.session_id ?? query.session_id, 'session');
+      expectMatch(scope.branchId, data.branch_id ?? query.branch_id, 'branch');
+    } else if (context.path === 'tasks') {
+      expectMatch(scope.taskId, id ?? data.task_id ?? query.task_id, 'task');
+      expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
+    } else if (context.path === 'messages') {
+      expectMatch(scope.taskId, data.task_id ?? query.task_id, 'task');
+      expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
+    } else if (context.path === 'branches') {
+      expectMatch(scope.branchId, id ?? data.branch_id ?? query.branch_id, 'branch');
+    }
+
+    return context;
+  };
+}
+
 async function getManagedEnvExecutionMode() {
   const config = await loadConfig();
   return config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
@@ -334,7 +387,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('messages').hooks({
     before: {
-      all: [requireAuth],
+      all: [requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Scope messages.find() to sessions the caller can access.
         // Without this backstop, any authenticated member could list messages
@@ -835,6 +888,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [
         typedValidateQuery(branchQueryValidator),
         requireAuth,
+        executorRuntimeScopeGuard(),
         requireMinimumRole(ROLES.MEMBER, 'access branches'),
       ],
       find: [
@@ -973,7 +1027,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   console.log(
                     `[Unix Integration] Syncing permissions for branch ${shortId(branch.branch_id)} (others_fs_access: ${previousValue} -> ${branch.others_fs_access})`
                   );
-                  const serviceToken = createServiceToken(jwtSecret);
+                  const serviceToken = createServiceToken(jwtSecret, undefined, {
+                    branch_id: branch.branch_id,
+                    command: 'unix.sync-branch',
+                  });
                   spawnExecutorFireAndForget(
                     {
                       command: 'unix.sync-branch',
@@ -1002,7 +1059,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
                 // Fire-and-forget sync with delete flag to executor
                 if (jwtSecret) {
-                  const serviceToken = createServiceToken(jwtSecret);
+                  const serviceToken = createServiceToken(jwtSecret, undefined, {
+                    branch_id: branchId,
+                    command: 'unix.sync-branch',
+                  });
                   spawnExecutorFireAndForget(
                     {
                       command: 'unix.sync-branch',
@@ -1752,7 +1812,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           // Fire-and-forget sync to executor
           console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createServiceToken(jwtSecret);
+          const serviceToken = createServiceToken(jwtSecret, undefined, {
+            user_id: user.user_id,
+            command: 'unix.sync-user',
+          });
           spawnExecutorFireAndForget(
             {
               command: 'unix.sync-user',
@@ -1800,7 +1863,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           // Fire-and-forget sync to executor
           console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createServiceToken(jwtSecret);
+          const serviceToken = createServiceToken(jwtSecret, undefined, {
+            user_id: user.user_id,
+            command: 'unix.sync-user',
+          });
           spawnExecutorFireAndForget(
             {
               command: 'unix.sync-user',
@@ -1852,7 +1918,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('sessions').hooks({
     before: {
-      all: [typedValidateQuery(sessionQueryValidator), requireAuth],
+      all: [typedValidateQuery(sessionQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Optimized SQL-based filtering (single query with JOIN on branches, no N+1)
         ...(branchRbacEnabled ? [scopeSessionQuery(sessionsRepository, superadminOpts)] : []),
@@ -2198,7 +2264,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                       `[Unix Integration] Non-owner session created in branch ${shortId(session.branch_id)} ` +
                         `by ${session.unix_username} (others_fs_access: ${branch.others_fs_access}), syncing group membership`
                     );
-                    const serviceToken = createServiceToken(jwtSecret);
+                    const serviceToken = createServiceToken(jwtSecret, undefined, {
+                      branch_id: branch.branch_id,
+                      session_id: session.session_id,
+                      command: 'unix.sync-branch',
+                    });
                     spawnExecutorFireAndForget(
                       {
                         command: 'unix.sync-branch',
@@ -2352,7 +2422,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('tasks').hooks({
     before: {
-      all: [typedValidateQuery(taskQueryValidator), requireAuth],
+      all: [typedValidateQuery(taskQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Scope tasks.find() to sessions the caller can access.
         ...(branchRbacEnabled

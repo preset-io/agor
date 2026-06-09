@@ -3,8 +3,9 @@ import jwt, { type SignOptions } from 'jsonwebtoken';
 
 export const RUNTIME_JWT_ISSUER = 'agor';
 export const RUNTIME_JWT_AUDIENCE = 'https://agor.dev';
+export const ARTIFACT_RUNTIME_JWT_AUDIENCE = 'agor:artifact-runtime';
 
-export type RuntimeTokenType = 'access' | 'refresh' | 'service';
+export type RuntimeTokenType = 'access' | 'refresh' | 'service' | 'executor-session' | 'artifact';
 
 export interface RuntimeTokenPayload {
   sub: UserID | string;
@@ -20,12 +21,13 @@ export interface RuntimeTokenPair {
 export function issueRuntimeToken(
   payload: RuntimeTokenPayload,
   jwtSecret: string,
-  expiresIn: SignOptions['expiresIn']
+  expiresIn: SignOptions['expiresIn'],
+  options: Pick<SignOptions, 'audience'> = {}
 ): string {
   return jwt.sign(payload, jwtSecret, {
     expiresIn,
     issuer: RUNTIME_JWT_ISSUER,
-    audience: RUNTIME_JWT_AUDIENCE,
+    audience: options.audience ?? RUNTIME_JWT_AUDIENCE,
   });
 }
 

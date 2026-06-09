@@ -60,7 +60,7 @@ import {
   ROLES,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle.js';
-import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import { ARTIFACT_RUNTIME_JWT_AUDIENCE, issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import {
   canonicalizeExistingPrefix,
@@ -1142,7 +1142,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const { grants, artifact, userId } = input;
 
     if (grants.agor_token && userId) {
-      out[GRANT_ENV_VAR_NAMES.agor_token] = await this.mintViewerJwt(userId);
+      out[GRANT_ENV_VAR_NAMES.agor_token] = await this.mintViewerJwt(userId, artifact, grants);
     }
     if (grants.agor_api_url) {
       out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getBaseUrl();
@@ -1182,14 +1182,30 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return out;
   }
 
-  private async mintViewerJwt(userId: string): Promise<string> {
+  private async mintViewerJwt(
+    userId: string,
+    artifact: Artifact,
+    grants: AgorGrants
+  ): Promise<string> {
     const authConfig = this.app.get('authentication') as { secret?: string } | undefined;
     const jwtSecret = authConfig?.secret;
     if (!jwtSecret) {
       console.warn('[artifacts] no auth.secret set — AGOR_TOKEN will render empty');
       return '';
     }
-    return issueRuntimeToken({ sub: userId, type: 'access' }, jwtSecret, '15m');
+    return issueRuntimeToken(
+      {
+        sub: userId,
+        type: 'artifact',
+        purpose: 'artifact-runtime',
+        artifact_id: artifact.artifact_id,
+        board_id: artifact.board_id,
+        proxies: grants.agor_proxies ?? [],
+      },
+      jwtSecret,
+      '15m',
+      { audience: ARTIFACT_RUNTIME_JWT_AUDIENCE }
+    );
   }
 
   private async resolveEnvVarValues(
