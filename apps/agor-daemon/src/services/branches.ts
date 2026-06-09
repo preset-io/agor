@@ -778,7 +778,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       // Generate token and spawn executor (fire-and-forget)
       appWithToken.sessionTokenService
-        ?.generateToken('branch-remove', userId)
+        ?.generateToken('branch-remove', userId, { branchId: branch.branch_id })
         .then((sessionToken) => {
           spawnExecutor(
             {
@@ -867,7 +867,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // to the wrong home directory, causing safety check failures.
 
       appWithToken.sessionTokenService
-        ?.generateToken('branch-clean', userId ?? currentUserId)
+        ?.generateToken('branch-clean', userId ?? currentUserId, { branchId: branch.branch_id })
         .then((sessionToken) => {
           spawnExecutor(
             {
@@ -897,7 +897,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // to the wrong home directory, causing safety check failures.
 
       appWithToken.sessionTokenService
-        ?.generateToken('branch-delete', userId ?? currentUserId)
+        ?.generateToken('branch-delete', userId ?? currentUserId, { branchId: branch.branch_id })
         .then((sessionToken) => {
           spawnExecutor(
             {

@@ -59,12 +59,12 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { executorRuntimeScopeGuard } from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
   SessionsServiceImpl,
 } from './declarations.js';
-
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
@@ -133,59 +133,6 @@ const BRANCH_ENV_FIELDS = [
 
 function itemHasAnyField(item: Record<string, unknown>, fields: readonly string[]): boolean {
   return fields.some((field) => Object.hasOwn(item, field));
-}
-
-type ExecutorTokenPayload = {
-  type?: string;
-  purpose?: string;
-  session_id?: string;
-  sessionId?: string;
-  task_id?: string;
-  branch_id?: string;
-};
-
-function executorRuntimeScopeGuard() {
-  return async (context: HookContext): Promise<HookContext> => {
-    const payload = (context.params as AuthenticatedParams).authentication?.payload as
-      | ExecutorTokenPayload
-      | undefined;
-    if (payload?.type !== 'executor-session') return context;
-
-    if (payload.purpose !== 'executor-task') {
-      throw new Forbidden('Executor token is not valid for this request');
-    }
-
-    const scope = {
-      sessionId: payload.session_id ?? payload.sessionId,
-      taskId: payload.task_id,
-      branchId: payload.branch_id,
-    };
-    const data = (context.data ?? {}) as Record<string, unknown>;
-    const query = ((context.params as Params).query ?? {}) as Record<string, unknown>;
-    const id = typeof context.id === 'string' ? context.id : undefined;
-
-    const expectMatch = (claim: string | undefined, value: unknown, label: string) => {
-      if (!claim || value === undefined || value === null) return;
-      if (String(value) !== claim) {
-        throw new Forbidden(`Executor token ${label} scope does not match this request`);
-      }
-    };
-
-    if (context.path === 'sessions') {
-      expectMatch(scope.sessionId, id ?? data.session_id ?? query.session_id, 'session');
-      expectMatch(scope.branchId, data.branch_id ?? query.branch_id, 'branch');
-    } else if (context.path === 'tasks') {
-      expectMatch(scope.taskId, id ?? data.task_id ?? query.task_id, 'task');
-      expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
-    } else if (context.path === 'messages') {
-      expectMatch(scope.taskId, data.task_id ?? query.task_id, 'task');
-      expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
-    } else if (context.path === 'branches') {
-      expectMatch(scope.branchId, id ?? data.branch_id ?? query.branch_id, 'branch');
-    }
-
-    return context;
-  };
 }
 
 async function getManagedEnvExecutionMode() {

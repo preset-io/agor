@@ -114,7 +114,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
 
     if (
       payload?.type !== undefined &&
-      !['access', 'refresh', 'service', 'executor-session'].includes(payload.type)
+      !['access', 'service', 'executor-session'].includes(payload.type)
     ) {
       throw new Error('JWT type is not valid for daemon API authentication');
     }

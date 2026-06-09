@@ -227,7 +227,7 @@ if (!apiKey) {
 
 | Grant | Env var name | Behavior |
 |---|---|---|
-| `agor_token: true` | `AGOR_TOKEN` | Mints a 15-min daemon JWT for the viewer. **Artifact-scoped consent only** — author/instance grants don't auto-cover this. |
+| `agor_token: true` | `AGOR_TOKEN` | Mints a 15-min artifact-runtime token for the viewer. It is accepted by artifact/proxy runtime paths, not as a general daemon API credential. **Artifact-scoped consent only** — author/instance grants don't auto-cover this. |
 | `agor_api_url: true` | `AGOR_API_URL` | Daemon base URL. |
 | `agor_proxies: ["openai", ...]` | `AGOR_PROXY_OPENAI`, … | HTTP proxy URLs for listed vendors (see [API Proxies](/guide/api-proxies)). |
 | `agor_user_email: true` | `AGOR_USER_EMAIL` | Viewer's email. |

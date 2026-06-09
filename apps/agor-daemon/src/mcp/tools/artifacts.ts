@@ -118,7 +118,7 @@ Recommended: create the folder inside your branch so files can be version-contro
 DECLARATIVE CONFIG:
 - \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template at render time. Currently only the \`react\` / \`react-ts\` mapping is verified end-to-end: those are CRA-backed (sandpack-react v2), so use \`process.env.REACT_APP_X\`. Other templates are best-effort and may need to be audited the first time an artifact publishes against them — the table in apps/agor-docs/pages/guide/artifacts.mdx tracks status. \`vanilla\` / \`vanilla-ts\` have no dotenv path (daemon warns and injects nothing).
 - \`agorGrants\`: declarative daemon capabilities. Each grant maps to a fixed env var:
-    \`agor_token: true\`     → mints a 15-min daemon JWT for the viewer; injected as \`AGOR_TOKEN\`. ARTIFACT-SCOPED CONSENT ONLY — author/instance grants don't auto-cover this.
+    \`agor_token: true\`     → mints a 15-min artifact-runtime token for the viewer; injected as \`AGOR_TOKEN\`. Accepted by artifact/proxy runtime paths, not as a general daemon API credential. ARTIFACT-SCOPED CONSENT ONLY — author/instance grants don't auto-cover this.
     \`agor_api_url: true\`   → injects the daemon URL as \`AGOR_API_URL\`.
     \`agor_user_email: true\` → injects viewer's email as \`AGOR_USER_EMAIL\`.
     \`agor_artifact_id: true\` → \`AGOR_ARTIFACT_ID\` (informational, no consent).

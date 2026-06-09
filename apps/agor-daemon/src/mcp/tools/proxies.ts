@@ -54,7 +54,7 @@ Each proxy forwards requests from /proxies/<vendor>/X to <upstream>/X so Sandpac
 
 EVERY request to a proxy needs TWO credentials, in the same headers object:
 
-  1. Authorization: Bearer <AGOR_TOKEN>     ← daemon JWT (15-min TTL), protects the proxy from being an open relay
+  1. Authorization: Bearer <AGOR_TOKEN>     ← artifact-runtime token (15-min TTL), protects the proxy from being an open relay and is scoped to declared proxy vendors
   2. <Vendor's auth header>                  ← whatever the upstream API actually wants
 
 Both come from the synthesized .env. Declare what your artifact needs at publish time:
