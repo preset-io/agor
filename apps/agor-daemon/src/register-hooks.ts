@@ -109,6 +109,10 @@ import {
 } from './utils/mcp-header-secrets.js';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
+import {
+  type RealtimeAccessBranchRepository,
+  RealtimeAccessCache,
+} from './utils/realtime-access-cache.js';
 import { configureRealtimePublish } from './utils/realtime-publish.js';
 import {
   ensureCurrentScheduleLoaded,
@@ -323,6 +327,39 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     } catch {
       return undefined;
     }
+  };
+
+  const realtimeAccessCache = new RealtimeAccessCache({
+    branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
+    sessionsRepository,
+  });
+
+  const invalidateRealtimeBranchAccess = async (branchId: unknown): Promise<void> => {
+    if (typeof branchId !== 'string' || branchId.length === 0) return;
+    realtimeAccessCache.invalidateBranch(branchId);
+    try {
+      const branch = await branchRepository.findById(branchId);
+      if (branch) realtimeAccessCache.invalidateBranch(branch.branch_id);
+    } catch {
+      // Best-effort cache invalidation only.
+    }
+  };
+
+  const invalidateRealtimeBranchFromResult = async (context: HookContext): Promise<HookContext> => {
+    const branchId =
+      (context.result as { branch_id?: unknown } | undefined)?.branch_id ?? context.id;
+    await invalidateRealtimeBranchAccess(branchId);
+    return context;
+  };
+
+  const invalidateRealtimeBranchFromRoute = async (context: HookContext): Promise<HookContext> => {
+    await invalidateRealtimeBranchAccess(context.params.route?.id);
+    return context;
+  };
+
+  const clearRealtimeBranchVisibility = (context: HookContext): HookContext => {
+    realtimeAccessCache.clearVisibility();
+    return context;
   };
 
   // Helper to get usersService from app
@@ -926,8 +963,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               },
             ]
           : []),
+        invalidateRealtimeBranchFromResult,
       ],
       patch: [
+        invalidateRealtimeBranchFromResult,
         ...(branchRbacEnabled
           ? [
               async (context: HookContext) => {
@@ -994,6 +1033,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       remove: [
+        invalidateRealtimeBranchFromResult,
         ...(branchRbacEnabled
           ? [
               async (context: HookContext) => {
@@ -1577,7 +1617,32 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
 
   safeService('groups')?.hooks(groupsHooks);
+  safeService('groups')?.hooks({
+    after: {
+      patch: [clearRealtimeBranchVisibility],
+      remove: [clearRealtimeBranchVisibility],
+    },
+  });
   safeService('group-memberships')?.hooks(groupMembershipsHooks);
+  safeService('group-memberships')?.hooks({
+    after: {
+      create: [clearRealtimeBranchVisibility],
+      remove: [clearRealtimeBranchVisibility],
+    },
+  });
+  safeService('branches/:id/owners')?.hooks({
+    after: {
+      create: [invalidateRealtimeBranchFromRoute],
+      remove: [invalidateRealtimeBranchFromRoute],
+    },
+  });
+  safeService('branches/:id/group-grants')?.hooks({
+    after: {
+      create: [invalidateRealtimeBranchFromRoute],
+      patch: [invalidateRealtimeBranchFromRoute],
+      remove: [invalidateRealtimeBranchFromRoute],
+    },
+  });
 
   // ============================================================================
   // Users hooks
@@ -1827,6 +1892,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     branchRbacEnabled,
     branchRepository,
     sessionsRepository,
+    accessCache: realtimeAccessCache,
     allowSuperadmin: superadminOpts.allowSuperadmin,
   });
 

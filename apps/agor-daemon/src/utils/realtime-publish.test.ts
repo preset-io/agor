@@ -1,5 +1,5 @@
 import type { BranchRepository, SessionRepository } from '@agor/core/db';
-import type { Branch, Session, User } from '@agor/core/types';
+import type { Branch, BranchPermissionLevel, Session, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { configureRealtimePublish } from './realtime-publish';
@@ -54,13 +54,16 @@ function repos(options: {
   session?: Session | null;
   permissions: Record<string, Branch['others_can']>;
 }) {
+  const viewableUserIds = Object.entries(options.permissions)
+    .filter(([, permission]) =>
+      ['view', 'session', 'prompt', 'all'].includes(permission as BranchPermissionLevel)
+    )
+    .map(([userId]) => userId);
   const branchRepository = {
     findById: vi.fn(async (id: string) =>
       id === options.branch.branch_id ? options.branch : null
     ),
-    resolveUserPermission: vi.fn(
-      async (_branch: Branch, userId: string) => options.permissions[userId] ?? 'none'
-    ),
+    findExplicitViewUserIds: vi.fn(async () => viewableUserIds),
   } as unknown as BranchRepository;
   const sessionsRepository = {
     findById: vi.fn(async (id: string) =>
@@ -101,6 +104,25 @@ describe('configureRealtimePublish', () => {
     );
 
     expect(channel.connections).toEqual([{ user: allowed }, { user: admin }]);
+  });
+
+  it('broadcasts broadly visible branch events without explicit user expansion', async () => {
+    const u1 = user('u1');
+    const u2 = user('u2');
+    const app = makeApp([{ user: u1 }, { user: u2 }]);
+    const r = repos({
+      branch: branch('b1', 'session'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { branch_id: 'b1' },
+      { path: 'branches', method: 'patch', event: 'patched' }
+    );
+
+    expect(channel.connections).toEqual([{ user: u1 }, { user: u2 }]);
+    expect(vi.mocked(r.branchRepository.findExplicitViewUserIds)).not.toHaveBeenCalled();
   });
 
   it('honors allowSuperadmin=false for branch events', async () => {
@@ -144,6 +166,33 @@ describe('configureRealtimePublish', () => {
 
     expect(r.sessionsRepository.findById).toHaveBeenCalledWith('s1');
     expect(channel.connections).toEqual([{ user: allowed }, service]);
+  });
+
+  it('caches session branch and branch visibility across streaming events', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const app = makeApp([{ user: allowed }, { user: denied }]);
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const first = await app.runPublish(
+      { message_id: 'm1', session_id: 's1', chunk: 'a' },
+      { path: 'messages', method: 'emit', event: 'streaming:chunk' }
+    );
+    const second = await app.runPublish(
+      { message_id: 'm1', session_id: 's1', chunk: 'b' },
+      { path: 'messages', method: 'emit', event: 'streaming:chunk' }
+    );
+
+    expect(first.connections).toEqual([{ user: allowed }]);
+    expect(second.connections).toEqual([{ user: allowed }]);
+    expect(r.sessionsRepository.findById).toHaveBeenCalledTimes(1);
+    expect(r.branchRepository.findById).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(r.branchRepository.findExplicitViewUserIds)).toHaveBeenCalledTimes(1);
   });
 
   it('resolves custom sessions events through camelCase sessionId', async () => {
@@ -304,7 +353,10 @@ describe('configureRealtimePublish', () => {
   it('fails closed for scoped events without a resolvable session or branch', async () => {
     const allowed = user('allowed');
     const service = { user: { _isServiceAccount: true, role: 'service' } };
-    const app = makeApp([{ user: allowed }, service]);
+    const tasksGet = vi.fn(async () => ({ session_id: 's1' }));
+    const app = makeApp([{ user: allowed }, service], {
+      tasks: { get: tasksGet },
+    });
     const r = repos({ branch: branch('b1'), permissions: { allowed: 'view' } });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
 
@@ -314,5 +366,6 @@ describe('configureRealtimePublish', () => {
     );
 
     expect(channel.connections).toEqual([service]);
+    expect(tasksGet).not.toHaveBeenCalled();
   });
 });

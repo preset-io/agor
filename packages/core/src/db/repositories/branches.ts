@@ -42,6 +42,7 @@ import { deepMerge } from './merge-utils';
 const BRANCH_PERMISSION_RANK = Object.fromEntries(
   BRANCH_PERMISSION_LEVELS.map((level, index) => [level, index - 1])
 ) as Record<NonNullable<Branch['others_can']>, number>;
+const VIEW_OR_BETTER_BRANCH_PERMISSIONS = ['view', 'session', 'prompt', 'all'] as const;
 
 /**
  * Session activity summary for a branch
@@ -483,6 +484,43 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     return BRANCH_PERMISSION_RANK[groupGrant.can] >= BRANCH_PERMISSION_RANK[others]
       ? groupGrant.can
       : others;
+  }
+
+  /**
+   * Find users with explicit view-or-better access to a branch through direct
+   * ownership or active group grants. This intentionally does not expand
+   * `others_can`; callers can handle public branch visibility without loading
+   * every user row.
+   */
+  async findExplicitViewUserIds(branchId: BranchID): Promise<UUID[]> {
+    const ownerRows = await select(this.db, { user_id: branchOwners.user_id })
+      .from(branchOwners)
+      .where(eq(branchOwners.branch_id, branchId))
+      .all();
+
+    const groupRows = await select(this.db, { user_id: groupMemberships.user_id })
+      .from(branchGroupGrants)
+      .innerJoin(groupMemberships, eq(groupMemberships.group_id, branchGroupGrants.group_id))
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .where(
+        and(
+          eq(branchGroupGrants.branch_id, branchId),
+          inArray(branchGroupGrants.can, VIEW_OR_BETTER_BRANCH_PERMISSIONS)
+        )
+      )
+      .all();
+
+    const userIds = new Set<UUID>();
+    for (const row of ownerRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    for (const row of groupRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    return Array.from(userIds);
   }
 
   /**

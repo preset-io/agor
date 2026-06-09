@@ -1,16 +1,13 @@
 import type { BranchRepository, SessionRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type {
-  Branch,
-  BranchPermissionLevel,
-  HookContext,
-  Session,
-  User,
-  UUID,
-} from '@agor/core/types';
+import type { BranchID, HookContext, User, UserID } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
-import { isSuperAdmin, PERMISSION_RANK } from './branch-authorization.js';
+import { isSuperAdmin } from './branch-authorization.js';
+import {
+  type RealtimeAccessBranchRepository,
+  RealtimeAccessCache,
+} from './realtime-access-cache.js';
 
 type PublishContext = Pick<HookContext, 'path' | 'method' | 'id' | 'event' | 'app'>;
 
@@ -24,6 +21,7 @@ type RealtimePublishOptions = {
   branchRbacEnabled: boolean;
   branchRepository: BranchRepository;
   sessionsRepository: SessionRepository;
+  accessCache?: RealtimeAccessCache;
   allowSuperadmin?: boolean;
 };
 
@@ -31,7 +29,7 @@ type PublishChannel = ReturnType<Application['channel']>;
 
 type PublishScope =
   | { kind: 'global' }
-  | { kind: 'branch'; branch: Branch | null }
+  | { kind: 'branch'; branchId: BranchID | null }
   | { kind: 'users'; userIds: Set<string> }
   | { kind: 'serviceOnly' };
 
@@ -97,11 +95,6 @@ function extractCreatedBy(data: unknown): string | undefined {
   return pickString(record, 'created_by', 'createdBy');
 }
 
-function channelConnections(channel: PublishChannel): unknown[] {
-  const connections = (channel as { connections?: unknown[] }).connections;
-  return Array.isArray(connections) ? connections : [];
-}
-
 function userFromConnection(
   connection: unknown
 ): (Partial<User> & { _isServiceAccount?: boolean }) | undefined {
@@ -122,14 +115,11 @@ function isAdminConnection(connection: unknown, allowSuperadmin: boolean): boole
   return isSuperAdmin(user?.role, allowSuperadmin);
 }
 
-async function sessionBranch(
+async function sessionBranchId(
   sessionId: string,
-  sessionsRepository: SessionRepository,
-  branchRepository: BranchRepository
-): Promise<Branch | null> {
-  const session = (await sessionsRepository.findById(sessionId)) as Session | null;
-  if (!session?.branch_id) return null;
-  return await branchRepository.findById(session.branch_id);
+  accessCache: RealtimeAccessCache
+): Promise<BranchID | null> {
+  return await accessCache.getBranchIdForSession(sessionId);
 }
 
 async function taskSessionId(context: PublishContext, taskId: string): Promise<string | null> {
@@ -157,30 +147,42 @@ async function messageSessionId(
   }
 }
 
-async function resolveBranchFromSessionTaskOrMessage(
+async function resolveBranchIdFromSessionTaskOrMessage(
   data: unknown,
   context: PublishContext,
-  branchRepository: BranchRepository,
-  sessionsRepository: SessionRepository
-): Promise<Branch | null | undefined> {
+  accessCache: RealtimeAccessCache
+): Promise<BranchID | null | undefined> {
+  const branchId = extractBranchId(data, context);
+  if (branchId) return branchId as BranchID;
+
   const sessionId = extractSessionId(data);
-  if (sessionId) return await sessionBranch(sessionId, sessionsRepository, branchRepository);
+  if (sessionId) return await sessionBranchId(sessionId, accessCache);
 
   const taskId = extractTaskId(data);
   if (taskId) {
     const resolvedSessionId = await taskSessionId(context, taskId);
-    return resolvedSessionId
-      ? await sessionBranch(resolvedSessionId, sessionsRepository, branchRepository)
-      : null;
+    return resolvedSessionId ? await sessionBranchId(resolvedSessionId, accessCache) : null;
   }
 
   const messageId = extractMessageId(data);
   if (messageId) {
     const resolvedSessionId = await messageSessionId(context, messageId);
-    return resolvedSessionId
-      ? await sessionBranch(resolvedSessionId, sessionsRepository, branchRepository)
-      : null;
+    return resolvedSessionId ? await sessionBranchId(resolvedSessionId, accessCache) : null;
   }
+
+  return undefined;
+}
+
+async function resolveBranchIdFromBranchOrSession(
+  data: unknown,
+  context: PublishContext,
+  accessCache: RealtimeAccessCache
+): Promise<BranchID | null | undefined> {
+  const branchId = extractBranchId(data, context);
+  if (branchId) return branchId as BranchID;
+
+  const sessionId = extractSessionId(data);
+  if (sessionId) return await sessionBranchId(sessionId, accessCache);
 
   return undefined;
 }
@@ -188,52 +190,37 @@ async function resolveBranchFromSessionTaskOrMessage(
 async function resolvePublishScope(
   data: unknown,
   context: PublishContext,
-  branchRepository: BranchRepository,
-  sessionsRepository: SessionRepository
+  accessCache: RealtimeAccessCache
 ): Promise<PublishScope> {
   if (!context.path) return { kind: 'global' };
 
   if (BRANCH_ID_SCOPED_PATHS.has(context.path)) {
     const branchId = extractBranchId(data, context);
-    return { kind: 'branch', branch: branchId ? await branchRepository.findById(branchId) : null };
+    return { kind: 'branch', branchId: (branchId as BranchID | undefined) ?? null };
   }
 
   if (context.path === 'sessions') {
-    const branchId = extractBranchId(data, context);
-    if (branchId) return { kind: 'branch', branch: await branchRepository.findById(branchId) };
-
     // Custom sessions events carry camelCase `sessionId` instead of the
     // session row's `branch_id`.
-    const branch = await resolveBranchFromSessionTaskOrMessage(
-      data,
-      context,
-      branchRepository,
-      sessionsRepository
-    );
-    return { kind: 'branch', branch: branch ?? null };
+    const resolvedBranchId = await resolveBranchIdFromBranchOrSession(data, context, accessCache);
+    return { kind: 'branch', branchId: resolvedBranchId ?? null };
   }
 
   if (SESSION_ID_SCOPED_PATHS.has(context.path)) {
-    const branch = await resolveBranchFromSessionTaskOrMessage(
-      data,
-      context,
-      branchRepository,
-      sessionsRepository
-    );
-    return { kind: 'branch', branch: branch ?? null };
+    // Hot message/task paths must carry branch_id or session_id. Avoid
+    // message/task fallback lookups here so malformed streaming events fail
+    // closed instead of doing DB work per chunk.
+    const branchId = await resolveBranchIdFromBranchOrSession(data, context, accessCache);
+    return { kind: 'branch', branchId: branchId ?? null };
   }
 
   if (OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS.has(context.path)) {
-    const branchId = extractBranchId(data, context);
-    if (branchId) return { kind: 'branch', branch: await branchRepository.findById(branchId) };
-
-    const branch = await resolveBranchFromSessionTaskOrMessage(
+    const resolvedBranchId = await resolveBranchIdFromSessionTaskOrMessage(
       data,
       context,
-      branchRepository,
-      sessionsRepository
+      accessCache
     );
-    if (branch !== undefined) return { kind: 'branch', branch };
+    if (resolvedBranchId !== undefined) return { kind: 'branch', branchId: resolvedBranchId };
 
     // These services can also emit global/card/board rows with no branch,
     // session, task, or message attachment.
@@ -242,7 +229,7 @@ async function resolvePublishScope(
 
   if (context.path === 'artifacts') {
     const branchId = extractBranchId(data, context);
-    if (branchId) return { kind: 'branch', branch: await branchRepository.findById(branchId) };
+    if (branchId) return { kind: 'branch', branchId: branchId as BranchID };
 
     // Null-branch artifacts are not covered by branch visibility. Keep delivery
     // narrow to the creator/admins when the creator is known, otherwise service
@@ -254,58 +241,13 @@ async function resolvePublishScope(
   return { kind: 'global' };
 }
 
-async function authorizedConnectedUserIdsForBranch(
-  branch: Branch,
-  connections: unknown[],
-  branchRepository: BranchRepository,
-  allowSuperadmin: boolean
-): Promise<Set<string>> {
-  const allowed = new Set<string>();
-  const usersById = new Map<string, Partial<User> & { _isServiceAccount?: boolean }>();
-
-  for (const connection of connections) {
-    const user = userFromConnection(connection);
-    if (typeof user?.user_id === 'string') usersById.set(user.user_id, user);
-  }
-
-  await Promise.all(
-    Array.from(usersById.values()).map(async (user) => {
-      if (isSuperAdmin(user.role, allowSuperadmin)) {
-        allowed.add(user.user_id!);
-        return;
-      }
-
-      const permission = (await branchRepository.resolveUserPermission(
-        branch,
-        user.user_id as UUID
-      )) as BranchPermissionLevel;
-      if (PERMISSION_RANK[permission] >= PERMISSION_RANK.view) {
-        allowed.add(user.user_id!);
-      }
-    })
-  );
-
-  return allowed;
-}
-
 function filterToServiceConnections(authenticated: PublishChannel): PublishChannel {
   return authenticated.filter((connection: unknown) => isServiceConnection(connection));
 }
 
-function filterToBranchUserIds(
-  authenticated: PublishChannel,
-  userIds: Set<string>
-): PublishChannel {
-  return authenticated.filter((connection: unknown) => {
-    if (isServiceConnection(connection)) return true;
-    const userId = userFromConnection(connection)?.user_id;
-    return typeof userId === 'string' && userIds.has(userId);
-  });
-}
-
 function filterToUserIdsOrAdmins(
   authenticated: PublishChannel,
-  userIds: Set<string>,
+  userIds: Set<string> | Set<UserID>,
   allowSuperadmin: boolean
 ): PublishChannel {
   return authenticated.filter((connection: unknown) => {
@@ -314,6 +256,20 @@ function filterToUserIdsOrAdmins(
     }
     const userId = userFromConnection(connection)?.user_id;
     return typeof userId === 'string' && userIds.has(userId);
+  });
+}
+
+function filterToUserIdsOrSuperadmins(
+  authenticated: PublishChannel,
+  userIds: Set<UserID>,
+  allowSuperadmin: boolean
+): PublishChannel {
+  return authenticated.filter((connection: unknown) => {
+    if (isServiceConnection(connection)) return true;
+    const user = userFromConnection(connection);
+    if (isSuperAdmin(user?.role, allowSuperadmin)) return true;
+    const userId = user?.user_id;
+    return typeof userId === 'string' && userIds.has(userId as UserID);
   });
 }
 
@@ -332,6 +288,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     branchRbacEnabled,
     branchRepository,
     sessionsRepository,
+    accessCache = new RealtimeAccessCache({
+      branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
+      sessionsRepository,
+    }),
     allowSuperadmin = true,
   } = options;
 
@@ -349,14 +309,14 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     const authenticated = app.channel('authenticated');
     if (!branchRbacEnabled) return authenticated;
 
-    const scope = await resolvePublishScope(data, context, branchRepository, sessionsRepository);
+    const scope = await resolvePublishScope(data, context, accessCache);
     if (scope.kind === 'global') return authenticated;
     if (scope.kind === 'serviceOnly') return filterToServiceConnections(authenticated);
     if (scope.kind === 'users') {
       return filterToUserIdsOrAdmins(authenticated, scope.userIds, allowSuperadmin);
     }
 
-    if (!scope.branch) {
+    if (!scope.branchId) {
       console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
         path: context.path,
         event: context.event,
@@ -365,13 +325,20 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       return filterToServiceConnections(authenticated);
     }
 
-    const allowedUserIds = await authorizedConnectedUserIdsForBranch(
-      scope.branch,
-      channelConnections(authenticated),
-      branchRepository,
-      allowSuperadmin
-    );
+    const visibility = await accessCache.getBranchVisibility(scope.branchId);
+    if (!visibility) {
+      console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
+        path: context.path,
+        event: context.event,
+        method: context.method,
+      });
+      return filterToServiceConnections(authenticated);
+    }
 
-    return filterToBranchUserIds(authenticated, allowedUserIds);
+    if (visibility.mode === 'allAuthenticated') {
+      return authenticated;
+    }
+
+    return filterToUserIdsOrSuperadmins(authenticated, visibility.userIds, allowSuperadmin);
   });
 }
