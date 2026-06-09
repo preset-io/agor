@@ -126,6 +126,10 @@ On first startup with an empty users table, the daemon creates
    only point at that file path.
 
 The bootstrap admin is forced to change its password on first login.
+`AGOR_ADMIN_PASSWORD` is only used while the users table is empty. If you
+forget to set it before first startup, read the generated credentials file and
+change the password after logging in; setting `AGOR_ADMIN_PASSWORD` on a later
+restart will not reset an existing user's password.
 
 ```bash
 # Retrieve generated credentials from inside the container when

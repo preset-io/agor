@@ -116,8 +116,10 @@ describe('logFirstRunAdminBootstrap', () => {
       credentialsPath: '/etc/agor/admin-credentials',
     });
     expect(written).toContain('First-run admin user created');
+    expect(written).toContain('generated because AGOR_ADMIN_PASSWORD was not set');
     expect(written).toContain('see /etc/agor/admin-credentials (mode 0600)');
-    expect(written).not.toContain('AGOR_ADMIN_PASSWORD');
+    expect(written).toContain('set AGOR_ADMIN_PASSWORD before first startup');
+    expect(written).toContain('will not reset passwords');
   });
 
   it('points operators at AGOR_ADMIN_PASSWORD when no file was written', () => {
