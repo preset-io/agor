@@ -346,7 +346,7 @@ export function BranchHeaderPill({
               )}
 
               {/* Nuke button */}
-              {onNukeEnvironment && branch.nuke_command && (
+              {!compact && onNukeEnvironment && branch.nuke_command && (
                 <Tooltip title={controlDisabledTooltip ?? 'Nuke environment (destructive)'}>
                   <Button
                     type="text"
