@@ -31,8 +31,8 @@ overrides:
   mdast-util-to-hast: '>=13.2.1 <14'
   minimatch@<5.1.8: '>=5.1.8 <6'
   minimatch@>=10.0.0 <10.2.3: '>=10.2.3 <11'
-  nextra>zod: ^3.25.0
   nextra-theme-docs>zod: ^3.25.0
+  nextra>zod: ^3.25.0
   npm-run-path: ^5.3.0
   path-to-regexp@<0.1.13: '>=0.1.13 <0.2'
   path-to-regexp@>=8.0.0 <8.4.2: '>=8.4.2 <9'
@@ -41,6 +41,7 @@ overrides:
   protobufjs@>=8.0.0 <8.0.1: '>=8.0.1 <9'
   qs: '>=6.14.2 <7'
   rollup: '>=4.59.0 <5'
+  shell-quote: '>=1.8.4 <2'
   smol-toml: '>=1.6.1 <2'
   socket.io-parser: '>=4.2.6 <5'
   systeminformation: '>=5.31.0 <6'
@@ -8249,8 +8250,8 @@ packages:
     resolution: {integrity: sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A==}
     engines: {node: '>=8'}
 
-  shell-quote@1.8.3:
-    resolution: {integrity: sha512-ObmnIF4hXNg1BqhnHmgbDETF8dLPCggZWBjkQfhZpbszZnYur5DUljTcCHii5LC3J5E0yeO/1LIMyH+UvHQgyw==}
+  shell-quote@1.8.4:
+    resolution: {integrity: sha512-VsC6n6vz1ihYYyZZwX7YZSF5l5x36ca17OC+a69h94YqB7X6XLwf+5MOgynYir2SLFUbl8gIYvBo8K8RoNQ6bQ==}
     engines: {node: '>= 0.4'}
 
   shiki@1.29.2:
@@ -10502,7 +10503,7 @@ snapshots:
       picomatch: 4.0.4
       proper-lockfile: 4.1.2
       read-package-up: 11.0.0
-      shell-quote: 1.8.3
+      shell-quote: 1.8.4
       simple-git: 3.36.0
       strip-ansi: 7.1.2
       strip-json-comments: 3.1.1
@@ -14138,7 +14139,7 @@ snapshots:
     dependencies:
       chalk: 4.1.2
       rxjs: 7.8.2
-      shell-quote: 1.8.3
+      shell-quote: 1.8.4
       supports-color: 8.1.1
       tree-kill: 1.2.2
       yargs: 17.7.2
@@ -18351,7 +18352,7 @@ snapshots:
 
   shebang-regex@3.0.0: {}
 
-  shell-quote@1.8.3: {}
+  shell-quote@1.8.4: {}
 
   shiki@1.29.2:
     dependencies:
