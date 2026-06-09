@@ -293,6 +293,7 @@ export const App: React.FC<AppProps> = ({
     branchShortId?: string;
     artifactShortId?: string;
   }>();
+  const isRootHomePath = location.pathname === '/';
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
@@ -327,8 +328,11 @@ export const App: React.FC<AppProps> = ({
   // Panel conditional evaluates to false in the *same* render, producing a
   // single-phase unmount identical to the explicit-close path.
   const effectiveSelectedSessionId = useMemo(
-    () => (selectedSessionId && sessionById.has(selectedSessionId) ? selectedSessionId : null),
-    [selectedSessionId, sessionById]
+    () =>
+      !isRootHomePath && selectedSessionId && sessionById.has(selectedSessionId)
+        ? selectedSessionId
+        : null,
+    [isRootHomePath, selectedSessionId, sessionById]
   );
 
   const [leftPanelTab, setLeftPanelTab] = useState<BoardAssistantPanelTab>('assistant');
@@ -387,7 +391,7 @@ export const App: React.FC<AppProps> = ({
   );
 
   const currentBoard = boardById.get(currentBoardId);
-  const isHomeSurface = !currentBoard && !hasExplicitEntityTarget && location.pathname === '/';
+  const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
 
   const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel || isHomeSurface;
 
@@ -1022,6 +1026,9 @@ export const App: React.FC<AppProps> = ({
               currentBoardId={currentBoardId}
               onBoardChange={navigation.goToBoard}
               onHomeClick={() => {
+                setCurrentBoardIdInternal('');
+                setSelectedSessionId(null);
+                setActiveUrlTarget(null);
                 navigation.goHome();
               }}
               branchById={branchById}

@@ -289,7 +289,11 @@ export function useUrlState(options: UseUrlStateOptions) {
     if (!urlBoardParam && !urlSessionShortId && !urlBranchShortId && !urlArtifactShortId) {
       const isHomePath = location.pathname === '/' || location.pathname === '';
       if (!isSettingsRoute && !isHomePath) {
+        syncingRef.current = true;
         navigate('/', { replace: true });
+        setTimeout(() => {
+          syncingRef.current = false;
+        }, 0);
         return;
       }
 
@@ -451,6 +455,21 @@ export function useUrlState(options: UseUrlStateOptions) {
   useEffect(() => {
     if (syncingRef.current) return;
     if (isSettingsRoute) return;
+
+    // Unknown non-root paths have no entity params but are not the Home
+    // route. The URL→state effect canonicalizes them to `/`; do not let
+    // stale board/session state self-heal them back to `/b/<board>/` first.
+    if (
+      !urlBoardParam &&
+      !urlSessionShortId &&
+      !urlBranchShortId &&
+      !urlArtifactShortId &&
+      location.pathname !== '/' &&
+      location.pathname !== ''
+    ) {
+      return;
+    }
+
     if (boardById.size === 0) return;
 
     // Don't overwrite URL while we're still trying to resolve incoming URL params
@@ -468,5 +487,6 @@ export function useUrlState(options: UseUrlStateOptions) {
     urlArtifactShortId,
     isSettingsRoute,
     updateUrlFromState,
+    location.pathname,
   ]);
 }
