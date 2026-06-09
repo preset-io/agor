@@ -149,13 +149,6 @@ export const BranchModal: React.FC<BranchModalProps> = ({
               />
             ),
           },
-          {
-            key: 'knowledge',
-            label: 'Knowledge',
-            children: (
-              <KnowledgeTab branch={branch} client={client} canEdit={form.canEditGeneral} />
-            ),
-          },
         ]
       : []),
     {
@@ -260,6 +253,19 @@ export const BranchModal: React.FC<BranchModalProps> = ({
         />
       ),
     },
+    // Knowledge is assistant-only and intentionally last for now: it is
+    // configuration-adjacent but less central than the primary branch/session tabs.
+    ...(isAnAssistant
+      ? [
+          {
+            key: 'knowledge',
+            label: 'Knowledge',
+            children: (
+              <KnowledgeTab branch={branch} client={client} canEdit={form.canEditGeneral} />
+            ),
+          },
+        ]
+      : []),
   ];
 
   // Modal-level footer: one Save action for all form-contributing tabs
