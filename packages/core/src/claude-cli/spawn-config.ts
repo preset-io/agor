@@ -1,7 +1,7 @@
 /**
  * Build the argv for spawning the `claude` shell binary in a Zellij pane.
  *
- * Verified against `claude` v2.1.154. We use the **interactive** subset of
+ * Verified against `claude` v2.1.170. We use the **interactive** subset of
  * flags (NO `-p`/`--print`) — see the analysis doc's "Policy & ToS landscape"
  * section for why the print-mode path is deliberately avoided.
  *

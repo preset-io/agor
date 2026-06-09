@@ -7,7 +7,7 @@
  *
  * `<slug>` is the working directory the session was launched from, with every
  * `/` and `.` replaced by `-`. This rule was verified live on
- * `claude` v2.1.154 against multiple paths.
+ * `claude` v2.1.170 against multiple paths.
  *
  * See docs/internal/claude-code-cli-integration-analysis-2026-05-14.md
  * (Appendix A) for the live session sample these helpers were validated

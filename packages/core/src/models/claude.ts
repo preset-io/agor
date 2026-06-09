@@ -24,6 +24,19 @@ export interface ClaudeModel {
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
+    id: 'claude-fable-5',
+    displayName: 'Claude Fable 5',
+    family: 'claude-5',
+    description:
+      'Claude 5 model for agentic work with adaptive thinking and built-in safety classifiers',
+  },
+  {
+    id: 'claude-fable-5[1m]',
+    displayName: 'Claude Fable 5 (1M context)',
+    family: 'claude-5',
+    description: 'Fable 5 with extended 1M token context window',
+  },
+  {
     id: 'claude-opus-4-8',
     displayName: 'Claude Opus 4.8',
     family: 'claude-4',
