@@ -3185,7 +3185,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 }
               })
             );
-            return withMetadata.filter((entry) => entry !== null);
+            const entries = withMetadata.filter(
+              (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
+            );
+            return shouldExposeMCPServerSecrets(params, {
+              allowSessionToken: true,
+              sessionId: id,
+            })
+              ? entries
+              : entries.map((entry) => ({
+                  ...entry,
+                  server: redactMCPServerSecrets(entry.server),
+                }));
           }
           const sessionServerRefs = await sessionMCPServersService.listServers(
             id as import('@agor/core/types').SessionID,

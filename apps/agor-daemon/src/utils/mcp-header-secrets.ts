@@ -3,7 +3,14 @@ import { redactMCPCustomHeaders } from '@agor/core/tools/mcp/http-headers';
 import type { MCPServer, Params } from '@agor/core/types';
 
 export type MCPSecretParams = Params & {
-  authentication?: { strategy?: string };
+  authentication?: {
+    strategy?: string;
+    payload?: {
+      type?: string;
+      session_id?: string;
+      sessionId?: string;
+    };
+  };
   user?: { role?: string; _isServiceAccount?: boolean };
   session_id?: string;
 };
@@ -22,11 +29,13 @@ export function shouldExposeMCPServerSecretsForSessionToken(
   params?: MCPSecretParams,
   options: { sessionId?: string } = {}
 ): boolean {
+  const payload = params?.authentication?.payload;
+  const sessionId = params?.session_id ?? payload?.session_id ?? payload?.sessionId;
   return (
     !!params?.provider &&
-    params.authentication?.strategy === 'session-token' &&
-    !!params.session_id &&
-    (!options.sessionId || params.session_id === options.sessionId)
+    (params.authentication?.strategy === 'session-token' || payload?.type === 'executor-session') &&
+    !!sessionId &&
+    (!options.sessionId || sessionId === options.sessionId)
   );
 }
 

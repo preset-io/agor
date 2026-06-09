@@ -83,6 +83,53 @@ describe('MCP server secret redaction', () => {
     ).toBe(false);
   });
 
+  it('exposes executor-session JWT secrets only when scoped to the same session', () => {
+    const executorParams = {
+      provider: 'socketio',
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          session_id: 'session-a',
+        },
+      },
+      session_id: 'session-a',
+    } as never;
+
+    expect(
+      shouldExposeMCPServerSecrets(executorParams, {
+        allowSessionToken: true,
+        sessionId: 'session-a',
+      })
+    ).toBe(true);
+    expect(
+      shouldExposeMCPServerSecretsForSessionToken(executorParams, { sessionId: 'session-a' })
+    ).toBe(true);
+
+    expect(
+      shouldExposeMCPServerSecrets(executorParams, {
+        allowSessionToken: true,
+        sessionId: 'session-b',
+      })
+    ).toBe(false);
+  });
+
+  it('does not expose executor-session JWT secrets without explicit route opt-in', () => {
+    expect(
+      shouldExposeMCPServerSecrets({
+        provider: 'socketio',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            session_id: 'session-a',
+          },
+        },
+        session_id: 'session-a',
+      } as never)
+    ).toBe(false);
+  });
+
   it('does not treat internal or service callers as session-token scoped callers', () => {
     expect(shouldExposeMCPServerSecrets({} as never)).toBe(true);
     expect(shouldExposeMCPServerSecretsForSessionToken({} as never)).toBe(false);
