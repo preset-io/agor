@@ -13,7 +13,6 @@ import { Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppMcpData, useAppRepoData, useAppUserData } from '../../contexts/AppDataContext';
-import { usePermissions } from '../../hooks/usePermissions';
 import { copyToClipboard } from '../../utils/clipboard';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -71,7 +70,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     setCliViewMode,
   }) => {
     const { token } = theme.useToken();
-    const { isAdmin } = usePermissions();
     const { showSuccess, showError } = useThemedMessage();
 
     // Subscribe only to the entity families this panel needs. This keeps the
@@ -128,9 +126,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                   onStopEnvironment={onStopEnvironment}
                   onNukeEnvironment={onNukeEnvironment}
                   onViewLogs={onViewLogs}
-                  canControlEnvironment={
-                    isAdmin || branch.others_can === 'all' || branch.created_by === currentUserId
-                  }
                 />
               )}
               {/* Issue and PR Pills */}

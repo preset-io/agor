@@ -12,7 +12,6 @@ import {
 } from '@ant-design/icons';
 import { Button, Space, Spin, Tooltip, theme } from 'antd';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
-import { usePermissions } from '../../hooks/usePermissions';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
@@ -41,13 +40,15 @@ export function EnvironmentPill({
   connectionDisabled = false,
 }: EnvironmentPillProps) {
   const { token } = theme.useToken();
-  const { isAdmin } = usePermissions();
   const confirmNuke = useConfirmNukeEnvironment();
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
-  const resolvedCanControlEnvironment =
-    canControlEnvironment ?? (isAdmin || branch.others_can === 'all');
+  // If a parent has loaded effective branch access (e.g. BranchModal), honor
+  // that explicit decision. Otherwise do not try to infer from direct owners or
+  // `others_can`: group grants are not present on the branch payload, and the
+  // daemon is the source of truth for environment authorization.
+  const resolvedCanControlEnvironment = canControlEnvironment ?? true;
   const controlDisabledTooltip = resolvedCanControlEnvironment
     ? undefined
     : "Requires branch 'all' permission or admin access";

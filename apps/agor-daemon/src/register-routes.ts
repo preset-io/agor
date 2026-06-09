@@ -101,6 +101,7 @@ import {
   requireMinimumRole,
 } from './utils/authorization.js';
 import {
+  cacheBranchAccess,
   checkSessionOwnerOrAdmin,
   ensureBranchPermission,
   loadScheduleAndBranch,
@@ -1504,12 +1505,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               throw new NotFound(`Branch ${session.branch_id} not found`);
             }
             const isOwner = await branchRepository.isOwner(wt.branch_id, userId);
+            const branchPermission = await branchRepository.resolveUserPermission(wt, userId);
             const effectiveLevel = resolveBranchPermission(
               wt,
               userId,
               isOwner,
               params.user?.role,
-              superadminOpts.allowSuperadmin
+              superadminOpts.allowSuperadmin,
+              branchPermission
             );
             const canRun =
               PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
@@ -1774,12 +1777,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           return res.status(404).json({ error: 'Branch not found' });
         }
         const isOwner = await branchRepo.isOwner(wt.branch_id, userId);
+        const branchPermission = await branchRepo.resolveUserPermission(wt, userId);
         const effectiveLevel = resolveBranchPermission(
           wt,
           userId,
           isOwner,
           params.user?.role,
-          superadminOpts.allowSuperadmin
+          superadminOpts.allowSuperadmin,
+          branchPermission
         );
 
         const canUpload =
@@ -2324,6 +2329,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app: app as any,
     isBranchOwner: async (branchId: string, userId: UUID) =>
       branchRepository.isOwner(branchId as import('@agor/core/types').BranchID, userId),
+    resolveBranchPermission: async (branch: import('@agor/core/types').Branch, userId: UUID) =>
+      branchRepository.resolveUserPermission(branch, userId),
   };
 
   registerAuthenticatedRoute(
@@ -2804,13 +2811,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             throw new Forbidden(`Branch not found: ${id}`);
           }
 
-          const userId = context.params.user?.user_id as
-            | import('@agor/core/types').UUID
-            | undefined;
-          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
-
-          context.params.branch = branch;
-          context.params.isBranchOwner = isOwner;
+          await cacheBranchAccess(context.params, branchRepository, branch);
 
           return context;
         },
@@ -2855,13 +2856,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             throw new Forbidden(`Branch not found: ${id}`);
           }
 
-          const userId = context.params.user?.user_id as
-            | import('@agor/core/types').UUID
-            | undefined;
-          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
-
-          context.params.branch = branch;
-          context.params.isBranchOwner = isOwner;
+          await cacheBranchAccess(context.params, branchRepository, branch);
 
           return context;
         },
@@ -3035,11 +3030,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             throw new NotFound(`Branch not found: ${id}`);
           }
 
-          const userId = context.params.user?.user_id as UUID | undefined;
-          const isOwner = userId ? await branchRepository.isOwner(branch.branch_id, userId) : false;
-
-          context.params.branch = branch;
-          context.params.isBranchOwner = isOwner;
+          await cacheBranchAccess(context.params, branchRepository, branch);
           return context;
         },
         branchRbacEnabled

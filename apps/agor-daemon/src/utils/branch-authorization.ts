@@ -126,6 +126,32 @@ export function resolveBranchPermission(
 }
 
 /**
+ * Cache branch access fields on Feathers params for downstream authorization
+ * hooks. Keep this as the single place that translates "current user + branch"
+ * into the direct-owner bit and the group-aware effective permission.
+ */
+export async function cacheBranchAccess(
+  params: AuthenticatedParams,
+  branchRepo: BranchRepository,
+  branch: Branch
+): Promise<void> {
+  const userId = params.user?.user_id as UUID | undefined;
+  const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
+  const branchPermission = userId
+    ? await branchRepo.resolveUserPermission(branch, userId)
+    : (branch.others_can ?? 'session');
+
+  const rbacParams = params as AuthenticatedParams & {
+    branch?: Branch;
+    isBranchOwner?: boolean;
+    branchPermission?: BranchPermissionLevel;
+  };
+  rbacParams.branch = branch;
+  rbacParams.isBranchOwner = isOwner;
+  rbacParams.branchPermission = branchPermission;
+}
+
+/**
  * Ensure the caller can control or mutate a branch's managed environment.
  *
  * Managed environment controls may run shell/webhook actions with impact tied
@@ -227,17 +253,8 @@ export function loadBranch(branchRepo: BranchRepository, branchIdField = 'branch
       throw new Forbidden(`Branch not found: ${branchId}`);
     }
 
-    // Check ownership
-    const userId = context.params.user?.user_id as UUID | undefined;
-    const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
-    const branchPermission = userId
-      ? await branchRepo.resolveUserPermission(branch, userId)
-      : (branch.others_can ?? 'session');
-
     // Cache on context for downstream hooks (type-safe via RBACParams)
-    context.params.branch = branch;
-    context.params.isBranchOwner = isOwner;
-    context.params.branchPermission = branchPermission;
+    await cacheBranchAccess(context.params, branchRepo, branch);
 
     return context;
   };
@@ -673,14 +690,9 @@ export function loadSessionBranch(
       throw new Forbidden(`Branch not found: ${session.branch_id}`);
     }
 
-    // Check ownership
-    const userId = context.params.user?.user_id as UUID | undefined;
-    const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
-
     // Cache on context for downstream hooks (type-safe via RBACParams)
     context.params.session = session;
-    context.params.branch = branch;
-    context.params.isBranchOwner = isOwner;
+    await cacheBranchAccess(context.params, branchRepo, branch);
 
     return context;
   };
@@ -848,17 +860,8 @@ export function loadBranchFromSession(branchRepo: BranchRepository) {
       throw new Forbidden(`Branch not found: ${session.branch_id}`);
     }
 
-    // Check ownership
-    const userId = context.params.user?.user_id as UUID | undefined;
-    const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
-    const branchPermission = userId
-      ? await branchRepo.resolveUserPermission(branch, userId)
-      : (branch.others_can ?? 'session');
-
     // Cache on context for downstream hooks (type-safe via RBACParams)
-    context.params.branch = branch;
-    context.params.isBranchOwner = isOwner;
-    context.params.branchPermission = branchPermission;
+    await cacheBranchAccess(context.params, branchRepo, branch);
 
     return context;
   };
@@ -1732,16 +1735,8 @@ export function loadScheduleAndBranch(
       throw new NotFound(`Branch not found for schedule: ${schedule.schedule_id}`);
     }
 
-    const userId = context.params.user?.user_id as UUID | undefined;
-    const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
-    const branchPermission = userId
-      ? await branchRepo.resolveUserPermission(branch, userId)
-      : (branch.others_can ?? 'session');
-
     context.params.schedule = schedule;
-    context.params.branch = branch;
-    context.params.isBranchOwner = isOwner;
-    context.params.branchPermission = branchPermission;
+    await cacheBranchAccess(context.params, branchRepo, branch);
     return context;
   };
 }

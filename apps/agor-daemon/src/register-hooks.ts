@@ -79,6 +79,7 @@ import {
   requireMinimumRole,
 } from './utils/authorization.js';
 import {
+  cacheBranchAccess,
   ensureBranchPermission,
   ensureCanCreateSession,
   ensureCanModifySchedule,
@@ -522,10 +523,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                       continue; // Skip if branch doesn't exist
                     }
 
-                    const isOwner = await branchRepository.isOwner(branch.branch_id, userId);
-                    const effectivePermission = branch.others_can ?? 'session';
-                    const hasAccess =
-                      isOwner || PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
+                    const effectivePermission = await branchRepository.resolveUserPermission(
+                      branch,
+                      userId
+                    );
+                    const hasAccess = PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
 
                     if (hasAccess) {
                       authorizedBoardObjects.push(boardObject);
@@ -1949,16 +1951,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                     if (!branch) {
                       throw new Forbidden(`Branch not found: ${data.branch_id}`);
                     }
-                    const userId = context.params.user?.user_id as
-                      | import('@agor/core/types').UUID
-                      | undefined;
-                    const isOwner = userId
-                      ? await branchRepository.isOwner(branch.branch_id, userId)
-                      : false;
-
                     // Cache for later hooks (RBACParams fields)
-                    context.params.branch = branch;
-                    context.params.isBranchOwner = isOwner;
+                    await cacheBranchAccess(context.params, branchRepository, branch);
                   } catch (error) {
                     console.error('Failed to load branch for RBAC check:', error);
                     throw error;

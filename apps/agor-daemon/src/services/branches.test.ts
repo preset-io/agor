@@ -1,5 +1,7 @@
-import type { Application, BoardID, BranchID } from '@agor/core/types';
+import { BranchRepository, GroupRepository, RepoRepository, UsersRepository } from '@agor/core/db';
+import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { BranchesService } from './branches';
 
 function createRenderEnvHarness(opts: {
@@ -574,5 +576,157 @@ describe('BranchesService managed environment control authorization', () => {
       branch_id: branchId,
     });
     expect(branchRepo.findById).not.toHaveBeenCalled();
+  });
+
+  dbTest('allows a group grant with effective all to start/stop environments', async ({ db }) => {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branches = new BranchRepository(db);
+    const groups = new GroupRepository(db);
+
+    const owner = await users.create({
+      email: 'env-owner@example.com',
+      name: 'Env Owner',
+      role: 'member',
+    });
+    const member = await users.create({
+      email: 'env-group-all@example.com',
+      name: 'Env Group All',
+      role: 'member',
+    });
+    const repo = await repos.create({
+      name: 'env-rbac-repo',
+      slug: 'env-rbac-repo',
+      repo_type: 'local',
+      local_path: '/tmp/env-rbac-repo',
+      default_branch: 'main',
+    });
+    const branch = await branches.create({
+      branch_id: '019f0000-0000-7000-8000-00000000e001' as BranchID,
+      repo_id: repo.repo_id,
+      name: 'env-group-all',
+      ref: 'env-group-all',
+      path: '/tmp/env-rbac-repo/env-group-all',
+      created_by: owner.user_id as UUID,
+      branch_unique_id: 9001,
+      new_branch: true,
+      others_can: 'none',
+    });
+    const group = await groups.create({ name: 'Env Controllers', created_by: owner.user_id });
+    await groups.addMember(group.group_id, member.user_id, owner.user_id);
+    await groups.upsertBranchGrant({
+      branch_id: branch.branch_id,
+      group_id: group.group_id,
+      can: 'all',
+      created_by: owner.user_id,
+    });
+
+    const service = new BranchesService(db, { service: vi.fn() } as unknown as Application);
+    const getSpy = vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const updateEnvironmentSpy = vi
+      .spyOn(service, 'updateEnvironment')
+      .mockResolvedValue(branch as never);
+
+    await expect(
+      service.startEnvironment(branch.branch_id, paramsFor(member.user_id, 'member'))
+    ).rejects.toThrow(/No start command configured/);
+    expect(getSpy).toHaveBeenCalled();
+
+    getSpy.mockClear();
+    await expect(
+      service.stopEnvironment(branch.branch_id, paramsFor(member.user_id, 'member'))
+    ).resolves.toMatchObject({ branch_id: branch.branch_id });
+    expect(getSpy).toHaveBeenCalled();
+    expect(updateEnvironmentSpy).toHaveBeenCalled();
+  });
+
+  dbTest('allows direct owners to start environments', async ({ db }) => {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branches = new BranchRepository(db);
+
+    const owner = await users.create({
+      email: 'env-direct-owner@example.com',
+      name: 'Env Direct Owner',
+      role: 'member',
+    });
+    const repo = await repos.create({
+      name: 'env-direct-owner-repo',
+      slug: 'env-direct-owner-repo',
+      repo_type: 'local',
+      local_path: '/tmp/env-direct-owner-repo',
+      default_branch: 'main',
+    });
+    const branch = await branches.create({
+      branch_id: '019f0000-0000-7000-8000-00000000e002' as BranchID,
+      repo_id: repo.repo_id,
+      name: 'env-direct-owner',
+      ref: 'env-direct-owner',
+      path: '/tmp/env-direct-owner-repo/env-direct-owner',
+      created_by: owner.user_id as UUID,
+      branch_unique_id: 9002,
+      new_branch: true,
+      others_can: 'none',
+    });
+    await branches.addOwner(branch.branch_id, owner.user_id as UUID);
+
+    const service = new BranchesService(db, { service: vi.fn() } as unknown as Application);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+
+    await expect(
+      service.startEnvironment(branch.branch_id, paramsFor(owner.user_id, 'member'))
+    ).rejects.toThrow(/No start command configured/);
+  });
+
+  dbTest('rejects insufficient group grants before environment actions run', async ({ db }) => {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branches = new BranchRepository(db);
+    const groups = new GroupRepository(db);
+
+    const owner = await users.create({
+      email: 'env-owner-view@example.com',
+      name: 'Env Owner View',
+      role: 'member',
+    });
+    const member = await users.create({
+      email: 'env-group-view@example.com',
+      name: 'Env Group View',
+      role: 'member',
+    });
+    const repo = await repos.create({
+      name: 'env-rbac-view-repo',
+      slug: 'env-rbac-view-repo',
+      repo_type: 'local',
+      local_path: '/tmp/env-rbac-view-repo',
+      default_branch: 'main',
+    });
+    const branch = await branches.create({
+      branch_id: '019f0000-0000-7000-8000-00000000e003' as BranchID,
+      repo_id: repo.repo_id,
+      name: 'env-group-view',
+      ref: 'env-group-view',
+      path: '/tmp/env-rbac-view-repo/env-group-view',
+      created_by: owner.user_id as UUID,
+      branch_unique_id: 9003,
+      new_branch: true,
+      others_can: 'none',
+    });
+    const group = await groups.create({ name: 'Env Viewers', created_by: owner.user_id });
+    await groups.addMember(group.group_id, member.user_id, owner.user_id);
+    await groups.upsertBranchGrant({
+      branch_id: branch.branch_id,
+      group_id: group.group_id,
+      can: 'prompt',
+      created_by: owner.user_id,
+    });
+
+    const service = new BranchesService(db, { service: vi.fn() } as unknown as Application);
+    const getSpy = vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+
+    await expect(
+      service.startEnvironment(branch.branch_id, paramsFor(member.user_id, 'member'))
+    ).rejects.toThrow(/'all' branch permission or admin access/);
+    expect(getSpy).not.toHaveBeenCalled();
   });
 });

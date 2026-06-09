@@ -110,6 +110,32 @@ const fakeRepo = {
   },
 };
 
+describe('environment tool authorization plumbing', () => {
+  it('passes MCP base service params to environment actions for service-layer RBAC', async () => {
+    const params = { provider: 'mcp', user: { user_id: 'user-1', role: 'member' } };
+    const startCalls: unknown[][] = [];
+    const ctx = {
+      ...makeCtx({
+        branches: {
+          startEnvironment: async (...args: unknown[]) => {
+            startCalls.push(args);
+            throw new Error("You need 'all' branch permission or admin access to start");
+          },
+        },
+      }),
+      baseServiceParams: params,
+    };
+
+    const handler = await captureEnvironmentTool(ctx, 'agor_environment_start');
+    const result = await handler({ branchId: 'wt-1' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toMatch(/'all' branch permission/);
+    expect(startCalls).toEqual([['wt-1', params]]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // agor_environment_set
 // ---------------------------------------------------------------------------

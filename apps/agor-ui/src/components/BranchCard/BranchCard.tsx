@@ -13,7 +13,6 @@ import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { usePermissions } from '../../hooks/usePermissions';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
@@ -101,7 +100,6 @@ const BranchCardComponent = ({
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
-  const { isAdmin } = usePermissions();
   const connectionDisabled = useConnectionDisabled();
 
   // Archive/Delete modal state
@@ -502,9 +500,6 @@ const BranchCardComponent = ({
             onStopEnvironment={onStopEnvironment}
             onViewLogs={onViewLogs}
             onNukeEnvironment={onNukeEnvironment}
-            canControlEnvironment={
-              isAdmin || branch.others_can === 'all' || branch.created_by === currentUserId
-            }
             connectionDisabled={connectionDisabled}
           />
         </Space>

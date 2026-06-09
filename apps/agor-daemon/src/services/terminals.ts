@@ -246,9 +246,20 @@ export class TerminalsService {
           throw new Forbidden(`Branch not found: ${data.branchId}`);
         }
         const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
+        const effectivePermission = await branchRepo.resolveUserPermission(branch, userId);
         const allowSuperadmin = config.execution?.allow_superadmin === true;
         const userRole = params?.user?.role as string | undefined;
-        if (!hasBranchPermission(branch, userId, isOwner, 'session', userRole, allowSuperadmin)) {
+        if (
+          !hasBranchPermission(
+            branch,
+            userId,
+            isOwner,
+            'session',
+            userRole,
+            allowSuperadmin,
+            effectivePermission
+          )
+        ) {
           throw new Forbidden(
             `You need 'session' permission on branch ${branch.name} to open a terminal there.`
           );
@@ -401,10 +412,19 @@ export class TerminalsService {
             throw new Forbidden(`Session's branch not found: ${session.branch_id}`);
           }
           const isOwner = await branchRepo.isOwner(wt.branch_id, callerUserId);
+          const effectivePermission = await branchRepo.resolveUserPermission(wt, callerUserId);
           const allowSuperadmin = config.execution?.allow_superadmin === true;
           const userRole = params?.user?.role as string | undefined;
           if (
-            !hasBranchPermission(wt, callerUserId, isOwner, 'session', userRole, allowSuperadmin)
+            !hasBranchPermission(
+              wt,
+              callerUserId,
+              isOwner,
+              'session',
+              userRole,
+              allowSuperadmin,
+              effectivePermission
+            )
           ) {
             throw new Forbidden(
               `You need 'session' permission on the session's branch to ensure its CLI tab.`

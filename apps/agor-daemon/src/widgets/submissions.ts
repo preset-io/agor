@@ -54,6 +54,8 @@ export interface WidgetResolverDeps {
   app: WidgetResolverApp;
   /** Branch ownership lookup — pulled out so tests can stub without RBAC plumbing. */
   isBranchOwner(branchId: string, userId: UserID): Promise<boolean>;
+  /** Optional group-aware effective branch permission lookup. */
+  resolveBranchPermission?(branch: Branch, userId: UserID): Promise<Branch['others_can']>;
 }
 
 export interface AuthenticatedCaller {
@@ -81,10 +83,18 @@ export function canResolveWidget(
   caller: AuthenticatedCaller,
   session: Pick<Session, 'created_by'>,
   branch: Branch,
-  isOwner: boolean
+  isOwner: boolean,
+  effectivePermission?: Branch['others_can']
 ): boolean {
   if (session.created_by === caller.user_id) return true;
-  const effective = resolveBranchPermission(branch, caller.user_id, isOwner, caller.role);
+  const effective = resolveBranchPermission(
+    branch,
+    caller.user_id,
+    isOwner,
+    caller.role,
+    true,
+    effectivePermission
+  );
   return PERMISSION_RANK[effective] >= PERMISSION_RANK.prompt;
 }
 
@@ -162,8 +172,9 @@ async function doResolveWidget(
   const session = (await deps.app.service('sessions').get(message.session_id)) as Session;
   const branch = (await deps.app.service('branches').get(session.branch_id)) as Branch;
   const isOwner = await deps.isBranchOwner(branch.branch_id, caller.user_id);
+  const effectivePermission = await deps.resolveBranchPermission?.(branch, caller.user_id);
 
-  if (!canResolveWidget(caller, session, branch, isOwner)) {
+  if (!canResolveWidget(caller, session, branch, isOwner, effectivePermission)) {
     throw new Forbidden(
       `You need to be the session creator, a branch owner, or have 'prompt' permission on the branch to resolve this widget.`
     );
