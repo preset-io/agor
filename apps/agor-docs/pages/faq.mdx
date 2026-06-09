@@ -1,6 +1,6 @@
 ---
 title: FAQ
-description: Frequently asked questions about session forking, spawning, and Agor's multiplayer workflow
+description: Frequently asked questions about branches, multi-repo workflows, session forking, spawning, and Agor's multiplayer workflow
 ---
 
 # FAQ
@@ -35,6 +35,26 @@ Branch "payment-integration" (issue #124, PR #457)
 Each branch is completely isolated - changes in one don't affect the other. This lets you work on multiple features simultaneously without switching branches or stashing changes.
 
 **Agor manages the git branches for you** - no need to run `git worktree add` manually. Just create a branch in the UI or CLI, and Agor handles the git operations.
+
+## Can Agor work on multiple repos or branches?
+
+Yes. Agor can support workflows that span multiple repositories and branches. The right pattern depends on how those repos relate to each other.
+
+### Pattern 1: Use git submodules for clear dependencies
+
+If one repo has a clear dependency on another, use a [git submodule](https://git-scm.com/book/en/v2/Git-Tools-Submodules) to formalize that relationship. The agent then gets a repo-in-a-repo inside the current Agor branch/workspace, so it can inspect and modify both codebases from one working directory.
+
+If you do not want to commit the submodule link, you can keep the wiring local-only or `.gitignore` it as appropriate for your team.
+
+### Pattern 2: Align branches across repos
+
+For coordinated work across independent repos, create Agor branches for the same feature or workstream in each repo, then ask an orchestrating agent to coordinate across them. For example:
+
+> We're in `feature-X` for this repo. Create or use the same `feature-X` branch in these three other repos, and coordinate the work across all four branches.
+
+The orchestrating agent can do the cross-repo work itself, or it can spawn and coordinate agents in each branch.
+
+Agor's strength is the control plane: multiple isolated branches, visible on boards, with agents that can coordinate across them. A single OS working directory is still one branch/workspace, but Agor makes multi-repo work natural through orchestration, branch alignment, and multi-agent visibility.
 
 ## Session trees? WTF?
 
@@ -445,7 +465,7 @@ Parent orchestrates, children execute focused subsessions with clean context.
 | **Who decides context** | Automatic (SDK copies everything)          | Parent agent packages what's relevant          |
 | **Context size**        | Large (entire parent history)              | Small (only what's needed)                     |
 | **After creation**      | Independent conversations that diverge     | Independent conversations that diverge         |
-| **Branch**            | **SHARED** (same filesystem)               | **SHARED** (same filesystem)                   |
+| **Branch**              | **SHARED** (same filesystem)               | **SHARED** (same filesystem)                   |
 | **Relationship**        | Sibling (parallel work)                    | Child (delegated work)                         |
 | **Use case**            | Parallel tasks with same starting context  | Delegate focused subsession with clean context |
 | **Parent waits?**       | No                                         | No (currently, may change)                     |
