@@ -51,7 +51,6 @@ const { Text, Title } = Typography;
 
 interface HomePageProps {
   client: AgorClient | null;
-  currentUser?: User | null;
   connected?: boolean;
   boardById: Map<string, Board>;
   recentBoardIds?: string[];
@@ -336,7 +335,9 @@ const HomeBoardsSection: React.FC<
         const branches = Array.from(branchById.values()).filter(
           (branch) => branch.board_id === board.board_id && !branch.archived
         );
-        const sessions = branches.flatMap((branch) => sessionsByBranch.get(branch.branch_id) || []);
+        const sessions = branches.flatMap((branch) =>
+          (sessionsByBranch.get(branch.branch_id) || []).filter((session) => !session.archived)
+        );
         const primaryAssistant = board.primary_assistant_id
           ? branchById.get(board.primary_assistant_id)
           : undefined;
@@ -494,7 +495,10 @@ const HomeSessionsSection: React.FC<
   const cardGlassStyle = glassCardStyle(token);
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
-  const allSessions = useMemo(() => Array.from(sessionById.values()), [sessionById]);
+  const allSessions = useMemo(
+    () => Array.from(sessionById.values()).filter((session) => !session.archived),
+    [sessionById]
+  );
   const trimmed = searchQuery.trim();
   const searching = isSessionSearchActive(trimmed);
   const displaySessions = useMemo(

@@ -283,8 +283,16 @@ export function useUrlState(options: UseUrlStateOptions) {
     if (!urlParamsChanged && fullyResolved) return;
 
     // No URL params at all → Home/no-board state. Do not self-heal back
-    // to the last board; `/` is a valid workspace surface.
+    // to the last board; `/` is a valid workspace surface. Unknown non-root
+    // paths also have no params, but should canonicalize to Home instead of
+    // clearing board state and rendering a no-board canvas at that path.
     if (!urlBoardParam && !urlSessionShortId && !urlBranchShortId && !urlArtifactShortId) {
+      const isHomePath = location.pathname === '/' || location.pathname === '';
+      if (!isSettingsRoute && !isHomePath) {
+        navigate('/', { replace: true });
+        return;
+      }
+
       if (!isSettingsRoute && currentBoardIdRef.current) {
         syncingRef.current = true;
         onBoardChange('');
@@ -435,6 +443,8 @@ export function useUrlState(options: UseUrlStateOptions) {
     onActiveUrlTargetChange,
     isSettingsRoute,
     recenterMap,
+    location.pathname,
+    navigate,
   ]);
 
   // State → URL self-heal

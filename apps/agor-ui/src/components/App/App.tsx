@@ -1180,7 +1180,6 @@ export const App: React.FC<AppProps> = ({
                         {isHomeSurface ? (
                           <HomePage
                             client={client}
-                            currentUser={user}
                             connected={connected}
                             boardById={boardById}
                             recentBoardIds={recentBoardIds}
