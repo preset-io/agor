@@ -4,7 +4,7 @@
  * Type-safe CRUD operations for sessions with short ID support.
  */
 
-import type { Session, SessionID, UUID } from '@agor/core/types';
+import type { BranchID, Session, SessionID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
@@ -247,6 +247,28 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       if (error instanceof AmbiguousIdError) throw error;
       throw new RepositoryError(
         `Failed to find session: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Find only the branch ID for a session. Used by realtime routing hot paths
+   * to avoid loading/enriching the full session row.
+   */
+  async findBranchIdBySessionId(id: string): Promise<BranchID | null> {
+    try {
+      const fullId = await this.resolveId(id);
+      const row = await select(this.db, { branch_id: sessions.branch_id })
+        .from(sessions)
+        .where(eq(sessions.session_id, fullId))
+        .one();
+      return (row?.branch_id as BranchID | undefined) ?? null;
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      if (error instanceof AmbiguousIdError) throw error;
+      throw new RepositoryError(
+        `Failed to find session branch: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

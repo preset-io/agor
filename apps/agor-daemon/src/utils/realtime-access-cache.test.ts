@@ -1,26 +1,25 @@
-import type { SessionRepository } from '@agor/core/db';
-import type { Branch, Session } from '@agor/core/types';
+import type { Branch } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { type RealtimeAccessBranchRepository, RealtimeAccessCache } from './realtime-access-cache';
+import {
+  type RealtimeAccessBranchRepository,
+  RealtimeAccessCache,
+  type RealtimeAccessSessionRepository,
+} from './realtime-access-cache';
 
 function branch(id: string, others_can: Branch['others_can'] = 'none'): Branch {
   return { branch_id: id, others_can } as Branch;
-}
-
-function session(id: string, branchId: string): Session {
-  return { session_id: id, branch_id: branchId } as Session;
 }
 
 describe('RealtimeAccessCache', () => {
   it('caches session branch ids until ttl expiration', async () => {
     let now = 1_000;
     const branchRepository = {
-      findById: vi.fn(),
+      findRealtimeVisibilityBranch: vi.fn(),
       findExplicitViewUserIds: vi.fn(),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
-      findById: vi.fn(async () => session('s1', 'b1')),
-    } as unknown as SessionRepository;
+      findBranchIdBySessionId: vi.fn(async () => 'b1'),
+    } as unknown as RealtimeAccessSessionRepository;
     const cache = new RealtimeAccessCache({
       branchRepository,
       sessionsRepository,
@@ -30,23 +29,51 @@ describe('RealtimeAccessCache', () => {
 
     await expect(cache.getBranchIdForSession('s1')).resolves.toBe('b1');
     await expect(cache.getBranchIdForSession('s1')).resolves.toBe('b1');
-    expect(sessionsRepository.findById).toHaveBeenCalledTimes(1);
+    expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(1);
 
     now += 60_001;
 
     await expect(cache.getBranchIdForSession('s1')).resolves.toBe('b1');
-    expect(sessionsRepository.findById).toHaveBeenCalledTimes(2);
+    expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses separate ttl values for session and branch caches', async () => {
+    let now = 1_000;
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'session')),
+      findExplicitViewUserIds: vi.fn(),
+    } as unknown as RealtimeAccessBranchRepository;
+    const sessionsRepository = {
+      findBranchIdBySessionId: vi.fn(async () => 'b1'),
+    } as unknown as RealtimeAccessSessionRepository;
+    const cache = new RealtimeAccessCache({
+      branchRepository,
+      sessionsRepository,
+      branchVisibilityTtlMs: 10,
+      sessionBranchTtlMs: 100,
+      now: () => now,
+    });
+
+    await cache.getBranchVisibility('b1');
+    await cache.getBranchIdForSession('s1');
+
+    now += 11;
+    await cache.getBranchVisibility('b1');
+    await cache.getBranchIdForSession('s1');
+
+    expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(2);
+    expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(1);
   });
 
   it('caches and invalidates restricted branch visibility', async () => {
     let now = 1_000;
     const branchRepository = {
-      findById: vi.fn(async () => branch('b1', 'none')),
+      findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'none')),
       findExplicitViewUserIds: vi.fn(async () => ['u1']),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
-      findById: vi.fn(),
-    } as unknown as SessionRepository;
+      findBranchIdBySessionId: vi.fn(),
+    } as unknown as RealtimeAccessSessionRepository;
     const cache = new RealtimeAccessCache({
       branchRepository,
       sessionsRepository,
@@ -59,30 +86,30 @@ describe('RealtimeAccessCache', () => {
 
     expect(first).toEqual({ mode: 'explicitUsers', userIds: new Set(['u1']) });
     expect(second).toEqual({ mode: 'explicitUsers', userIds: new Set(['u1']) });
-    expect(branchRepository.findById).toHaveBeenCalledTimes(1);
+    expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(1);
     expect(branchRepository.findExplicitViewUserIds).toHaveBeenCalledTimes(1);
 
     cache.invalidateBranch('b1');
 
     await cache.getBranchVisibility('b1');
-    expect(branchRepository.findById).toHaveBeenCalledTimes(2);
+    expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(2);
     expect(branchRepository.findExplicitViewUserIds).toHaveBeenCalledTimes(2);
 
     now += 60_001;
 
     await cache.getBranchVisibility('b1');
-    expect(branchRepository.findById).toHaveBeenCalledTimes(3);
+    expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(3);
     expect(branchRepository.findExplicitViewUserIds).toHaveBeenCalledTimes(3);
   });
 
   it('represents broadly visible branches without expanding user ids', async () => {
     const branchRepository = {
-      findById: vi.fn(async () => branch('b1', 'session')),
+      findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'session')),
       findExplicitViewUserIds: vi.fn(async () => ['u1']),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
-      findById: vi.fn(),
-    } as unknown as SessionRepository;
+      findBranchIdBySessionId: vi.fn(),
+    } as unknown as RealtimeAccessSessionRepository;
     const cache = new RealtimeAccessCache({
       branchRepository,
       sessionsRepository,

@@ -1,13 +1,19 @@
-import type { BranchRepository, SessionRepository } from '@agor/core/db';
-import type { Branch, BranchID, Session, UserID, UUID } from '@agor/core/types';
+import type { Branch, BranchID, UserID, UUID } from '@agor/core/types';
 import { PERMISSION_RANK } from './branch-authorization.js';
 
 export type BranchRealtimeVisibility =
   | { mode: 'allAuthenticated' }
   | { mode: 'explicitUsers'; userIds: Set<UserID> };
 
-export type RealtimeAccessBranchRepository = Pick<BranchRepository, 'findById'> & {
+export type RealtimeAccessBranchRepository = {
+  findRealtimeVisibilityBranch(
+    branchId: string
+  ): Promise<Pick<Branch, 'branch_id' | 'others_can'> | null>;
   findExplicitViewUserIds(branchId: BranchID): Promise<UUID[]>;
+};
+
+export type RealtimeAccessSessionRepository = {
+  findBranchIdBySessionId(sessionId: string): Promise<BranchID | null>;
 };
 
 type BranchVisibilityCacheEntry = BranchRealtimeVisibility & {
@@ -21,14 +27,17 @@ type SessionBranchCacheEntry = {
 
 export interface RealtimeAccessCacheOptions {
   branchRepository: RealtimeAccessBranchRepository;
-  sessionsRepository: SessionRepository;
+  sessionsRepository: RealtimeAccessSessionRepository;
+  branchVisibilityTtlMs?: number;
+  sessionBranchTtlMs?: number;
   ttlMs?: number;
   now?: () => number;
 }
 
-const DEFAULT_TTL_MS = 60_000;
+const DEFAULT_BRANCH_VISIBILITY_TTL_MS = 5 * 60_000;
+const DEFAULT_SESSION_BRANCH_TTL_MS = 60 * 60_000;
 
-function branchAllowsAllAuthenticated(branch: Branch): boolean {
+function branchAllowsAllAuthenticated(branch: Pick<Branch, 'others_can'>): boolean {
   const othersCan = branch.others_can ?? 'session';
   return PERMISSION_RANK[othersCan] >= PERMISSION_RANK.view;
 }
@@ -41,11 +50,15 @@ function branchAllowsAllAuthenticated(branch: Branch): boolean {
 export class RealtimeAccessCache {
   private readonly branchVisibility = new Map<BranchID, BranchVisibilityCacheEntry>();
   private readonly sessionBranches = new Map<string, SessionBranchCacheEntry>();
-  private readonly ttlMs: number;
+  private readonly branchVisibilityTtlMs: number;
+  private readonly sessionBranchTtlMs: number;
   private readonly now: () => number;
 
   constructor(private readonly options: RealtimeAccessCacheOptions) {
-    this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+    this.branchVisibilityTtlMs =
+      options.branchVisibilityTtlMs ?? options.ttlMs ?? DEFAULT_BRANCH_VISIBILITY_TTL_MS;
+    this.sessionBranchTtlMs =
+      options.sessionBranchTtlMs ?? options.ttlMs ?? DEFAULT_SESSION_BRANCH_TTL_MS;
     this.now = options.now ?? Date.now;
   }
 
@@ -56,11 +69,10 @@ export class RealtimeAccessCache {
       return cached.branchId;
     }
 
-    const session = (await this.options.sessionsRepository.findById(sessionId)) as Session | null;
-    const branchId = (session?.branch_id as BranchID | undefined) ?? null;
+    const branchId = await this.options.sessionsRepository.findBranchIdBySessionId(sessionId);
     this.sessionBranches.set(sessionId, {
       branchId,
-      expiresAt: now + this.ttlMs,
+      expiresAt: now + this.sessionBranchTtlMs,
     });
     return branchId;
   }
@@ -72,7 +84,7 @@ export class RealtimeAccessCache {
       return this.visibilityFromEntry(cached);
     }
 
-    const branch = await this.options.branchRepository.findById(branchId);
+    const branch = await this.options.branchRepository.findRealtimeVisibilityBranch(branchId);
     if (!branch) {
       this.branchVisibility.delete(branchId);
       return null;
@@ -91,7 +103,7 @@ export class RealtimeAccessCache {
 
     this.branchVisibility.set(branch.branch_id, {
       ...visibility,
-      expiresAt: now + this.ttlMs,
+      expiresAt: now + this.branchVisibilityTtlMs,
     });
     return visibility;
   }

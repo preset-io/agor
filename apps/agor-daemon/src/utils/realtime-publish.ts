@@ -7,6 +7,7 @@ import { isSuperAdmin } from './branch-authorization.js';
 import {
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
+  type RealtimeAccessSessionRepository,
 } from './realtime-access-cache.js';
 
 type PublishContext = Pick<HookContext, 'path' | 'method' | 'id' | 'event' | 'app' | 'params'>;
@@ -300,7 +301,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     sessionsRepository,
     accessCache = new RealtimeAccessCache({
       branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
-      sessionsRepository,
+      sessionsRepository: sessionsRepository as unknown as RealtimeAccessSessionRepository,
     }),
     allowSuperadmin = true,
   } = options;

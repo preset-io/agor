@@ -112,6 +112,7 @@ import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js'
 import {
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
+  type RealtimeAccessSessionRepository,
 } from './utils/realtime-access-cache.js';
 import { configureRealtimePublish } from './utils/realtime-publish.js';
 import {
@@ -331,7 +332,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const realtimeAccessCache = new RealtimeAccessCache({
     branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
-    sessionsRepository,
+    sessionsRepository: sessionsRepository as unknown as RealtimeAccessSessionRepository,
   });
 
   const invalidateRealtimeBranchAccess = async (branchId: unknown): Promise<void> => {

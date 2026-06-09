@@ -250,6 +250,35 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
+   * Find only the fields needed by realtime delivery visibility checks.
+   */
+  async findRealtimeVisibilityBranch(
+    id: string
+  ): Promise<Pick<Branch, 'branch_id' | 'others_can'> | null> {
+    try {
+      const fullId = await resolveByShortIdPrefix(id, 'Branch', async (pattern) => {
+        const rows = await select(this.db, { branch_id: branches.branch_id })
+          .from(branches)
+          .where(like(branches.branch_id, pattern))
+          .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+          .all();
+        return rows.map((r: { branch_id: string }) => r.branch_id);
+      });
+      const row = await select(this.db, {
+        branch_id: branches.branch_id,
+        others_can: branches.others_can,
+      })
+        .from(branches)
+        .where(eq(branches.branch_id, fullId))
+        .one();
+      return row ? { branch_id: row.branch_id as BranchID, others_can: row.others_can } : null;
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      throw error;
+    }
+  }
+
+  /**
    * Find all branches (with optional filters)
    *
    * By default, returns ALL branches including archived. This matches the generic

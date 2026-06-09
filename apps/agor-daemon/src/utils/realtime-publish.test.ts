@@ -1,7 +1,10 @@
-import type { BranchRepository, SessionRepository } from '@agor/core/db';
 import type { Branch, BranchPermissionLevel, Session, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import type {
+  RealtimeAccessBranchRepository,
+  RealtimeAccessSessionRepository,
+} from './realtime-access-cache';
 import { configureRealtimePublish } from './realtime-publish';
 
 class FakeChannel {
@@ -60,16 +63,16 @@ function repos(options: {
     )
     .map(([userId]) => userId);
   const branchRepository = {
-    findById: vi.fn(async (id: string) =>
+    findRealtimeVisibilityBranch: vi.fn(async (id: string) =>
       id === options.branch.branch_id ? options.branch : null
     ),
     findExplicitViewUserIds: vi.fn(async () => viewableUserIds),
-  } as unknown as BranchRepository;
+  } as unknown as RealtimeAccessBranchRepository;
   const sessionsRepository = {
-    findById: vi.fn(async (id: string) =>
-      options.session?.session_id === id ? options.session : null
+    findBranchIdBySessionId: vi.fn(async (id: string) =>
+      options.session?.session_id === id ? options.session.branch_id : null
     ),
-  } as unknown as SessionRepository;
+  } as unknown as RealtimeAccessSessionRepository;
   return { branchRepository, sessionsRepository };
 }
 
@@ -210,7 +213,7 @@ describe('configureRealtimePublish', () => {
       { path: 'tasks', method: 'create', event: 'created' }
     );
 
-    expect(r.sessionsRepository.findById).toHaveBeenCalledWith('s1');
+    expect(r.sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledWith('s1');
     expect(channel.connections).toEqual([{ user: allowed }, service]);
   });
 
@@ -236,8 +239,8 @@ describe('configureRealtimePublish', () => {
 
     expect(first.connections).toEqual([{ user: allowed }]);
     expect(second.connections).toEqual([{ user: allowed }]);
-    expect(r.sessionsRepository.findById).toHaveBeenCalledTimes(1);
-    expect(r.branchRepository.findById).toHaveBeenCalledTimes(1);
+    expect(r.sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(1);
+    expect(r.branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(1);
     expect(vi.mocked(r.branchRepository.findExplicitViewUserIds)).toHaveBeenCalledTimes(1);
   });
 
@@ -257,7 +260,7 @@ describe('configureRealtimePublish', () => {
       { path: 'sessions', method: 'emit', event: 'permission:request' }
     );
 
-    expect(r.sessionsRepository.findById).toHaveBeenCalledWith('s1');
+    expect(r.sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledWith('s1');
     expect(channel.connections).toEqual([{ user: allowed }]);
   });
 
@@ -277,7 +280,7 @@ describe('configureRealtimePublish', () => {
       { path: 'board-comments', method: 'create', event: 'created' }
     );
 
-    expect(r.sessionsRepository.findById).toHaveBeenCalledWith('s1');
+    expect(r.sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledWith('s1');
     expect(channel.connections).toEqual([{ user: allowed }]);
   });
 
