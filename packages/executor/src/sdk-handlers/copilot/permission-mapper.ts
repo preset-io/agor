@@ -140,19 +140,12 @@ async function isAttachedMcpServer(
   // Built-in "agor" server is always auto-approved
   if (serverName === 'agor') return true;
 
-  // Check if server is attached to session
-  if (!deps.sessionMCPRepo || !deps.mcpServerRepo) return false;
+  // Check if server is attached to session via the session-scoped MCP route.
+  if (!deps.sessionMCPRepo) return false;
 
   try {
-    const sessionMCPs = await deps.sessionMCPRepo.findBySessionId(sessionId);
-    const attachedServerIds = sessionMCPs.map((s) => s.mcp_server_id);
-
-    for (const serverId of attachedServerIds) {
-      const server = await deps.mcpServerRepo.findById(serverId);
-      if (server && server.name === serverName) {
-        return true;
-      }
-    }
+    const attachedServers = await deps.sessionMCPRepo.listServers(sessionId, true);
+    return attachedServers.some((server) => server.name === serverName);
   } catch (error) {
     console.error(`[Copilot Permission] Error verifying MCP server "${serverName}":`, error);
   }

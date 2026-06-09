@@ -51,6 +51,7 @@ describe('createCanUseToolCallback', () => {
       } as any,
       sessionMCPRepo: {
         findBySessionId: vi.fn().mockResolvedValue([]),
+        listServers: vi.fn().mockResolvedValue([]),
       } as any,
     };
   }
@@ -73,6 +74,7 @@ describe('createCanUseToolCallback', () => {
       expect(result.updatedPermissions?.[0]?.destination).toBe('session');
       // The agor server is added dynamically — should NOT round-trip through the DB.
       expect(deps.sessionMCPRepo.findBySessionId).not.toHaveBeenCalled();
+      expect(deps.sessionMCPRepo.listServers).not.toHaveBeenCalled();
       expect(deps.mcpServerRepo.findById).not.toHaveBeenCalled();
       // No permission UI involved.
       expect(deps.permissionService.emitRequest).not.toHaveBeenCalled();
@@ -80,19 +82,21 @@ describe('createCanUseToolCallback', () => {
 
     it('auto-allows tools from MCP servers that ARE attached to the session', async () => {
       const deps = createBaseDeps();
-      deps.sessionMCPRepo.findBySessionId.mockResolvedValue([{ mcp_server_id: 'srv-1' }]);
-      deps.mcpServerRepo.findById.mockResolvedValue({ name: 'shortcut' });
+      deps.sessionMCPRepo.listServers.mockResolvedValue([{ name: 'shortcut' }]);
 
       const callback = createCanUseToolCallback(sessionId, taskId, deps);
       const result = await callback('mcp__shortcut__list_stories', {}, noopOptions);
 
       expect(result.behavior).toBe('allow');
+      expect(deps.sessionMCPRepo.listServers).toHaveBeenCalledWith(sessionId, true);
+      expect(deps.sessionMCPRepo.findBySessionId).not.toHaveBeenCalled();
+      expect(deps.mcpServerRepo.findById).not.toHaveBeenCalled();
       expect(deps.permissionService.emitRequest).not.toHaveBeenCalled();
     });
 
     it('falls through to permission flow when an MCP server is NOT attached', async () => {
       const deps = createBaseDeps();
-      deps.sessionMCPRepo.findBySessionId.mockResolvedValue([]); // no attached servers
+      deps.sessionMCPRepo.listServers.mockResolvedValue([]); // no attached servers
       deps.permissionService.waitForDecision.mockResolvedValue({
         allow: false,
         timedOut: false,

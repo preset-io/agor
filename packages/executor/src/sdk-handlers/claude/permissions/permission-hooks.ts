@@ -86,19 +86,8 @@ export function createCanUseToolCallback(
         }
 
         try {
-          // Get the session's attached MCP servers
-          const sessionMCPs = await deps.sessionMCPRepo.findBySessionId(sessionId);
-          const attachedServerIds = sessionMCPs.map((s) => s.mcp_server_id);
-
-          // Look up the MCP servers to check their names
-          let serverVerified = false;
-          for (const serverId of attachedServerIds) {
-            const server = await deps.mcpServerRepo.findById(serverId);
-            if (server && server.name === serverName) {
-              serverVerified = true;
-              break;
-            }
-          }
+          const attachedServers = await deps.sessionMCPRepo.listServers(sessionId, true);
+          const serverVerified = attachedServers.some((server) => server.name === serverName);
 
           if (serverVerified) {
             console.log(
