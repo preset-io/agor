@@ -1204,6 +1204,7 @@ export const App: React.FC<AppProps> = ({
                             sessionById={sessionById}
                             sessionsByBranch={sessionsByBranch}
                             userById={userById}
+                            currentUserId={user?.user_id}
                             onBoardClick={navigation.goToBoard}
                             onBranchClick={navigation.goToBranch}
                             onSessionClick={handleSessionClick}

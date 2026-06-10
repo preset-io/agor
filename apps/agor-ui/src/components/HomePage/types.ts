@@ -11,6 +11,7 @@ export interface HomePageProps {
   sessionById: Map<string, Session>;
   sessionsByBranch: Map<string, Session[]>;
   userById: Map<string, User>;
+  currentUserId?: string;
   onBoardClick: (boardId: string) => void;
   onBranchClick: (branchId: string) => void;
   onSessionClick: (sessionId: string) => void;

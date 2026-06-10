@@ -50,6 +50,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
             branchById={props.branchById}
             boardById={props.boardById}
             repoById={props.repoById}
+            currentUserId={props.currentUserId}
             onSessionClick={props.onSessionClick}
           />
         </main>

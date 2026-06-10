@@ -120,15 +120,21 @@ const HomeSessionRow: React.FC<{
 };
 
 export const HomeSessionsSection: React.FC<
-  Pick<HomePageProps, 'sessionById' | 'branchById' | 'boardById' | 'repoById' | 'onSessionClick'>
-> = ({ sessionById, branchById, boardById, repoById, onSessionClick }) => {
+  Pick<
+    HomePageProps,
+    'sessionById' | 'branchById' | 'boardById' | 'repoById' | 'currentUserId' | 'onSessionClick'
+  >
+> = ({ sessionById, branchById, boardById, repoById, currentUserId, onSessionClick }) => {
   const { token } = theme.useToken();
   const cardGlassStyle = glassCardStyle(token);
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
   const allSessions = useMemo(
-    () => Array.from(sessionById.values()).filter((session) => !session.archived),
-    [sessionById]
+    () =>
+      Array.from(sessionById.values()).filter(
+        (session) => !session.archived && (!currentUserId || session.created_by === currentUserId)
+      ),
+    [currentUserId, sessionById]
   );
   const trimmed = searchQuery.trim();
   const searching = isSessionSearchActive(trimmed);
@@ -142,9 +148,9 @@ export const HomeSessionsSection: React.FC<
   return (
     <section style={{ minHeight: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
       <HomeSectionHeader
-        title="Sessions"
+        title={currentUserId ? 'My Sessions' : 'Sessions'}
         icon={<ClockCircleOutlined />}
-        info={`Up to ${HOME_SESSIONS_LIMIT} cross-board sessions using the same local session state as the board left panel. Board and branch pills are included because this list is not filtered to one board.`}
+        info={`Up to ${HOME_SESSIONS_LIMIT} ${currentUserId ? 'of your' : 'cross-board'} sessions using the same local session state as the board left panel. Board and branch pills are included because this list is not filtered to one board.`}
       />
       <Card
         styles={{
