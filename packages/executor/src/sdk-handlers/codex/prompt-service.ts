@@ -46,6 +46,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
+import type { TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
@@ -205,7 +206,8 @@ export class CodexPromptService {
     apiKey?: string,
     private mcpServerRepo?: MCPServerRepository,
     private usersRepo?: UsersRepository,
-    useNativeAuth: boolean = false
+    useNativeAuth: boolean = false,
+    private tasksService?: TasksService
   ) {
     // Store API key from base-executor (already resolved with proper precedence)
     this.apiKey = apiKey || '';
@@ -895,8 +897,21 @@ export class CodexPromptService {
 
     // forUserId enables per-user OAuth token injection at the MCP scoping
     // layer — mirrors Claude's contextUserId pattern so personal OAuth-
-    // protected MCP servers work for Codex too.
-    const forUserId = (session.created_by ?? undefined) as UserID | undefined;
+    // protected MCP servers work for Codex too. Prefer the task creator (the
+    // user who issued THIS prompt) over the session owner, since a session can
+    // be prompted by multiple users and credentials must attribute to the
+    // prompter.
+    let forUserId = (session.created_by ?? undefined) as UserID | undefined;
+    if (taskId && this.tasksService) {
+      try {
+        const task = await this.tasksService.get(taskId);
+        if (task?.created_by) {
+          forUserId = task.created_by as UserID;
+        }
+      } catch {
+        // Fall back to session owner if task lookup fails.
+      }
+    }
     const { servers: mcpServersConfig, total: mcpServerCount } = await this.buildMcpServersConfig(
       sessionId,
       mcpToken,

@@ -116,7 +116,8 @@ export class CodexTool implements ITool {
         apiKey,
         mcpServerRepo,
         usersRepo,
-        useNativeAuth ?? false
+        useNativeAuth ?? false,
+        tasksService
       );
     }
   }

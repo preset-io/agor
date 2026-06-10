@@ -720,7 +720,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/sessions/:id/genealogy',
     {
-      async find(_data: unknown, params: RouteParams) {
+      async find(params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         return sessionsService.getGenealogy(id, params);
@@ -2767,7 +2767,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/branches/:id/health',
     {
-      async find(_data: unknown, params: RouteParams) {
+      async find(params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Branch ID required');
         return branchesService.checkHealth(id as import('@agor/core/types').BranchID, params);
@@ -3127,7 +3127,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       app,
       '/sessions/:id/mcp-servers',
       {
-        async find(_data: unknown, params: RouteParams) {
+        async find(params: RouteParams) {
           const id = params.route?.id;
           if (!id) throw new Error('Session ID required');
           await requireSessionScopedConfigOwnerOrAdmin(id, params);
@@ -3342,7 +3342,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       // GET returns the selected env var names as a plain `string[]` — both
       // the comment above and the UI consumer expect names, not full rows.
-      async find(_data: unknown, params: RouteParams): Promise<string[]> {
+      async find(params: RouteParams): Promise<string[]> {
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
         // Read permission: session creator OR admin (no branch tier).

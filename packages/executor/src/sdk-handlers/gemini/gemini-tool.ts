@@ -85,7 +85,8 @@ export class GeminiTool implements ITool {
         sessionMCPRepo,
         mcpEnabled,
         useNativeAuth,
-        usersRepo
+        usersRepo,
+        this.tasksService
       );
     }
   }
