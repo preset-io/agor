@@ -28,7 +28,8 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
-import type { MCPServersConfig, SessionID, TaskID, UserID } from '../../types.js';
+import type { MCPServersConfig, SessionID, TaskID } from '../../types.js';
+import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
@@ -162,25 +163,14 @@ export async function setupQuery(
     throw new Error(`Session not found: ${sessionId}`);
   }
 
-  // Determine which user's context to use for environment variables and API keys
-  // Priority: task creator (if task exists) > session owner (fallback)
-  let contextUserId = session.created_by as UserID | undefined;
-  console.log(
-    `[Query Builder] Initial contextUserId from session.created_by: ${contextUserId || 'NOT SET'}`
-  );
-
-  if (taskId && deps.tasksService) {
-    try {
-      const task = await deps.tasksService.get(taskId);
-      if (task?.created_by) {
-        contextUserId = task.created_by as UserID;
-        console.log(`[Query Builder] Updated contextUserId from task.created_by: ${contextUserId}`);
-      }
-    } catch (_err) {
-      // Fall back to session owner if task not found
-    }
-  }
-  console.log(`[Query Builder] Final contextUserId: ${contextUserId || 'NOT SET'}`);
+  // Determine which user's context to use for environment variables and API
+  // keys: the task creator (prompter) when known, else the session owner.
+  const contextUserId = await resolveContextUserId({
+    session,
+    taskId,
+    tasksService: deps.tasksService,
+  });
+  console.log(`[Query Builder] Resolved contextUserId: ${contextUserId || 'NOT SET'}`);
 
   // Determine model to use (session config or default)
   // Models may include [1m] suffix for extended context — strip it for SDK and add beta flag

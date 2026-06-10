@@ -35,6 +35,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
+import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { convertConversationToHistory } from './conversation-converter.js';
@@ -140,21 +141,13 @@ export class GeminiPromptService {
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    // Context user for per-user OAuth/API-key resolution. Prefer the task
-    // creator (the user who issued THIS prompt) over the session owner, since
-    // a session can be prompted by multiple users and credentials must
-    // attribute to the prompter.
-    let contextUserId = session.created_by as UserID | undefined;
-    if (taskId && this.tasksService) {
-      try {
-        const task = await this.tasksService.get(taskId);
-        if (task?.created_by) {
-          contextUserId = task.created_by as UserID;
-        }
-      } catch {
-        // Fall back to session owner if task lookup fails.
-      }
-    }
+    // Context user for per-user OAuth/API-key resolution — the task creator
+    // (prompter) when known, else the session owner.
+    const contextUserId = await resolveContextUserId({
+      session,
+      taskId,
+      tasksService: this.tasksService,
+    });
 
     // Get or create Gemini client for this session
     const client = await this.getOrCreateClient(sessionId, permissionMode, contextUserId);
@@ -559,7 +552,7 @@ export class GeminiPromptService {
   private async getOrCreateClient(
     sessionId: SessionID,
     permissionMode?: PermissionMode,
-    contextUserId?: import('../../types').UserID
+    contextUserId?: UserID
   ): Promise<InstanceType<typeof Gemini.GeminiClient>> {
     // Resolve per-user API key FIRST, before checking for existing client
     // This ensures we use the correct key even when reusing a cached client
@@ -724,10 +717,12 @@ export class GeminiPromptService {
     // Fetch user-configured MCP servers
     if (this.sessionMCPRepo && this.mcpServerRepo) {
       try {
-        // Use shared MCP scoping utility
+        // Use shared MCP scoping utility. forUserId injects the prompter's
+        // per-user OAuth tokens for personal OAuth-protected MCP servers.
         const serversWithSource = await getMcpServersForSession(sessionId, {
           sessionMCPRepo: this.sessionMCPRepo,
           mcpServerRepo: this.mcpServerRepo,
+          forUserId: contextUserId,
         });
 
         // Convert to Gemini SDK format
