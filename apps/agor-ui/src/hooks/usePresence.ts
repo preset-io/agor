@@ -26,9 +26,9 @@ interface UsePresenceOptions {
   enabled?: boolean;
   globalPresence?: boolean; // If true, track users across all boards (for navbar facepile)
   /**
-   * Optional coalescing window for presenceMap updates. When set, repeated
-   * cursor-moved events for the same user on the same board within this window
-   * are treated as no-ops for facepile state.
+   * Optional coalescing window for facepile presence updates. When set, repeated
+   * board-scoped `cursor-moved` or global `presence-updated` events for the
+   * same user on the same board within this window are treated as no-ops.
    */
   presenceMinUpdateIntervalMs?: number;
 }
