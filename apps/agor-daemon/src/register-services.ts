@@ -1354,6 +1354,7 @@ async function registerMCPServices(
             ...pendingFlow,
             clientId: pendingFlow.context.clientId,
             clientSecret: pendingFlow.context.clientSecret,
+            tokenEndpoint: pendingFlow.context.tokenEndpoint,
           },
           'OAuth Callback'
         );
@@ -1933,6 +1934,7 @@ async function registerMCPServices(
             ...pendingFlow,
             clientId: pendingFlow.context.clientId,
             clientSecret: pendingFlow.context.clientSecret,
+            tokenEndpoint: pendingFlow.context.tokenEndpoint,
           },
           'OAuth Complete'
         );
@@ -2163,9 +2165,13 @@ async function registerMCPServices(
 
       const userTokenRepo = new UserMCPOAuthTokenRepository(db);
       const mcpServerRepo = new MCPServerRepository(db);
-      const { refreshAndPersistToken, InvalidGrantError, MissingRefreshTokenError } = await import(
-        '@agor/core/tools/mcp/oauth-refresh'
-      );
+      const {
+        refreshAndPersistToken,
+        InvalidGrantError,
+        MissingRefreshTokenError,
+        MissingTokenEndpointError,
+        MissingClientIdError,
+      } = await import('@agor/core/tools/mcp/oauth-refresh');
 
       try {
         const server = await mcpServerRepo.findById(serverId);
@@ -2192,13 +2198,19 @@ async function registerMCPServices(
         if (err instanceof InvalidGrantError || err instanceof MissingRefreshTokenError) {
           return { success: false, error: 'needs_reauth' };
         }
+        if (err instanceof MissingTokenEndpointError) {
+          return { success: false, error: 'missing_token_endpoint' };
+        }
+        if (err instanceof MissingClientIdError) {
+          return { success: false, error: 'missing_client_id' };
+        }
         console.error(
           `[OAuth Refresh] ${serverId}:`,
-          err instanceof Error ? err.name : 'unknown_error'
+          err instanceof Error ? `${err.name}: ${err.message}` : 'unknown_error'
         );
         return {
           success: false,
-          error: 'unknown_error',
+          error: err instanceof Error ? err.message : 'token_refresh_failed',
         };
       }
     },

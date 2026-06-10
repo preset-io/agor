@@ -57,6 +57,16 @@ export class MissingTokenEndpointError extends Error {
   }
 }
 
+export class MissingClientIdError extends Error {
+  readonly code = 'missing_client_id';
+  constructor(
+    message: string = 'Cannot refresh OAuth token: no client_id available for this grant'
+  ) {
+    super(message);
+    this.name = 'MissingClientIdError';
+  }
+}
+
 export interface RefreshMCPTokenOptions {
   tokenEndpoint: string;
   refreshToken: string;
@@ -262,7 +272,7 @@ export async function refreshAndPersistToken(deps: RefreshAndPersistDeps): Promi
     const clientSecret = row.oauth_client_secret ?? serverAuth?.oauth_client_secret;
 
     if (!clientId) {
-      throw new Error(
+      throw new MissingClientIdError(
         `Cannot refresh OAuth token: no client_id available for server ${deps.mcpServerId}`
       );
     }

@@ -13,6 +13,7 @@ import {
   __refreshMutexSizeForTests,
   __resetRefreshMutexForTests,
   InvalidGrantError,
+  MissingClientIdError,
   MissingRefreshTokenError,
   MissingTokenEndpointError,
   needsRefresh,
@@ -454,6 +455,32 @@ describe('refreshAndPersistToken', () => {
     // Pre-registered with secret → Basic auth
     const expectedAuth = `Basic ${Buffer.from('admin-preregistered:admin-secret').toString('base64')}`;
     expect(init.headers.Authorization).toBe(expectedAuth);
+  });
+
+  it('throws MissingClientIdError when neither token row nor server config has client_id', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'old-a',
+      oauth_refresh_token: 'rt-1',
+      oauth_client_id: undefined,
+      oauth_client_secret: undefined,
+    });
+    mockFindById.mockResolvedValue({
+      url: 'https://srv.example.com/mcp',
+      auth: { oauth_token_url: 'https://auth.example.com/token' },
+    });
+    globalThis.fetch = vi.fn() as unknown as typeof globalThis.fetch;
+
+    await expect(
+      refreshAndPersistToken({
+        db: {} as any,
+        userId: USER_ID,
+        mcpServerId: SERVER_ID,
+      })
+    ).rejects.toBeInstanceOf(MissingClientIdError);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it('mutex: concurrent refreshes for same key collapse to ONE HTTP call', async () => {

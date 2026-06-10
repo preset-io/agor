@@ -5,7 +5,7 @@
  * Tokens are also persisted to the database for cross-process access.
  */
 
-import { UserMCPOAuthTokenRepository } from '@agor/core/db';
+import { MCPServerRepository, UserMCPOAuthTokenRepository } from '@agor/core/db';
 import { resolveTokenExpiry } from '@agor/core/tools/mcp/oauth-token-expiry';
 import type { MCPServerID, UserID } from '@agor/core/types';
 
@@ -93,6 +93,12 @@ export async function persistOAuthToken(
     clientId?: string;
     /** client_secret used for the grant (absent for public clients). */
     clientSecret?: string;
+    /**
+     * Token endpoint discovered/used for this grant. Persisted back onto the
+     * server config when it was previously blank so later refreshes do not
+     * have to guess from the MCP resource URL.
+     */
+    tokenEndpoint?: string;
   },
   logPrefix: string
 ): Promise<void> {
@@ -141,6 +147,32 @@ export async function persistOAuthToken(
     clientId: pendingFlow.clientId,
     clientSecret: pendingFlow.clientSecret,
   });
+
+  if (pendingFlow.tokenEndpoint) {
+    try {
+      const mcpServerRepo = new MCPServerRepository(db);
+      const server = await mcpServerRepo.findById(pendingFlow.mcpServerId);
+      if (server?.auth?.type === 'oauth' && !server.auth.oauth_token_url) {
+        await mcpServerRepo.update(pendingFlow.mcpServerId, {
+          auth: {
+            ...server.auth,
+            oauth_token_url: pendingFlow.tokenEndpoint,
+          },
+        });
+        console.log(
+          `[${logPrefix}] Saved discovered OAuth token endpoint for server ${pendingFlow.mcpServerId}`
+        );
+      }
+    } catch (error) {
+      // Token persistence already succeeded; do not fail the OAuth callback.
+      // The manual refresh path will still surface a typed endpoint error if
+      // this best-effort config backfill fails.
+      console.warn(
+        `[${logPrefix}] Failed to save discovered OAuth token endpoint for server ${pendingFlow.mcpServerId}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
 
   console.log(
     `[${logPrefix}] ${oauthMode === 'per_user' ? 'Per-user' : 'Shared'} token saved ` +
