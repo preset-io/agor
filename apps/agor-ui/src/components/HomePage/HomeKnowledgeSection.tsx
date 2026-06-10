@@ -24,7 +24,6 @@ const KnowledgeDocRow: React.FC<{ doc: KnowledgeDocument }> = ({ doc }) => {
   return (
     <List.Item onClick={() => navigate(path)} style={{ cursor: 'pointer', padding: '10px 0' }}>
       <List.Item.Meta
-        avatar={<BookOutlined />}
         title={<Text ellipsis={{ tooltip: doc.title || doc.path }}>{doc.title || doc.path}</Text>}
         description={
           <Space size={6} wrap>
