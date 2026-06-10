@@ -49,7 +49,6 @@ export const ENTITY_PILL_COLORS = {
   mcp: 'purple',
   user: 'orange',
   artifact: 'gold',
-  knowledge: 'green',
   repo: 'default',
 } as const;
 
@@ -102,7 +101,7 @@ interface PillProps {
   icon?: React.ReactNode;
   color?: string;
   children: React.ReactNode;
-  onClick?: (e: React.MouseEvent) => void;
+  onClick?: (e: EntityPillInteractionEvent) => void;
   tooltip?: string;
 }
 
@@ -855,6 +854,10 @@ export const DirtyStatePill: React.FC<DirtyStatePillProps> = ({ style }) => {
   );
 };
 
+type EntityPillInteractionEvent =
+  | React.MouseEvent<HTMLSpanElement>
+  | React.KeyboardEvent<HTMLSpanElement>;
+
 interface EntityPillProps extends BasePillProps {
   icon?: React.ReactNode;
   color: string;
@@ -862,10 +865,11 @@ interface EntityPillProps extends BasePillProps {
   emoji?: string | null;
   compact?: boolean;
   title?: string;
-  onClick?: (e: React.MouseEvent) => void;
+  onClick?: (e: EntityPillInteractionEvent) => void;
   maxWidth?: number;
   code?: boolean;
   ariaLabel?: string;
+  'aria-label'?: string;
 }
 
 export const EntityPill: React.FC<EntityPillProps> = ({
@@ -879,21 +883,33 @@ export const EntityPill: React.FC<EntityPillProps> = ({
   maxWidth = 220,
   code = false,
   ariaLabel,
+  'aria-label': ariaLabelProp,
   style,
 }) => {
   const { token } = theme.useToken();
   const hasLabel = label !== undefined && label !== null && label !== '';
+  const interactive = Boolean(onClick);
+  const resolvedAriaLabel = ariaLabelProp ?? ariaLabel;
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLSpanElement>) => {
+    if (!onClick || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    onClick(event);
+  };
 
   return (
     <Tag
       icon={icon}
       color={color}
       title={title}
-      aria-label={ariaLabel}
+      aria-label={resolvedAriaLabel}
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      onKeyDown={handleKeyDown}
       style={{
         maxWidth: compact ? '100%' : undefined,
         marginInlineEnd: compact ? 0 : undefined,
-        cursor: onClick ? 'pointer' : 'default',
+        cursor: interactive ? 'pointer' : 'default',
         ...style,
       }}
       onClick={onClick}
@@ -925,7 +941,7 @@ interface BranchPillProps extends BasePillProps {
   compact?: boolean;
   title?: string;
   emoji?: string | null;
-  onClick?: (e: React.MouseEvent) => void;
+  onClick?: (e: EntityPillInteractionEvent) => void;
 }
 
 export const BranchPill: React.FC<BranchPillProps> = ({
@@ -956,7 +972,7 @@ interface BoardPillProps extends BasePillProps {
   };
   compact?: boolean;
   title?: string;
-  onClick?: (e: React.MouseEvent) => void;
+  onClick?: (e: EntityPillInteractionEvent) => void;
 }
 
 export const BoardPill: React.FC<BoardPillProps> = ({
@@ -986,7 +1002,7 @@ interface UserPillProps extends BasePillProps {
   };
   compact?: boolean;
   title?: string;
-  onClick?: (e: React.MouseEvent) => void;
+  onClick?: (e: EntityPillInteractionEvent) => void;
 }
 
 export const UserPill: React.FC<UserPillProps> = ({
@@ -1018,7 +1034,7 @@ interface AssistantPillProps extends BasePillProps {
   emoji?: string | null;
   compact?: boolean;
   title?: string;
-  onClick?: (e: React.MouseEvent) => void;
+  onClick?: (e: EntityPillInteractionEvent) => void;
 }
 
 export const AssistantPill: React.FC<AssistantPillProps> = ({
@@ -1047,7 +1063,8 @@ interface SessionPillProps extends BasePillProps {
   compact?: boolean;
   title?: string;
   ariaLabel?: string;
-  onClick?: (e: React.MouseEvent) => void;
+  'aria-label'?: string;
+  onClick?: (e: EntityPillInteractionEvent) => void;
 }
 
 export const SessionPill: React.FC<SessionPillProps> = ({
@@ -1055,6 +1072,7 @@ export const SessionPill: React.FC<SessionPillProps> = ({
   compact = false,
   title,
   ariaLabel,
+  'aria-label': ariaLabelProp,
   onClick,
   style,
 }) => (
@@ -1064,7 +1082,7 @@ export const SessionPill: React.FC<SessionPillProps> = ({
     label={label}
     compact={compact}
     title={title}
-    ariaLabel={ariaLabel}
+    ariaLabel={ariaLabelProp ?? ariaLabel}
     onClick={onClick}
     style={style}
   />

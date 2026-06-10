@@ -101,8 +101,8 @@ describe('BranchHeaderPill', () => {
     expect(screen.getByRole('button', { name: 'Nuke environment' })).toBeInTheDocument();
   });
 
-  it('uses the supplied identity URL for the branch identity area', () => {
-    render(<BranchHeaderPill {...defaultProps} identityHref="https://agor.example/ui/s/abc123/" />);
+  it('uses the supplied identity link for the branch identity area', () => {
+    render(<BranchHeaderPill {...defaultProps} identityLink="https://agor.example/ui/s/abc123/" />);
 
     const link = screen.getByRole('link', { name: /preset-io\/agor.*feature\/remove-nuke/ });
     expect(link).toHaveAttribute('href', 'https://agor.example/ui/s/abc123/');

@@ -38,8 +38,7 @@ interface ActivityEvent {
   id: string;
   type: ActivityEventType;
   dttm: string | Date;
-  icon: React.ReactNode;
-  message: React.ReactNode;
+  entityId: string;
 }
 
 const ActivityFeedItem: React.FC<{
@@ -173,7 +172,7 @@ export const HomeActivitySection: React.FC<
             }
           >
             <SessionPill
-              aria-label={sessionTitle}
+              ariaLabel={sessionTitle}
               title={sessionTitle}
               onClick={() => onSessionClick(session.session_id)}
               style={{
@@ -229,8 +228,7 @@ export const HomeActivitySection: React.FC<
             id: `branch:${branch.branch_id}`,
             type: assistant ? 'assistants' : 'branches',
             dttm: branch.created_at,
-            icon: assistant ? <RobotOutlined /> : <BranchesOutlined />,
-            message: branchMessage(branch, assistant),
+            entityId: branch.branch_id,
           };
         }),
       ...Array.from(sessionById.values())
@@ -240,8 +238,7 @@ export const HomeActivitySection: React.FC<
             id: `session:${session.session_id}`,
             type: 'sessions',
             dttm: session.last_updated,
-            icon: <UnorderedListOutlined />,
-            message: sessionMessage(session),
+            entityId: session.session_id,
           })
         ),
     ];
@@ -250,7 +247,26 @@ export const HomeActivitySection: React.FC<
       .filter((event) => filter === 'all' || event.type === filter)
       .sort((a, b) => new Date(b.dttm).getTime() - new Date(a.dttm).getTime())
       .slice(0, HOME_ACTIVITY_LIMIT);
-  }, [branchById, sessionById, filter, branchMessage, sessionMessage]);
+  }, [branchById, sessionById, filter]);
+
+  const renderActivityIcon = useCallback((event: ActivityEvent) => {
+    if (event.type === 'sessions') return <UnorderedListOutlined />;
+    if (event.type === 'assistants') return <RobotOutlined />;
+    return <BranchesOutlined />;
+  }, []);
+
+  const renderActivityMessage = useCallback(
+    (event: ActivityEvent): React.ReactNode => {
+      if (event.type === 'sessions') {
+        const session = sessionById.get(event.entityId);
+        return session ? sessionMessage(session) : null;
+      }
+
+      const branch = branchById.get(event.entityId);
+      return branch ? branchMessage(branch, event.type === 'assistants') : null;
+    },
+    [branchById, branchMessage, sessionById, sessionMessage]
+  );
 
   return (
     <Card
@@ -310,9 +326,17 @@ export const HomeActivitySection: React.FC<
           <List
             rowKey="id"
             dataSource={items}
-            renderItem={(item) => (
-              <ActivityFeedItem icon={item.icon} message={item.message} time={item.dttm} />
-            )}
+            renderItem={(item) => {
+              const message = renderActivityMessage(item);
+              if (!message) return null;
+              return (
+                <ActivityFeedItem
+                  icon={renderActivityIcon(item)}
+                  message={message}
+                  time={item.dttm}
+                />
+              );
+            }}
           />
         )}
       </div>

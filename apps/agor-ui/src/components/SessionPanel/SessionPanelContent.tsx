@@ -23,6 +23,16 @@ import { ForkSpawnModal } from '../ForkSpawnModal';
 import { MCPServerPill } from '../MCPServer';
 import { IssuePill, PullRequestPill } from '../Pill';
 
+const toInternalRoutePath = (url?: string | null): string | null => {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return url;
+  }
+};
+
 export interface SessionPanelContentProps {
   client: AgorClient | null;
   session: Session;
@@ -126,7 +136,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                   onStopEnvironment={onStopEnvironment}
                   onNukeEnvironment={onNukeEnvironment}
                   onViewLogs={onViewLogs}
-                  identityHref={session.url}
+                  identityLink={toInternalRoutePath(session.url)}
                 />
               )}
               {/* Issue and PR Pills */}
