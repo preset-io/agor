@@ -3,9 +3,9 @@ import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   ApartmentOutlined,
   BranchesOutlined,
-  ClockCircleOutlined,
   RobotOutlined,
   TeamOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
 import {
   Avatar,
@@ -238,7 +238,7 @@ export const HomeActivitySection: React.FC<
             id: `session:${session.session_id}`,
             type: 'sessions',
             dttm: session.last_updated,
-            icon: <ClockCircleOutlined />,
+            icon: <UnorderedListOutlined />,
             message: sessionMessage(session),
           })
         ),
@@ -284,7 +284,7 @@ export const HomeActivitySection: React.FC<
               {
                 label: (
                   <Tooltip title="Sessions">
-                    <ClockCircleOutlined />
+                    <UnorderedListOutlined />
                   </Tooltip>
                 ),
                 value: 'sessions',
