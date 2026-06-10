@@ -22,7 +22,8 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
-import { Layout, Upload } from 'antd';
+import { LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { Button, Layout, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
@@ -1151,16 +1152,20 @@ export const App: React.FC<AppProps> = ({
                       onDeleteComment={onDeleteComment}
                       hoveredCommentId={hoveredCommentId}
                       selectedCommentId={selectedCommentId}
+                      onCollapse={() => setCommentsPanelCollapsed(true)}
                     />
                   )}
                 </Panel>
                 <PanelResizeHandle
                   style={{
+                    position: 'relative',
                     width: leftPanelCollapsed ? '0px' : '4px',
                     background: 'var(--ant-color-border-secondary)',
                     cursor: leftPanelCollapsed ? 'default' : 'col-resize',
                     transition: 'background 0.2s',
                     pointerEvents: leftPanelCollapsed ? 'none' : 'auto',
+                    overflow: 'visible',
+                    zIndex: 10,
                   }}
                   onDragging={(isDragging) => {
                     leftPanelResizeDraggingRef.current = isDragging;
@@ -1177,7 +1182,39 @@ export const App: React.FC<AppProps> = ({
                         'var(--ant-color-border-secondary)';
                     }
                   }}
-                />
+                >
+                  {currentBoard && (
+                    <Button
+                      type="default"
+                      size="small"
+                      shape="circle"
+                      icon={
+                        leftPanelCollapsed ? (
+                          <RightOutlined style={{ fontSize: 10 }} />
+                        ) : (
+                          <LeftOutlined style={{ fontSize: 10 }} />
+                        )
+                      }
+                      onClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+                      style={{
+                        position: 'absolute',
+                        top: '50%',
+                        left: '50%',
+                        transform: 'translate(-50%, -50%)',
+                        width: 20,
+                        height: 20,
+                        minWidth: 20,
+                        padding: 0,
+                        pointerEvents: 'auto',
+                        boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
+                        zIndex: 10,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    />
+                  )}
+                </PanelResizeHandle>
                 <Panel
                   id="content-panel"
                   order={2}

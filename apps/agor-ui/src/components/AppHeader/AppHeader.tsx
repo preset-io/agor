@@ -14,7 +14,6 @@ import {
   CommentOutlined,
   QuestionCircleOutlined,
   SettingOutlined,
-  UnorderedListOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { useHref, useNavigate } from 'react-router-dom';
@@ -120,7 +119,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   currentUserId,
   connected = false,
   connecting = false,
-  onMenuClick,
   onCommentsClick,
   onEventStreamClick,
   onSettingsClick,
@@ -228,17 +226,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             RecentBoardPills, theme, external doc link, presence display)
             stays fully alive — those never depend on the daemon.
             See docs/disconnected-state-design.md. */}
-        {currentBoardName && (
-          <Tooltip title="Toggle board panel" placement="bottom">
-            <Button
-              type="text"
-              icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
-              style={headerIconButtonStyle}
-              onClick={onMenuClick}
-              disabled={mutationDisabled}
-            />
-          </Tooltip>
-        )}
         <div style={{ minWidth: 200 }}>
           <BoardSwitcher
             boards={boards}

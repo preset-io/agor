@@ -10,7 +10,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
-import { RobotOutlined } from '@ant-design/icons';
+import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
   App as AntApp,
@@ -20,6 +20,7 @@ import {
   Space,
   Spin,
   Tabs,
+  Tooltip,
   Typography,
   theme,
 } from 'antd';
@@ -77,6 +78,7 @@ interface BoardAssistantPanelProps {
   onDeleteComment?: (commentId: string) => void;
   hoveredCommentId?: string | null;
   selectedCommentId?: string | null;
+  onCollapse?: () => void;
   client: AgorClient | null;
 }
 
@@ -108,6 +110,7 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
   onDeleteComment,
   hoveredCommentId,
   selectedCommentId,
+  onCollapse,
   client,
 }) => {
   const { token } = theme.useToken();
@@ -432,6 +435,19 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
         ]}
         style={{ height: '100%' }}
         tabBarStyle={{ margin: 0, padding: '0 12px' }}
+        tabBarExtraContent={{
+          right: onCollapse ? (
+            <Tooltip title="Collapse panel" placement="bottom">
+              <Button
+                type="text"
+                size="small"
+                icon={<LeftOutlined style={{ fontSize: 11 }} />}
+                onClick={onCollapse}
+                style={{ marginRight: 4 }}
+              />
+            </Tooltip>
+          ) : undefined,
+        }}
       />
     </div>
   );
