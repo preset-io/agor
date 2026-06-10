@@ -12,6 +12,8 @@ import type { KnowledgeDocument } from './types';
 
 const { Text } = Typography;
 
+const HOME_KNOWLEDGE_LIMIT = 50;
+
 const normalizeFindResult = <T,>(result: T[] | { data?: T[] }): T[] =>
   Array.isArray(result) ? result : (result.data ?? []);
 
@@ -55,7 +57,7 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
     setLoading(true);
     client
       .service('kb/documents')
-      .find({ query: { archived: false, $limit: 8, $sort: { updated_at: -1 } } })
+      .find({ query: { archived: false, $limit: HOME_KNOWLEDGE_LIMIT, $sort: { updated_at: -1 } } })
       .then((result) => {
         if (cancelled) return;
         const rows = normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[])
@@ -64,7 +66,7 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
               new Date(b.updated_at || b.created_at || 0).getTime() -
               new Date(a.updated_at || a.created_at || 0).getTime()
           )
-          .slice(0, 8);
+          .slice(0, HOME_KNOWLEDGE_LIMIT);
         setDocs(rows);
       })
       .catch((err) => {
@@ -93,7 +95,7 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
       <HomeSectionHeader
         title="Recent Knowledge"
         icon={<BookOutlined />}
-        info="Recently updated readable Knowledge documents from kb/documents. Access checks remain server-side through the existing Knowledge service."
+        info={`Up to ${HOME_KNOWLEDGE_LIMIT} recently updated readable Knowledge documents from kb/documents. Access checks remain server-side through the existing Knowledge service.`}
       />
       <div style={{ overflow: 'auto', minHeight: 0 }}>
         {!connected ? (
