@@ -126,6 +126,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                   onStopEnvironment={onStopEnvironment}
                   onNukeEnvironment={onNukeEnvironment}
                   onViewLogs={onViewLogs}
+                  identityHref={session.url}
                 />
               )}
               {/* Issue and PR Pills */}

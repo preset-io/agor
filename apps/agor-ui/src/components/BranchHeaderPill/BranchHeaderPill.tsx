@@ -35,6 +35,8 @@ interface BranchHeaderPillProps {
   connectionDisabled?: boolean;
   /** Show environment status/controls and environment shortcut. Defaults to true. */
   showEnvButtons?: boolean;
+  /** Optional URL for the branch identity area. Used by session surfaces for deep links. */
+  identityHref?: string | null;
   /**
    * Compact rendering for constrained side panels.
    * Hides the repo slug in the identity section and omits destructive environment actions.
@@ -63,6 +65,7 @@ export function BranchHeaderPill({
   canControlEnvironment,
   connectionDisabled = false,
   showEnvButtons = true,
+  identityHref,
   compact = false,
 }: BranchHeaderPillProps) {
   const { token } = theme.useToken();
@@ -110,6 +113,32 @@ export function BranchHeaderPill({
   const openModal = () => {
     onOpenBranch?.(branch.branch_id);
   };
+
+  const identityContent = (
+    <>
+      <BranchesOutlined style={{ fontSize: 12 }} />
+      {!compact && (
+        <>
+          <span style={{ fontFamily: token.fontFamilyCode, fontSize: token.fontSizeSM }}>
+            {repo.slug}
+          </span>
+          <ApartmentOutlined style={{ fontSize: 10, opacity: 0.6 }} />
+        </>
+      )}
+      <span
+        style={{
+          fontFamily: token.fontFamilyCode,
+          fontSize: token.fontSizeSM,
+          maxWidth: compact ? 220 : 180,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {branch.name}
+      </span>
+    </>
+  );
 
   // --- Environment status helpers ---
 
@@ -160,9 +189,11 @@ export function BranchHeaderPill({
     }
   };
 
-  const identityTooltip = compact
-    ? `${repo.slug} / ${branch.name} · Open branch settings`
-    : 'Open branch settings';
+  const identityTooltip = identityHref
+    ? `${repo.slug} / ${branch.name} · Open session`
+    : compact
+      ? `${repo.slug} / ${branch.name} · Open branch settings`
+      : 'Open branch settings';
 
   // --- Render ---
 
@@ -179,46 +210,45 @@ export function BranchHeaderPill({
         cursor: 'default',
       }}
     >
-      {/* Section 1: Repo + Branch — click opens modal (General tab) */}
+      {/* Section 1: Repo + Branch — click opens either the supplied identity URL or the branch modal. */}
       <Tooltip title={identityTooltip}>
-        <button
-          type="button"
-          onClick={openModal}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: compact ? '0 6px' : '0 8px',
-            cursor: 'pointer',
-            height: PILL_HEIGHT,
-            background: 'none',
-            border: 'none',
-            color: 'inherit',
-            font: 'inherit',
-          }}
-        >
-          <BranchesOutlined style={{ fontSize: 12 }} />
-          {!compact && (
-            <>
-              <span style={{ fontFamily: token.fontFamilyCode, fontSize: token.fontSizeSM }}>
-                {repo.slug}
-              </span>
-              <ApartmentOutlined style={{ fontSize: 10, opacity: 0.6 }} />
-            </>
-          )}
-          <span
+        {identityHref ? (
+          <a
+            href={identityHref}
+            onClick={(e) => e.stopPropagation()}
             style={{
-              fontFamily: token.fontFamilyCode,
-              fontSize: token.fontSizeSM,
-              maxWidth: compact ? 220 : 180,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: compact ? '0 6px' : '0 8px',
+              cursor: 'pointer',
+              height: PILL_HEIGHT,
+              color: 'inherit',
+              textDecoration: 'none',
             }}
           >
-            {branch.name}
-          </span>
-        </button>
+            {identityContent}
+          </a>
+        ) : (
+          <button
+            type="button"
+            onClick={openModal}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: compact ? '0 6px' : '0 8px',
+              cursor: 'pointer',
+              height: PILL_HEIGHT,
+              background: 'none',
+              border: 'none',
+              color: 'inherit',
+              font: 'inherit',
+            }}
+          >
+            {identityContent}
+          </button>
+        )}
       </Tooltip>
 
       {/* Section 2: Environment status + controls */}
