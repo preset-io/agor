@@ -295,6 +295,7 @@ export const App: React.FC<AppProps> = ({
   }>();
   const isRootHomePath = location.pathname === '/';
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
+  const [pendingHomeNavigation, setPendingHomeNavigation] = useState(false);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -329,10 +330,13 @@ export const App: React.FC<AppProps> = ({
   // single-phase unmount identical to the explicit-close path.
   const effectiveSelectedSessionId = useMemo(
     () =>
-      !isRootHomePath && selectedSessionId && sessionById.has(selectedSessionId)
+      !isRootHomePath &&
+      !pendingHomeNavigation &&
+      selectedSessionId &&
+      sessionById.has(selectedSessionId)
         ? selectedSessionId
         : null,
-    [isRootHomePath, selectedSessionId, sessionById]
+    [isRootHomePath, pendingHomeNavigation, selectedSessionId, sessionById]
   );
 
   const [leftPanelTab, setLeftPanelTab] = useState<BoardAssistantPanelTab>('assistant');
@@ -391,7 +395,11 @@ export const App: React.FC<AppProps> = ({
   );
 
   const currentBoard = boardById.get(currentBoardId);
-  const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
+  const isHomeSurface = (isRootHomePath || pendingHomeNavigation) && !hasExplicitEntityTarget;
+
+  useEffect(() => {
+    if (pendingHomeNavigation && isRootHomePath) setPendingHomeNavigation(false);
+  }, [isRootHomePath, pendingHomeNavigation]);
 
   const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel || isHomeSurface;
 
@@ -1026,6 +1034,7 @@ export const App: React.FC<AppProps> = ({
               currentBoardId={currentBoardId}
               onBoardChange={navigation.goToBoard}
               onHomeClick={() => {
+                setPendingHomeNavigation(true);
                 setCurrentBoardIdInternal('');
                 setSelectedSessionId(null);
                 setActiveUrlTarget(null);
