@@ -134,8 +134,8 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
             ? `${server.display_name || server.name} refreshed — expires ${formatExpiresIn(result.expires_at).phrase}`
             : `${server.display_name || server.name} refreshed`
         );
-      } else if (result.error === 'needs_reauth') {
-        showWarning('Refresh token is no longer valid — sign in again.');
+      } else if (result.error === 'needs_reauth' || result.error === 'missing_client_id') {
+        showWarning(formatRefreshError(result.error));
         // Fall through to full OAuth flow so the user can re-auth in one click.
         await handleOAuthClick();
       } else {

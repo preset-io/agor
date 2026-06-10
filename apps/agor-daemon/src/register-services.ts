@@ -2210,7 +2210,7 @@ async function registerMCPServices(
         );
         return {
           success: false,
-          error: err instanceof Error ? err.message : 'token_refresh_failed',
+          error: 'token_refresh_failed',
         };
       }
     },

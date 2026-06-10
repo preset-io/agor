@@ -66,6 +66,36 @@ export { oauth21TokenCache };
 // Database Token Storage
 // ============================================================================
 
+async function backfillOAuthTokenEndpoint(
+  // biome-ignore lint/suspicious/noExplicitAny: db type is complex (Drizzle instance), callers always pass the correct value
+  db: any,
+  opts: { mcpServerId: string; tokenEndpoint: string; logPrefix: string }
+): Promise<void> {
+  try {
+    const mcpServerRepo = new MCPServerRepository(db);
+    const server = await mcpServerRepo.findById(opts.mcpServerId);
+    if (server?.auth?.type === 'oauth' && !server.auth.oauth_token_url) {
+      await mcpServerRepo.update(opts.mcpServerId, {
+        auth: {
+          ...server.auth,
+          oauth_token_url: opts.tokenEndpoint,
+        },
+      });
+      console.log(
+        `[${opts.logPrefix}] Saved discovered OAuth token endpoint for server ${opts.mcpServerId}`
+      );
+    }
+  } catch (error) {
+    // Token persistence already succeeded; do not fail the OAuth callback.
+    // The manual refresh path will still surface a typed endpoint error if
+    // this best-effort config backfill fails.
+    console.warn(
+      `[${opts.logPrefix}] Failed to save discovered OAuth token endpoint for server ${opts.mcpServerId}:`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
 /**
  * Cache + persist an OAuth token after a successful flow completion.
  *
@@ -149,29 +179,11 @@ export async function persistOAuthToken(
   });
 
   if (pendingFlow.tokenEndpoint) {
-    try {
-      const mcpServerRepo = new MCPServerRepository(db);
-      const server = await mcpServerRepo.findById(pendingFlow.mcpServerId);
-      if (server?.auth?.type === 'oauth' && !server.auth.oauth_token_url) {
-        await mcpServerRepo.update(pendingFlow.mcpServerId, {
-          auth: {
-            ...server.auth,
-            oauth_token_url: pendingFlow.tokenEndpoint,
-          },
-        });
-        console.log(
-          `[${logPrefix}] Saved discovered OAuth token endpoint for server ${pendingFlow.mcpServerId}`
-        );
-      }
-    } catch (error) {
-      // Token persistence already succeeded; do not fail the OAuth callback.
-      // The manual refresh path will still surface a typed endpoint error if
-      // this best-effort config backfill fails.
-      console.warn(
-        `[${logPrefix}] Failed to save discovered OAuth token endpoint for server ${pendingFlow.mcpServerId}:`,
-        error instanceof Error ? error.message : error
-      );
-    }
+    await backfillOAuthTokenEndpoint(db, {
+      mcpServerId: pendingFlow.mcpServerId,
+      tokenEndpoint: pendingFlow.tokenEndpoint,
+      logPrefix,
+    });
   }
 
   console.log(
