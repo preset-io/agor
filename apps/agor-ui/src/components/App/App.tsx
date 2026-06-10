@@ -23,7 +23,7 @@ import type {
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
-import { Button, Layout, Upload } from 'antd';
+import { Button, Layout, Tooltip, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
@@ -1184,35 +1184,41 @@ export const App: React.FC<AppProps> = ({
                   }}
                 >
                   {currentBoard && (
-                    <Button
-                      type="default"
-                      size="small"
-                      shape="circle"
-                      icon={
-                        leftPanelCollapsed ? (
-                          <RightOutlined style={{ fontSize: 10 }} />
-                        ) : (
-                          <LeftOutlined style={{ fontSize: 10 }} />
-                        )
-                      }
-                      onClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-                      style={{
-                        position: 'absolute',
-                        top: '50%',
-                        left: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        width: 20,
-                        height: 20,
-                        minWidth: 20,
-                        padding: 0,
-                        pointerEvents: 'auto',
-                        boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
-                        zIndex: 10,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    />
+                    <Tooltip
+                      title={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
+                      placement="right"
+                      getPopupContainer={() => document.body}
+                    >
+                      <Button
+                        type="default"
+                        size="small"
+                        shape="circle"
+                        icon={
+                          leftPanelCollapsed ? (
+                            <RightOutlined style={{ fontSize: 10 }} />
+                          ) : (
+                            <LeftOutlined style={{ fontSize: 10 }} />
+                          )
+                        }
+                        onClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+                        style={{
+                          position: 'absolute',
+                          top: '50%',
+                          left: '50%',
+                          transform: 'translate(-50%, -50%)',
+                          width: 20,
+                          height: 20,
+                          minWidth: 20,
+                          padding: 0,
+                          pointerEvents: 'auto',
+                          boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
+                          zIndex: 10,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      />
+                    </Tooltip>
                   )}
                 </PanelResizeHandle>
                 <Panel
