@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { buildKnowledgeRoutePath, namespaceSlugFromUri } from '../../utils/knowledgeRoutes';
 import { formatRelativeTime } from '../../utils/time';
+import { Tag } from '../Tag';
 import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
 import type { KnowledgeDocument } from './types';
@@ -24,11 +25,20 @@ const KnowledgeDocRow: React.FC<{ doc: KnowledgeDocument }> = ({ doc }) => {
   return (
     <List.Item onClick={() => navigate(path)} style={{ cursor: 'pointer', padding: '10px 0' }}>
       <List.Item.Meta
-        title={<Text ellipsis={{ tooltip: doc.title || doc.path }}>{doc.title || doc.path}</Text>}
+        title={
+          <Space size={6} style={{ maxWidth: '100%' }}>
+            <Text ellipsis={{ tooltip: doc.title || doc.path }} style={{ minWidth: 0 }}>
+              {doc.title || doc.path}
+            </Text>
+            <Tag color="default" style={{ marginInlineEnd: 0 }}>
+              {namespace || 'Knowledge'}
+            </Tag>
+          </Space>
+        }
         description={
           <Space size={6} wrap>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {namespace || 'Knowledge'} / {doc.path}
+              {doc.path}
             </Text>
             {doc.updated_at && (
               <Text type="secondary" style={{ fontSize: 12 }}>
