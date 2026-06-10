@@ -1185,7 +1185,7 @@ export const App: React.FC<AppProps> = ({
                 >
                   {currentBoard && (
                     <Tooltip
-                      title={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
+                      title={leftPanelCollapsed ? 'Open sidepanel' : 'Close sidepanel'}
                       placement="right"
                       getPopupContainer={() => document.body}
                     >
