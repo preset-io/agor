@@ -971,6 +971,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       };
 
       if (zoneId === null) {
+        if (triggerTemplate || targetSessionId) {
+          throw new Error(
+            'triggerTemplate and targetSessionId cannot be used when zoneId is null; clearing a zone pin does not run zone triggers.'
+          );
+        }
+
         const boardObject = await boardObjectsService.findByBranchId(
           branchId as BranchID,
           ctx.baseServiceParams

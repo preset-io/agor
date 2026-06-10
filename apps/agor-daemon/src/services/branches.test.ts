@@ -432,6 +432,48 @@ describe('BranchesService.unarchive', () => {
   });
 });
 
+describe('BranchesService.archiveOrDelete', () => {
+  it('preserves a zoned board object when archiving through the archive operation', async () => {
+    const { service, boardObjectsService, sessionsService } = createServiceHarness();
+    const branchId = 'wt-archive-op' as BranchID;
+    const userId = 'user-1' as UUID;
+
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      name: 'WT Archive Op',
+      path: '/tmp/wt-archive-op',
+      archived: false,
+      board_id: 'board-a',
+      filesystem_status: 'ready',
+      environment_instance: { status: 'stopped' },
+    } as never);
+    vi.spyOn(service, 'patch').mockResolvedValue({
+      branch_id: branchId,
+      name: 'WT Archive Op',
+      path: '/tmp/wt-archive-op',
+      archived: true,
+      board_id: 'board-a',
+    } as never);
+    boardObjectsService.findByBranchId.mockResolvedValue({
+      object_id: 'obj-branch',
+      zone_id: 'zone-review',
+    });
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'archive', filesystemAction: 'preserved' },
+      { user: { user_id: userId } } as never
+    );
+
+    expect(sessionsService.find).toHaveBeenCalledWith({
+      query: { branch_id: branchId, $limit: 1000 },
+      paginate: false,
+    });
+    expect(boardObjectsService.findByBranchId).not.toHaveBeenCalled();
+    expect(boardObjectsService.patch).not.toHaveBeenCalled();
+  });
+});
+
 describe('BranchesService.find zone filtering', () => {
   it('applies zone_id before pagination', async () => {
     const branch1 = { branch_id: 'branch-1', name: 'outside', board_id: 'board-1' };

@@ -238,6 +238,43 @@ describe('agor_branches_set_zone', () => {
     expect(parsed.zone_id).toBeNull();
     expect(parsed.note).toMatch(/cleared/i);
   });
+
+  it('rejects trigger arguments when clearing the zone pin', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const branchesGet = vi.fn(async () => ({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+      name: 'Branch 1',
+    }));
+    const findByBranchId = vi.fn();
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet };
+        if (name === 'board-objects') {
+          return {
+            findByBranchId,
+            patch: vi.fn(),
+          };
+        }
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await expect(
+      setZone({ branchId: 'branch-1', zoneId: null, triggerTemplate: true })
+    ).rejects.toThrow(/cannot be used when zoneId is null/i);
+    expect(findByBranchId).not.toHaveBeenCalled();
+  });
 });
 
 describe('agor_branches_list', () => {
