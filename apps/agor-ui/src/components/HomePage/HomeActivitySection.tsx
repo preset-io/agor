@@ -15,7 +15,6 @@ import {
   Popover,
   Segmented,
   Space,
-  Tag,
   Tooltip,
   Typography,
   theme,
@@ -25,6 +24,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { BranchPill, ENTITY_PILL_COLORS } from '../Pill';
+import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
 import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
