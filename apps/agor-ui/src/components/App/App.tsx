@@ -23,7 +23,7 @@ import type {
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
 import { Layout, Upload } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
   Panel,
@@ -396,10 +396,29 @@ export const App: React.FC<AppProps> = ({
 
   const currentBoard = boardById.get(currentBoardId);
   const isHomeSurface = (isRootHomePath || pendingHomeNavigation) && !hasExplicitEntityTarget;
+  const headerBoardId = isHomeSurface ? '' : currentBoardId;
+  const headerBoard = isHomeSurface ? undefined : currentBoard;
 
-  useEffect(() => {
-    if (pendingHomeNavigation && isRootHomePath) setPendingHomeNavigation(false);
-  }, [isRootHomePath, pendingHomeNavigation]);
+  // Home is route-authoritative. Do not clear board/session state while the
+  // old `/b/...` URL is still active — that creates a transient no-board
+  // canvas render. Instead, render Home immediately via `pendingHomeNavigation`
+  // during the route transition, then clean stale board/session state only once
+  // the `/` route has committed. Layout timing keeps the header/board picker
+  // from painting stale board identity on Home.
+  useLayoutEffect(() => {
+    if (!isRootHomePath || hasExplicitEntityTarget) return;
+    if (currentBoardId) setCurrentBoardIdInternal('');
+    if (selectedSessionId) setSelectedSessionId(null);
+    if (activeUrlTarget) setActiveUrlTarget(null);
+    if (pendingHomeNavigation) setPendingHomeNavigation(false);
+  }, [
+    activeUrlTarget,
+    currentBoardId,
+    hasExplicitEntityTarget,
+    isRootHomePath,
+    pendingHomeNavigation,
+    selectedSessionId,
+  ]);
 
   const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel || isHomeSurface;
 
@@ -1023,21 +1042,18 @@ export const App: React.FC<AppProps> = ({
               onThemeEditorClick={() => setThemeEditorOpen(true)}
               onLogout={onLogout}
               onRetryConnection={onRetryConnection}
-              currentBoardName={currentBoard?.name}
-              currentBoardIcon={currentBoard?.icon}
+              currentBoardName={headerBoard?.name}
+              currentBoardIcon={headerBoard?.icon}
               unreadCommentsCount={
                 activeComments.filter((c: BoardComment) => !c.parent_comment_id).length
               }
               eventStreamEnabled={eventStreamEnabled}
               hasUserMentions={hasUserMentions}
               boards={mapToArray(boardById)}
-              currentBoardId={currentBoardId}
+              currentBoardId={headerBoardId}
               onBoardChange={navigation.goToBoard}
               onHomeClick={() => {
                 setPendingHomeNavigation(true);
-                setCurrentBoardIdInternal('');
-                setSelectedSessionId(null);
-                setActiveUrlTarget(null);
                 navigation.goHome();
               }}
               branchById={branchById}
