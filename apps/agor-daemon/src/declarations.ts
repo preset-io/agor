@@ -12,7 +12,6 @@ import type {
   Board,
   Branch,
   BranchID,
-  BranchPermissionLevel,
   CloneRepositoryResult,
   AuthenticatedParams as CoreAuthenticatedParams,
   AuthenticatedUser as CoreAuthenticatedUser,
@@ -149,10 +148,8 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
       sourceBranch?: string;
       issue_url?: string;
       pull_request_url?: string;
-      boardId?: string;
+      boardId: string;
       zoneId?: string;
-      others_can?: BranchPermissionLevel;
-      others_fs_access?: 'none' | 'read' | 'write';
     },
     params?: FeathersParams
   ): Promise<Branch>;

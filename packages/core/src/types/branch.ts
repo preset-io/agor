@@ -317,6 +317,12 @@ export interface Branch {
   // ===== RBAC: App-layer permissions (rbac.md) =====
 
   /**
+   * Whether this branch uses its own permission fields or aligns to board defaults.
+   * Existing branches default/read as 'override' for backcompat.
+   */
+  permission_source?: BranchPermissionSource;
+
+  /**
    * Permission level for non-owners
    *
    * - 'none': No access (branch is completely private to owners)
@@ -417,6 +423,14 @@ export const BRANCH_PERMISSION_LEVELS = ['none', 'view', 'session', 'prompt', 'a
  * Permission level type (for app-layer RBAC)
  */
 export type BranchPermissionLevel = (typeof BRANCH_PERMISSION_LEVELS)[number];
+
+/**
+ * Source of a branch's non-owner permission defaults.
+ *
+ * - 'override': branch row fields are authoritative (legacy/backcompat default)
+ * - 'board': branch was created to align with its board-level defaults
+ */
+export type BranchPermissionSource = 'board' | 'override';
 
 // Schedules are now a first-class entity. See `Schedule` in `./schedule.ts`
 // and `schedules` in `packages/core/src/db/schema.{sqlite,postgres}.ts`.

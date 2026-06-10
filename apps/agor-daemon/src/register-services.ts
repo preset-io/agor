@@ -12,6 +12,7 @@ import {
 } from '@agor/core/config';
 import {
   and,
+  BoardRepository,
   BranchRepository,
   type Database,
   eq,
@@ -55,6 +56,7 @@ import {
 import { createArtifactsService } from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
+import { setupBoardOwnersService } from './services/board-owners.js';
 import { createBoardsService } from './services/boards.js';
 import { setupBranchOwnersService } from './services/branch-owners.js';
 import { createBranchesService } from './services/branches.js';
@@ -73,6 +75,7 @@ import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
   createGroupsService,
+  setupBoardGroupGrantsService,
   setupBranchEffectiveAccessService,
   setupBranchGroupGrantsService,
 } from './services/groups.js';
@@ -364,6 +367,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   setupBranchEffectiveAccessService(app, new BranchRepository(db));
   if (branchRbacEnabled) {
+    setupBoardOwnersService(app, new BoardRepository(db));
+    setupBoardGroupGrantsService(app, db);
     setupBranchGroupGrantsService(app, db, new BranchRepository(db));
   }
 

@@ -14,15 +14,15 @@ export default class BranchAdd extends BaseCommand {
 
   static examples = [
     // Case 1: Create new branch (branch name = branch name)
-    '<%= config.bin %> <%= command.id %> feature-auth --repo-id 01933e4a',
+    '<%= config.bin %> <%= command.id %> feature-auth --repo-id 01933e4a --board-id 01933e4b',
     // Case 2: Create new branch with different name
-    '<%= config.bin %> <%= command.id %> my-experiment --repo-id 01933e4a --branch feature-x',
+    '<%= config.bin %> <%= command.id %> my-experiment --repo-id 01933e4a --board-id 01933e4b --branch feature-x',
     // Case 3: Checkout existing branch
-    '<%= config.bin %> <%= command.id %> fix-api --repo-id 01933e4a --checkout',
+    '<%= config.bin %> <%= command.id %> fix-api --repo-id 01933e4a --board-id 01933e4b --checkout',
     // Case 4: Checkout specific ref
-    '<%= config.bin %> <%= command.id %> debug-session --repo-id 01933e4a --ref abc123def',
+    '<%= config.bin %> <%= command.id %> debug-session --repo-id 01933e4a --board-id 01933e4b --ref abc123def',
     // Case 5: Create branch from specific base
-    '<%= config.bin %> <%= command.id %> feature-y --repo-id 01933e4a --from develop',
+    '<%= config.bin %> <%= command.id %> feature-y --repo-id 01933e4a --board-id 01933e4b --from develop',
   ];
 
   static args = {
@@ -35,6 +35,10 @@ export default class BranchAdd extends BaseCommand {
   static flags = {
     'repo-id': Flags.string({
       description: 'Repository ID',
+      required: true,
+    }),
+    'board-id': Flags.string({
+      description: 'Board ID',
       required: true,
     }),
     branch: Flags.string({
@@ -129,6 +133,7 @@ export default class BranchAdd extends BaseCommand {
         createBranch,
         pullLatest,
         sourceBranch,
+        boardId: flags['board-id'],
       })) as unknown as Branch;
 
       this.log(`${chalk.green('✓')} Branch created and registered`);

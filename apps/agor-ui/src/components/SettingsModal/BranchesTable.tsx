@@ -164,8 +164,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     const hasSourceBranch = !!values.sourceBranch;
     const hasName = !!values.name && /^[a-z0-9-]+$/.test(values.name);
     const hasBranchName = useSameBranchName || !!values.branchName;
+    const hasBoard = !!values.boardId;
 
-    setIsFormValid(hasRepo && hasSourceBranch && hasName && hasBranchName);
+    setIsFormValid(hasRepo && hasSourceBranch && hasName && hasBranchName && hasBoard);
   }, [form, useSameBranchName]);
 
   // Initialize form once per modal-open session. Without the useRef guard
@@ -292,7 +293,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         createBranch: true, // Always create new branch based on source branch
         sourceBranch: values.sourceBranch,
         pullLatest: true, // Always fetch latest before creating branch
-        boardId: values.boardId, // Optional: add to board
+        boardId: values.boardId,
         storage_mode: storageMode,
         ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
       });
@@ -624,6 +625,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             onRepoChange={handleRepoChange}
             defaultBranch={getDefaultBranch()}
             showBoardSelector={true}
+            requireBoard
             onFormChange={validateForm}
             useSameBranchName={useSameBranchName}
             onUseSameBranchNameChange={setUseSameBranchName}

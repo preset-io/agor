@@ -1,15 +1,7 @@
 import { existsSync } from 'node:fs';
 import { isBranchRbacEnabled } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
-import type {
-  BoardID,
-  Branch,
-  BranchID,
-  BranchPermissionLevel,
-  Repo,
-  UUID,
-  ZoneBoardObject,
-} from '@agor/core/types';
+import type { BoardID, Branch, BranchID, Repo, UUID, ZoneBoardObject } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, getAssistantConfig, isAssistant } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
@@ -470,33 +462,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           'pullRequestUrl',
           'Pull request URL to associate with the branch.'
         ),
-        // RBAC fields (optional, sensible defaults, safe to ignore for single-user setups)
-        othersCan: z
-          .enum(BRANCH_PERMISSION_LEVELS)
-          .optional()
-          .describe(
-            'App-layer permission for non-owner users. ' +
-              '"none" = no access, "view" = read-only, "session" = can create & prompt own sessions, ' +
-              '"prompt" = can prompt ANY session (including other users\'), "all" = full access. ' +
-              'Default: "session". Always effective regardless of Unix isolation mode. Single-user setups can ignore this.'
-          ),
-        othersFsAccess: z
-          .enum(['none', 'read', 'write'])
-          .optional()
-          .describe(
-            'OS-level filesystem permission for non-owner users. ' +
-              '"none" = no filesystem access, "read" = read-only, "write" = read-write. ' +
-              'Default: "read". Only effective when Unix isolation (AGOR_UNIX_MODE) is configured. ' +
-              'Has no effect in simple mode. Single-user setups can ignore this.'
-          ),
-        ownerIds: z
-          .array(mcpRequiredId('ownerIds[]', 'User', 'User ID'))
-          .optional()
-          .describe(
-            'Additional user IDs to add as owners of this branch. ' +
-              'The creating user is always added as owner automatically. ' +
-              'Owners have full access regardless of othersCan/othersFsAccess settings.'
-          ),
+        // New branches always align with their board permissions. Use
+        // agor_branches_update after creation for the deliberate override flow.
         variant: mcpOptionalString(
           'variant',
           'Environment variant name to use for this branch. ' +
@@ -529,6 +496,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       let branchName = coerceString(args.branchName)!;
       const originalName = branchName;
       const boardId = await resolveBoardId(ctx, coerceString(args.boardId)!);
+      if (!boardId) throw new Error('boardId is required');
       const zoneId = coerceString(args.zoneId);
       const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : true;
 
@@ -598,8 +566,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // Positioning is handled automatically by the repos service —
       // agents don't need to think about x/y coordinates.
 
-      const othersCan = args.othersCan as BranchPermissionLevel | undefined;
-      const othersFsAccess = args.othersFsAccess as 'none' | 'read' | 'write' | undefined;
       const storageMode = args.storage_mode as 'worktree' | 'clone' | undefined;
       const cloneDepth = typeof args.clone_depth === 'number' ? args.clone_depth : undefined;
 
@@ -614,40 +580,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ...(sourceBranch ? { sourceBranch } : {}),
           ...(issueUrl ? { issue_url: issueUrl } : {}),
           ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
-          ...(boardId ? { boardId } : {}),
+          boardId,
           ...(zoneId ? { zoneId } : {}),
-          ...(othersCan ? { others_can: othersCan } : {}),
-          ...(othersFsAccess ? { others_fs_access: othersFsAccess } : {}),
           ...(variant ? { environment_variant: variant } : {}),
           ...(storageMode ? { storage_mode: storageMode } : {}),
           ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
         },
         ctx.baseServiceParams
       );
-
-      // Add additional owners (creator is already added by reposService.createBranch)
-      const ownerWarnings: string[] = [];
-      if (args.ownerIds && args.ownerIds.length > 0) {
-        if (!isBranchRbacEnabled()) {
-          ownerWarnings.push(
-            'ownerIds ignored: branch RBAC is not enabled. Enable branch_rbac in config to manage owners.'
-          );
-        } else {
-          const branchOwnersService = ctx.app.service('branches/:id/owners');
-          for (const ownerId of args.ownerIds) {
-            try {
-              await branchOwnersService.create(
-                { user_id: ownerId },
-                { ...ctx.baseServiceParams, route: { id: branch.branch_id } }
-              );
-            } catch (error) {
-              ownerWarnings.push(
-                `Failed to add owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
-              );
-            }
-          }
-        }
-      }
 
       // Build response with appropriate notes
       const response: Record<string, unknown> = { ...branch };
@@ -661,10 +601,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       } else {
         response.hint =
           'Use agor_branches_set_zone to pin this branch to a specific zone and optionally trigger zone prompt templates.';
-      }
-
-      if (ownerWarnings.length > 0) {
-        response.ownerWarnings = ownerWarnings;
       }
 
       return textResult(response);

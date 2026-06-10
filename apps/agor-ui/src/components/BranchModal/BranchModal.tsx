@@ -95,6 +95,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     () => new Map(form.allUsers.map((user) => [user.user_id, user])),
     [form.allUsers]
   );
+  const branchBoard = boardById.get(form.general.boardId || branch?.board_id || '');
 
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
   useEffect(() => {
@@ -229,6 +230,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
                 groupGrantsStatus={form.groupGrantsStatus}
                 groupGrantsError={form.groupGrantsError}
                 currentUser={currentUser}
+                client={client}
+                board={branchBoard}
                 state={form.permissions}
                 setField={form.setPermissions}
                 ownersLoadError={form.ownersLoadError}

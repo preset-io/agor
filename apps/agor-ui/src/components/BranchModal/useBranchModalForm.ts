@@ -59,6 +59,7 @@ export interface AssistantFormState {
 }
 
 export interface PermissionsFormState {
+  permissionSource: NonNullable<Branch['permission_source']>;
   selectedOwnerIds: string[];
   othersCan: BranchPermissionLevel;
   othersFsAccess: FsAccessLevel;
@@ -146,7 +147,13 @@ const buildAssistantDefaults = (branch: Branch | null): AssistantFormState => {
 };
 
 const buildPermissionsDefaults = (branch: Branch | null, owners: User[]): PermissionsFormState => ({
-  selectedOwnerIds: owners.map((o) => o.user_id),
+  permissionSource: branch?.permission_source || 'override',
+  selectedOwnerIds:
+    owners.length > 0
+      ? owners.map((o) => o.user_id)
+      : branch?.created_by
+        ? [branch.created_by]
+        : [],
   othersCan: branch?.others_can || 'session',
   othersFsAccess: branch?.others_fs_access || 'read',
   allowSessionSharing: Boolean(branch?.dangerously_allow_session_sharing),
@@ -298,9 +305,15 @@ export function useBranchModalForm({
         // Only seed selectedOwnerIds if the user hasn't touched the permissions
         // slice yet — preserves their in-flight edits across data refreshes.
         if (!permissionsTouchedRef.current) {
+          const ownerIds =
+            ownersData.length > 0
+              ? ownersData.map((o) => o.user_id)
+              : branch.created_by
+                ? [branch.created_by]
+                : [];
           setPermissionsState((prev) => ({
             ...prev,
-            selectedOwnerIds: ownersData.map((o) => o.user_id),
+            selectedOwnerIds: ownerIds,
           }));
         }
 
@@ -421,7 +434,8 @@ export function useBranchModalForm({
     return (
       permissions.othersCan !== (branch.others_can || 'session') ||
       permissions.othersFsAccess !== (branch.others_fs_access || 'read') ||
-      permissions.allowSessionSharing !== Boolean(branch.dangerously_allow_session_sharing)
+      permissions.allowSessionSharing !== Boolean(branch.dangerously_allow_session_sharing) ||
+      permissions.permissionSource !== (branch.permission_source || 'override')
     );
   }, [branch, rbacEnabled, permissions]);
 
@@ -487,6 +501,14 @@ export function useBranchModalForm({
       if (rbacEnabled && ownersChanged && permissions.selectedOwnerIds.length === 0) {
         throw new Error('At least one owner is required');
       }
+      if (
+        rbacEnabled &&
+        permissions.permissionSource === 'override' &&
+        permissions.othersCan === 'none' &&
+        permissions.selectedOwnerIds.length !== 1
+      ) {
+        throw new Error('Private branches must have exactly one private user');
+      }
 
       // 1. Add new owners FIRST so a transfer like "remove me, add Bob"
       // doesn't briefly leave an empty owner set, and so Bob can pick up
@@ -535,6 +557,7 @@ export function useBranchModalForm({
         updates.others_can = permissions.othersCan;
         updates.others_fs_access = permissions.othersFsAccess;
         updates.dangerously_allow_session_sharing = permissions.allowSessionSharing;
+        updates.permission_source = permissions.permissionSource;
       }
 
       if (Object.keys(updates).length > 0) {

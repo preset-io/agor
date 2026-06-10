@@ -92,6 +92,7 @@ describe('GroupRepository branch grants', () => {
     const board = await boards.create({
       name: 'Archived group board',
       created_by: ownerId as UUID,
+      access_mode: 'private',
     });
     const branch = await branches.create({
       branch_id: '019f0000-0000-7000-8000-0000000000a1' as BranchID,
@@ -146,6 +147,60 @@ describe('GroupRepository branch grants', () => {
     const visibleBoards = await boards.findVisibleBoardIds(memberId as UUID);
     expect(visibleBoards).not.toContain(board.board_id);
   });
+
+  dbTest(
+    'ignores archived board group grants when resolving board-aligned branch access',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const repos = new RepoRepository(db);
+      const boards = new BoardRepository(db);
+      const branches = new BranchRepository(db);
+      const groups = new GroupRepository(db);
+
+      const ownerId = await makeUser(users, 'owner-archived-board@example.com');
+      const memberId = await makeUser(users, 'member-archived-board@example.com');
+
+      const repo = await repos.create({
+        name: 'archived-board-group-repo',
+        slug: 'archived-board-group-repo',
+        repo_type: 'local',
+        local_path: '/tmp/archived-board-group-repo',
+        default_branch: 'main',
+      });
+      const board = await boards.create({
+        name: 'Archived board group grant board',
+        created_by: ownerId as UUID,
+        access_mode: 'shared',
+        default_others_can: 'none',
+      });
+      const branch = await branches.create({
+        branch_id: '019f0000-0000-7000-8000-0000000000a2' as BranchID,
+        repo_id: repo.repo_id,
+        name: 'archived-board-group-branch',
+        ref: 'archived-board-group-branch',
+        path: '/tmp/archived-board-group-repo/archived-board-group-branch',
+        created_by: ownerId as UUID,
+        branch_unique_id: 102,
+        new_branch: true,
+        board_id: board.board_id,
+        permission_source: 'board',
+      });
+
+      const group = await groups.create({ name: 'Archived Board Team', created_by: ownerId });
+      await groups.addMember(group.group_id, memberId, ownerId);
+      await groups.upsertBoardGrant({
+        board_id: board.board_id,
+        group_id: group.group_id,
+        can: 'all',
+        fs_access: 'write',
+        created_by: ownerId,
+      });
+      await groups.update(group.group_id, { archived: true });
+
+      await expect(branches.resolveUserPermission(branch, memberId as UUID)).resolves.toBe('none');
+      await expect(groups.getBoardGrantsForUser(board.board_id, memberId)).resolves.toEqual([]);
+    }
+  );
 
   dbTest('ignores invalid persisted group grant permissions', async ({ db }) => {
     const users = new UsersRepository(db);
@@ -247,6 +302,7 @@ describe('GroupRepository branch grants', () => {
     const board = await boards.create({
       name: 'Private none grant board',
       created_by: ownerId as UUID,
+      access_mode: 'private',
     });
 
     const branch = await branches.create({
@@ -340,6 +396,7 @@ describe('GroupRepository branch grants', () => {
       const board = await boards.create({
         name: `Parity board ${testCase.name}`,
         created_by: ownerId as UUID,
+        access_mode: 'private',
       });
       const branch = await branches.create({
         branch_id: `019f0000-0000-7000-8000-00000000010${index}` as BranchID,

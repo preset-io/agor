@@ -28,7 +28,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { activeGroupGrantAccessExists, visibleBranchAccessCondition } from './branch-access';
+import { visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
 
 /**
@@ -763,7 +763,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         branchOwners,
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
       )
-      .where(visibleBranchAccessCondition(activeGroupGrantAccessExists(this.db, userId)))
+      .where(visibleBranchAccessCondition(this.db, userId))
       .all();
 
     const seen = new Set<string>();

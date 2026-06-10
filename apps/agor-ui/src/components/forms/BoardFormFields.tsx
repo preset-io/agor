@@ -1,8 +1,13 @@
-import type { Board } from '@agor-live/client';
+import type { Board, Group, User } from '@agor-live/client';
 import type { FormInstance } from 'antd';
-import { Checkbox, Collapse, ColorPicker, Form, Input, Select, Space, Typography } from 'antd';
+import { Alert, Checkbox, ColorPicker, Form, Input, Select, Space, Tabs, Typography } from 'antd';
 import { useState } from 'react';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
+import {
+  RbacPermissionFields,
+  type RbacPermissionValue,
+  type RbacVisibility,
+} from '../permissions/RbacPermissionFields';
 
 export const BACKGROUND_PRESETS = [
   {
@@ -169,6 +174,13 @@ export function extractBoardFormValues(form: FormInstance): Partial<Board> {
         : bgColor.toHexString()
       : null,
     custom_css: values.custom_css || null,
+    access_mode: values.access_mode || 'shared',
+    default_others_can:
+      values.access_mode === 'private' ? 'none' : values.default_others_can || 'session',
+    default_others_fs_access: values.default_others_fs_access || 'read',
+    default_dangerously_allow_session_sharing: Boolean(
+      values.default_dangerously_allow_session_sharing
+    ),
     custom_context: values.custom_context ? JSON.parse(values.custom_context) : null,
   } as unknown as Partial<Board>;
 }
@@ -181,6 +193,9 @@ export interface BoardFormFieldsProps {
   extra?: React.ReactNode;
   /** Initial custom CSS mode — auto-detected from board values if not provided */
   initialCustomCSS?: boolean;
+  rbacEnabled?: boolean;
+  allUsers?: User[];
+  allGroups?: Group[];
 }
 
 /**
@@ -196,16 +211,13 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   autoFocus,
   extra,
   initialCustomCSS = false,
+  rbacEnabled = false,
+  allUsers = [],
+  allGroups = [],
 }) => {
   const [useCustomCSS, setUseCustomCSS] = useState(initialCustomCSS);
 
-  // Auto-expand CSS section if the board already has background or custom_css values
-  const defaultActiveKeys: string[] = [];
-  if (initialCustomCSS) {
-    defaultActiveKeys.push('css');
-  }
-
-  return (
+  const generalFields = (
     <>
       <Form.Item label="Name" required style={{ marginBottom: 24 }}>
         <Space.Compact style={{ display: 'flex' }}>
@@ -223,119 +235,152 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
       <Form.Item label="Description" name="description">
         <Input.TextArea placeholder="Optional description..." rows={3} />
       </Form.Item>
-
-      <Collapse
-        defaultActiveKey={defaultActiveKeys}
-        ghost
-        style={{ marginBottom: 16 }}
-        items={[
-          {
-            key: 'css',
-            label: 'CSS Background',
-            children: (
-              <>
-                <Space orientation="vertical" style={{ width: '100%', marginBottom: 16 }}>
-                  <Checkbox
-                    checked={useCustomCSS}
-                    onChange={(e) => {
-                      setUseCustomCSS(e.target.checked);
-                      if (e.target.checked) {
-                        // Clear color picker value when switching to custom CSS mode
-                        const current = form.getFieldValue('background_color');
-                        if (current && typeof current !== 'string') {
-                          form.setFieldsValue({ background_color: current.toHexString() });
-                        }
-                      }
-                    }}
-                  >
-                    Use custom CSS background
-                  </Checkbox>
-
-                  {!useCustomCSS ? (
-                    <Form.Item name="background_color" noStyle>
-                      <ColorPicker showText format="hex" allowClear />
-                    </Form.Item>
-                  ) : (
-                    <>
-                      <Select
-                        placeholder="Load a preset..."
-                        style={{ width: '100%', marginBottom: 8 }}
-                        allowClear
-                        showSearch
-                        options={BACKGROUND_PRESETS}
-                        onChange={(value) => {
-                          if (value) {
-                            form.setFieldsValue({ background_color: value });
-                          }
-                        }}
-                      />
-                      <Form.Item name="background_color" noStyle>
-                        <Input.TextArea
-                          placeholder="Enter custom CSS background value (gradients, patterns, etc.)"
-                          rows={3}
-                          style={{ fontFamily: 'monospace', fontSize: '12px' }}
-                        />
-                      </Form.Item>
-                    </>
-                  )}
-
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: '12px', display: 'block', marginTop: 4 }}
-                  >
-                    {!useCustomCSS
-                      ? 'Set a solid background color for the board canvas'
-                      : 'Enter any valid CSS background value (gradients, patterns, etc.)'}
-                  </Typography.Text>
-                </Space>
-
-                {useCustomCSS && (
-                  <Space orientation="vertical" style={{ width: '100%' }}>
-                    <Typography.Text strong style={{ fontSize: '13px' }}>
-                      Animation CSS
-                    </Typography.Text>
-                    <Select
-                      placeholder="Load an animation preset..."
-                      style={{ width: '100%', marginBottom: 8 }}
-                      allowClear
-                      showSearch
-                      options={ANIMATION_PRESETS}
-                      onChange={(value) => {
-                        if (value) {
-                          form.setFieldsValue({ custom_css: value });
-                        }
-                      }}
-                    />
-                    <Form.Item name="custom_css" noStyle>
-                      <Input.TextArea
-                        placeholder={`@keyframes bioGlow {\n  0%, 100% { background-position: 0% 50%; }\n  50% { background-position: 100% 50%; }\n}\n\nbackground-size: 400% 400%;\nanimation: bioGlow 12s ease infinite;`}
-                        rows={6}
-                        style={{ fontFamily: 'monospace', fontSize: '12px' }}
-                      />
-                    </Form.Item>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: '12px', display: 'block', marginTop: 4 }}
-                    >
-                      Supports @keyframes, animation, background-size, and other CSS. Dangerous
-                      patterns (url, expression, @import) are blocked for security.
-                    </Typography.Text>
-                  </Space>
-                )}
-              </>
-            ),
-          },
-          ...(extra
-            ? [
-                {
-                  key: 'advanced',
-                  label: 'Advanced',
-                  children: extra,
-                },
-              ]
-            : []),
-        ]}
-      />
     </>
+  );
+
+  const watchOptions = { form, preserve: true };
+  const boardVisibility = (Form.useWatch('access_mode', watchOptions) ||
+    'shared') as RbacVisibility;
+  const ownerIds = (Form.useWatch('owner_ids', watchOptions) || []) as string[];
+  const groupGrants = (Form.useWatch('board_group_grants', watchOptions) ||
+    []) as RbacPermissionValue['groupGrants'];
+  const defaultOthersCan = Form.useWatch('default_others_can', watchOptions) || 'session';
+  const defaultOthersFsAccess = Form.useWatch('default_others_fs_access', watchOptions) || 'read';
+  const defaultSessionSharing = Boolean(
+    Form.useWatch('default_dangerously_allow_session_sharing', watchOptions)
+  );
+
+  const permissionValue: RbacPermissionValue = {
+    visibility: boardVisibility,
+    ownerIds,
+    groupGrants,
+    othersCan: boardVisibility === 'private' ? 'none' : defaultOthersCan,
+    othersFsAccess: defaultOthersFsAccess,
+    allowSessionSharing: defaultSessionSharing,
+  };
+
+  const setPermissionField = <K extends keyof RbacPermissionValue>(
+    key: K,
+    value: RbacPermissionValue[K]
+  ) => {
+    if (key === 'visibility') form.setFieldsValue({ access_mode: value });
+    if (key === 'ownerIds') form.setFieldsValue({ owner_ids: value });
+    if (key === 'groupGrants') form.setFieldsValue({ board_group_grants: value });
+    if (key === 'othersCan') form.setFieldsValue({ default_others_can: value });
+    if (key === 'othersFsAccess') form.setFieldsValue({ default_others_fs_access: value });
+    if (key === 'allowSessionSharing') {
+      form.setFieldsValue({ default_dangerously_allow_session_sharing: value });
+    }
+  };
+
+  const permissionsFields = (
+    <Form layout="horizontal" colon={false} component={false}>
+      <Alert
+        type="info"
+        showIcon
+        description="Default branch permissions apply to new/aligned branches; branch overrides can still share individual branches."
+        style={{ marginBottom: 24 }}
+      />
+      <RbacPermissionFields
+        value={permissionValue}
+        onChange={setPermissionField}
+        allUsers={allUsers}
+        allGroups={allGroups}
+        canEdit
+        canEditOwners={rbacEnabled}
+        canEditGroups={rbacEnabled}
+        ownerHelp="Manage board owners"
+        groupsHelp="Inherited by aligned branches"
+        visibilityLabel="Default branch permissions"
+        othersCanLabel="Default others can"
+        othersFsAccessLabel="Default filesystem access"
+      />
+      {!rbacEnabled && (
+        <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
+          <Typography.Text type="secondary">
+            Enable execution.branch_rbac to manage board owners and group grants.
+          </Typography.Text>
+        </Form.Item>
+      )}
+    </Form>
+  );
+
+  const cssFields = (
+    <>
+      <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
+        <Checkbox
+          checked={useCustomCSS}
+          onChange={(e) => {
+            setUseCustomCSS(e.target.checked);
+            if (e.target.checked) {
+              const current = form.getFieldValue('background_color');
+              if (current && typeof current !== 'string') {
+                form.setFieldsValue({ background_color: current.toHexString() });
+              }
+            }
+          }}
+        >
+          Use custom CSS background
+        </Checkbox>
+
+        {!useCustomCSS ? (
+          <Form.Item name="background_color" noStyle>
+            <ColorPicker showText format="hex" allowClear />
+          </Form.Item>
+        ) : (
+          <>
+            <Select
+              placeholder="Load a preset..."
+              style={{ width: '100%', marginBottom: 8 }}
+              allowClear
+              showSearch
+              options={BACKGROUND_PRESETS}
+              onChange={(value) => {
+                if (value) form.setFieldsValue({ background_color: value });
+              }}
+            />
+            <Form.Item name="background_color" noStyle>
+              <Input.TextArea
+                placeholder="Enter custom CSS background value (gradients, patterns, etc.)"
+                rows={3}
+                style={{ fontFamily: 'monospace', fontSize: '12px' }}
+              />
+            </Form.Item>
+          </>
+        )}
+      </Space>
+
+      {useCustomCSS && (
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Typography.Text strong style={{ fontSize: '13px' }}>
+            Animation CSS
+          </Typography.Text>
+          <Select
+            placeholder="Load an animation preset..."
+            style={{ width: '100%', marginBottom: 8 }}
+            allowClear
+            showSearch
+            options={ANIMATION_PRESETS}
+            onChange={(value) => {
+              if (value) form.setFieldsValue({ custom_css: value });
+            }}
+          />
+          <Form.Item name="custom_css" noStyle>
+            <Input.TextArea rows={6} style={{ fontFamily: 'monospace', fontSize: '12px' }} />
+          </Form.Item>
+        </Space>
+      )}
+    </>
+  );
+
+  return (
+    <Tabs
+      items={[
+        { key: 'general', label: 'General', children: generalFields },
+        { key: 'permissions', label: 'Permissions', children: permissionsFields },
+        { key: 'css', label: 'CSS', children: cssFields },
+        ...(extra ? [{ key: 'advanced', label: 'Advanced', children: extra }] : []),
+      ]}
+    />
   );
 };

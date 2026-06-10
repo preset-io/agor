@@ -15,7 +15,17 @@
 import { BRANCH_PERMISSION_LEVELS, type UUID } from '@agor/core/types';
 import { and, eq, exists, inArray, isNotNull, or, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../client';
-import { branches, branchGroupGrants, branchOwners, groupMemberships, groups } from '../schema';
+import { jsonExtract } from '../database-wrapper';
+import {
+  boardGroupGrants,
+  boardOwners,
+  boards,
+  branches,
+  branchGroupGrants,
+  branchOwners,
+  groupMemberships,
+  groups,
+} from '../schema';
 
 export const VISIBLE_BRANCH_PERMISSION_LEVELS = BRANCH_PERMISSION_LEVELS.filter(
   (level) => level !== 'none'
@@ -51,16 +61,86 @@ export function activeGroupGrantAccessExists(db: Database, userId: UUID) {
   );
 }
 
+export function activeBoardGroupGrantAccessExists(db: Database, userId: UUID) {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(boardGroupGrants)
+      .innerJoin(
+        groupMemberships,
+        and(
+          eq(groupMemberships.group_id, boardGroupGrants.group_id),
+          eq(groupMemberships.user_id, userId)
+        )
+      )
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .innerJoin(
+        boards,
+        and(
+          eq(boards.board_id, boardGroupGrants.board_id),
+          eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared')
+        )
+      )
+      .where(
+        and(
+          eq(boardGroupGrants.board_id, branches.board_id),
+          inArray(boardGroupGrants.can, VISIBLE_BRANCH_PERMISSION_LEVELS)
+        )
+      )
+  );
+}
+
+export function activeBoardOwnerAccessExists(db: Database, userId: UUID) {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(boardOwners)
+      .where(and(eq(boardOwners.board_id, branches.board_id), eq(boardOwners.user_id, userId)))
+  );
+}
+
+export function alignedBoardDefaultVisible(db: Database) {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(boards)
+      .where(
+        and(
+          eq(boards.board_id, branches.board_id),
+          eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared'),
+          inArray(
+            sql`coalesce(${jsonExtract(db, boards.data, 'default_others_can')}, 'session')`,
+            VISIBLE_BRANCH_PERMISSION_LEVELS
+          )
+        )
+      )
+  );
+}
+
 /**
  * Branch is visible when the joined/correlated user is:
  * - a direct owner, OR
  * - in a group with an explicit non-none grant, OR
  * - covered by a public/fallback others_can level of view+
  */
-export function visibleBranchAccessCondition(groupGrantAccessCondition: SQL) {
-  return or(
-    isNotNull(branchOwners.user_id),
-    groupGrantAccessCondition,
-    inArray(branches.others_can, VISIBLE_BRANCH_PERMISSION_LEVELS)
+export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
+  return (
+    or(
+      isNotNull(branchOwners.user_id),
+      activeGroupGrantAccessExists(db, userId),
+      and(eq(branches.permission_source, 'board'), activeBoardOwnerAccessExists(db, userId)),
+      and(eq(branches.permission_source, 'board'), activeBoardGroupGrantAccessExists(db, userId)),
+      and(eq(branches.permission_source, 'board'), alignedBoardDefaultVisible(db)),
+      and(
+        eq(branches.permission_source, 'override'),
+        inArray(branches.others_can, VISIBLE_BRANCH_PERMISSION_LEVELS)
+      )
+    ) ?? sql`false`
   );
 }

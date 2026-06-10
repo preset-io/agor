@@ -463,6 +463,10 @@ export const boards = sqliteTable(
       .json<unknown>('data')
       .$type<{
         description?: string;
+        access_mode?: 'private' | 'shared';
+        default_others_can?: import('@agor/core/types').BranchPermissionLevel;
+        default_others_fs_access?: 'none' | 'read' | 'write';
+        default_dangerously_allow_session_sharing?: boolean;
         color?: string;
         icon?: string;
         background_color?: string; // Background color for the board canvas
@@ -623,6 +627,10 @@ export const branches = sqliteTable(
     }),
 
     // RBAC: App-layer permissions (rbac.md)
+    permission_source: text('permission_source', { enum: ['board', 'override'] })
+      .$type<'board' | 'override'>()
+      .notNull()
+      .default('override'),
     others_can: text('others_can', {
       enum: [...BRANCH_PERMISSION_LEVELS],
     }).default('view'),
@@ -742,6 +750,29 @@ export const branchOwners = sqliteTable(
   (table) => ({
     // Composite primary key matching migration 0016
     pk: primaryKey({ columns: [table.branch_id, table.user_id] }),
+  })
+);
+
+/**
+ * Board Owners - RBAC junction table.
+ *
+ * Board owners can manage board-level defaults and are treated as inherited
+ * branch owners for board-aligned branches.
+ */
+export const boardOwners = sqliteTable(
+  'board_owners',
+  {
+    board_id: text('board_id', { length: 36 })
+      .notNull()
+      .references(() => boards.board_id, { onDelete: 'cascade' }),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    created_at: t.timestamp('created_at'),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.board_id, table.user_id] }),
+    userIdx: index('board_owners_user_idx').on(table.user_id),
   })
 );
 
@@ -1053,6 +1084,36 @@ export const branchGroupGrants = sqliteTable(
   (table) => ({
     pk: primaryKey({ columns: [table.branch_id, table.group_id] }),
     groupIdx: index('branch_group_grants_group_idx').on(table.group_id),
+  })
+);
+
+/**
+ * Board Group Grants - group-aware board visibility/default grants.
+ */
+export const boardGroupGrants = sqliteTable(
+  'board_group_grants',
+  {
+    board_id: text('board_id', { length: 36 })
+      .notNull()
+      .references(() => boards.board_id, { onDelete: 'cascade' }),
+    group_id: text('group_id', { length: 36 })
+      .notNull()
+      .references(() => groups.group_id, { onDelete: 'cascade' }),
+    can: text('can', { enum: [...BRANCH_PERMISSION_LEVELS] })
+      .notNull()
+      .default('view'),
+    fs_access: text('fs_access', { enum: ['none', 'read', 'write'] }).$type<
+      'none' | 'read' | 'write'
+    >(),
+    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.board_id, table.group_id] }),
+    groupIdx: index('board_group_grants_group_idx').on(table.group_id),
   })
 );
 
@@ -2102,6 +2163,8 @@ export type GroupInsert = typeof groups.$inferInsert;
 export type GroupMembershipRow = typeof groupMemberships.$inferSelect;
 export type GroupMembershipInsert = typeof groupMemberships.$inferInsert;
 export type BranchGroupGrantRow = typeof branchGroupGrants.$inferSelect;
+export type BoardGroupGrantRow = typeof boardGroupGrants.$inferSelect;
+export type BoardOwnerRow = typeof boardOwners.$inferSelect;
 export type BranchGroupGrantInsert = typeof branchGroupGrants.$inferInsert;
 export type MCPServerRow = typeof mcpServers.$inferSelect;
 export type MCPServerInsert = typeof mcpServers.$inferInsert;

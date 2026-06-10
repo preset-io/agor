@@ -1,4 +1,10 @@
-import { BranchRepository, GroupRepository, RepoRepository, UsersRepository } from '@agor/core/db';
+import {
+  BoardRepository,
+  BranchRepository,
+  GroupRepository,
+  RepoRepository,
+  UsersRepository,
+} from '@agor/core/db';
 import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -729,4 +735,96 @@ describe('BranchesService managed environment control authorization', () => {
     ).rejects.toThrow(/'all' branch permission or admin access/);
     expect(getSpy).not.toHaveBeenCalled();
   });
+});
+
+describe('BranchesService.create permission defaults', () => {
+  dbTest(
+    'defaults new board branches to board permissions when no explicit branch permissions are provided',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const repos = new RepoRepository(db);
+      const boards = new BoardRepository(db);
+      const owner = await users.create({
+        email: 'board-default-owner@example.com',
+        role: 'member',
+      });
+      const repo = await repos.create({
+        name: 'board-default-repo',
+        slug: 'board-default-repo',
+        repo_type: 'local',
+        local_path: '/tmp/board-default-repo',
+        default_branch: 'main',
+      });
+      const board = await boards.create({
+        name: 'Board Defaults',
+        created_by: owner.user_id,
+        default_others_can: 'prompt',
+        default_others_fs_access: 'write',
+        default_dangerously_allow_session_sharing: true,
+      });
+
+      const app = { service: vi.fn() } as unknown as Application;
+      const service = new BranchesService(db, app);
+      const branch = (await service.create({
+        repo_id: repo.repo_id,
+        name: 'board-aligned',
+        ref: 'board-aligned',
+        path: '/tmp/board-default-repo/board-aligned',
+        board_id: board.board_id as BoardID,
+        created_by: owner.user_id as UUID,
+        branch_unique_id: 9301,
+        new_branch: true,
+      })) as import('@agor/core/types').Branch;
+
+      expect(branch.permission_source).toBe('board');
+      expect(branch.others_can).toBe('prompt');
+      expect(branch.others_fs_access).toBe('write');
+      expect(branch.dangerously_allow_session_sharing).toBe(true);
+    }
+  );
+
+  dbTest(
+    'ignores explicit branch permission fields at creation and remains board-aligned',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const repos = new RepoRepository(db);
+      const boards = new BoardRepository(db);
+      const owner = await users.create({
+        email: 'branch-explicit-owner@example.com',
+        role: 'member',
+      });
+      const repo = await repos.create({
+        name: 'branch-explicit-repo',
+        slug: 'branch-explicit-repo',
+        repo_type: 'local',
+        local_path: '/tmp/branch-explicit-repo',
+        default_branch: 'main',
+      });
+      const board = await boards.create({
+        name: 'Prompt Defaults',
+        created_by: owner.user_id,
+        default_others_can: 'prompt',
+        default_others_fs_access: 'write',
+      });
+
+      const app = { service: vi.fn() } as unknown as Application;
+      const service = new BranchesService(db, app);
+      const branch = (await service.create({
+        repo_id: repo.repo_id,
+        name: 'board-explicit',
+        ref: 'board-explicit',
+        path: '/tmp/branch-explicit-repo/board-explicit',
+        board_id: board.board_id as BoardID,
+        created_by: owner.user_id as UUID,
+        branch_unique_id: 9302,
+        new_branch: true,
+        others_can: 'none',
+        others_fs_access: 'none',
+      })) as import('@agor/core/types').Branch;
+
+      expect(branch.permission_source).toBe('board');
+      expect(branch.others_can).toBe('prompt');
+      expect(branch.others_fs_access).toBe('write');
+    }
+  );
 });

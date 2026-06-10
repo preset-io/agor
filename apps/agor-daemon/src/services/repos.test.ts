@@ -70,6 +70,7 @@ describe('ReposService.createBranch clone preflight', () => {
           ref: 'new-branch',
           createBranch: true,
           sourceBranch: 'local-only',
+          boardId: 'board-1',
           storage_mode: 'clone',
         },
         { user: { user_id: 'user-1' } } as never

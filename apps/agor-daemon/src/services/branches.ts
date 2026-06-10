@@ -32,6 +32,7 @@ import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor
 import { stripGitUrlCredentials } from '@agor/core/git';
 import type {
   AuthenticatedParams,
+  Board,
   BoardID,
   Branch,
   BranchID,
@@ -362,18 +363,37 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
-   * Apply config-driven defaults before insert.
+   * Apply branch creation defaults before insert.
    *
-   * Reads `branches.others_can_default` and `branches.others_fs_access_default`
-   * so admins can set org-wide defaults in config.yaml. Explicit values on the
-   * input always win; defaults fill in only when the caller omits the field.
+   * New branches always start aligned with their board. Branch-specific
+   * overrides are an explicit post-create action in the Branch modal.
+   *
+   * Store the board defaults on the branch row as a snapshot for legacy readers
+   * and for a sensible starting point if the user later switches to override
+   * mode. Effective access for board-aligned branches still resolves through the
+   * board at read/enforcement time.
    */
   private async applyBranchCreateDefaults(data: Partial<Branch>): Promise<Partial<Branch>> {
+    const withDefaults: Partial<Branch> = { ...data };
+    // New branches always start aligned with their board. Branch-specific
+    // overrides are an explicit post-create action in the Branch modal.
+    withDefaults.permission_source = 'board';
+
+    if (withDefaults.permission_source === 'board' && withDefaults.board_id) {
+      const board = (await this.boardRepo.findById(withDefaults.board_id)) as Board | null;
+      if (board) {
+        withDefaults.others_can = board.default_others_can ?? 'session';
+        withDefaults.others_fs_access = board.default_others_fs_access ?? 'read';
+        withDefaults.dangerously_allow_session_sharing =
+          board.default_dangerously_allow_session_sharing ?? false;
+      }
+      return withDefaults;
+    }
+
     const config = await loadConfig();
     const defaults = config.branches;
-    if (!defaults) return data;
+    if (!defaults) return withDefaults;
 
-    const withDefaults: Partial<Branch> = { ...data };
     if (defaults.others_can_default !== undefined && withDefaults.others_can === undefined) {
       withDefaults.others_can = defaults.others_can_default;
     }
@@ -428,7 +448,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch> | Partial<Branch>[],
     params?: BranchParams
   ): Promise<Branch | Branch[]> {
+    const assertHasBoard = (item: Partial<Branch>) => {
+      if (!item.board_id) {
+        throw new BadRequest('board_id is required when creating a branch');
+      }
+    };
+
     if (Array.isArray(data)) {
+      data.forEach(assertHasBoard);
       const withDefaults = await Promise.all(
         data.map((item) => this.applyBranchCreateDefaults(item))
       );
@@ -442,6 +469,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
       return readyBranches;
     }
+    assertHasBoard(data);
     const withDefaults = await this.applyBranchCreateDefaults(data);
     const created = (await super.create(withDefaults, params)) as Branch;
     const readyBranch = await this.maybeEnsureAssistantKnowledgeNamespace(created, params);
@@ -671,6 +699,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const oldBoardId = currentBranch.board_id;
     const boardIdProvided = Object.hasOwn(data, 'board_id');
     const newBoardId = data.board_id;
+    const boardChanged = boardIdProvided && oldBoardId !== newBoardId;
+
+    if (
+      boardChanged &&
+      currentBranch.permission_source === 'board' &&
+      data.permission_source !== 'override'
+    ) {
+      throw new BadRequest(
+        'This branch is aligned with board permissions. Switch to "Override board-level permissions" before moving it to another board.'
+      );
+    }
 
     // Call parent patch
     const updatedBranch = (await super.patch(id, data, params)) as Branch;
@@ -691,7 +730,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return withZone as BranchWithZoneAndSessions;
     }
 
-    if (oldBoardId !== newBoardId) {
+    if (boardChanged) {
       const boardObjectsService = this.getBoardObjectsService();
 
       try {
@@ -740,6 +779,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const currentBranch = await super.get(id, params);
     await this.assertCanMutateAssistantKnowledgeConfig(currentBranch, data, params);
     this.assertAssistantKindIsStable(currentBranch, data);
+    if (
+      currentBranch.board_id !== data.board_id &&
+      currentBranch.permission_source === 'board' &&
+      data.permission_source !== 'override'
+    ) {
+      throw new BadRequest(
+        'This branch is aligned with board permissions. Switch to "Override board-level permissions" before moving it to another board.'
+      );
+    }
     return super.update(id, data, params) as Promise<Branch>;
   }
 

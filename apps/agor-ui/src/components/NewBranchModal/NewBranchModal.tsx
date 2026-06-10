@@ -1,4 +1,4 @@
-import type { Repo } from '@agor-live/client';
+import type { Board, Repo } from '@agor-live/client';
 import { Button, Form, Modal } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
@@ -15,6 +15,7 @@ export interface NewBranchModalProps {
   onClose: () => void;
   onCreate: (config: NewBranchConfig) => void;
   repoById: Map<string, Repo>;
+  boardById?: Map<string, Board>;
   currentBoardId?: string; // Auto-fill board if provided
   defaultPosition?: { x: number; y: number }; // Default position on canvas (center of viewport)
   branchStorageConfig?: BranchStorageConfig;
@@ -25,6 +26,7 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
   onClose,
   onCreate,
   repoById,
+  boardById = new Map(),
   currentBoardId,
   defaultPosition,
   branchStorageConfig,
@@ -42,7 +44,7 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       const values = form.getFieldsValue();
 
       // Check if required fields are filled
-      const isValid = !!(values.repoId && values.sourceBranch && values.name);
+      const isValid = !!(values.repoId && values.sourceBranch && values.name && values.boardId);
       setIsFormValid(isValid);
     }, 0);
   }, [form]);
@@ -69,6 +71,7 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       form.setFieldsValue({
         repoId: lastRepoId,
         sourceBranch: repoById.get(lastRepoId)?.default_branch,
+        ...(currentBoardId ? { boardId: currentBoardId } : {}),
       });
       setSelectedRepoId(lastRepoId);
       // Trigger validation check
@@ -80,12 +83,13 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       form.setFieldsValue({
         repoId: firstRepo.repo_id,
         sourceBranch: firstRepo.default_branch,
+        ...(currentBoardId ? { boardId: currentBoardId } : {}),
       });
       setSelectedRepoId(firstRepo.repo_id);
       // Trigger validation check
       handleValuesChange();
     }
-  }, [open, repoById, form, handleValuesChange]);
+  }, [open, repoById, currentBoardId, form, handleValuesChange]);
 
   const handleRepoChange = (repoId: string) => {
     setSelectedRepoId(repoId);
@@ -119,7 +123,7 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       pullLatest: true,
       issue_url: values.issue_url,
       pull_request_url: values.pull_request_url,
-      board_id: currentBoardId, // Include board_id if provided
+      board_id: values.boardId,
       position: defaultPosition, // Include position if provided
       storage_mode: storageMode,
       ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
@@ -169,10 +173,13 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       >
         <BranchFormFields
           repoById={repoById}
+          boardById={boardById}
           selectedRepoId={selectedRepoId}
           onRepoChange={handleRepoChange}
           defaultBranch={selectedRepo?.default_branch || 'main'}
           showUrlFields={true}
+          showBoardSelector
+          requireBoard
           onFormChange={handleValuesChange}
           branchStorageConfig={branchStorageConfig}
         />

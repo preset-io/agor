@@ -10,9 +10,9 @@ import type {
   AuthenticationResult,
   Board,
   BoardExportBlob,
+  BoardGroupGrantWithGroup,
   Branch,
   BranchGroupGrantWithGroup,
-  BranchPermissionLevel,
   CardType,
   CardWithType,
   CloneRepositoryResult,
@@ -180,6 +180,8 @@ export interface ServiceTypes {
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
+  'boards/:id/owners': User;
+  'boards/:id/group-grants': BoardGroupGrantWithGroup;
   'branches/:id/group-grants': BranchGroupGrantWithGroup;
   cards: CardWithType;
   'card-types': CardType; // CardType CRUD
@@ -326,14 +328,12 @@ export interface ReposService extends AgorService<Repo> {
       sourceBranch?: string;
       issue_url?: string;
       pull_request_url?: string;
-      boardId?: string;
+      boardId: string;
       custom_context?: Record<string, unknown>;
       notes?: string | null;
       /** Explicit board position. Honored as-is when supplied. */
       position?: { x: number; y: number };
       zoneId?: string;
-      others_can?: BranchPermissionLevel;
-      others_fs_access?: 'none' | 'read' | 'write';
       environment_variant?: string;
       /**
        * Branch storage model — see

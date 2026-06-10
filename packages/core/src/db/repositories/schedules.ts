@@ -32,7 +32,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { activeGroupGrantAccessExists, visibleBranchAccessCondition } from './branch-access';
+import { visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
 
 export class ScheduleRepository implements BaseRepository<Schedule, Partial<Schedule>> {
@@ -232,9 +232,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
     userId: UUID,
     filter?: { branch_id?: BranchID; enabled?: boolean; created_by?: UUID }
   ): Promise<Schedule[]> {
-    const conditions = [
-      visibleBranchAccessCondition(activeGroupGrantAccessExists(this.db, userId)),
-    ];
+    const conditions = [visibleBranchAccessCondition(this.db, userId)];
     if (filter?.branch_id) conditions.push(eq(schedules.branch_id, filter.branch_id));
     if (filter?.enabled !== undefined) conditions.push(eq(schedules.enabled, filter.enabled));
     if (filter?.created_by) conditions.push(eq(schedules.created_by, filter.created_by));

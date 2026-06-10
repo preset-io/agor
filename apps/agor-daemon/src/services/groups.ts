@@ -5,9 +5,10 @@
  */
 
 import type { BranchRepository } from '@agor/core/db';
-import { type Database, GroupRepository } from '@agor/core/db';
+import { BoardRepository, type Database, GroupRepository } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
+  BoardGroupGrantWithGroup,
   BranchGroupGrantWithGroup,
   BranchID,
   BranchPermissionLevel,
@@ -257,6 +258,108 @@ export function setupBranchGroupGrantsService(
   });
 }
 
+async function requireBoardGrantViewer(db: Database, context: HookContext): Promise<HookContext> {
+  if (!context.params.provider) return context;
+  if (context.params.user?._isServiceAccount) return context;
+  const user = context.params.user;
+  if (!user) throw new NotAuthenticated('Authentication required');
+  if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+  const boardId = context.params.route?.id;
+  if (!boardId) throw new BadRequest('Board ID is required');
+  const boardRepo = new BoardRepository(db);
+  if (!(await boardRepo.canView(boardId, user.user_id as UserID))) {
+    throw new Forbidden('You need board access to see board group grants');
+  }
+  return context;
+}
+
+async function requireBoardGrantManager(db: Database, context: HookContext): Promise<HookContext> {
+  if (!context.params.provider) return context;
+  if (context.params.user?._isServiceAccount) return context;
+  const user = context.params.user;
+  if (!user) throw new NotAuthenticated('Authentication required');
+  if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+  const boardId = context.params.route?.id;
+  if (!boardId) throw new BadRequest('Board ID is required');
+  const boardRepo = new BoardRepository(db);
+  if (!(await boardRepo.canMutate(boardId, user.user_id as UserID))) {
+    throw new Forbidden("You need board owner or board group 'all' access to manage board groups");
+  }
+  return context;
+}
+
+export function setupBoardGroupGrantsService(
+  app: import('@agor/core/feathers').Application,
+  db: Database
+) {
+  const repo = new GroupRepository(db);
+  app.use(
+    'boards/:id/group-grants',
+    {
+      async find(params?: Params): Promise<BoardGroupGrantWithGroup[]> {
+        const boardId = paramsRoute(params)?.id;
+        if (!boardId) throw new BadRequest('Board ID is required');
+        return repo.listBoardGrants(boardId);
+      },
+      async create(
+        data: {
+          group_id?: string;
+          can?: BranchPermissionLevel;
+          fs_access?: 'none' | 'read' | 'write' | null;
+        },
+        params?: Params
+      ): Promise<BoardGroupGrantWithGroup> {
+        const boardId = paramsRoute(params)?.id;
+        if (!boardId || !data.group_id) throw new BadRequest('board id and group_id are required');
+        const nextCan = branchGroupGrantPermissionLevelOrDefault(data.can);
+        return repo.upsertBoardGrant({
+          board_id: boardId,
+          group_id: data.group_id,
+          can: nextCan,
+          fs_access: data.fs_access,
+          created_by: paramsUser(params)?.user_id as UserID | undefined,
+        });
+      },
+      async patch(
+        id: string,
+        data: { can?: BranchPermissionLevel; fs_access?: 'none' | 'read' | 'write' | null },
+        params?: Params
+      ): Promise<BoardGroupGrantWithGroup> {
+        const boardId = paramsRoute(params)?.id;
+        if (!boardId) throw new BadRequest('Board ID is required');
+        const current = (await repo.listBoardGrants(boardId)).find((g) => g.group_id === id);
+        if (!current) throw new BadRequest(`Board group grant not found: ${id}`);
+        const nextCan = data.can ?? current.can;
+        assertBranchGroupGrantPermissionLevel(nextCan);
+        return repo.upsertBoardGrant({
+          board_id: boardId,
+          group_id: id,
+          can: nextCan,
+          fs_access: data.fs_access === undefined ? current.fs_access : data.fs_access,
+          created_by: paramsUser(params)?.user_id as UserID | undefined,
+        });
+      },
+      async remove(id: string, params?: Params): Promise<BoardGroupGrantWithGroup> {
+        const boardId = paramsRoute(params)?.id;
+        if (!boardId) throw new BadRequest('Board ID is required');
+        const removed = await repo.removeBoardGrant(boardId, id);
+        if (!removed) throw new BadRequest(`Board group grant not found: ${id}`);
+        return removed;
+      },
+    },
+    { methods: ['find', 'create', 'patch', 'remove'] }
+  );
+
+  app.service('boards/:id/group-grants').hooks({
+    before: {
+      find: [(context: HookContext) => requireBoardGrantViewer(db, context)],
+      create: [(context: HookContext) => requireBoardGrantManager(db, context)],
+      patch: [(context: HookContext) => requireBoardGrantManager(db, context)],
+      remove: [(context: HookContext) => requireBoardGrantManager(db, context)],
+    },
+  });
+}
+
 export function setupBranchEffectiveAccessService(
   app: import('@agor/core/feathers').Application,
   branchRepo: BranchRepository
@@ -291,29 +394,14 @@ export function setupBranchEffectiveAccessService(
           return { can: 'all', is_owner: true, source: 'owner' };
         }
 
-        const groupGrant = await branchRepo.getBestGroupGrantForUser(
-          branch.branch_id as BranchID,
-          userId
-        );
-        const others = branch.others_can ?? 'session';
-        const can =
-          groupGrant && PERMISSION_RANK[groupGrant.can] >= PERMISSION_RANK[others]
-            ? groupGrant.can
-            : others;
+        const effective = await branchRepo.resolveUserAccess(branch, userId);
+        const can = effective.can;
 
         if (PERMISSION_RANK[can] < PERMISSION_RANK.view) {
           throw new Forbidden('You need view permission to see branch access');
         }
 
-        return groupGrant && can === groupGrant.can
-          ? {
-              can,
-              fs_access: undefined,
-              is_owner: false,
-              source: 'group',
-              group_ids: groupGrant.groupIds as EffectiveBranchAccess['group_ids'],
-            }
-          : { can, fs_access: branch.others_fs_access, is_owner: false, source: 'others' };
+        return effective;
       },
     },
     { methods: ['find'] }

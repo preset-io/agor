@@ -8,23 +8,16 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import type { BranchPermissionLevel, Group, User } from '@agor-live/client';
-import { UserOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Form, Select, Space, Switch, Typography } from 'antd';
-import { useState } from 'react';
-import { useThemedMessage } from '../../../utils/message';
+import type { AgorClient, Board, BoardGroupGrantWithGroup, Group, User } from '@agor-live/client';
+import { Alert, Descriptions, Form, Radio, Typography } from 'antd';
+import { useEffect, useState } from 'react';
 import {
-  searchableSelectProps,
-  selectSearchTextFromLabel,
-  toGroupSelectOption,
-  toUserSelectOption,
-} from '../../../utils/selectSearch';
-import { Tag } from '../../Tag';
-import type { FsAccessLevel, GroupGrantsStatus, PermissionsFormState } from '../useBranchModalForm';
+  RbacPermissionFields,
+  type RbacPermissionValue,
+  rbacVisibilityFromOthersCan,
+} from '../../permissions/RbacPermissionFields';
+import type { GroupGrantsStatus, PermissionsFormState } from '../useBranchModalForm';
 
-// Note: this tab is only rendered when RBAC is enabled — the parent
-// `BranchModal` hides it otherwise. No in-tab `rbacEnabled=false` placeholder
-// is needed (or reachable).
 interface PermissionsTabProps {
   loadingOwners: boolean;
   canEdit: boolean;
@@ -33,25 +26,12 @@ interface PermissionsTabProps {
   groupGrantsStatus?: GroupGrantsStatus;
   groupGrantsError?: Error | null;
   currentUser?: User | null;
+  client: AgorClient | null;
+  board?: Board | null;
   state: PermissionsFormState;
   setField: <K extends keyof PermissionsFormState>(key: K, value: PermissionsFormState[K]) => void;
-  /** Non-fatal owners-load failure (network / server error, not 404). */
   ownersLoadError?: Error | null;
 }
-
-const permissionLevelDescriptions: Record<BranchPermissionLevel, string> = {
-  none: 'No access (branch is completely private to owners)',
-  view: 'Can view branches, sessions, tasks, and messages',
-  session: 'Can create new sessions (running as own identity) and prompt own sessions',
-  prompt: 'Can prompt ANY session, including those created by other users',
-  all: 'Full access (create/update/delete sessions and branches)',
-};
-
-const fsAccessDescriptions: Record<FsAccessLevel, string> = {
-  none: 'No filesystem access (permission denied)',
-  read: 'Read-only filesystem access',
-  write: 'Read and write filesystem access',
-};
 
 export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   loadingOwners,
@@ -61,257 +41,184 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   groupGrantsStatus = 'loaded',
   groupGrantsError,
   currentUser,
+  client,
+  board,
   state,
   setField,
   ownersLoadError,
 }) => {
-  const { showError } = useThemedMessage();
-  // Local key to force the Select to remount when we need to reject a removal
-  // (Ant's Select is uncontrolled enough that pasting the previous value back
-  // doesn't always cancel an in-flight tag removal animation).
-  const [selectKey, setSelectKey] = useState(0);
-
-  const currentUserId = currentUser?.user_id;
-  const groupGrants = state.groupGrants ?? [];
-  const groupGrantsUnavailable = groupGrantsStatus === 'unavailable';
-  const groupGrantsLoading = groupGrantsStatus === 'loading';
-  const canEditGroups = canEdit && groupGrantsStatus === 'loaded';
-
-  const handleOwnersChange = (newOwnerIds: string[]) => {
-    if (newOwnerIds.length === 0) {
-      showError('At least one owner is required');
-      // Force remount to revert the visual removal animation
-      setSelectKey((prev) => prev + 1);
-      return;
-    }
-    setField('selectedOwnerIds', newOwnerIds);
+  const [boardOwners, setBoardOwners] = useState<User[]>([]);
+  const [boardGroupGrants, setBoardGroupGrants] = useState<BoardGroupGrantWithGroup[]>([]);
+  const [boardDefaultsLoading, setBoardDefaultsLoading] = useState(false);
+  const [boardDefaultsError, setBoardDefaultsError] = useState<Error | null>(null);
+  const permissionSource = state.permissionSource ?? 'override';
+  const canEditBranchFallbacks = canEdit && permissionSource === 'override';
+  const fieldValue: RbacPermissionValue = {
+    visibility: rbacVisibilityFromOthersCan(state.othersCan),
+    ownerIds: state.selectedOwnerIds,
+    groupGrants: state.groupGrants ?? [],
+    othersCan: state.othersCan,
+    othersFsAccess: state.othersFsAccess,
+    allowSessionSharing: state.allowSessionSharing,
   };
 
+  const setPermissionField = <K extends keyof RbacPermissionValue>(
+    key: K,
+    value: RbacPermissionValue[K]
+  ) => {
+    if (key === 'ownerIds') setField('selectedOwnerIds', value as string[]);
+    if (key === 'groupGrants')
+      setField('groupGrants', value as PermissionsFormState['groupGrants']);
+    if (key === 'othersCan') setField('othersCan', value as PermissionsFormState['othersCan']);
+    if (key === 'othersFsAccess') {
+      setField('othersFsAccess', value as PermissionsFormState['othersFsAccess']);
+    }
+    if (key === 'allowSessionSharing') setField('allowSessionSharing', value as boolean);
+  };
+
+  useEffect(() => {
+    if (!client || !board?.board_id || permissionSource !== 'board') {
+      setBoardOwners([]);
+      setBoardGroupGrants([]);
+      setBoardDefaultsError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setBoardDefaultsLoading(true);
+    setBoardDefaultsError(null);
+    Promise.all([
+      client.service('boards/:id/owners').find({ route: { id: board.board_id } }),
+      client.service('boards/:id/group-grants').find({ route: { id: board.board_id } }),
+    ])
+      .then(([owners, grants]) => {
+        if (cancelled) return;
+        setBoardOwners(owners as User[]);
+        setBoardGroupGrants(grants as BoardGroupGrantWithGroup[]);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setBoardOwners([]);
+        setBoardGroupGrants([]);
+        setBoardDefaultsError(error instanceof Error ? error : new Error(String(error)));
+      })
+      .finally(() => {
+        if (!cancelled) setBoardDefaultsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, board?.board_id, permissionSource]);
+
+  const boardOwnerNames = boardOwners.map((owner) => owner.name || owner.email || owner.user_id);
+  const boardGroupLabels = boardGroupGrants.map((grant) => {
+    const group = allGroups.find((candidate) => candidate.group_id === grant.group_id);
+    const groupName = grant.group?.name || group?.name || grant.group_id;
+    const fs = grant.fs_access ? `, FS: ${grant.fs_access}` : '';
+    return `${groupName}: ${grant.can}${fs}`;
+  });
+
   return (
-    <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto', padding: 24 }}>
-      <Typography.Text strong style={{ fontSize: 14, display: 'block', marginBottom: 16 }}>
-        Owners & Permissions
-      </Typography.Text>
-
-      {ownersLoadError && (
-        <Alert
-          type="error"
-          showIcon
-          message="Could not load branch permissions"
-          description={`${ownersLoadError.message}. Editing is disabled until this resolves — try closing and reopening the modal.`}
-          style={{ marginBottom: 16 }}
-        />
-      )}
-
+    <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Form layout="horizontal" colon={false}>
-        {/* Owners Multi-Select */}
         <Form.Item
-          label="Owners"
+          label="Permission Mode"
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
-          help="Owners always have full access"
-          style={{ marginBottom: 12 }}
+          help={
+            permissionSource === 'board'
+              ? 'Uses board-level defaults for non-owner access.'
+              : 'Uses branch-level permission overrides.'
+          }
         >
-          <Select
-            key={selectKey}
-            mode="multiple"
-            style={{ width: '100%' }}
-            placeholder="Select owners..."
-            value={state.selectedOwnerIds}
-            onChange={handleOwnersChange}
-            loading={loadingOwners}
+          <Radio.Group
+            value={permissionSource}
             disabled={!canEdit}
-            {...searchableSelectProps}
-            options={allUsers
-              .map((user) => {
-                const isCurrentUser = user.user_id === currentUserId;
-                const option = toUserSelectOption(user);
-                const label = isCurrentUser ? `${option.label} (You)` : option.label;
-                return {
-                  ...option,
-                  label,
-                  searchText: selectSearchTextFromLabel(label),
-                };
-              })
-              .sort((a, b) => a.label.localeCompare(b.label))}
-            tagRender={(props) => {
-              const user = allUsers.find((u) => u.user_id === props.value);
-              const isCurrentUser = user?.user_id === currentUserId;
-              return (
-                <Tag
-                  {...props}
-                  color={isCurrentUser ? 'green' : 'default'}
-                  closable={props.closable}
-                  onClose={props.onClose}
-                  style={{ marginRight: 3 }}
-                >
-                  <Space size={4}>
-                    <UserOutlined style={{ fontSize: 11 }} />
-                    <span>{props.label}</span>
-                  </Space>
-                </Tag>
-              );
-            }}
-          />
-        </Form.Item>
-
-        {/* Group Grants */}
-        <Form.Item
-          label="Groups"
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          help="Grant explicit branch access to user groups"
-          style={{ marginBottom: 12 }}
-        >
-          <Space direction="vertical" style={{ width: '100%' }}>
-            {groupGrantsUnavailable && (
-              <Alert
-                type="warning"
-                showIcon
-                message="Group permissions unavailable"
-                description={`Owner and branch-level permissions can still be edited. ${
-                  groupGrantsError?.message
-                    ? `Group permissions could not be loaded: ${groupGrantsError.message}`
-                    : 'This daemon may not support group grants yet.'
-                }`}
-              />
-            )}
-            <Select
-              mode="multiple"
-              style={{ width: '100%' }}
-              placeholder="Select groups..."
-              value={groupGrants.map((grant) => grant.group_id)}
-              loading={groupGrantsLoading}
-              disabled={!canEditGroups}
-              options={allGroups
-                .map(toGroupSelectOption)
-                .sort((a, b) => a.label.localeCompare(b.label))}
-              {...searchableSelectProps}
-              onChange={(groupIds) => {
-                const existing = new Map(groupGrants.map((grant) => [grant.group_id, grant]));
-                setField(
-                  'groupGrants',
-                  groupIds.map(
-                    (groupId) => existing.get(groupId) || { group_id: groupId, can: 'view' }
-                  )
-                );
-              }}
-            />
-            {groupGrants.map((grant) => {
-              const group = allGroups.find((g) => g.group_id === grant.group_id);
-              return (
-                <Space
-                  key={grant.group_id}
-                  style={{ width: '100%', justifyContent: 'space-between' }}
-                >
-                  <Typography.Text>{group?.name || grant.group_id}</Typography.Text>
-                  <Select
-                    size="small"
-                    style={{ width: 140 }}
-                    value={grant.can}
-                    disabled={!canEditGroups}
-                    options={[
-                      { value: 'view', label: 'View' },
-                      { value: 'session', label: 'Own Sessions' },
-                      { value: 'prompt', label: 'Prompt' },
-                      { value: 'all', label: 'All' },
-                    ]}
-                    onChange={(can) =>
-                      setField(
-                        'groupGrants',
-                        groupGrants.map((g) => (g.group_id === grant.group_id ? { ...g, can } : g))
-                      )
-                    }
-                  />
-                </Space>
-              );
-            })}
-          </Space>
-        </Form.Item>
-
-        {/* Permission Tier */}
-        <Form.Item
-          label="Others Can"
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          help={permissionLevelDescriptions[state.othersCan]}
-          style={{ marginBottom: 12 }}
-        >
-          <Select
-            value={state.othersCan}
-            onChange={(value) => setField('othersCan', value)}
-            disabled={!canEdit}
+            onChange={(e) => setField('permissionSource', e.target.value)}
             options={[
-              { value: 'none', label: 'None' },
-              { value: 'view', label: 'View' },
-              { value: 'session', label: 'Own Sessions' },
-              { value: 'prompt', label: 'Prompt' },
-              { value: 'all', label: 'All' },
+              { value: 'board', label: 'Align with board permissions' },
+              { value: 'override', label: 'Override board-level permissions' },
             ]}
           />
         </Form.Item>
 
-        {state.othersCan === 'prompt' && (
-          <Form.Item wrapperCol={{ offset: 8, span: 16 }} style={{ marginBottom: 12 }}>
-            <Alert
-              type="warning"
-              showIcon
-              icon={<WarningOutlined />}
-              message="Unix identity risk"
-              description="Allows users to send prompts to sessions they didn't create. Those sessions execute under the original creator's OS identity and filesystem permissions. Only use with fully trusted collaborators."
-            />
-          </Form.Item>
+        {permissionSource === 'board' && (
+          <>
+            <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
+              <Alert
+                type="info"
+                showIcon
+                message="Aligned with board permissions"
+                description="This branch inherits board-level visibility, board owners, board groups, and board fallback permissions. Switch to Override to edit branch-level private/shared permissions directly."
+              />
+            </Form.Item>
+            <Form.Item label="Board defaults" labelCol={{ span: 8 }} wrapperCol={{ span: 16 }}>
+              {board ? (
+                <Descriptions size="small" column={1} bordered style={{ width: '100%' }}>
+                  <Descriptions.Item label="Visibility">
+                    {board.access_mode === 'private' ? 'Private' : 'Shared'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Owners">
+                    {boardDefaultsLoading
+                      ? 'Loading…'
+                      : boardOwnerNames.length > 0
+                        ? boardOwnerNames.join(', ')
+                        : 'None'}
+                  </Descriptions.Item>
+                  {boardDefaultsError && (
+                    <Descriptions.Item label="Owner/group details">
+                      <Typography.Text type="danger">
+                        Could not load: {boardDefaultsError.message}
+                      </Typography.Text>
+                    </Descriptions.Item>
+                  )}
+                  {board.access_mode !== 'private' && (
+                    <>
+                      <Descriptions.Item label="Groups">
+                        {boardDefaultsLoading
+                          ? 'Loading…'
+                          : boardGroupLabels.length > 0
+                            ? boardGroupLabels.join(', ')
+                            : 'None'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Others can">
+                        {board.default_others_can || 'session'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Filesystem access">
+                        {board.default_others_fs_access || 'read'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Legacy session sharing">
+                        {board.default_dangerously_allow_session_sharing ? 'Allowed' : 'Off'}
+                      </Descriptions.Item>
+                    </>
+                  )}
+                </Descriptions>
+              ) : (
+                <Typography.Text type="secondary">
+                  Board defaults are unavailable for this branch.
+                </Typography.Text>
+              )}
+            </Form.Item>
+          </>
         )}
 
-        {/* Filesystem Access */}
-        <Form.Item
-          label="Filesystem Access"
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          help={fsAccessDescriptions[state.othersFsAccess]}
-          style={{ marginBottom: 12 }}
-        >
-          <Select
-            value={state.othersFsAccess}
-            onChange={(value) => setField('othersFsAccess', value)}
-            disabled={!canEdit}
-            options={[
-              { value: 'none', label: 'None' },
-              { value: 'read', label: 'Read' },
-              { value: 'write', label: 'Write' },
-            ]}
+        {permissionSource === 'override' && (
+          <RbacPermissionFields
+            value={fieldValue}
+            onChange={setPermissionField}
+            allUsers={allUsers}
+            allGroups={allGroups}
+            currentUser={currentUser}
+            canEdit={canEditBranchFallbacks}
+            canEditGroups={canEditBranchFallbacks && groupGrantsStatus === 'loaded'}
+            loadingOwners={loadingOwners}
+            groupGrantsLoading={groupGrantsStatus === 'loading'}
+            groupGrantsUnavailable={groupGrantsStatus === 'unavailable'}
+            groupGrantsError={groupGrantsError}
+            ownersLoadError={ownersLoadError}
+            groupsHelp="Grant explicit branch access to user groups"
           />
-        </Form.Item>
-
-        {/*
-         * TODO(product): finalize copy for "Allow legacy session sharing" — the
-         * label/help/warning text below is provisional. Coordinate wording with
-         * docs + UI.
-         */}
-        <Form.Item
-          label="Allow legacy session sharing"
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          help="When OFF (default), spawning or forking another user's session attributes the new session to YOU. When ON, the new session keeps the original creator's identity, credentials, and Unix user — restoring legacy behavior."
-          style={{ marginBottom: 12 }}
-        >
-          <Switch
-            checked={state.allowSessionSharing}
-            onChange={(value) => setField('allowSessionSharing', value)}
-            disabled={!canEdit}
-          />
-        </Form.Item>
-
-        {state.allowSessionSharing && (
-          <Form.Item wrapperCol={{ offset: 8, span: 16 }} style={{ marginBottom: 12 }}>
-            <Alert
-              type="error"
-              showIcon
-              icon={<WarningOutlined />}
-              message="Dangerous: identity borrowing on spawn/fork"
-              description="With this enabled, sessions spawned or forked by other users in this branch run under the original creator's OS identity, credentials, and environment variables. A collaborator can effectively execute code as you. Only enable for fully trusted collaborators or legacy automation that depends on the old behavior."
-            />
-          </Form.Item>
         )}
       </Form>
     </div>

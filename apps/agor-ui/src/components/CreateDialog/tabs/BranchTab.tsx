@@ -1,4 +1,4 @@
-import type { Repo } from '@agor-live/client';
+import type { Board, Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
@@ -16,7 +16,7 @@ export interface BranchTabConfig {
   pullLatest: boolean;
   issue_url?: string;
   pull_request_url?: string;
-  board_id?: string;
+  board_id: string;
   position?: { x: number; y: number };
   /**
    * Branch storage model. 'worktree' = legacy `git worktree add`. 'clone' =
@@ -30,6 +30,7 @@ export interface BranchTabConfig {
 
 export interface BranchTabProps {
   repoById: Map<string, Repo>;
+  boardById?: Map<string, Board>;
   currentBoardId?: string;
   defaultPosition?: { x: number; y: number };
   onValidityChange: (valid: boolean) => void;
@@ -39,6 +40,7 @@ export interface BranchTabProps {
 
 export const BranchTab: React.FC<BranchTabProps> = ({
   repoById,
+  boardById = new Map(),
   currentBoardId,
   defaultPosition,
   onValidityChange,
@@ -53,7 +55,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
   const handleValuesChange = useCallback(() => {
     setTimeout(() => {
       const values = form.getFieldsValue();
-      const isValid = !!(values.repoId && values.sourceBranch && values.name);
+      const isValid = !!(values.repoId && values.sourceBranch && values.name && values.boardId);
       onValidityChange(isValid);
     }, 0);
   }, [form, onValidityChange]);
@@ -74,6 +76,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
       form.setFieldsValue({
         repoId: lastRepoId,
         sourceBranch: repoById.get(lastRepoId)?.default_branch,
+        ...(currentBoardId ? { boardId: currentBoardId } : {}),
       });
       setSelectedRepoId(lastRepoId);
       handleValuesChange();
@@ -83,11 +86,12 @@ export const BranchTab: React.FC<BranchTabProps> = ({
       form.setFieldsValue({
         repoId: firstRepo.repo_id,
         sourceBranch: firstRepo.default_branch,
+        ...(currentBoardId ? { boardId: currentBoardId } : {}),
       });
       setSelectedRepoId(firstRepo.repo_id);
       handleValuesChange();
     }
-  }, [repoById, form, handleValuesChange]);
+  }, [repoById, currentBoardId, form, handleValuesChange]);
 
   const handleRepoChange = (repoId: string) => {
     setSelectedRepoId(repoId);
@@ -117,7 +121,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
         pullLatest: true,
         issue_url: values.issue_url,
         pull_request_url: values.pull_request_url,
-        board_id: currentBoardId,
+        board_id: values.boardId,
         position: defaultPosition,
         storage_mode: storageMode,
         ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
@@ -137,10 +141,13 @@ export const BranchTab: React.FC<BranchTabProps> = ({
     <Form form={form} layout="vertical" onValuesChange={handleValuesChange}>
       <BranchFormFields
         repoById={repoById}
+        boardById={boardById}
         selectedRepoId={selectedRepoId}
         onRepoChange={handleRepoChange}
         defaultBranch={selectedRepo?.default_branch || 'main'}
         showUrlFields={true}
+        showBoardSelector
+        requireBoard
         onFormChange={handleValuesChange}
         branchStorageConfig={branchStorageConfig}
       />

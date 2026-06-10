@@ -32,7 +32,7 @@ describe('PermissionsTab', () => {
         setField={vi.fn()}
       />
     );
-    expect(screen.getByText('Owners & Permissions')).toBeInTheDocument();
+    expect(screen.getByText('Permission Mode')).toBeInTheDocument();
     expect(screen.getByText('Owners')).toBeInTheDocument();
     expect(screen.getByText('Others Can')).toBeInTheDocument();
     expect(screen.getByText('Filesystem Access')).toBeInTheDocument();

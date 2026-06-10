@@ -9,7 +9,7 @@
  * CreateDialog) — same fix (useRef gate so init runs once per mount).
  */
 
-import type { Repo } from '@agor-live/client';
+import type { Board, Repo } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { BranchTab, type BranchTabConfig } from './BranchTab';
@@ -25,6 +25,20 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
     local_path: '/tmp/repo-1',
     ...overrides,
   } as unknown as Repo;
+}
+
+function makeBoard(overrides: Partial<Board> = {}): Board {
+  return {
+    board_id: 'board-1',
+    name: 'Board One',
+    created_at: new Date().toISOString(),
+    last_updated: new Date().toISOString(),
+    created_by: 'user-1',
+    url: '',
+    archived: false,
+    objects: {},
+    ...overrides,
+  } as unknown as Board;
 }
 
 describe('BranchTab — source-branch preservation', () => {
@@ -71,10 +85,13 @@ describe('BranchTab — branch storage policy', () => {
       current: null,
     };
     const repo = makeRepo({ default_branch: 'main' });
+    const board = makeBoard();
 
     render(
       <BranchTab
         repoById={new Map([[repo.repo_id, repo]])}
+        boardById={new Map([[board.board_id, board]])}
+        currentBoardId={board.board_id}
         onValidityChange={vi.fn()}
         formRef={formRef}
         branchStorageConfig={branchStorageConfig}

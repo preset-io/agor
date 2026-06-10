@@ -1446,9 +1446,10 @@ export function scopeFindToAccessibleSessions(
  * Scope find() queries on the boards service to the set of boards the caller
  * can see.
  *
- * A board is visible if the caller created it OR any branch on the board is
- * accessible to them (owner or `others_can` permits at least 'view'). Empty
- * boards stay visible to their creator; superadmins bypass.
+ * A board is visible if the caller owns it, it is shared, any branch on the
+ * board is accessible to them, or the board's primary assistant branch is
+ * accessible to them. Empty private boards stay visible to their owners;
+ * superadmins bypass.
  *
  * Resolution happens in a single SQL EXISTS query via
  * {@link BoardRepository.findVisibleBoardIds}, avoiding the hydrate-every-

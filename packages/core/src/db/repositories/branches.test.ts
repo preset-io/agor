@@ -11,8 +11,11 @@ import { boards } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardObjectRepository } from './board-objects';
+import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
+import { GroupRepository } from './groups';
 import { RepoRepository } from './repos';
+import { UsersRepository } from './users';
 
 /**
  * Create test repo data (needed as FK for branches)
@@ -59,6 +62,10 @@ function createBranchData(overrides?: {
   updated_at?: string;
   storage_mode?: 'worktree' | 'clone';
   clone_depth?: number;
+  permission_source?: 'board' | 'override';
+  others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+  others_fs_access?: 'none' | 'read' | 'write';
+  dangerously_allow_session_sharing?: boolean;
 }) {
   const name = overrides?.name ?? 'feature-branch';
   const repoId = overrides?.repo_id ?? (generateId() as UUID);
@@ -88,6 +95,10 @@ function createBranchData(overrides?: {
     updated_at: overrides?.updated_at,
     storage_mode: overrides?.storage_mode,
     clone_depth: overrides?.clone_depth,
+    permission_source: overrides?.permission_source,
+    others_can: overrides?.others_can,
+    others_fs_access: overrides?.others_fs_access,
+    dangerously_allow_session_sharing: overrides?.dangerously_allow_session_sharing,
   } as const;
 }
 
@@ -771,4 +782,141 @@ describe('BranchRepository.delete', () => {
 
     await expect(wtRepo.delete('99999999')).rejects.toThrow(EntityNotFoundError);
   });
+});
+
+describe('BranchRepository permission_source', () => {
+  dbTest(
+    'defaults legacy/read branches to override and round-trips board alignment',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const repo = await repoRepo.create(createRepoData({ slug: 'permission-source-repo' }));
+
+      const legacy = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'legacy-permission-source',
+          branch_unique_id: 9101,
+        })
+      );
+      expect(legacy.permission_source).toBe('override');
+
+      const aligned = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'aligned-permission-source',
+          branch_unique_id: 9102,
+          permission_source: 'board',
+        })
+      );
+      expect(aligned.permission_source).toBe('board');
+
+      const patched = await branchRepo.update(aligned.branch_id, { permission_source: 'override' });
+      expect(patched.permission_source).toBe('override');
+    }
+  );
+});
+
+describe('BranchRepository resolveUserAccess', () => {
+  dbTest(
+    'uses board session-sharing defaults for direct owners of board-aligned branches',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const boardRepo = new BoardRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const usersRepo = new UsersRepository(db);
+      const repo = await repoRepo.create(createRepoData({ slug: 'owner-board-defaults-repo' }));
+      const ownerId = generateId() as UUID;
+      await usersRepo.create({
+        user_id: ownerId,
+        email: 'owner-board-defaults@example.com',
+        name: 'Owner',
+      });
+      const board = await boardRepo.create({
+        board_id: generateId(),
+        name: 'Board Defaults',
+        created_by: ownerId,
+        access_mode: 'shared',
+        default_dangerously_allow_session_sharing: true,
+      });
+      const branch = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          name: 'owner-board-defaults',
+          branch_unique_id: 9201,
+          created_by: ownerId,
+          permission_source: 'board',
+          dangerously_allow_session_sharing: false,
+        })
+      );
+      await branchRepo.addOwner(branch.branch_id, ownerId);
+
+      const effective = await branchRepo.resolveUserAccess(branch, ownerId);
+      expect(effective).toMatchObject({
+        can: 'all',
+        source: 'owner',
+        dangerously_allow_session_sharing: true,
+      });
+    }
+  );
+
+  dbTest(
+    'tie-breaks equal app permissions by stronger explicit filesystem access',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const boardRepo = new BoardRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const groupRepo = new GroupRepository(db);
+      const usersRepo = new UsersRepository(db);
+      const repo = await repoRepo.create(createRepoData({ slug: 'fs-tiebreak-repo' }));
+      const creatorId = generateId() as UUID;
+      const memberId = generateId() as UUID;
+      await usersRepo.create({
+        user_id: creatorId,
+        email: 'creator-fs@example.com',
+        name: 'Creator',
+      });
+      await usersRepo.create({
+        user_id: memberId,
+        email: 'member-fs@example.com',
+        name: 'Member',
+      });
+      const board = await boardRepo.create({
+        board_id: generateId(),
+        name: 'FS Tie Board',
+        created_by: creatorId,
+        access_mode: 'shared',
+        default_others_can: 'session',
+        default_others_fs_access: 'read',
+      });
+      const group = await groupRepo.create({ name: 'FS Writers', created_by: creatorId });
+      await groupRepo.addMember(group.group_id, memberId, creatorId);
+      await groupRepo.upsertBoardGrant({
+        board_id: board.board_id,
+        group_id: group.group_id,
+        can: 'session',
+        fs_access: 'write',
+        created_by: creatorId,
+      });
+      const branch = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          name: 'fs-tiebreak',
+          branch_unique_id: 9202,
+          created_by: creatorId,
+          permission_source: 'board',
+        })
+      );
+
+      const effective = await branchRepo.resolveUserAccess(branch, memberId);
+      expect(effective).toMatchObject({
+        can: 'session',
+        fs_access: 'write',
+        source: 'board_group',
+        group_ids: [group.group_id],
+      });
+    }
+  );
 });

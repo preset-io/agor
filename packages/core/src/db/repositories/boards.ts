@@ -4,7 +4,15 @@
  * Type-safe CRUD operations for boards with short ID support.
  */
 
-import type { Board, BoardExportBlob, BoardObject, Branch, UUID } from '@agor/core/types';
+import type {
+  Board,
+  BoardAccessMode,
+  BoardExportBlob,
+  BoardObject,
+  Branch,
+  BranchPermissionLevel,
+  UUID,
+} from '@agor/core/types';
 import { isAssistant } from '@agor/core/types';
 import { and, eq, exists, isNull, like, ne, or, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
@@ -13,8 +21,18 @@ import { generateId } from '../../lib/ids';
 import { generateSlug } from '../../lib/slugs';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type BoardInsert, type BoardRow, boards, branches, branchOwners } from '../schema';
+import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
+import {
+  type BoardInsert,
+  type BoardRow,
+  boardGroupGrants,
+  boardOwners,
+  boards,
+  branches,
+  branchOwners,
+  groupMemberships,
+  groups,
+} from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -23,8 +41,32 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { activeGroupGrantAccessExists, visibleBranchAccessCondition } from './branch-access';
+import { visibleBranchAccessCondition } from './branch-access';
 import { BranchRepository } from './branches';
+
+const BOARD_ACCESS_MODES = ['private', 'shared'] as const;
+const BOARD_DEFAULT_FS_ACCESS = ['none', 'read', 'write'] as const;
+const BOARD_DEFAULT_OTHERS_CAN = ['none', 'view', 'session', 'prompt', 'all'] as const;
+
+function validateBoardPermissionDefaults(board: Partial<Board>): void {
+  if (board.access_mode !== undefined && !BOARD_ACCESS_MODES.includes(board.access_mode)) {
+    throw new RepositoryError(`Invalid board access_mode: ${board.access_mode}`);
+  }
+  if (
+    board.default_others_can !== undefined &&
+    !BOARD_DEFAULT_OTHERS_CAN.includes(board.default_others_can)
+  ) {
+    throw new RepositoryError(`Invalid board default_others_can: ${board.default_others_can}`);
+  }
+  if (
+    board.default_others_fs_access !== undefined &&
+    !BOARD_DEFAULT_FS_ACCESS.includes(board.default_others_fs_access)
+  ) {
+    throw new RepositoryError(
+      `Invalid board default_others_fs_access: ${board.default_others_fs_access}`
+    );
+  }
+}
 
 /**
  * Board repository implementation
@@ -47,6 +89,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       custom_css?: string;
       objects?: Record<string, BoardObject>;
       custom_context?: Record<string, unknown>;
+      access_mode?: BoardAccessMode;
+      default_others_can?: BranchPermissionLevel;
+      default_others_fs_access?: 'none' | 'read' | 'write';
+      default_dangerously_allow_session_sharing?: boolean;
     };
 
     const boardId = row.board_id as UUID;
@@ -69,6 +115,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
       archived_by: row.archived_by ?? undefined,
       ...data,
+      access_mode: data.access_mode ?? 'shared',
+      default_others_can: data.default_others_can ?? 'session',
+      default_others_fs_access: data.default_others_fs_access ?? 'read',
+      default_dangerously_allow_session_sharing:
+        data.default_dangerously_allow_session_sharing ?? false,
     };
   }
 
@@ -76,6 +127,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * Convert Board to database insert format
    */
   private boardToInsert(board: Partial<Board>): BoardInsert {
+    validateBoardPermissionDefaults(board);
     const now = Date.now();
     const boardId = board.board_id ?? generateId();
     if (!board.created_by) {
@@ -92,6 +144,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       created_by: board.created_by,
       data: {
         description: board.description,
+        access_mode: board.access_mode ?? 'shared',
+        default_others_can: board.default_others_can ?? 'session',
+        default_others_fs_access: board.default_others_fs_access ?? 'read',
+        default_dangerously_allow_session_sharing:
+          board.default_dangerously_allow_session_sharing ?? false,
         color: board.color,
         icon: board.icon,
         background_color: board.background_color,
@@ -291,8 +348,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * A board is visible if either:
    * - The user created it (self-created boards are always visible, even when
    *   they carry no branches yet), OR
-   * - At least one branch on the board is accessible to the user (owner
-   *   row, or `others_can` permits at least 'view').
+   * - At least one branch on the board is accessible to the user, OR
+   * - The board's primary assistant branch is accessible to the user, even if
+   *   that assistant branch currently lives on another board.
    *
    * Implemented as a single correlated `EXISTS` subquery against `boards` so
    * each board row is emitted at most once — no `DISTINCT` or `UNION` needed.
@@ -319,17 +377,118 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
           and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
         )
         .where(
+          and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition(this.db, userId))
+        )
+    );
+    const accessiblePrimaryAssistantExists = exists(
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+      (this.db as any)
+        .select({ _: sql`1` })
+        .from(branches)
+        .leftJoin(
+          branchOwners,
+          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+        )
+        .where(
           and(
-            eq(branches.board_id, boards.board_id),
-            visibleBranchAccessCondition(activeGroupGrantAccessExists(this.db, userId))
+            eq(branches.branch_id, boards.primary_assistant_id),
+            visibleBranchAccessCondition(this.db, userId)
           )
         )
     );
     const rows = await select(this.db, { board_id: boards.board_id })
       .from(boards)
-      .where(or(eq(boards.created_by, userId), accessibleBranchExists))
+      .where(
+        or(
+          eq(boards.created_by, userId),
+          exists(
+            // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+            (this.db as any)
+              .select({ _: sql`1` })
+              .from(boardOwners)
+              .where(
+                and(eq(boardOwners.board_id, boards.board_id), eq(boardOwners.user_id, userId))
+              )
+          ),
+          sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared') = 'shared'`,
+          accessibleBranchExists,
+          accessiblePrimaryAssistantExists
+        )
+      )
       .all();
     return rows.map((r: { board_id: string }) => r.board_id);
+  }
+
+  async isOwner(boardId: string, userId: UUID): Promise<boolean> {
+    const row = await select(this.db)
+      .from(boardOwners)
+      .where(and(eq(boardOwners.board_id, boardId), eq(boardOwners.user_id, userId)))
+      .one();
+    return row != null;
+  }
+
+  async canMutate(boardId: string, userId: UUID): Promise<boolean> {
+    const board = await this.findById(boardId);
+    if (!board) throw new EntityNotFoundError('Board', boardId);
+    if (board.created_by === userId) return true;
+    if (await this.isOwner(board.board_id, userId)) return true;
+    if (board.access_mode === 'private') return false;
+
+    const row = await select(this.db)
+      .from(boardGroupGrants)
+      .innerJoin(
+        groupMemberships,
+        and(
+          eq(groupMemberships.group_id, boardGroupGrants.group_id),
+          eq(groupMemberships.user_id, userId)
+        )
+      )
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .where(and(eq(boardGroupGrants.board_id, board.board_id), eq(boardGroupGrants.can, 'all')))
+      .one();
+
+    return row != null;
+  }
+
+  async canView(boardId: string, userId: UUID): Promise<boolean> {
+    const board = await this.findById(boardId);
+    if (!board) throw new EntityNotFoundError('Board', boardId);
+    if (board.access_mode === 'shared') return true;
+    return (await this.findVisibleBoardIds(userId)).includes(board.board_id);
+  }
+
+  async getOwners(boardId: string): Promise<UUID[]> {
+    const board = await this.findById(boardId);
+    if (!board) throw new EntityNotFoundError('Board', boardId);
+    const rows = await select(this.db)
+      .from(boardOwners)
+      .where(eq(boardOwners.board_id, board.board_id))
+      .all();
+    return rows.map((row: { user_id: string }) => row.user_id as UUID);
+  }
+
+  async addOwner(boardId: string, userId: UUID): Promise<void> {
+    const board = await this.findById(boardId);
+    if (!board) throw new EntityNotFoundError('Board', boardId);
+    if (await this.isOwner(board.board_id, userId)) return;
+    await insert(this.db, boardOwners)
+      .values({
+        board_id: board.board_id,
+        user_id: userId,
+        created_at: new Date(),
+      })
+      .run();
+  }
+
+  async removeOwner(boardId: string, userId: UUID): Promise<void> {
+    const board = await this.findById(boardId);
+    if (!board) throw new EntityNotFoundError('Board', boardId);
+    await deleteFrom(this.db, boardOwners)
+      .where(and(eq(boardOwners.board_id, board.board_id), eq(boardOwners.user_id, userId)))
+      .run();
   }
 
   /**
@@ -771,6 +930,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       color: board.color,
       background_color: board.background_color,
       custom_css: board.custom_css,
+      access_mode: board.access_mode,
+      default_others_can: board.default_others_can,
+      default_others_fs_access: board.default_others_fs_access,
+      default_dangerously_allow_session_sharing: board.default_dangerously_allow_session_sharing,
       objects: board.objects,
       custom_context: board.custom_context,
     };
@@ -795,6 +958,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       background_color: blob.background_color,
       objects: blob.objects,
       custom_context: blob.custom_context,
+      access_mode: blob.access_mode,
+      default_others_can: blob.default_others_can,
+      default_others_fs_access: blob.default_others_fs_access,
+      default_dangerously_allow_session_sharing: blob.default_dangerously_allow_session_sharing,
       created_by: userId,
     });
   }
@@ -861,6 +1028,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       background_color: blob.background_color,
       objects: blob.objects,
       custom_context: blob.custom_context,
+      access_mode: blob.access_mode,
+      default_others_can: blob.default_others_can,
+      default_others_fs_access: blob.default_others_fs_access,
+      default_dangerously_allow_session_sharing: blob.default_dangerously_allow_session_sharing,
       created_by: userId,
     });
   }

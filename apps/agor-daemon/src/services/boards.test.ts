@@ -4,7 +4,14 @@
  * Basic tests to verify custom export/import/clone methods are properly wired up.
  */
 
-import { BoardObjectRepository, BranchRepository, generateId, RepoRepository } from '@agor/core/db';
+import {
+  BoardObjectRepository,
+  BranchRepository,
+  type Database,
+  generateId,
+  RepoRepository,
+  UsersRepository,
+} from '@agor/core/db';
 import type { Board, BranchID, UUID } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -12,6 +19,16 @@ import { BoardsService } from './boards';
 
 const TEST_USER = 'test-user' as UUID;
 const TEST_PARAMS = { user: { user_id: TEST_USER } } as never;
+
+async function ensureTestUser(db: Database) {
+  const users = new UsersRepository(db);
+  await users.create({
+    user_id: TEST_USER,
+    email: 'test-user@example.com',
+    name: 'Test User',
+    role: 'member',
+  });
+}
 
 function createRepoData(overrides?: { repo_id?: UUID; slug?: string }) {
   const slug = overrides?.slug ?? `test-repo-${generateId()}`;
@@ -79,6 +96,7 @@ describe('BoardsService - Custom Methods', () => {
   });
 
   dbTest('fromBlob should import board from JSON blob', async ({ db }) => {
+    await ensureTestUser(db);
     const service = new BoardsService(db);
 
     // Create and export a board
@@ -122,6 +140,7 @@ describe('BoardsService - Custom Methods', () => {
   });
 
   dbTest('fromYaml should import board from YAML string', async ({ db }) => {
+    await ensureTestUser(db);
     const service = new BoardsService(db);
 
     // Create and export to YAML
@@ -148,6 +167,7 @@ describe('BoardsService - Custom Methods', () => {
   });
 
   dbTest('clone should create a copy with new name', async ({ db }) => {
+    await ensureTestUser(db);
     const service = new BoardsService(db);
 
     const original = (await service.create({
@@ -168,6 +188,7 @@ describe('BoardsService - Custom Methods', () => {
   });
 
   dbTest('clone should accept slug identifiers', async ({ db }) => {
+    await ensureTestUser(db);
     const service = new BoardsService(db);
 
     await service.create({

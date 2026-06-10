@@ -1481,6 +1481,7 @@ export const App: React.FC<AppProps> = ({
               }}
               defaultTab={createDialogDefaultTab}
               repoById={repoById}
+              boardById={boardById}
               currentBoardId={currentBoardId}
               defaultPosition={newBranchDefaultPosition || undefined}
               onCreateBranch={handleCreateBranch}

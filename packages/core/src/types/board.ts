@@ -1,4 +1,5 @@
 import type { AgenticToolName } from './agentic-tool';
+import type { BranchPermissionLevel } from './branch';
 import type { CardID } from './card';
 import type { ArtifactID, BoardID, BranchID } from './id';
 
@@ -205,6 +206,9 @@ export interface AssistantWelcomeNoteRequest {
   assistantEmoji?: string | null;
 }
 
+export type BoardAccessMode = 'private' | 'shared';
+export type BoardDefaultFsAccess = 'none' | 'read' | 'write';
+
 export interface Board {
   /** Unique board identifier (UUIDv7) */
   board_id: BoardID;
@@ -255,6 +259,18 @@ export interface Board {
 
   /** User ID of the user who created this board */
   created_by: string;
+
+  /** Board-level visibility. Existing boards default/read as 'shared'. */
+  access_mode?: BoardAccessMode;
+
+  /** Default app-layer permission for new/aligned branches on this board. */
+  default_others_can?: BranchPermissionLevel;
+
+  /** Default filesystem access for new/aligned branches on this board. */
+  default_others_fs_access?: BoardDefaultFsAccess;
+
+  /** Default legacy session sharing behavior for new/aligned branches on this board. */
+  default_dangerously_allow_session_sharing?: boolean;
 
   /** Hex color for visual distinction */
   color?: string;
@@ -314,6 +330,10 @@ export interface BoardExportBlob {
   color?: string;
   background_color?: string;
   custom_css?: string;
+  access_mode?: BoardAccessMode;
+  default_others_can?: BranchPermissionLevel;
+  default_others_fs_access?: BoardDefaultFsAccess;
+  default_dangerously_allow_session_sharing?: boolean;
 
   // Annotations (zones, text, markdown)
   objects?: {

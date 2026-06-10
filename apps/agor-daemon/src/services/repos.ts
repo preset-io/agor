@@ -24,7 +24,7 @@ import {
 } from '@agor/core/config';
 import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
-import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   assertRemoteRefVisibleForClone,
   getBranchPath,
@@ -40,7 +40,6 @@ import {
 import type {
   AuthenticatedParams,
   Branch,
-  BranchPermissionLevel,
   CloneRepositoryResult,
   QueryParams,
   Repo,
@@ -586,7 +585,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       sourceBranch?: string;
       issue_url?: string;
       pull_request_url?: string;
-      boardId?: string;
+      boardId: string;
       custom_context?: Record<string, unknown>;
       notes?: string | null;
       /** Explicit board position. Honored as-is when supplied; otherwise
@@ -596,8 +595,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
        *  about x/y; the UI passes the viewport center. */
       position?: { x: number; y: number };
       zoneId?: string;
-      others_can?: BranchPermissionLevel;
-      others_fs_access?: 'none' | 'read' | 'write';
       environment_variant?: string;
       /**
        * Branch storage model — see context/explorations/clone-redesign.md.
@@ -609,6 +606,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     },
     params?: RepoParams
   ): Promise<Branch> {
+    if (!data.boardId) {
+      throw new BadRequest('boardId is required when creating a branch');
+    }
+
     const repo = await this.get(id, params);
 
     console.log('🔍 RepoService.createBranch - repo lookup result:', {
@@ -773,9 +774,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         branch_unique_id: branchUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor
         // Environment templates will be rendered by executor after Unix group creation
-        // RBAC fields (optional, defaults handled by repository layer)
-        ...(data.others_can ? { others_can: data.others_can } : {}),
-        ...(data.others_fs_access ? { others_fs_access: data.others_fs_access } : {}),
+        // RBAC fields are intentionally omitted at creation: new branches
+        // always align with their board defaults. Overrides are a deliberate
+        // post-create action from the Branch permissions tab.
         ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
         storage_mode: storageMode,
         ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
@@ -937,7 +938,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             userId: userId as string | undefined,
             // Unix group isolation (only when RBAC is enabled)
             initUnixGroup: rbacEnabled,
-            othersAccess: data.others_fs_access || branch.others_fs_access || 'read',
+            othersAccess: branch.others_fs_access || 'read',
             // Branch storage mode (forwarded for the clone-mode code path)
             storageMode,
             ...(cloneDepth !== undefined ? { cloneDepth } : {}),

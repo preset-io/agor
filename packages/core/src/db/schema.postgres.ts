@@ -452,6 +452,10 @@ export const boards = pgTable(
       .json<unknown>('data')
       .$type<{
         description?: string;
+        access_mode?: 'private' | 'shared';
+        default_others_can?: import('@agor/core/types').BranchPermissionLevel;
+        default_others_fs_access?: 'none' | 'read' | 'write';
+        default_dangerously_allow_session_sharing?: boolean;
         color?: string;
         icon?: string;
         background_color?: string; // Background color for the board canvas
@@ -612,6 +616,10 @@ export const branches = pgTable(
     }),
 
     // RBAC: App-layer permissions (rbac.md)
+    permission_source: text('permission_source', { enum: ['board', 'override'] })
+      .$type<'board' | 'override'>()
+      .notNull()
+      .default('override'),
     others_can: text('others_can', {
       enum: [...BRANCH_PERMISSION_LEVELS],
     }).default('view'),
@@ -726,6 +734,29 @@ export const branchOwners = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.branch_id, table.user_id] }),
+  })
+);
+
+/**
+ * Board Owners - RBAC junction table.
+ *
+ * Board owners can manage board-level defaults and are treated as inherited
+ * branch owners for board-aligned branches.
+ */
+export const boardOwners = pgTable(
+  'board_owners',
+  {
+    board_id: varchar('board_id', { length: 36 })
+      .notNull()
+      .references(() => boards.board_id, { onDelete: 'cascade' }),
+    user_id: varchar('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    created_at: t.timestamp('created_at'),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.board_id, table.user_id] }),
+    userIdx: index('board_owners_user_idx').on(table.user_id),
   })
 );
 
@@ -1031,6 +1062,36 @@ export const branchGroupGrants = pgTable(
   (table) => ({
     pk: primaryKey({ columns: [table.branch_id, table.group_id] }),
     groupIdx: index('branch_group_grants_group_idx').on(table.group_id),
+  })
+);
+
+/**
+ * Board Group Grants - group-aware board visibility/default grants.
+ */
+export const boardGroupGrants = pgTable(
+  'board_group_grants',
+  {
+    board_id: varchar('board_id', { length: 36 })
+      .notNull()
+      .references(() => boards.board_id, { onDelete: 'cascade' }),
+    group_id: varchar('group_id', { length: 36 })
+      .notNull()
+      .references(() => groups.group_id, { onDelete: 'cascade' }),
+    can: text('can', { enum: [...BRANCH_PERMISSION_LEVELS] })
+      .notNull()
+      .default('view'),
+    fs_access: text('fs_access', { enum: ['none', 'read', 'write'] }).$type<
+      'none' | 'read' | 'write'
+    >(),
+    created_by: varchar('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.board_id, table.group_id] }),
+    groupIdx: index('board_group_grants_group_idx').on(table.group_id),
   })
 );
 
@@ -2071,6 +2132,8 @@ export type GroupInsert = typeof groups.$inferInsert;
 export type GroupMembershipRow = typeof groupMemberships.$inferSelect;
 export type GroupMembershipInsert = typeof groupMemberships.$inferInsert;
 export type BranchGroupGrantRow = typeof branchGroupGrants.$inferSelect;
+export type BoardGroupGrantRow = typeof boardGroupGrants.$inferSelect;
+export type BoardOwnerRow = typeof boardOwners.$inferSelect;
 export type BranchGroupGrantInsert = typeof branchGroupGrants.$inferInsert;
 export type MCPServerRow = typeof mcpServers.$inferSelect;
 export type MCPServerInsert = typeof mcpServers.$inferInsert;

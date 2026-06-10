@@ -1654,6 +1654,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [invalidateRealtimeBranchFromRoute],
     },
   });
+  safeService('boards/:id/owners')?.hooks({
+    after: {
+      create: [clearRealtimeBranchVisibility],
+      remove: [clearRealtimeBranchVisibility],
+    },
+  });
+  safeService('boards/:id/group-grants')?.hooks({
+    after: {
+      create: [clearRealtimeBranchVisibility],
+      patch: [clearRealtimeBranchVisibility],
+      remove: [clearRealtimeBranchVisibility],
+    },
+  });
 
   // ============================================================================
   // Users hooks
@@ -2482,6 +2495,52 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // BoardRepository for RBAC find-scope hook (single instance reused across
   // requests). Cheap to construct — just wraps the shared db handle.
   const boardRepository = new BoardRepository(db);
+  const ensureBoardAccess = (mode: 'view' | 'mutate', action: string) => {
+    return async (context: HookContext) => {
+      if (!branchRbacEnabled || !context.params.provider) return context;
+      const user = context.params.user;
+      if (!user) throw new NotAuthenticated('Authentication required');
+      if (user._isServiceAccount) return context;
+      const allowSuperadmin = superadminOpts?.allowSuperadmin ?? true;
+      if (user.role === ROLES.ADMIN || (allowSuperadmin && user.role === ROLES.SUPERADMIN)) {
+        return context;
+      }
+
+      // biome-ignore lint/suspicious/noExplicitAny: Custom Feathers method args are dynamic.
+      const args = (context as any).arguments as unknown[] | undefined;
+      const firstArg = args?.[0];
+      const id =
+        typeof context.id === 'string'
+          ? context.id
+          : typeof context.params.route?.id === 'string'
+            ? context.params.route.id
+            : typeof firstArg === 'string'
+              ? firstArg
+              : firstArg && typeof firstArg === 'object'
+                ? ((firstArg as { boardId?: string; id?: string; slug?: string }).boardId ??
+                  (firstArg as { boardId?: string; id?: string; slug?: string }).id ??
+                  (firstArg as { boardId?: string; id?: string; slug?: string }).slug)
+                : undefined;
+      if (!id) throw new BadRequest('Board ID is required');
+
+      const board = await boardRepository.findBySlugOrId(id);
+      if (!board) throw new Forbidden(`Board not found: ${id}`);
+      const allowed =
+        mode === 'view'
+          ? await boardRepository.canView(board.board_id, user.user_id as UserID)
+          : await boardRepository.canMutate(board.board_id, user.user_id as UserID);
+      if (!allowed) {
+        throw new Forbidden(
+          mode === 'view'
+            ? `You need board access to ${action}`
+            : `You need board owner or board group 'all' access to ${action}`
+        );
+      }
+      return context;
+    };
+  };
+  const ensureCanViewBoard = (action: string) => ensureBoardAccess('view', action);
+  const ensureCanMutateBoard = (action: string) => ensureBoardAccess('mutate', action);
 
   safeService('boards')?.hooks({
     before: {
@@ -2494,9 +2553,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ? [scopeFindToAccessibleBoards(boardRepository, superadminOpts)]
           : []),
       ],
+      get: [ensureCanViewBoard('view this board')],
+      findBySlug: [ensureCanViewBoard('view this board')],
+      findBySlugOrId: [ensureCanViewBoard('view this board')],
       create: [requireMinimumRole(ROLES.MEMBER, 'create boards'), injectCreatedBy()],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update boards'),
+        ensureCanMutateBoard('update this board'),
         async (context: HookContext<Board>) => {
           // Handle atomic board object operations via _action parameter
           const contextData = context.data || {};
@@ -2576,16 +2639,32 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete boards')],
-      toBlob: [requireMinimumRole(ROLES.MEMBER, 'export boards')],
-      toYaml: [requireMinimumRole(ROLES.MEMBER, 'export boards')],
+      remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete boards'),
+        ensureCanMutateBoard('delete this board'),
+      ],
+      toBlob: [
+        requireMinimumRole(ROLES.MEMBER, 'export boards'),
+        ensureCanViewBoard('export boards'),
+      ],
+      toYaml: [
+        requireMinimumRole(ROLES.MEMBER, 'export boards'),
+        ensureCanViewBoard('export boards'),
+      ],
       fromBlob: [requireMinimumRole(ROLES.MEMBER, 'import boards')],
       fromYaml: [requireMinimumRole(ROLES.MEMBER, 'import boards')],
-      clone: [requireMinimumRole(ROLES.MEMBER, 'clone boards')],
-      setPrimaryAssistant: [requireMinimumRole(ROLES.MEMBER, 'set primary assistant')],
-      clearPrimaryAssistant: [requireMinimumRole(ROLES.MEMBER, 'clear primary assistant')],
+      clone: [requireMinimumRole(ROLES.MEMBER, 'clone boards'), ensureCanViewBoard('clone boards')],
+      setPrimaryAssistant: [
+        requireMinimumRole(ROLES.MEMBER, 'set primary assistant'),
+        ensureCanMutateBoard('set primary assistant'),
+      ],
+      clearPrimaryAssistant: [
+        requireMinimumRole(ROLES.MEMBER, 'clear primary assistant'),
+        ensureCanMutateBoard('clear primary assistant'),
+      ],
       ensureAssistantWelcomeNote: [
         requireMinimumRole(ROLES.MEMBER, 'create assistant welcome note'),
+        ensureCanMutateBoard('create assistant welcome note'),
       ],
     },
     after: {
@@ -2657,9 +2736,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
+      patch: [clearRealtimeBranchVisibility],
+      remove: [clearRealtimeBranchVisibility],
       // Emit created events for custom methods that create boards
       // Custom methods don't automatically trigger app.publish(), so we emit manually
       clone: [
+        clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
             app.service('boards').emit('created', context.result);
@@ -2668,6 +2750,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       fromBlob: [
+        clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
             app.service('boards').emit('created', context.result);
@@ -2676,6 +2759,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       fromYaml: [
+        clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
             app.service('boards').emit('created', context.result);
@@ -2684,6 +2768,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       setPrimaryAssistant: [
+        clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
             app.service('boards').emit('patched', context.result);
@@ -2692,6 +2777,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       clearPrimaryAssistant: [
+        clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
             app.service('boards').emit('patched', context.result);
@@ -2700,6 +2786,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       ensureAssistantWelcomeNote: [
+        clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           const assistantWelcomeNoteMutated = (
             context.params as typeof context.params & {
@@ -2731,8 +2818,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
     app.service('/boards/:id/archive').hooks({
       before: {
-        create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'archive boards')],
+        create: [
+          requireAuth,
+          requireMinimumRole(ROLES.MEMBER, 'archive boards'),
+          ensureCanMutateBoard('archive this board'),
+        ],
       },
+      after: { create: [clearRealtimeBranchVisibility] },
     });
 
     // POST /boards/:id/unarchive - Unarchive a board
@@ -2746,8 +2838,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
     app.service('/boards/:id/unarchive').hooks({
       before: {
-        create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'unarchive boards')],
+        create: [
+          requireAuth,
+          requireMinimumRole(ROLES.MEMBER, 'unarchive boards'),
+          ensureCanMutateBoard('unarchive this board'),
+        ],
       },
+      after: { create: [clearRealtimeBranchVisibility] },
     });
   } // end boards archive/unarchive
 }

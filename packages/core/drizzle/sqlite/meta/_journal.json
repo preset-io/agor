@@ -372,6 +372,27 @@
       "when": 1781100000000,
       "tag": "0054_kb_namespace_rbac",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "6",
+      "when": 1781200000000,
+      "tag": "0055_board_rbac_defaults",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "6",
+      "when": 1781300000000,
+      "tag": "0056_board_group_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1781400000000,
+      "tag": "0057_board_owners",
+      "breakpoints": true
     }
   ]
 }

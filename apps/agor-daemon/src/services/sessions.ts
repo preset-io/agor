@@ -7,6 +7,7 @@
 
 import { PAGINATION } from '@agor/core/config';
 import {
+  BranchRepository,
   type Database,
   SessionEnvSelectionRepository,
   SessionMCPServerRepository,
@@ -19,12 +20,14 @@ import { formatModelToolMismatchWarning, lintModelToolMatch } from '@agor/core/m
 import { resolveChildSessionConfig } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
+  Branch,
   MCPServerID,
   Paginated,
   QueryParams,
   Session,
   SessionID,
   TaskID,
+  UUID,
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
@@ -105,6 +108,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private sessionMCPRepo: SessionMCPServerRepository;
   private sessionEnvSelectionRepo: SessionEnvSelectionRepository;
   private usersRepo: UsersRepository;
+  private branchRepo: BranchRepository;
 
   constructor(db: Database, app: Application) {
     const sessionRepo = new SessionRepository(db);
@@ -122,6 +126,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     this.app = app;
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
     this.sessionEnvSelectionRepo = new SessionEnvSelectionRepository(db);
+    this.branchRepo = new BranchRepository(db);
     // Used by resolveChildIdentity to stamp unix_username on fork/spawn children
     // without going through app.service('users') — matches the convention used
     // by scheduler.ts / gateway.ts / terminals.ts.
@@ -234,6 +239,15 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     try {
       const wt = await this.app.service('branches').get(parent.branch_id, { provider: undefined });
       branch = wt as typeof branch;
+      if (caller.user_id) {
+        const effective = await this.branchRepo.resolveUserAccess(
+          wt as Branch,
+          caller.user_id as UUID
+        );
+        if (branch) {
+          branch.dangerously_allow_session_sharing = effective.dangerously_allow_session_sharing;
+        }
+      }
     } catch {
       // If we can't load the branch, default to the safe (caller-as-owner) path.
       branch = undefined;

@@ -5,6 +5,9 @@
  */
 
 import type {
+  BoardGroupGrant,
+  BoardGroupGrantWithGroup,
+  BoardID,
   BranchGroupGrant,
   BranchGroupGrantWithGroup,
   BranchID,
@@ -14,12 +17,14 @@ import type {
   GroupMembership,
   UserID,
 } from '@agor/core/types';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import {
+  type BoardGroupGrantRow,
   type BranchGroupGrantRow,
+  boardGroupGrants,
   branchGroupGrants,
   type GroupInsert,
   type GroupMembershipRow,
@@ -90,6 +95,21 @@ export class GroupRepository {
   private rowToGrant(row: BranchGroupGrantRow, group?: Group): BranchGroupGrantWithGroup {
     return {
       branch_id: row.branch_id as BranchID,
+      group_id: row.group_id as GroupID,
+      can: row.can as BranchPermissionLevel,
+      fs_access: row.fs_access ?? undefined,
+      created_by: (row.created_by as UserID | null) ?? undefined,
+      created_at: new Date(row.created_at).toISOString(),
+      updated_at: row.updated_at
+        ? new Date(row.updated_at).toISOString()
+        : new Date(row.created_at).toISOString(),
+      group,
+    };
+  }
+
+  private rowToBoardGrant(row: BoardGroupGrantRow, group?: Group): BoardGroupGrantWithGroup {
+    return {
+      board_id: row.board_id as BoardID,
       group_id: row.group_id as GroupID,
       can: row.can as BranchPermissionLevel,
       fs_access: row.fs_access ?? undefined,
@@ -291,17 +311,110 @@ export class GroupRepository {
   }
 
   async getBranchGrantsForUser(branchId: string, userId: string): Promise<BranchGroupGrant[]> {
-    const userGroupIds = await this.getGroupIdsForUser(userId);
-    if (userGroupIds.length === 0) return [];
     const rows = await select(this.db)
       .from(branchGroupGrants)
+      .innerJoin(groupMemberships, eq(branchGroupGrants.group_id, groupMemberships.group_id))
+      .innerJoin(groups, eq(groupMemberships.group_id, groups.group_id))
       .where(
         and(
           eq(branchGroupGrants.branch_id, branchId),
-          inArray(branchGroupGrants.group_id, userGroupIds)
+          eq(groupMemberships.user_id, userId),
+          eq(groups.archived, false)
         )
       )
       .all();
-    return rows.map((row: BranchGroupGrantRow) => this.rowToGrant(row));
+    return rows.map((row: { branch_group_grants: BranchGroupGrantRow }) =>
+      this.rowToGrant(row.branch_group_grants)
+    );
+  }
+
+  async listBoardGrants(boardId: string): Promise<BoardGroupGrantWithGroup[]> {
+    const rows = await select(this.db)
+      .from(boardGroupGrants)
+      .leftJoin(groups, eq(boardGroupGrants.group_id, groups.group_id))
+      .where(eq(boardGroupGrants.board_id, boardId))
+      .all();
+    return rows.map((r: { board_group_grants: BoardGroupGrantRow; groups?: GroupRow | null }) =>
+      this.rowToBoardGrant(r.board_group_grants, r.groups ? this.rowToGroup(r.groups) : undefined)
+    );
+  }
+
+  async upsertBoardGrant(data: {
+    board_id: string;
+    group_id: string;
+    can: BranchPermissionLevel;
+    fs_access?: 'none' | 'read' | 'write' | null;
+    created_by?: UserID;
+  }): Promise<BoardGroupGrantWithGroup> {
+    const now = new Date();
+    const existing = await select(this.db)
+      .from(boardGroupGrants)
+      .where(
+        and(
+          eq(boardGroupGrants.board_id, data.board_id),
+          eq(boardGroupGrants.group_id, data.group_id)
+        )
+      )
+      .one();
+
+    if (existing) {
+      await update(this.db, boardGroupGrants)
+        .set({ can: data.can, fs_access: data.fs_access ?? null, updated_at: now })
+        .where(
+          and(
+            eq(boardGroupGrants.board_id, data.board_id),
+            eq(boardGroupGrants.group_id, data.group_id)
+          )
+        )
+        .run();
+    } else {
+      await insert(this.db, boardGroupGrants)
+        .values({
+          board_id: data.board_id as BoardID,
+          group_id: data.group_id as GroupID,
+          can: data.can,
+          fs_access: data.fs_access ?? null,
+          created_by: data.created_by ?? null,
+          created_at: now,
+          updated_at: now,
+        })
+        .run();
+    }
+
+    const grants = await this.listBoardGrants(data.board_id);
+    const grant = grants.find((g) => g.group_id === data.group_id);
+    if (!grant) throw new RepositoryError('Failed to retrieve board group grant');
+    return grant;
+  }
+
+  async removeBoardGrant(
+    boardId: string,
+    groupId: string
+  ): Promise<BoardGroupGrantWithGroup | null> {
+    const existing =
+      (await this.listBoardGrants(boardId)).find((g) => g.group_id === groupId) ?? null;
+    if (!existing) return null;
+    await deleteFrom(this.db, boardGroupGrants)
+      .where(and(eq(boardGroupGrants.board_id, boardId), eq(boardGroupGrants.group_id, groupId)))
+      .run();
+    return existing;
+  }
+
+  async getBoardGrantsForUser(boardId: string, userId: string): Promise<BoardGroupGrant[]> {
+    const rows = await select(this.db)
+      .from(boardGroupGrants)
+      .innerJoin(groupMemberships, eq(boardGroupGrants.group_id, groupMemberships.group_id))
+      .innerJoin(groups, eq(groupMemberships.group_id, groups.group_id))
+      .where(
+        and(
+          eq(boardGroupGrants.board_id, boardId),
+          eq(groupMemberships.user_id, userId),
+          eq(groups.archived, false)
+        )
+      )
+      .all();
+    return rows.map((row: { board_group_grants: BoardGroupGrantRow }) =>
+      this.rowToBoardGrant(row.board_group_grants)
+    );
   }
 }

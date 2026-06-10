@@ -49,6 +49,8 @@ export interface BranchFormFieldsProps {
   showUrlFields?: boolean;
   /** Show board selector */
   showBoardSelector?: boolean;
+  /** Require a board selection when the selector is shown */
+  requireBoard?: boolean;
   /** Callback when form values change */
   onFormChange?: () => void;
   /** Controlled checkbox state */
@@ -68,6 +70,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
   fieldPrefix = '',
   showUrlFields = false,
   showBoardSelector = false,
+  requireBoard = false,
   onFormChange,
   useSameBranchName: controlledUseSameBranchName,
   onUseSameBranchNameChange,
@@ -141,12 +144,14 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
       {showBoardSelector && (
         <Form.Item
           name={`${fieldPrefix}boardId`}
-          label="Board (optional)"
-          tooltip="Add this branch to a board for organization"
+          label="Board"
+          tooltip="Branches are created on a board and align with that board's default permissions"
+          rules={requireBoard ? [{ required: true, message: 'Please select a board' }] : undefined}
+          validateTrigger={['onBlur', 'onChange']}
         >
           <Select
-            placeholder="Select board (optional)..."
-            allowClear
+            placeholder="Select board..."
+            allowClear={!requireBoard}
             showSearch
             filterOption={(input, option) =>
               String(option?.label ?? '')

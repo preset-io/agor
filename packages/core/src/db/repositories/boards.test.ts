@@ -13,7 +13,9 @@ import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
+import { GroupRepository } from './groups';
 import { RepoRepository } from './repos';
+import { UsersRepository } from './users';
 
 /**
  * Create test board data with defaults
@@ -31,6 +33,10 @@ function createBoardData(overrides?: Partial<Board>): Partial<Board> {
     created_by: overrides?.created_by ?? 'test-user',
     created_at: overrides?.created_at,
     last_updated: overrides?.last_updated,
+    access_mode: overrides?.access_mode,
+    default_others_can: overrides?.default_others_can,
+    default_others_fs_access: overrides?.default_others_fs_access,
+    default_dangerously_allow_session_sharing: overrides?.default_dangerously_allow_session_sharing,
   };
   if (Object.hasOwn(overrides ?? {}, 'primary_assistant_id')) {
     data.primary_assistant_id = overrides?.primary_assistant_id;
@@ -624,6 +630,46 @@ describe('BoardRepository.update', () => {
 // ============================================================================
 
 describe('BoardRepository primary assistant', () => {
+  dbTest(
+    'keeps private boards visible through an accessible primary assistant even after assistant moves',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const boardRepo = new BoardRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const viewer = await users.create({
+        email: 'primary-assistant-viewer@example.com',
+        role: 'member',
+      });
+      const oldBoard = await boardRepo.create(
+        createBoardData({ name: 'Kelly Board', access_mode: 'private' })
+      );
+      const newBoard = await boardRepo.create(
+        createBoardData({ name: 'QBR Prep', access_mode: 'private' })
+      );
+      const assistant = await createBranchForBoard(db, oldBoard.board_id, {
+        assistant: true,
+        name: 'kelly-assistant',
+      });
+
+      await boardRepo.setPrimaryAssistant(oldBoard.board_id, assistant.branch_id);
+      await branchRepo.update(assistant.branch_id, {
+        board_id: newBoard.board_id,
+        permission_source: 'override',
+        others_can: 'none',
+      });
+
+      await expect(boardRepo.findVisibleBoardIds(viewer.user_id as UUID)).resolves.not.toContain(
+        oldBoard.board_id
+      );
+
+      await branchRepo.addOwner(assistant.branch_id, viewer.user_id as UUID);
+
+      await expect(boardRepo.findVisibleBoardIds(viewer.user_id as UUID)).resolves.toContain(
+        oldBoard.board_id
+      );
+    }
+  );
+
   dbTest('should set and fetch a valid primary assistant', async ({ db }) => {
     const boardRepo = new BoardRepository(db);
     const board = await boardRepo.create(createBoardData());
@@ -1332,5 +1378,112 @@ describe('BoardRepository slug uniqueness', () => {
     expect(board1.slug).toBeUndefined();
     expect(board2.slug).toBeUndefined();
     expect(board1.board_id).not.toBe(board2.board_id);
+  });
+});
+
+describe('BoardRepository RBAC defaults', () => {
+  dbTest('applies shared backcompat defaults when fields are omitted', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData({ name: 'Backcompat Board' }));
+
+    expect(board.access_mode).toBe('shared');
+    expect(board.default_others_can).toBe('session');
+    expect(board.default_others_fs_access).toBe('read');
+    expect(board.default_dangerously_allow_session_sharing).toBe(false);
+  });
+
+  dbTest('round-trips board-level permission defaults', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        name: 'Private Defaults Board',
+        access_mode: 'private',
+        default_others_can: 'none',
+        default_others_fs_access: 'none',
+        default_dangerously_allow_session_sharing: true,
+      })
+    );
+
+    expect(board).toMatchObject({
+      access_mode: 'private',
+      default_others_can: 'none',
+      default_others_fs_access: 'none',
+      default_dangerously_allow_session_sharing: true,
+    });
+
+    const updated = await repo.update(board.board_id, {
+      access_mode: 'shared',
+      default_others_can: 'prompt',
+      default_others_fs_access: 'write',
+      default_dangerously_allow_session_sharing: false,
+    });
+
+    expect(updated).toMatchObject({
+      access_mode: 'shared',
+      default_others_can: 'prompt',
+      default_others_fs_access: 'write',
+      default_dangerously_allow_session_sharing: false,
+    });
+  });
+
+  dbTest('treats created_by as a board mutator for historical boards', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const creatorId = generateId() as UUID;
+    await usersRepo.create({
+      user_id: creatorId,
+      email: 'creator@example.com',
+      name: 'Creator',
+    });
+    const board = await repo.create(
+      createBoardData({
+        name: 'Historical Board',
+        created_by: creatorId,
+        access_mode: 'private',
+      })
+    );
+
+    expect(await repo.canMutate(board.board_id, creatorId)).toBe(true);
+    expect(await repo.findVisibleBoardIds(creatorId)).toContain(board.board_id);
+  });
+
+  dbTest('ignores stale board group mutators when a board is private', async ({ db }) => {
+    const boardRepo = new BoardRepository(db);
+    const groupRepo = new GroupRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const creatorId = generateId() as UUID;
+    const memberId = generateId() as UUID;
+    await usersRepo.create({
+      user_id: creatorId,
+      email: 'creator-private@example.com',
+      name: 'Creator',
+    });
+    await usersRepo.create({
+      user_id: memberId,
+      email: 'member-private@example.com',
+      name: 'Member',
+    });
+    const board = await boardRepo.create(
+      createBoardData({
+        name: 'Private Board',
+        created_by: creatorId,
+        access_mode: 'private',
+      })
+    );
+    const group = await groupRepo.create({ name: 'Editors', created_by: creatorId });
+    await groupRepo.addMember(group.group_id, memberId, creatorId);
+    await groupRepo.upsertBoardGrant({
+      board_id: board.board_id,
+      group_id: group.group_id,
+      can: 'all',
+      fs_access: 'write',
+      created_by: creatorId,
+    });
+
+    expect(await boardRepo.canMutate(board.board_id, memberId)).toBe(false);
+    expect(await boardRepo.findVisibleBoardIds(memberId)).not.toContain(board.board_id);
+
+    await boardRepo.update(board.board_id, { access_mode: 'shared' });
+    expect(await boardRepo.canMutate(board.board_id, memberId)).toBe(true);
   });
 });

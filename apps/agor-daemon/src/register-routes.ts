@@ -2483,7 +2483,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sourceBranch?: string;
           issue_url?: string;
           pull_request_url?: string;
-          boardId?: string;
+          boardId: string;
           /** Explicit board position. Omit to let the service compute a
            *  smart default — preferred for MCP/agent callers. The UI
            *  passes the viewport center so the new card lands where the
