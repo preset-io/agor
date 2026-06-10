@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Session, SpawnConfig, Task } from '@agor-live/client';
-import { getAssistantConfig, isAssistant, shortId } from '@agor-live/client';
+import { getAssistantConfig, isAssistant, sessionPath, shortId } from '@agor-live/client';
 import {
   CodeOutlined,
   CommentOutlined,
@@ -22,16 +22,6 @@ import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminal';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 import { MCPServerPill } from '../MCPServer';
 import { IssuePill, PullRequestPill } from '../Pill';
-
-const toInternalRoutePath = (url?: string | null): string | null => {
-  if (!url) return null;
-  try {
-    const parsed = new URL(url);
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
-  } catch {
-    return url;
-  }
-};
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;
@@ -136,7 +126,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                   onStopEnvironment={onStopEnvironment}
                   onNukeEnvironment={onNukeEnvironment}
                   onViewLogs={onViewLogs}
-                  identityLink={toInternalRoutePath(session.url)}
+                  identityLink={sessionPath(session.session_id)}
                 />
               )}
               {/* Issue and PR Pills */}
