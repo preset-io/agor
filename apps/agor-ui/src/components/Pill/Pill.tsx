@@ -838,12 +838,14 @@ interface BranchPillProps extends BasePillProps {
   branch: string;
   compact?: boolean;
   title?: string;
+  onClick?: (e: React.MouseEvent) => void;
 }
 
 export const BranchPill: React.FC<BranchPillProps> = ({
   branch,
   compact = false,
   title,
+  onClick,
   style,
 }) => {
   const { token } = theme.useToken();
@@ -856,9 +858,10 @@ export const BranchPill: React.FC<BranchPillProps> = ({
       style={{
         maxWidth: compact ? '100%' : undefined,
         marginInlineEnd: compact ? 0 : undefined,
-        cursor: 'default',
+        cursor: onClick ? 'pointer' : 'default',
         ...style,
       }}
+      onClick={onClick}
     >
       <span
         style={{

@@ -1,4 +1,4 @@
-import type { Branch, Session } from '@agor-live/client';
+import type { Board, Branch, Session } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   ApartmentOutlined,
@@ -7,11 +7,12 @@ import {
   RobotOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
-import { Avatar, Card, Empty, List, Segmented, Space, Tooltip, Typography, theme } from 'antd';
+import { Avatar, Card, Empty, List, Segmented, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useMemo, useState } from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
+import { BranchPill } from '../Pill';
 import { ToolIcon } from '../ToolIcon';
 import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
@@ -83,6 +84,26 @@ export const HomeActivitySection: React.FC<
   const { token } = theme.useToken();
   const cardGlassStyle = glassCardStyle(token);
   const [filter, setFilter] = useState<ActivityFilter>('all');
+  const clickablePillStyle = useMemo<React.CSSProperties>(
+    () => ({
+      cursor: 'pointer',
+      marginInlineEnd: 0,
+    }),
+    []
+  );
+
+  const boardPill = useCallback(
+    (board: Board) => (
+      <Tag
+        icon={<ApartmentOutlined />}
+        onClick={() => onBoardClick(board.board_id)}
+        style={clickablePillStyle}
+      >
+        <span style={{ fontFamily: token.fontFamilyCode }}>{board.name}</span>
+      </Tag>
+    ),
+    [clickablePillStyle, onBoardClick, token.fontFamilyCode]
+  );
 
   const branchMessage = useCallback(
     (branch: Branch, assistant: boolean) => {
@@ -95,26 +116,32 @@ export const HomeActivitySection: React.FC<
           <Text strong>{actor}</Text>
           <Text type="secondary">created</Text>
           {assistant ? (
-            <RobotOutlined style={{ color: token.colorTextTertiary }} />
+            <Tag
+              icon={<RobotOutlined />}
+              color="purple"
+              onClick={() => onBranchClick(branch.branch_id)}
+              style={clickablePillStyle}
+            >
+              <span style={{ fontFamily: token.fontFamilyCode }}>{branchLabel}</span>
+            </Tag>
           ) : (
-            <BranchesOutlined style={{ color: token.colorTextTertiary }} />
+            <BranchPill
+              branch={branchLabel}
+              compact
+              title={branch.name}
+              onClick={() => onBranchClick(branch.branch_id)}
+            />
           )}
-          <Typography.Link onClick={() => onBranchClick(branch.branch_id)}>
-            {branchLabel}
-          </Typography.Link>
           {board && (
             <>
               <Text type="secondary">on</Text>
-              <ApartmentOutlined style={{ color: token.colorTextTertiary }} />
-              <Typography.Link onClick={() => onBoardClick(board.board_id)}>
-                {board.name}
-              </Typography.Link>
+              {boardPill(board)}
             </>
           )}
         </Space>
       );
     },
-    [boardById, onBoardClick, onBranchClick, token.colorTextTertiary, userById]
+    [boardById, boardPill, clickablePillStyle, onBranchClick, token.fontFamilyCode, userById]
   );
 
   const sessionMessage = useCallback(
@@ -134,26 +161,27 @@ export const HomeActivitySection: React.FC<
         <Space size={4} wrap>
           <Text strong>{actor}</Text>
           <Text type="secondary">{verb}</Text>
-          <ToolIcon tool={session.agentic_tool} size={14} />
-          <Typography.Link onClick={() => onSessionClick(session.session_id)}>
-            {sessionTitle}
-          </Typography.Link>
+          <Tag
+            icon={<ToolIcon tool={session.agentic_tool} size={14} />}
+            onClick={() => onSessionClick(session.session_id)}
+            style={clickablePillStyle}
+          >
+            <span style={{ fontFamily: token.fontFamilyCode }}>{sessionTitle}</span>
+          </Tag>
           {branch && (
             <>
               <Text type="secondary">in</Text>
-              <BranchesOutlined style={{ color: token.colorTextTertiary }} />
-              <Typography.Link onClick={() => onBranchClick(branch.branch_id)}>
-                {branch.name}
-              </Typography.Link>
+              <BranchPill
+                branch={branch.name}
+                compact
+                onClick={() => onBranchClick(branch.branch_id)}
+              />
             </>
           )}
           {board && (
             <>
               <Text type="secondary">on</Text>
-              <ApartmentOutlined style={{ color: token.colorTextTertiary }} />
-              <Typography.Link onClick={() => onBoardClick(board.board_id)}>
-                {board.name}
-              </Typography.Link>
+              {boardPill(board)}
             </>
           )}
         </Space>
@@ -161,11 +189,12 @@ export const HomeActivitySection: React.FC<
     },
     [
       boardById,
+      boardPill,
       branchById,
-      onBoardClick,
       onBranchClick,
       onSessionClick,
-      token.colorTextTertiary,
+      clickablePillStyle,
+      token.fontFamilyCode,
       userById,
     ]
   );
