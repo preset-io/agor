@@ -937,10 +937,18 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       const zoneId = args.zoneId === null ? null : coerceString(args.zoneId)!;
-      const targetSessionId = coerceString(args.targetSessionId)
-        ? await resolveSessionId(ctx, coerceString(args.targetSessionId)!)
-        : undefined;
+      const rawTargetSessionId = coerceString(args.targetSessionId);
       const triggerTemplate = args.triggerTemplate === true;
+
+      if (zoneId === null && (triggerTemplate || rawTargetSessionId)) {
+        throw new Error(
+          'triggerTemplate and targetSessionId cannot be used when zoneId is null; clearing a zone pin does not run zone triggers.'
+        );
+      }
+
+      const targetSessionId = rawTargetSessionId
+        ? await resolveSessionId(ctx, rawTargetSessionId)
+        : undefined;
 
       console.log(
         zoneId === null
@@ -971,12 +979,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       };
 
       if (zoneId === null) {
-        if (triggerTemplate || targetSessionId) {
-          throw new Error(
-            'triggerTemplate and targetSessionId cannot be used when zoneId is null; clearing a zone pin does not run zone triggers.'
-          );
-        }
-
         const boardObject = await boardObjectsService.findByBranchId(
           branchId as BranchID,
           ctx.baseServiceParams

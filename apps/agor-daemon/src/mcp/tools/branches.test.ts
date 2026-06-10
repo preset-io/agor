@@ -273,6 +273,9 @@ describe('agor_branches_set_zone', () => {
     await expect(
       setZone({ branchId: 'branch-1', zoneId: null, triggerTemplate: true })
     ).rejects.toThrow(/cannot be used when zoneId is null/i);
+    await expect(
+      setZone({ branchId: 'branch-1', zoneId: null, targetSessionId: 'bad-session' })
+    ).rejects.toThrow(/cannot be used when zoneId is null/i);
     expect(findByBranchId).not.toHaveBeenCalled();
   });
 });
