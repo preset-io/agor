@@ -17,7 +17,7 @@ import { getSessionStatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
 import { HighlightMatch } from '../HighlightMatch';
-import { BranchPill } from '../Pill';
+import { BoardPill, BranchPill } from '../Pill';
 import { SessionSearchToolbar } from '../SessionSearchControls';
 import { ToolIcon } from '../ToolIcon';
 import { HomeSectionHeader } from './HomeSectionHeader';
@@ -99,11 +99,7 @@ const HomeSessionRow: React.FC<{
                   {formatRelativeTime(session.last_updated)}
                 </Text>
               </Tooltip>
-              {board && (
-                <Tag>
-                  {board.icon || '📋'} {board.name}
-                </Tag>
-              )}
+              {board && <BoardPill board={board} compact />}
               {branch && (
                 <BranchPill
                   branch={branch.name}

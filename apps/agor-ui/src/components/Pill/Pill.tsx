@@ -46,7 +46,7 @@ export const ENTITY_PILL_COLORS = {
   board: 'blue',
   assistant: 'geekblue',
   mcp: 'purple',
-  user: 'magenta',
+  user: 'orange',
   artifact: 'gold',
   knowledge: 'green',
   repo: 'default',
@@ -947,7 +947,7 @@ export const BoardPill: React.FC<BoardPillProps> = ({
           textOverflow: compact ? 'ellipsis' : undefined,
           whiteSpace: compact ? 'nowrap' : undefined,
           verticalAlign: compact ? 'bottom' : undefined,
-          fontFamily: token.fontFamilyCode,
+          fontFamily: token.fontFamily,
         }}
       >
         {board.icon && <span style={{ fontFamily: token.fontFamily }}>{board.icon}</span>}
@@ -1001,7 +1001,7 @@ export const UserPill: React.FC<UserPillProps> = ({
           textOverflow: compact ? 'ellipsis' : undefined,
           whiteSpace: compact ? 'nowrap' : undefined,
           verticalAlign: compact ? 'bottom' : undefined,
-          fontFamily: token.fontFamilyCode,
+          fontFamily: token.fontFamily,
         }}
       >
         {user.emoji && <span style={{ fontFamily: token.fontFamily }}>{user.emoji}</span>}
