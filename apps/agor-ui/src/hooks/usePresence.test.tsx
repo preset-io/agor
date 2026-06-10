@@ -129,4 +129,58 @@ describe('usePresence', () => {
     });
     expect(result.current.activeUsers[0]?.cursor).toBeUndefined();
   });
+
+  it('keeps global facepile presence when the current route has no board', () => {
+    const { client, emit } = makeMockClient();
+    const users = [makeUser()];
+
+    const { result, rerender } = renderHook(
+      ({ boardId }: { boardId: string | null }) =>
+        usePresence({
+          client,
+          boardId: boardId as never,
+          users,
+          globalPresence: true,
+          presenceMinUpdateIntervalMs: 10_000,
+        }),
+      {
+        initialProps: { boardId: 'board-a' },
+      }
+    );
+
+    act(() => {
+      emit('presence-updated', {
+        userId: 'user-1',
+        boardId: 'board-b',
+        timestamp: 1_000,
+      } satisfies PresenceUpdatedEvent);
+    });
+
+    expect(result.current.activeUsers).toHaveLength(1);
+    expect(result.current.activeUsers[0]).toMatchObject({
+      boardId: 'board-b',
+      lastSeen: 1_000,
+    });
+
+    rerender({ boardId: null });
+
+    expect(result.current.activeUsers).toHaveLength(1);
+    expect(result.current.activeUsers[0]).toMatchObject({
+      boardId: 'board-b',
+      lastSeen: 1_000,
+    });
+
+    act(() => {
+      emit('presence-updated', {
+        userId: 'user-1',
+        boardId: 'board-c',
+        timestamp: 20_000,
+      } satisfies PresenceUpdatedEvent);
+    });
+
+    expect(result.current.activeUsers[0]).toMatchObject({
+      boardId: 'board-c',
+      lastSeen: 20_000,
+    });
+  });
 });

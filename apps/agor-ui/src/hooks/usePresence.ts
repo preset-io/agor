@@ -70,7 +70,13 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
   >(new Map());
 
   useEffect(() => {
-    if (!enabled || !client?.io || !boardId) {
+    if (!enabled || !client?.io) {
+      setCursorMap(new Map());
+      setPresenceMap(new Map());
+      return;
+    }
+
+    if (!globalPresence && !boardId) {
       setCursorMap(new Map());
       setPresenceMap(new Map());
       return;
@@ -79,7 +85,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
     // Handle cursor-moved events
     const handleCursorMoved = (event: CursorMovedEvent) => {
       // For cursor rendering, only track cursors for the current board
-      if (event.boardId === boardId) {
+      if (boardId && event.boardId === boardId) {
         const updateData = {
           x: event.x,
           y: event.y,
@@ -204,7 +210,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
     // Handle cursor-left events (user navigated away)
     const handleCursorLeft = (event: { userId: string; boardId: BoardID }) => {
       // For cursor rendering, only handle current board
-      if (event.boardId === boardId) {
+      if (boardId && event.boardId === boardId) {
         setCursorMap((prev) => {
           if (!prev.has(event.userId)) return prev; // No-op if user not tracked
           const next = new Map(prev);
