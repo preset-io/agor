@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { buildKnowledgeRoutePath, namespaceSlugFromUri } from '../../utils/knowledgeRoutes';
 import { formatRelativeTime } from '../../utils/time';
-import { Tag } from '../Tag';
+import { KnowledgeNamespacePill } from '../Pill';
 import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
 import type { KnowledgeDocument } from './types';
@@ -30,9 +30,10 @@ const KnowledgeDocRow: React.FC<{ doc: KnowledgeDocument }> = ({ doc }) => {
             <Text ellipsis={{ tooltip: doc.title || doc.path }} style={{ minWidth: 0 }}>
               {doc.title || doc.path}
             </Text>
-            <Tag color="default" style={{ marginInlineEnd: 0 }}>
-              {namespace || 'Knowledge'}
-            </Tag>
+            <KnowledgeNamespacePill
+              namespace={namespace || 'Knowledge'}
+              style={{ marginInlineEnd: 0 }}
+            />
           </Space>
         }
         description={

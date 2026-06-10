@@ -22,6 +22,7 @@ import {
   SlackOutlined,
   ThunderboltOutlined,
   ToolOutlined,
+  UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
@@ -854,6 +855,71 @@ export const DirtyStatePill: React.FC<DirtyStatePillProps> = ({ style }) => {
   );
 };
 
+interface EntityPillProps extends BasePillProps {
+  icon?: React.ReactNode;
+  color: string;
+  label?: React.ReactNode;
+  emoji?: string | null;
+  compact?: boolean;
+  title?: string;
+  onClick?: (e: React.MouseEvent) => void;
+  maxWidth?: number;
+  code?: boolean;
+  ariaLabel?: string;
+}
+
+export const EntityPill: React.FC<EntityPillProps> = ({
+  icon,
+  color,
+  label,
+  emoji,
+  compact = false,
+  title,
+  onClick,
+  maxWidth = 220,
+  code = false,
+  ariaLabel,
+  style,
+}) => {
+  const { token } = theme.useToken();
+  const hasLabel = label !== undefined && label !== null && label !== '';
+
+  return (
+    <Tag
+      icon={icon}
+      color={color}
+      title={title}
+      aria-label={ariaLabel}
+      style={{
+        maxWidth: compact ? '100%' : undefined,
+        marginInlineEnd: compact ? 0 : undefined,
+        cursor: onClick ? 'pointer' : 'default',
+        ...style,
+      }}
+      onClick={onClick}
+    >
+      {hasLabel && (
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: emoji ? 4 : undefined,
+            maxWidth: compact ? maxWidth : undefined,
+            overflow: compact ? 'hidden' : undefined,
+            textOverflow: compact ? 'ellipsis' : undefined,
+            whiteSpace: compact ? 'nowrap' : undefined,
+            verticalAlign: compact ? 'bottom' : undefined,
+            fontFamily: code ? token.fontFamilyCode : token.fontFamily,
+          }}
+        >
+          {emoji && <span style={{ fontFamily: token.fontFamily }}>{emoji}</span>}
+          {label}
+        </span>
+      )}
+    </Tag>
+  );
+};
+
 interface BranchPillProps extends BasePillProps {
   branch: string;
   compact?: boolean;
@@ -869,41 +935,19 @@ export const BranchPill: React.FC<BranchPillProps> = ({
   emoji,
   onClick,
   style,
-}) => {
-  const { token } = theme.useToken();
-
-  return (
-    <Tag
-      icon={<BranchesOutlined />}
-      color={ENTITY_PILL_COLORS.branch}
-      title={title}
-      style={{
-        maxWidth: compact ? '100%' : undefined,
-        marginInlineEnd: compact ? 0 : undefined,
-        cursor: onClick ? 'pointer' : 'default',
-        ...style,
-      }}
-      onClick={onClick}
-    >
-      <span
-        style={{
-          display: compact || emoji ? 'inline-flex' : undefined,
-          alignItems: emoji ? 'center' : undefined,
-          gap: emoji ? 4 : undefined,
-          maxWidth: compact ? 220 : undefined,
-          overflow: compact ? 'hidden' : undefined,
-          textOverflow: compact ? 'ellipsis' : undefined,
-          whiteSpace: compact ? 'nowrap' : undefined,
-          verticalAlign: compact ? 'bottom' : undefined,
-          fontFamily: token.fontFamilyCode,
-        }}
-      >
-        {emoji && <span style={{ fontFamily: token.fontFamily }}>{emoji}</span>}
-        {branch}
-      </span>
-    </Tag>
-  );
-};
+}) => (
+  <EntityPill
+    icon={<BranchesOutlined />}
+    color={ENTITY_PILL_COLORS.branch}
+    label={branch}
+    emoji={emoji}
+    compact={compact}
+    title={title}
+    onClick={onClick}
+    code
+    style={style}
+  />
+);
 
 interface BoardPillProps extends BasePillProps {
   board: {
@@ -921,41 +965,18 @@ export const BoardPill: React.FC<BoardPillProps> = ({
   title,
   onClick,
   style,
-}) => {
-  const { token } = theme.useToken();
-
-  return (
-    <Tag
-      icon={<ApartmentOutlined />}
-      color={ENTITY_PILL_COLORS.board}
-      title={title ?? board.name}
-      style={{
-        maxWidth: compact ? '100%' : undefined,
-        marginInlineEnd: compact ? 0 : undefined,
-        cursor: onClick ? 'pointer' : 'default',
-        ...style,
-      }}
-      onClick={onClick}
-    >
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: board.icon ? 4 : undefined,
-          maxWidth: compact ? 220 : undefined,
-          overflow: compact ? 'hidden' : undefined,
-          textOverflow: compact ? 'ellipsis' : undefined,
-          whiteSpace: compact ? 'nowrap' : undefined,
-          verticalAlign: compact ? 'bottom' : undefined,
-          fontFamily: token.fontFamily,
-        }}
-      >
-        {board.icon && <span style={{ fontFamily: token.fontFamily }}>{board.icon}</span>}
-        {board.name}
-      </span>
-    </Tag>
-  );
-};
+}) => (
+  <EntityPill
+    icon={<ApartmentOutlined />}
+    color={ENTITY_PILL_COLORS.board}
+    label={board.name}
+    emoji={board.icon}
+    compact={compact}
+    title={title ?? board.name}
+    onClick={onClick}
+    style={style}
+  />
+);
 
 interface UserPillProps extends BasePillProps {
   user: {
@@ -975,41 +996,88 @@ export const UserPill: React.FC<UserPillProps> = ({
   onClick,
   style,
 }) => {
-  const { token } = theme.useToken();
   const label = user.name || user.email || 'Someone';
 
   return (
-    <Tag
+    <EntityPill
       icon={<UserOutlined />}
       color={ENTITY_PILL_COLORS.user}
+      label={label}
+      emoji={user.emoji}
+      compact={compact}
       title={title ?? label}
-      style={{
-        maxWidth: compact ? '100%' : undefined,
-        marginInlineEnd: compact ? 0 : undefined,
-        cursor: onClick ? 'pointer' : 'default',
-        ...style,
-      }}
       onClick={onClick}
-    >
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: user.emoji ? 4 : undefined,
-          maxWidth: compact ? 180 : undefined,
-          overflow: compact ? 'hidden' : undefined,
-          textOverflow: compact ? 'ellipsis' : undefined,
-          whiteSpace: compact ? 'nowrap' : undefined,
-          verticalAlign: compact ? 'bottom' : undefined,
-          fontFamily: token.fontFamily,
-        }}
-      >
-        {user.emoji && <span style={{ fontFamily: token.fontFamily }}>{user.emoji}</span>}
-        {label}
-      </span>
-    </Tag>
+      maxWidth={180}
+      style={style}
+    />
   );
 };
+
+interface AssistantPillProps extends BasePillProps {
+  name: string;
+  emoji?: string | null;
+  compact?: boolean;
+  title?: string;
+  onClick?: (e: React.MouseEvent) => void;
+}
+
+export const AssistantPill: React.FC<AssistantPillProps> = ({
+  name,
+  emoji,
+  compact = false,
+  title,
+  onClick,
+  style,
+}) => (
+  <EntityPill
+    icon={<RobotOutlined />}
+    color={ENTITY_PILL_COLORS.assistant}
+    label={name}
+    emoji={emoji}
+    compact={compact}
+    title={title ?? name}
+    onClick={onClick}
+    code
+    style={style}
+  />
+);
+
+interface SessionPillProps extends BasePillProps {
+  label?: React.ReactNode;
+  compact?: boolean;
+  title?: string;
+  ariaLabel?: string;
+  onClick?: (e: React.MouseEvent) => void;
+}
+
+export const SessionPill: React.FC<SessionPillProps> = ({
+  label,
+  compact = false,
+  title,
+  ariaLabel,
+  onClick,
+  style,
+}) => (
+  <EntityPill
+    icon={<UnorderedListOutlined />}
+    color={ENTITY_PILL_COLORS.session}
+    label={label}
+    compact={compact}
+    title={title}
+    ariaLabel={ariaLabel}
+    onClick={onClick}
+    style={style}
+  />
+);
+
+interface KnowledgeNamespacePillProps extends BasePillProps {
+  namespace: string;
+}
+
+export const KnowledgeNamespacePill: React.FC<KnowledgeNamespacePillProps> = ({
+  namespace,
+  style,
+}) => <EntityPill color="default" label={namespace} compact title={namespace} style={style} />;
 
 interface RepoPillProps extends BasePillProps {
   repoName: string;

@@ -1,5 +1,6 @@
 export { EventStreamPill } from './EventStreamPill';
 export {
+  AssistantPill,
   BoardPill,
   BranchPill,
   ChannelPill,
@@ -7,10 +8,12 @@ export {
   ContextWindowPill,
   DirtyStatePill,
   ENTITY_PILL_COLORS,
+  EntityPill,
   ForkPill,
   GitShaPill,
   GitStatePill,
   IssuePill,
+  KnowledgeNamespacePill,
   MessageCountPill,
   ModelPill,
   PILL_COLORS,
@@ -20,6 +23,7 @@ export {
   ReportPill,
   ScheduledRunPill,
   SessionIdPill,
+  SessionPill,
   SpawnPill,
   StatusPill,
   TokenCountPill,

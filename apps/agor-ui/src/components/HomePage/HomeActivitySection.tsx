@@ -22,9 +22,7 @@ import type React from 'react';
 import { useCallback, useMemo, useState } from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
-import { BoardPill, BranchPill, ENTITY_PILL_COLORS, UserPill } from '../Pill';
-import { Tag } from '../Tag';
-import { ToolIcon } from '../ToolIcon';
+import { AssistantPill, BoardPill, BranchPill, SessionPill, UserPill } from '../Pill';
 import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
 import type { HomePageProps } from './types';
@@ -115,26 +113,14 @@ export const HomeActivitySection: React.FC<
           {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
           <Text type="secondary">created</Text>
           {assistant ? (
-            <Tag
-              icon={<RobotOutlined />}
-              color={ENTITY_PILL_COLORS.assistant}
+            <AssistantPill
+              name={branchLabel}
+              emoji={assistantConfig?.emoji}
+              compact
+              title={branch.name}
               onClick={() => onBranchClick(branch.branch_id)}
               style={clickablePillStyle}
-            >
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: assistantConfig?.emoji ? 4 : undefined,
-                  fontFamily: token.fontFamilyCode,
-                }}
-              >
-                {assistantConfig?.emoji && (
-                  <span style={{ fontFamily: token.fontFamily }}>{assistantConfig.emoji}</span>
-                )}
-                {branchLabel}
-              </span>
-            </Tag>
+            />
           ) : (
             <BranchPill
               branch={branchLabel}
@@ -157,15 +143,7 @@ export const HomeActivitySection: React.FC<
         </Space>
       );
     },
-    [
-      boardById,
-      clickablePillStyle,
-      onBoardClick,
-      onBranchClick,
-      token.fontFamily,
-      token.fontFamilyCode,
-      userById,
-    ]
+    [boardById, clickablePillStyle, onBoardClick, onBranchClick, userById]
   );
 
   const sessionMessage = useCallback(
@@ -194,9 +172,9 @@ export const HomeActivitySection: React.FC<
               </Text>
             }
           >
-            <Tag
-              color={ENTITY_PILL_COLORS.session}
+            <SessionPill
               aria-label={sessionTitle}
+              title={sessionTitle}
               onClick={() => onSessionClick(session.session_id)}
               style={{
                 ...clickablePillStyle,
@@ -204,9 +182,7 @@ export const HomeActivitySection: React.FC<
                 alignItems: 'center',
                 paddingInline: 6,
               }}
-            >
-              <ToolIcon tool={session.agentic_tool} size={14} />
-            </Tag>
+            />
           </Popover>
           {branch && (
             <>
