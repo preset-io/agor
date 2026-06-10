@@ -15,6 +15,8 @@ import type { HomePageProps } from './types';
 
 const { Text } = Typography;
 
+const HOME_ACTIVITY_LIMIT = 100;
+
 const ActivityFeedItem: React.FC<{
   icon: React.ReactNode;
   text: React.ReactNode;
@@ -53,7 +55,7 @@ export const HomeActivitySection: React.FC<
       Array.from(branchById.values())
         .filter((branch) => !branch.archived)
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        .slice(0, 8),
+        .slice(0, HOME_ACTIVITY_LIMIT),
     [branchById]
   );
   return (
@@ -71,13 +73,14 @@ export const HomeActivitySection: React.FC<
       <HomeSectionHeader
         title="Team activity"
         icon={<TeamOutlined />}
-        info="V1 derives a quiet activity summary from local branch/assistant creation state. A persisted activity summary endpoint can replace this later for comments, artifacts, and assistant prompt events."
+        info={`Up to ${HOME_ACTIVITY_LIMIT} recent branch/assistant creation events derived from local state. A persisted activity summary endpoint can replace this later for comments, artifacts, and assistant prompt events.`}
       />
       <div style={{ overflow: 'auto', minHeight: 0 }}>
         {items.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No recent activity" />
         ) : (
           <List
+            rowKey="branch_id"
             dataSource={items}
             renderItem={(branch) => {
               const board = branch.board_id ? boardById.get(branch.board_id) : undefined;

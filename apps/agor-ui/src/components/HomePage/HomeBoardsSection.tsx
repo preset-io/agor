@@ -17,6 +17,8 @@ import type { HomePageProps } from './types';
 
 const { Text } = Typography;
 
+const HOME_BOARDS_LIMIT = 50;
+
 const activeStatuses = new Set<Session['status']>([
   'running',
   'stopping',
@@ -44,7 +46,7 @@ const groupBranchesByBoard = (branchById: Map<string, Branch>): Map<string, Bran
   return grouped;
 };
 
-const groupActiveSessionsByBranch = (
+const groupVisibleSessionsByBranch = (
   sessionsByBranch: Map<string, Session[]>
 ): Map<string, Session[]> => {
   const grouped = new Map<string, Session[]>();
@@ -63,7 +65,7 @@ const deriveBoardRows = ({
 }: Pick<HomePageProps, 'boardById' | 'recentBoardIds' | 'branchById' | 'sessionsByBranch'>) => {
   const visitRank = new Map((recentBoardIds ?? []).map((boardId, index) => [boardId, index]));
   const branchesByBoard = groupBranchesByBoard(branchById);
-  const visibleSessionsByBranch = groupActiveSessionsByBranch(sessionsByBranch);
+  const visibleSessionsByBranch = groupVisibleSessionsByBranch(sessionsByBranch);
 
   return Array.from(boardById.values())
     .filter((board) => !board.archived)
@@ -92,7 +94,8 @@ const deriveBoardRows = ({
     .sort(
       (a, b) =>
         a.visitRank - b.visitRank || b.latest - a.latest || a.board.name.localeCompare(b.board.name)
-    );
+    )
+    .slice(0, HOME_BOARDS_LIMIT);
 };
 
 const BoardHomeCard: React.FC<{
@@ -250,7 +253,7 @@ export const HomeBoardsSection: React.FC<
       <HomeSectionHeader
         title="Boards"
         icon={<ApartmentOutlined />}
-        info="All accessible boards, sorted by this browser’s last-visited board order when available, then by recent board, branch, or session activity."
+        info={`Up to ${HOME_BOARDS_LIMIT} accessible boards, sorted by this browser’s last-visited board order when available, then by recent board, branch, or session activity.`}
       />
       {rows.length === 0 ? (
         <Card style={glassCardStyle(token)}>

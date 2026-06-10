@@ -104,7 +104,11 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
         ) : docs.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No Knowledge docs yet" />
         ) : (
-          <List dataSource={docs} renderItem={(doc) => <KnowledgeDocRow doc={doc} />} />
+          <List
+            rowKey="document_id"
+            dataSource={docs}
+            renderItem={(doc) => <KnowledgeDocRow doc={doc} />}
+          />
         )}
       </div>
     </Card>

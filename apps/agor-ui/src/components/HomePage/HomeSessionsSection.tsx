@@ -26,6 +26,8 @@ import type { HomePageProps } from './types';
 
 const { Text } = Typography;
 
+const HOME_SESSIONS_LIMIT = 100;
+
 const attentionStatuses = new Set<Session['status']>([
   'awaiting_permission',
   'awaiting_input',
@@ -130,20 +132,19 @@ export const HomeSessionsSection: React.FC<
   );
   const trimmed = searchQuery.trim();
   const searching = isSessionSearchActive(trimmed);
-  const displaySessions = useMemo(
-    () =>
-      searching
-        ? searchSessions(allSessions, trimmed).map(({ session }) => session)
-        : sortSessions(allSessions, sort),
-    [allSessions, searching, trimmed, sort]
-  );
+  const displaySessions = useMemo(() => {
+    const sessions = searching
+      ? searchSessions(allSessions, trimmed).map(({ session }) => session)
+      : sortSessions(allSessions, sort);
+    return sessions.slice(0, HOME_SESSIONS_LIMIT);
+  }, [allSessions, searching, trimmed, sort]);
 
   return (
     <section style={{ minHeight: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
       <HomeSectionHeader
         title="Sessions"
         icon={<ClockCircleOutlined />}
-        info="Cross-board sessions using the same local session state as the board left panel. Board and branch pills are included because this list is not filtered to one board."
+        info={`Up to ${HOME_SESSIONS_LIMIT} cross-board sessions using the same local session state as the board left panel. Board and branch pills are included because this list is not filtered to one board.`}
       />
       <Card
         styles={{
@@ -176,6 +177,7 @@ export const HomeSessionsSection: React.FC<
             />
           ) : (
             <List
+              rowKey="session_id"
               dataSource={displaySessions}
               renderItem={(session) => {
                 const branch = branchById.get(session.branch_id);
