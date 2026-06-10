@@ -51,6 +51,8 @@ function formatRefreshError(error?: string): string {
       );
     case 'needs_reauth':
       return 'refresh token is no longer valid — sign in again';
+    case 'token_refresh_failed':
+      return 'provider token refresh failed — try again, or sign in again if it keeps failing';
     default:
       return error || 'unknown error';
   }
