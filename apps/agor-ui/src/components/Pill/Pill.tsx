@@ -22,6 +22,7 @@ import {
   SlackOutlined,
   ThunderboltOutlined,
   ToolOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
@@ -857,6 +858,7 @@ interface BranchPillProps extends BasePillProps {
   branch: string;
   compact?: boolean;
   title?: string;
+  emoji?: string | null;
   onClick?: (e: React.MouseEvent) => void;
 }
 
@@ -864,6 +866,7 @@ export const BranchPill: React.FC<BranchPillProps> = ({
   branch,
   compact = false,
   title,
+  emoji,
   onClick,
   style,
 }) => {
@@ -884,7 +887,9 @@ export const BranchPill: React.FC<BranchPillProps> = ({
     >
       <span
         style={{
-          display: compact ? 'inline-block' : undefined,
+          display: compact || emoji ? 'inline-flex' : undefined,
+          alignItems: emoji ? 'center' : undefined,
+          gap: emoji ? 4 : undefined,
           maxWidth: compact ? 220 : undefined,
           overflow: compact ? 'hidden' : undefined,
           textOverflow: compact ? 'ellipsis' : undefined,
@@ -893,7 +898,114 @@ export const BranchPill: React.FC<BranchPillProps> = ({
           fontFamily: token.fontFamilyCode,
         }}
       >
+        {emoji && <span style={{ fontFamily: token.fontFamily }}>{emoji}</span>}
         {branch}
+      </span>
+    </Tag>
+  );
+};
+
+interface BoardPillProps extends BasePillProps {
+  board: {
+    name: string;
+    icon?: string | null;
+  };
+  compact?: boolean;
+  title?: string;
+  onClick?: (e: React.MouseEvent) => void;
+}
+
+export const BoardPill: React.FC<BoardPillProps> = ({
+  board,
+  compact = false,
+  title,
+  onClick,
+  style,
+}) => {
+  const { token } = theme.useToken();
+
+  return (
+    <Tag
+      icon={<ApartmentOutlined />}
+      color={ENTITY_PILL_COLORS.board}
+      title={title ?? board.name}
+      style={{
+        maxWidth: compact ? '100%' : undefined,
+        marginInlineEnd: compact ? 0 : undefined,
+        cursor: onClick ? 'pointer' : 'default',
+        ...style,
+      }}
+      onClick={onClick}
+    >
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: board.icon ? 4 : undefined,
+          maxWidth: compact ? 220 : undefined,
+          overflow: compact ? 'hidden' : undefined,
+          textOverflow: compact ? 'ellipsis' : undefined,
+          whiteSpace: compact ? 'nowrap' : undefined,
+          verticalAlign: compact ? 'bottom' : undefined,
+          fontFamily: token.fontFamilyCode,
+        }}
+      >
+        {board.icon && <span style={{ fontFamily: token.fontFamily }}>{board.icon}</span>}
+        {board.name}
+      </span>
+    </Tag>
+  );
+};
+
+interface UserPillProps extends BasePillProps {
+  user: {
+    name?: string | null;
+    email?: string | null;
+    emoji?: string | null;
+  };
+  compact?: boolean;
+  title?: string;
+  onClick?: (e: React.MouseEvent) => void;
+}
+
+export const UserPill: React.FC<UserPillProps> = ({
+  user,
+  compact = false,
+  title,
+  onClick,
+  style,
+}) => {
+  const { token } = theme.useToken();
+  const label = user.name || user.email || 'Someone';
+
+  return (
+    <Tag
+      icon={<UserOutlined />}
+      color={ENTITY_PILL_COLORS.user}
+      title={title ?? label}
+      style={{
+        maxWidth: compact ? '100%' : undefined,
+        marginInlineEnd: compact ? 0 : undefined,
+        cursor: onClick ? 'pointer' : 'default',
+        ...style,
+      }}
+      onClick={onClick}
+    >
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: user.emoji ? 4 : undefined,
+          maxWidth: compact ? 180 : undefined,
+          overflow: compact ? 'hidden' : undefined,
+          textOverflow: compact ? 'ellipsis' : undefined,
+          whiteSpace: compact ? 'nowrap' : undefined,
+          verticalAlign: compact ? 'bottom' : undefined,
+          fontFamily: token.fontFamilyCode,
+        }}
+      >
+        {user.emoji && <span style={{ fontFamily: token.fontFamily }}>{user.emoji}</span>}
+        {label}
       </span>
     </Tag>
   );

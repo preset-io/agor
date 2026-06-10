@@ -1,7 +1,6 @@
-import type { Board, Branch, Session } from '@agor-live/client';
+import type { Branch, Session } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
-  ApartmentOutlined,
   BranchesOutlined,
   RobotOutlined,
   TeamOutlined,
@@ -23,7 +22,7 @@ import type React from 'react';
 import { useCallback, useMemo, useState } from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
-import { BranchPill, ENTITY_PILL_COLORS } from '../Pill';
+import { BoardPill, BranchPill, ENTITY_PILL_COLORS, UserPill } from '../Pill';
 import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
 import { HomeSectionHeader } from './HomeSectionHeader';
@@ -104,29 +103,16 @@ export const HomeActivitySection: React.FC<
     []
   );
 
-  const boardPill = useCallback(
-    (board: Board) => (
-      <Tag
-        color={ENTITY_PILL_COLORS.board}
-        icon={<ApartmentOutlined />}
-        onClick={() => onBoardClick(board.board_id)}
-        style={clickablePillStyle}
-      >
-        <span style={{ fontFamily: token.fontFamilyCode }}>{board.name}</span>
-      </Tag>
-    ),
-    [clickablePillStyle, onBoardClick, token.fontFamilyCode]
-  );
-
   const branchMessage = useCallback(
     (branch: Branch, assistant: boolean) => {
       const board = branch.board_id ? boardById.get(branch.board_id) : undefined;
-      const actor = userById.get(branch.created_by)?.name || 'Someone';
-      const branchLabel = getAssistantConfig(branch)?.displayName ?? branch.name;
+      const actor = userById.get(branch.created_by);
+      const assistantConfig = getAssistantConfig(branch);
+      const branchLabel = assistantConfig?.displayName ?? branch.name;
 
       return (
         <Space size={4} wrap>
-          <Text strong>{actor}</Text>
+          {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
           <Text type="secondary">created</Text>
           {assistant ? (
             <Tag
@@ -135,7 +121,19 @@ export const HomeActivitySection: React.FC<
               onClick={() => onBranchClick(branch.branch_id)}
               style={clickablePillStyle}
             >
-              <span style={{ fontFamily: token.fontFamilyCode }}>{branchLabel}</span>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: assistantConfig?.emoji ? 4 : undefined,
+                  fontFamily: token.fontFamilyCode,
+                }}
+              >
+                {assistantConfig?.emoji && (
+                  <span style={{ fontFamily: token.fontFamily }}>{assistantConfig.emoji}</span>
+                )}
+                {branchLabel}
+              </span>
             </Tag>
           ) : (
             <BranchPill
@@ -148,20 +146,33 @@ export const HomeActivitySection: React.FC<
           {board && (
             <>
               <Text type="secondary">on</Text>
-              {boardPill(board)}
+              <BoardPill
+                board={board}
+                compact
+                onClick={() => onBoardClick(board.board_id)}
+                style={clickablePillStyle}
+              />
             </>
           )}
         </Space>
       );
     },
-    [boardById, boardPill, clickablePillStyle, onBranchClick, token.fontFamilyCode, userById]
+    [
+      boardById,
+      clickablePillStyle,
+      onBoardClick,
+      onBranchClick,
+      token.fontFamily,
+      token.fontFamilyCode,
+      userById,
+    ]
   );
 
   const sessionMessage = useCallback(
     (session: Session) => {
       const branch = branchById.get(session.branch_id);
       const board = branch?.board_id ? boardById.get(branch.board_id) : undefined;
-      const actor = userById.get(session.created_by)?.name || 'Someone';
+      const actor = userById.get(session.created_by);
       const sessionTitle = getSessionDisplayTitle(session, {
         includeAgentFallback: true,
         includeIdFallback: true,
@@ -172,7 +183,7 @@ export const HomeActivitySection: React.FC<
 
       return (
         <Space size={4} wrap>
-          <Text strong>{actor}</Text>
+          {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
           <Text type="secondary">{verb}</Text>
           <Popover
             trigger="hover"
@@ -210,13 +221,26 @@ export const HomeActivitySection: React.FC<
           {board && (
             <>
               <Text type="secondary">on</Text>
-              {boardPill(board)}
+              <BoardPill
+                board={board}
+                compact
+                onClick={() => onBoardClick(board.board_id)}
+                style={clickablePillStyle}
+              />
             </>
           )}
         </Space>
       );
     },
-    [boardById, boardPill, branchById, onBranchClick, onSessionClick, clickablePillStyle, userById]
+    [
+      boardById,
+      branchById,
+      onBoardClick,
+      onBranchClick,
+      onSessionClick,
+      clickablePillStyle,
+      userById,
+    ]
   );
 
   const items = useMemo(() => {

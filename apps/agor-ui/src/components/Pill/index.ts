@@ -1,5 +1,6 @@
 export { EventStreamPill } from './EventStreamPill';
 export {
+  BoardPill,
   BranchPill,
   ChannelPill,
   ConceptPill,
@@ -23,6 +24,7 @@ export {
   StatusPill,
   TokenCountPill,
   ToolCountPill,
+  UserPill,
 } from './Pill';
 export { SessionMetadataCard } from './SessionMetadataCard';
 export { TimerPill } from './TimerPill';
