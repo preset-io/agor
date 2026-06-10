@@ -332,6 +332,21 @@ export class TerminalsService {
   > = new Map();
 
   /**
+   * Per-user start barrier for the async "no executor exists → spawn one"
+   * path.
+   *
+   * Opening an embedded Claude CLI terminal in React dev can issue two
+   * near-simultaneous `terminals.create` calls (the initial attach effect
+   * plus the visible/refocus effect; StrictMode/HMR can double this too).
+   * Without a reservation, both requests observe `executorTerminals` as
+   * empty, both spawn `zellij attach agor-<user> --create`, and both
+   * executor sockets consume the same `terminal:tab create` broadcasts.
+   * That duplicate attach/create storm is enough to make Zellij 0.44.x
+   * panic in its screen/plugin state update path.
+   */
+  private executorStarting: Map<UserID, Promise<void>> = new Map();
+
+  /**
    * Create or join an executor-based terminal session
    *
    * - Spawns one executor per user (not per terminal)
@@ -503,6 +518,22 @@ export class TerminalsService {
       throw new Error('Authentication required for executor terminal');
     }
 
+    const waitForPendingStart = async (): Promise<boolean> => {
+      const pending = this.executorStarting.get(userId);
+      if (!pending) return false;
+      await pending.catch(() => {
+        /* the next pass will surface/repair the failed start */
+      });
+      return true;
+    };
+
+    // If another request is already in the cold-start path for this user,
+    // wait for it to publish `executorTerminals` and then re-enter. This
+    // turns duplicate mount/refocus calls into ordinary warm-path attaches.
+    if (await waitForPendingStart()) {
+      return this.createExecutorTerminal(data, params);
+    }
+
     // Cold-start adoption: after a daemon restart, `executorTerminals`
     // is empty but the browser's PRIOR `zellij attach agor-<short>`
     // process is still alive (Zellij keeps the session). Without this
@@ -627,158 +658,180 @@ export class TerminalsService {
       };
     }
 
-    // Resolve Unix user for impersonation
-    const config = await loadConfig();
-    const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
-    const executorUser = config.execution?.executor_unix_user;
-
-    let impersonatedUser: string | null = null;
-    const usersRepo = new UsersRepository(this.db);
-    try {
-      const user = await usersRepo.findById(userId);
-      if (user?.unix_username) {
-        impersonatedUser = user.unix_username;
-      }
-    } catch (error) {
-      console.warn(`⚠️ Failed to load user ${userId}:`, error);
+    // Re-check the barrier after the async adoption probe above. Two
+    // callers can both enter with no pending start, then both await
+    // `detectExistingExecutor`; whichever resumes first installs the
+    // reservation below, and the later caller must wait/re-enter instead
+    // of spawning a second attach process.
+    if (await waitForPendingStart()) {
+      return this.createExecutorTerminal(data, params);
     }
 
-    const impersonationResult = resolveUnixUserForImpersonation({
-      mode: unixUserMode as UnixUserMode,
-      userUnixUsername: impersonatedUser,
-      executorUnixUser: executorUser,
+    let resolveStart!: () => void;
+    const startReservation = new Promise<void>((resolve) => {
+      resolveStart = resolve;
     });
+    this.executorStarting.set(userId, startReservation);
 
-    const finalUnixUser = impersonationResult.unixUser;
-
-    // Validate Unix user exists
     try {
-      validateResolvedUnixUser(unixUserMode as UnixUserMode, finalUnixUser);
-    } catch (err) {
-      if (err instanceof UnixUserNotFoundError) {
-        throw new Error(`${(err as UnixUserNotFoundError).message}`);
+      // Resolve Unix user for impersonation
+      const config = await loadConfig();
+      const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
+      const executorUser = config.execution?.executor_unix_user;
+
+      let impersonatedUser: string | null = null;
+      const usersRepo = new UsersRepository(this.db);
+      try {
+        const user = await usersRepo.findById(userId);
+        if (user?.unix_username) {
+          impersonatedUser = user.unix_username;
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to load user ${userId}:`, error);
       }
-      throw err;
-    }
 
-    // Determine cwd and branch info
-    let cwd = os.homedir();
-    let branchName: string | undefined;
+      const impersonationResult = resolveUnixUserForImpersonation({
+        mode: unixUserMode as UnixUserMode,
+        userUnixUsername: impersonatedUser,
+        executorUnixUser: executorUser,
+      });
 
-    if (data.branchId) {
-      const branchRepo = new BranchRepository(this.db);
-      const branch = await branchRepo.findById(data.branchId);
-      if (branch) {
-        branchName = branch.name;
-        if (finalUnixUser) {
-          const symlinkPath = `/home/${finalUnixUser}/agor/worktrees/${branch.name}`;
-          cwd = fs.existsSync(symlinkPath) ? symlinkPath : branch.path;
-        } else {
-          cwd = branch.path;
+      const finalUnixUser = impersonationResult.unixUser;
+
+      // Validate Unix user exists
+      try {
+        validateResolvedUnixUser(unixUserMode as UnixUserMode, finalUnixUser);
+      } catch (err) {
+        if (err instanceof UnixUserNotFoundError) {
+          throw new Error(`${(err as UnixUserNotFoundError).message}`);
+        }
+        throw err;
+      }
+
+      // Determine cwd and branch info
+      let cwd = os.homedir();
+      let branchName: string | undefined;
+
+      if (data.branchId) {
+        const branchRepo = new BranchRepository(this.db);
+        const branch = await branchRepo.findById(data.branchId);
+        if (branch) {
+          branchName = branch.name;
+          if (finalUnixUser) {
+            const symlinkPath = `/home/${finalUnixUser}/agor/worktrees/${branch.name}`;
+            cwd = fs.existsSync(symlinkPath) ? symlinkPath : branch.path;
+          } else {
+            cwd = branch.path;
+          }
         }
       }
-    }
 
-    // Build Zellij session name
-    const userSessionSuffix = shortId(userId);
-    const sessionName = `agor-${userSessionSuffix}`;
+      // Build Zellij session name
+      const userSessionSuffix = shortId(userId);
+      const sessionName = `agor-${userSessionSuffix}`;
 
-    // Generate session token for executor
-    const daemonUrl = `http://localhost:${config.daemon?.port || 3030}`;
-    const sessionToken = generateSessionToken(this.app);
+      // Generate session token for executor
+      const daemonUrl = `http://localhost:${config.daemon?.port || 3030}`;
+      const sessionToken = generateSessionToken(this.app);
 
-    // Get user environment and write env file for shell sourcing
-    const userEnv = await resolveUserEnvironment(userId, this.db);
-    const envFile = writeEnvFile(userId, userEnv, finalUnixUser);
+      // Get user environment and write env file for shell sourcing
+      const userEnv = await resolveUserEnvironment(userId, this.db);
+      const envFile = writeEnvFile(userId, userEnv, finalUnixUser);
 
-    // Get executor process environment (includes system vars)
-    // When impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them
-    const executorEnv = await createUserProcessEnvironment(
-      userId,
-      this.db,
-      undefined,
-      !!finalUnixUser
-    );
-
-    // Spawn executor with zellij.attach command
-    spawnExecutorFireAndForget(
-      {
-        command: 'zellij.attach',
-        sessionToken,
-        daemonUrl,
-        params: {
-          userId,
-          sessionName,
-          cwd,
-          tabName: branchName,
-          cols: data.cols || 160,
-          rows: data.rows || 40,
-          envFile, // Pass env file path for shell to source
-        },
-      },
-      {
-        logPrefix: `[TerminalsService.executor ${shortId(userId)}]`,
-        asUser: finalUnixUser || undefined,
-        env: executorEnv,
-        // Clean up map when executor exits (handles crashes too)
-        onExit: () => this.handleExecutorExit(userId),
-      }
-    );
-
-    // Track the executor
-    this.executorTerminals.set(userId, {
-      sessionName,
-      activeBranches: new Set([data.branchId || 'default']),
-      startedAt: new Date(),
-    });
-
-    // Cold-start path: the executor hasn't yet attached to its Feathers
-    // channel, so the `onCliSessionCreated` dispatch (if any) landed in
-    // an empty room and was dropped. Re-emit after the executor boots
-    // (~1.5s). Same liveness branching as the warm path — `claude`
-    // alive ⇒ focus, dead ⇒ forceRecreate (close any stale tab from
-    // an earlier daemon instance, then spawn fresh).
-    if (data.cliEnsure) {
-      const ensure = data.cliEnsure;
-      const alive = await isClaudeRunningFor(
-        ensure.sessionId as unknown as import('@agor/core/types').SessionID
+      // Get executor process environment (includes system vars)
+      // When impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them
+      const executorEnv = await createUserProcessEnvironment(
+        userId,
+        this.db,
+        undefined,
+        !!finalUnixUser
       );
-      setTimeout(() => {
-        if (alive) {
+
+      // Spawn executor with zellij.attach command
+      spawnExecutorFireAndForget(
+        {
+          command: 'zellij.attach',
+          sessionToken,
+          daemonUrl,
+          params: {
+            userId,
+            sessionName,
+            cwd,
+            tabName: branchName,
+            cols: data.cols || 160,
+            rows: data.rows || 40,
+            envFile, // Pass env file path for shell to source
+          },
+        },
+        {
+          logPrefix: `[TerminalsService.executor ${shortId(userId)}]`,
+          asUser: finalUnixUser || undefined,
+          env: executorEnv,
+          // Clean up map when executor exits (handles crashes too)
+          onExit: () => this.handleExecutorExit(userId),
+        }
+      );
+
+      // Track the executor
+      this.executorTerminals.set(userId, {
+        sessionName,
+        activeBranches: new Set([data.branchId || 'default']),
+        startedAt: new Date(),
+      });
+
+      // Cold-start path: the executor hasn't yet attached to its Feathers
+      // channel, so the `onCliSessionCreated` dispatch (if any) landed in
+      // an empty room and was dropped. Re-emit after the executor boots
+      // (~1.5s). Same liveness branching as the warm path — `claude`
+      // alive ⇒ focus, dead ⇒ forceRecreate (close any stale tab from
+      // an earlier daemon instance, then spawn fresh).
+      if (data.cliEnsure) {
+        const ensure = data.cliEnsure;
+        const alive = await isClaudeRunningFor(
+          ensure.sessionId as unknown as import('@agor/core/types').SessionID
+        );
+        setTimeout(() => {
+          if (alive) {
+            this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+              userId,
+              action: 'focus',
+              tabName: ensure.tabName,
+            });
+          } else {
+            this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
+              userId,
+              action: 'create',
+              tabName: ensure.tabName,
+              cwd: ensure.cwd,
+              command: ensure.command,
+              commandArgs: ensure.commandArgs,
+              forceRecreate: true,
+            });
+          }
+        }, 1500);
+      } else if (data.focusTabName) {
+        setTimeout(() => {
           this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
             userId,
             action: 'focus',
-            tabName: ensure.tabName,
+            tabName: data.focusTabName,
           });
-        } else {
-          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-            userId,
-            action: 'create',
-            tabName: ensure.tabName,
-            cwd: ensure.cwd,
-            command: ensure.command,
-            commandArgs: ensure.commandArgs,
-            forceRecreate: true,
-          });
-        }
-      }, 1500);
-    } else if (data.focusTabName) {
-      setTimeout(() => {
-        this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-          userId,
-          action: 'focus',
-          tabName: data.focusTabName,
-        });
-      }, 1500);
-    }
+        }, 1500);
+      }
 
-    return {
-      userId,
-      channel: `user/${userId}/terminal`,
-      sessionName,
-      isNew: true,
-      branchName,
-    };
+      return {
+        userId,
+        channel: `user/${userId}/terminal`,
+        sessionName,
+        isNew: true,
+        branchName,
+      };
+    } finally {
+      if (this.executorStarting.get(userId) === startReservation) {
+        this.executorStarting.delete(userId);
+      }
+      resolveStart();
+    }
   }
 
   /**
