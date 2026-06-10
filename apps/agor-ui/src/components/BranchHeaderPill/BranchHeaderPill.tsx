@@ -20,6 +20,7 @@ import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
+import { ENTITY_PILL_COLORS } from '../Pill/Pill';
 import { Tag } from '../Tag';
 
 interface BranchHeaderPillProps {
@@ -199,7 +200,7 @@ export function BranchHeaderPill({
 
   return (
     <Tag
-      color="cyan"
+      color={ENTITY_PILL_COLORS.branch}
       style={{
         userSelect: 'none',
         padding: 0,

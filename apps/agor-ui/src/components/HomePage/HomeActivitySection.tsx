@@ -24,7 +24,7 @@ import type React from 'react';
 import { useCallback, useMemo, useState } from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
-import { BranchPill } from '../Pill';
+import { BranchPill, ENTITY_PILL_COLORS } from '../Pill';
 import { ToolIcon } from '../ToolIcon';
 import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
@@ -107,6 +107,7 @@ export const HomeActivitySection: React.FC<
   const boardPill = useCallback(
     (board: Board) => (
       <Tag
+        color={ENTITY_PILL_COLORS.board}
         icon={<ApartmentOutlined />}
         onClick={() => onBoardClick(board.board_id)}
         style={clickablePillStyle}
@@ -130,7 +131,7 @@ export const HomeActivitySection: React.FC<
           {assistant ? (
             <Tag
               icon={<RobotOutlined />}
-              color="purple"
+              color={ENTITY_PILL_COLORS.assistant}
               onClick={() => onBranchClick(branch.branch_id)}
               style={clickablePillStyle}
             >
@@ -183,6 +184,7 @@ export const HomeActivitySection: React.FC<
             }
           >
             <Tag
+              color={ENTITY_PILL_COLORS.session}
               aria-label={sessionTitle}
               onClick={() => onSessionClick(session.session_id)}
               style={{

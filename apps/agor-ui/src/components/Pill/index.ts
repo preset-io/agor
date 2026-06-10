@@ -5,6 +5,7 @@ export {
   ConceptPill,
   ContextWindowPill,
   DirtyStatePill,
+  ENTITY_PILL_COLORS,
   ForkPill,
   GitShaPill,
   GitStatePill,

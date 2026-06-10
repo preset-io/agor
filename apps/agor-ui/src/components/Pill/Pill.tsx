@@ -33,8 +33,27 @@ import { Tag } from '../Tag';
 import { getUrlDisplayLabel, isGitHubUrl, type UrlDisplayRepo } from './url-helpers';
 
 /**
- * Standardized color palette for pills/badges
- * Using subset of Ant Design preset colors for consistency
+ * Object/entity colors for clickable identity pills.
+ *
+ * Keep these distinct from status colors below: object colors answer
+ * "what kind of thing is this?", while status colors answer "what state is it in?".
+ * Values are Ant Design preset colors.
+ */
+export const ENTITY_PILL_COLORS = {
+  branch: 'cyan',
+  session: 'default',
+  board: 'blue',
+  assistant: 'geekblue',
+  mcp: 'purple',
+  user: 'magenta',
+  artifact: 'gold',
+  knowledge: 'green',
+  repo: 'default',
+} as const;
+
+/**
+ * Standardized color palette for pills/badges.
+ * Using subset of Ant Design preset colors for consistency.
  */
 export const PILL_COLORS = {
   // Metadata (grayscale - subtle, informational only)
@@ -43,7 +62,7 @@ export const PILL_COLORS = {
   token: 'default', // Token usage
   model: 'default', // Model ID
   git: 'default', // Git info (clean state)
-  session: 'default', // Session IDs
+  session: ENTITY_PILL_COLORS.session, // Session IDs
 
   // Status (colored - actionable/warnings)
   success: 'green', // Completed/success
@@ -58,7 +77,7 @@ export const PILL_COLORS = {
   // Features
   report: 'green', // Has report
   concept: 'geekblue', // Loaded concepts
-  branch: 'blue', // Managed branch
+  branch: ENTITY_PILL_COLORS.branch, // Managed branch
 } as const;
 
 interface BasePillProps {
@@ -853,7 +872,7 @@ export const BranchPill: React.FC<BranchPillProps> = ({
   return (
     <Tag
       icon={<BranchesOutlined />}
-      color={PILL_COLORS.git}
+      color={ENTITY_PILL_COLORS.branch}
       title={title}
       style={{
         maxWidth: compact ? '100%' : undefined,

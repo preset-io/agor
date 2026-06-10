@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useThemedMessage } from '../../utils/message';
 import { formatAbsoluteTime } from '../../utils/time';
+import { ENTITY_PILL_COLORS } from '../Pill';
 import { Tag } from '../Tag';
 import { MCPServerEditModal } from './MCPServerEditModal';
 
@@ -167,7 +168,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
     <>
       <Tooltip title={needsAuth ? 'Click to authenticate' : authedTooltip}>
         <Tag
-          color={needsAuth ? 'orange' : 'purple'}
+          color={needsAuth ? 'orange' : ENTITY_PILL_COLORS.mcp}
           icon={
             needsAuth ? <LoginOutlined /> : refreshing ? <ReloadOutlined spin /> : <ApiOutlined />
           }

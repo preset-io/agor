@@ -19,7 +19,7 @@ import React from 'react';
 import type { SocketEvent } from '../../hooks/useEventStream';
 import BranchCard from '../BranchCard/BranchCard';
 import { UserAvatar } from '../metadata/UserAvatar';
-import { EventStreamPill, SessionMetadataCard } from '../Pill';
+import { ENTITY_PILL_COLORS, EventStreamPill, SessionMetadataCard } from '../Pill';
 import { Tag } from '../Tag';
 
 const { Text } = Typography;
@@ -272,7 +272,7 @@ const EventItemComponent = ({
         <EventStreamPill
           id={sessionId}
           icon={CodeOutlined}
-          color="cyan"
+          color={ENTITY_PILL_COLORS.session}
           copyLabel="Session ID"
           metadataCard={
             session ? (
@@ -295,7 +295,7 @@ const EventItemComponent = ({
           id={derivedBranchId}
           label={branch.name}
           icon={FolderOutlined}
-          color="geekblue"
+          color={ENTITY_PILL_COLORS.branch}
           copyLabel="Branch ID"
           metadataCard={
             <BranchCard
@@ -315,7 +315,11 @@ const EventItemComponent = ({
 
       {/* User pill - shows who triggered this event */}
       {user && (
-        <Tag icon={<UserOutlined />} color="magenta" style={{ margin: 0, fontSize: 11 }}>
+        <Tag
+          icon={<UserOutlined />}
+          color={ENTITY_PILL_COLORS.user}
+          style={{ margin: 0, fontSize: 11 }}
+        >
           <UserAvatar user={user} showName={true} size="small" />
         </Tag>
       )}
