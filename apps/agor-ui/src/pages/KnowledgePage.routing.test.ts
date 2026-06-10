@@ -4,9 +4,12 @@ import {
   buildKnowledgeDocumentRouteUrl,
   buildKnowledgeQueryString,
   buildKnowledgeSearchResultKey,
+  isKnowledgeDocumentContentReady,
   matchesKnowledgeSidebarFilter,
   resolveActiveKnowledgeDocument,
   shouldDeferKnowledgeUrlMirrorForRoute,
+  shouldShowKnowledgeGraphView,
+  shouldShowKnowledgeRouteDocumentLoading,
 } from './KnowledgePage';
 
 type TestDoc = { document_id: string; path: string; title: string };
@@ -52,32 +55,30 @@ describe('KnowledgePage routing state helpers', () => {
     expect(
       buildKnowledgeQueryString({
         query: ' onboarding ',
-        kind: 'Skills',
         editing: true,
         activeDocId: '__knowledge_draft__',
       })
-    ).toBe('?q=onboarding&kind=skills&draft=page&mode=edit');
+    ).toBe('?q=onboarding&draft=page&mode=edit');
   });
 
   it('omits draft state for normal document edit routes', () => {
     expect(
       buildKnowledgeQueryString({
-        kind: 'Pages',
         editing: true,
         activeDocId: pageDoc.document_id,
       })
-    ).toBe('?kind=pages&mode=edit');
+    ).toBe('?mode=edit');
   });
 
-  it('preserves the current query string when mirroring the open document route', () => {
+  it('preserves route-owned query params and drops local-only filters when mirroring', () => {
     expect(
       buildKnowledgeDocumentRouteUrl({
         routeBasePath: '/knowledge',
         namespaceSlug: 'global',
         documentPath: 'untitled.md',
-        currentSearch: '?kind=pages',
+        currentSearch: '?kind=pages&mode=edit&q=onboarding',
       })
-    ).toBe('/knowledge/global/untitled.md?kind=pages');
+    ).toBe('/knowledge/global/untitled.md?mode=edit&q=onboarding');
   });
 
   it('defers URL mirroring while the route points at a different document', () => {
@@ -94,6 +95,93 @@ describe('KnowledgePage routing state helpers', () => {
         activeDocPath: pageDoc.path,
       })
     ).toBe(false);
+  });
+
+  it('uses a loading state, not the graph, while a direct document route resolves', () => {
+    expect(
+      shouldShowKnowledgeRouteDocumentLoading({
+        activeDocMatchesRoute: false,
+        routeDocumentResolutionFailed: false,
+        routeNamespaceSlug: 'global',
+        routeDocumentPath: pageDoc.path,
+      })
+    ).toBe(true);
+
+    expect(
+      shouldShowKnowledgeGraphView({
+        activeDocPresent: false,
+        isEditing: false,
+        routeDocumentPath: pageDoc.path,
+      })
+    ).toBe(false);
+  });
+
+  it('stops showing the direct-route loading state after resolution fails', () => {
+    expect(
+      shouldShowKnowledgeRouteDocumentLoading({
+        activeDocMatchesRoute: false,
+        routeDocumentResolutionFailed: true,
+        routeNamespaceSlug: 'global',
+        routeDocumentPath: pageDoc.path,
+      })
+    ).toBe(false);
+  });
+
+  it('keeps graph home behavior for base and namespace Knowledge routes', () => {
+    expect(
+      shouldShowKnowledgeRouteDocumentLoading({
+        activeDocMatchesRoute: false,
+        routeDocumentResolutionFailed: false,
+        routeNamespaceSlug: null,
+        routeDocumentPath: '',
+      })
+    ).toBe(false);
+
+    expect(
+      shouldShowKnowledgeRouteDocumentLoading({
+        activeDocMatchesRoute: false,
+        routeDocumentResolutionFailed: false,
+        routeNamespaceSlug: 'global',
+        routeDocumentPath: '',
+      })
+    ).toBe(false);
+
+    expect(
+      shouldShowKnowledgeGraphView({
+        activeDocPresent: false,
+        isEditing: false,
+        routeDocumentPath: '',
+      })
+    ).toBe(true);
+  });
+
+  it('waits for the routed document content before rendering the article', () => {
+    expect(
+      isKnowledgeDocumentContentReady({
+        activeDocId: pageDoc.document_id,
+        activeDocDocumentId: pageDoc.document_id,
+        isDraftDocument: false,
+        versionsDocumentId: null,
+      })
+    ).toBe(false);
+
+    expect(
+      isKnowledgeDocumentContentReady({
+        activeDocId: pageDoc.document_id,
+        activeDocDocumentId: pageDoc.document_id,
+        isDraftDocument: false,
+        versionsDocumentId: pageDoc.document_id,
+      })
+    ).toBe(true);
+
+    expect(
+      isKnowledgeDocumentContentReady({
+        activeDocId: '__knowledge_draft__',
+        activeDocDocumentId: '__knowledge_draft__',
+        isDraftDocument: true,
+        versionsDocumentId: null,
+      })
+    ).toBe(true);
   });
 });
 

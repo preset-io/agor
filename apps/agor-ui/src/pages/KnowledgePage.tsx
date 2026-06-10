@@ -162,6 +162,11 @@ interface KnowledgeNamespaceAclDraftEntry {
   permission: KnowledgeNamespacePermission;
 }
 
+interface RouteDocumentResolutionFailure {
+  key: string;
+  message: string;
+}
+
 type KnowledgeNamespaceFormValues = Pick<
   KnowledgeNamespace,
   'slug' | 'display_name' | 'description' | 'kind' | 'visibility_default' | 'others_can'
@@ -388,20 +393,6 @@ const kindForSegment = (segment: string): KnowledgeDocumentKind | undefined => {
   return undefined;
 };
 
-const kindFilterToUrlParam = (filter: string) => {
-  if (filter === 'Pages') return 'pages';
-  if (filter === 'Skills') return 'skills';
-  if (filter === 'Memories') return 'memories';
-  return null;
-};
-
-const kindFilterFromUrlParam = (value: string | null) => {
-  if (value === 'pages') return 'Pages';
-  if (value === 'skills') return 'Skills';
-  if (value === 'memories') return 'Memories';
-  return 'All';
-};
-
 // Non-throwing leaf title used only as a fallback when a doc has no title.
 const leafTitleFromPath = (path: string): string => {
   const leaf = path.split('/').filter(Boolean).pop() ?? path;
@@ -461,17 +452,50 @@ export function shouldDeferKnowledgeUrlMirrorForRoute(args: {
   return Boolean(args.routeDocumentPath && args.activeDocPath !== args.routeDocumentPath);
 }
 
+export function shouldShowKnowledgeRouteDocumentLoading(args: {
+  activeDocMatchesRoute: boolean;
+  routeDocumentResolutionFailed: boolean;
+  routeNamespaceSlug?: string | null;
+  routeDocumentPath: string;
+}): boolean {
+  return Boolean(
+    args.routeNamespaceSlug &&
+      args.routeDocumentPath &&
+      !args.activeDocMatchesRoute &&
+      !args.routeDocumentResolutionFailed
+  );
+}
+
+export function shouldShowKnowledgeGraphView(args: {
+  activeDocPresent: boolean;
+  isEditing: boolean;
+  routeDocumentPath: string;
+}): boolean {
+  return !args.activeDocPresent && !args.isEditing && !args.routeDocumentPath;
+}
+
+export function isKnowledgeDocumentContentReady(args: {
+  activeDocId?: string | null;
+  activeDocDocumentId?: string | null;
+  isDraftDocument: boolean;
+  versionsDocumentId?: string | null;
+}): boolean {
+  return Boolean(
+    args.activeDocDocumentId &&
+      (args.isDraftDocument ||
+        (args.versionsDocumentId === args.activeDocDocumentId &&
+          args.activeDocDocumentId === args.activeDocId))
+  );
+}
+
 export function buildKnowledgeQueryString(args: {
   query?: string;
-  kind?: string;
   editing?: boolean;
   activeDocId?: string | null;
 }): string {
   const params = new URLSearchParams();
-  const kindParam = kindFilterToUrlParam(args.kind ?? 'All');
 
   if (args.query?.trim()) params.set('q', args.query.trim());
-  if (kindParam) params.set('kind', kindParam);
   if (args.editing && args.activeDocId === DRAFT_DOCUMENT_ID) params.set('draft', 'page');
   if (args.editing && args.activeDocId) params.set('mode', 'edit');
 
@@ -485,8 +509,11 @@ export function buildKnowledgeDocumentRouteUrl(args: {
   documentPath: string;
   currentSearch?: string;
 }): string {
+  const currentParams = new URLSearchParams(args.currentSearch ?? '');
+  currentParams.delete('kind');
+  const search = currentParams.toString();
   return `${buildKnowledgeRoutePath(args.routeBasePath, args.namespaceSlug, args.documentPath)}${
-    args.currentSearch ?? ''
+    search ? `?${search}` : ''
   }`;
 }
 
@@ -636,6 +663,8 @@ export function KnowledgePage({
     ? safeDecodeURIComponent(routeParams.namespaceSlug)
     : null;
   const routeDocumentPath = decodeKnowledgeRoutePath(routeParams['*']);
+  const routeDocumentKey =
+    routeNamespaceSlug && routeDocumentPath ? `${routeNamespaceSlug}\n${routeDocumentPath}` : null;
   const routeBasePath = getKnowledgeRouteBase(location.pathname);
   const routeSearchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const [namespaces, setNamespaces] = useState<KnowledgeNamespace[]>([]);
@@ -645,6 +674,9 @@ export function KnowledgePage({
   const [draftDocument, setDraftDocument] = useState<KnowledgeDocument | null>(null);
   const [draftNamespaceSlug, setDraftNamespaceSlug] = useState<string | null>(null);
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
+  const [versionsDocumentId, setVersionsDocumentId] = useState<string | null>(null);
+  const [routeDocumentResolutionFailure, setRouteDocumentResolutionFailure] =
+    useState<RouteDocumentResolutionFailure | null>(null);
   const [activeSpace, setActiveSpace] = useState(() => routeNamespaceSlug ?? 'global');
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
   // Keep the open document independent from the filtered sidebar result set.
@@ -677,9 +709,7 @@ export function KnowledgePage({
   const [globalSearchError, setGlobalSearchError] = useState<string | null>(null);
   const [globalSearchResults, setGlobalSearchResults] = useState<KnowledgeSearchResult[]>([]);
   const [globalSearchResultsKey, setGlobalSearchResultsKey] = useState<string | null>(null);
-  const [kindFilter, setKindFilter] = useState<string>(() =>
-    kindFilterFromUrlParam(routeSearchParams.get('kind'))
-  );
+  const [kindFilter, setKindFilter] = useState<string>('All');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -764,6 +794,12 @@ export function KnowledgePage({
   }, [globalSearchOpen]);
 
   useEffect(() => {
+    setRouteDocumentResolutionFailure((current) =>
+      current && current.key !== routeDocumentKey ? null : current
+    );
+  }, [routeDocumentKey]);
+
+  useEffect(() => {
     activeDocIdRef.current = activeDocId;
   }, [activeDocId]);
 
@@ -778,6 +814,12 @@ export function KnowledgePage({
     [activeDocId, activeDocSnapshot, documents, draftDocument]
   );
   const isDraftDocument = activeDoc?.document_id === DRAFT_DOCUMENT_ID;
+  const activeDocContentReady = isKnowledgeDocumentContentReady({
+    activeDocId,
+    activeDocDocumentId: activeDoc?.document_id,
+    isDraftDocument,
+    versionsDocumentId,
+  });
 
   const selectedNamespace = useMemo(
     () => namespaces.find((ns) => ns.slug === activeSpace) ?? namespaces[0] ?? null,
@@ -934,14 +976,13 @@ export function KnowledgePage({
   }, [activeDoc, documents, nextDraftTitle]);
 
   const buildKnowledgeSearch = useCallback(
-    (overrides: { query?: string; kind?: string; editing?: boolean } = {}) =>
+    (overrides: { query?: string; editing?: boolean } = {}) =>
       buildKnowledgeQueryString({
         query: overrides.query,
-        kind: overrides.kind ?? kindFilter,
         editing: overrides.editing ?? isEditing,
         activeDocId,
       }),
-    [activeDocId, isEditing, kindFilter]
+    [activeDocId, isEditing]
   );
 
   const folderPaths = useMemo(() => {
@@ -1502,8 +1543,8 @@ export function KnowledgePage({
   // Refresh the graph whenever it becomes the visible view (no doc open), so
   // edges created by a just-saved edit show up on return.
   useEffect(() => {
-    if (!activeDocId) loadGraph();
-  }, [activeDocId, loadGraph]);
+    if (!activeDocId && !routeDocumentPath) loadGraph();
+  }, [activeDocId, loadGraph, routeDocumentPath]);
 
   const confirmDiscardUnsavedChanges = useCallback(async (): Promise<boolean> => {
     if (!hasUnsavedChanges) return true;
@@ -1534,7 +1575,6 @@ export function KnowledgePage({
   useEffect(() => {
     const nextSpace = routeNamespaceSlug ?? 'global';
     const nextQuery = routeSearchParams.get('q') ?? '';
-    const nextKind = kindFilterFromUrlParam(routeSearchParams.get('kind'));
     const nextEditing =
       routeSearchParams.get('mode') === 'edit' &&
       (Boolean(routeDocumentPath) || routeSearchParams.get('draft') === 'page');
@@ -1560,7 +1600,6 @@ export function KnowledgePage({
     }
     if (routeNamespaceSlug && nextSpace !== activeSpace) setActiveSpace(nextSpace);
     setGlobalSearchQuery((current) => (current === nextQuery ? current : nextQuery));
-    if (nextKind !== kindFilter) setKindFilter(nextKind);
     const pendingEditMode = pendingEditModeRef.current;
     if (pendingEditMode === null) {
       if (nextEditing !== isEditing) setIsEditing(nextEditing);
@@ -1572,7 +1611,6 @@ export function KnowledgePage({
     activeDocId,
     activeSpace,
     isEditing,
-    kindFilter,
     routeDocumentPath,
     routeNamespaceSlug,
     routeSearchParams,
@@ -1582,11 +1620,16 @@ export function KnowledgePage({
   useEffect(() => {
     if (activeDocIdRef.current === DRAFT_DOCUMENT_ID) return;
     if (!client || !routeNamespaceSlug || !routeDocumentPath) return;
+    const currentRouteKey = routeDocumentKey;
+    if (!currentRouteKey) return;
 
     const snapshotMatchesRoute =
       activeDocSnapshot?.path === routeDocumentPath &&
       namespaceSlugForDocument(activeDocSnapshot) === routeNamespaceSlug;
     if (snapshotMatchesRoute) {
+      setRouteDocumentResolutionFailure((current) =>
+        current?.key === currentRouteKey ? null : current
+      );
       if (activeDocSnapshot.document_id !== activeDocId) {
         activeDocIdRef.current = activeDocSnapshot.document_id;
         setActiveDocId(activeDocSnapshot.document_id);
@@ -1599,6 +1642,9 @@ export function KnowledgePage({
         doc.path === routeDocumentPath && namespaceSlugForDocument(doc) === routeNamespaceSlug
     );
     if (routedDocument) {
+      setRouteDocumentResolutionFailure((current) =>
+        current?.key === currentRouteKey ? null : current
+      );
       setActiveDocSnapshot(routedDocument);
       if (routedDocument.document_id !== activeDocId) {
         activeDocIdRef.current = routedDocument.document_id;
@@ -1628,14 +1674,30 @@ export function KnowledgePage({
           activeDocIdRef.current = null;
           setActiveDocId(null);
           setActiveDocSnapshot(null);
+          setRouteDocumentResolutionFailure({
+            key: currentRouteKey,
+            message: 'Knowledge page not found.',
+          });
           return;
         }
+        setRouteDocumentResolutionFailure((current) =>
+          current?.key === currentRouteKey ? null : current
+        );
         setActiveDocSnapshot(resolvedDocument);
         activeDocIdRef.current = resolvedDocument.document_id;
         setActiveDocId(resolvedDocument.document_id);
       })
       .catch((err) => {
-        if (!cancelled) console.error('Failed to resolve Knowledge route document:', err);
+        if (!cancelled) {
+          console.error('Failed to resolve Knowledge route document:', err);
+          activeDocIdRef.current = null;
+          setActiveDocId(null);
+          setActiveDocSnapshot(null);
+          setRouteDocumentResolutionFailure({
+            key: currentRouteKey,
+            message: err instanceof Error ? err.message : 'Failed to load Knowledge page.',
+          });
+        }
       });
 
     return () => {
@@ -1647,6 +1709,7 @@ export function KnowledgePage({
     client,
     documents,
     namespaceSlugForDocument,
+    routeDocumentKey,
     routeDocumentPath,
     routeNamespaceSlug,
   ]);
@@ -1674,11 +1737,15 @@ export function KnowledgePage({
         if (cancelled) return;
         const [directDoc] = normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]);
         if (!directDoc) return;
+        setRouteDocumentResolutionFailure((current) =>
+          current?.key === routeDocumentKey ? null : current
+        );
         setDocuments((prev) =>
           prev.some((doc) => doc.document_id === directDoc.document_id)
             ? prev
             : [directDoc, ...prev]
         );
+        setActiveDocSnapshot(directDoc);
         activeDocIdRef.current = directDoc.document_id;
         setActiveDocId(directDoc.document_id);
       } catch (err) {
@@ -1688,7 +1755,15 @@ export function KnowledgePage({
     return () => {
       cancelled = true;
     };
-  }, [client, documents, loading, namespaceSlugForDocument, routeDocumentPath, routeNamespaceSlug]);
+  }, [
+    client,
+    documents,
+    loading,
+    namespaceSlugForDocument,
+    routeDocumentKey,
+    routeDocumentPath,
+    routeNamespaceSlug,
+  ]);
 
   useEffect(() => {
     if (activeDocIdRef.current === DRAFT_DOCUMENT_ID) return;
@@ -1746,7 +1821,7 @@ export function KnowledgePage({
     }
 
     // Only an OPEN document's *path* drives the URL from this effect. Query
-    // params (`q`, `kind`, `mode`, `draft`) are owned by explicit UI navigation
+    // params (`q`, `mode`, `draft`) are owned by explicit UI navigation
     // handlers and read back into state by the route-reading effect above.
     // Rebuilding query params here from local state creates a two-writer value:
     // after a route change, local state can lag by one render, so this effect
@@ -1793,10 +1868,12 @@ export function KnowledgePage({
   const loadVersions = useCallback(async () => {
     if (isDraftDocument) {
       setVersions([]);
+      setVersionsDocumentId(DRAFT_DOCUMENT_ID);
       return;
     }
     if (!client || !activeDoc) {
       setVersions([]);
+      setVersionsDocumentId(null);
       return;
     }
     const documentId = activeDoc.document_id;
@@ -1807,6 +1884,7 @@ export function KnowledgePage({
       if (activeDocIdRef.current !== documentId) return;
       const rows = normalizeFindResult<KnowledgeVersion>(result as KnowledgeVersion[]);
       setVersions(rows);
+      setVersionsDocumentId(documentId);
       setSelectedVersionId((current) =>
         current && rows.some((row) => row.version_id === current)
           ? current
@@ -1817,6 +1895,7 @@ export function KnowledgePage({
       if (activeDocIdRef.current !== documentId) return;
       console.error('Failed to load Knowledge versions:', err);
       setVersions([]);
+      setVersionsDocumentId(documentId);
       setMarkdownDraft(DEFAULT_MARKDOWN);
     }
   }, [client, activeDoc, isDraftDocument]);
@@ -1867,6 +1946,7 @@ export function KnowledgePage({
     setRenamePathOnTitleChange(false);
     setMarkdownDraft(`# ${title}\n\nWrite markdown here.\n`);
     setVersions([]);
+    setVersionsDocumentId(DRAFT_DOCUMENT_ID);
     pendingEditModeRef.current = true;
     setIsEditing(true);
     navigate(`${buildKnowledgeRoutePath(routeBasePath, namespaceSlug)}?draft=page&mode=edit`);
@@ -1950,6 +2030,7 @@ export function KnowledgePage({
       setActiveDocId(created.document_id);
       setSelectedFolder(parentFolderForPath(created.path));
       setMarkdownDraft(`# ${title}\n\nWrite markdown here.\n`);
+      setVersionsDocumentId(created.document_id);
       setExpandedTreeKeys((prev) => [
         ...new Set([...prev, `folder:${parentFolderForPath(created.path)}`]),
       ]);
@@ -1995,6 +2076,7 @@ export function KnowledgePage({
         setActiveDocId(created.document_id);
         setSelectedFolder(parentFolderForPath(created.path));
         setVersions([]);
+        setVersionsDocumentId(created.document_id);
         pendingEditModeRef.current = false;
         setIsEditing(false);
         navigate(
@@ -2115,6 +2197,7 @@ export function KnowledgePage({
       setRenamePathOnTitleChange(false);
       setMarkdownDraft(DEFAULT_MARKDOWN);
       setVersions([]);
+      setVersionsDocumentId(null);
       setKnowledgeEditMode(false);
       return;
     }
@@ -2185,6 +2268,7 @@ export function KnowledgePage({
           setActiveDocId(null);
           setActiveDocSnapshot(null);
           setVersions([]);
+          setVersionsDocumentId(null);
           setSelectedVersionId(null);
         } catch (err) {
           console.error('Failed to archive Knowledge document:', err);
@@ -2630,9 +2714,34 @@ export function KnowledgePage({
   const folderNameHelp =
     'Use letters, numbers, spaces, dashes, underscores, dots, and / for subfolders.';
   const showReadActions = titleActionsVisible;
+  const activeDocMatchesRoute =
+    !routeDocumentPath ||
+    Boolean(
+      activeDoc &&
+        activeDoc.path === routeDocumentPath &&
+        (!routeNamespaceSlug || namespaceSlugForDocument(activeDoc) === routeNamespaceSlug)
+    );
+  const showRouteDocumentFailure = Boolean(
+    routeDocumentKey &&
+      routeDocumentResolutionFailure &&
+      routeDocumentResolutionFailure.key === routeDocumentKey
+  );
   // Graph is the home view: shown in the main panel whenever no doc is open.
-  const showGraph = !activeDoc && !isEditing;
-  const fillMain = isEditing || showGraph;
+  const showRouteDocumentLoading = shouldShowKnowledgeRouteDocumentLoading({
+    activeDocMatchesRoute,
+    routeDocumentResolutionFailed: showRouteDocumentFailure,
+    routeNamespaceSlug,
+    routeDocumentPath,
+  });
+  const showGraph = shouldShowKnowledgeGraphView({
+    activeDocPresent: Boolean(activeDoc),
+    isEditing,
+    routeDocumentPath,
+  });
+  const showDocumentLoading =
+    showRouteDocumentLoading ||
+    Boolean(activeDoc && (!activeDocMatchesRoute || !activeDocContentReady));
+  const fillMain = isEditing || showGraph || showDocumentLoading || showRouteDocumentFailure;
 
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden', background: token.colorBgLayout }}>
@@ -2843,13 +2952,7 @@ export function KnowledgePage({
                   block
                   size="small"
                   value={kindFilter}
-                  onChange={(value) => {
-                    const nextKind = String(value);
-                    setKindFilter(nextKind);
-                    navigate(`${location.pathname}${buildKnowledgeSearch({ kind: nextKind })}`, {
-                      replace: true,
-                    });
-                  }}
+                  onChange={(value) => setKindFilter(String(value))}
                   options={['All', 'Pages', 'Skills', 'Memories']}
                 />
                 <Spin spinning={loading}>
@@ -2873,11 +2976,11 @@ export function KnowledgePage({
                         padding: '5px 10px',
                         border: 0,
                         borderRadius: token.borderRadius,
-                        background: !activeDoc ? token.colorPrimaryBg : 'transparent',
+                        background: showGraph ? token.colorPrimaryBg : 'transparent',
                         color: token.colorText,
                         cursor: 'pointer',
                         textAlign: 'left',
-                        fontWeight: !activeDoc ? 600 : 400,
+                        fontWeight: showGraph ? 600 : 400,
                       }}
                     >
                       <ApartmentOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
@@ -2940,7 +3043,7 @@ export function KnowledgePage({
                   />
                 )}
 
-                {activeDoc ? (
+                {activeDoc && activeDocMatchesRoute && activeDocContentReady ? (
                   <div
                     style={{
                       width: '100%',
@@ -3222,6 +3325,29 @@ export function KnowledgePage({
                       </div>
                     )}
                   </div>
+                ) : showDocumentLoading ? (
+                  <Flex
+                    vertical
+                    align="center"
+                    justify="center"
+                    style={{ flex: 1, minHeight: 320, width: '100%' }}
+                  >
+                    <Spin />
+                  </Flex>
+                ) : showRouteDocumentFailure ? (
+                  <Flex
+                    vertical
+                    align="center"
+                    justify="center"
+                    style={{ flex: 1, minHeight: 320, width: '100%' }}
+                  >
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description={
+                        routeDocumentResolutionFailure?.message ?? 'Knowledge page not found.'
+                      }
+                    />
+                  </Flex>
                 ) : (
                   <div style={{ flex: 1, minHeight: 0, width: '100%' }}>
                     <KnowledgeGraph
