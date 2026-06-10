@@ -1,4 +1,10 @@
-import type { Board, BoardEntityType, BoardObject, BoardObjectType } from '@agor/core/types';
+import type {
+  Board,
+  BoardEntityType,
+  BoardObject,
+  BoardObjectType,
+  BranchID,
+} from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
@@ -61,6 +67,12 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Include positioned entities (branches, cards) with their x/y coordinates and zone assignments (default: false). Enable when you need to know where branches are placed on the canvas.'
           ),
+        includeArchived: z
+          .boolean()
+          .optional()
+          .describe(
+            'When includeEntities=true, include archived branch entities. Default false excludes archived branches while preserving card entities.'
+          ),
         entityZoneId: mcpOptionalString(
           'entityZoneId',
           'When includeEntities=true, only return positioned entities pinned to this board zone ID.'
@@ -116,16 +128,43 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         const matchedEntities = (
           boardObjectsResult as { data: import('@agor/core/types').BoardEntityObject[] }
         ).data;
-        const total = matchedEntities.length;
+        let visibleEntities = matchedEntities;
+
+        if (args.includeArchived !== true) {
+          const branchIds = matchedEntities
+            .map((entity) => entity.branch_id)
+            .filter((branchId): branchId is BranchID => typeof branchId === 'string');
+
+          if (branchIds.length > 0) {
+            const activeBranchesResult = await ctx.app.service('branches').find({
+              query: {
+                branch_id: { $in: Array.from(new Set(branchIds)) },
+                archived: false,
+              },
+              paginate: false,
+              ...ctx.baseServiceParams,
+            });
+            const activeBranches = Array.isArray(activeBranchesResult)
+              ? activeBranchesResult
+              : (activeBranchesResult as { data: Array<{ branch_id: string }> }).data;
+            const activeBranchIds = new Set(activeBranches.map((branch) => branch.branch_id));
+
+            visibleEntities = matchedEntities.filter(
+              (entity) => !entity.branch_id || activeBranchIds.has(entity.branch_id)
+            );
+          }
+        }
+
+        const total = visibleEntities.length;
         const skip = args.entitiesSkip ?? 0;
         const limit = args.entitiesLimit ?? null;
         const entities =
           args.entitiesLimit !== undefined || args.entitiesSkip !== undefined
-            ? matchedEntities.slice(
+            ? visibleEntities.slice(
                 skip,
                 args.entitiesLimit === undefined ? undefined : skip + args.entitiesLimit
               )
-            : matchedEntities;
+            : visibleEntities;
 
         return textResult({
           ...board,

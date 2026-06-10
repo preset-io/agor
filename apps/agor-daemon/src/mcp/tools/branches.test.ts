@@ -183,6 +183,63 @@ describe('branch MCP input schemas', () => {
   });
 });
 
+describe('agor_branches_set_zone', () => {
+  it('accepts zoneId null and clears the existing board object zone pin', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const branch = {
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+      name: 'Branch 1',
+    };
+    const branchesGet = vi.fn(async () => branch);
+    const findByBranchId = vi.fn(async () => ({
+      object_id: 'obj-branch-1',
+      branch_id: 'branch-1',
+      zone_id: 'zone-review',
+    }));
+    const boardObjectsPatch = vi.fn(async () => ({
+      object_id: 'obj-branch-1',
+      branch_id: 'branch-1',
+      zone_id: undefined,
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet };
+        if (name === 'board-objects') {
+          return {
+            findByBranchId,
+            patch: boardObjectsPatch,
+          };
+        }
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await setZone({ branchId: 'branch-1', zoneId: null });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(branchesGet).toHaveBeenCalledWith('branch-1', baseServiceParams);
+    expect(findByBranchId).toHaveBeenCalledWith('branch-1', baseServiceParams);
+    expect(boardObjectsPatch).toHaveBeenCalledWith(
+      'obj-branch-1',
+      { zone_id: null },
+      baseServiceParams
+    );
+    expect(parsed.zone_id).toBeNull();
+    expect(parsed.note).toMatch(/cleared/i);
+  });
+});
+
 describe('agor_branches_list', () => {
   const baseServiceParams = {
     authenticated: true,

@@ -905,17 +905,22 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_set_zone',
     {
       description:
-        "Pin a branch to a zone on a board and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session.",
+        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session.",
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
           'Branch',
           'Branch ID to pin to the zone (UUIDv7 or short ID)'
         ),
-        zoneId: mcpRequiredString(
-          'zoneId',
-          'Zone ID to pin the branch to (e.g., "zone-1770152859108")'
-        ),
+        zoneId: z
+          .union([
+            mcpRequiredString(
+              'zoneId',
+              'Zone ID to pin the branch to (e.g., "zone-1770152859108")'
+            ),
+            z.null(),
+          ])
+          .describe('Zone ID to pin the branch to, or null to clear the current zone pin.'),
         targetSessionId: mcpOptionalId(
           'targetSessionId',
           'Session',
@@ -931,16 +936,66 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const zoneId = coerceString(args.zoneId)!;
+      const zoneId = args.zoneId === null ? null : coerceString(args.zoneId)!;
       const targetSessionId = coerceString(args.targetSessionId)
         ? await resolveSessionId(ctx, coerceString(args.targetSessionId)!)
         : undefined;
       const triggerTemplate = args.triggerTemplate === true;
 
-      console.log(`📍 MCP pinning branch ${shortId(branchId)} to zone ${zoneId}`);
+      console.log(
+        zoneId === null
+          ? `📍 MCP clearing zone pin for branch ${shortId(branchId)}`
+          : `📍 MCP pinning branch ${shortId(branchId)} to zone ${zoneId}`
+      );
 
       // Get branch to find its board
       const branch = await ctx.app.service('branches').get(branchId, ctx.baseServiceParams);
+
+      // Find or create board object for this branch
+      const boardObjectsService = ctx.app.service('board-objects') as unknown as {
+        findByBranchId: (
+          branchId: BranchID,
+          params?: unknown
+        ) => Promise<import('@agor/core/types').BoardEntityObject | null>;
+        create: (
+          data: unknown,
+          params?: unknown
+        ) => Promise<import('@agor/core/types').BoardEntityObject>;
+        patch: (
+          objectId: string,
+          data: Partial<Omit<import('@agor/core/types').BoardEntityObject, 'zone_id'>> & {
+            zone_id?: string | null;
+          },
+          params?: unknown
+        ) => Promise<import('@agor/core/types').BoardEntityObject>;
+      };
+
+      if (zoneId === null) {
+        const boardObject = await boardObjectsService.findByBranchId(
+          branchId as BranchID,
+          ctx.baseServiceParams
+        );
+        if (!boardObject) {
+          return textResult({
+            branch,
+            zone_id: null,
+            note: 'Branch has no board object; no zone pin to clear.',
+          });
+        }
+
+        const updatedBoardObject = await boardObjectsService.patch(
+          boardObject.object_id,
+          { zone_id: null },
+          ctx.baseServiceParams
+        );
+
+        return textResult({
+          branch,
+          boardObject: updatedBoardObject,
+          zone_id: null,
+          note: 'Branch zone pin cleared.',
+        });
+      }
 
       if (!branch.board_id) {
         throw new Error('Branch must be on a board before it can be pinned to a zone');
@@ -957,23 +1012,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // Calculate position RELATIVE to zone (not absolute canvas coordinates)
       // The UI expects relative positions and adds zone.x/zone.y when rendering
       const { x: relativeX, y: relativeY } = computeZoneRelativePosition(zone as ZoneBoardObject);
-
-      // Find or create board object for this branch
-      const boardObjectsService = ctx.app.service('board-objects') as unknown as {
-        findByBranchId: (
-          branchId: BranchID,
-          params?: unknown
-        ) => Promise<import('@agor/core/types').BoardEntityObject | null>;
-        create: (
-          data: unknown,
-          params?: unknown
-        ) => Promise<import('@agor/core/types').BoardEntityObject>;
-        patch: (
-          objectId: string,
-          data: Partial<import('@agor/core/types').BoardEntityObject>,
-          params?: unknown
-        ) => Promise<import('@agor/core/types').BoardEntityObject>;
-      };
 
       let boardObject: import('@agor/core/types').BoardEntityObject | null =
         await boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams);

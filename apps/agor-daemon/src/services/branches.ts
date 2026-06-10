@@ -1061,13 +1061,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
 
-      // Clear zone_id on the board entity so archived branches don't move with zones
-      const boardObjectsService = this.getBoardObjectsService();
-      const boardEntity = await boardObjectsService.findByBranchId(id);
-      if (boardEntity?.zone_id) {
-        await boardObjectsService.patch(boardEntity.object_id, { zone_id: null });
-      }
-
       return archivedBranch;
     } else {
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)

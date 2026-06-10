@@ -121,7 +121,10 @@ describe('agor_boards_get', () => {
     },
   };
 
-  function makeApp(options?: { boardObjectsFind?: ReturnType<typeof vi.fn> }) {
+  function makeApp(options?: {
+    boardObjectsFind?: ReturnType<typeof vi.fn>;
+    branchesFind?: ReturnType<typeof vi.fn>;
+  }) {
     const boardsGet = vi.fn(async () => board);
     const boardObjectsFind =
       options?.boardObjectsFind ??
@@ -131,14 +134,21 @@ describe('agor_boards_get', () => {
         limit: 100,
         skip: 0,
       }));
+    const branchesFind =
+      options?.branchesFind ??
+      vi.fn(async (params?: { query?: { branch_id?: { $in?: string[] } } }) =>
+        (params?.query?.branch_id?.$in ?? []).map((branch_id) => ({ branch_id, archived: false }))
+      );
 
     return {
       boardsGet,
       boardObjectsFind,
+      branchesFind,
       app: {
         service(name: string) {
           if (name === 'boards') return { get: boardsGet };
           if (name === 'board-objects') return { find: boardObjectsFind };
+          if (name === 'branches') return { find: branchesFind };
           throw new Error(`Unexpected service call: ${name}`);
         },
       },
@@ -198,7 +208,12 @@ describe('agor_boards_get', () => {
       limit: 100,
       skip: 0,
     }));
-    const { app } = makeApp({ boardObjectsFind });
+    const branchesFind = vi.fn(async () => [
+      { branch_id: 'branch-0', archived: false },
+      { branch_id: 'branch-1', archived: false },
+      { branch_id: 'branch-2', archived: false },
+    ]);
+    const { app } = makeApp({ boardObjectsFind, branchesFind });
     const getBoard = registerAndCaptureHandler('agor_boards_get', {
       app,
       userId: 'user-1',
@@ -223,12 +238,74 @@ describe('agor_boards_get', () => {
       },
       ...baseServiceParams,
     });
+    expect(branchesFind).toHaveBeenCalledWith({
+      query: {
+        branch_id: { $in: ['branch-0', 'branch-1', 'branch-2'] },
+        archived: false,
+      },
+      paginate: false,
+      ...baseServiceParams,
+    });
     expect(parsed.entities).toHaveLength(1);
     expect(parsed.entities[0].branch_id).toBe('branch-1');
     expect(parsed.entities_pagination).toEqual({ total: 3, limit: 1, skip: 1 });
   });
 
-  it('preserves includeEntities=true behavior when no entity filters are provided', async () => {
+  it('excludes archived branch entities by default while preserving card entities', async () => {
+    const boardObjectsFind = vi.fn(async () => ({
+      data: [
+        {
+          object_id: 'obj-branch-1',
+          board_id: 'board-1',
+          branch_id: 'branch-1',
+          entity_type: 'branch',
+          position: { x: 10, y: 20 },
+          created_at: '2026-06-01T00:00:00.000Z',
+        },
+        {
+          object_id: 'obj-branch-2',
+          board_id: 'board-1',
+          branch_id: 'branch-2',
+          entity_type: 'branch',
+          position: { x: 30, y: 40 },
+          created_at: '2026-06-01T00:00:00.000Z',
+        },
+        {
+          object_id: 'obj-card-1',
+          board_id: 'board-1',
+          card_id: 'card-1',
+          entity_type: 'card',
+          position: { x: 50, y: 60 },
+          created_at: '2026-06-01T00:00:00.000Z',
+        },
+      ],
+      total: 3,
+      limit: 100,
+      skip: 0,
+    }));
+    const branchesFind = vi.fn(async () => [{ branch_id: 'branch-1', archived: false }]);
+    const { app } = makeApp({ boardObjectsFind, branchesFind });
+    const getBoard = registerAndCaptureHandler('agor_boards_get', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await getBoard({ boardId: 'board-1', includeEntities: true });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(boardObjectsFind).toHaveBeenCalledWith({
+      query: { board_id: 'board-1' },
+      ...baseServiceParams,
+    });
+    expect(parsed.entities.map((entity: { object_id: string }) => entity.object_id)).toEqual([
+      'obj-branch-1',
+      'obj-card-1',
+    ]);
+    expect(parsed.entities_pagination).toEqual({ total: 2, limit: null, skip: 0 });
+  });
+
+  it('includes archived branch entities when includeArchived=true', async () => {
     const boardObjectsFind = vi.fn(async () => ({
       data: [
         {
@@ -244,21 +321,24 @@ describe('agor_boards_get', () => {
       limit: 100,
       skip: 0,
     }));
-    const { app } = makeApp({ boardObjectsFind });
+    const branchesFind = vi.fn(async () => []);
+    const { app } = makeApp({ boardObjectsFind, branchesFind });
     const getBoard = registerAndCaptureHandler('agor_boards_get', {
       app,
       userId: 'user-1',
       baseServiceParams,
     });
 
-    const result = await getBoard({ boardId: 'board-1', includeEntities: true });
+    const result = await getBoard({
+      boardId: 'board-1',
+      includeEntities: true,
+      includeArchived: true,
+    });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(boardObjectsFind).toHaveBeenCalledWith({
-      query: { board_id: 'board-1' },
-      ...baseServiceParams,
-    });
+    expect(branchesFind).not.toHaveBeenCalled();
     expect(parsed.entities).toHaveLength(1);
+    expect(parsed.entities[0].branch_id).toBe('branch-1');
     expect(parsed.entities_pagination).toEqual({ total: 1, limit: null, skip: 0 });
   });
 
