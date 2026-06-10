@@ -7,7 +7,19 @@ import {
   RobotOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
-import { Avatar, Card, Empty, List, Segmented, Space, Tag, Tooltip, Typography, theme } from 'antd';
+import {
+  Avatar,
+  Card,
+  Empty,
+  List,
+  Popover,
+  Segmented,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import type React from 'react';
 import { useCallback, useMemo, useState } from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
@@ -161,13 +173,28 @@ export const HomeActivitySection: React.FC<
         <Space size={4} wrap>
           <Text strong>{actor}</Text>
           <Text type="secondary">{verb}</Text>
-          <Tag
-            icon={<ToolIcon tool={session.agentic_tool} size={14} />}
-            onClick={() => onSessionClick(session.session_id)}
-            style={clickablePillStyle}
+          <Popover
+            trigger="hover"
+            title={<Text style={{ maxWidth: 320, display: 'block' }}>{sessionTitle}</Text>}
+            content={
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {session.agentic_tool} · {session.status.replaceAll('_', ' ')}
+              </Text>
+            }
           >
-            <span style={{ fontFamily: token.fontFamilyCode }}>{sessionTitle}</span>
-          </Tag>
+            <Tag
+              aria-label={sessionTitle}
+              onClick={() => onSessionClick(session.session_id)}
+              style={{
+                ...clickablePillStyle,
+                display: 'inline-flex',
+                alignItems: 'center',
+                paddingInline: 6,
+              }}
+            >
+              <ToolIcon tool={session.agentic_tool} size={14} />
+            </Tag>
+          </Popover>
           {branch && (
             <>
               <Text type="secondary">in</Text>
@@ -187,16 +214,7 @@ export const HomeActivitySection: React.FC<
         </Space>
       );
     },
-    [
-      boardById,
-      boardPill,
-      branchById,
-      onBranchClick,
-      onSessionClick,
-      clickablePillStyle,
-      token.fontFamilyCode,
-      userById,
-    ]
+    [boardById, boardPill, branchById, onBranchClick, onSessionClick, clickablePillStyle, userById]
   );
 
   const items = useMemo(() => {
