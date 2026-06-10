@@ -57,9 +57,11 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
           <HomeActivitySection
             branchById={props.branchById}
             boardById={props.boardById}
+            sessionById={props.sessionById}
             userById={props.userById}
             onBoardClick={props.onBoardClick}
             onBranchClick={props.onBranchClick}
+            onSessionClick={props.onSessionClick}
           />
           <HomeKnowledgeSection client={props.client} connected={props.connected} />
         </aside>

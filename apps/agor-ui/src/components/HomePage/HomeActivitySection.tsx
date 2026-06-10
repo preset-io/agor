@@ -1,14 +1,18 @@
+import type { Branch, Session } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   ApartmentOutlined,
   BranchesOutlined,
+  ClockCircleOutlined,
   RobotOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
-import { Avatar, Card, Empty, List, Space, Typography, theme } from 'antd';
+import { Avatar, Card, Empty, List, Segmented, Space, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
+import { ToolIcon } from '../ToolIcon';
 import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
 import type { HomePageProps } from './types';
@@ -17,11 +21,22 @@ const { Text } = Typography;
 
 const HOME_ACTIVITY_LIMIT = 100;
 
+type ActivityFilter = 'all' | 'branches' | 'sessions' | 'assistants';
+type ActivityEventType = Exclude<ActivityFilter, 'all'>;
+
+interface ActivityEvent {
+  id: string;
+  type: ActivityEventType;
+  dttm: string | Date;
+  icon: React.ReactNode;
+  message: React.ReactNode;
+}
+
 const ActivityFeedItem: React.FC<{
   icon: React.ReactNode;
-  text: React.ReactNode;
+  message: React.ReactNode;
   time?: string | Date | null;
-}> = ({ icon, text, time }) => {
+}> = ({ icon, message, time }) => {
   const { token } = theme.useToken();
   return (
     <List.Item style={{ padding: '10px 0' }}>
@@ -33,7 +48,7 @@ const ActivityFeedItem: React.FC<{
           {icon}
         </Avatar>
         <div>
-          <div>{text}</div>
+          <div>{message}</div>
           {time && (
             <Text type="secondary" style={{ fontSize: 12 }}>
               {formatRelativeTime(time)}
@@ -46,18 +61,148 @@ const ActivityFeedItem: React.FC<{
 };
 
 export const HomeActivitySection: React.FC<
-  Pick<HomePageProps, 'branchById' | 'boardById' | 'userById' | 'onBoardClick' | 'onBranchClick'>
-> = ({ branchById, boardById, userById, onBoardClick, onBranchClick }) => {
+  Pick<
+    HomePageProps,
+    | 'branchById'
+    | 'boardById'
+    | 'sessionById'
+    | 'userById'
+    | 'onBoardClick'
+    | 'onBranchClick'
+    | 'onSessionClick'
+  >
+> = ({
+  branchById,
+  boardById,
+  sessionById,
+  userById,
+  onBoardClick,
+  onBranchClick,
+  onSessionClick,
+}) => {
   const { token } = theme.useToken();
   const cardGlassStyle = glassCardStyle(token);
-  const items = useMemo(
-    () =>
-      Array.from(branchById.values())
-        .filter((branch) => !branch.archived)
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        .slice(0, HOME_ACTIVITY_LIMIT),
-    [branchById]
+  const [filter, setFilter] = useState<ActivityFilter>('all');
+
+  const branchMessage = useCallback(
+    (branch: Branch, assistant: boolean) => {
+      const board = branch.board_id ? boardById.get(branch.board_id) : undefined;
+      const actor = userById.get(branch.created_by)?.name || 'Someone';
+      const branchLabel = getAssistantConfig(branch)?.displayName ?? branch.name;
+
+      return (
+        <Space size={4} wrap>
+          <Text strong>{actor}</Text>
+          <Text type="secondary">created</Text>
+          {assistant ? (
+            <RobotOutlined style={{ color: token.colorTextTertiary }} />
+          ) : (
+            <BranchesOutlined style={{ color: token.colorTextTertiary }} />
+          )}
+          <Typography.Link onClick={() => onBranchClick(branch.branch_id)}>
+            {branchLabel}
+          </Typography.Link>
+          {board && (
+            <>
+              <Text type="secondary">on</Text>
+              <ApartmentOutlined style={{ color: token.colorTextTertiary }} />
+              <Typography.Link onClick={() => onBoardClick(board.board_id)}>
+                {board.name}
+              </Typography.Link>
+            </>
+          )}
+        </Space>
+      );
+    },
+    [boardById, onBoardClick, onBranchClick, token.colorTextTertiary, userById]
   );
+
+  const sessionMessage = useCallback(
+    (session: Session) => {
+      const branch = branchById.get(session.branch_id);
+      const board = branch?.board_id ? boardById.get(branch.board_id) : undefined;
+      const actor = userById.get(session.created_by)?.name || 'Someone';
+      const sessionTitle = getSessionDisplayTitle(session, {
+        includeAgentFallback: true,
+        includeIdFallback: true,
+      });
+      const createdAt = new Date(session.created_at).getTime();
+      const updatedAt = new Date(session.last_updated).getTime();
+      const verb = Math.abs(updatedAt - createdAt) < 1000 ? 'started' : 'updated';
+
+      return (
+        <Space size={4} wrap>
+          <Text strong>{actor}</Text>
+          <Text type="secondary">{verb}</Text>
+          <ToolIcon tool={session.agentic_tool} size={14} />
+          <Typography.Link onClick={() => onSessionClick(session.session_id)}>
+            {sessionTitle}
+          </Typography.Link>
+          {branch && (
+            <>
+              <Text type="secondary">in</Text>
+              <BranchesOutlined style={{ color: token.colorTextTertiary }} />
+              <Typography.Link onClick={() => onBranchClick(branch.branch_id)}>
+                {branch.name}
+              </Typography.Link>
+            </>
+          )}
+          {board && (
+            <>
+              <Text type="secondary">on</Text>
+              <ApartmentOutlined style={{ color: token.colorTextTertiary }} />
+              <Typography.Link onClick={() => onBoardClick(board.board_id)}>
+                {board.name}
+              </Typography.Link>
+            </>
+          )}
+        </Space>
+      );
+    },
+    [
+      boardById,
+      branchById,
+      onBoardClick,
+      onBranchClick,
+      onSessionClick,
+      token.colorTextTertiary,
+      userById,
+    ]
+  );
+
+  const items = useMemo(() => {
+    const events: ActivityEvent[] = [
+      ...Array.from(branchById.values())
+        .filter((branch) => !branch.archived)
+        .map((branch): ActivityEvent => {
+          const assistant = isAssistant(branch);
+          return {
+            id: `branch:${branch.branch_id}`,
+            type: assistant ? 'assistants' : 'branches',
+            dttm: branch.created_at,
+            icon: assistant ? <RobotOutlined /> : <BranchesOutlined />,
+            message: branchMessage(branch, assistant),
+          };
+        }),
+      ...Array.from(sessionById.values())
+        .filter((session) => !session.archived)
+        .map(
+          (session): ActivityEvent => ({
+            id: `session:${session.session_id}`,
+            type: 'sessions',
+            dttm: session.last_updated,
+            icon: <ClockCircleOutlined />,
+            message: sessionMessage(session),
+          })
+        ),
+    ];
+
+    return events
+      .filter((event) => filter === 'all' || event.type === filter)
+      .sort((a, b) => new Date(b.dttm).getTime() - new Date(a.dttm).getTime())
+      .slice(0, HOME_ACTIVITY_LIMIT);
+  }, [branchById, sessionById, filter, branchMessage, sessionMessage]);
+
   return (
     <Card
       style={{ minHeight: 0, flex: 1, ...cardGlassStyle }}
@@ -73,50 +218,52 @@ export const HomeActivitySection: React.FC<
       <HomeSectionHeader
         title="Team activity"
         icon={<TeamOutlined />}
-        info={`Up to ${HOME_ACTIVITY_LIMIT} recent branch/assistant creation events derived from local state. A persisted activity summary endpoint can replace this later for comments, artifacts, and assistant prompt events.`}
+        info={`Up to ${HOME_ACTIVITY_LIMIT} recent branch, assistant, and session events derived from local state and sorted together by event time. A persisted activity summary endpoint can replace this later for comments, artifacts, and prompt events.`}
+        extra={
+          <Segmented<ActivityFilter>
+            size="small"
+            value={filter}
+            onChange={setFilter}
+            options={[
+              { label: <Tooltip title="All activity">All</Tooltip>, value: 'all' },
+              {
+                label: (
+                  <Tooltip title="Branches">
+                    <BranchesOutlined />
+                  </Tooltip>
+                ),
+                value: 'branches',
+              },
+              {
+                label: (
+                  <Tooltip title="Sessions">
+                    <ClockCircleOutlined />
+                  </Tooltip>
+                ),
+                value: 'sessions',
+              },
+              {
+                label: (
+                  <Tooltip title="Assistants">
+                    <RobotOutlined />
+                  </Tooltip>
+                ),
+                value: 'assistants',
+              },
+            ]}
+          />
+        }
       />
       <div style={{ overflow: 'auto', minHeight: 0 }}>
         {items.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No recent activity" />
         ) : (
           <List
-            rowKey="branch_id"
+            rowKey="id"
             dataSource={items}
-            renderItem={(branch) => {
-              const board = branch.board_id ? boardById.get(branch.board_id) : undefined;
-              const actor = userById.get(branch.created_by)?.name || 'Someone';
-              const assistant = isAssistant(branch);
-              const branchLabel = getAssistantConfig(branch)?.displayName ?? branch.name;
-              return (
-                <ActivityFeedItem
-                  icon={assistant ? <RobotOutlined /> : <BranchesOutlined />}
-                  text={
-                    <Space size={4} wrap>
-                      <Text strong>{actor}</Text>
-                      <Text type="secondary">created</Text>
-                      {assistant ? (
-                        <RobotOutlined style={{ color: token.colorTextTertiary }} />
-                      ) : (
-                        <BranchesOutlined style={{ color: token.colorTextTertiary }} />
-                      )}
-                      <Typography.Link onClick={() => onBranchClick(branch.branch_id)}>
-                        {branchLabel}
-                      </Typography.Link>
-                      {board && (
-                        <>
-                          <Text type="secondary">on</Text>
-                          <ApartmentOutlined style={{ color: token.colorTextTertiary }} />
-                          <Typography.Link onClick={() => onBoardClick(board.board_id)}>
-                            {board.name}
-                          </Typography.Link>
-                        </>
-                      )}
-                    </Space>
-                  }
-                  time={branch.created_at}
-                />
-              );
-            }}
+            renderItem={(item) => (
+              <ActivityFeedItem icon={item.icon} message={item.message} time={item.dttm} />
+            )}
           />
         )}
       </div>
