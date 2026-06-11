@@ -421,4 +421,69 @@ describe('Knowledge MCP input schemas', () => {
     expect(result[0].current_version).not.toHaveProperty('content_text');
     expect(result[0].snippet).toBe('memory body');
   });
+
+  it('applies Knowledge search content shaping to assistant knowledge search', async () => {
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'docs/context.md',
+          uri: 'agor://kb/global/docs/context.md',
+          title: 'Context',
+          kind: 'doc',
+          visibility: 'public',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: {
+          version_id: 'ver-1',
+          document_id: 'doc-1',
+          version_number: 1,
+          content_text: 'knowledge body',
+        },
+        snippet: 'knowledge body',
+        score: 10,
+      },
+    ]);
+    const tools = await captureKnowledgeTools(
+      {
+        sessions: { get: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) },
+        branches: {
+          get: vi.fn().mockResolvedValue({
+            branch_id: 'branch-1',
+            assistant: {
+              kb: {
+                primary_namespace_id: 'ns-1',
+                primary_namespace_slug: 'assistant',
+                global_access: 'write',
+              },
+            },
+          }),
+        },
+        'kb/namespaces': {
+          get: vi.fn().mockResolvedValue({
+            namespace_id: 'ns-1',
+            slug: 'assistant',
+            archived: false,
+          }),
+        },
+        'kb/search': { find },
+      },
+      { sessionId: 'session-1' }
+    );
+
+    const result = textResultJson(
+      await tools.agor_assistant_knowledge_search.handler?.({ query: 'knowledge' })
+    ) as Array<Record<string, any>>;
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({ q: 'knowledge' }),
+      })
+    );
+    expect(result[0].current_version).not.toHaveProperty('content_text');
+    expect(result[0].snippet).toBe('knowledge body');
+  });
 });
