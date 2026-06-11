@@ -100,16 +100,28 @@ describe('Knowledge MCP input schemas', () => {
     expect(issueMessages(empty?.error)).toContain('slug cannot be empty.');
   });
 
-  it('reports required document content clearly without handler fallback errors', async () => {
+  it('allows metadata-only document put payloads for existing documents', async () => {
+    const tools = await captureKnowledgeTools();
+
+    const parsed = tools.agor_kb_put.cfg.inputSchema?.safeParse({
+      documentId: 'doc-1',
+      iconEmoji: '📘',
+    });
+
+    expect(parsed?.success).toBe(true);
+  });
+
+  it('requires document content to be a string when provided', async () => {
     const tools = await captureKnowledgeTools();
 
     const parsed = tools.agor_kb_put.cfg.inputSchema?.safeParse({
       namespace: 'global',
       path: 'foo.md',
+      content: 123,
     });
 
     expect(parsed?.success).toBe(false);
-    expect(issueMessages(parsed?.error)).toContain('content is required and must be a string.');
+    expect(issueMessages(parsed?.error)).toContain('content must be a string when provided.');
   });
 
   it('enforces positive/non-negative integer pagination and range controls', async () => {

@@ -1194,10 +1194,11 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         ),
         content: z
           .string({
-            error: 'content is required and must be a string.',
+            error: 'content must be a string when provided.',
           })
+          .optional()
           .describe(
-            'Markdown content for the new version. Embed [label](agor://kb/document/<documentId>) links to other KB docs to create graph edges between them.'
+            'Markdown content for the new version. Required when creating a new document; omit for metadata-only updates such as setting iconEmoji on an existing document. Embed [label](agor://kb/document/<documentId>) links to other KB docs to create graph edges between them.'
           ),
         firstLineIsTitle: z
           .boolean()
@@ -1248,21 +1249,22 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (!service) return knowledgeNotImplementedResult('agor_kb_put', ['kb/documents']);
 
       const content = typeof args.content === 'string' ? args.content : undefined;
-      if (content === undefined) throw new Error('content is required and must be a string.');
-
       const uri = coerceString(args.uri);
       const parsedUri = parseKnowledgeUri(uri);
       const title = coerceString(args.title);
-      const firstContentLine = content
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .find(Boolean);
+      const firstContentLine =
+        content
+          ?.split(/\r?\n/)
+          .map((line) => line.trim())
+          .find(Boolean) ?? null;
       const contentStartsWithHeading = Boolean(firstContentLine?.match(/^#{1,6}\s+\S/));
       // Agents commonly pass both `title` and markdown beginning with `# Title`.
       // Default to deriving/hiding the first heading in that case so the viewer
       // does not render duplicate titles. Callers can opt out explicitly.
       const firstLineIsTitle =
-        args.firstLineIsTitle ?? (contentStartsWithHeading || title === undefined);
+        content === undefined
+          ? args.firstLineIsTitle
+          : (args.firstLineIsTitle ?? (contentStartsWithHeading || title === undefined));
 
       const iconEmoji =
         args.iconEmoji === undefined
@@ -1275,8 +1277,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         namespace_slug: coerceString(args.namespace) ?? parsedUri?.namespace_slug,
         path: coerceString(args.path) ?? parsedUri?.path,
         title,
-        content_text: content,
-        first_line_is_title: firstLineIsTitle,
+        ...(content !== undefined ? { content_text: content } : {}),
+        ...(firstLineIsTitle !== undefined ? { first_line_is_title: firstLineIsTitle } : {}),
         kind: (args.kind as KnowledgeDocumentKind | undefined) ?? 'doc',
         ...(args.iconEmoji !== undefined ? { icon_emoji: iconEmoji } : {}),
         visibility: args.visibility as KnowledgeVisibility | undefined,

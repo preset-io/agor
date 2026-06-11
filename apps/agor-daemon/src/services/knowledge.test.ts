@@ -441,6 +441,17 @@ describe('KnowledgeDocumentsService permissions', () => {
       expect(updated.document_id).toBe(created.document_id);
       expect(updated.icon_emoji).toBe('📘');
 
+      const iconOnlyUpdate = await service.putDocument(
+        {
+          document_id: created.document_id,
+          icon_emoji: '🧭',
+        },
+        params(owner)
+      );
+      expect(iconOnlyUpdate.document_id).toBe(created.document_id);
+      expect(iconOnlyUpdate.icon_emoji).toBe('🧭');
+      expect(iconOnlyUpdate.current_version_id).toBe(updated.current_version_id);
+
       const hydrated = await service.getDocument(
         { namespace_slug: namespace.slug, path: 'guide.md', include_content: true },
         params(owner)
