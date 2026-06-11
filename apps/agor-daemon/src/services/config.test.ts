@@ -156,4 +156,33 @@ describe('ConfigService.resolveApiKey', () => {
 
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
   });
+
+  it('rejects executor runtime tokens for tools without a canonical API key mapping', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return { get: vi.fn(async () => ({ created_by: 'creator-1', session_id: 'session-1' })) };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'opencode' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'opencode' },
+        {
+          provider: 'socketio',
+          authentication: {
+            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+          },
+        } as never
+      )
+    ).rejects.toBeInstanceOf(Forbidden);
+
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
 });

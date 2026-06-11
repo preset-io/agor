@@ -207,7 +207,7 @@ export class ConfigService {
         throw new BadRequest('Tool is required for executor API key resolution');
       }
       const expectedKeyName = TOOL_API_KEY_NAMES[tool];
-      if (expectedKeyName && expectedKeyName !== keyName) {
+      if (!expectedKeyName || expectedKeyName !== keyName) {
         throw new Forbidden('Executor token is not valid for this API key');
       }
       const sessionsService = this.app?.service('sessions');
