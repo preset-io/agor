@@ -9,6 +9,7 @@ import {
   buildClaudeCliAgorMcpConfig,
   buildSpawnConfigForSession,
   resolveClaudeCliMcpConfigTargetUnixUser,
+  writeClaudeCliMcpConfigFile,
   writeClaudeCliMcpConfigForSession,
 } from './claude-cli-integration';
 
@@ -46,6 +47,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   for (const filePath of generatedPaths.splice(0)) {
     fs.rmSync(path.dirname(filePath), { recursive: true, force: true });
@@ -136,5 +138,18 @@ describe('Claude CLI Agor MCP config', () => {
         makeSession({ unix_username: 'alice' })
       )
     ).toBe('alice');
+  });
+
+  it('validates target-user config paths before attempting privileged writes', () => {
+    expect(() =>
+      writeClaudeCliMcpConfigFile({
+        mcpConfig: buildClaudeCliAgorMcpConfig({
+          daemonUrl: 'https://agor.example.test',
+          mcpToken: 'tok_123',
+        }),
+        sessionShortId: '019e8abc',
+        targetUnixUser: 'bad user',
+      })
+    ).toThrow('invalid target Unix username');
   });
 });

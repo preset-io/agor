@@ -34,7 +34,7 @@
  *   - Subagent JSONL discovery
  */
 
-import { execFileSync, spawn as spawnProcess } from 'node:child_process';
+import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,6 +68,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import {
+  getHomedirFromUsername,
   isValidUnixUsername,
   resolveUnixUserForImpersonation,
   type UnixUserMode,
@@ -283,7 +284,7 @@ export function isClaudeRunningFor(sessionId: SessionID): Promise<boolean> {
     // pgrep uses extended regex with -f. `(--session-id|--resume) <id>`
     // covers both spawn forms `buildClaudeCliSpawn` emits.
     const pattern = `claude .*(--session-id|--resume) ${sessionId}`;
-    const proc = spawnProcess('pgrep', ['-f', pattern], { stdio: 'ignore' });
+    const proc = childProcess.spawn('pgrep', ['-f', pattern], { stdio: 'ignore' });
     proc.on('exit', (code) => resolve(code === 0));
     proc.on('error', () => resolve(true));
     setTimeout(() => {
@@ -1116,13 +1117,6 @@ function writePrivateMcpConfigAsUser(params: {
   targetUnixUser: string;
 }): string {
   const { content, sessionShortId, targetUnixUser } = params;
-  if (!isValidUnixUsername(targetUnixUser)) {
-    throw new Error(`invalid target Unix username: ${JSON.stringify(targetUnixUser)}`);
-  }
-  if (!/^[a-zA-Z0-9_-]+$/.test(sessionShortId)) {
-    throw new Error(`invalid session short id: ${JSON.stringify(sessionShortId)}`);
-  }
-
   const script = [
     'set -euo pipefail',
     'umask 077',
@@ -1132,16 +1126,30 @@ function writePrivateMcpConfigAsUser(params: {
     'printf "%s\\n" "$dir/mcp.json"',
   ].join('; ');
 
-  return execFileSync(
-    'sudo',
-    ['-n', '-u', targetUnixUser, 'bash', '-c', script, '--', sessionShortId],
-    {
-      input: content,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5000,
-    }
-  ).trim();
+  return childProcess
+    .execFileSync(
+      'sudo',
+      ['-n', '-u', targetUnixUser, 'bash', '-c', script, '--', sessionShortId],
+      {
+        input: content,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 5000,
+      }
+    )
+    .trim();
+}
+
+function assertValidMcpConfigWriteParams(params: {
+  sessionShortId: string;
+  targetUnixUser?: string;
+}): void {
+  if (!/^[a-zA-Z0-9_-]+$/.test(params.sessionShortId)) {
+    throw new Error(`invalid session short id: ${JSON.stringify(params.sessionShortId)}`);
+  }
+  if (params.targetUnixUser && !isValidUnixUsername(params.targetUnixUser)) {
+    throw new Error(`invalid target Unix username: ${JSON.stringify(params.targetUnixUser)}`);
+  }
 }
 
 function writePrivateMcpConfigAsDaemon(params: {
@@ -1157,7 +1165,11 @@ function writePrivateMcpConfigAsDaemon(params: {
   // privileged. Chown both path components so a 0700 dir + 0600 file remain
   // readable only by the target process owner.
   if (params.targetUnixUser) {
-    const homeStat = fs.statSync(`/home/${params.targetUnixUser}`);
+    const targetHome = getHomedirFromUsername(params.targetUnixUser);
+    if (!targetHome) {
+      throw new Error(`could not resolve home directory for ${params.targetUnixUser}`);
+    }
+    const homeStat = fs.statSync(targetHome);
     fs.chownSync(dir, homeStat.uid, homeStat.gid);
     fs.chownSync(filePath, homeStat.uid, homeStat.gid);
   }
@@ -1170,6 +1182,7 @@ export function writeClaudeCliMcpConfigFile(params: {
   sessionShortId: string;
   targetUnixUser?: string;
 }): string {
+  assertValidMcpConfigWriteParams(params);
   const content = `${JSON.stringify(params.mcpConfig, null, 2)}\n`;
 
   if (params.targetUnixUser) {
