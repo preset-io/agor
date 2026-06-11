@@ -37,6 +37,8 @@ interface BranchHeaderPillProps {
   connectionDisabled?: boolean;
   /** Show environment status/controls and environment shortcut. Defaults to true. */
   showEnvButtons?: boolean;
+  /** Whether to show the destructive Nuke action when available. Defaults to true. */
+  showNukeEnvironment?: boolean;
   /** Optional link for the branch identity area. Used by session surfaces for deep links. */
   identityLink?: string | null;
   /**
@@ -67,6 +69,7 @@ export function BranchHeaderPill({
   canControlEnvironment,
   connectionDisabled = false,
   showEnvButtons = true,
+  showNukeEnvironment = true,
   identityLink,
   compact = false,
 }: BranchHeaderPillProps) {
@@ -384,7 +387,7 @@ export function BranchHeaderPill({
               )}
 
               {/* Nuke button */}
-              {!compact && onNukeEnvironment && branch.nuke_command && (
+              {showNukeEnvironment && !compact && onNukeEnvironment && branch.nuke_command && (
                 <Tooltip title={controlDisabledTooltip ?? 'Nuke environment (destructive)'}>
                   <Button
                     type="text"

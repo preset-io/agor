@@ -1,6 +1,5 @@
 import type { Branch, Repo } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('antd', async () => {
@@ -13,6 +12,8 @@ vi.mock('antd', async () => {
       ...props
     }: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon?: React.ReactNode }) =>
       React.createElement('button', props, icon, children),
+    Space: ({ children }: { children: React.ReactNode }) =>
+      React.createElement(React.Fragment, null, children),
     Spin: () => React.createElement('span', null, 'loading'),
     Tooltip: ({ children }: { children: React.ReactNode }) =>
       React.createElement(React.Fragment, null, children),
@@ -27,34 +28,23 @@ vi.mock('antd', async () => {
     theme: {
       useToken: () => ({
         token: {
-          colorBorderSecondary: '#ddd',
           colorError: '#f00',
           colorInfo: '#00f',
           colorSuccess: '#0a0',
           colorTextDisabled: '#999',
           colorWarning: '#fa0',
           fontFamilyCode: 'monospace',
-          fontSizeSM: 12,
         },
       }),
     },
   };
 });
 
-vi.mock('../../hooks/usePermissions', () => ({
-  usePermissions: () => ({
-    role: 'admin',
-    isAdmin: true,
-    isSuperAdmin: false,
-    hasRole: () => true,
-  }),
-}));
-
 vi.mock('../../hooks/useConfirmNukeEnvironment', () => ({
   useConfirmNukeEnvironment: () => vi.fn(),
 }));
 
-import { BranchHeaderPill } from './BranchHeaderPill';
+import { EnvironmentPill } from './EnvironmentPill';
 
 const repo = {
   repo_id: 'repo-1',
@@ -72,23 +62,22 @@ const branch = {
   repo_id: repo.repo_id,
   name: 'feature/remove-nuke',
   nuke_command: 'docker compose down -v',
-  others_can: 'all',
   environment_instance: { status: 'stopped' },
 } as Branch;
 
 const defaultProps = {
   repo,
   branch,
-  onOpenBranch: vi.fn(),
+  onEdit: vi.fn(),
   onStartEnvironment: vi.fn(),
   onStopEnvironment: vi.fn(),
   onViewLogs: vi.fn(),
   onNukeEnvironment: vi.fn(),
 };
 
-describe('BranchHeaderPill', () => {
-  it('hides the destructive nuke action in compact mode', () => {
-    render(<BranchHeaderPill {...defaultProps} compact />);
+describe('EnvironmentPill', () => {
+  it('can hide only the destructive nuke action while preserving other controls', () => {
+    render(<EnvironmentPill {...defaultProps} showNukeEnvironment={false} />);
 
     expect(screen.getByRole('button', { name: 'Start environment' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop environment' })).toBeInTheDocument();
@@ -96,36 +85,9 @@ describe('BranchHeaderPill', () => {
     expect(screen.queryByRole('button', { name: 'Nuke environment' })).not.toBeInTheDocument();
   });
 
-  it('keeps the destructive nuke action in non-compact mode', () => {
-    render(<BranchHeaderPill {...defaultProps} />);
+  it('shows the destructive nuke action by default when configured', () => {
+    render(<EnvironmentPill {...defaultProps} />);
 
     expect(screen.getByRole('button', { name: 'Nuke environment' })).toBeInTheDocument();
-  });
-
-  it('can explicitly hide only the destructive nuke action', () => {
-    render(<BranchHeaderPill {...defaultProps} showNukeEnvironment={false} />);
-
-    expect(screen.getByRole('button', { name: 'Start environment' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Stop environment' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'View environment logs' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Nuke environment' })).not.toBeInTheDocument();
-  });
-
-  it('uses the supplied identity link for the branch identity area', () => {
-    render(<BranchHeaderPill {...defaultProps} identityLink="https://agor.example/ui/s/abc123/" />);
-
-    const link = screen.getByRole('link', { name: /preset-io\/agor.*feature\/remove-nuke/ });
-    expect(link).toHaveAttribute('href', 'https://agor.example/ui/s/abc123/');
-  });
-
-  it('renders basename-aware internal identity links', () => {
-    render(
-      <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-        <BranchHeaderPill {...defaultProps} identityLink="/s/abc123/" />
-      </MemoryRouter>
-    );
-
-    const link = screen.getByRole('link', { name: /preset-io\/agor.*feature\/remove-nuke/ });
-    expect(link).toHaveAttribute('href', '/ui/s/abc123/');
   });
 });
