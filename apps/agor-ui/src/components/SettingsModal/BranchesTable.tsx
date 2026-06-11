@@ -30,6 +30,7 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveToggleButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { BranchFormFields } from '../BranchFormFields';
+import { HighlightMatch } from '../HighlightMatch';
 import { renderEnvCell } from './BranchEnvColumn';
 
 interface BranchesTableProps {
@@ -326,7 +327,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           ) : (
             <BranchesOutlined />
           )}
-          <Typography.Text strong>{name}</Typography.Text>
+          <Typography.Text strong>
+            <HighlightMatch text={name} query={searchTerm} />
+          </Typography.Text>
         </Space>
       ),
     },
@@ -347,7 +350,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       render: (repoId: string) => (
         <Space>
           <FolderOutlined />
-          <Typography.Text>{getRepoName(repoId)}</Typography.Text>
+          <Typography.Text>
+            <HighlightMatch text={getRepoName(repoId)} query={searchTerm} />
+          </Typography.Text>
         </Space>
       ),
     },
@@ -355,7 +360,11 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       title: 'Branch',
       dataIndex: 'ref',
       key: 'ref',
-      render: (ref: string) => <Typography.Text code>{ref}</Typography.Text>,
+      render: (ref: string) => (
+        <Typography.Text code>
+          <HighlightMatch text={ref} query={searchTerm} />
+        </Typography.Text>
+      ),
     },
     {
       title: 'Sessions',

@@ -25,8 +25,10 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
+import { HighlightMatch } from '../HighlightMatch';
 import { UserSettingsModal } from './UserSettingsModal';
 
 interface UsersTableProps {
@@ -53,6 +55,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [memberships, setMemberships] = useState<GroupMembership[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
@@ -92,6 +95,23 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     () => new Map(groups.map((group) => [group.group_id, group])),
     [groups]
   );
+
+  const users = useMemo(() => {
+    const sorted = mapToSortedArray(userById, (a, b) =>
+      a.email.localeCompare(b.email, undefined, { sensitivity: 'base' })
+    );
+    return filterBySettingsSearch(sorted, searchTerm, [
+      (user) => user.email,
+      (user) => user.name,
+      (user) => user.unix_username,
+      (user) => user.role,
+      (user) =>
+        (groupsByUser.get(user.user_id) || [])
+          .map((groupId) => groupById.get(groupId))
+          .filter((group): group is Group => Boolean(group))
+          .flatMap((group) => [group.name, group.slug]),
+    ]);
+  }, [userById, searchTerm, groupsByUser, groupById]);
 
   const handleDelete = (userId: string) => {
     onDelete?.(userId);
@@ -141,7 +161,9 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       render: (email: string, user: User) => (
         <Space>
           <span style={{ fontSize: 20 }}>{user.emoji || '👤'}</span>
-          <span>{email}</span>
+          <span>
+            <HighlightMatch text={email} query={searchTerm} />
+          </span>
         </Space>
       ),
     },
@@ -149,7 +171,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
-      render: (name: string) => <Typography.Text>{name || '—'}</Typography.Text>,
+      render: (name: string) => (
+        <Typography.Text>
+          {name ? <HighlightMatch text={name} query={searchTerm} /> : '—'}
+        </Typography.Text>
+      ),
     },
     {
       title: 'Role',
@@ -175,7 +201,9 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               .filter((group): group is Group => Boolean(group))
               .sort((a, b) => a.name.localeCompare(b.name))
               .map((group) => (
-                <Tag key={group.group_id}>{group.name}</Tag>
+                <Tag key={group.group_id}>
+                  <HighlightMatch text={group.name} query={searchTerm} />
+                </Tag>
               ))}
           </Space>
         );
@@ -219,15 +247,22 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         }}
       >
         <Typography.Text type="secondary">Manage user accounts and permissions.</Typography.Text>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-          New User
-        </Button>
+        <Space>
+          <Input
+            allowClear
+            placeholder="Search name, email, username, role, or groups"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: 320 }}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+            New User
+          </Button>
+        </Space>
       </div>
 
       <Table
-        dataSource={mapToSortedArray(userById, (a, b) =>
-          a.email.localeCompare(b.email, undefined, { sensitivity: 'base' })
-        )}
+        dataSource={users}
         columns={columns}
         rowKey="user_id"
         pagination={false}

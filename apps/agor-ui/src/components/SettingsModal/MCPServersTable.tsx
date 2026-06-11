@@ -5,6 +5,7 @@ import {
   Button,
   Descriptions,
   Form,
+  Input,
   Modal,
   Popconfirm,
   Space,
@@ -12,9 +13,11 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
+import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
 
@@ -54,6 +57,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [testing, setTesting] = useState(false);
   const [alreadyCreatedInOAuthFlow, setAlreadyCreatedInOAuthFlow] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
 
   // Sync editing server when mcpServerById updates (real-time WebSocket updates).
   // Also keeps the open edit modal in sync if the underlying record changes.
@@ -269,9 +273,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       width: 180,
       render: (_: string, server: MCPServer) => (
         <div>
-          <div>{server.display_name || server.name}</div>
+          <div>
+            <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
+          </div>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {server.name}
+            <HighlightMatch text={server.name} query={searchTerm} />
           </Typography.Text>
         </div>
       ),
@@ -332,7 +338,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       dataIndex: 'source',
       key: 'source',
       width: 100,
-      render: (source: string) => <Typography.Text type="secondary">{source}</Typography.Text>,
+      render: (source: string) => (
+        <Typography.Text type="secondary">
+          <HighlightMatch text={source} query={searchTerm} />
+        </Typography.Text>
+      ),
     },
     {
       title: 'Actions',
@@ -369,6 +379,25 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     },
   ];
 
+  const servers = useMemo(() => {
+    const sorted = mapToSortedArray(mcpServerById, (a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    );
+    return filterBySettingsSearch(sorted, searchTerm, [
+      (server) => server.name,
+      (server) => server.display_name,
+      (server) => server.description,
+      (server) => server.transport,
+      (server) => server.scope,
+      (server) => server.source,
+      (server) => server.url,
+      (server) => server.command,
+      (server) => server.args,
+      (server) => server.enabled,
+      (server) => server.tools?.flatMap((tool) => [tool.name, tool.description]),
+    ]);
+  }, [mcpServerById, searchTerm]);
+
   return (
     <div>
       <div
@@ -382,15 +411,22 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         <Typography.Text type="secondary">
           Configure Model Context Protocol servers for enhanced AI capabilities.
         </Typography.Text>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-          New MCP Server
-        </Button>
+        <Space>
+          <Input
+            allowClear
+            placeholder="Search name, URL, command, tools, transport, or scope"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: 360 }}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+            New MCP Server
+          </Button>
+        </Space>
       </div>
 
       <Table
-        dataSource={mapToSortedArray(mcpServerById, (a, b) =>
-          a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-        )}
+        dataSource={servers}
         columns={columns}
         rowKey="mcp_server_id"
         pagination={{ pageSize: 10, showSizeChanger: true }}

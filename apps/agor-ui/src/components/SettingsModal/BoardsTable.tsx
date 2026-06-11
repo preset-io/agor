@@ -34,8 +34,10 @@ import {
 import { useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ArchiveToggleButton } from '../ArchiveButton';
 import { BoardFormFields, extractBoardFormValues, isCustomCSS } from '../forms/BoardFormFields';
+import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 
 interface BoardsTableProps {
@@ -70,6 +72,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
+  const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
 
   // Calculate session count per board (branch-centric model)
@@ -341,6 +344,23 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     </Form.Item>
   );
 
+  const boards = useMemo(() => {
+    const filteredByArchive = mapToSortedArray(boardById, (a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    ).filter((board) => {
+      if (archiveFilter === 'active') return !board.archived;
+      if (archiveFilter === 'archived') return board.archived;
+      return true;
+    });
+
+    return filterBySettingsSearch(filteredByArchive, searchTerm, [
+      (board) => board.name,
+      (board) => board.slug,
+      (board) => board.description,
+      (board) => board.board_id,
+    ]);
+  }, [boardById, archiveFilter, searchTerm]);
+
   const columns = [
     {
       title: 'Icon',
@@ -353,12 +373,17 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
+      render: (name: string) => <HighlightMatch text={name} query={searchTerm} />,
     },
     {
       title: 'Description',
       dataIndex: 'description',
       key: 'description',
-      render: (desc: string) => <Typography.Text type="secondary">{desc || '—'}</Typography.Text>,
+      render: (desc: string) => (
+        <Typography.Text type="secondary">
+          {desc ? <HighlightMatch text={desc} query={searchTerm} /> : '—'}
+        </Typography.Text>
+      ),
     },
     {
       title: 'Sessions',
@@ -449,6 +474,13 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
               { value: 'archived', label: 'Archived' },
             ]}
           />
+          <Input
+            allowClear
+            placeholder="Search name, slug, description, or ID"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: 300 }}
+          />
           <Button icon={<UploadOutlined />} onClick={handleImportClick}>
             Import Board
           </Button>
@@ -459,13 +491,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       </div>
 
       <Table
-        dataSource={mapToSortedArray(boardById, (a, b) =>
-          a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-        ).filter((board) => {
-          if (archiveFilter === 'active') return !board.archived;
-          if (archiveFilter === 'archived') return board.archived;
-          return true; // 'all'
-        })}
+        dataSource={boards}
         columns={columns}
         rowKey="board_id"
         pagination={false}

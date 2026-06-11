@@ -1,10 +1,12 @@
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Modal, Space, Typography } from 'antd';
-import { useState } from 'react';
+import { Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
+import { useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
+import { HighlightMatch } from '../HighlightMatch';
 import { Tag } from '../Tag';
 
 interface ReposTableProps {
@@ -23,6 +25,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   onDelete,
 }) => {
   const repos = mapToArray(repoById).sort((a, b) => a.name.localeCompare(b.name));
+  const [searchTerm, setSearchTerm] = useState('');
   const [repoModalOpen, setRepoModalOpen] = useState(false);
   const [editingRepo, setEditingRepo] = useState<Repo | null>(null);
   const [repoMode, setRepoMode] = useState<'remote' | 'local'>('remote');
@@ -31,6 +34,18 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   const [repoToDelete, setRepoToDelete] = useState<Repo | null>(null);
 
   const isEditing = !!editingRepo;
+  const filteredRepos = useMemo(
+    () =>
+      filterBySettingsSearch(repos, searchTerm, [
+        (repo) => repo.name,
+        (repo) => repo.slug,
+        (repo) => repo.remote_url,
+        (repo) => repo.local_path,
+        (repo) => repo.default_branch,
+        (repo) => repo.repo_type,
+      ]),
+    [repos, searchTerm]
+  );
 
   const handleOpenDeleteModal = (repo: Repo) => {
     setRepoToDelete(repo);
@@ -134,9 +149,18 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         <Typography.Text type="secondary">
           Connect remote or local git repositories for your sessions.
         </Typography.Text>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>
-          New Repository
-        </Button>
+        <Space>
+          <Input
+            allowClear
+            placeholder="Search name, slug, URL, path, type, or branch"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: 340 }}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>
+            New Repository
+          </Button>
+        </Space>
       </div>
 
       {repos.length === 0 && (
@@ -160,7 +184,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
 
       {repos.length > 0 && (
         <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-          {repos.map((repo: Repo) => {
+          {filteredRepos.map((repo: Repo) => {
             const isLocal = repo.repo_type === 'local';
             const tagColor = isLocal ? 'green' : 'blue';
             const tagLabel = isLocal ? 'Local' : 'Remote';
@@ -172,9 +196,11 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                 title={
                   <Space>
                     <FolderOutlined />
-                    <Typography.Text strong>{repo.name}</Typography.Text>
+                    <Typography.Text strong>
+                      <HighlightMatch text={repo.name} query={searchTerm} />
+                    </Typography.Text>
                     <Tag color={tagColor} style={{ marginLeft: 8 }}>
-                      {tagLabel}
+                      <HighlightMatch text={tagLabel} query={searchTerm} />
                     </Tag>
                   </Space>
                 }
@@ -203,7 +229,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                       Slug:{' '}
                     </Typography.Text>
                     <Typography.Text code style={{ fontSize: 12 }}>
-                      {repo.slug}
+                      <HighlightMatch text={repo.slug} query={searchTerm} />
                     </Typography.Text>
                   </div>
 
@@ -212,7 +238,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                       Type:{' '}
                     </Typography.Text>
                     <Typography.Text code style={{ fontSize: 11 }}>
-                      {tagLabel.toLowerCase()}
+                      <HighlightMatch text={tagLabel.toLowerCase()} query={searchTerm} />
                     </Typography.Text>
                   </div>
 
@@ -221,7 +247,11 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                       Remote:{' '}
                     </Typography.Text>
                     <Typography.Text code style={{ fontSize: 11 }}>
-                      {repo.remote_url ?? '—'}
+                      {repo.remote_url ? (
+                        <HighlightMatch text={repo.remote_url} query={searchTerm} />
+                      ) : (
+                        '—'
+                      )}
                     </Typography.Text>
                   </div>
 
@@ -231,7 +261,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                         Path:{' '}
                       </Typography.Text>
                       <Typography.Text code style={{ fontSize: 11 }}>
-                        {repo.local_path}
+                        <HighlightMatch text={repo.local_path} query={searchTerm} />
                       </Typography.Text>
                     </div>
                   )}

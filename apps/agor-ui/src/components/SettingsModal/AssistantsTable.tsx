@@ -32,6 +32,7 @@ import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AssistantFormFields } from '../forms/AssistantFormFields';
+import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
 
@@ -223,7 +224,9 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
             ) : (
               <RobotOutlined style={{ color: token.colorInfo }} />
             )}
-            <Typography.Text strong>{config?.displayName ?? record.name}</Typography.Text>
+            <Typography.Text strong>
+              <HighlightMatch text={config?.displayName ?? record.name} query={searchTerm} />
+            </Typography.Text>
           </Space>
         );
       },
@@ -274,7 +277,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
                 cursor: 'help',
               }}
             >
-              {firstLine}
+              <HighlightMatch text={firstLine} query={searchTerm} />
             </Typography.Text>
           </Popover>
         );

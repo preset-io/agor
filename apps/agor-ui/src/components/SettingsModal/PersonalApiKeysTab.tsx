@@ -1,9 +1,11 @@
 import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Popconfirm, Space, Table, Typography, theme } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
+import { filterBySettingsSearch } from '../../utils/settingsSearch';
+import { HighlightMatch } from '../HighlightMatch';
 
 interface ApiKeyEntry {
   id: string;
@@ -25,6 +27,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
 
@@ -90,6 +93,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
+      render: (name: string) => <HighlightMatch text={name} query={searchTerm} />,
     },
     {
       title: 'Key',
@@ -97,7 +101,8 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
       key: 'prefix',
       render: (prefix: string) => (
         <Typography.Text code style={{ fontSize: 12 }}>
-          {prefix}...
+          <HighlightMatch text={prefix} query={searchTerm} />
+          ...
         </Typography.Text>
       ),
     },
@@ -137,6 +142,18 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
     },
   ];
 
+  const filteredKeys = useMemo(
+    () =>
+      filterBySettingsSearch(keys, searchTerm, [
+        (key) => key.name,
+        (key) => key.prefix,
+        (key) => key.id,
+        (key) => key.created_at,
+        (key) => key.last_used_at,
+      ]),
+    [keys, searchTerm]
+  );
+
   return (
     <div>
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
@@ -144,17 +161,21 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
         external tools. Tokens have the same permissions as your user account.
       </Typography.Paragraph>
 
-      <Button
-        type="primary"
-        icon={<PlusOutlined />}
-        onClick={() => setShowCreateModal(true)}
-        style={{ marginBottom: 16 }}
-      >
-        Create New Key
-      </Button>
+      <Space style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+        <Input
+          allowClear
+          placeholder="Search name, prefix, or dates"
+          value={searchTerm}
+          onChange={(event) => setSearchTerm(event.target.value)}
+          style={{ width: 300 }}
+        />
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
+          Create New Key
+        </Button>
+      </Space>
 
       <Table
-        dataSource={keys}
+        dataSource={filteredKeys}
         columns={columns}
         rowKey="id"
         loading={loading}

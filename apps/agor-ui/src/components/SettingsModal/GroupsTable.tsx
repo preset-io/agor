@@ -17,7 +17,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
 import { searchableSelectProps, toUserSelectOption } from '@/utils/selectSearch';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
+import { HighlightMatch } from '../HighlightMatch';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
 
 interface GroupsTableProps {
@@ -33,6 +35,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const [editingGroup, setEditingGroup] = useState<Group | null>(null);
   const [editingMemberIds, setEditingMemberIds] = useState<string[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const [editForm] = Form.useForm();
   const createSlugEditedRef = useRef(false);
@@ -156,20 +159,50 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const userOptions = mapToSortedArray(userById, (a, b) => a.email.localeCompare(b.email)).map(
     toUserSelectOption
   );
+  const filteredGroups = filterBySettingsSearch(
+    [...groups].sort((a, b) => a.name.localeCompare(b.name)),
+    searchTerm,
+    [
+      (group) => group.name,
+      (group) => group.slug,
+      (group) => group.description,
+      (group) =>
+        (membershipsByGroup.get(group.group_id) || [])
+          .map((userId) => userById.get(userId))
+          .filter((user): user is User => Boolean(user))
+          .flatMap((user) => [user.name, user.email, user.unix_username]),
+    ]
+  );
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+      <div
+        style={{
+          marginBottom: 16,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
         <Typography.Text type="secondary">Manage groups and user memberships.</Typography.Text>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-          New Group
-        </Button>
+        <Space>
+          <Input
+            allowClear
+            placeholder="Search name, slug, description, or members"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: 320 }}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+            New Group
+          </Button>
+        </Space>
       </div>
 
       <Table
         rowKey="group_id"
         size="small"
         pagination={false}
-        dataSource={[...groups].sort((a, b) => a.name.localeCompare(b.name))}
+        dataSource={filteredGroups}
         columns={[
           {
             title: 'Group',
@@ -177,12 +210,20 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             render: (_: string, group: Group) => (
               <Space>
                 <TeamOutlined />
-                <span>{group.name}</span>
-                <Tag>{group.slug}</Tag>
+                <span>
+                  <HighlightMatch text={group.name} query={searchTerm} />
+                </span>
+                <Tag>
+                  <HighlightMatch text={group.slug || ''} query={searchTerm} />
+                </Tag>
               </Space>
             ),
           },
-          { title: 'Description', dataIndex: 'description', render: (v?: string) => v || '—' },
+          {
+            title: 'Description',
+            dataIndex: 'description',
+            render: (v?: string) => (v ? <HighlightMatch text={v} query={searchTerm} /> : '—'),
+          },
           {
             title: 'Members',
             render: (_: unknown, group: Group) => (

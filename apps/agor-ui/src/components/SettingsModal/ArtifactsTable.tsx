@@ -16,10 +16,12 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { HighlightMatch } from '../HighlightMatch';
 
 interface ArtifactsTableProps {
   artifactById: Map<string, Artifact>;
@@ -49,6 +51,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
 }) => {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingArtifact, setEditingArtifact] = useState<Artifact | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
 
   // Reuses the `artifactById` prop so we don't read the same data via
@@ -115,10 +118,12 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       key: 'name',
       render: (name: string, artifact: Artifact) => (
         <Space orientation="vertical" size={0}>
-          <Typography.Text strong>{name}</Typography.Text>
+          <Typography.Text strong>
+            <HighlightMatch text={name} query={searchTerm} />
+          </Typography.Text>
           {artifact.description && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {artifact.description}
+              <HighlightMatch text={artifact.description} query={searchTerm} />
             </Typography.Text>
           )}
         </Space>
@@ -130,7 +135,9 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       key: 'template',
       width: 120,
       render: (template: string) => (
-        <Tag color={templateColors[template] || 'default'}>{template}</Tag>
+        <Tag color={templateColors[template] || 'default'}>
+          <HighlightMatch text={template} query={searchTerm} />
+        </Tag>
       ),
     },
     {
@@ -161,7 +168,9 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         if (!branchId) return <Typography.Text type="secondary">—</Typography.Text>;
         const branch = branchById.get(branchId);
         return (
-          <Typography.Text type="secondary">{branch?.name || shortId(branchId)}</Typography.Text>
+          <Typography.Text type="secondary">
+            <HighlightMatch text={branch?.name || shortId(branchId)} query={searchTerm} />
+          </Typography.Text>
         );
       },
     },
@@ -174,7 +183,10 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         const board = boardById.get(boardId);
         return (
           <Typography.Text type="secondary">
-            {board ? `${board.icon || ''} ${board.name}`.trim() : shortId(boardId)}
+            <HighlightMatch
+              text={board ? `${board.icon || ''} ${board.name}`.trim() : shortId(boardId)}
+              query={searchTerm}
+            />
           </Typography.Text>
         );
       },
@@ -241,16 +253,47 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     },
   ];
 
-  const dataSource = mapToSortedArray(artifactById, (a, b) =>
-    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-  ).filter((artifact) => !artifact.archived);
+  const dataSource = useMemo(() => {
+    const activeArtifacts = mapToSortedArray(artifactById, (a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    ).filter((artifact) => !artifact.archived);
+    return filterBySettingsSearch(activeArtifacts, searchTerm, [
+      (artifact) => artifact.name,
+      (artifact) => artifact.description,
+      (artifact) => artifact.template,
+      (artifact) => artifact.build_status,
+      (artifact) => artifact.artifact_id,
+      (artifact) => {
+        const branch = artifact.branch_id ? branchById.get(artifact.branch_id) : undefined;
+        return [branch?.name, branch?.ref, artifact.branch_id];
+      },
+      (artifact) => {
+        const board = boardById.get(artifact.board_id);
+        return [board?.name, board?.slug, artifact.board_id];
+      },
+    ]);
+  }, [artifactById, searchTerm, branchById, boardById]);
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
+      <div
+        style={{
+          marginBottom: 16,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
         <Typography.Text type="secondary">
           Live web application artifacts created by agents via MCP tools.
         </Typography.Text>
+        <Input
+          allowClear
+          placeholder="Search name, description, template, branch, or board"
+          value={searchTerm}
+          onChange={(event) => setSearchTerm(event.target.value)}
+          style={{ width: 360 }}
+        />
       </div>
 
       {dataSource.length === 0 ? (

@@ -57,10 +57,12 @@ import { getDaemonUrl } from '@/config/daemon';
 import { copyToClipboard } from '@/utils/clipboard';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
+import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BranchSelect } from './BranchSelect';
 
@@ -1180,6 +1182,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
   const [createdChannelKey, setCreatedChannelKey] = useState<string | null>(null);
   const [createdChannelType, setCreatedChannelType] = useState<ChannelType | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
   const [referencedBranchesById, setReferencedBranchesById] = useState<Map<string, Branch>>(
@@ -1545,6 +1548,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       dataIndex: 'name',
       key: 'name',
       width: 180,
+      render: (name: string) => <HighlightMatch text={name} query={searchTerm} />,
     },
     {
       title: 'Type',
@@ -1566,7 +1570,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         const wt = branchOptionsById.get(branchId);
         return (
           <Typography.Text type="secondary">
-            {wt ? `${wt.name || wt.ref || branchId}${wt.archived ? ' (archived)' : ''}` : branchId}
+            <HighlightMatch
+              text={
+                wt
+                  ? `${wt.name || wt.ref || branchId}${wt.archived ? ' (archived)' : ''}`
+                  : branchId
+              }
+              query={searchTerm}
+            />
           </Typography.Text>
         );
       },
@@ -1621,9 +1632,23 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     },
   ];
 
-  const channels = mapToSortedArray(gatewayChannelById, (a, b) =>
-    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-  );
+  const channels = useMemo(() => {
+    const sorted = mapToSortedArray(gatewayChannelById, (a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    );
+    return filterBySettingsSearch(sorted, searchTerm, [
+      (channel) => channel.name,
+      (channel) => channel.channel_type,
+      (channel) => channel.channel_key,
+      (channel) => (channel.enabled ? 'enabled' : 'disabled'),
+      (channel) => channel.last_message_at,
+      (channel) => {
+        const branch = branchOptionsById.get(channel.target_branch_id);
+        return [branch?.name, branch?.ref, channel.target_branch_id];
+      },
+      (channel) => JSON.stringify(channel.config ?? {}),
+    ]);
+  }, [gatewayChannelById, searchTerm, branchOptionsById]);
 
   return (
     <div>
@@ -1638,9 +1663,18 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         <Typography.Text type="secondary">
           Route messages from Slack, GitHub, and other platforms to Agor sessions.
         </Typography.Text>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-          Add Channel
-        </Button>
+        <Space>
+          <Input
+            allowClear
+            placeholder="Search name, type, target branch, key, or config"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: 360 }}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+            Add Channel
+          </Button>
+        </Space>
       </div>
 
       <Alert
