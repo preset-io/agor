@@ -1029,6 +1029,7 @@ export function buildSpawnConfigForSession(
     displayName: `cli-${shortId(session.session_id)}`,
     model: session.model_config?.model,
     effort: session.model_config?.effort as ClaudeCliSpawnConfig['effort'] | undefined,
+    advisorModel: session.model_config?.advisorModel,
     permissionMode: permissionModeForCli(session.permission_config?.mode),
     addDirs: [branchCwd],
     mcpConfigPath: opts.mcpConfigPath,

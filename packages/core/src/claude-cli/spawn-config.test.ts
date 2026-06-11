@@ -77,6 +77,11 @@ describe('buildClaudeCliSpawn', () => {
     expect(args.slice(i + 1, i + 3)).toEqual(['/repo/a', '/repo/b']);
   });
 
+  it('emits --advisor when an advisor model is configured', () => {
+    const { args } = buildClaudeCliSpawn({ advisorModel: 'opus' });
+    expect(args).toEqual(['--advisor', 'opus']);
+  });
+
   it('builds a full realistic spawn', () => {
     const { args } = buildClaudeCliSpawn({
       sessionId: '019e2747-cd3c-7669-af2e-aeb5b1e80ed9',

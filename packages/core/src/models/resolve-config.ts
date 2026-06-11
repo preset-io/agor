@@ -35,6 +35,7 @@ export type ModelConfigInput = {
   mode?: 'alias' | 'exact';
   model?: string;
   effort?: EffortLevel;
+  advisorModel?: string;
   provider?: string;
 };
 
@@ -53,7 +54,7 @@ export type ResolvedModelConfig = NonNullable<Session['model_config']>;
  * - `mode` defaults to `'alias'` (matches every legacy call site).
  * - `updated_at` is stamped from `opts.now ?? new Date()` (injectable for
  *   determinism in tests).
- * - `effort` and `provider` are only included when explicitly defined, so
+ * - Optional fields are only included when explicitly defined, so
  *   we never write `undefined` values onto the persisted object.
  */
 export function resolveModelConfig(
@@ -66,6 +67,7 @@ export function resolveModelConfig(
     model: input.model,
     updated_at: (opts?.now ?? new Date()).toISOString(),
     ...(input.effort !== undefined && { effort: input.effort }),
+    ...(input.advisorModel !== undefined && { advisorModel: input.advisorModel }),
     ...(input.provider !== undefined && { provider: input.provider }),
   };
 }
@@ -119,17 +121,20 @@ export function getDefaultModelForTool(tool: AgenticToolName): string | undefine
 function getModelLessFallbackOverrides(
   input: ModelConfigInput | undefined | null
 ): ModelConfigInput | undefined {
-  if (input?.effort === undefined) return undefined;
-  return { effort: input.effort };
+  const overrides: ModelConfigInput = {};
+  if (input?.effort !== undefined) overrides.effort = input.effort;
+  if (input?.advisorModel !== undefined) overrides.advisorModel = input.advisorModel;
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
 /**
  * Resolve model config at a session-create boundary.
  *
  * Full model configs remain first-wins and are not merged with lower-priority
- * sources. However, a higher-priority source that only carries `effort` (from
- * the UI's separate effort selector) is merged onto the next source that
- * supplies the actual model, or onto the tool fallback. We intentionally do not
+ * sources. However, a higher-priority source that only carries model-less
+ * overrides (for example `effort` or Claude Code `advisorModel`) is merged onto
+ * the next source that supplies the actual model, or onto the tool fallback.
+ * We intentionally do not
  * carry model-less `mode` / `provider` because their meaning depends on the
  * missing model value. This prevents partial persisted model_config objects
  * while preserving the user's explicit effort choice.

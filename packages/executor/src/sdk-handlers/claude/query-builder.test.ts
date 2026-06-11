@@ -83,6 +83,25 @@ describe('setupQuery - Local Settings Support', () => {
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
     expect(callArgs.options.disallowedTools).toEqual([...CLAUDE_CODE_DISALLOWED_TOOLS]);
   });
+
+  it('passes session advisorModel through Claude Code SDK settings', async () => {
+    const deps = createMockDeps();
+    vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+      session_id: 'test-session' as SessionID,
+      branch_id: 'test-branch' as BranchID,
+      model_config: {
+        mode: 'alias',
+        model: 'claude-sonnet-4-6',
+        updated_at: '2026-06-11T00:00:00.000Z',
+        advisorModel: 'opus',
+      },
+    } as any);
+
+    await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options.settings).toMatchObject({ advisorModel: 'opus' });
+  });
 });
 
 describe('setupQuery - canUseTool registration', () => {

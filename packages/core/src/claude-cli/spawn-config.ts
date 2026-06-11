@@ -13,6 +13,7 @@
  *   --model <alias>                e.g. claude-opus-4-8. Stripped of [1m] suffix.
  *   --betas <flag>                 e.g. context-1m-2025-08-07 (only with [1m] models).
  *   --effort <level>               low | medium | high | xhigh | max
+ *   --advisor <model>              Claude Code server-side advisor model.
  *   --permission-mode <mode>       default|acceptEdits|bypassPermissions|plan|dontAsk|auto.
  *                                  Mutually exclusive with --dangerously-skip-permissions.
  *   --dangerously-skip-permissions Distinct argv per Anthropic's flag design — same
@@ -92,6 +93,9 @@ export interface ClaudeCliSpawnConfig {
 
   /** Reasoning effort. */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+  /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable', or full model ID). */
+  advisorModel?: string;
 
   /** Permission handling at spawn. See type comment. */
   permissionMode?: ClaudeCliPermissionMode;
@@ -196,6 +200,10 @@ export function buildClaudeCliSpawn(cfg: ClaudeCliSpawnConfig): BuiltSpawn {
 
   if (cfg.effort) {
     args.push('--effort', cfg.effort);
+  }
+
+  if (cfg.advisorModel) {
+    args.push('--advisor', cfg.advisorModel);
   }
 
   if (cfg.permissionMode) {

@@ -948,6 +948,7 @@ export const users = sqliteTable(
               mode?: 'alias' | 'exact';
               model?: string;
               effort?: EffortLevel;
+              advisorModel?: string;
             };
             permissionMode?: string;
             mcpServerIds?: string[];
@@ -957,6 +958,7 @@ export const users = sqliteTable(
               mode?: 'alias' | 'exact';
               model?: string;
               effort?: EffortLevel;
+              advisorModel?: string;
             };
             permissionMode?: string;
             mcpServerIds?: string[];

@@ -22,6 +22,8 @@ import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModel
 export interface ModelConfig {
   mode: 'alias' | 'exact';
   model: string;
+  // Claude Code-specific: server-side advisor tool model.
+  advisorModel?: string;
   // OpenCode-specific: provider + model
   provider?: string;
 }
@@ -97,6 +99,29 @@ const CURSOR_MODEL_OPTIONS = [
     id: DEFAULT_CURSOR_MODEL,
     label: CURSOR_MODEL_METADATA[DEFAULT_CURSOR_MODEL].displayName,
     description: CURSOR_MODEL_METADATA[DEFAULT_CURSOR_MODEL].description,
+  },
+];
+
+const CLAUDE_ADVISOR_MODEL_OPTIONS = [
+  {
+    value: 'opus',
+    label: 'Opus',
+    description: 'Most capable advisor for hard reasoning',
+  },
+  {
+    value: 'sonnet',
+    label: 'Sonnet',
+    description: 'Balanced advisor',
+  },
+  {
+    value: 'fable',
+    label: 'Fable',
+    description: 'Latest-generation advisor, when available',
+  },
+  {
+    value: 'claude-haiku-4-5',
+    label: 'Haiku 4.5',
+    description: 'Fastest/cheapest advisor',
   },
 ];
 function preferDefaultModel<T extends { id: string }>(models: T[], defaultModel: string): T[] {
@@ -276,6 +301,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       // When switching modes, provide the same effective default the daemon
       // applies if the form is submitted without a model_config.
       onChange({
+        ...value,
         mode: newMode,
         model: value?.model || fallbackModel,
       });
@@ -285,8 +311,20 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const handleModelChange = (newModel: string) => {
     if (onChange) {
       onChange({
+        ...value,
         mode,
         model: newModel,
+      });
+    }
+  };
+
+  const handleAdvisorModelChange = (advisorModel: string | undefined) => {
+    if (onChange) {
+      onChange({
+        ...value,
+        mode,
+        model: value?.model || fallbackModel,
+        advisorModel,
       });
     }
   };
@@ -400,6 +438,28 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           )}
         </Space>
       </Radio.Group>
+
+      {(effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli') && (
+        <div>
+          <Space size={4}>
+            <span>Advisor model</span>
+            <Tooltip title="Optional Claude Code advisor tool model. Leave unset to use existing Claude settings or disable session-level override.">
+              <InfoCircleOutlined />
+            </Tooltip>
+          </Space>
+          <Select
+            allowClear
+            placeholder="Not set"
+            value={value?.advisorModel}
+            onChange={handleAdvisorModelChange}
+            style={{ width: '100%', minWidth: 400, marginTop: 8 }}
+            options={CLAUDE_ADVISOR_MODEL_OPTIONS.map((option) => ({
+              value: option.value,
+              label: `${option.label} · ${option.description}`,
+            }))}
+          />
+        </div>
+      )}
     </Space>
   );
 };

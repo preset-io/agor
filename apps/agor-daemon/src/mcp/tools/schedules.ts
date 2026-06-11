@@ -35,10 +35,14 @@ const agenticToolConfigSchema = z
         mode: z.enum(['alias', 'exact']).optional(),
         model: mcpOptionalString('model_config.model', 'Model name override.'),
         effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+        advisorModel: mcpOptionalString(
+          'model_config.advisorModel',
+          "Claude Code advisor model override (e.g. 'opus', 'sonnet', 'fable')."
+        ),
       })
       .optional()
       .describe(
-        'Optional model override (canonical DefaultModelConfig shape). Omit to inherit the agent default; set { model } to override; set { mode, model, effort } for full control.'
+        'Optional model override (canonical DefaultModelConfig shape). Omit to inherit the agent default; set { model } to override; set { mode, model, effort, advisorModel } for full control.'
       ),
     mcp_server_ids: z
       .array(mcpRequiredId('mcp_server_ids[]', 'MCP server'))

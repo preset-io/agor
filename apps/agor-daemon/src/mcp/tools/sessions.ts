@@ -87,6 +87,10 @@ const modelConfigObjectSchema = z.object({
     .enum(['low', 'medium', 'high', 'max'])
     .optional()
     .describe('Reasoning effort level (default: high)'),
+  advisorModel: mcpOptionalString(
+    'modelConfig.advisorModel',
+    "Claude Code advisor model override (e.g. 'opus', 'sonnet', 'fable', or a full model ID)."
+  ),
   provider: mcpOptionalString(
     'modelConfig.provider',
     "Provider ID (OpenCode only, e.g. 'anthropic')"
@@ -103,7 +107,7 @@ const modelConfigInputSchema = z
   ])
   .optional()
   .describe(
-    "Model override for this session. Pass either a model ID string (e.g. 'claude-opus-4-6') or a full { mode, model, effort, provider } object. Overrides the user default model_config and is threaded through to the spawned agent process. Call agor_models_list to discover valid model IDs per agenticTool."
+    "Model override for this session. Pass either a model ID string (e.g. 'claude-opus-4-6') or a full { mode, model, effort, advisorModel, provider } object. Overrides the user default model_config and is threaded through to the spawned agent process. Call agor_models_list to discover valid model IDs per agenticTool."
   );
 
 /**
@@ -408,6 +412,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         title: session.title,
         model: session.model_config?.model || null,
         effort: session.model_config?.effort || null,
+        advisorModel: session.model_config?.advisorModel || null,
 
         // User (who is authenticated / who is prompting)
         user_name: user.name,

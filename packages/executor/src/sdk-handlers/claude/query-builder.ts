@@ -308,6 +308,18 @@ export async function setupQuery(
     console.log(`🧠 Effort level: high (default)`);
   }
 
+  // Configure Claude Code's server-side advisor tool model when a session-level
+  // override is present. The Agent SDK exposes this through Claude Code settings
+  // (not as a first-class top-level option or MCP tool declaration).
+  const advisorModel = session.model_config?.advisorModel?.trim();
+  if (advisorModel) {
+    queryOptions.settings = {
+      ...((queryOptions.settings as Record<string, unknown> | undefined) ?? {}),
+      advisorModel,
+    };
+    console.log(`🧭 Advisor model: ${advisorModel}`);
+  }
+
   // Add beta flags (e.g., 1M context window for [1m] model variants)
   if (betas.length > 0) {
     queryOptions.betas = betas;

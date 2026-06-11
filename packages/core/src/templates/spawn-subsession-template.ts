@@ -23,6 +23,7 @@ export interface SpawnSubsessionContext {
     mode?: string;
     model?: string;
     effort?: string;
+    advisorModel?: string;
   };
   codexSandboxMode?: string;
   codexApprovalPolicy?: string;
@@ -59,7 +60,9 @@ REQUEST: """
     -
     {{modelConfig.model}}{{#if modelConfig.effort}}
       (effort:
-      {{modelConfig.effort}}){{/if}}
+      {{modelConfig.effort}}){{/if}}{{#if modelConfig.advisorModel}}
+      (advisor:
+      {{modelConfig.advisorModel}}){{/if}}
   {{/if}}
   {{#if codexSandboxMode}}
     - Codex Sandbox Mode:
@@ -110,7 +113,9 @@ hashing and JWT for tokens."
 {{#if modelConfig}}
   - modelConfig: { mode: "{{modelConfig.mode}}", model: "{{modelConfig.model}}"{{#if
     modelConfig.effort
-  }}, effort: "{{modelConfig.effort}}"{{/if}}
+  }}, effort: "{{modelConfig.effort}}"{{/if}}{{#if
+    modelConfig.advisorModel
+  }}, advisorModel: "{{modelConfig.advisorModel}}"{{/if}}
   }
 {{/if}}
 {{#if codexSandboxMode}}
@@ -152,7 +157,9 @@ session will do YOUR EXACT TOOL CALL MUST BE: agor_sessions_spawn({ "prompt": "{
   "permissionMode": "{{permissionMode}}",{{/if}}{{#if modelConfig}}
   "modelConfig": { "mode": "{{modelConfig.mode}}", "model": "{{modelConfig.model}}"{{#if
     modelConfig.effort
-  }}, "effort": "{{modelConfig.effort}}"{{/if}}
+  }}, "effort": "{{modelConfig.effort}}"{{/if}}{{#if
+    modelConfig.advisorModel
+  }}, "advisorModel": "{{modelConfig.advisorModel}}"{{/if}}
   },{{/if}}{{#if codexSandboxMode}}
   "codexSandboxMode": "{{codexSandboxMode}}",{{/if}}{{#if codexApprovalPolicy}}
   "codexApprovalPolicy": "{{codexApprovalPolicy}}",{{/if}}{{#if codexNetworkAccess}}

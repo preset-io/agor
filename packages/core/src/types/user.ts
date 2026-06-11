@@ -92,6 +92,8 @@ export interface DefaultModelConfig {
   model?: string;
   /** Effort level for reasoning depth */
   effort?: EffortLevel;
+  /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); unset means no session override */
+  advisorModel?: string;
 }
 
 /**

@@ -252,6 +252,8 @@ export interface Session {
     notes?: string;
     /** Effort level for reasoning depth (default: high) */
     effort?: EffortLevel;
+    /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); unset means no session override */
+    advisorModel?: string;
     /**
      * Provider ID for OpenCode sessions (e.g., 'openai', 'anthropic', 'opencode')
      * Used in combination with model to specify which provider's API to use
@@ -616,6 +618,8 @@ export interface SpawnConfig {
     mode?: 'alias' | 'exact';
     model?: string;
     effort?: EffortLevel;
+    /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); ignored for non-Claude tools. */
+    advisorModel?: string;
     /**
      * Provider ID (OpenCode only, e.g. 'anthropic', 'openai', 'opencode').
      * Persisted on session.model_config.provider. Ignored for non-OpenCode tools.
