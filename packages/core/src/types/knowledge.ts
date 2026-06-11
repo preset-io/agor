@@ -426,6 +426,8 @@ export interface KnowledgeDocument {
    */
   url?: string | null;
   title: string;
+  /** Optional Notion-style emoji icon shown beside this document in Knowledge UI. */
+  icon_emoji?: string | null;
   kind: KnowledgeDocumentKind;
   visibility: KnowledgeVisibility;
   /**
@@ -621,6 +623,7 @@ export interface KnowledgeGraphEdge {
 export interface KnowledgeGraphDocNode {
   document_id: KnowledgeDocumentID;
   title: string;
+  icon_emoji?: string | null;
   path: string;
   uri: string;
   kind: KnowledgeDocumentKind;

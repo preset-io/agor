@@ -118,6 +118,7 @@ export class KnowledgeGraphService {
     const nodes: KnowledgeGraphDocNode[] = readable.map((doc) => ({
       document_id: doc.document_id,
       title: doc.title,
+      icon_emoji: doc.icon_emoji ?? null,
       path: doc.path,
       uri: doc.uri,
       kind: doc.kind,

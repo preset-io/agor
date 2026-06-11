@@ -174,6 +174,7 @@ describe('Knowledge repositories', () => {
       namespace_id: namespace.namespace_id,
       path: 'guides/intro.md',
       title: 'Intro',
+      icon_emoji: '📘',
       content_text: '# Intro\n\nHello Knowledge',
       created_by: owner.user_id as UserID,
     });
@@ -182,6 +183,7 @@ describe('Knowledge repositories', () => {
     expect(created.url).toContain('/ui/kb/repo-test/guides/intro.md');
     expect(created.current_version_id).toBeTruthy();
     expect(created.status).toBe('published');
+    expect(created.icon_emoji).toBe('📘');
 
     const history = await versions.findAll({ document_id: created.document_id });
     expect(history).toHaveLength(1);
@@ -219,6 +221,7 @@ describe('Knowledge repositories', () => {
     const updated = await documents.update(created.document_id, {
       path: 'folder/new.md',
       title: 'New',
+      icon_emoji: '🧭',
       content_text: 'v2',
       updated_by: owner.user_id as UserID,
       change_summary: 'Second version',
@@ -226,7 +229,11 @@ describe('Knowledge repositories', () => {
 
     expect(updated.path).toBe('folder/new.md');
     expect(updated.uri).toBe('agor://kb/version-test/folder/new.md');
+    expect(updated.icon_emoji).toBe('🧭');
     expect(updated.current_version_id).not.toBe(created.current_version_id);
+
+    const withoutIcon = await documents.update(created.document_id, { icon_emoji: null });
+    expect(withoutIcon.icon_emoji).toBeNull();
 
     const history = await versions.findAll({ document_id: created.document_id });
     expect(history.map((version) => version.version_number)).toEqual([2, 1]);
@@ -375,6 +382,7 @@ describe('Knowledge repositories', () => {
       namespace_id: namespace.namespace_id,
       path: 'guides/intro.md',
       title: 'Intro',
+      icon_emoji: '📘',
       content_text: 'prefixneedle guide',
     });
     await documents.create({

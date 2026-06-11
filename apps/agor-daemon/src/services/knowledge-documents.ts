@@ -224,6 +224,9 @@ export class KnowledgeDocumentsService extends DrizzleService<
         : {}),
     };
     const prepared: KnowledgeDocumentWriteData = { ...data, metadata };
+    if (typeof prepared.icon_emoji === 'string') {
+      prepared.icon_emoji = prepared.icon_emoji.trim() || null;
+    }
     if (wantsFirstLineTitle(prepared) && typeof prepared.content_text === 'string') {
       prepared.title = titleFromKnowledgeContent(
         prepared.content_text,

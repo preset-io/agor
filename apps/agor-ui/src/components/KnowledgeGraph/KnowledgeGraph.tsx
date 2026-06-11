@@ -75,6 +75,7 @@ interface DocNodeData {
   documentId: string;
   title: string;
   kind: KnowledgeDocumentKind;
+  iconEmoji?: string | null;
 }
 
 const DocNode = memo(({ id, data }: NodeProps<DocNodeData>) => {
@@ -106,7 +107,7 @@ const DocNode = memo(({ id, data }: NodeProps<DocNodeData>) => {
         style={{ fontSize: 12, fontWeight: 500, lineHeight: 1.3 }}
         ellipsis={{ tooltip: data.title }}
       >
-        {data.title}
+        {data.iconEmoji ? `${data.iconEmoji} ${data.title}` : data.title}
       </Text>
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
@@ -138,7 +139,7 @@ function nodeIdSignature(nodes: KnowledgeGraphDocNode[]): string {
 // refreshed when a document is edited, even when the node-id set is unchanged.
 function nodeDataSignature(nodes: KnowledgeGraphDocNode[]): string {
   return nodes
-    .map((n) => `${n.document_id}:${n.title}:${n.kind}`)
+    .map((n) => `${n.document_id}:${n.title}:${n.kind}:${n.icon_emoji ?? ''}`)
     .sort()
     .join('|');
 }
@@ -186,7 +187,12 @@ export function KnowledgeGraph({
             x: Math.cos(angle) * radius,
             y: Math.sin(angle) * radius,
           },
-          data: { documentId: doc.document_id, title: doc.title, kind: doc.kind },
+          data: {
+            documentId: doc.document_id,
+            title: doc.title,
+            kind: doc.kind,
+            iconEmoji: doc.icon_emoji ?? null,
+          },
         };
       });
     });

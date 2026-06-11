@@ -337,6 +337,13 @@
       "when": 1781400000000,
       "tag": "0048_board_owners",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1781500000000,
+      "tag": "0049_kb_document_icon_emoji",
+      "breakpoints": true
     }
   ]
 }

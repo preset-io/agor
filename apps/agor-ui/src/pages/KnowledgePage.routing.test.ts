@@ -5,6 +5,7 @@ import {
   buildKnowledgeQueryString,
   buildKnowledgeSearchResultKey,
   isKnowledgeDocumentContentReady,
+  knowledgeDocumentDisplayIcon,
   matchesKnowledgeSidebarFilter,
   resolveActiveKnowledgeDocument,
   shouldDeferKnowledgeUrlMirrorForRoute,
@@ -220,5 +221,13 @@ describe('KnowledgePage global search helpers', () => {
       false
     );
     expect(areKnowledgeSearchResultsFresh({ resultKey, query: '', mode: 'text' })).toBe(false);
+  });
+});
+
+describe('knowledgeDocumentDisplayIcon', () => {
+  it('uses a document emoji when present and falls back for old documents', () => {
+    expect(knowledgeDocumentDisplayIcon({ icon_emoji: '📘' })).toBe('📘');
+    expect(knowledgeDocumentDisplayIcon({ icon_emoji: null })).toBe('📄');
+    expect(knowledgeDocumentDisplayIcon({ icon_emoji: '   ' }, '📝')).toBe('📝');
   });
 });

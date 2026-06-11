@@ -1205,6 +1205,11 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
             'Derive the title from the first non-empty markdown line and hide that line in the read-only viewer. Defaults to true when content starts with an H1 (even if `title` is also provided) or when `title` is omitted; set false only when the explicit `title` should be separate from the markdown body.'
           ),
         kind: KnowledgeDocumentKindSchema.optional().describe('Document kind (default: doc)'),
+        iconEmoji: z
+          .string({ error: 'iconEmoji must be a string or null when provided.' })
+          .nullable()
+          .optional()
+          .describe('Optional emoji icon for the document. Pass null or an empty string to clear.'),
         visibility: KnowledgeVisibilitySchema.optional().describe(
           'Visibility (default: namespace default or public)'
         ),
@@ -1256,6 +1261,13 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const firstLineIsTitle =
         args.firstLineIsTitle ?? (contentStartsWithHeading || title === undefined);
 
+      const iconEmoji =
+        args.iconEmoji === undefined
+          ? undefined
+          : typeof args.iconEmoji === 'string'
+            ? args.iconEmoji.trim() || null
+            : null;
+
       const data = {
         document_id: coerceString(args.documentId),
         uri,
@@ -1265,6 +1277,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         content_text: content,
         first_line_is_title: firstLineIsTitle,
         kind: (args.kind as KnowledgeDocumentKind | undefined) ?? 'doc',
+        icon_emoji: iconEmoji,
         visibility: args.visibility as KnowledgeVisibility | undefined,
         status: args.status as KnowledgeDocumentStatus | undefined,
         edit_policy: args.editPolicy as KnowledgeEditPolicy | undefined,

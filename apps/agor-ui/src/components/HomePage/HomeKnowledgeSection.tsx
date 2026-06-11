@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor-live/client';
-import { BookOutlined } from '@ant-design/icons';
+import { BookOutlined, FileOutlined } from '@ant-design/icons';
 import { Card, Empty, List, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useState } from 'react';
@@ -19,12 +19,20 @@ const normalizeFindResult = <T,>(result: T[] | { data?: T[] }): T[] =>
   Array.isArray(result) ? result : (result.data ?? []);
 
 const KnowledgeDocRow: React.FC<{ doc: KnowledgeDocument }> = ({ doc }) => {
+  const { token } = theme.useToken();
   const navigate = useNavigate();
   const namespace = namespaceSlugFromUri(doc.uri);
   const path = buildKnowledgeRoutePath('/knowledge', namespace, doc.path);
   return (
     <List.Item onClick={() => navigate(path)} style={{ cursor: 'pointer', padding: '10px 0' }}>
       <List.Item.Meta
+        avatar={
+          doc.icon_emoji ? (
+            <span style={{ fontSize: 18, lineHeight: '22px' }}>{doc.icon_emoji}</span>
+          ) : (
+            <FileOutlined style={{ color: token.colorTextTertiary }} />
+          )
+        }
         title={
           <Space size={6} style={{ maxWidth: '100%' }}>
             <Text ellipsis={{ tooltip: doc.title || doc.path }} style={{ minWidth: 0 }}>

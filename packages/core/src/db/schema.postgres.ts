@@ -1796,6 +1796,7 @@ export const kbDocuments = pgTable(
     path: text('path').notNull(),
     uri: text('uri').notNull(),
     title: text('title').notNull(),
+    icon_emoji: text('icon_emoji'),
     kind: text('kind', {
       enum: ['doc', 'memory', 'skill', 'prompt', 'guide', 'decision', 'bundle', 'external'],
     })
