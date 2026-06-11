@@ -41,7 +41,6 @@ import {
   SaveOutlined,
   SearchOutlined,
   SettingOutlined,
-  SmileOutlined,
   TeamOutlined,
   UpOutlined,
   UserOutlined,
@@ -1094,6 +1093,7 @@ export function KnowledgePage({
         (activeDoc &&
           (markdownDraft !== savedMarkdown ||
             titleDraft !== activeDoc.title ||
+            (iconEmojiDraft ?? null) !== (activeDoc.icon_emoji ?? null) ||
             visibilityDraft !== activeDoc.visibility ||
             statusDraft !== activeDoc.status ||
             kindDraft !== activeDoc.kind ||
@@ -3148,28 +3148,38 @@ export function KnowledgePage({
                         style={{ width: '100%', minWidth: 0, flex: 1 }}
                       >
                         <Flex align="center" gap={12} style={{ width: '100%' }}>
-                          {((isEditing ? iconEmojiDraft : activeDoc.icon_emoji) || isEditing) && (
-                            <Popover
-                              trigger="click"
-                              placement="bottomLeft"
-                              onOpenChange={setIconPickerOpen}
-                              content={renderKnowledgeIconPicker(
-                                isEditing ? setIconEmojiDraft : updateActiveDocumentIcon
-                              )}
+                          <Popover
+                            trigger="click"
+                            placement="bottomLeft"
+                            onOpenChange={setIconPickerOpen}
+                            content={renderKnowledgeIconPicker(
+                              isEditing ? setIconEmojiDraft : updateActiveDocumentIcon
+                            )}
+                          >
+                            <Button
+                              type="text"
+                              size="large"
+                              disabled={!client && !isDraftDocument}
+                              style={{
+                                fontSize: 30,
+                                width: 44,
+                                height: 44,
+                                padding: 0,
+                                color: (isEditing ? iconEmojiDraft : activeDoc.icon_emoji)
+                                  ? undefined
+                                  : token.colorTextTertiary,
+                              }}
+                              aria-label={
+                                (isEditing ? iconEmojiDraft : activeDoc.icon_emoji)
+                                  ? 'Change Knowledge document emoji icon'
+                                  : 'Add Knowledge document emoji icon'
+                              }
                             >
-                              <Button
-                                type="text"
-                                size="large"
-                                disabled={!client && !isDraftDocument}
-                                style={{ fontSize: 30, width: 44, height: 44, padding: 0 }}
-                                aria-label="Change Knowledge document emoji icon"
-                              >
-                                {(isEditing ? iconEmojiDraft : activeDoc.icon_emoji) || (
-                                  <SmileOutlined />
-                                )}
-                              </Button>
-                            </Popover>
-                          )}
+                              {(isEditing ? iconEmojiDraft : activeDoc.icon_emoji) || (
+                                <FileOutlined />
+                              )}
+                            </Button>
+                          </Popover>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             {isEditing && !titleFromContent ? (
                               <Input
@@ -3286,16 +3296,6 @@ export function KnowledgePage({
                           <>
                             {showReadActions && (
                               <>
-                                <Popover
-                                  trigger="click"
-                                  placement="bottomRight"
-                                  onOpenChange={setIconPickerOpen}
-                                  content={renderKnowledgeIconPicker(updateActiveDocumentIcon)}
-                                >
-                                  <Button icon={<SmileOutlined />} disabled={!client || saving}>
-                                    {activeDoc.icon_emoji ? 'Change icon' : 'Add icon'}
-                                  </Button>
-                                </Popover>
                                 <Button
                                   icon={<HistoryOutlined />}
                                   disabled={!client}
