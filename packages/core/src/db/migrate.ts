@@ -41,6 +41,14 @@ export class MigrationError extends Error {
   }
 }
 
+function getRootCause(error: unknown): unknown {
+  let current = error;
+  while (current instanceof Error && current.cause) {
+    current = current.cause;
+  }
+  return current;
+}
+
 /**
  * Check if migrations tracking table exists (dialect-aware)
  */
@@ -61,8 +69,13 @@ async function hasMigrationsTable(db: Database): Promise<boolean> {
     }
     return false;
   } catch (error) {
+    const rootCause = getRootCause(error);
+    const rootMsg =
+      rootCause !== error
+        ? ` (root cause: ${rootCause instanceof Error ? rootCause.message : String(rootCause)})`
+        : '';
     throw new MigrationError(
-      `Failed to check migrations table: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to check migrations table: ${error instanceof Error ? error.message : String(error)}${rootMsg}`,
       error
     );
   }
@@ -200,8 +213,13 @@ export async function checkMigrationStatus(
       applied,
     };
   } catch (error) {
+    const rootCause = getRootCause(error);
+    const rootMsg =
+      rootCause !== error
+        ? ` (root cause: ${rootCause instanceof Error ? rootCause.message : String(rootCause)})`
+        : '';
     throw new MigrationError(
-      `Failed to check migration status: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to check migration status: ${error instanceof Error ? error.message : String(error)}${rootMsg}`,
       error
     );
   }
