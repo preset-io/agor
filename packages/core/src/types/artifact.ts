@@ -253,8 +253,12 @@ export interface ArtifactPayload {
   dependencies?: Record<string, string>;
   entry?: string;
   content_hash: string;
-  /** DB file-map hash, excluding per-viewer synthesized files. Used to reject stale browser reports. */
-  artifact_content_hash?: string;
+  /**
+   * Non-secret hash of files plus persisted render-affecting metadata. Browser
+   * runtime reports include this so the daemon can reject stale reports after
+   * metadata-only render changes.
+   */
+  runtime_report_hash?: string;
   /** Names of env vars the artifact requires (without prefix). */
   required_env_vars?: string[];
   /** Grants the artifact requested. */

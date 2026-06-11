@@ -327,11 +327,11 @@ export function ArtifactFullscreenPage({
             />
             <ArtifactConsoleReporter
               artifactId={payload.artifact_id}
-              contentHash={payload.artifact_content_hash ?? payload.content_hash}
+              contentHash={payload.runtime_report_hash ?? payload.content_hash}
             />
             <ArtifactSandpackErrorReporter
               artifactId={payload.artifact_id}
-              contentHash={payload.artifact_content_hash ?? payload.content_hash}
+              contentHash={payload.runtime_report_hash ?? payload.content_hash}
             />
             <ArtifactRuntimeBridge artifactId={payload.artifact_id} />
           </SandpackProvider>

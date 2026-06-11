@@ -1075,6 +1075,58 @@ describe('ArtifactsService.getStatus + console isolation', () => {
     }
   );
 
+  dbTest(
+    'waitForRuntimeStatus ignores stale reports after metadata-only render changes',
+    async ({ db }) => {
+      vi.useFakeTimers();
+      try {
+        const service = new ArtifactsService(db, makeFakeApp());
+        const board = await seedBoard(db);
+        const artifactRepo = new ArtifactRepository(db);
+        const created = await artifactRepo.create({
+          artifact_id: generateId(),
+          board_id: board.board_id,
+          name: 'wait-stale-metadata',
+          template: 'react',
+          files: { '/index.js': 'console.log("x")' },
+          content_hash: 'same-file-hash',
+          public: true,
+          created_by: 'user-owner',
+        });
+        const beforePayload = await service.getPayload(created.artifact_id, 'viewer-A' as never);
+
+        const updated = await service.updateMetadata(
+          created.artifact_id,
+          { sandpack_config: { options: { showNavigator: true } } },
+          'user-owner',
+          'admin'
+        );
+        expect(updated.content_hash).toBe('same-file-hash');
+
+        const waitPromise = service.waitForRuntimeStatus(created.artifact_id, 'viewer-A' as never, {
+          timeoutMs: 500,
+          settleMs: 0,
+        });
+        await service.setSandpackError(
+          created.artifact_id,
+          'viewer-A',
+          null,
+          'idle',
+          beforePayload.runtime_report_hash
+        );
+        await vi.advanceTimersByTimeAsync(600);
+
+        const result = await waitPromise;
+        expect(result.ok).toBe(false);
+        expect(result.observed).toBe(false);
+        expect(result.timed_out).toBe(true);
+        expect(result.sandpack_status).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
   dbTest('getStatus rejects when artifact is not visible to caller', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);

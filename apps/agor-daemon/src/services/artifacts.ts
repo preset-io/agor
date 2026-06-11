@@ -1010,7 +1010,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       dependencies: artifact.dependencies,
       entry: artifact.entry,
       content_hash: contentHash,
-      artifact_content_hash: artifact.content_hash,
+      runtime_report_hash: this.computeRuntimeReportHash(artifact),
       required_env_vars: requiredEnvVars.length > 0 ? requiredEnvVars : undefined,
       agor_grants: Object.keys(grants).length > 0 ? grants : undefined,
       trust_state: trustState,
@@ -1701,7 +1701,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     entries: ArtifactConsoleEntry[],
     contentHash?: string
   ): Promise<void> {
-    if (!(await this.isCurrentContentHash(artifactId, contentHash))) return;
+    if (!(await this.isCurrentRuntimeReportHash(artifactId, contentHash))) return;
     const key = this.viewerKey(artifactId, userId);
     const existing = this.consoleLogs.get(key) ?? [];
     const combined = [...existing, ...entries];
@@ -1721,7 +1721,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     status?: string,
     contentHash?: string
   ): Promise<void> {
-    if (!(await this.isCurrentContentHash(artifactId, contentHash))) return;
+    if (!(await this.isCurrentRuntimeReportHash(artifactId, contentHash))) return;
     const key = this.viewerKey(artifactId, userId);
     this.sandpackErrors.set(key, error);
     if (status !== undefined) {
@@ -1731,10 +1731,44 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     this.notifyRuntimeStatusWaiters(key);
   }
 
-  private async isCurrentContentHash(artifactId: string, contentHash?: string): Promise<boolean> {
-    if (!contentHash) return true;
+  private async isCurrentRuntimeReportHash(
+    artifactId: string,
+    runtimeReportHash?: string
+  ): Promise<boolean> {
+    if (!runtimeReportHash) return true;
     const artifact = await this.artifactRepo.findById(artifactId);
-    return artifact?.content_hash === contentHash;
+    if (!artifact) return false;
+    return this.computeRuntimeReportHash(artifact) === runtimeReportHash;
+  }
+
+  private computeRuntimeReportHash(
+    artifact: Pick<
+      Artifact,
+      | 'artifact_id'
+      | 'board_id'
+      | 'template'
+      | 'files'
+      | 'sandpack_config'
+      | 'required_env_vars'
+      | 'agor_grants'
+      | 'agor_runtime'
+      | 'entry'
+    >
+  ): string {
+    const files = artifact.files ?? {};
+    return this.computeHashFromFiles({
+      ...files,
+      '/.agor/runtime-report-inputs.json': JSON.stringify({
+        artifact_id: artifact.artifact_id,
+        board_id: artifact.board_id,
+        template: artifact.template,
+        entry: artifact.entry ?? null,
+        sandpack_config: artifact.sandpack_config ?? null,
+        required_env_vars: artifact.required_env_vars ?? [],
+        agor_grants: artifact.agor_grants ?? {},
+        agor_runtime_enabled: artifact.agor_runtime?.enabled !== false,
+      }),
+    });
   }
 
   private notifyRuntimeStatusWaiters(key: string): void {

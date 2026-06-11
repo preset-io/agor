@@ -599,11 +599,11 @@ export const ArtifactNode = ({
             />
             <ArtifactConsoleReporter
               artifactId={data.artifactId}
-              contentHash={payload.artifact_content_hash ?? payload.content_hash}
+              contentHash={payload.runtime_report_hash ?? payload.content_hash}
             />
             <ArtifactSandpackErrorReporter
               artifactId={data.artifactId}
-              contentHash={payload.artifact_content_hash ?? payload.content_hash}
+              contentHash={payload.runtime_report_hash ?? payload.content_hash}
             />
             <ArtifactRuntimeBridge artifactId={data.artifactId} />
             <CodeSandboxExporter artifactId={data.artifactId} />
