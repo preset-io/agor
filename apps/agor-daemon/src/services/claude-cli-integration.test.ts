@@ -8,6 +8,7 @@ import { generateSessionToken } from '../mcp/tokens.js';
 import {
   buildClaudeCliAgorMcpConfig,
   buildSpawnConfigForSession,
+  resolveClaudeCliMcpConfigTargetUnixUser,
   writeClaudeCliMcpConfigForSession,
 } from './claude-cli-integration';
 
@@ -17,7 +18,12 @@ vi.mock('../mcp/tokens.js', () => ({
 
 const generatedPaths: string[] = [];
 
-function makeApp(config: { daemon?: { mcpEnabled?: boolean } } = {}): Application {
+function makeApp(
+  config: {
+    daemon?: { mcpEnabled?: boolean };
+    execution?: { unix_user_mode?: string; executor_unix_user?: string | null };
+  } = {}
+): Application {
   return {
     get: (key: string) => (key === 'config' ? config : undefined),
   } as unknown as Application;
@@ -112,5 +118,23 @@ describe('Claude CLI Agor MCP config', () => {
       makeSession().session_id,
       'user-1'
     );
+  });
+
+  it('resolves the MCP config file owner from Unix isolation mode', () => {
+    expect(resolveClaudeCliMcpConfigTargetUnixUser(undefined, makeSession())).toBeUndefined();
+
+    expect(
+      resolveClaudeCliMcpConfigTargetUnixUser(
+        { execution: { unix_user_mode: 'insulated', executor_unix_user: 'agor_executor' } },
+        makeSession({ unix_username: 'alice' })
+      )
+    ).toBe('agor_executor');
+
+    expect(
+      resolveClaudeCliMcpConfigTargetUnixUser(
+        { execution: { unix_user_mode: 'strict' } },
+        makeSession({ unix_username: 'alice' })
+      )
+    ).toBe('alice');
   });
 });

@@ -34,7 +34,7 @@
  *   - Subagent JSONL discovery
  */
 
-import { spawn as spawnProcess } from 'node:child_process';
+import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -67,6 +67,11 @@ import {
   type TaskID,
   TaskStatus,
 } from '@agor/core/types';
+import {
+  isValidUnixUsername,
+  resolveUnixUserForImpersonation,
+  type UnixUserMode,
+} from '@agor/core/unix';
 import { DrizzleService } from '../adapters/drizzle';
 import { buildInitialUserMessage } from '../utils/build-initial-user-message.js';
 import { canReceiveMcpTokenForSession } from '../utils/mcp-token-authorization.js';
@@ -1046,6 +1051,14 @@ export interface ClaudeCliAgorMcpConfig {
   };
 }
 
+interface ClaudeCliMcpConfigRuntimeConfig {
+  daemon?: { mcpEnabled?: boolean };
+  execution?: {
+    unix_user_mode?: string;
+    executor_unix_user?: string | null;
+  };
+}
+
 /**
  * Build the Claude CLI `--mcp-config` payload for Agor's built-in MCP server.
  *
@@ -1076,6 +1089,119 @@ export function buildClaudeCliAgorMcpConfig(params: {
 }
 
 /**
+ * Resolve the Unix user that will read Claude CLI's `--mcp-config` file.
+ *
+ * The file carries an MCP bearer token, so it should stay mode 0600 and be
+ * owned by the same account that runs the Zellij/Claude process:
+ *   - simple: daemon user (no explicit target)
+ *   - insulated: shared executor_unix_user
+ *   - strict: session creator's immutable unix_username
+ */
+export function resolveClaudeCliMcpConfigTargetUnixUser(
+  config: ClaudeCliMcpConfigRuntimeConfig | undefined,
+  session: Session
+): string | undefined {
+  const mode = (config?.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
+  const result = resolveUnixUserForImpersonation({
+    mode,
+    userUnixUsername: session.unix_username,
+    executorUnixUser: config?.execution?.executor_unix_user,
+  });
+  return result.unixUser ?? undefined;
+}
+
+function writePrivateMcpConfigAsUser(params: {
+  content: string;
+  sessionShortId: string;
+  targetUnixUser: string;
+}): string {
+  const { content, sessionShortId, targetUnixUser } = params;
+  if (!isValidUnixUsername(targetUnixUser)) {
+    throw new Error(`invalid target Unix username: ${JSON.stringify(targetUnixUser)}`);
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(sessionShortId)) {
+    throw new Error(`invalid session short id: ${JSON.stringify(sessionShortId)}`);
+  }
+
+  const script = [
+    'set -euo pipefail',
+    'umask 077',
+    'tmp="/tmp"',
+    'dir="$(mktemp -d "$tmp/agor-mcp-$1-XXXXXX")"',
+    'cat > "$dir/mcp.json"',
+    'printf "%s\\n" "$dir/mcp.json"',
+  ].join('; ');
+
+  return execFileSync(
+    'sudo',
+    ['-n', '-u', targetUnixUser, 'bash', '-c', script, '--', sessionShortId],
+    {
+      input: content,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5000,
+    }
+  ).trim();
+}
+
+function writePrivateMcpConfigAsDaemon(params: {
+  content: string;
+  sessionShortId: string;
+  targetUnixUser?: string;
+}): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `agor-mcp-${params.sessionShortId}-`));
+  const filePath = path.join(dir, 'mcp.json');
+  fs.writeFileSync(filePath, params.content, { mode: 0o600 });
+
+  // Root fallback for deployments where sudo is unavailable but the daemon is
+  // privileged. Chown both path components so a 0700 dir + 0600 file remain
+  // readable only by the target process owner.
+  if (params.targetUnixUser) {
+    const homeStat = fs.statSync(`/home/${params.targetUnixUser}`);
+    fs.chownSync(dir, homeStat.uid, homeStat.gid);
+    fs.chownSync(filePath, homeStat.uid, homeStat.gid);
+  }
+
+  return filePath;
+}
+
+export function writeClaudeCliMcpConfigFile(params: {
+  mcpConfig: ClaudeCliAgorMcpConfig;
+  sessionShortId: string;
+  targetUnixUser?: string;
+}): string {
+  const content = `${JSON.stringify(params.mcpConfig, null, 2)}\n`;
+
+  if (params.targetUnixUser) {
+    try {
+      return writePrivateMcpConfigAsUser({
+        content,
+        sessionShortId: params.sessionShortId,
+        targetUnixUser: params.targetUnixUser,
+      });
+    } catch (err) {
+      if (typeof process.getuid === 'function' && process.getuid() === 0) {
+        console.warn(
+          `[claude-cli-integration] sudo write of MCP config for ${params.targetUnixUser} failed; falling back to root chown:`,
+          err instanceof Error ? err.message : String(err)
+        );
+        return writePrivateMcpConfigAsDaemon({
+          content,
+          sessionShortId: params.sessionShortId,
+          targetUnixUser: params.targetUnixUser,
+        });
+      }
+      throw err;
+    }
+  }
+
+  return writePrivateMcpConfigAsDaemon({
+    content,
+    sessionShortId: params.sessionShortId,
+  });
+}
+
+/**
  * Write a per-session Claude CLI MCP config file and return its path.
  *
  * Best-effort by design: failing to write this file should not block opening a
@@ -1100,7 +1226,7 @@ export async function writeClaudeCliMcpConfigForSession(
     actor?: { user_id?: string; role?: string } | null;
   } = {}
 ): Promise<string | undefined> {
-  const config = app.get('config') as { daemon?: { mcpEnabled?: boolean } } | undefined;
+  const config = app.get('config') as ClaudeCliMcpConfigRuntimeConfig | undefined;
   if (config?.daemon?.mcpEnabled === false) return undefined;
 
   if (
@@ -1129,30 +1255,11 @@ export async function writeClaudeCliMcpConfigForSession(
       mcpToken,
     });
 
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `agor-mcp-${shortId(session.session_id)}-`));
-    const filePath = path.join(dir, 'mcp.json');
-    fs.writeFileSync(filePath, `${JSON.stringify(mcpConfig, null, 2)}\n`, { mode: 0o600 });
-
-    // In strict Unix-user mode the CLI process may run as the session's Unix
-    // user. If the daemon is privileged, hand ownership of the temp config to
-    // that user so we can keep 0600 instead of making bearer tokens world-
-    // readable in /tmp. Non-root deployments where chown is unavailable still
-    // work in simple mode (same Unix user); otherwise the warning below tells
-    // operators why MCP is missing.
-    if (session.unix_username && typeof process.getuid === 'function' && process.getuid() === 0) {
-      try {
-        const homeStat = fs.statSync(`/home/${session.unix_username}`);
-        fs.chownSync(dir, homeStat.uid, homeStat.gid);
-        fs.chownSync(filePath, homeStat.uid, homeStat.gid);
-      } catch (err) {
-        console.warn(
-          `[claude-cli-integration] failed to chown MCP config for ${session.unix_username}:`,
-          err instanceof Error ? err.message : String(err)
-        );
-      }
-    }
-
-    return filePath;
+    return writeClaudeCliMcpConfigFile({
+      mcpConfig,
+      sessionShortId: shortId(session.session_id),
+      targetUnixUser: resolveClaudeCliMcpConfigTargetUnixUser(config, session),
+    });
   } catch (err) {
     console.warn(
       `[claude-cli-integration] failed to write MCP config for session ${shortId(session.session_id)}; Agor MCP tools will be unavailable in Claude CLI/RemoteTrigger:`,
