@@ -78,6 +78,51 @@ interface DocNodeData {
   iconEmoji?: string | null;
 }
 
+interface DocNodeLabelProps {
+  title: string;
+  iconEmoji?: string | null;
+}
+
+export function KnowledgeGraphDocNodeLabel({ title, iconEmoji }: DocNodeLabelProps) {
+  return (
+    <span
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0,
+        lineHeight: 1.3,
+      }}
+    >
+      {iconEmoji ? (
+        <span
+          aria-hidden="true"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            flex: '0 0 auto',
+            lineHeight: 1,
+          }}
+        >
+          {iconEmoji}
+        </span>
+      ) : null}
+      <Text
+        style={{
+          fontSize: 12,
+          fontWeight: 500,
+          lineHeight: 1.3,
+          minWidth: 0,
+          flex: '1 1 auto',
+        }}
+        ellipsis={{ tooltip: title }}
+      >
+        {title}
+      </Text>
+    </span>
+  );
+}
+
 const DocNode = memo(({ id, data }: NodeProps<DocNodeData>) => {
   const { token } = theme.useToken();
   const { focusId, neighborIds, hasFocus } = useContext(HighlightContext);
@@ -90,6 +135,8 @@ const DocNode = memo(({ id, data }: NodeProps<DocNodeData>) => {
     <div
       style={{
         position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
         maxWidth: 180,
         padding: '6px 12px',
         borderRadius: token.borderRadiusLG,
@@ -103,12 +150,7 @@ const DocNode = memo(({ id, data }: NodeProps<DocNodeData>) => {
       }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
-      <Text
-        style={{ fontSize: 12, fontWeight: 500, lineHeight: 1.3 }}
-        ellipsis={{ tooltip: data.title }}
-      >
-        {data.iconEmoji ? `${data.iconEmoji} ${data.title}` : data.title}
-      </Text>
+      <KnowledgeGraphDocNodeLabel title={data.title} iconEmoji={data.iconEmoji} />
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   );
