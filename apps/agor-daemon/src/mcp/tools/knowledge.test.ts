@@ -29,6 +29,8 @@ vi.mock('../server.js', () => ({
 
 vi.mock('@agor/core/types', () => ({
   buildKnowledgeDocumentUri: (id: string) => `agor://kb/document/${id}`,
+  getAssistantConfig: (branch: { assistant?: unknown }) => branch.assistant,
+  isAssistant: (branch: { assistant?: unknown }) => Boolean(branch.assistant),
   KNOWLEDGE_DOCUMENT_KINDS: ['doc', 'note'],
   KNOWLEDGE_DOCUMENT_STATUSES: ['draft', 'published'],
   KNOWLEDGE_DOCUMENT_URI_PREFIX: 'agor://kb/document/',
@@ -47,7 +49,8 @@ type CapturedTool = {
 };
 
 async function captureKnowledgeTools(
-  services: Record<string, unknown> = {}
+  services: Record<string, unknown> = {},
+  ctxOverrides: Record<string, unknown> = {}
 ): Promise<Record<string, CapturedTool>> {
   const { registerKnowledgeTools } = await import('./knowledge.js');
   const captured: Record<string, CapturedTool> = {};
@@ -63,6 +66,7 @@ async function captureKnowledgeTools(
     userId: 'user-1' as any,
     authenticatedUser: { user_id: 'user-1', role: 'member' } as any,
     baseServiceParams: {},
+    ...ctxOverrides,
   });
 
   return captured;
@@ -233,6 +237,43 @@ describe('Knowledge MCP input schemas', () => {
     expect(result[0].snippet).toBe('matched line 1\nmatched line 2\n…');
   });
 
+  it('caps Knowledge search snippets by characters even for single-line snippets', async () => {
+    const longSnippet = 'x'.repeat(1300);
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'long.md',
+          uri: 'agor://kb/global/long.md',
+          title: 'Long',
+          kind: 'doc',
+          visibility: 'public',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: {
+          version_id: 'ver-1',
+          document_id: 'doc-1',
+          version_number: 1,
+          content_text: longSnippet,
+        },
+        snippet: longSnippet,
+        score: 10,
+      },
+    ]);
+    const tools = await captureKnowledgeTools({ 'kb/search': { find } });
+
+    const result = textResultJson(await tools.agor_kb_search.handler?.({ query: 'long' })) as Array<
+      Record<string, any>
+    >;
+
+    expect(result[0].snippet).toHaveLength(1201);
+    expect(result[0].snippet.endsWith('…')).toBe(true);
+    expect(result[0].current_version).not.toHaveProperty('content_text');
+  });
+
   it('returns metadata-only Knowledge browse results by default for query empty string', async () => {
     const find = vi.fn().mockResolvedValue([
       {
@@ -310,5 +351,74 @@ describe('Knowledge MCP input schemas', () => {
         query: expect.objectContaining({ include_chunks: true }),
       })
     );
+  });
+
+  it('applies Knowledge search content shaping to assistant memory search', async () => {
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'memory/today.md',
+          uri: 'agor://kb/assistant/memory/today.md',
+          title: 'Today',
+          kind: 'doc',
+          visibility: 'private',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'assistant', display_name: 'Assistant' },
+        current_version: {
+          version_id: 'ver-1',
+          document_id: 'doc-1',
+          version_number: 1,
+          content_text: 'memory body',
+        },
+        snippet: 'memory body',
+        score: 10,
+      },
+    ]);
+    const tools = await captureKnowledgeTools(
+      {
+        sessions: { get: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) },
+        branches: {
+          get: vi.fn().mockResolvedValue({
+            branch_id: 'branch-1',
+            assistant: {
+              kb: {
+                primary_namespace_id: 'ns-1',
+                primary_namespace_slug: 'assistant',
+                global_access: 'write',
+              },
+            },
+          }),
+        },
+        'kb/namespaces': {
+          get: vi.fn().mockResolvedValue({
+            namespace_id: 'ns-1',
+            slug: 'assistant',
+            archived: false,
+          }),
+        },
+        'kb/search': { find },
+      },
+      { sessionId: 'session-1' }
+    );
+
+    const result = textResultJson(
+      await tools.agor_assistant_memory_search.handler?.({ query: 'memory' })
+    ) as Array<Record<string, any>>;
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          q: 'memory',
+          namespace_slug: 'assistant',
+          path_prefix: 'memory/',
+        }),
+      })
+    );
+    expect(result[0].current_version).not.toHaveProperty('content_text');
+    expect(result[0].snippet).toBe('memory body');
   });
 });

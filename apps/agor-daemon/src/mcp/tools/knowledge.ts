@@ -81,6 +81,33 @@ type KnowledgeSearchContentMode = z.infer<typeof KnowledgeSearchContentModeSchem
 
 const DEFAULT_KB_SEARCH_SNIPPET_LINES = 3;
 const MAX_KB_SEARCH_SNIPPET_LINES = 20;
+const MAX_KB_SEARCH_SNIPPET_CHARS = 1200;
+
+const KnowledgeSearchContentControlSchemaShape = {
+  contentMode: KnowledgeSearchContentModeSchema.optional().describe(
+    'Controls body content in results. "none" returns metadata only; "snippet" includes short snippets; "full" includes full current_version.content_text when available. Defaults: "snippet" for non-empty searches, "none" for browse/listing with query:"". Prefer agor_kb_get/agor_kb_get_range for reading content.'
+  ),
+  snippetLines: z
+    .number({
+      error: 'snippetLines must be a positive integer when provided.',
+    })
+    .int('snippetLines must be an integer.')
+    .positive('snippetLines must be greater than 0.')
+    .max(
+      MAX_KB_SEARCH_SNIPPET_LINES,
+      `snippetLines must be less than or equal to ${MAX_KB_SEARCH_SNIPPET_LINES}.`
+    )
+    .optional()
+    .describe(
+      `Maximum lines per returned snippet when contentMode:"snippet" (default: ${DEFAULT_KB_SEARCH_SNIPPET_LINES}, max: ${MAX_KB_SEARCH_SNIPPET_LINES}). Snippets are also capped at ${MAX_KB_SEARCH_SNIPPET_CHARS} characters.`
+    ),
+  includeContent: z
+    .boolean()
+    .optional()
+    .describe(
+      'Compatibility alias. Use contentMode instead. true maps to contentMode:"full"; false keeps the default metadata/snippet behavior.'
+    ),
+};
 
 function mcpOptionalVersionToken(fieldName: string, description: string) {
   return z
@@ -291,8 +318,10 @@ function clampKbSearchSnippetLines(value: unknown): number {
 function limitSnippetLines(value: unknown, snippetLines: number): string | null {
   if (typeof value !== 'string' || value.length === 0) return null;
   const lines = value.split(/\r?\n/);
-  if (lines.length <= snippetLines) return value;
-  return `${lines.slice(0, snippetLines).join('\n')}\n…`;
+  const lineLimited =
+    lines.length <= snippetLines ? value : `${lines.slice(0, snippetLines).join('\n')}\n…`;
+  if (lineLimited.length <= MAX_KB_SEARCH_SNIPPET_CHARS) return lineLimited;
+  return `${lineLimited.slice(0, MAX_KB_SEARCH_SNIPPET_CHARS)}…`;
 }
 
 function removeKnowledgeContentFields(value: Record<string, unknown>): Record<string, unknown> {
@@ -362,6 +391,20 @@ function resolveKnowledgeSearchContentMode(args: {
   if (args.includeContent === true) return 'full';
   const query = typeof args.query === 'string' ? args.query.trim() : '';
   return query ? 'snippet' : 'none';
+}
+
+function shapeKnowledgeSearchResponse(
+  result: unknown,
+  args: {
+    query?: unknown;
+    contentMode?: unknown;
+    snippetLines?: unknown;
+    includeContent?: unknown;
+  }
+): unknown {
+  const contentMode = resolveKnowledgeSearchContentMode(args);
+  const snippetLines = clampKbSearchSnippetLines(args.snippetLines);
+  return shapeKnowledgeSearchResult(enrichWithReferenceUri(result), { contentMode, snippetLines });
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -642,6 +685,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         query: z.string().describe('Search text. Use an empty string to browse memory.'),
         limit: z.number().int().min(1).max(50).optional(),
         mode: z.enum(['text', 'semantic', 'hybrid']).optional(),
+        ...KnowledgeSearchContentControlSchemaShape,
       }),
     },
     async (args) => {
@@ -651,19 +695,18 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (!service?.find) {
         return knowledgeNotImplementedResult('agor_assistant_memory_search', ['kb/search.find']);
       }
-      return textResult(
-        enrichWithReferenceUri(
-          await service.find(
-            mcpParams(ctx, {
-              q: coerceString(args.query) ?? '',
-              namespace_slug: namespace.slug,
-              path_prefix: 'memory/',
-              limit: args.limit ?? 10,
-              mode: args.mode,
-            })
-          )
-        )
+      const contentMode = resolveKnowledgeSearchContentMode(args);
+      const result = await service.find(
+        mcpParams(ctx, {
+          q: coerceString(args.query) ?? '',
+          namespace_slug: namespace.slug,
+          path_prefix: 'memory/',
+          limit: args.limit ?? 10,
+          mode: args.mode,
+          ...(contentMode === 'full' ? { include_chunks: true } : {}),
+        })
       );
+      return textResult(shapeKnowledgeSearchResponse(result, args));
     }
   );
 
@@ -682,6 +725,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         pathPrefix: z.string().optional().describe('Optional path prefix filter.'),
         limit: z.number().int().min(1).max(50).optional(),
         mode: z.enum(['text', 'semantic', 'hybrid']).optional(),
+        ...KnowledgeSearchContentControlSchemaShape,
       }),
     },
     async (args) => {
@@ -708,19 +752,18 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         );
       }
 
-      return textResult(
-        enrichWithReferenceUri(
-          await service.find(
-            mcpParams(ctx, {
-              q: coerceString(args.query) ?? '',
-              ...(namespaceSlug ? { namespace_slug: namespaceSlug } : {}),
-              ...(args.pathPrefix ? { path_prefix: coerceString(args.pathPrefix) } : {}),
-              limit: args.limit ?? 10,
-              mode: args.mode,
-            })
-          )
-        )
+      const contentMode = resolveKnowledgeSearchContentMode(args);
+      const result = await service.find(
+        mcpParams(ctx, {
+          q: coerceString(args.query) ?? '',
+          ...(namespaceSlug ? { namespace_slug: namespaceSlug } : {}),
+          ...(args.pathPrefix ? { path_prefix: coerceString(args.pathPrefix) } : {}),
+          limit: args.limit ?? 10,
+          mode: args.mode,
+          ...(contentMode === 'full' ? { include_chunks: true } : {}),
+        })
       );
+      return textResult(shapeKnowledgeSearchResponse(result, args));
     }
   );
 
@@ -980,29 +1023,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .describe(
             'Include per-document embedding/indexing summary: derived state, chunk counts, queue depth, model, and last error.'
           ),
-        contentMode: KnowledgeSearchContentModeSchema.optional().describe(
-          'Controls body content in results. "none" returns metadata only; "snippet" includes short snippets; "full" includes full current_version.content_text when available. Defaults: "snippet" for non-empty searches, "none" for browse/listing with query:"". Prefer agor_kb_get/agor_kb_get_range for reading content.'
-        ),
-        snippetLines: z
-          .number({
-            error: 'snippetLines must be a positive integer when provided.',
-          })
-          .int('snippetLines must be an integer.')
-          .positive('snippetLines must be greater than 0.')
-          .max(
-            MAX_KB_SEARCH_SNIPPET_LINES,
-            `snippetLines must be less than or equal to ${MAX_KB_SEARCH_SNIPPET_LINES}.`
-          )
-          .optional()
-          .describe(
-            `Maximum lines per returned snippet when contentMode:"snippet" (default: ${DEFAULT_KB_SEARCH_SNIPPET_LINES}, max: ${MAX_KB_SEARCH_SNIPPET_LINES}).`
-          ),
-        includeContent: z
-          .boolean()
-          .optional()
-          .describe(
-            'Deprecated legacy alias. Use contentMode instead. true maps to contentMode:"full"; false keeps the default metadata/snippet behavior.'
-          ),
+        ...KnowledgeSearchContentControlSchemaShape,
         includeArchived: z
           .boolean()
           .optional()
@@ -1035,12 +1056,11 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (args.limit) query.limit = args.limit;
       if (args.mode) query.mode = args.mode;
       const contentMode = resolveKnowledgeSearchContentMode(args);
-      const snippetLines = clampKbSearchSnippetLines(args.snippetLines);
       if (contentMode === 'full') query.include_chunks = true;
 
       if (service.find) {
-        const result = enrichWithReferenceUri(await service.find(mcpParams(ctx, query)));
-        return textResult(shapeKnowledgeSearchResult(result, { contentMode, snippetLines }));
+        const result = await service.find(mcpParams(ctx, query));
+        return textResult(shapeKnowledgeSearchResponse(result, args));
       }
       return knowledgeNotImplementedResult('agor_kb_search', ['kb/search.find']);
     }
