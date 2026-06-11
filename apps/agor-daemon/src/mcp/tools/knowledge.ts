@@ -1278,7 +1278,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         content_text: content,
         first_line_is_title: firstLineIsTitle,
         kind: (args.kind as KnowledgeDocumentKind | undefined) ?? 'doc',
-        icon_emoji: iconEmoji,
+        ...(args.iconEmoji !== undefined ? { icon_emoji: iconEmoji } : {}),
         visibility: args.visibility as KnowledgeVisibility | undefined,
         status: args.status as KnowledgeDocumentStatus | undefined,
         edit_policy: args.editPolicy as KnowledgeEditPolicy | undefined,

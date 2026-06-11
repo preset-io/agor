@@ -421,11 +421,13 @@ describe('KnowledgeDocumentsService permissions', () => {
           path: 'guide.md',
           content_text: '# Guide\n\nInitial',
           first_line_is_title: true,
+          icon_emoji: '📘',
         },
         params(owner)
       );
       expect(created.title).toBe('Guide');
       expect(created.uri).toBe('agor://kb/mcp-style/guide.md');
+      expect(created.icon_emoji).toBe('📘');
 
       const updated = await service.putDocument(
         {
@@ -437,6 +439,7 @@ describe('KnowledgeDocumentsService permissions', () => {
         params(owner)
       );
       expect(updated.document_id).toBe(created.document_id);
+      expect(updated.icon_emoji).toBe('📘');
 
       const hydrated = await service.getDocument(
         { namespace_slug: namespace.slug, path: 'guide.md', include_content: true },

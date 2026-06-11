@@ -36,6 +36,8 @@ vi.mock('@agor/core/types', () => ({
   KNOWLEDGE_GRAPH_EDGE_TYPES: ['references', 'relates_to'],
   KNOWLEDGE_GRAPH_NODE_TYPES: ['document', 'external'],
   KNOWLEDGE_VISIBILITIES: ['public', 'private'],
+  normalizeKnowledgeDocumentIconEmoji: (icon: string | null | undefined) =>
+    typeof icon === 'string' && icon.trim() ? icon.trim() : null,
   parseKnowledgeUri: () => undefined,
 }));
 

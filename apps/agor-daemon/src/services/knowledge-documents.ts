@@ -225,7 +225,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
         : {}),
     };
     const prepared: KnowledgeDocumentWriteData = { ...data, metadata };
-    if ('icon_emoji' in prepared) {
+    if (prepared.icon_emoji !== undefined) {
       prepared.icon_emoji = normalizeKnowledgeDocumentIconEmoji(prepared.icon_emoji);
     }
     if (wantsFirstLineTitle(prepared) && typeof prepared.content_text === 'string') {
