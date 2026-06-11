@@ -691,11 +691,11 @@ describe('MCP session input validation clarity', () => {
 
 describe('modelConfig schema (string shorthand coercion)', () => {
   // The MCP-tool boundary historically required `modelConfig` as a structured
-  // `{ mode, model, effort, provider }` object. Several MCP clients silently
-  // mangle nested objects in tool args, and asking an agent to construct that
-  // shape just to pin a model is hostile UX. We now accept either form. The
-  // schema validates the union without transforming (so `toJSONSchema` works);
-  // handlers normalize the string form to `{ model: <id> }` internally.
+  // `{ mode, model, effort, advisorModel, provider }` object. Several MCP
+  // clients silently mangle nested objects in tool args, and asking an agent to
+  // construct that shape just to pin a model is hostile UX. We now accept either
+  // form. The schema validates the union without transforming (so `toJSONSchema`
+  // works); handlers normalize the string form to `{ model: <id> }` internally.
   it('accepts a plain string for modelConfig', async () => {
     const tools = await registerAndCaptureTools(
       { app: {}, userId: 'user-1', sessionId: 'sess-caller' },

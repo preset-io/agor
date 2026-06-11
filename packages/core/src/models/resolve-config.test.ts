@@ -172,6 +172,40 @@ describe('resolveModelConfigWithFallback', () => {
     });
   });
 
+  it('accumulates split model-less overrides onto the tool fallback', () => {
+    const result = resolveModelConfigWithFallback(
+      'claude-code',
+      [{ advisorModel: 'opus' }, { effort: 'max' }],
+      { now }
+    );
+    expect(result).toEqual({
+      mode: 'alias',
+      model: 'claude-sonnet-4-6',
+      effort: 'max',
+      advisorModel: 'opus',
+      updated_at: '2026-04-23T00:00:00.000Z',
+    });
+  });
+
+  it('preserves higher-priority model-less overrides when accumulating', () => {
+    const result = resolveModelConfigWithFallback(
+      'claude-code',
+      [
+        { advisorModel: 'opus' },
+        { advisorModel: 'sonnet', effort: 'medium' },
+        { model: 'claude-haiku-4-5' },
+      ],
+      { now }
+    );
+    expect(result).toEqual({
+      mode: 'alias',
+      model: 'claude-haiku-4-5',
+      effort: 'medium',
+      advisorModel: 'opus',
+      updated_at: '2026-04-23T00:00:00.000Z',
+    });
+  });
+
   it('does not carry model-less mode/provider onto a fallback model', () => {
     const result = resolveModelConfigWithFallback(
       'claude-code',
