@@ -214,6 +214,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       // Setup socket event listeners BEFORE connecting
       client.io.on('connect', async () => {
         if (mounted) {
+          const isReconnect = hasConnectedOnce;
           hasConnectedOnce = true; // Mark that we've successfully connected
           // Reset manual-reconnect backoff now that we're connected again.
           manualReconnectAttempts = 0;
@@ -221,6 +222,15 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
           // Cancel any pending "flip to disconnected" — we made it back in
           // time, so consumers never saw a disabled frame.
           clearDisconnectGrace();
+
+          // Initial authentication is performed by the connect() flow after
+          // its "wait for connection" promise resolves. If we authenticate
+          // here too, the first socket connection fires two back-to-back
+          // daemon login events for the same user. Only this event handler's
+          // reconnect path should re-authenticate.
+          if (!isReconnect) {
+            return;
+          }
 
           // Re-authenticate on reconnection (e.g., after daemon restart or
           // network recovery). Read the token from the ref to pick up any

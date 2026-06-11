@@ -11,6 +11,7 @@ import {
   kbDocumentVersions,
   kbEmbeddingSpaces,
   select,
+  shortId,
   sql,
   update,
 } from '@agor/core/db';
@@ -31,6 +32,7 @@ const DEFAULT_TICK_MS = 30_000;
 
 interface PendingUnitRow {
   unit_id: string;
+  document_id: string;
   content_text: string | null;
   content_md5: string | null;
 }
@@ -409,6 +411,19 @@ export class KnowledgeEmbeddingIndexer {
       );
     }
 
+    // Hot idle path: first ask the core Knowledge table whether there is
+    // anything to index. Avoid pgvector DDL/capability setup, embedding-space
+    // lookup, and provider work on ticks where no units are pending.
+    const pending = (await select(this.db, { unit_id: kbDocumentUnits.unit_id })
+      .from(kbDocumentUnits)
+      .where(
+        sql`${kbDocumentUnits.embedding_status} IN ('pending', 'stale') AND ${kbDocumentUnits.content_text} IS NOT NULL`
+      )
+      .orderBy(kbDocumentUnits.created_at)
+      .limit(1)
+      .one()) as { unit_id: string } | undefined;
+    if (!pending) return this.idle();
+
     const pgvector = await ensureKnowledgePgvectorStorage(this.db);
     if (!pgvector.available) {
       this.lastError = pgvector.reason ?? 'Knowledge pgvector storage is unavailable';
@@ -447,6 +462,24 @@ export class KnowledgeEmbeddingIndexer {
       this.lastIndexedAt = new Date();
       return reused;
     }
+
+    const chunksByDocument = new Map<string, number>();
+    let totalChars = 0;
+    for (const row of rows) {
+      chunksByDocument.set(row.document_id, (chunksByDocument.get(row.document_id) ?? 0) + 1);
+      totalChars += row.content_text?.length ?? 0;
+    }
+    const docSummary = [...chunksByDocument.entries()]
+      .slice(0, 5)
+      .map(([documentId, count]) => `${shortId(documentId)}=${count}`)
+      .join(', ');
+    const extraDocs = Math.max(0, chunksByDocument.size - 5);
+    console.info(
+      `[knowledge-indexer] Computing ${rows.length} embedding chunk(s) across ${
+        chunksByDocument.size
+      } document(s) (${docSummary}${extraDocs > 0 ? `, +${extraDocs} more` : ''}); ` +
+        `model=${model}, dimensions=${dimensions}, chars=${totalChars}`
+    );
 
     let results: Awaited<ReturnType<OpenAIEmbeddingProvider['embed']>>;
     try {

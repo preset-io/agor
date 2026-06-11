@@ -55,7 +55,7 @@ export async function resolveApiKey(
   keyName: ApiKeyName,
   context: KeyResolutionContext = {}
 ): Promise<KeyResolutionResult> {
-  console.log(
+  console.debug(
     `🔍 [API Key Resolution] Resolving ${keyName} for user ${context.userId ? shortId(context.userId) : 'none'}`
   );
 
@@ -67,7 +67,7 @@ export async function resolveApiKey(
   //    is omitted (CLI / generic callers), we fall back to sweeping every
   //    bucket to preserve the legacy "any user key for this name" semantic.
   if (context.userId && context.db) {
-    console.log(`   → Checking user-level configuration...`);
+    console.debug(`   → Checking user-level configuration...`);
     const row = await select(context.db).from(users).where(eq(users.user_id, context.userId)).one();
 
     if (row) {
@@ -92,7 +92,7 @@ export async function resolveApiKey(
         try {
           const decryptedKey = decryptApiKey(encryptedKey);
           if (decryptedKey && decryptedKey.length > 0) {
-            console.log(
+            console.debug(
               `   ✓ Found user-level API key for ${keyName} (user: ${shortId(context.userId)})`
             );
             return { apiKey: decryptedKey, source: 'user', useNativeAuth: false };
@@ -109,9 +109,9 @@ export async function resolveApiKey(
       }
     }
   } else if (!context.userId) {
-    console.log(`   → Skipping user-level check (no user ID provided)`);
+    console.debug(`   → Skipping user-level check (no user ID provided)`);
   } else if (!context.db) {
-    console.log(`   → Skipping user-level check (no database connection)`);
+    console.debug(`   → Skipping user-level check (no database connection)`);
   }
 
   // 2. Check global config.yaml (second precedence). Only the keys that have a
@@ -119,26 +119,26 @@ export async function resolveApiKey(
   //    CLAUDE_CODE_OAUTH_TOKEN / COPILOT_GITHUB_TOKEN are skipped here and fall
   //    through to the env-var lookup below.
   if (isConfigCredentialKey(keyName)) {
-    console.log(`   → Checking app-level configuration (config.yaml)...`);
+    console.debug(`   → Checking app-level configuration (config.yaml)...`);
     const globalKey = getCredential(keyName);
     if (globalKey && globalKey.length > 0) {
-      console.log(`   ✓ Found app-level API key for ${keyName} (from config.yaml)`);
+      console.debug(`   ✓ Found app-level API key for ${keyName} (from config.yaml)`);
       return { apiKey: globalKey, source: 'config', useNativeAuth: false };
     }
-    console.log(`   ✗ No app-level API key for ${keyName}`);
+    console.debug(`   ✗ No app-level API key for ${keyName}`);
   }
 
   // 3. Check environment variable (third precedence)
-  console.log(`   → Checking OS-level environment variables...`);
+  console.debug(`   → Checking OS-level environment variables...`);
   const envKey = process.env[keyName];
   if (envKey && envKey.length > 0) {
-    console.log(`   ✓ Found OS-level environment variable ${keyName}`);
+    console.debug(`   ✓ Found OS-level environment variable ${keyName}`);
     return { apiKey: envKey, source: 'env', useNativeAuth: false };
   }
-  console.log(`   ✗ No OS-level environment variable ${keyName}`);
+  console.debug(`   ✗ No OS-level environment variable ${keyName}`);
 
   // 4. No key found - SDK should fall back to native auth (OAuth, CLI login, etc.)
-  console.log(`   ℹ️  No API key found for ${keyName} - SDK will use native authentication`);
+  console.debug(`   ℹ️  No API key found for ${keyName} - SDK will use native authentication`);
   return { apiKey: undefined, source: 'none', useNativeAuth: true };
 }
 

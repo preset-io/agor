@@ -749,7 +749,7 @@ export function createSocketIOConfig(
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
           socket.join(userRoomName(userId));
-          console.log(
+          console.debug(
             `🏠 Socket ${socket.id} joined user room after login: user:${shortId(userId)}`
           );
           break;
@@ -805,7 +805,7 @@ export function configureChannels(app: Application): void {
   app.on('login', (authResult: unknown, context: { connection?: unknown }) => {
     if (context.connection) {
       const result = authResult as { user?: { user_id?: string; email?: string } };
-      console.log('✅ Login event fired:', result.user?.user_id, result.user?.email);
+      console.debug('✅ Login event fired:', result.user?.user_id, result.user?.email);
 
       // SECURITY: Only now does the connection receive broadcast events
       app.channel('authenticated').join(context.connection as never);

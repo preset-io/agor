@@ -332,10 +332,14 @@ async function resolveApiKeyForTask(
       keyName,
       tool,
     })) as import('@agor/core/config').KeyResolutionResult;
-    console.log(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
+    console.debug(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
     return result;
   } catch (err) {
-    console.warn('[API Key Resolution] Failed to resolve via daemon service:', err);
+    console.warn(
+      `[API Key Resolution] Failed to resolve via daemon service: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
     // Fall back to sync resolution (config + env only, no per-user keys)
     return resolveApiKey(keyName, {});
   }
@@ -394,9 +398,11 @@ export async function executeToolTask(params: {
 
   // Log resolution result
   if (resolution.apiKey) {
-    console.log(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);
+    console.debug(
+      `[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`
+    );
   } else {
-    console.log(
+    console.debug(
       `[${toolName}] No API key found - SDK will use native authentication (OAuth/CLI login)`
     );
   }

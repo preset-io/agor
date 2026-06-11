@@ -220,7 +220,7 @@ export class CodexPromptService {
     if (this.apiKey) {
       // Source already logged by base-executor via resolveApiKeyForTask().
     } else if (this.useNativeAuth) {
-      console.log(
+      console.debug(
         '🔓 [Codex] No API key configured — falling back to ChatGPT subscription auth from $CODEX_HOME/auth.json. ' +
           'Run `codex login` if you have not authenticated yet.'
       );
@@ -268,6 +268,9 @@ export class CodexPromptService {
       } catch {
         continue;
       }
+      let deleted = 0;
+      let failed = 0;
+      const failedByCode = new Map<string, number>();
       for (const name of entries) {
         if (!name.startsWith('agor-codex-instructions-') || !name.endsWith('.md')) continue;
         const full = path.join(dir, name);
@@ -275,12 +278,26 @@ export class CodexPromptService {
           const stat = await fs.stat(full);
           if (stat.mtimeMs < cutoffMs) {
             await fs.unlink(full);
+            deleted++;
           }
         } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            console.warn(`⚠️  [Codex] Failed to sweep ${full}:`, err);
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT') {
+            failed++;
+            failedByCode.set(code ?? 'UNKNOWN', (failedByCode.get(code ?? 'UNKNOWN') ?? 0) + 1);
           }
         }
+      }
+      if (deleted > 0) {
+        console.debug(`🧹 [Codex] Swept ${deleted} stale instructions file(s) from ${dir}`);
+      }
+      if (failed > 0) {
+        const summary = [...failedByCode.entries()]
+          .map(([code, count]) => `${code}=${count}`)
+          .join(', ');
+        console.debug(
+          `🧹 [Codex] Skipped ${failed} stale instructions file(s) in ${dir} (${summary})`
+        );
       }
     }
   }
@@ -395,7 +412,7 @@ export class CodexPromptService {
       return;
     }
 
-    console.log(
+    console.debug(
       `🔄 [Codex] Per-session config changed, reinitializing SDK (apiKey=${this.apiKey ? 'set' : 'unset'}, useNativeAuth=${this.useNativeAuth})`
     );
     this.codex = new Codex.Codex(this.buildCodexOptions(this.apiKey, baseUrl, config));
@@ -441,7 +458,7 @@ export class CodexPromptService {
     }
 
     this.instructionsFilePaths.set(sessionId, filePath);
-    console.log(`✅ [Codex] Wrote per-session instructions file at ${filePath}`);
+    console.debug(`✅ [Codex] Wrote per-session instructions file at ${filePath}`);
     return filePath;
   }
 
@@ -501,8 +518,8 @@ export class CodexPromptService {
     mcpToken: string | undefined,
     forUserId: UserID | undefined
   ): Promise<{ servers: CodexConfigObject; total: number }> {
-    console.log(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
-    console.log(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
+    console.debug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
+    console.debug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
     const serversWithSource = await getMcpServersForSession(sessionId, {
       sessionMCPRepo: this.sessionMCPServerRepo,
@@ -512,15 +529,17 @@ export class CodexPromptService {
 
     const mcpServers = serversWithSource.map((s) => s.server);
 
-    console.log(`📊 [Codex MCP] Found ${mcpServers.length} MCP server(s) for session`);
+    console.debug(`📊 [Codex MCP] Found ${mcpServers.length} MCP server(s) for session`);
     if (mcpServers.length > 0) {
-      console.log(`   Servers: ${mcpServers.map((s) => `${s.name} (${s.transport})`).join(', ')}`);
+      console.debug(
+        `   Servers: ${mcpServers.map((s) => `${s.name} (${s.transport})`).join(', ')}`
+      );
     }
 
     const stdioServers = mcpServers.filter((s) => s.transport === 'stdio');
     const httpServers = mcpServers.filter((s) => s.transport === 'http' || s.transport === 'sse');
 
-    console.log(
+    console.debug(
       `   📊 [Codex MCP] Transport breakdown: ${stdioServers.length} STDIO, ${httpServers.length} HTTP/SSE`
     );
 
@@ -541,7 +560,7 @@ export class CodexPromptService {
         required: false,
         ...MCP_AUTO_APPROVE,
       };
-      console.log(
+      console.debug(
         `   📝 [Codex MCP] Configuring built-in Agor MCP server (HTTP) at ${daemonUrl}/mcp`
       );
     }
@@ -854,9 +873,9 @@ export class CodexPromptService {
     // This ensures hot-reload of credentials from Settings UI while avoiding process accumulation
     this.refreshClient(currentApiKey);
 
-    console.log(`🔍 [Codex] Starting prompt execution for session ${shortId(sessionId)}`);
-    console.log(`   Permission mode: ${permissionMode || 'not specified (will use default)'}`);
-    console.log(`   Existing thread ID: ${session.sdk_session_id || 'none (will create new)'}`);
+    console.debug(`🔍 [Codex] Starting prompt execution for session ${shortId(sessionId)}`);
+    console.debug(`   Permission mode: ${permissionMode || 'not specified (will use default)'}`);
+    console.debug(`   Existing thread ID: ${session.sdk_session_id || 'none (will create new)'}`);
 
     // Codex permission settings split across two surfaces:
     // - sandboxMode, approvalPolicy, networkAccessEnabled: per-thread via ThreadOptions
@@ -879,7 +898,7 @@ export class CodexPromptService {
     const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
     const networkAccess = codexConfig?.networkAccess ?? defaults.networkAccess;
 
-    console.log(
+    console.debug(
       `   Using Codex permissions: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}`
     );
 
@@ -918,7 +937,7 @@ export class CodexPromptService {
     // apiKey/baseUrl) actually changed — issue #133 protection.
     this.ensureCodexClient(codexConfigPayload);
 
-    console.log(
+    console.debug(
       `   Configured: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}, ${mcpServerCount} MCP server(s)`
     );
 
@@ -928,7 +947,7 @@ export class CodexPromptService {
       throw new Error(`Branch ${session.branch_id} not found for session ${sessionId}`);
     }
 
-    console.log(`   Working directory: ${branch.path}`);
+    console.debug(`   Working directory: ${branch.path}`);
 
     await this.ensureForkedCodexThread(sessionId, session);
 
@@ -1003,7 +1022,7 @@ export class CodexPromptService {
     // Start or resume thread
     let thread: Thread;
     if (session.sdk_session_id) {
-      console.log(`🔄 [Codex] Resuming thread: ${session.sdk_session_id}`);
+      console.debug(`🔄 [Codex] Resuming thread: ${session.sdk_session_id}`);
 
       thread = this.codex.resumeThread(session.sdk_session_id, threadOptions);
 
@@ -1029,9 +1048,9 @@ export class CodexPromptService {
         }
       }
     } else {
-      console.log(`🆕 [Codex] Creating new thread`);
+      console.debug(`🆕 [Codex] Creating new thread`);
       if (mcpServerCount > 0) {
-        console.log(
+        console.debug(
           `✅ [Codex MCP] New thread will have ${mcpServerCount} MCP server(s) available via --config flags`
         );
       }
@@ -1039,7 +1058,7 @@ export class CodexPromptService {
     }
 
     try {
-      console.log(
+      console.debug(
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
       );
 
@@ -1058,10 +1077,10 @@ export class CodexPromptService {
 
       // Use streaming API with abort signal for proper cancellation support
       // The signal is passed to Codex SDK which will throw AbortError when aborted
-      console.log(`🎬 [Codex] Starting runStreamed() for session ${shortId(sessionId)}`);
+      console.debug(`🎬 [Codex] Starting runStreamed() for session ${shortId(sessionId)}`);
       const turnOptions = abortController ? { signal: abortController.signal } : undefined;
       const { events } = await thread.runStreamed(prompt, turnOptions);
-      console.log(`✅ [Codex] runStreamed() returned, starting event iteration`);
+      console.debug(`✅ [Codex] runStreamed() returned, starting event iteration`);
 
       const currentMessage: Array<{
         type: string;
@@ -1083,7 +1102,7 @@ export class CodexPromptService {
 
       for await (const event of events) {
         eventCount++;
-        console.log(`📨 [Codex] Event ${eventCount}: ${event.type}`);
+        console.debug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
 
         // Check if stop was requested
         if (this.stopRequested.get(sessionId)) {

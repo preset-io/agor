@@ -79,8 +79,8 @@ export async function getMcpServersForSession(
   }
 
   try {
-    console.log('🔌 Resolving MCP servers for session...');
-    console.log(`   [MCP Scoping] forUserId: ${deps.forUserId || 'NOT SET'}`);
+    console.debug('🔌 Resolving MCP servers for session...');
+    console.debug(`   [MCP Scoping] forUserId: ${deps.forUserId || 'NOT SET'}`);
 
     // Track seen server IDs to prevent duplicates
     const seenServerIds = new Set<string>();
@@ -203,7 +203,9 @@ export async function getMcpServersForSession(
       );
     }
   } catch (error) {
-    console.error('❌ Failed to resolve MCP servers:', error);
+    console.warn(
+      `⚠️  Failed to resolve MCP servers: ${error instanceof Error ? error.message : String(error)}`
+    );
     // Return empty array on error to avoid breaking session creation
     return [];
   }

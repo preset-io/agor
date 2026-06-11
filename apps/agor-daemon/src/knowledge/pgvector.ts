@@ -9,6 +9,12 @@ export interface KnowledgePgvectorCapability {
   setupHint: string | null;
 }
 
+interface KnowledgePgvectorStorageState extends KnowledgePgvectorCapability {
+  tableReady: boolean;
+  spaceIndexReady: boolean;
+  hnswIndexReady: boolean;
+}
+
 const SETUP_HINT =
   'Install the pgvector package on the Postgres server and have a database owner run `CREATE EXTENSION vector;`, or grant the Agor database user permission to create the extension, then re-enable/reindex Knowledge semantic search.';
 
@@ -26,13 +32,16 @@ export function semanticUnavailableMessage(reason?: string | null): string {
   return `Semantic Knowledge search is unavailable${reason ? `: ${reason}` : ''}. ${SETUP_HINT}`;
 }
 
-async function readCapability(db: Database): Promise<KnowledgePgvectorCapability> {
+async function readCapability(db: Database): Promise<KnowledgePgvectorStorageState> {
   if (!isPostgresDatabase(db)) {
     return {
       available: false,
       extensionInstalled: false,
       extensionAvailable: false,
       storageReady: false,
+      tableReady: false,
+      spaceIndexReady: false,
+      hnswIndexReady: false,
       reason: 'the configured database is not PostgreSQL',
       setupHint: 'Use text Knowledge search, or switch Agor to PostgreSQL and enable pgvector.',
     };
@@ -44,12 +53,17 @@ async function readCapability(db: Database): Promise<KnowledgePgvectorCapability
       sql`SELECT
           EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS extension_installed,
           EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') AS extension_available,
-          to_regclass('public.kb_unit_embeddings') IS NOT NULL AS storage_ready`
+          to_regclass('public.kb_unit_embeddings') IS NOT NULL AS table_ready,
+          to_regclass('public.kb_unit_embeddings_space_idx') IS NOT NULL AS space_index_ready,
+          to_regclass('public.kb_unit_embeddings_embedding_1536_hnsw_idx') IS NOT NULL AS hnsw_index_ready`
     );
     const first = rowsOf(result)[0] ?? {};
     const extensionInstalled = boolValue(first.extension_installed);
     const extensionAvailable = boolValue(first.extension_available);
-    const storageReady = boolValue(first.storage_ready);
+    const tableReady = boolValue(first.table_ready);
+    const spaceIndexReady = boolValue(first.space_index_ready);
+    const hnswIndexReady = boolValue(first.hnsw_index_ready);
+    const storageReady = tableReady;
     const reason = !extensionInstalled
       ? extensionAvailable
         ? 'the pgvector extension is available on the server but is not enabled in this database'
@@ -62,6 +76,9 @@ async function readCapability(db: Database): Promise<KnowledgePgvectorCapability
       extensionInstalled,
       extensionAvailable,
       storageReady,
+      tableReady,
+      spaceIndexReady,
+      hnswIndexReady,
       reason,
       setupHint: reason ? SETUP_HINT : null,
     };
@@ -71,6 +88,9 @@ async function readCapability(db: Database): Promise<KnowledgePgvectorCapability
       extensionInstalled: false,
       extensionAvailable: false,
       storageReady: false,
+      tableReady: false,
+      spaceIndexReady: false,
+      hnswIndexReady: false,
       reason: `unable to inspect pgvector capability (${error instanceof Error ? error.message : String(error)})`,
       setupHint: SETUP_HINT,
     };
@@ -104,10 +124,15 @@ export async function ensureKnowledgePgvectorStorage(
     if (!capability.extensionInstalled) return capability;
   }
 
+  if (capability.tableReady && capability.spaceIndexReady && capability.hnswIndexReady) {
+    return capability;
+  }
+
   try {
-    await executeRaw(
-      db,
-      sql`CREATE TABLE IF NOT EXISTS kb_unit_embeddings (
+    if (!capability.tableReady) {
+      await executeRaw(
+        db,
+        sql`CREATE TABLE kb_unit_embeddings (
           unit_id varchar(36) NOT NULL REFERENCES public.kb_document_units(unit_id) ON DELETE cascade,
           embedding_space_id varchar(36) NOT NULL REFERENCES public.kb_embedding_spaces(embedding_space_id) ON DELETE cascade,
           content_sha256 text NOT NULL,
@@ -117,24 +142,32 @@ export async function ensureKnowledgePgvectorStorage(
           updated_at timestamp with time zone NOT NULL,
           CONSTRAINT kb_unit_embeddings_unit_id_embedding_space_id_pk PRIMARY KEY(unit_id, embedding_space_id)
         )`
-    );
-    await executeRaw(
-      db,
-      sql`CREATE INDEX IF NOT EXISTS kb_unit_embeddings_space_idx ON kb_unit_embeddings USING btree (embedding_space_id)`
-    );
-
-    try {
+      );
+      capability.tableReady = true;
+    }
+    if (!capability.spaceIndexReady) {
       await executeRaw(
         db,
-        sql`CREATE INDEX IF NOT EXISTS kb_unit_embeddings_embedding_1536_hnsw_idx
+        sql`CREATE INDEX kb_unit_embeddings_space_idx ON kb_unit_embeddings USING btree (embedding_space_id)`
+      );
+      capability.spaceIndexReady = true;
+    }
+
+    if (!capability.hnswIndexReady) {
+      try {
+        await executeRaw(
+          db,
+          sql`CREATE INDEX kb_unit_embeddings_embedding_1536_hnsw_idx
             ON kb_unit_embeddings USING hnsw ((embedding::vector(1536)) vector_cosine_ops)
             WHERE vector_dims(embedding) = 1536`
-      );
-    } catch (error) {
-      console.warn(
-        '[knowledge-pgvector] vector storage is available, but creating the HNSW index failed:',
-        error instanceof Error ? error.message : error
-      );
+        );
+        capability.hnswIndexReady = true;
+      } catch (error) {
+        console.warn(
+          '[knowledge-pgvector] vector storage is available, but creating the HNSW index failed:',
+          error instanceof Error ? error.message : error
+        );
+      }
     }
   } catch (error) {
     return {

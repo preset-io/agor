@@ -104,7 +104,7 @@ export class SessionTokenService {
       use_count: 0,
     });
 
-    console.log(
+    console.debug(
       `[SessionTokenService] Generated JWT for session=${sessionId}, expires=${expiresAt.toISOString()}`
     );
 
@@ -147,18 +147,23 @@ export class SessionTokenService {
       return null;
     }
 
-    // Check max uses (if configured)
+    // Check max uses (if configured). Reusable executor tokens are validated
+    // on every protected daemon service call, so avoid mutating a diagnostic
+    // counter for the normal unlimited-use path.
     if (data.max_uses > 0 && data.use_count >= data.max_uses) {
       console.warn(`[SessionTokenService] Token max uses exceeded`);
       this.tokens.delete(token);
       return null;
     }
 
-    // Increment use count
-    data.use_count++;
+    if (data.max_uses > 0) {
+      data.use_count++;
+    }
 
-    console.log(
-      `[SessionTokenService] Token validated: session=${data.session_id}, uses=${data.use_count}/${data.max_uses === -1 ? '∞' : data.max_uses}`
+    console.debug(
+      data.max_uses > 0
+        ? `[SessionTokenService] Token validated: session=${data.session_id}, uses=${data.use_count}/${data.max_uses}`
+        : `[SessionTokenService] Reusable token validated: session=${data.session_id}`
     );
 
     return {
@@ -174,7 +179,7 @@ export class SessionTokenService {
    */
   revokeToken(token: string): void {
     if (this.tokens.delete(token)) {
-      console.log(`[SessionTokenService] Token revoked`);
+      console.debug(`[SessionTokenService] Token revoked`);
     }
   }
 
@@ -192,7 +197,7 @@ export class SessionTokenService {
     }
 
     if (count > 0) {
-      console.log(`[SessionTokenService] Revoked ${count} tokens for session=${sessionId}`);
+      console.debug(`[SessionTokenService] Revoked ${count} tokens for session=${sessionId}`);
     }
   }
 
@@ -218,7 +223,7 @@ export class SessionTokenService {
     }
 
     if (count > 0) {
-      console.log(`[SessionTokenService] Cleaned up ${count} expired tokens`);
+      console.debug(`[SessionTokenService] Cleaned up ${count} expired tokens`);
     }
   }
 

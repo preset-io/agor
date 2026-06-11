@@ -43,7 +43,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
     // Debug logging. SECURITY: never log any portion of the token value —
     // session tokens are bearer credentials, even an 8-char prefix narrows a
     // guess significantly. Log presence booleans only.
-    console.log('[SessionTokenStrategy] parse() called:', {
+    console.debug('[SessionTokenStrategy] parse() called:', {
       socketId: socket?.id,
       hasFeathers: !!socket?.feathers,
       feathersKeys: socket?.feathers ? Object.keys(socket.feathers) : [],
@@ -61,16 +61,18 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
 
     // Only parse if we have a UUID-format token
     if (hasSessionToken && token) {
-      console.log('[SessionTokenStrategy] parse() returning session token (UUID format detected)');
+      console.debug(
+        '[SessionTokenStrategy] parse() returning session token (UUID format detected)'
+      );
       return { sessionToken: token };
     }
 
     if (auth?.strategy === 'session-token' && auth?.accessToken) {
-      console.log('[SessionTokenStrategy] parse() returning session token (strategy match)');
+      console.debug('[SessionTokenStrategy] parse() returning session token (strategy match)');
       return { sessionToken: auth.accessToken };
     }
 
-    console.log('[SessionTokenStrategy] parse() returning null (not session-token)');
+    console.debug('[SessionTokenStrategy] parse() returning null (not session-token)');
     return null;
   }
 
@@ -80,7 +82,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
   ): Promise<AuthenticationResult> {
     // SECURITY: do not log the authentication object — it contains the
     // session token. Log shape only.
-    console.log('[SessionTokenStrategy] authenticate() CALLED with:', {
+    console.debug('[SessionTokenStrategy] authenticate() CALLED with:', {
       authKeys: Object.keys(authentication || {}),
       hasSessionToken: !!authentication?.sessionToken,
     });
@@ -88,7 +90,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
     const { sessionToken } = authentication;
 
     if (!sessionToken) {
-      console.log('[SessionTokenStrategy] authenticate() FAILED: no token');
+      console.debug('[SessionTokenStrategy] authenticate() FAILED: no token');
       throw new Error('No session token provided');
     }
 
@@ -116,7 +118,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
         strategy: 'session-token',
         accessToken: sessionToken,
       };
-      console.log('[SessionTokenStrategy] ✅ Stored auth on socket during authenticate():', {
+      console.debug('[SessionTokenStrategy] ✅ Stored auth on socket during authenticate():', {
         socketId,
         storedStrategy: socket.feathers.authentication.strategy,
         // SECURITY: no token preview — bearer credentials must never be logged.
@@ -140,7 +142,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       session_id: sessionInfo.session_id,
     };
 
-    console.log('[SessionTokenStrategy] authenticate() returning:', {
+    console.debug('[SessionTokenStrategy] authenticate() returning:', {
       strategy: result.authentication.strategy,
       // SECURITY: no token preview.
       user_id: sessionInfo.user_id,
@@ -155,7 +157,7 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
    */
   async verifyAccessToken(accessToken: string): Promise<AuthenticationResult> {
     // SECURITY: no token preview.
-    console.log('[SessionTokenStrategy] verifyAccessToken() called:', {
+    console.debug('[SessionTokenStrategy] verifyAccessToken() called:', {
       hasToken: !!accessToken,
     });
 
@@ -164,11 +166,11 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
     const sessionInfo = await this.sessionTokenService.validateToken(accessToken);
 
     if (!sessionInfo) {
-      console.log('[SessionTokenStrategy] verifyAccessToken() FAILED: invalid token');
+      console.debug('[SessionTokenStrategy] verifyAccessToken() FAILED: invalid token');
       throw new Error('Invalid or expired session token');
     }
 
-    console.log('[SessionTokenStrategy] verifyAccessToken() SUCCESS');
+    console.debug('[SessionTokenStrategy] verifyAccessToken() SUCCESS');
     return {
       authentication: {
         strategy: 'session-token',
@@ -188,14 +190,14 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
    * Override to skip database lookup since we already have user info from token
    */
   async getEntity(id: string): Promise<unknown> {
-    console.log('[SessionTokenStrategy] getEntity() called:', { user_id: id });
+    console.debug('[SessionTokenStrategy] getEntity() called:', { user_id: id });
     // Session tokens already include user_id, so we return a minimal user object
     // This prevents Feathers from trying to lookup the user in the database
     const user = {
       user_id: id,
       email: '',
     };
-    console.log('[SessionTokenStrategy] getEntity() returning:', user);
+    console.debug('[SessionTokenStrategy] getEntity() returning:', user);
     return user;
   }
 }
