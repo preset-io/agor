@@ -75,6 +75,12 @@ const KnowledgeVisibilitySchema = z.enum(KNOWLEDGE_VISIBILITIES);
 const KnowledgeEditPolicySchema = z.enum(KNOWLEDGE_EDIT_POLICIES);
 const KnowledgeGraphNodeTypeSchema = z.enum(KNOWLEDGE_GRAPH_NODE_TYPES);
 const KnowledgeGraphEdgeTypeSchema = z.enum(KNOWLEDGE_GRAPH_EDGE_TYPES);
+const KnowledgeSearchContentModeSchema = z.enum(['none', 'snippet', 'full']);
+
+type KnowledgeSearchContentMode = z.infer<typeof KnowledgeSearchContentModeSchema>;
+
+const DEFAULT_KB_SEARCH_SNIPPET_LINES = 3;
+const MAX_KB_SEARCH_SNIPPET_LINES = 20;
 
 function mcpOptionalVersionToken(fieldName: string, description: string) {
   return z
@@ -275,6 +281,87 @@ function enrichWithReferenceUri(value: unknown): unknown {
     next = { ...next, document: enrichWithReferenceUri(obj.document) };
   }
   return next;
+}
+
+function clampKbSearchSnippetLines(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_KB_SEARCH_SNIPPET_LINES;
+  return Math.min(Math.max(Math.trunc(value), 1), MAX_KB_SEARCH_SNIPPET_LINES);
+}
+
+function limitSnippetLines(value: unknown, snippetLines: number): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const lines = value.split(/\r?\n/);
+  if (lines.length <= snippetLines) return value;
+  return `${lines.slice(0, snippetLines).join('\n')}\n…`;
+}
+
+function removeKnowledgeContentFields(value: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...value };
+  delete next.content_text;
+  delete next.content_blob;
+  return next;
+}
+
+function shapeKnowledgeSearchResult(
+  value: unknown,
+  options: {
+    contentMode: KnowledgeSearchContentMode;
+    snippetLines: number;
+  }
+): unknown {
+  if (Array.isArray(value)) return value.map((item) => shapeKnowledgeSearchResult(item, options));
+  if (!value || typeof value !== 'object') return value;
+
+  const obj = value as Record<string, unknown>;
+  if (Array.isArray(obj.data)) {
+    return { ...obj, data: obj.data.map((item) => shapeKnowledgeSearchResult(item, options)) };
+  }
+  if (!obj.document || typeof obj.document !== 'object') return obj;
+
+  const currentVersion =
+    obj.current_version && typeof obj.current_version === 'object'
+      ? (obj.current_version as Record<string, unknown>)
+      : null;
+  const contentText = currentVersion?.content_text;
+  const next: Record<string, unknown> = { ...obj };
+
+  if (options.contentMode === 'full') return next;
+
+  if (currentVersion) next.current_version = removeKnowledgeContentFields(currentVersion);
+
+  if (options.contentMode === 'none') {
+    delete next.snippet;
+  } else {
+    next.snippet =
+      limitSnippetLines(obj.snippet, options.snippetLines) ??
+      limitSnippetLines(contentText, options.snippetLines);
+  }
+
+  if (Array.isArray(obj.chunks)) {
+    next.chunks = obj.chunks.map((chunk) => {
+      if (!chunk || typeof chunk !== 'object') return chunk;
+      const shapedChunk = removeKnowledgeContentFields(chunk as Record<string, unknown>);
+      if (options.contentMode === 'none') delete shapedChunk.snippet;
+      else shapedChunk.snippet = limitSnippetLines(shapedChunk.snippet, options.snippetLines);
+      return shapedChunk;
+    });
+  }
+
+  return next;
+}
+
+function resolveKnowledgeSearchContentMode(args: {
+  query?: unknown;
+  contentMode?: unknown;
+  includeContent?: unknown;
+}): KnowledgeSearchContentMode {
+  const explicitMode = args.contentMode;
+  if (explicitMode === 'none' || explicitMode === 'snippet' || explicitMode === 'full') {
+    return explicitMode;
+  }
+  if (args.includeContent === true) return 'full';
+  const query = typeof args.query === 'string' ? args.query.trim() : '';
+  return query ? 'snippet' : 'none';
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -858,7 +945,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_search',
     {
       description:
-        'Search Agor Knowledge documents. Supports text, semantic, and hybrid modes when Knowledge embeddings are enabled/configured. Each result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
+        'Search or browse Agor Knowledge documents. Use this to find candidate docs from metadata and short snippets, then use agor_kb_get, agor_kb_outline, or agor_kb_get_range to read needed content. Supports text, semantic, and hybrid modes when Knowledge embeddings are enabled/configured. Each result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         query: z
@@ -893,6 +980,29 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .describe(
             'Include per-document embedding/indexing summary: derived state, chunk counts, queue depth, model, and last error.'
           ),
+        contentMode: KnowledgeSearchContentModeSchema.optional().describe(
+          'Controls body content in results. "none" returns metadata only; "snippet" includes short snippets; "full" includes full current_version.content_text when available. Defaults: "snippet" for non-empty searches, "none" for browse/listing with query:"". Prefer agor_kb_get/agor_kb_get_range for reading content.'
+        ),
+        snippetLines: z
+          .number({
+            error: 'snippetLines must be a positive integer when provided.',
+          })
+          .int('snippetLines must be an integer.')
+          .positive('snippetLines must be greater than 0.')
+          .max(
+            MAX_KB_SEARCH_SNIPPET_LINES,
+            `snippetLines must be less than or equal to ${MAX_KB_SEARCH_SNIPPET_LINES}.`
+          )
+          .optional()
+          .describe(
+            `Maximum lines per returned snippet when contentMode:"snippet" (default: ${DEFAULT_KB_SEARCH_SNIPPET_LINES}, max: ${MAX_KB_SEARCH_SNIPPET_LINES}).`
+          ),
+        includeContent: z
+          .boolean()
+          .optional()
+          .describe(
+            'Deprecated legacy alias. Use contentMode instead. true maps to contentMode:"full"; false keeps the default metadata/snippet behavior.'
+          ),
         includeArchived: z
           .boolean()
           .optional()
@@ -924,9 +1034,14 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (args.includeIndexing === true) query.include_indexing = true;
       if (args.limit) query.limit = args.limit;
       if (args.mode) query.mode = args.mode;
+      const contentMode = resolveKnowledgeSearchContentMode(args);
+      const snippetLines = clampKbSearchSnippetLines(args.snippetLines);
+      if (contentMode === 'full') query.include_chunks = true;
 
-      if (service.find)
-        return textResult(enrichWithReferenceUri(await service.find(mcpParams(ctx, query))));
+      if (service.find) {
+        const result = enrichWithReferenceUri(await service.find(mcpParams(ctx, query)));
+        return textResult(shapeKnowledgeSearchResult(result, { contentMode, snippetLines }));
+      }
       return knowledgeNotImplementedResult('agor_kb_search', ['kb/search.find']);
     }
   );

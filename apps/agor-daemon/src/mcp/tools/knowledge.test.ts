@@ -75,6 +75,12 @@ function issueMessages(error: unknown): string[] {
   );
 }
 
+function textResultJson(result: unknown): unknown {
+  const text = (result as { content?: Array<{ text?: string }> })?.content?.[0]?.text;
+  if (typeof text !== 'string') throw new Error('Expected text result');
+  return JSON.parse(text);
+}
+
 describe('Knowledge MCP input schemas', () => {
   it('rejects renamed branch_id instead of accepting it as an alias', async () => {
     const tools = await captureKnowledgeTools();
@@ -172,6 +178,137 @@ describe('Knowledge MCP input schemas', () => {
         'startLine must be an integer.',
         'contextLines must be greater than or equal to 0.',
       ])
+    );
+  });
+
+  it('omits full Knowledge search content by default while returning snippets for text search', async () => {
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'runbooks/deploy.md',
+          uri: 'agor://kb/global/runbooks/deploy.md',
+          url: 'http://localhost/ui/kb/global/runbooks/deploy.md',
+          title: 'Deploy',
+          icon_emoji: '📘',
+          kind: 'doc',
+          visibility: 'public',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: {
+          version_id: 'ver-1',
+          document_id: 'doc-1',
+          version_number: 1,
+          content_text: 'line 1\nline 2\nline 3\nline 4',
+        },
+        snippet: 'matched line 1\nmatched line 2\nmatched line 3\nmatched line 4',
+        score: 10,
+        mode: 'text',
+      },
+    ]);
+    const tools = await captureKnowledgeTools({ 'kb/search': { find } });
+
+    const result = textResultJson(
+      await tools.agor_kb_search.handler?.({ query: 'deploy', snippetLines: 2 })
+    ) as Array<Record<string, any>>;
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({ q: 'deploy' }),
+      })
+    );
+    expect(result[0].document).toEqual(
+      expect.objectContaining({
+        document_id: 'doc-1',
+        path: 'runbooks/deploy.md',
+        title: 'Deploy',
+        icon_emoji: '📘',
+        reference_uri: 'agor://kb/document/doc-1',
+      })
+    );
+    expect(result[0].current_version).not.toHaveProperty('content_text');
+    expect(result[0].snippet).toBe('matched line 1\nmatched line 2\n…');
+  });
+
+  it('returns metadata-only Knowledge browse results by default for query empty string', async () => {
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'notes/private.md',
+          uri: 'agor://kb/global/notes/private.md',
+          title: 'Private note',
+          kind: 'doc',
+          visibility: 'private',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: {
+          version_id: 'ver-1',
+          document_id: 'doc-1',
+          version_number: 1,
+          content_text: 'sensitive body',
+        },
+        snippet: 'sensitive body',
+        score: 0,
+      },
+    ]);
+    const tools = await captureKnowledgeTools({ 'kb/search': { find } });
+
+    const result = textResultJson(await tools.agor_kb_search.handler?.({ query: '' })) as Array<
+      Record<string, any>
+    >;
+
+    expect(result[0]).not.toHaveProperty('snippet');
+    expect(result[0].current_version).not.toHaveProperty('content_text');
+    expect(result[0].document.reference_uri).toBe('agor://kb/document/doc-1');
+  });
+
+  it('includes full Knowledge search content only when explicitly requested', async () => {
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'runbooks/deploy.md',
+          uri: 'agor://kb/global/runbooks/deploy.md',
+          title: 'Deploy',
+          kind: 'doc',
+          visibility: 'public',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: {
+          version_id: 'ver-1',
+          document_id: 'doc-1',
+          version_number: 1,
+          content_text: 'full body',
+        },
+        snippet: 'full body',
+        score: 10,
+      },
+    ]);
+    const tools = await captureKnowledgeTools({ 'kb/search': { find } });
+
+    const contentModeResult = textResultJson(
+      await tools.agor_kb_search.handler?.({ query: 'deploy', contentMode: 'full' })
+    ) as Array<Record<string, any>>;
+    const includeContentResult = textResultJson(
+      await tools.agor_kb_search.handler?.({ query: 'deploy', includeContent: true })
+    ) as Array<Record<string, any>>;
+
+    expect(contentModeResult[0].current_version.content_text).toBe('full body');
+    expect(includeContentResult[0].current_version.content_text).toBe('full body');
+    expect(find).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({ include_chunks: true }),
+      })
     );
   });
 });

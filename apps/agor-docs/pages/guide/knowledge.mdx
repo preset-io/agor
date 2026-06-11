@@ -107,6 +107,7 @@ Knowledge has first-class MCP tools, so agents can use it without leaving their 
 Common workflows:
 
 - **Search and load context** with `agor_kb_search`, `agor_kb_get`, `agor_kb_outline`, and `agor_kb_get_range`.
+  `agor_kb_search` is optimized for discovery: non-empty searches return metadata plus short snippets by default, while browse/listing calls with `query: ""` return metadata only. Use `contentMode: "none" | "snippet" | "full"` and `snippetLines` to control result verbosity, and prefer `agor_kb_get` or `agor_kb_get_range` when you need to read document content.
 - **File new context** with `agor_kb_put` when an agent discovers something worth keeping.
 - **Make targeted edits** with `agor_kb_edit`, including version checks and dry runs.
 - **Round-trip through a worktree** with `agor_kb_materialize` and `agor_kb_publish_from_worktree`, where branch permissions allow local workspace access.
