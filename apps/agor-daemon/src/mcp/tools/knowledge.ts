@@ -1279,7 +1279,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         title,
         ...(content !== undefined ? { content_text: content } : {}),
         ...(firstLineIsTitle !== undefined ? { first_line_is_title: firstLineIsTitle } : {}),
-        kind: (args.kind as KnowledgeDocumentKind | undefined) ?? 'doc',
+        ...(args.kind !== undefined ? { kind: args.kind as KnowledgeDocumentKind } : {}),
         ...(args.iconEmoji !== undefined ? { icon_emoji: iconEmoji } : {}),
         visibility: args.visibility as KnowledgeVisibility | undefined,
         status: args.status as KnowledgeDocumentStatus | undefined,
