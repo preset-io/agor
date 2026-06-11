@@ -573,18 +573,18 @@ export class CodexPromptService {
       );
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
-      console.log(`   📝 [Codex MCP] Configuring STDIO server: ${server.name} -> ${serverName}`);
+      console.debug(`   📝 [Codex MCP] Configuring STDIO server: ${server.name} -> ${serverName}`);
       if (server.command) {
         serverConfig.command = server.command;
-        console.log(`      command: ${server.command}`);
+        console.debug(`      command: ${server.command}`);
       }
       if (server.args && server.args.length > 0) {
         serverConfig.args = server.args as CodexConfigValue[];
-        console.log(`      args: ${JSON.stringify(server.args)}`);
+        console.debug(`      args: ${JSON.stringify(server.args)}`);
       }
       if (server.env && Object.keys(server.env).length > 0) {
         serverConfig.env = server.env as CodexConfigObject;
-        console.log(`      env vars: ${Object.keys(server.env).length} variable(s)`);
+        console.debug(`      env vars: ${Object.keys(server.env).length} variable(s)`);
       }
 
       result[serverName] = serverConfig;
@@ -598,10 +598,10 @@ export class CodexPromptService {
       );
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
-      console.log(`   📝 [Codex MCP] Configuring HTTP server: ${server.name} -> ${serverName}`);
+      console.debug(`   📝 [Codex MCP] Configuring HTTP server: ${server.name} -> ${serverName}`);
       if (server.url) {
         serverConfig.url = server.url;
-        console.log(`      url: ${server.url}`);
+        console.debug(`      url: ${server.url}`);
       }
 
       // Resolve the Authorization header via the shared MCP auth helper —
@@ -618,7 +618,7 @@ export class CodexPromptService {
         if (customHeaders) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
           serverConfig.headers = customHeaders;
-          console.log(`      custom headers: ${Object.keys(customHeaders).length} header(s)`);
+          console.debug(`      custom headers: ${Object.keys(customHeaders).length} header(s)`);
         }
         if (authHeader) {
           const bearerToken = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1];
@@ -626,7 +626,7 @@ export class CodexPromptService {
             const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}`;
             process.env[envVarName] = bearerToken;
             serverConfig.bearer_token_env_var = envVarName;
-            console.log(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
+            console.debug(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
           } else {
             console.warn(
               `      ⚠️  auth: resolved Authorization header for "${server.name}" is not a Bearer scheme (Codex CLI only supports bearer); skipping injection`
@@ -652,13 +652,7 @@ export class CodexPromptService {
 
     const total = stdioServers.length + httpServers.length + (mcpToken ? 1 : 0);
     if (total > 0) {
-      const parts: string[] = [];
-      if (mcpToken) parts.push('Agor (HTTP)');
-      if (stdioServers.length > 0)
-        parts.push(`${stdioServers.length} STDIO (${stdioServers.map((s) => s.name).join(', ')})`);
-      if (httpServers.length > 0)
-        parts.push(`${httpServers.length} HTTP (${httpServers.map((s) => s.name).join(', ')})`);
-      console.log(`✅ [Codex MCP] Configured ${total} MCP server(s): ${parts.join(', ')}`);
+      console.info(`✅ [Codex MCP] Configured ${total} MCP server(s)`);
     }
 
     return { servers: result, total };

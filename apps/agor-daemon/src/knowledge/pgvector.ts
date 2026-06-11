@@ -132,7 +132,7 @@ export async function ensureKnowledgePgvectorStorage(
     if (!capability.tableReady) {
       await executeRaw(
         db,
-        sql`CREATE TABLE kb_unit_embeddings (
+        sql`CREATE TABLE IF NOT EXISTS kb_unit_embeddings (
           unit_id varchar(36) NOT NULL REFERENCES public.kb_document_units(unit_id) ON DELETE cascade,
           embedding_space_id varchar(36) NOT NULL REFERENCES public.kb_embedding_spaces(embedding_space_id) ON DELETE cascade,
           content_sha256 text NOT NULL,
@@ -148,7 +148,7 @@ export async function ensureKnowledgePgvectorStorage(
     if (!capability.spaceIndexReady) {
       await executeRaw(
         db,
-        sql`CREATE INDEX kb_unit_embeddings_space_idx ON kb_unit_embeddings USING btree (embedding_space_id)`
+        sql`CREATE INDEX IF NOT EXISTS kb_unit_embeddings_space_idx ON kb_unit_embeddings USING btree (embedding_space_id)`
       );
       capability.spaceIndexReady = true;
     }
@@ -157,7 +157,7 @@ export async function ensureKnowledgePgvectorStorage(
       try {
         await executeRaw(
           db,
-          sql`CREATE INDEX kb_unit_embeddings_embedding_1536_hnsw_idx
+          sql`CREATE INDEX IF NOT EXISTS kb_unit_embeddings_embedding_1536_hnsw_idx
             ON kb_unit_embeddings USING hnsw ((embedding::vector(1536)) vector_cosine_ops)
             WHERE vector_dims(embedding) = 1536`
         );

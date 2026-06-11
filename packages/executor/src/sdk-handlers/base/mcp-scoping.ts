@@ -99,7 +99,7 @@ export async function getMcpServersForSession(
 
     if (typeof deps.sessionMCPRepo.listEffectiveServers === 'function') {
       const effectiveServers = await deps.sessionMCPRepo.listEffectiveServers(sessionId, true);
-      console.log(`   📍 Effective session scope: ${effectiveServers.length} server(s)`);
+      console.debug(`   📍 Effective session scope: ${effectiveServers.length} server(s)`);
 
       for (const server of effectiveServers) {
         addServer(server, server.scope === 'global' ? 'global' : 'session-assigned');
@@ -107,7 +107,7 @@ export async function getMcpServersForSession(
     } else {
       // STEP 1: Get ALL global-scoped MCP servers (available to all sessions)
       // Pass forUserId for per-user OAuth token injection
-      console.log(
+      console.debug(
         `   [MCP Scoping] Calling findAll with forUserId: ${deps.forUserId || 'NOT SET'}`
       );
       const globalServers = await deps.mcpServerRepo.findAll(
@@ -118,7 +118,7 @@ export async function getMcpServersForSession(
         deps.forUserId
       );
 
-      console.log(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
+      console.debug(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
 
       for (const server of globalServers ?? []) {
         addServer(server, 'global');
@@ -127,7 +127,7 @@ export async function getMcpServersForSession(
       // STEP 2: Get session-scoped MCP servers assigned to this specific session
       const sessionServers = await deps.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
 
-      console.log(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
+      console.debug(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
 
       for (const server of sessionServers) {
         addServer(server, 'session-assigned');
@@ -136,12 +136,12 @@ export async function getMcpServersForSession(
 
     // Log summary (before template resolution)
     if (servers.length > 0) {
-      console.log(`   ✅ Total: ${servers.length} MCP server(s) resolved`);
+      console.debug(`   ✅ Total: ${servers.length} MCP server(s) resolved`);
       for (const { server, source } of servers) {
-        console.log(`      - ${server.name} (${server.transport}) [${source}]`);
+        console.debug(`      - ${server.name} (${server.transport}) [${source}]`);
       }
     } else {
-      console.log('   ℹ️  No MCP servers available for this session');
+      console.debug('   ℹ️  No MCP servers available for this session');
     }
 
     // STEP 3: Resolve templates in config fields (url, env.*, auth.*)
@@ -195,10 +195,10 @@ export async function getMcpServersForSession(
     }
 
     if (templatesResolved > 0) {
-      console.log(`   🔧 Resolved templates in ${templatesResolved} MCP server(s)`);
+      console.debug(`   🔧 Resolved templates in ${templatesResolved} MCP server(s)`);
     }
     if (serversSkipped > 0) {
-      console.log(
+      console.warn(
         `   ⚠️  Skipped ${serversSkipped} MCP server(s) due to unresolved required templates`
       );
     }

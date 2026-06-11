@@ -38,6 +38,24 @@ import { withResolvedConfig } from './build-resolved-config-slice.js';
 
 let configuredDaemonUrl: string | null = null;
 
+function resolveExecutorLogLevel(env: Record<string, string>): string {
+  if (env.LOG_LEVEL) return env.LOG_LEVEL;
+  const debug = process.env.DEBUG;
+  if (debug === '*' || debug?.includes('agor')) return 'debug';
+  return process.env.NODE_ENV === 'production' ? 'info' : 'debug';
+}
+
+function withDaemonExecutorEnv(
+  env: Record<string, string>,
+  daemonUrl: string
+): Record<string, string> {
+  return {
+    ...env,
+    DAEMON_URL: daemonUrl,
+    LOG_LEVEL: resolveExecutorLogLevel(env),
+  };
+}
+
 /** Set the daemon URL for executor payloads. Call once at daemon startup. */
 export function configureDaemonUrl(url: string): void {
   configuredDaemonUrl = url;
@@ -252,28 +270,31 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   const daemonUrl = getDaemonUrl();
 
   const envWithDaemonUrl: Record<string, string> = preparedEnv
-    ? { DAEMON_URL: daemonUrl, ...preparedEnv }
+    ? withDaemonExecutorEnv(preparedEnv, daemonUrl)
     : asUser
-      ? Object.fromEntries(
-          Object.entries({
-            DAEMON_URL: daemonUrl,
-            PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-            NODE_ENV: env.NODE_ENV,
-            // HOME: not set - sudo will set it to the target user's home directory
-            ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-            ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-            ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-            CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
-            OPENAI_API_KEY: env.OPENAI_API_KEY,
-            OPENAI_BASE_URL: env.OPENAI_BASE_URL,
-            GEMINI_API_KEY: env.GEMINI_API_KEY,
-            GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-            // Forward git hardening pairs across the sudo boundary (sudoers
-            // env_keep is the belt; this is the suspenders for this path).
-            GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
-          }).filter(([_, v]) => v !== undefined)
+      ? withDaemonExecutorEnv(
+          Object.fromEntries(
+            Object.entries({
+              PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+              NODE_ENV: env.NODE_ENV,
+              LOG_LEVEL: env.LOG_LEVEL,
+              // HOME: not set - sudo will set it to the target user's home directory
+              ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+              ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+              ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
+              CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
+              OPENAI_API_KEY: env.OPENAI_API_KEY,
+              OPENAI_BASE_URL: env.OPENAI_BASE_URL,
+              GEMINI_API_KEY: env.GEMINI_API_KEY,
+              GOOGLE_API_KEY: env.GOOGLE_API_KEY,
+              // Forward git hardening pairs across the sudo boundary (sudoers
+              // env_keep is the belt; this is the suspenders for this path).
+              GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
+            }).filter(([_, v]) => v !== undefined)
+          ),
+          daemonUrl
         )
-      : { ...env, DAEMON_URL: daemonUrl };
+      : withDaemonExecutorEnv(env as Record<string, string>, daemonUrl);
 
   const prepared = asUser
     ? preparedEnvFilePath
@@ -526,25 +547,28 @@ function runExecutorCommandLocal(
 
   const daemonUrl = getDaemonUrl();
   const envWithDaemonUrl: Record<string, string> = preparedEnv
-    ? { DAEMON_URL: daemonUrl, ...preparedEnv }
+    ? withDaemonExecutorEnv(preparedEnv, daemonUrl)
     : asUser
-      ? Object.fromEntries(
-          Object.entries({
-            DAEMON_URL: daemonUrl,
-            PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-            NODE_ENV: env.NODE_ENV,
-            ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-            ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-            ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-            CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
-            OPENAI_API_KEY: env.OPENAI_API_KEY,
-            OPENAI_BASE_URL: env.OPENAI_BASE_URL,
-            GEMINI_API_KEY: env.GEMINI_API_KEY,
-            GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-            GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
-          }).filter(([_, v]) => v !== undefined)
+      ? withDaemonExecutorEnv(
+          Object.fromEntries(
+            Object.entries({
+              PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+              NODE_ENV: env.NODE_ENV,
+              LOG_LEVEL: env.LOG_LEVEL,
+              ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+              ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+              ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
+              CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
+              OPENAI_API_KEY: env.OPENAI_API_KEY,
+              OPENAI_BASE_URL: env.OPENAI_BASE_URL,
+              GEMINI_API_KEY: env.GEMINI_API_KEY,
+              GOOGLE_API_KEY: env.GOOGLE_API_KEY,
+              GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
+            }).filter(([_, v]) => v !== undefined)
+          ),
+          daemonUrl
         )
-      : { ...env, DAEMON_URL: daemonUrl };
+      : withDaemonExecutorEnv(env as Record<string, string>, daemonUrl);
 
   const prepared = asUser
     ? preparedEnvFilePath

@@ -77,6 +77,8 @@ export const ALLOWED_ENV_VARS = new Set([
   // Node.js (safe subset — NOT NODE_OPTIONS which could inject code)
   'NODE_PATH',
   'NODE_EXTRA_CA_CERTS',
+  // Logging controls. Keep executor log filtering aligned with the daemon.
+  'LOG_LEVEL',
 
   // Git identity
   'GIT_AUTHOR_NAME',

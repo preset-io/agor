@@ -22,7 +22,7 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
-function getCurrentLogLevel(): LogLevel {
+export function getCurrentLogLevel(): LogLevel {
   const logLevel = process.env.LOG_LEVEL?.toLowerCase();
   if (logLevel && logLevel in LOG_LEVELS) {
     return logLevel as LogLevel;
