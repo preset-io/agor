@@ -818,6 +818,7 @@ export function KnowledgePage({
     [activeDocId, activeDocSnapshot, documents, draftDocument]
   );
   const isDraftDocument = activeDoc?.document_id === DRAFT_DOCUMENT_ID;
+  const activeDocIconEmoji = activeDoc ? (isEditing ? iconEmojiDraft : activeDoc.icon_emoji) : null;
   const activeDocContentReady = isKnowledgeDocumentContentReady({
     activeDocId,
     activeDocDocumentId: activeDoc?.document_id,
@@ -3156,20 +3157,22 @@ export function KnowledgePage({
                               disabled={!client && !isDraftDocument}
                               style={{
                                 fontSize: 30,
-                                width: 44,
-                                height: 44,
+                                width: 52,
+                                height: 52,
                                 padding: 0,
-                                color: (isEditing ? iconEmojiDraft : activeDoc.icon_emoji)
-                                  ? undefined
-                                  : token.colorTextTertiary,
+                                color: activeDocIconEmoji ? undefined : token.colorTextTertiary,
                               }}
                               aria-label={
-                                (isEditing ? iconEmojiDraft : activeDoc.icon_emoji)
+                                activeDocIconEmoji
                                   ? 'Change Knowledge document emoji icon'
                                   : 'Add Knowledge document emoji icon'
                               }
                             >
-                              {(isEditing ? iconEmojiDraft : activeDoc.icon_emoji) || (
+                              {activeDocIconEmoji ? (
+                                <span style={{ fontSize: 39, lineHeight: 1 }}>
+                                  {activeDocIconEmoji}
+                                </span>
+                              ) : (
                                 <FileOutlined />
                               )}
                             </Button>
