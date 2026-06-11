@@ -59,6 +59,7 @@ import {
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
+import { updateSessionMcpServers } from './utils/sessionMcpServers';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
 
@@ -1373,24 +1374,7 @@ function AppContent() {
     try {
       // Get current session-MCP relationships for this session
       const currentIds = sessionMcpServerIds.get(sessionId) || [];
-
-      // Find servers to add (in new list but not in current)
-      const toAdd = mcpServerIds.filter((id) => !currentIds.includes(id));
-
-      // Find servers to remove (in current list but not in new)
-      const toRemove = currentIds.filter((id) => !mcpServerIds.includes(id));
-
-      // Add new relationships
-      for (const serverId of toAdd) {
-        await client.service(`sessions/${sessionId}/mcp-servers`).create({
-          mcpServerId: serverId,
-        });
-      }
-
-      // Remove old relationships
-      for (const serverId of toRemove) {
-        await client.service(`sessions/${sessionId}/mcp-servers`).remove(serverId);
-      }
+      await updateSessionMcpServers(client, sessionId, currentIds, mcpServerIds);
 
       // Note: Don't show success message here - it's part of the session settings save
       // The main "Session updated" message will appear from handleUpdateSession

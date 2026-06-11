@@ -4,7 +4,6 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
-  MCPServer,
   PermissionMode,
   Session,
   SessionID,
@@ -21,32 +20,16 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
-  ApiOutlined,
   BranchesOutlined,
   CloseOutlined,
   CodeOutlined,
   ForkOutlined,
-  PlusOutlined,
   QuestionCircleOutlined,
-  RobotOutlined,
   SendOutlined,
   SettingOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import {
-  Alert,
-  Tag as AntTag,
-  App,
-  Badge,
-  Button,
-  Divider,
-  Popover,
-  Space,
-  Spin,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Alert, App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -62,19 +45,16 @@ import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessi
 import { ArchiveActionButton } from '../ArchiveButton';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CallbackToggleButton } from '../CallbackToggleButton';
-import { EffortSelector } from '../EffortSelector';
 import { FileUpload, FileUploadButton } from '../FileUpload';
 import { MCPServerPill } from '../MCPServer';
-import { summarizeSessionMcpServers } from '../MCPServer/mcp-session-summary';
-import { MCPServerSelect } from '../MCPServerSelect';
-import { type ModelConfig, ModelSelector } from '../ModelSelector';
+import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
-import { PermissionModeSelector } from '../PermissionModeSelector';
 import { ContextWindowPill, TimerPill, TokenCountPill } from '../Pill';
 import { SessionIdsButton } from '../SessionIds';
-import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
+import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 import { SessionPanelContent } from './SessionPanelContent';
+import { SessionRunSettingsPopover } from './SessionRunSettingsPopover';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -230,311 +210,6 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
 PromptInput.displayName = 'PromptInput';
 
 // ---------------------------------------------------------------------------
-
-interface SessionMcpFooterControlProps {
-  client: AgorClient | null;
-  sessionId: string;
-  sessionMcpServerIds: string[];
-  mcpServerById: Map<string, MCPServer>;
-  userAuthenticatedMcpServerIds: Set<string>;
-  onOpenSessionSettings?: (sessionId: string) => void;
-}
-
-const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = ({
-  client,
-  sessionId,
-  sessionMcpServerIds,
-  mcpServerById,
-  userAuthenticatedMcpServerIds,
-  onOpenSessionSettings,
-}) => {
-  const { token } = theme.useToken();
-  const { showSuccess, showError } = useThemedMessage();
-  const [open, setOpen] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
-
-  const summary = React.useMemo(
-    () =>
-      summarizeSessionMcpServers(sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds),
-    [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]
-  );
-
-  const attachedServers = React.useMemo(
-    () =>
-      sessionMcpServerIds
-        .map((id) => mcpServerById.get(id))
-        .filter((server): server is MCPServer => Boolean(server)),
-    [sessionMcpServerIds, mcpServerById]
-  );
-
-  const handleChange = async (nextIds: string[]) => {
-    if (!client) return;
-    setSaving(true);
-    try {
-      const current = new Set(sessionMcpServerIds);
-      const next = new Set(nextIds);
-
-      await Promise.all([
-        ...nextIds
-          .filter((id) => !current.has(id))
-          .map((id) =>
-            client.service(`sessions/${sessionId}/mcp-servers`).create({ mcpServerId: id })
-          ),
-        ...sessionMcpServerIds
-          .filter((id) => !next.has(id))
-          .map((id) => client.service(`sessions/${sessionId}/mcp-servers`).remove(id)),
-      ]);
-
-      showSuccess('Session MCP servers updated');
-    } catch (err) {
-      showError(
-        `Failed to update MCP servers: ${err instanceof Error ? err.message : String(err)}`
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const content = (
-    <div style={{ width: 340, maxWidth: 'min(340px, 80vw)' }}>
-      <Space direction="vertical" size={10} style={{ width: '100%' }}>
-        <div>
-          <Typography.Text strong>Session MCP servers</Typography.Text>
-          <Typography.Paragraph type="secondary" style={{ margin: `${token.sizeUnit}px 0 0` }}>
-            Attach tools/connectors that the agent can use in this conversation.
-          </Typography.Paragraph>
-        </div>
-
-        {attachedServers.length > 0 && (
-          <Space size={6} wrap>
-            {attachedServers.map((server) => (
-              <MCPServerPill
-                key={server.mcp_server_id}
-                server={server}
-                needsAuth={mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)}
-                client={client}
-              />
-            ))}
-          </Space>
-        )}
-
-        <MCPServerSelect
-          mcpServers={Array.from(mcpServerById.values())}
-          placeholder="Attach MCP servers…"
-          value={sessionMcpServerIds}
-          onChange={handleChange}
-          loading={saving}
-          disabled={!client}
-          style={{ width: '100%' }}
-        />
-
-        <Divider style={{ margin: `${token.sizeUnit}px 0` }} />
-        <Button
-          block
-          icon={<SettingOutlined />}
-          onClick={() => {
-            setOpen(false);
-            onOpenSessionSettings?.(sessionId);
-          }}
-        >
-          Open session settings
-        </Button>
-      </Space>
-    </div>
-  );
-
-  return (
-    <Popover
-      open={open}
-      onOpenChange={setOpen}
-      trigger="click"
-      placement="top"
-      getPopupContainer={(trigger) => trigger.parentElement ?? document.body}
-      title={null}
-      content={content}
-    >
-      <Tag
-        icon={<ApiOutlined />}
-        color="default"
-        title={`${summary.tooltip}. Click to add or change MCP servers.`}
-        style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
-      >
-        <span>MCP</span>
-        <AntTag
-          color={
-            summary.tone === 'error' ? 'error' : summary.tone === 'warning' ? 'warning' : undefined
-          }
-          style={{
-            marginInlineStart: token.sizeUnit,
-            marginInlineEnd: 0,
-            minWidth: 16,
-            height: 14,
-            paddingInline: 4,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            lineHeight: '12px',
-            fontSize: 10,
-            textAlign: 'center',
-            fontVariantNumeric: 'tabular-nums',
-            verticalAlign: 'middle',
-          }}
-        >
-          {summary.attachedCount}
-        </AntTag>
-        <PlusOutlined style={{ marginLeft: token.sizeUnit * 1.5 }} />
-      </Tag>
-    </Popover>
-  );
-};
-
-// ---------------------------------------------------------------------------
-
-interface SessionRunSettingsPopoverProps {
-  client: AgorClient | null;
-  session: Session;
-  modelLabel?: string;
-  modelConfig?: ModelConfig;
-  onModelConfigChange: (config: ModelConfig) => void;
-  effortLevel: EffortLevel;
-  onEffortChange: (effort: EffortLevel) => void;
-  permissionMode: PermissionMode;
-  onPermissionModeChange: (mode: PermissionMode) => void;
-  codexSandboxMode: CodexSandboxMode;
-  codexApprovalPolicy: CodexApprovalPolicy;
-  onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
-}
-
-const SessionRunSettingsPopover: React.FC<SessionRunSettingsPopoverProps> = ({
-  client,
-  session,
-  modelLabel,
-  modelConfig,
-  onModelConfigChange,
-  effortLevel,
-  onEffortChange,
-  permissionMode,
-  onPermissionModeChange,
-  codexSandboxMode,
-  codexApprovalPolicy,
-  onCodexPermissionChange,
-}) => {
-  const { token } = theme.useToken();
-
-  const getModelDisplayName = (modelId: string) => {
-    if (modelId.includes('sonnet')) {
-      const match = modelId.match(/sonnet-(\d)-(\d)/);
-      return match ? `sonnet-${match[1]}.${match[2]}` : 'sonnet';
-    }
-    if (modelId.includes('haiku')) {
-      const match = modelId.match(/haiku-(\d)-(\d)/);
-      return match ? `haiku-${match[1]}.${match[2]}` : 'haiku';
-    }
-    if (modelId.includes('opus')) {
-      const match = modelId.match(/opus-(\d)-(\d)/);
-      return match ? `opus-${match[1]}.${match[2]}` : 'opus';
-    }
-    return modelId;
-  };
-
-  const content = (
-    <div style={{ width: 320, maxWidth: 'min(320px, 80vw)' }}>
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <div>
-          <Typography.Text strong>Quick session settings</Typography.Text>
-        </div>
-
-        {modelLabel && (
-          <div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Model
-            </Typography.Text>
-            <div style={{ marginTop: token.sizeUnit }}>
-              <ModelSelector
-                value={modelConfig}
-                onChange={onModelConfigChange}
-                agentic_tool={session.agentic_tool}
-                client={client}
-                compact
-              />
-            </div>
-          </div>
-        )}
-
-        {session.agentic_tool === 'claude-code' && (
-          <div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Reasoning effort
-            </Typography.Text>
-            <div style={{ marginTop: token.sizeUnit }}>
-              <EffortSelector
-                value={effortLevel}
-                onChange={onEffortChange}
-                size="small"
-                compact
-                plain
-                fullWidth
-              />
-            </div>
-          </div>
-        )}
-
-        <div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Permissions
-          </Typography.Text>
-          <div style={{ marginTop: token.sizeUnit }}>
-            <PermissionModeSelector
-              value={permissionMode}
-              onChange={onPermissionModeChange}
-              agentic_tool={session.agentic_tool}
-              codexSandboxMode={codexSandboxMode}
-              codexApprovalPolicy={codexApprovalPolicy}
-              onCodexChange={onCodexPermissionChange}
-              compact
-              iconOnly={false}
-              plain
-              fullWidth
-              size="small"
-            />
-          </div>
-        </div>
-      </Space>
-    </div>
-  );
-
-  const trigger = modelLabel ? (
-    <Tag
-      icon={<RobotOutlined />}
-      color="default"
-      title="Model and run settings"
-      style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
-    >
-      <span>{getModelDisplayName(modelLabel)}</span>
-      <SettingOutlined style={{ marginLeft: token.sizeUnit * 1.5 }} />
-    </Tag>
-  ) : (
-    <Tag
-      icon={<SettingOutlined />}
-      color="default"
-      style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
-    >
-      Run
-    </Tag>
-  );
-
-  return (
-    <Popover
-      trigger="click"
-      placement="top"
-      getPopupContainer={(node) => node.parentElement ?? document.body}
-      content={content}
-      title={null}
-    >
-      {trigger}
-    </Popover>
-  );
-};
 
 // ---------------------------------------------------------------------------
 

@@ -32,6 +32,7 @@ import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
 import { type SessionForIds, SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
+import { getModelDisplayName } from './modelDisplay';
 import { getUrlDisplayLabel, isGitHubUrl, type UrlDisplayRepo } from './url-helpers';
 
 /**
@@ -477,43 +478,9 @@ interface ModelPillProps extends BasePillProps {
 }
 
 export const ModelPill: React.FC<ModelPillProps> = ({ model, style }) => {
-  // Simplify model name for display
-  // Examples:
-  // - "claude-sonnet-4-5-20250929" -> "sonnet-4.5"
-  // - "gpt-4o" -> "gpt-4o"
-  // - "gpt-3.5-turbo" -> "gpt-3.5-turbo"
-  const getDisplayName = (modelId: string) => {
-    // Claude models: extract version from pattern
-    if (modelId.includes('sonnet')) {
-      const match = modelId.match(/sonnet-(\d)-(\d)/);
-      return match ? `sonnet-${match[1]}.${match[2]}` : 'sonnet';
-    }
-    if (modelId.includes('haiku')) {
-      const match = modelId.match(/haiku-(\d)-(\d)/);
-      return match ? `haiku-${match[1]}.${match[2]}` : 'haiku';
-    }
-    if (modelId.includes('opus')) {
-      const match = modelId.match(/opus-(\d)-(\d)/);
-      return match ? `opus-${match[1]}.${match[2]}` : 'opus';
-    }
-
-    // OpenAI GPT models: show as-is (e.g., "gpt-4o", "gpt-3.5-turbo", "gpt-4-turbo")
-    if (modelId.startsWith('gpt-')) {
-      return modelId;
-    }
-
-    // Gemini models: show as-is (e.g., "gemini-2.5-flash", "gemini-2.5-pro")
-    if (modelId.startsWith('gemini-')) {
-      return modelId;
-    }
-
-    // Fallback to full ID for unknown models
-    return modelId;
-  };
-
   return (
     <Tag icon={<RobotOutlined />} color={PILL_COLORS.model} style={style}>
-      {getDisplayName(model)}
+      {getModelDisplayName(model)}
     </Tag>
   );
 };
