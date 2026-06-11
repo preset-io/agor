@@ -167,6 +167,14 @@ export function scopeExecutorRuntimeAuth(requireAuth: AuthHook): AuthHook {
  */
 export function executorRuntimeScopeGuard() {
   return async (context: HookContext): Promise<HookContext> => {
+    // Only police calls that arrive over the executor's transport. Internal
+    // server-side service composition (provider undefined) is trusted: route
+    // handlers the executor legitimately reached fan out to other services
+    // (e.g. the session MCP-servers route reads `mcp-servers`) while carrying
+    // the executor's auth in `params`. Re-scoping those would reject paths
+    // that are intentionally not in this guard's allow-list.
+    if (!(context.params as Params).provider) return context;
+
     const payload = scopedPayload(context);
     if (!payload) return context;
 

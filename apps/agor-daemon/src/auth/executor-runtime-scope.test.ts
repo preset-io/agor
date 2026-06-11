@@ -14,7 +14,7 @@ function ctx(overrides: Partial<HookContext>): HookContext {
   return {
     path: 'tasks',
     method: 'find',
-    params: { authentication: { payload }, query: {} },
+    params: { authentication: { payload }, query: {}, provider: 'socketio' },
     ...overrides,
   } as HookContext;
 }
@@ -35,7 +35,11 @@ describe('executorRuntimeScopeGuard', () => {
     const context = ctx({
       path: 'messages',
       method: 'find',
-      params: { authentication: { payload }, query: { session_id: 'session-1' } },
+      params: {
+        authentication: { payload },
+        query: { session_id: 'session-1' },
+        provider: 'socketio',
+      },
     });
 
     await executorRuntimeScopeGuard()(context);
@@ -47,7 +51,11 @@ describe('executorRuntimeScopeGuard', () => {
     const context = ctx({
       path: 'messages',
       method: 'find',
-      params: { authentication: { payload }, query: { session_id: 'session-2' } },
+      params: {
+        authentication: { payload },
+        query: { session_id: 'session-2' },
+        provider: 'socketio',
+      },
     });
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/session scope/);
@@ -57,7 +65,7 @@ describe('executorRuntimeScopeGuard', () => {
     const context = ctx({
       path: 'messages',
       method: 'find',
-      params: { authentication: { payload }, query: { task_id: 'task-1' } },
+      params: { authentication: { payload }, query: { task_id: 'task-1' }, provider: 'socketio' },
     });
 
     await executorRuntimeScopeGuard()(context);
@@ -69,7 +77,7 @@ describe('executorRuntimeScopeGuard', () => {
     const context = ctx({
       path: 'tasks',
       method: 'find',
-      params: { authentication: { payload }, query: { task_id: 'task-2' } },
+      params: { authentication: { payload }, query: { task_id: 'task-2' }, provider: 'socketio' },
     });
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
@@ -89,6 +97,7 @@ describe('executorRuntimeScopeGuard', () => {
           },
         },
         query: {},
+        provider: 'socketio',
       },
     });
 
@@ -198,6 +207,20 @@ describe('executorRuntimeScopeGuard', () => {
     );
   });
 
+  it('bypasses internal (provider-less) service composition', async () => {
+    // Route handlers the executor legitimately reaches fan out to non-allowlisted
+    // services internally (e.g. sessions/:id/mcp-servers reading `mcp-servers`).
+    // Those internal calls carry the executor payload but have no transport
+    // provider and must not be re-scoped/rejected.
+    const context = ctx({
+      path: 'mcp-servers',
+      method: 'find',
+      params: { authentication: { payload }, query: {} },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
   it('validates every bulk message payload item against task scope', async () => {
     const context = ctx({
       path: 'messages/bulk',
@@ -261,7 +284,12 @@ describe('executorRuntimeScopeGuard', () => {
     const context = ctx({
       path: 'sessions/:id/genealogy',
       method: 'find',
-      params: { authentication: { payload }, query: {}, route: { id: 'session-1' } },
+      params: {
+        authentication: { payload },
+        query: {},
+        route: { id: 'session-1' },
+        provider: 'socketio',
+      },
     });
 
     await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
@@ -271,7 +299,12 @@ describe('executorRuntimeScopeGuard', () => {
     const context = ctx({
       path: 'sessions/:id/fork',
       method: 'create',
-      params: { authentication: { payload }, query: {}, route: { id: 'session-1' } },
+      params: {
+        authentication: { payload },
+        query: {},
+        route: { id: 'session-1' },
+        provider: 'socketio',
+      },
     });
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
@@ -283,7 +316,12 @@ describe('executorRuntimeScopeGuard', () => {
     const context = ctx({
       path: 'sessions/:id/mcp-servers',
       method: 'find',
-      params: { authentication: { payload }, query: {}, route: { id: 'session-1' } },
+      params: {
+        authentication: { payload },
+        query: {},
+        route: { id: 'session-1' },
+        provider: 'socketio',
+      },
     });
 
     await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
@@ -293,7 +331,12 @@ describe('executorRuntimeScopeGuard', () => {
     const context = ctx({
       path: 'sessions/:id/mcp-servers',
       method: 'create',
-      params: { authentication: { payload }, query: {}, route: { id: 'session-1' } },
+      params: {
+        authentication: { payload },
+        query: {},
+        route: { id: 'session-1' },
+        provider: 'socketio',
+      },
     });
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
@@ -305,7 +348,12 @@ describe('executorRuntimeScopeGuard', () => {
     const context = ctx({
       path: 'sessions/:id/mcp-servers',
       method: 'find',
-      params: { authentication: { payload }, query: {}, route: { id: 'session-2' } },
+      params: {
+        authentication: { payload },
+        query: {},
+        route: { id: 'session-2' },
+        provider: 'socketio',
+      },
     });
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/session scope/);
