@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { filterSelectOptionBySearchText } from '../utils/selectSearch';
 import {
   areKnowledgeSearchResultsFresh,
   buildKnowledgeDocumentRouteUrl,
+  buildKnowledgeNamespaceSelectOptions,
   buildKnowledgeQueryString,
   buildKnowledgeSearchResultKey,
   isKnowledgeDocumentContentReady,
@@ -220,5 +222,69 @@ describe('KnowledgePage global search helpers', () => {
       false
     );
     expect(areKnowledgeSearchResultsFresh({ resultKey, query: '', mode: 'text' })).toBe(false);
+  });
+});
+
+describe('KnowledgePage namespace select helpers', () => {
+  it('sorts namespace options by display name with slug fallback and searchable text', () => {
+    expect(
+      buildKnowledgeNamespaceSelectOptions([
+        {
+          namespace_id: 'ns-z',
+          slug: 'zebra',
+          display_name: 'Zebra Space',
+        },
+        {
+          namespace_id: 'ns-a',
+          slug: 'alpha-slug',
+          display_name: 'Alpha Space',
+        },
+        {
+          namespace_id: 'ns-b',
+          slug: 'beta',
+          display_name: null,
+        },
+        {
+          namespace_id: 'ns-a2',
+          slug: 'alpha-slug-2',
+          display_name: 'Alpha Space',
+        },
+      ])
+    ).toEqual([
+      {
+        label: 'Alpha Space',
+        value: 'alpha-slug',
+        searchText: 'alpha space alpha-slug',
+      },
+      {
+        label: 'Alpha Space',
+        value: 'alpha-slug-2',
+        searchText: 'alpha space alpha-slug-2',
+      },
+      {
+        label: 'beta',
+        value: 'beta',
+        searchText: 'beta beta',
+      },
+      {
+        label: 'Zebra Space',
+        value: 'zebra',
+        searchText: 'zebra space zebra',
+      },
+    ]);
+  });
+
+  it('makes namespace options filterable by display name and slug', () => {
+    const [option] = buildKnowledgeNamespaceSelectOptions([
+      {
+        namespace_id: 'ns-product',
+        slug: 'product-docs',
+        display_name: 'Product Knowledge',
+      },
+    ]);
+
+    expect(filterSelectOptionBySearchText('product knowledge', option)).toBe(true);
+    expect(filterSelectOptionBySearchText('product-docs', option)).toBe(true);
+    expect(filterSelectOptionBySearchText('engineering', option)).toBe(false);
   });
 });

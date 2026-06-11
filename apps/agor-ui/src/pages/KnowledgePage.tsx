@@ -108,6 +108,7 @@ import {
 } from '../utils/knowledgeRoutes';
 import { useThemedModal } from '../utils/modal';
 import { slugify } from '../utils/repoSlug';
+import { searchableSelectProps } from '../utils/selectSearch';
 
 const { Header, Content } = Layout;
 const { Text, Title } = Typography;
@@ -547,6 +548,42 @@ export const areKnowledgeSearchResultsFresh = (args: {
 }) =>
   Boolean(args.query.trim()) &&
   args.resultKey === buildKnowledgeSearchResultKey(args.query, args.mode);
+
+type KnowledgeNamespaceOptionSource = Pick<
+  KnowledgeNamespace,
+  'namespace_id' | 'slug' | 'display_name'
+>;
+
+const knowledgeNamespaceDisplayName = (namespace: KnowledgeNamespaceOptionSource) =>
+  namespace.display_name?.trim() || namespace.slug;
+
+export function buildKnowledgeNamespaceSelectOptions(namespaces: KnowledgeNamespaceOptionSource[]) {
+  return [...namespaces]
+    .sort((a, b) => {
+      const displayCompare = knowledgeNamespaceDisplayName(a).localeCompare(
+        knowledgeNamespaceDisplayName(b),
+        undefined,
+        { sensitivity: 'base', numeric: true }
+      );
+      if (displayCompare !== 0) return displayCompare;
+
+      const slugCompare = a.slug.localeCompare(b.slug, undefined, {
+        sensitivity: 'base',
+        numeric: true,
+      });
+      if (slugCompare !== 0) return slugCompare;
+
+      return a.namespace_id.localeCompare(b.namespace_id);
+    })
+    .map((namespace) => {
+      const label = knowledgeNamespaceDisplayName(namespace);
+      return {
+        label,
+        value: namespace.slug,
+        searchText: `${label} ${namespace.slug}`.toLowerCase(),
+      };
+    });
+}
 
 const compactKnowledgeSnippet = (value?: string | null) =>
   (value ?? '')
@@ -2768,10 +2805,8 @@ export function KnowledgePage({
     </div>
   );
 
-  const spaceOptions = [
-    { label: 'All Spaces', value: 'all' },
-    ...namespaces.map((ns) => ({ label: ns.display_name || ns.slug, value: ns.slug })),
-  ];
+  const namespaceOptions = buildKnowledgeNamespaceSelectOptions(namespaces);
+  const spaceOptions = [{ label: 'All Spaces', value: 'all' }, ...namespaceOptions];
   const createFolderError = validateKnowledgePath(createFolder, { allowEmpty: true });
   const newFolderParentError = validateKnowledgePath(newFolderParent, { allowEmpty: true });
   const newFolderNameError = normalizeFolderPath(newFolderName)
@@ -2988,6 +3023,7 @@ export function KnowledgePage({
                     Space
                   </Text>
                   <Select
+                    {...searchableSelectProps}
                     value={activeSpace}
                     onChange={changeKnowledgeSpace}
                     style={{ width: '100%' }}
@@ -4114,12 +4150,10 @@ export function KnowledgePage({
           </Form.Item>
           <Form.Item label="Space">
             <Select
+              {...searchableSelectProps}
               value={createNamespace}
               onChange={setCreateNamespace}
-              options={namespaces.map((ns) => ({
-                label: ns.display_name || ns.slug,
-                value: ns.slug,
-              }))}
+              options={namespaceOptions}
             />
           </Form.Item>
           <Form.Item
