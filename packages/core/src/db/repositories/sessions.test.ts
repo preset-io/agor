@@ -885,6 +885,54 @@ describe('SessionRepository.update', () => {
     );
   });
 
+  dbTest('should not update last_updated when only clearing ready_for_prompt', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const lastUpdated = '2026-01-01T00:00:00.000Z';
+    const data = createSessionData({
+      branch_id: branch.branch_id,
+      last_updated: lastUpdated,
+      ready_for_prompt: true,
+    });
+    const created = await repo.create(data);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const updated = await repo.update(data.session_id!, { ready_for_prompt: false });
+
+    expect(updated.ready_for_prompt).toBe(false);
+    expect(updated.last_updated).toBe(created.last_updated);
+  });
+
+  dbTest(
+    'should update last_updated when setting ready_for_prompt with status activity',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const lastUpdated = '2026-01-01T00:00:00.000Z';
+      const data = createSessionData({
+        branch_id: branch.branch_id,
+        last_updated: lastUpdated,
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
+      });
+      const created = await repo.create(data);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const updated = await repo.update(data.session_id!, {
+        status: SessionStatus.IDLE,
+        ready_for_prompt: true,
+      });
+
+      expect(updated.ready_for_prompt).toBe(true);
+      expect(updated.status).toBe(SessionStatus.IDLE);
+      expect(new Date(updated.last_updated).getTime()).toBeGreaterThan(
+        new Date(created.last_updated).getTime()
+      );
+    }
+  );
+
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
     const repo = new SessionRepository(db);
 

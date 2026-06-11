@@ -39,6 +39,20 @@ export interface SessionWithLastMessage extends Session {
 }
 
 /**
+ * Patches that only acknowledge UI attention state should not make a session
+ * look recently active. Keep this intentionally value-aware: setting
+ * ready_for_prompt=true is emitted by task/stop/executor completion paths and
+ * is activity; clearing it is the session-open/highlight acknowledgement path.
+ *
+ * Do not add title/description/model/permission fields here — those are
+ * user-visible session metadata changes and should continue to affect recency.
+ */
+function isSessionTimestampNeutralPatch(updates: Partial<Session>): boolean {
+  const keys = Object.keys(updates);
+  return keys.length === 1 && keys[0] === 'ready_for_prompt' && updates.ready_for_prompt === false;
+}
+
+/**
  * Session repository implementation
  */
 export class SessionRepository implements BaseRepository<Session, Partial<Session>> {
@@ -521,18 +535,28 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // Pass all columns via insertData (matches branch repo pattern).
         // Previously used an explicit column allowlist that silently dropped
         // columns like archived/archived_reason, causing data to revert on reload.
-        // Always refresh updated_at to current time on every update — sessionToInsert()
-        // preserves the old timestamp from the merged session, but updates must advance it.
-        // Without this, the staleness check in query-builder.ts (hoursSinceUpdate > 24)
-        // would erroneously clear sdk_session_id and disconnect agents from their history.
-        insertData.updated_at = new Date();
+        // Refresh updated_at for meaningful updates. sessionToInsert() preserves
+        // the old timestamp from the merged session, so timestamp-neutral UI
+        // acknowledgements (currently only ready_for_prompt:false) can keep
+        // recency ordering stable. Meaningful activity/settings/status patches
+        // still advance it; without that, the staleness check in query-builder.ts
+        // (hoursSinceUpdate > 24) would erroneously clear sdk_session_id and
+        // disconnect agents from their history.
+        const shouldRefreshLastUpdated = !isSessionTimestampNeutralPatch(updates);
+        if (shouldRefreshLastUpdated) {
+          insertData.updated_at = new Date();
+        }
 
         await update(txAsDb(tx), sessions)
           .set(insertData)
           .where(eq(sessions.session_id, fullId))
           .run();
 
-        // Return merged session with refreshed timestamp
+        if (!insertData.updated_at) {
+          throw new RepositoryError('Session update did not produce an updated_at timestamp');
+        }
+
+        // Return merged session with the persisted timestamp.
         merged.last_updated = insertData.updated_at.toISOString();
         return merged;
       });
