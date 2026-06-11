@@ -27,23 +27,26 @@ echo "✅ Home directory permissions fixed"
 
 # Fix build directory permissions (clean stale dist files with wrong ownership)
 echo "🔧 Ensuring write access for build tools..."
+DIST_DIRS="/app/packages/core/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
 if sudo -n true 2>/dev/null; then
-  # Clean and recreate dist directories with correct ownership
-  # This prevents EACCES errors when tsup tries to unlink old files
-  sudo -n rm -rf /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
-  sudo -n mkdir -p /app/packages/core/dist /app/packages/executor/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist
+  # Clean and recreate dist directories with correct ownership.
+  # Use the explicit workspace list instead of /app/packages/*/dist globs:
+  # under `set -e`, an unmatched glob is passed literally to chown and aborts
+  # startup before the initial builds have a chance to create dist outputs.
+  sudo -n rm -rf $DIST_DIRS 2>/dev/null || true
+  sudo -n mkdir -p $DIST_DIRS
 
   # Chown all package/app directories (non-recursive for speed)
   sudo -n chown agor:agor /app/packages/* /app/apps/* 2>/dev/null || true
 
   # Chown dist directories recursively (in case they have nested files)
-  sudo -n chown -R agor:agor /app/packages/*/dist /app/apps/*/dist
+  sudo -n chown -R agor:agor $DIST_DIRS
 
   echo "✅ Build directories ready"
 else
   # Fallback: try without sudo (might work depending on host permissions)
-  rm -rf /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
-  mkdir -p /app/packages/*/dist /app/apps/*/dist 2>/dev/null || true
+  rm -rf $DIST_DIRS 2>/dev/null || true
+  mkdir -p $DIST_DIRS 2>/dev/null || true
   echo "⚠️  Build directories created (sudo not available, may have permission issues)"
 fi
 
