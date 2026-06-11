@@ -11,6 +11,16 @@ type RepoForSafeDirectory = {
   local_path?: string | null;
 };
 
+const DEBUG_GIT_SAFE_DIRECTORY =
+  process.env.AGOR_DEBUG_GIT_SAFE_DIRECTORY === '1' ||
+  process.env.DEBUG?.includes('git-safe-directory');
+
+function gitSafeDirectoryDebug(...args: unknown[]): void {
+  if (DEBUG_GIT_SAFE_DIRECTORY) {
+    console.debug(...args);
+  }
+}
+
 function appendGitConfigParameterPairs(pairs: readonly string[]): void {
   const encoded = buildGitConfigParameters(pairs);
   if (!encoded) return;
@@ -54,7 +64,7 @@ export async function configureSessionGitSafeDirectories(
         const repo = (await client.service('repos').get(branch.repo_id)) as RepoForSafeDirectory;
         if (repo?.local_path) paths.push(repo.local_path);
       } catch (error) {
-        console.warn(
+        gitSafeDirectoryDebug(
           `${logPrefix} Failed to load repo ${branch.repo_id} for safe.directory setup:`,
           error instanceof Error ? error.message : String(error)
         );
@@ -72,7 +82,7 @@ export async function configureSessionGitSafeDirectories(
   appendGitConfigParameterPairs(uniquePaths.map((path) => `safe.directory=${path}`));
 
   if (uniquePaths.length > 0) {
-    console.log(
+    gitSafeDirectoryDebug(
       `${logPrefix} Added ${uniquePaths.length} safe.directory entr${uniquePaths.length === 1 ? 'y' : 'ies'} for session git commands`
     );
   }

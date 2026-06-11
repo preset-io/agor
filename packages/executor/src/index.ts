@@ -26,6 +26,15 @@ import { tryMarkTaskTerminal } from './terminal-task.js';
 
 patchConsole();
 
+const DEBUG_EXECUTOR =
+  process.env.AGOR_DEBUG_EXECUTOR === '1' || process.env.DEBUG?.includes('executor');
+
+function executorDebug(...args: unknown[]): void {
+  if (DEBUG_EXECUTOR) {
+    console.debug(...args);
+  }
+}
+
 export interface ExecutorConfig {
   sessionToken: string;
   sessionId: string;
@@ -66,19 +75,17 @@ export class AgorExecutor {
    * Start the executor process
    */
   async start(): Promise<void> {
-    console.log('[executor] Starting Agor Executor (Feathers mode)');
     const uid = typeof process.getuid === 'function' ? process.getuid() : 'N/A';
-    console.log(`[executor] User: ${process.env.USER || 'unknown'} (uid: ${uid})`);
-    console.log(`[executor] Session: ${shortId(this.config.sessionId)}`);
-    console.log(`[executor] Task: ${shortId(this.config.taskId)}`);
-    console.log(`[executor] Tool: ${this.config.tool}`);
-    console.log(`[executor] Daemon: ${this.config.daemonUrl}`);
+    console.log(
+      `[executor] Starting ${this.config.tool} task ${shortId(this.config.taskId)} ` +
+        `for session ${shortId(this.config.sessionId)} as ${process.env.USER || 'unknown'} (uid: ${uid})`
+    );
 
     try {
       // Connect to daemon via Feathers/WebSocket
-      console.log('[executor] Connecting to daemon via Feathers...');
+      executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken);
-      console.log('[executor] Connected to daemon');
+      executorDebug('[executor] Connected to daemon');
 
       // Setup event listeners
       this.setupEventListeners();
@@ -139,7 +146,7 @@ export class AgorExecutor {
       }
     });
 
-    console.log('[executor] Event listeners registered');
+    executorDebug('[executor] Event listeners registered');
   }
 
   /**
@@ -160,7 +167,7 @@ export class AgorExecutor {
       intervalMs: heartbeatConfig?.interval_ms,
     });
 
-    console.log(`[executor] Executing task with ${this.config.tool}...`);
+    executorDebug(`[executor] Executing task with ${this.config.tool}...`);
 
     try {
       // Import and initialize tool registry

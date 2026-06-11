@@ -23,6 +23,15 @@ import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
 
+const DEBUG_STARTUP =
+  process.env.AGOR_DEBUG_STARTUP === '1' || process.env.DEBUG?.includes('startup');
+
+function startupDebug(...args: unknown[]): void {
+  if (DEBUG_STARTUP) {
+    console.debug(...args);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Context
 // ---------------------------------------------------------------------------
@@ -102,6 +111,8 @@ interface OrphanCleanupResult {
   orphanedTasks: Task[];
   orphanedSessions: Session[];
   sessionIdsWithOrphanedTasks: Set<string>;
+  queuedTasks: Task[];
+  sessionsResetFromOrphanedTasks: number;
 }
 
 async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
@@ -110,8 +121,6 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   // Get tasks service from the app (registered during services phase)
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
 
-  console.log('🧹 Cleaning up orphaned task/session state...');
-
   // Determine restart type before touching anything — sentinel is consumed here
   const wasGraceful = await readAndClearSentinel();
 
@@ -119,12 +128,13 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   const orphanedTasks = await tasksService.getOrphaned();
 
   if (orphanedTasks.length > 0) {
-    console.log(`   Found ${orphanedTasks.length} orphaned task(s)`);
     for (const task of orphanedTasks) {
       await tasksService.patch(task.task_id, {
         status: TaskStatus.STOPPED,
       });
-      console.log(`   ✓ Marked task ${task.task_id} as stopped (was: ${task.status})`);
+      startupDebug(
+        `[startup] stopped orphaned task ${shortId(task.task_id)} (was: ${task.status})`
+      );
     }
   }
 
@@ -144,7 +154,6 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   }
 
   if (orphanedSessions.length > 0) {
-    console.log(`   Found ${orphanedSessions.length} orphaned session(s)`);
     for (const session of orphanedSessions) {
       // IMPORTANT: Use app.service() instead of sessionsService to go through
       // FeathersJS service layer and trigger app.publish() for WebSocket events
@@ -156,7 +165,7 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
         },
         {}
       );
-      console.log(
+      startupDebug(
         `   ✓ Marked session ${shortId(session.session_id)} as idle (was: ${session.status})`
       );
     }
@@ -166,10 +175,8 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   const sessionIdsWithOrphanedTasks = new Set(
     orphanedTasks.map((t: Task) => t.session_id as string)
   );
+  let sessionsResetFromOrphanedTasks = 0;
   if (sessionIdsWithOrphanedTasks.size > 0) {
-    console.log(
-      `   Checking ${sessionIdsWithOrphanedTasks.size} session(s) with orphaned tasks...`
-    );
     for (const sessionId of sessionIdsWithOrphanedTasks) {
       const session = await sessionsService.get(sessionId as Id);
       // If session is still in an active state after orphaned task cleanup, set to IDLE
@@ -187,7 +194,8 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
           },
           {}
         );
-        console.log(
+        sessionsResetFromOrphanedTasks++;
+        startupDebug(
           `   ✓ Marked session ${shortId(sessionId)} as idle (had orphaned tasks, was: ${session.status})`
         );
       }
@@ -206,7 +214,6 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   const queuedTasks = queuedResult.data;
 
   if (queuedTasks.length > 0) {
-    console.log(`   Found ${queuedTasks.length} queued task(s) — wiping queue on restart`);
     for (const task of queuedTasks) {
       await tasksService.patch(task.task_id, {
         status: TaskStatus.STOPPED,
@@ -214,15 +221,23 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
     }
   }
 
-  if (orphanedTasks.length === 0 && orphanedSessions.length === 0 && queuedTasks.length === 0) {
-    console.log('   No orphaned tasks or sessions found');
+  const cleanupParts: string[] = [
+    `${orphanedTasks.length} orphaned task(s) stopped`,
+    `${orphanedSessions.length} active session(s) reset`,
+    `${queuedTasks.length} queued task(s) stopped`,
+  ];
+  if (sessionsResetFromOrphanedTasks > 0) {
+    cleanupParts.push(`${sessionsResetFromOrphanedTasks} task-owned session(s) reset`);
   }
+  console.log(`[startup] orphan cleanup: ${cleanupParts.join(', ')}`);
 
   return {
     wasGraceful,
     orphanedTasks,
     orphanedSessions,
     sessionIdsWithOrphanedTasks,
+    queuedTasks,
+    sessionsResetFromOrphanedTasks,
   };
 }
 
@@ -349,7 +364,7 @@ export function runPostStartJob(name: string, job: () => Promise<void> | void): 
   void Promise.resolve()
     .then(() => job())
     .then(() => {
-      console.log(`[startup] post-start job completed: ${name}`);
+      startupDebug(`[startup] post-start job completed: ${name}`);
     })
     .catch((error: unknown) => {
       console.warn(`[startup] post-start job failed: ${name}`, error);
@@ -428,19 +443,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
   console.log(
     `🚀 Agor daemon running at http://${displayHost}:${DAEMON_PORT} (bound to ${DAEMON_HOST})`
   );
-  console.log(`   Health: http://${displayHost}:${DAEMON_PORT}/health`);
-  console.log(`   Authentication: 🔐 Required`);
-  console.log(`   Login: POST http://${displayHost}:${DAEMON_PORT}/authentication`);
-  console.log(`   Services:`);
-  console.log(`     - /sessions`);
-  console.log(`     - /tasks`);
-  console.log(`     - /messages`);
-  console.log(`     - /boards`);
-  console.log(`     - /repos`);
-  console.log(`     - /mcp-servers`);
-  console.log(`     - /config`);
-  console.log(`     - /context`);
-  console.log(`     - /users`);
+  console.log(
+    `   health=/health auth=required services=/sessions,/tasks,/messages,/boards,/repos,/mcp-servers,/config,/context,/users`
+  );
 
   runPostStartJob('health-monitor-initialize', () => healthMonitor.initialize());
   runPostStartJob('daemon-restart-notices', () => injectRestartNotices(ctx, orphanCleanupResult));
@@ -459,7 +464,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
     const hostIp = resolveHostIpAddress(config.daemon?.host_ip_address);
     const source = config.daemon?.host_ip_address ? 'config' : hostIp ? 'autodetected' : 'unknown';
-    console.log(`🌐 Host IP for env templates: ${hostIp ?? '(none)'} (source: ${source})`);
+    startupDebug(`🌐 Host IP for env templates: ${hostIp ?? '(none)'} (source: ${source})`);
   });
 
   // Security warning: web terminal + simple unix mode = daemon-user shell access.

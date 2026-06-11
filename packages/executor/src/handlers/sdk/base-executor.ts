@@ -26,6 +26,15 @@ import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.j
 import type { AgorClient } from '../../services/feathers-client.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
+const DEBUG_SDK_EXECUTOR =
+  process.env.AGOR_DEBUG_SDK_EXECUTOR === '1' || process.env.DEBUG?.includes('sdk-executor');
+
+function sdkDebug(...args: unknown[]): void {
+  if (DEBUG_SDK_EXECUTOR) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Tool interface that all SDK wrappers must implement
  */
@@ -332,14 +341,14 @@ async function resolveApiKeyForTask(
       keyName,
       tool,
     })) as import('@agor/core/config').KeyResolutionResult;
-    console.debug(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
+    sdkDebug(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
     return result;
   } catch (err) {
-    console.warn(
-      `[API Key Resolution] Failed to resolve via daemon service: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: number })?.code;
+    const log =
+      code === 403 || message.includes('Executor token is not valid') ? sdkDebug : console.warn;
+    log(`[API Key Resolution] Falling back to local resolution: ${message}`);
     // Fall back to sync resolution (config + env only, no per-user keys)
     return resolveApiKey(keyName, {});
   }
@@ -398,11 +407,9 @@ export async function executeToolTask(params: {
 
   // Log resolution result
   if (resolution.apiKey) {
-    console.debug(
-      `[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`
-    );
+    sdkDebug(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);
   } else {
-    console.debug(
+    sdkDebug(
       `[${toolName}] No API key found - SDK will use native authentication (OAuth/CLI login)`
     );
   }

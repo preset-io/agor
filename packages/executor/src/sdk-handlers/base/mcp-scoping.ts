@@ -24,6 +24,15 @@ import type {
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
 
+const DEBUG_MCP_SCOPING =
+  process.env.AGOR_DEBUG_MCP_SCOPING === '1' || process.env.DEBUG?.includes('mcp-scoping');
+
+function mcpDebug(...args: unknown[]): void {
+  if (DEBUG_MCP_SCOPING) {
+    console.debug(...args);
+  }
+}
+
 /**
  * MCP server with source metadata
  */
@@ -79,8 +88,8 @@ export async function getMcpServersForSession(
   }
 
   try {
-    console.debug('🔌 Resolving MCP servers for session...');
-    console.debug(`   [MCP Scoping] forUserId: ${deps.forUserId || 'NOT SET'}`);
+    mcpDebug('🔌 Resolving MCP servers for session...');
+    mcpDebug(`   [MCP Scoping] forUserId: ${deps.forUserId || 'NOT SET'}`);
 
     // Track seen server IDs to prevent duplicates
     const seenServerIds = new Set<string>();
@@ -99,7 +108,7 @@ export async function getMcpServersForSession(
 
     if (typeof deps.sessionMCPRepo.listEffectiveServers === 'function') {
       const effectiveServers = await deps.sessionMCPRepo.listEffectiveServers(sessionId, true);
-      console.debug(`   📍 Effective session scope: ${effectiveServers.length} server(s)`);
+      mcpDebug(`   📍 Effective session scope: ${effectiveServers.length} server(s)`);
 
       for (const server of effectiveServers) {
         addServer(server, server.scope === 'global' ? 'global' : 'session-assigned');
@@ -107,9 +116,7 @@ export async function getMcpServersForSession(
     } else {
       // STEP 1: Get ALL global-scoped MCP servers (available to all sessions)
       // Pass forUserId for per-user OAuth token injection
-      console.debug(
-        `   [MCP Scoping] Calling findAll with forUserId: ${deps.forUserId || 'NOT SET'}`
-      );
+      mcpDebug(`   [MCP Scoping] Calling findAll with forUserId: ${deps.forUserId || 'NOT SET'}`);
       const globalServers = await deps.mcpServerRepo.findAll(
         {
           scope: 'global',
@@ -118,7 +125,7 @@ export async function getMcpServersForSession(
         deps.forUserId
       );
 
-      console.debug(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
+      mcpDebug(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
 
       for (const server of globalServers ?? []) {
         addServer(server, 'global');
@@ -127,7 +134,7 @@ export async function getMcpServersForSession(
       // STEP 2: Get session-scoped MCP servers assigned to this specific session
       const sessionServers = await deps.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
 
-      console.debug(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
+      mcpDebug(`   📍 Session-assigned: ${sessionServers.length} server(s)`);
 
       for (const server of sessionServers) {
         addServer(server, 'session-assigned');
@@ -136,12 +143,12 @@ export async function getMcpServersForSession(
 
     // Log summary (before template resolution)
     if (servers.length > 0) {
-      console.debug(`   ✅ Total: ${servers.length} MCP server(s) resolved`);
+      mcpDebug(`   ✅ Total: ${servers.length} MCP server(s) resolved`);
       for (const { server, source } of servers) {
-        console.debug(`      - ${server.name} (${server.transport}) [${source}]`);
+        mcpDebug(`      - ${server.name} (${server.transport}) [${source}]`);
       }
     } else {
-      console.debug('   ℹ️  No MCP servers available for this session');
+      mcpDebug('   ℹ️  No MCP servers available for this session');
     }
 
     // STEP 3: Resolve templates in config fields (url, env.*, auth.*)
@@ -195,7 +202,7 @@ export async function getMcpServersForSession(
     }
 
     if (templatesResolved > 0) {
-      console.debug(`   🔧 Resolved templates in ${templatesResolved} MCP server(s)`);
+      mcpDebug(`   🔧 Resolved templates in ${templatesResolved} MCP server(s)`);
     }
     if (serversSkipped > 0) {
       console.warn(

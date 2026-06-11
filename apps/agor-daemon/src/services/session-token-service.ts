@@ -13,6 +13,15 @@
 
 import jwt from 'jsonwebtoken';
 
+const DEBUG_SESSION_TOKENS =
+  process.env.AGOR_DEBUG_SESSION_TOKENS === '1' || process.env.DEBUG?.includes('session-token');
+
+function sessionTokenDebug(...args: unknown[]): void {
+  if (DEBUG_SESSION_TOKENS) {
+    console.debug(...args);
+  }
+}
+
 interface SessionTokenData {
   session_id: string;
   task_id?: string;
@@ -160,7 +169,7 @@ export class SessionTokenService {
       data.use_count++;
     }
 
-    console.debug(
+    sessionTokenDebug(
       data.max_uses > 0
         ? `[SessionTokenService] Token validated: session=${data.session_id}, uses=${data.use_count}/${data.max_uses}`
         : `[SessionTokenService] Reusable token validated: session=${data.session_id}`

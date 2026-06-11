@@ -29,6 +29,15 @@ import type {
 import type { SessionID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 
+const DEBUG_CLAUDE_MESSAGES =
+  process.env.AGOR_DEBUG_CLAUDE_MESSAGES === '1' || process.env.DEBUG?.includes('claude-messages');
+
+function claudeMessageDebug(...args: unknown[]): void {
+  if (DEBUG_CLAUDE_MESSAGES) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Content block interface for SDK messages
  */
@@ -247,7 +256,7 @@ export class SDKMessageProcessor {
 
     // Log message type for debugging (skip stream_event as it's too verbose)
     if (this.state.messageCount % 10 === 0 && msg.type !== 'stream_event') {
-      console.debug(`📨 SDK message ${this.state.messageCount}: type=${msg.type}`);
+      claudeMessageDebug(`📨 SDK message ${this.state.messageCount}: type=${msg.type}`);
     }
 
     // Add detailed logging for debugging SDK behavior
@@ -372,7 +381,7 @@ export class SDKMessageProcessor {
       const toolResults = content.filter((b) => b.type === 'tool_result');
       const errorCount = toolResults.filter((tr) => tr.is_error).length;
       const successCount = toolResults.length - errorCount;
-      console.log(
+      claudeMessageDebug(
         `🔧 SDK user message with ${toolResults.length} tool result(s) (✅ ${successCount}, ❌ ${errorCount})`
       );
 
@@ -391,7 +400,7 @@ export class SDKMessageProcessor {
     } else if (hasText) {
       const textBlocks = content.filter((b) => b.type === 'text');
       const textPreview = textBlocks[0]?.text?.substring(0, 100) || '';
-      console.log(
+      claudeMessageDebug(
         `👤 SDK user message (uuid: ${uuid ? shortId(uuid) : 'unknown'}): "${textPreview}"`
       );
 
@@ -408,8 +417,8 @@ export class SDKMessageProcessor {
         },
       ];
     } else {
-      console.log(`👤 SDK user message (uuid: ${uuid ? shortId(uuid) : 'unknown'})`);
-      console.log(
+      claudeMessageDebug(`👤 SDK user message (uuid: ${uuid ? shortId(uuid) : 'unknown'})`);
+      claudeMessageDebug(
         `   Content types:`,
         Array.isArray(content) ? content.map((b) => b.type) : 'no content'
       );
@@ -430,7 +439,7 @@ export class SDKMessageProcessor {
 
     // Message start event
     if (event?.type === 'message_start') {
-      console.debug(`🎬 Message start`);
+      claudeMessageDebug(`🎬 Message start`);
       events.push({
         type: 'message_start',
         agentSessionId: this.state.capturedAgentSessionId,
@@ -469,7 +478,7 @@ export class SDKMessageProcessor {
           agentSessionId: this.state.capturedAgentSessionId,
         });
       } else if (block?.type === 'thinking') {
-        console.debug(`🧠 Thinking block start`);
+        claudeMessageDebug(`🧠 Thinking block start`);
         // Track thinking blocks
         this.state.contentBlockStack.push({
           index: blockIndex,
@@ -542,7 +551,7 @@ export class SDKMessageProcessor {
           agentSessionId: this.state.capturedAgentSessionId,
         });
       } else {
-        console.debug(`🏁 Content block ${blockIndex} complete`);
+        claudeMessageDebug(`🏁 Content block ${blockIndex} complete`);
       }
 
       // Remove from stack
@@ -553,7 +562,7 @@ export class SDKMessageProcessor {
 
     // Message stop event
     if (event?.type === 'message_stop') {
-      console.debug(`🏁 Message complete`);
+      claudeMessageDebug(`🏁 Message complete`);
       events.push({
         type: 'message_complete',
         agentSessionId: this.state.capturedAgentSessionId,
@@ -832,7 +841,7 @@ export class SDKMessageProcessor {
     const msgType = msg.type || 'unknown';
 
     if (SDKMessageProcessor.SUPPRESSED_MESSAGE_TYPES.has(msgType)) {
-      console.debug(`🔇 Suppressed SDK message type: ${msgType}`);
+      claudeMessageDebug(`🔇 Suppressed SDK message type: ${msgType}`);
       return [];
     }
 

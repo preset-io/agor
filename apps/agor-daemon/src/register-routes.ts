@@ -126,6 +126,24 @@ import {
 } from './utils/upload.js';
 import { resolveWidget } from './widgets/submissions.js';
 
+const DEBUG_AUTH_EVENTS =
+  process.env.AGOR_DEBUG_AUTH_EVENTS === '1' || process.env.DEBUG?.includes('auth-events');
+
+function authEventDebug(...args: unknown[]): void {
+  if (DEBUG_AUTH_EVENTS) {
+    console.debug(...args);
+  }
+}
+
+const DEBUG_TASK_QUEUE =
+  process.env.AGOR_DEBUG_TASK_QUEUE === '1' || process.env.DEBUG?.includes('task-queue');
+
+function taskQueueDebug(...args: unknown[]): void {
+  if (DEBUG_TASK_QUEUE) {
+    console.debug(...args);
+  }
+}
+
 export class AgorLocalStrategy extends LocalStrategy {
   async findEntity(username: string, params: Params) {
     markLocalAuthenticationLookup(params);
@@ -370,7 +388,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       create: [
         // biome-ignore lint/suspicious/noExplicitAny: FeathersJS context type not fully typed
         async (context: any) => {
-          console.log('✅ Authentication succeeded:', {
+          authEventDebug('✅ Authentication succeeded:', {
             strategy: context.result?.authentication?.strategy,
             hasUser: !!context.result?.user,
             user_id: context.result?.user?.user_id,
@@ -2165,7 +2183,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const nextTask = await taskRepo.getNextQueued(sessionId);
 
     if (!nextTask) {
-      console.log(`📭 No queued tasks for session ${shortId(sessionId)}`);
+      taskQueueDebug(`📭 No queued tasks for session ${shortId(sessionId)}`);
       return;
     }
 

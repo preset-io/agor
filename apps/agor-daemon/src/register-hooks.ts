@@ -129,6 +129,15 @@ import {
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
 
+const DEBUG_MCP_TOKENS =
+  process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
+
+function mcpTokenDebug(...args: unknown[]): void {
+  if (DEBUG_MCP_TOKENS) {
+    console.debug(...args);
+  }
+}
+
 const BRANCH_ENV_FIELDS = [
   'start_command',
   'stop_command',
@@ -2151,7 +2160,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             userId as import('@agor/core/types').UserID
           );
 
-          console.log(`🔄 Regenerated MCP token for session ${shortId(session.session_id)}`);
+          mcpTokenDebug(`🔄 Regenerated MCP token for session ${shortId(session.session_id)}`);
 
           // Add token to result (not stored in DB, regenerated on-demand with
           // a fresh `jti` and `exp`)

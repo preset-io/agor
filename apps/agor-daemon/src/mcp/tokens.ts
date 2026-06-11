@@ -12,8 +12,10 @@
  * - `exp`  — unix seconds, enforced by `jsonwebtoken.verify`
  * - `jti`  — per-issuance UUID (useful for log correlation)
  *
- * No revocation mechanics. Tokens are re-minted fresh on every `session.get` /
- * `session.create` and carry a short `exp` (default 24h); any suspected
+ * No revocation mechanics. Tokens are minted lazily and cached briefly per
+ * `(session,user)` so high-frequency `session.get` calls don't perform
+ * redundant JWT signing and session-existence probes. Tokens carry a short
+ * `exp` (default 24h); any suspected
  * compromise is addressed by rotating the JWT signing secret or letting the
  * token expire. MCP is internal-only (loopback) — if/when it goes external
  * we'd design auth from scratch (OAuth / API keys) rather than extending this.
@@ -32,6 +34,15 @@ import {
   type UserID,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
+
+const DEBUG_MCP_TOKENS =
+  process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
+
+function mcpTokenDebug(...args: unknown[]): void {
+  if (DEBUG_MCP_TOKENS) {
+    console.debug(...args);
+  }
+}
 
 // Re-exported so daemon callers don't have to reach into @agor/core/types.
 export { MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from '@agor/core/types';
@@ -72,6 +83,13 @@ interface ModuleState {
   sessionRepo: SessionRepository;
   expirationMs: number;
   now: () => number;
+  tokenCache: Map<string, CachedMcpToken>;
+  lastCachePruneAtMs: number;
+}
+
+interface CachedMcpToken {
+  token: string;
+  expiresAtMs: number;
 }
 
 let _state: ModuleState | null = null;
@@ -101,6 +119,8 @@ export function initMcpTokens(options: McpTokenInitOptions): void {
     sessionRepo: new SessionRepository(options.db),
     expirationMs,
     now,
+    tokenCache: new Map(),
+    lastCachePruneAtMs: 0,
   };
 
   console.log(`[mcp-tokens] initialized: exp=${expirationMs}ms`);
@@ -118,7 +138,7 @@ export function shutdownMcpTokens(): void {
 // ============================================================================
 
 /**
- * Mint a fresh MCP token for a session.
+ * Mint or reuse an MCP token for a session.
  *
  * @throws if the module isn't initialized, the session doesn't exist, or the
  *   app lacks a JWT secret.
@@ -134,15 +154,36 @@ export async function generateSessionToken(
     throw new Error('MCP token generation failed: JWT secret not configured in app settings');
   }
 
+  const nowMs = s.now();
+  if (nowMs - s.lastCachePruneAtMs > 5 * 60 * 1000) {
+    for (const [key, entry] of s.tokenCache) {
+      if (entry.expiresAtMs <= nowMs) {
+        s.tokenCache.delete(key);
+      }
+    }
+    s.lastCachePruneAtMs = nowMs;
+  }
+
+  const cacheKey = `${sessionId}:${userId}`;
+  const cached = s.tokenCache.get(cacheKey);
+  // Keep a buffer so callers never receive a token that is about to expire.
+  const refreshBufferMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, s.expirationMs * 0.1));
+  if (cached && cached.expiresAtMs - nowMs > refreshBufferMs) {
+    mcpTokenDebug(`🎫 MCP token cache hit: session=${shortId(sessionId)}`);
+    return cached.token;
+  }
+
   const sessionExists = await s.sessionRepo.exists(sessionId);
   if (!sessionExists) {
+    s.tokenCache.delete(cacheKey);
     throw new Error(
       `MCP token generation failed: session ${sessionId} not found — cannot mint token for a non-existent session`
     );
   }
 
-  const nowSec = Math.floor(s.now() / 1000);
+  const nowSec = Math.floor(nowMs / 1000);
   const expSec = nowSec + Math.floor(s.expirationMs / 1000);
+  const expiresAtMs = expSec * 1000;
   const jti = generateId();
 
   const payload: McpTokenPayload = {
@@ -156,8 +197,9 @@ export async function generateSessionToken(
   };
 
   const token = jwt.sign(payload, jwtSecret, { algorithm: 'HS256' });
+  s.tokenCache.set(cacheKey, { token, expiresAtMs });
 
-  console.log(
+  mcpTokenDebug(
     `🎫 MCP token issued: session=${shortId(sessionId)} jti=${jti.substring(0, 8)} exp=+${Math.floor(s.expirationMs / 1000)}s`
   );
 

@@ -128,18 +128,28 @@ describe('generateSessionToken', () => {
     expect((decoded.exp as number) - (decoded.iat as number)).toBe(60);
   });
 
-  dbTest('each issuance produces a different jti', async ({ db }) => {
-    initMcpTokens({ db });
-    const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
+  dbTest('reuses cached tokens until they approach expiry', async ({ db }) => {
+    const baseMs = Date.now();
+    vi.useFakeTimers({ now: baseMs, shouldAdvanceTime: false });
+    try {
+      initMcpTokens({ db, expirationMs: 60_000 });
+      const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
 
-    const t1 = await generateSessionToken(makeApp(), sessionId, 'u' as UserID);
-    const t2 = await generateSessionToken(makeApp(), sessionId, 'u' as UserID);
-    const d1 = jwt.decode(t1) as { jti?: string };
-    const d2 = jwt.decode(t2) as { jti?: string };
+      const t1 = await generateSessionToken(makeApp(), sessionId, 'u' as UserID);
+      const t2 = await generateSessionToken(makeApp(), sessionId, 'u' as UserID);
+      expect(t2).toBe(t1);
 
-    expect(d1.jti).toBeDefined();
-    expect(d2.jti).toBeDefined();
-    expect(d1.jti).not.toBe(d2.jti);
+      vi.setSystemTime(new Date(baseMs + 31_000));
+      const t3 = await generateSessionToken(makeApp(), sessionId, 'u' as UserID);
+      const d1 = jwt.decode(t1) as { jti?: string };
+      const d3 = jwt.decode(t3) as { jti?: string };
+
+      expect(d1.jti).toBeDefined();
+      expect(d3.jti).toBeDefined();
+      expect(d3.jti).not.toBe(d1.jti);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   dbTest('throws when the session does not exist', async ({ db }) => {

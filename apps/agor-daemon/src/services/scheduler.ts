@@ -239,7 +239,9 @@ export class SchedulerService {
       return;
     }
 
-    console.log(`🔄 Starting scheduler (tick interval: ${this.config.tickInterval}ms)`);
+    if (this.config.debug) {
+      console.log(`🔄 Starting scheduler (tick interval: ${this.config.tickInterval}ms)`);
+    }
     this.isRunning = true;
 
     // Run first tick immediately
@@ -264,7 +266,7 @@ export class SchedulerService {
       return;
     }
 
-    console.log('🛑 Stopping scheduler');
+    console.log('🛑 Scheduler stopped');
     this.isRunning = false;
 
     if (this.intervalHandle) {

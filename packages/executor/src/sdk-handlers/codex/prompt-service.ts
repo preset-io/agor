@@ -90,6 +90,14 @@ type CodexConfigValue = CodexConfigObject[string];
  */
 const MCP_AUTO_APPROVE: CodexConfigObject = { default_tools_approval_mode: 'approve' };
 
+const DEBUG_CODEX = process.env.AGOR_DEBUG_CODEX === '1' || process.env.DEBUG?.includes('codex');
+
+function codexDebug(...args: unknown[]): void {
+  if (DEBUG_CODEX) {
+    console.debug(...args);
+  }
+}
+
 export interface CodexPromptResult {
   /** Complete assistant response from Codex */
   messages: Array<{
@@ -220,7 +228,7 @@ export class CodexPromptService {
     if (this.apiKey) {
       // Source already logged by base-executor via resolveApiKeyForTask().
     } else if (this.useNativeAuth) {
-      console.debug(
+      codexDebug(
         '🔓 [Codex] No API key configured — falling back to ChatGPT subscription auth from $CODEX_HOME/auth.json. ' +
           'Run `codex login` if you have not authenticated yet.'
       );
@@ -232,7 +240,7 @@ export class CodexPromptService {
     }
 
     if (baseUrl) {
-      console.debug(`🔗 [Codex] Using custom OPENAI_BASE_URL`);
+      codexDebug(`🔗 [Codex] Using custom OPENAI_BASE_URL`);
     }
 
     // Bootstrap Codex SDK without per-session config (rebuilt lazily in
@@ -289,13 +297,13 @@ export class CodexPromptService {
         }
       }
       if (deleted > 0) {
-        console.debug(`🧹 [Codex] Swept ${deleted} stale instructions file(s) from ${dir}`);
+        codexDebug(`🧹 [Codex] Swept ${deleted} stale instructions file(s) from ${dir}`);
       }
       if (failed > 0) {
         const summary = [...failedByCode.entries()]
           .map(([code, count]) => `${code}=${count}`)
           .join(', ');
-        console.debug(
+        codexDebug(
           `🧹 [Codex] Skipped ${failed} stale instructions file(s) in ${dir} (${summary})`
         );
       }
@@ -412,7 +420,7 @@ export class CodexPromptService {
       return;
     }
 
-    console.debug(
+    codexDebug(
       `🔄 [Codex] Per-session config changed, reinitializing SDK (apiKey=${this.apiKey ? 'set' : 'unset'}, useNativeAuth=${this.useNativeAuth})`
     );
     this.codex = new Codex.Codex(this.buildCodexOptions(this.apiKey, baseUrl, config));
@@ -458,7 +466,7 @@ export class CodexPromptService {
     }
 
     this.instructionsFilePaths.set(sessionId, filePath);
-    console.debug(`✅ [Codex] Wrote per-session instructions file at ${filePath}`);
+    codexDebug(`✅ [Codex] Wrote per-session instructions file at ${filePath}`);
     return filePath;
   }
 
@@ -518,8 +526,8 @@ export class CodexPromptService {
     mcpToken: string | undefined,
     forUserId: UserID | undefined
   ): Promise<{ servers: CodexConfigObject; total: number }> {
-    console.debug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
-    console.debug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
+    codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
+    codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
     const serversWithSource = await getMcpServersForSession(sessionId, {
       sessionMCPRepo: this.sessionMCPServerRepo,
@@ -529,17 +537,15 @@ export class CodexPromptService {
 
     const mcpServers = serversWithSource.map((s) => s.server);
 
-    console.debug(`📊 [Codex MCP] Found ${mcpServers.length} MCP server(s) for session`);
+    codexDebug(`📊 [Codex MCP] Found ${mcpServers.length} MCP server(s) for session`);
     if (mcpServers.length > 0) {
-      console.debug(
-        `   Servers: ${mcpServers.map((s) => `${s.name} (${s.transport})`).join(', ')}`
-      );
+      codexDebug(`   Servers: ${mcpServers.map((s) => `${s.name} (${s.transport})`).join(', ')}`);
     }
 
     const stdioServers = mcpServers.filter((s) => s.transport === 'stdio');
     const httpServers = mcpServers.filter((s) => s.transport === 'http' || s.transport === 'sse');
 
-    console.debug(
+    codexDebug(
       `   📊 [Codex MCP] Transport breakdown: ${stdioServers.length} STDIO, ${httpServers.length} HTTP/SSE`
     );
 
@@ -560,7 +566,7 @@ export class CodexPromptService {
         required: false,
         ...MCP_AUTO_APPROVE,
       };
-      console.debug(
+      codexDebug(
         `   📝 [Codex MCP] Configuring built-in Agor MCP server (HTTP) at ${daemonUrl}/mcp`
       );
     }
@@ -573,18 +579,18 @@ export class CodexPromptService {
       );
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
-      console.debug(`   📝 [Codex MCP] Configuring STDIO server: ${server.name} -> ${serverName}`);
+      codexDebug(`   📝 [Codex MCP] Configuring STDIO server: ${server.name} -> ${serverName}`);
       if (server.command) {
         serverConfig.command = server.command;
-        console.debug(`      command: ${server.command}`);
+        codexDebug(`      command: ${server.command}`);
       }
       if (server.args && server.args.length > 0) {
         serverConfig.args = server.args as CodexConfigValue[];
-        console.debug(`      args: ${JSON.stringify(server.args)}`);
+        codexDebug(`      args: ${JSON.stringify(server.args)}`);
       }
       if (server.env && Object.keys(server.env).length > 0) {
         serverConfig.env = server.env as CodexConfigObject;
-        console.debug(`      env vars: ${Object.keys(server.env).length} variable(s)`);
+        codexDebug(`      env vars: ${Object.keys(server.env).length} variable(s)`);
       }
 
       result[serverName] = serverConfig;
@@ -598,10 +604,10 @@ export class CodexPromptService {
       );
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
-      console.debug(`   📝 [Codex MCP] Configuring HTTP server: ${server.name} -> ${serverName}`);
+      codexDebug(`   📝 [Codex MCP] Configuring HTTP server: ${server.name} -> ${serverName}`);
       if (server.url) {
         serverConfig.url = server.url;
-        console.debug(`      url: ${server.url}`);
+        codexDebug(`      url: ${server.url}`);
       }
 
       // Resolve the Authorization header via the shared MCP auth helper —
@@ -618,7 +624,7 @@ export class CodexPromptService {
         if (customHeaders) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
           serverConfig.headers = customHeaders;
-          console.debug(`      custom headers: ${Object.keys(customHeaders).length} header(s)`);
+          codexDebug(`      custom headers: ${Object.keys(customHeaders).length} header(s)`);
         }
         if (authHeader) {
           const bearerToken = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1];
@@ -626,7 +632,7 @@ export class CodexPromptService {
             const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}`;
             process.env[envVarName] = bearerToken;
             serverConfig.bearer_token_env_var = envVarName;
-            console.debug(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
+            codexDebug(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
           } else {
             console.warn(
               `      ⚠️  auth: resolved Authorization header for "${server.name}" is not a Bearer scheme (Codex CLI only supports bearer); skipping injection`
@@ -867,9 +873,9 @@ export class CodexPromptService {
     // This ensures hot-reload of credentials from Settings UI while avoiding process accumulation
     this.refreshClient(currentApiKey);
 
-    console.debug(`🔍 [Codex] Starting prompt execution for session ${shortId(sessionId)}`);
-    console.debug(`   Permission mode: ${permissionMode || 'not specified (will use default)'}`);
-    console.debug(`   Existing thread ID: ${session.sdk_session_id || 'none (will create new)'}`);
+    codexDebug(`🔍 [Codex] Starting prompt execution for session ${shortId(sessionId)}`);
+    codexDebug(`   Permission mode: ${permissionMode || 'not specified (will use default)'}`);
+    codexDebug(`   Existing thread ID: ${session.sdk_session_id || 'none (will create new)'}`);
 
     // Codex permission settings split across two surfaces:
     // - sandboxMode, approvalPolicy, networkAccessEnabled: per-thread via ThreadOptions
@@ -892,7 +898,7 @@ export class CodexPromptService {
     const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
     const networkAccess = codexConfig?.networkAccess ?? defaults.networkAccess;
 
-    console.debug(
+    codexDebug(
       `   Using Codex permissions: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}`
     );
 
@@ -931,7 +937,7 @@ export class CodexPromptService {
     // apiKey/baseUrl) actually changed — issue #133 protection.
     this.ensureCodexClient(codexConfigPayload);
 
-    console.debug(
+    codexDebug(
       `   Configured: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}, ${mcpServerCount} MCP server(s)`
     );
 
@@ -941,7 +947,7 @@ export class CodexPromptService {
       throw new Error(`Branch ${session.branch_id} not found for session ${sessionId}`);
     }
 
-    console.debug(`   Working directory: ${branch.path}`);
+    codexDebug(`   Working directory: ${branch.path}`);
 
     await this.ensureForkedCodexThread(sessionId, session);
 
@@ -1016,7 +1022,7 @@ export class CodexPromptService {
     // Start or resume thread
     let thread: Thread;
     if (session.sdk_session_id) {
-      console.debug(`🔄 [Codex] Resuming thread: ${session.sdk_session_id}`);
+      codexDebug(`🔄 [Codex] Resuming thread: ${session.sdk_session_id}`);
 
       thread = this.codex.resumeThread(session.sdk_session_id, threadOptions);
 
@@ -1042,9 +1048,9 @@ export class CodexPromptService {
         }
       }
     } else {
-      console.debug(`🆕 [Codex] Creating new thread`);
+      codexDebug(`🆕 [Codex] Creating new thread`);
       if (mcpServerCount > 0) {
-        console.debug(
+        codexDebug(
           `✅ [Codex MCP] New thread will have ${mcpServerCount} MCP server(s) available via --config flags`
         );
       }
@@ -1052,7 +1058,7 @@ export class CodexPromptService {
     }
 
     try {
-      console.debug(
+      codexDebug(
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
       );
 
@@ -1071,10 +1077,10 @@ export class CodexPromptService {
 
       // Use streaming API with abort signal for proper cancellation support
       // The signal is passed to Codex SDK which will throw AbortError when aborted
-      console.debug(`🎬 [Codex] Starting runStreamed() for session ${shortId(sessionId)}`);
+      codexDebug(`🎬 [Codex] Starting runStreamed() for session ${shortId(sessionId)}`);
       const turnOptions = abortController ? { signal: abortController.signal } : undefined;
       const { events } = await thread.runStreamed(prompt, turnOptions);
-      console.debug(`✅ [Codex] runStreamed() returned, starting event iteration`);
+      codexDebug(`✅ [Codex] runStreamed() returned, starting event iteration`);
 
       const currentMessage: Array<{
         type: string;
@@ -1096,7 +1102,7 @@ export class CodexPromptService {
 
       for await (const event of events) {
         eventCount++;
-        console.debug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
+        codexDebug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
 
         // Check if stop was requested
         if (this.stopRequested.get(sessionId)) {

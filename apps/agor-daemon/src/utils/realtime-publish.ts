@@ -10,6 +10,16 @@ import {
   type RealtimeAccessSessionRepository,
 } from './realtime-access-cache.js';
 
+const DEBUG_REALTIME_PUBLISH =
+  process.env.AGOR_DEBUG_REALTIME_PUBLISH === '1' ||
+  process.env.DEBUG?.includes('realtime-publish');
+
+function realtimePublishDebug(...args: unknown[]): void {
+  if (DEBUG_REALTIME_PUBLISH) {
+    console.debug(...args);
+  }
+}
+
 type PublishContext = Pick<HookContext, 'path' | 'method' | 'id' | 'event' | 'app' | 'params'>;
 
 type ConnectionLike = {
@@ -308,7 +318,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
 
   app.publish(async (data: unknown, context: HookContext) => {
     if (context.path && context.method && !isStreamingEvent(context)) {
-      console.log(
+      realtimePublishDebug(
         `📡 [Publish] ${context.path} ${context.method}`,
         context.id
           ? `id: ${typeof context.id === 'string' ? shortId(context.id) : context.id}`

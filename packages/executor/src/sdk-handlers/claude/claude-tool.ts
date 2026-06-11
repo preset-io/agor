@@ -57,6 +57,16 @@ import {
 import type { ProcessedEvent } from './message-processor.js';
 import { ClaudePromptService } from './prompt-service.js';
 
+const DEBUG_CLAUDE_STREAMING =
+  process.env.AGOR_DEBUG_CLAUDE_STREAMING === '1' ||
+  process.env.DEBUG?.includes('claude-streaming');
+
+function claudeStreamingDebug(...args: unknown[]): void {
+  if (DEBUG_CLAUDE_STREAMING) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Format a human-readable rate limit message for the conversation UI.
  *
@@ -490,7 +500,7 @@ export class ClaudeTool implements ITool {
             currentThinkingMessageId = generateId() as MessageID;
             const thinkingStartTime = Date.now();
             const ttfb = thinkingStartTime - streamStartTime;
-            console.debug(`⏱️ [SDK] TTFB (thinking): ${ttfb}ms`);
+            claudeStreamingDebug(`⏱️ [SDK] TTFB (thinking): ${ttfb}ms`);
 
             if (streamingCallbacks.onThinkingStart) {
               // Note: budget is extracted from thinking block if available
@@ -718,7 +728,7 @@ export class ClaudeTool implements ITool {
           currentTextMessageId = generateId() as MessageID;
           firstTokenTime = Date.now();
           const ttfb = firstTokenTime - streamStartTime;
-          console.debug(`⏱️ [SDK] TTFB (text): ${ttfb}ms`);
+          claudeStreamingDebug(`⏱️ [SDK] TTFB (text): ${ttfb}ms`);
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamStart(currentTextMessageId, {
@@ -748,7 +758,7 @@ export class ClaudeTool implements ITool {
           await streamingCallbacks.onStreamEnd(currentTextMessageId);
           const totalTime = streamEndTime - streamStartTime;
           const streamingTime = firstTokenTime ? streamEndTime - firstTokenTime : 0;
-          console.debug(
+          claudeStreamingDebug(
             `⏱️ [Streaming] Complete - TTFB: ${firstTokenTime ? firstTokenTime - streamStartTime : 0}ms, streaming: ${streamingTime}ms, total: ${totalTime}ms`
           );
         }

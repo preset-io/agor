@@ -48,6 +48,15 @@ import { registerTaskTools } from './tools/tasks.js';
 import { registerUserTools } from './tools/users.js';
 import { registerWidgetTools } from './tools/widgets.js';
 
+const DEBUG_MCP_REQUESTS =
+  process.env.AGOR_DEBUG_MCP_REQUESTS === '1' || process.env.DEBUG?.includes('mcp-requests');
+
+function mcpRequestDebug(...args: unknown[]): void {
+  if (DEBUG_MCP_REQUESTS) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Shared context passed to every tool handler.
  */
@@ -497,7 +506,7 @@ export function setupMCPRoutes(
 
   const handler = async (req: Request, res: Response) => {
     try {
-      console.log(`🔌 Incoming MCP request: ${req.method} /mcp`);
+      mcpRequestDebug(`🔌 Incoming MCP request: ${req.method} /mcp`);
 
       // Reject session tokens in query strings — they leak via Referer, browser
       // history, reverse-proxy access logs, and any verbose request logger that
@@ -611,7 +620,7 @@ export function setupMCPRoutes(
         }
       }
 
-      console.log(
+      mcpRequestDebug(
         `🔌 MCP request authenticated (user: ${shortId(userId)}, session: ${sessionId ? shortId(sessionId) : 'none'})`
       );
 

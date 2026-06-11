@@ -10,6 +10,15 @@ import { type AgorClient, createClient } from '@agor/core/api';
 // Re-export AgorClient type for use in other executor files
 export type { AgorClient } from '@agor/core/api';
 
+const DEBUG_FEATHERS_CLIENT =
+  process.env.AGOR_DEBUG_FEATHERS_CLIENT === '1' || process.env.DEBUG?.includes('feathers-client');
+
+function feathersClientDebug(...args: unknown[]): void {
+  if (DEBUG_FEATHERS_CLIENT) {
+    console.debug(...args);
+  }
+}
+
 /**
  * In-memory storage for executor authentication
  * Executors need to store authentication for subsequent requests but can't use localStorage
@@ -47,7 +56,7 @@ export async function createExecutorClient(
 
   // Create client with custom storage (don't auto-connect, we'll connect manually)
   const client = createClient(daemonUrl, false, {
-    verbose: true, // Log connection status for debugging
+    verbose: DEBUG_FEATHERS_CLIENT, // Log connection status for debugging
     reconnectionAttempts: 5, // Allow more retries for transient network hiccups during long-running tasks
   });
 
@@ -77,7 +86,7 @@ export async function createExecutorClient(
     });
   });
 
-  console.log('[executor] Connected to daemon via Feathers client');
+  feathersClientDebug('[executor] Connected to daemon via Feathers client');
 
   // Authenticate with session token (which is now a JWT!)
   // This uses the standard JWT strategy - no custom strategy needed
@@ -87,7 +96,7 @@ export async function createExecutorClient(
     accessToken: sessionToken,
   });
 
-  console.log('[executor] Authenticated with session token (JWT)');
+  feathersClientDebug('[executor] Authenticated with session token (JWT)');
 
   // Re-authenticate automatically on socket reconnect
   // When socket.io reconnects after a transport error, the new socket is unauthenticated.

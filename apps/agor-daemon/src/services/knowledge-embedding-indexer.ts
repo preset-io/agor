@@ -191,6 +191,7 @@ export class KnowledgeEmbeddingIndexer {
   private provider = new OpenAIEmbeddingProvider();
   private lastError: string | null = null;
   private lastIndexedAt: Date | null = null;
+  private pgvectorStorageReady = false;
 
   constructor(private db: Database) {
     this.variables = new AppVariableRepository(db);
@@ -424,10 +425,13 @@ export class KnowledgeEmbeddingIndexer {
       .one()) as { unit_id: string } | undefined;
     if (!pending) return this.idle();
 
-    const pgvector = await ensureKnowledgePgvectorStorage(this.db);
-    if (!pgvector.available) {
-      this.lastError = pgvector.reason ?? 'Knowledge pgvector storage is unavailable';
-      return 0;
+    if (!this.pgvectorStorageReady) {
+      const pgvector = await ensureKnowledgePgvectorStorage(this.db);
+      if (!pgvector.available) {
+        this.lastError = pgvector.reason ?? 'Knowledge pgvector storage is unavailable';
+        return 0;
+      }
+      this.pgvectorStorageReady = true;
     }
 
     const batchSize = Math.min(Math.max(semantic.indexing?.batch_size ?? 32, 1), 128);

@@ -18,6 +18,15 @@ import type { Branch, BranchID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { BranchesServiceImpl } from '../declarations';
 
+const DEBUG_HEALTH_MONITOR =
+  process.env.AGOR_DEBUG_HEALTH_MONITOR === '1' || process.env.DEBUG?.includes('health-monitor');
+
+function healthMonitorDebug(...args: unknown[]): void {
+  if (DEBUG_HEALTH_MONITOR) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Health Monitor - Singleton service for periodic health checks
  */
@@ -65,13 +74,13 @@ export class HealthMonitor {
       // Start monitoring if not already monitored
       // Monitor both 'running' and 'starting' - health checks will transition 'starting' → 'running'
       if (!this.intervals.has(branch.branch_id)) {
-        console.log(`🏥 Starting health monitoring for branch: ${branch.name}`);
+        healthMonitorDebug(`🏥 Starting health monitoring for branch: ${branch.name}`);
         this.startMonitoring(branch.branch_id);
       }
     } else {
       // Stop monitoring if status is not running or starting
       if (this.intervals.has(branch.branch_id)) {
-        console.log(`🏥 Stopping health monitoring for branch: ${branch.name}`);
+        healthMonitorDebug(`🏥 Stopping health monitoring for branch: ${branch.name}`);
         this.stopMonitoring(branch.branch_id);
       }
     }
@@ -161,8 +170,6 @@ export class HealthMonitor {
    * Called on daemon startup to resume monitoring existing environments
    */
   async initialize() {
-    console.log('🏥 Initializing Health Monitor...');
-
     try {
       const branchesService = this.app.service('branches');
 
@@ -184,14 +191,10 @@ export class HealthMonitor {
           w.environment_instance?.status === 'starting'
       );
 
-      if (activeBranches.length > 0) {
-        console.log(`   Found ${activeBranches.length} active environment(s)`);
-        for (const branch of activeBranches) {
-          this.startMonitoring(branch.branch_id);
-        }
-      } else {
-        console.log('   No active environments found');
+      for (const branch of activeBranches) {
+        this.startMonitoring(branch.branch_id);
       }
+      console.log(`🏥 Health Monitor initialized (${activeBranches.length} active environment(s))`);
     } catch (error) {
       console.error('❌ Failed to initialize Health Monitor:', error);
     }
@@ -203,17 +206,16 @@ export class HealthMonitor {
    * Called on daemon shutdown
    */
   cleanup() {
-    console.log('🏥 Cleaning up Health Monitor...');
     this.isShuttingDown = true;
 
     // Clear all intervals
-    for (const [branchId, interval] of this.intervals.entries()) {
+    const stoppedCount = this.intervals.size;
+    for (const interval of this.intervals.values()) {
       clearInterval(interval);
-      console.log(`   Stopped monitoring: ${shortId(branchId)}`);
     }
 
     this.intervals.clear();
-    console.log('   Health Monitor cleaned up');
+    console.log(`🏥 Health Monitor cleaned up (${stoppedCount} monitor(s) stopped)`);
   }
 
   /**

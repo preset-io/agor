@@ -26,6 +26,15 @@ import {
   type PromptPayload,
 } from './payload-types.js';
 
+const DEBUG_EXECUTOR_CLI =
+  process.env.AGOR_DEBUG_EXECUTOR_CLI === '1' || process.env.DEBUG?.includes('executor-cli');
+
+function executorCliDebug(...args: unknown[]): void {
+  if (DEBUG_EXECUTOR_CLI) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Read all input from stdin
  */
@@ -73,7 +82,7 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`[executor] Received command: ${payload.command}`);
+  executorCliDebug(`[executor] Received command: ${payload.command}`);
 
   // Special handling for prompt command - needs long-running WebSocket connection
   if (isPromptPayload(payload)) {
@@ -146,9 +155,9 @@ async function handlePromptPayload(
     const { filterEnv } = await import('@agor/core/config');
     const { env: safeEnv, rejected } = filterEnv(payload.env as Record<string, string>, (key) => {
       // Log key only — never the value, which is attacker-controlled.
-      console.warn(`[executor] Rejected denied env var from payload: ${key}`);
+      executorCliDebug(`[executor] Rejected denied env var from payload: ${key}`);
     });
-    console.log(
+    executorCliDebug(
       `[executor] Applying ${Object.keys(safeEnv).length} env vars from payload` +
         (rejected.length > 0 ? ` (${rejected.length} rejected)` : '')
     );
