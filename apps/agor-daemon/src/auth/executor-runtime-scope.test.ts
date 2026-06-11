@@ -359,13 +359,26 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/session scope/);
   });
 
-  it('wraps auth hooks with executor runtime scope validation', async () => {
+  it('wraps auth hooks and allows task-scoped API key resolution', async () => {
     const requireAuth = async (context: HookContext) => context;
-    const context = ctx({ path: 'config/resolve-api-key', method: 'create' });
+    const context = ctx({
+      path: 'config/resolve-api-key',
+      method: 'create',
+      data: { keyName: 'OPENAI_API_KEY', tool: 'codex' },
+    });
 
-    await expect(scopeExecutorRuntimeAuth(requireAuth)(context)).rejects.toThrow(
-      /not valid for this endpoint/
-    );
+    await expect(scopeExecutorRuntimeAuth(requireAuth)(context)).resolves.toBe(context);
+    expect(context.data).toMatchObject({ taskId: 'task-1' });
+  });
+
+  it('rejects API key resolution for another task under executor token auth', async () => {
+    const context = ctx({
+      path: 'config/resolve-api-key',
+      method: 'create',
+      data: { taskId: 'task-2', keyName: 'OPENAI_API_KEY', tool: 'codex' },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
   });
 
   it('lets wrapped auth hooks pass internal (provider-less) service composition', async () => {

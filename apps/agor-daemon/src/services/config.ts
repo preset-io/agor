@@ -15,12 +15,13 @@ import {
 import type { Database } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type {
-  AgenticToolName,
-  AuthenticatedParams,
-  Params,
-  TaskID,
-  UserID,
+import {
+  type AgenticToolName,
+  type AuthenticatedParams,
+  type Params,
+  type TaskID,
+  TOOL_API_KEY_NAMES,
+  type UserID,
 } from '@agor/core/types';
 
 const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
@@ -35,6 +36,21 @@ const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
 
 function isResolvableApiKeyName(value: string): value is ApiKeyName {
   return Object.hasOwn(RESOLVABLE_API_KEY_NAMES, value);
+}
+
+type ExecutorTokenPayload = {
+  type?: string;
+  purpose?: string;
+  task_id?: string;
+};
+
+function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefined {
+  const payload = (params as AuthenticatedParams | undefined)?.authentication?.payload as
+    | ExecutorTokenPayload
+    | undefined;
+  return payload?.type === 'executor-session' && payload.purpose === 'executor-task'
+    ? payload
+    : undefined;
 }
 
 /**
@@ -132,35 +148,76 @@ export class ConfigService {
     useNativeAuth: boolean;
     decryptionFailed?: boolean;
   }> {
-    // This method returns plaintext secret material and is only for trusted
-    // daemon/executor flows. External callers must authenticate with an
-    // executor service JWT; normal user/API-key auth may read masked config via
-    // /config but must not resolve raw configured keys.
-    if (params?.provider) {
-      const caller = (params as AuthenticatedParams | undefined)?.user;
-      if (!caller) {
-        throw new NotAuthenticated('Authentication required');
-      }
-      if (caller._isServiceAccount !== true) {
-        throw new Forbidden('Only the executor service account may resolve API keys');
-      }
-    }
-
     const { taskId, keyName, tool } = data;
     if (!isResolvableApiKeyName(keyName)) {
       throw new BadRequest('Unsupported API key name');
     }
 
-    // Fetch task to get creator user ID
+    // This method returns plaintext secret material and is only for trusted
+    // daemon/executor flows. External callers must authenticate either as the
+    // service account or with a task-scoped executor runtime JWT. Normal
+    // user/API-key auth may read masked config via /config but must not resolve
+    // raw configured keys.
+    const executorPayload = getExecutorTokenPayload(params);
+    if (params?.provider) {
+      const caller = (params as AuthenticatedParams | undefined)?.user;
+      const isServiceAccount = caller?._isServiceAccount === true;
+      if (!isServiceAccount && !executorPayload) {
+        if (!caller) {
+          throw new NotAuthenticated('Authentication required');
+        }
+        throw new Forbidden('Only executor runtime credentials may resolve API keys');
+      }
+      if (executorPayload?.task_id && executorPayload.task_id !== taskId) {
+        throw new Forbidden('Executor token task scope does not match this request');
+      }
+    }
+
+    // Fetch task to get creator user ID and session. This is required for
+    // executor-token calls and best-effort for internal/service-account calls.
     let userId: UserID | undefined;
+    let sessionId: string | undefined;
     try {
       const tasksService = this.app?.service('tasks');
       if (tasksService) {
         const task = await tasksService.get(taskId, { provider: undefined });
         userId = task?.created_by;
+        sessionId = task?.session_id;
       }
     } catch (err) {
       console.warn(`[Config.resolveApiKey] Failed to fetch task ${taskId}:`, err);
+      if (executorPayload) {
+        throw new Forbidden('Executor token task scope could not be verified');
+      }
+    }
+
+    if (executorPayload && (!userId || !sessionId)) {
+      throw new Forbidden('Executor token task scope could not be verified');
+    }
+
+    // Executor runtime calls are narrowly scoped to the SDK for this session.
+    // Do not let a compromised executor token ask for another tool's bucket or
+    // an unrelated credential name.
+    if (executorPayload) {
+      const verifiedSessionId = sessionId;
+      if (!verifiedSessionId) {
+        throw new Forbidden('Executor token task scope could not be verified');
+      }
+      if (!tool) {
+        throw new BadRequest('Tool is required for executor API key resolution');
+      }
+      const expectedKeyName = TOOL_API_KEY_NAMES[tool];
+      if (expectedKeyName && expectedKeyName !== keyName) {
+        throw new Forbidden('Executor token is not valid for this API key');
+      }
+      const sessionsService = this.app?.service('sessions');
+      if (!sessionsService) {
+        throw new Forbidden('Executor token tool scope could not be verified');
+      }
+      const session = await sessionsService.get(verifiedSessionId, { provider: undefined });
+      if (session?.agentic_tool !== tool) {
+        throw new Forbidden('Executor token tool scope does not match this session');
+      }
     }
 
     // Use core resolveApiKey with database access

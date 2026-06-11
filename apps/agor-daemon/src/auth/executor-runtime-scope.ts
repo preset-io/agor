@@ -299,6 +299,13 @@ export function executorRuntimeScopeGuard() {
         throw new Forbidden('Executor token is not valid for this endpoint');
       }
       requireMatchingSessionRoute(context, scope);
+    } else if (path === 'config/resolve-api-key') {
+      if (context.method !== 'create') {
+        throw new Forbidden('Executor token is not valid for this endpoint');
+      }
+      const taskId = expectClaim(scope.taskId, 'task');
+      expectMatch(taskId, data.taskId ?? data.task_id, 'task');
+      setIfAbsent(data, 'taskId', taskId);
     } else {
       throw new Forbidden('Executor token is not valid for this endpoint');
     }
