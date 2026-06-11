@@ -367,4 +367,18 @@ describe('executorRuntimeScopeGuard', () => {
       /not valid for this endpoint/
     );
   });
+
+  it('lets wrapped auth hooks pass internal (provider-less) service composition', async () => {
+    // Mirrors the production failure: the externally-guarded
+    // sessions/:id/mcp-servers handler fans out to the non-allowlisted
+    // mcp-servers service with the executor payload but no transport provider.
+    const requireAuth = async (context: HookContext) => context;
+    const context = ctx({
+      path: 'mcp-servers',
+      method: 'find',
+      params: { authentication: { payload }, query: {} },
+    });
+
+    await expect(scopeExecutorRuntimeAuth(requireAuth)(context)).resolves.toBe(context);
+  });
 });
