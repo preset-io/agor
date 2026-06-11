@@ -110,6 +110,32 @@ describe('applySessionConfigDefaults', () => {
     );
   });
 
+  it("fills missing advisorModel from the user's model default", async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: { agentic_tool: 'claude-code', created_by: ALICE },
+      users: {
+        [ALICE]: {
+          user_id: ALICE,
+          default_agentic_config: {
+            'claude-code': {
+              modelConfig: { model: 'claude-sonnet-4-6', advisorModel: 'opus' },
+            },
+          },
+        },
+      },
+    });
+    await hook(ctx);
+    expect(
+      (ctx.data as { model_config: { model: string; advisorModel: string } }).model_config
+    ).toMatchObject({
+      model: 'claude-sonnet-4-6',
+      advisorModel: 'opus',
+    });
+  });
+
   it('fills a partial effort-only model_config with the default model and preserves effort', async () => {
     const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
     const ctx = makeContext({
@@ -129,6 +155,29 @@ describe('applySessionConfigDefaults', () => {
       mode: 'alias',
       model: 'claude-sonnet-4-6',
       effort: 'max',
+    });
+  });
+
+  it('fills a partial advisor-only model_config with the default model and preserves advisorModel', async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: {
+        agentic_tool: 'claude-code',
+        created_by: ALICE,
+        model_config: { advisorModel: 'opus', updated_at: 'client-time' },
+      },
+      users: { [ALICE]: { user_id: ALICE } },
+    });
+    await hook(ctx);
+    expect(
+      (ctx.data as { model_config: { mode: string; model: string; advisorModel: string } })
+        .model_config
+    ).toMatchObject({
+      mode: 'alias',
+      model: 'claude-sonnet-4-6',
+      advisorModel: 'opus',
     });
   });
 

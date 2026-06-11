@@ -175,6 +175,22 @@ describe('resolveSessionDefaults', () => {
       expect(r.model_config?.updated_at).toBe(now.toISOString());
     });
 
+    it("preserves advisorModel from the user's tool default", () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'claude-code',
+        user: makeUser({
+          'claude-code': { modelConfig: { model: 'claude-sonnet-4-6', advisorModel: 'opus' } },
+        }),
+        now,
+      });
+      expect(r.model_config).toEqual({
+        mode: 'alias',
+        model: 'claude-sonnet-4-6',
+        advisorModel: 'opus',
+        updated_at: now.toISOString(),
+      });
+    });
+
     it('merges an effort-only override onto the tool default model', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
@@ -200,6 +216,24 @@ describe('resolveSessionDefaults', () => {
         mode: 'alias',
         model: 'claude-opus-4-6',
         effort: 'max',
+        updated_at: now.toISOString(),
+      });
+    });
+
+    it('merges split advisor/effort overrides onto the user default model', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'claude-code',
+        user: makeUser({
+          'claude-code': { modelConfig: { model: 'claude-opus-4-6', effort: 'high' } },
+        }),
+        overrides: { modelConfig: { advisorModel: 'sonnet' } },
+        now,
+      });
+      expect(r.model_config).toEqual({
+        mode: 'alias',
+        model: 'claude-opus-4-6',
+        effort: 'high',
+        advisorModel: 'sonnet',
         updated_at: now.toISOString(),
       });
     });

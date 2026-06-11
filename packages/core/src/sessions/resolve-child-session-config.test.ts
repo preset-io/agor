@@ -102,6 +102,7 @@ describe('resolveChildSessionConfig', () => {
         mode: 'alias',
         model: 'claude-opus-4-7',
         effort: 'high',
+        advisorModel: 'opus',
         updated_at: '2026-05-01T00:00:00.000Z',
       },
       permission_config: { mode: 'bypassPermissions' },
@@ -117,6 +118,7 @@ describe('resolveChildSessionConfig', () => {
       // Parent wins over user default on same-tool spawns.
       expect(r.model_config?.model).toBe('claude-opus-4-7');
       expect(r.model_config?.effort).toBe('high');
+      expect(r.model_config?.advisorModel).toBe('opus');
     });
 
     it('inherits parent permission_config when child tool === parent tool', () => {
@@ -141,6 +143,24 @@ describe('resolveChildSessionConfig', () => {
       });
       expect(r.model_config?.model).toBe('claude-haiku-4-5');
       expect(r.permission_config.mode).toBe('plan');
+    });
+
+    it('merges advisor-only override onto inherited parent model config', () => {
+      const r = resolveChildSessionConfig({
+        parent,
+        effectiveTool: 'claude-code',
+        overrides: {
+          modelConfig: { advisorModel: 'sonnet' },
+        },
+        now,
+      });
+      expect(r.model_config).toEqual({
+        mode: 'alias',
+        model: 'claude-opus-4-7',
+        effort: 'high',
+        advisorModel: 'sonnet',
+        updated_at: now.toISOString(),
+      });
     });
 
     it('defaults effectiveTool to parent.agentic_tool when omitted', () => {
