@@ -58,6 +58,17 @@ function makeService(repo: Repository<Widget>): {
 }
 
 describe('DrizzleService event emission', () => {
+  it('reuses a hook-prefetched record on get()', async () => {
+    const prefetched = { id: 'w1', name: 'from hook' };
+    const repo = makeRepo([{ id: 'w1', name: 'from repo' }]);
+    const { service } = makeService(repo);
+
+    const result = await service.get('w1', { _agorPrefetchedRecord: prefetched } as never);
+
+    expect(result).toBe(prefetched);
+    expect(repo.findById).not.toHaveBeenCalled();
+  });
+
   it('emits only `created` on create()', async () => {
     const repo = makeRepo();
     const { service, events } = makeService(repo);

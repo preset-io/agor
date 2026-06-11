@@ -7,13 +7,17 @@
 
 import type { Branch, BranchPermissionLevel, HookContext, Session } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   ensureCanPromptInSession,
   hasBranchPermission,
   isSuperAdmin,
+  loadBranchFromSession,
+  loadSession,
+  loadSessionBranch,
   paginateClientSide,
   resolveBranchPermission,
+  resolveSessionContext,
 } from './branch-authorization';
 
 /** Minimal branch fixture for permission tests */
@@ -280,6 +284,93 @@ describe('ensureCanPromptInSession', () => {
       ctx.params.provider = undefined;
       expect(() => hook(ctx)).not.toThrow();
     });
+  });
+});
+
+describe('request-scoped RBAC loading', () => {
+  const branch = makeBranch({ branch_id: 'branch-cache-1' as Branch['branch_id'] });
+  const session = {
+    session_id: 'session-cache-1',
+    branch_id: branch.branch_id,
+    created_by: USER_ID,
+  } as Session;
+
+  function makeBranchRepo() {
+    return {
+      findById: vi.fn(async () => branch),
+      isOwner: vi.fn(async () => false),
+      resolveUserPermission: vi.fn(async () => 'session' as BranchPermissionLevel),
+    };
+  }
+
+  it('reuses a loaded session and branch across RBAC hooks in one request', async () => {
+    const sessionService = { get: vi.fn(async () => session) };
+    const branchRepo = makeBranchRepo();
+    const ctx = {
+      path: 'messages',
+      method: 'create',
+      data: { session_id: session.session_id },
+      params: {
+        provider: 'rest',
+        user: { user_id: USER_ID, role: ROLES.MEMBER },
+        sessionId: session.session_id,
+      },
+    } as unknown as HookContext;
+
+    await loadSession(sessionService)(ctx);
+    await loadSession(sessionService)(ctx);
+    await loadBranchFromSession(branchRepo as never)(ctx);
+    await loadBranchFromSession(branchRepo as never)(ctx);
+
+    expect(sessionService.get).toHaveBeenCalledTimes(1);
+    expect(branchRepo.findById).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks sessions.get hook-loaded session as prefetched for the service get()', async () => {
+    const sessionService = { get: vi.fn(async () => session) };
+    const branchRepo = makeBranchRepo();
+    const ctx = {
+      path: 'sessions',
+      method: 'get',
+      id: session.session_id,
+      params: {
+        provider: 'rest',
+        user: { user_id: USER_ID, role: ROLES.MEMBER },
+      },
+    } as unknown as HookContext;
+
+    await loadSessionBranch(sessionService, branchRepo as never)(ctx);
+
+    expect(sessionService.get).toHaveBeenCalledTimes(1);
+    expect(ctx.params.session).toBe(session);
+    expect((ctx.params as { _agorPrefetchedRecord?: unknown })._agorPrefetchedRecord).toBe(session);
+  });
+
+  it('resolves id-addressed message context from the stored record, not spoofed query', async () => {
+    const existingMessage = {
+      message_id: 'message-cache-1',
+      session_id: session.session_id,
+    };
+    const ctx = {
+      path: 'messages',
+      method: 'get',
+      id: existingMessage.message_id,
+      params: {
+        provider: 'rest',
+        query: { session_id: 'spoofed-session' },
+        user: { user_id: USER_ID, role: ROLES.MEMBER },
+      },
+      service: {
+        get: vi.fn(async () => existingMessage),
+      },
+    } as unknown as HookContext;
+
+    await resolveSessionContext()(ctx);
+
+    expect(ctx.params.sessionId).toBe(session.session_id);
+    expect((ctx.params as { _agorPrefetchedRecord?: unknown })._agorPrefetchedRecord).toBe(
+      existingMessage
+    );
   });
 });
 

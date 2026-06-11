@@ -243,6 +243,20 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
    * Get a single record by ID
    */
   async get(id: Id, _params?: P): Promise<T> {
+    // RBAC before-hooks sometimes have to load the target record to resolve
+    // its parent session/branch before the service method runs. When they do,
+    // they stash that exact record on params so the service get/patch/remove
+    // path does not immediately perform the same primary-key read again.
+    const prefetched = (_params as { _agorPrefetchedRecord?: T } | undefined)
+      ?._agorPrefetchedRecord;
+    if (
+      prefetched &&
+      (prefetched as Record<string, unknown>)[this.id] !== undefined &&
+      String((prefetched as Record<string, unknown>)[this.id]) === String(id)
+    ) {
+      return prefetched;
+    }
+
     const result = await this.repository.findById(String(id));
 
     if (!result) {
