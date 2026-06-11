@@ -30,6 +30,7 @@ import {
   KNOWLEDGE_GRAPH_EDGE_TYPES,
   KNOWLEDGE_GRAPH_NODE_TYPES,
   KNOWLEDGE_VISIBILITIES,
+  normalizeKnowledgeDocumentIconEmoji,
   parseKnowledgeUri,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -1209,7 +1210,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .string({ error: 'iconEmoji must be a string or null when provided.' })
           .nullable()
           .optional()
-          .describe('Optional emoji icon for the document. Pass null or an empty string to clear.'),
+          .describe(
+            'Optional emoji icon for the document. Pass null or an empty string to clear. Values are trimmed and capped to a short display-safe length.'
+          ),
         visibility: KnowledgeVisibilitySchema.optional().describe(
           'Visibility (default: namespace default or public)'
         ),
@@ -1264,9 +1267,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const iconEmoji =
         args.iconEmoji === undefined
           ? undefined
-          : typeof args.iconEmoji === 'string'
-            ? args.iconEmoji.trim() || null
-            : null;
+          : normalizeKnowledgeDocumentIconEmoji(args.iconEmoji);
 
       const data = {
         document_id: coerceString(args.documentId),

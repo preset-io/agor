@@ -161,6 +161,17 @@ export const KNOWLEDGE_GRAPH_EDGE_TYPES = [
 
 export type KnowledgeGraphEdgeType = (typeof KNOWLEDGE_GRAPH_EDGE_TYPES)[number];
 
+export const KNOWLEDGE_DOCUMENT_ICON_EMOJI_MAX_LENGTH = 32;
+
+export function normalizeKnowledgeDocumentIconEmoji(
+  icon: string | null | undefined
+): string | null {
+  if (typeof icon !== 'string') return null;
+  const trimmed = icon.trim();
+  if (!trimmed) return null;
+  return [...trimmed].slice(0, KNOWLEDGE_DOCUMENT_ICON_EMOJI_MAX_LENGTH).join('');
+}
+
 export const KNOWLEDGE_URI_PREFIX = 'agor://kb/';
 
 /**

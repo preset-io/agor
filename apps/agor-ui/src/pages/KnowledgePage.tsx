@@ -16,6 +16,7 @@ import type {
 import {
   hasMinimumRole,
   KNOWLEDGE_DOCUMENT_KINDS,
+  normalizeKnowledgeDocumentIconEmoji,
   normalizeKnowledgeFolderPath,
   ROLES,
   titleFromKnowledgeContent,
@@ -534,13 +535,6 @@ export function matchesKnowledgeSidebarFilter(
 
   const terms = normalizedQuery.split(/\s+/).filter(Boolean);
   return terms.length > 0 && terms.every((term) => haystack.includes(term));
-}
-
-export function knowledgeDocumentDisplayIcon(
-  doc: Pick<CoreKnowledgeDocument, 'icon_emoji'>,
-  fallback = '📄'
-): string {
-  return doc.icon_emoji?.trim() || fallback;
 }
 
 export const buildKnowledgeSearchResultKey = (query: string, mode: KnowledgeSearchMode) =>
@@ -2199,7 +2193,7 @@ export function KnowledgePage({
 
   const updateActiveDocumentIcon = async (emoji: string | null) => {
     if (!activeDoc) return;
-    const nextIcon = emoji?.trim() || null;
+    const nextIcon = normalizeKnowledgeDocumentIconEmoji(emoji);
     setIconEmojiDraft(nextIcon);
     if (isDraftDocument) {
       setDraftDocument((current) => (current ? { ...current, icon_emoji: nextIcon } : current));
