@@ -24,7 +24,10 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
-  const repos = mapToArray(repoById).sort((a, b) => a.name.localeCompare(b.name));
+  const repos = useMemo(
+    () => mapToArray(repoById).sort((a, b) => a.name.localeCompare(b.name)),
+    [repoById]
+  );
   const [searchTerm, setSearchTerm] = useState('');
   const [repoModalOpen, setRepoModalOpen] = useState(false);
   const [editingRepo, setEditingRepo] = useState<Repo | null>(null);

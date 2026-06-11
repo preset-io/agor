@@ -1,4 +1,4 @@
-import { tokenizeSearchQuery } from '@agor-live/client';
+import { matchSearchTokens, tokenizeSearchQuery } from '@agor-live/client';
 
 export type SearchableValue = string | number | boolean | null | undefined | SearchableValue[];
 
@@ -24,12 +24,8 @@ export function matchesSettingsSearch<T>(
   const tokens = getSettingsSearchTokens(query);
   if (tokens.length === 0) return true;
 
-  const haystack = accessors
-    .flatMap((accessor) => flattenSearchableValue(accessor(item)))
-    .join(' ')
-    .toLowerCase();
-
-  return tokens.every((token) => haystack.includes(token));
+  const fields = accessors.flatMap((accessor) => flattenSearchableValue(accessor(item)));
+  return matchSearchTokens(tokens, fields);
 }
 
 export function filterBySettingsSearch<T>(
