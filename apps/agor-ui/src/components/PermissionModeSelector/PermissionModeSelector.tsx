@@ -38,6 +38,9 @@ export interface PermissionModeSelectorProps {
    * only the icon fits. The tooltip preserves the label either way.
    */
   iconOnly?: boolean;
+  /** Render compact selects with plain text labels (useful in popovers/forms). */
+  plain?: boolean;
+  fullWidth?: boolean;
   /** Size for compact mode */
   size?: 'small' | 'middle' | 'large';
   /** Codex-specific: sandbox mode value */
@@ -267,6 +270,8 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   agentic_tool = 'claude-code',
   compact = false,
   iconOnly = false,
+  plain = false,
+  fullWidth = false,
   size = 'middle',
   codexSandboxMode,
   codexApprovalPolicy,
@@ -291,14 +296,18 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
     // (used by SessionPanel for inline Codex controls)
     if (agentic_tool === 'codex' && onCodexChange) {
       return (
-        <Space size={4}>
+        <Space size={4} direction={fullWidth ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
           <Select
             value={effectiveCodexSandboxMode}
             onChange={(val) => onCodexChange(val, effectiveCodexApprovalPolicy)}
             size={size}
             placeholder="Sandbox"
             popupMatchSelectWidth={false}
-            style={{ minWidth: 70, fontSize: token.fontSizeSM }}
+            style={{
+              minWidth: 70,
+              width: fullWidth ? '100%' : undefined,
+              fontSize: token.fontSizeSM,
+            }}
             optionLabelProp="label"
             options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
               label,
@@ -320,7 +329,11 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             size={size}
             placeholder="Approval"
             popupMatchSelectWidth={false}
-            style={{ minWidth: 70, fontSize: token.fontSizeSM }}
+            style={{
+              minWidth: 70,
+              width: fullWidth ? '100%' : undefined,
+              fontSize: token.fontSizeSM,
+            }}
             optionLabelProp="label"
             options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
               label,
@@ -352,12 +365,14 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
         <Select
           value={effectiveValue}
           onChange={onChange}
-          style={{ fontSize: token.fontSizeSM }}
+          style={{ fontSize: token.fontSizeSM, width: fullWidth ? '100%' : undefined }}
           size={size}
           popupMatchSelectWidth={false}
           optionLabelProp="label"
           options={modes.map(({ mode, label, description, icon, color }) => ({
-            label: iconOnly ? (
+            label: plain ? (
+              label
+            ) : iconOnly ? (
               <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>
             ) : (
               <Space size={4} style={{ fontSize: token.fontSizeSM }}>

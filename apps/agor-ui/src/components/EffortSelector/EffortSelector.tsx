@@ -21,6 +21,8 @@ interface EffortSelectorProps {
   onChange?: (effort: EffortLevel) => void;
   size?: 'small' | 'middle' | 'large';
   compact?: boolean;
+  plain?: boolean;
+  fullWidth?: boolean;
 }
 
 const EFFORT_OPTIONS: {
@@ -48,6 +50,8 @@ export const EffortSelector: React.FC<EffortSelectorProps> = ({
   onChange,
   size = 'middle',
   compact = false,
+  plain = false,
+  fullWidth = false,
 }) => {
   const { token } = theme.useToken();
 
@@ -58,14 +62,16 @@ export const EffortSelector: React.FC<EffortSelectorProps> = ({
         onChange={onChange}
         size={size}
         style={{
-          width: compact ? undefined : 160,
+          width: fullWidth ? '100%' : compact ? undefined : 160,
           fontSize: compact ? token.fontSizeSM : undefined,
         }}
         popupMatchSelectWidth={false}
         optionLabelProp="label"
         options={EFFORT_OPTIONS.map((opt) => ({
           value: opt.value,
-          label: compact ? (
+          label: plain ? (
+            opt.label
+          ) : compact ? (
             <span style={{ fontSize: token.fontSizeSM }}>
               <BulbOutlined style={{ fontSize: token.fontSizeSM - 1, marginRight: 2 }} />
               {opt.shortLabel}

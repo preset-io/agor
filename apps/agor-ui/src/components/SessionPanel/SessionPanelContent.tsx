@@ -14,13 +14,11 @@ import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppMcpData, useAppRepoData, useAppUserData } from '../../contexts/AppDataContext';
 import { copyToClipboard } from '../../utils/clipboard';
-import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { ConversationView } from '../ConversationView';
 import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminal';
 import { ForkSpawnModal } from '../ForkSpawnModal';
-import { MCPServerPill } from '../MCPServer';
 import { IssuePill, PullRequestPill } from '../Pill';
 
 export interface SessionPanelContentProps {
@@ -54,7 +52,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     session,
     branch = null,
     currentUserId,
-    sessionMcpServerIds = [],
     scrollToBottom,
     scrollToTop,
     setScrollToBottom,
@@ -77,8 +74,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     // entity churn (e.g. repo edits invalidating user/MCP consumers).
     const { userById } = useAppUserData();
     const { repoById } = useAppRepoData();
-    const { mcpServerById, userAuthenticatedMcpServerIds } = useAppMcpData();
-
+    const { mcpServerById } = useAppMcpData();
     // Get actions from context
     const {
       onOpenBranch,
@@ -114,7 +110,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           }}
         >
           {/* Pills section (only shown if there's content) */}
-          {(branch || sessionMcpServerIds.length > 0) && (
+          {branch && (
             <Space size={8} wrap style={{ flex: 1 }}>
               {/* Unified Branch Pill */}
               {branch && repo && (
@@ -136,22 +132,10 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               {branch?.pull_request_url && (
                 <PullRequestPill prUrl={branch.pull_request_url} currentRepo={repo ?? undefined} />
               )}
-              {/* MCP Servers */}
-              {sessionMcpServerIds
-                .map((serverId) => mcpServerById.get(serverId))
-                .filter(Boolean)
-                .map((server) => (
-                  <MCPServerPill
-                    key={server!.mcp_server_id}
-                    server={server!}
-                    needsAuth={mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)}
-                    client={client}
-                  />
-                ))}
             </Space>
           )}
           {/* Spacer if no pills */}
-          {!(branch || sessionMcpServerIds.length > 0) && <div style={{ flex: 1 }} />}
+          {!branch && <div style={{ flex: 1 }} />}
           {/* Scroll Navigation Buttons - always visible */}
           <Space size={4}>
             <Tooltip title="Scroll to top of conversation">

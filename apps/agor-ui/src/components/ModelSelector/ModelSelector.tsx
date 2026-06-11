@@ -10,7 +10,7 @@ import {
   type GeminiModel,
 } from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Input, Radio, Select, Space, Tooltip } from 'antd';
+import { Input, Radio, Select, Space, Tooltip, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import {
   DEFAULT_CURSOR_MODEL,
@@ -54,6 +54,8 @@ export interface ModelSelectorProps {
    * client, the picker only shows static models.
    */
   client?: AgorClient | null;
+  /** Render as a single compact dropdown suitable for popovers/toolbars. */
+  compact?: boolean;
 }
 
 interface DynamicModelOption {
@@ -127,7 +129,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   agent,
   agentic_tool,
   client,
+  compact = false,
 }) => {
+  const { token } = theme.useToken();
+
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
 
@@ -306,6 +311,30 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       });
     }
   };
+
+  if (compact) {
+    const currentValue = value?.model || fallbackModel;
+    const options = modelList.map((m) => ({
+      value: m.id,
+      label: m.id,
+    }));
+    if (currentValue && !options.some((option) => option.value === currentValue)) {
+      options.unshift({ value: currentValue, label: currentValue });
+    }
+
+    return (
+      <Select
+        value={currentValue}
+        onChange={handleModelChange}
+        size="small"
+        showSearch
+        optionFilterProp="label"
+        popupMatchSelectWidth={false}
+        style={{ width: '100%', fontSize: token.fontSizeSM }}
+        options={options}
+      />
+    );
+  }
 
   return (
     <Space orientation="vertical" style={{ width: '100%' }}>

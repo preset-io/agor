@@ -4,6 +4,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  MCPServer,
   PermissionMode,
   Session,
   SessionID,
@@ -20,16 +21,32 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
+  ApiOutlined,
   BranchesOutlined,
   CloseOutlined,
   CodeOutlined,
   ForkOutlined,
+  PlusOutlined,
   QuestionCircleOutlined,
+  RobotOutlined,
   SendOutlined,
   SettingOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import {
+  Alert,
+  Tag as AntTag,
+  App,
+  Badge,
+  Button,
+  Divider,
+  Popover,
+  Space,
+  Spin,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -48,10 +65,14 @@ import { CallbackToggleButton } from '../CallbackToggleButton';
 import { EffortSelector } from '../EffortSelector';
 import { FileUpload, FileUploadButton } from '../FileUpload';
 import { MCPServerPill } from '../MCPServer';
+import { summarizeSessionMcpServers } from '../MCPServer/mcp-session-summary';
+import { MCPServerSelect } from '../MCPServerSelect';
+import { type ModelConfig, ModelSelector } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
 import { PermissionModeSelector } from '../PermissionModeSelector';
-import { ContextWindowPill, ModelPill, TimerPill, TokenCountPill } from '../Pill';
+import { ContextWindowPill, TimerPill, TokenCountPill } from '../Pill';
 import { SessionIdsButton } from '../SessionIds';
+import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
 import { SessionPanelContent } from './SessionPanelContent';
 
@@ -207,6 +228,313 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
 );
 
 PromptInput.displayName = 'PromptInput';
+
+// ---------------------------------------------------------------------------
+
+interface SessionMcpFooterControlProps {
+  client: AgorClient | null;
+  sessionId: string;
+  sessionMcpServerIds: string[];
+  mcpServerById: Map<string, MCPServer>;
+  userAuthenticatedMcpServerIds: Set<string>;
+  onOpenSessionSettings?: (sessionId: string) => void;
+}
+
+const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = ({
+  client,
+  sessionId,
+  sessionMcpServerIds,
+  mcpServerById,
+  userAuthenticatedMcpServerIds,
+  onOpenSessionSettings,
+}) => {
+  const { token } = theme.useToken();
+  const { showSuccess, showError } = useThemedMessage();
+  const [open, setOpen] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+
+  const summary = React.useMemo(
+    () =>
+      summarizeSessionMcpServers(sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds),
+    [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]
+  );
+
+  const attachedServers = React.useMemo(
+    () =>
+      sessionMcpServerIds
+        .map((id) => mcpServerById.get(id))
+        .filter((server): server is MCPServer => Boolean(server)),
+    [sessionMcpServerIds, mcpServerById]
+  );
+
+  const handleChange = async (nextIds: string[]) => {
+    if (!client) return;
+    setSaving(true);
+    try {
+      const current = new Set(sessionMcpServerIds);
+      const next = new Set(nextIds);
+
+      await Promise.all([
+        ...nextIds
+          .filter((id) => !current.has(id))
+          .map((id) =>
+            client.service(`sessions/${sessionId}/mcp-servers`).create({ mcpServerId: id })
+          ),
+        ...sessionMcpServerIds
+          .filter((id) => !next.has(id))
+          .map((id) => client.service(`sessions/${sessionId}/mcp-servers`).remove(id)),
+      ]);
+
+      showSuccess('Session MCP servers updated');
+    } catch (err) {
+      showError(
+        `Failed to update MCP servers: ${err instanceof Error ? err.message : String(err)}`
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const content = (
+    <div style={{ width: 340, maxWidth: 'min(340px, 80vw)' }}>
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <div>
+          <Typography.Text strong>Session MCP servers</Typography.Text>
+          <Typography.Paragraph type="secondary" style={{ margin: `${token.sizeUnit}px 0 0` }}>
+            Attach tools/connectors that the agent can use in this conversation.
+          </Typography.Paragraph>
+        </div>
+
+        {attachedServers.length > 0 && (
+          <Space size={6} wrap>
+            {attachedServers.map((server) => (
+              <MCPServerPill
+                key={server.mcp_server_id}
+                server={server}
+                needsAuth={mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)}
+                client={client}
+              />
+            ))}
+          </Space>
+        )}
+
+        <MCPServerSelect
+          mcpServers={Array.from(mcpServerById.values())}
+          placeholder="Attach MCP servers…"
+          value={sessionMcpServerIds}
+          onChange={handleChange}
+          loading={saving}
+          disabled={!client}
+          style={{ width: '100%' }}
+        />
+
+        <Divider style={{ margin: `${token.sizeUnit}px 0` }} />
+        <Button
+          block
+          icon={<SettingOutlined />}
+          onClick={() => {
+            setOpen(false);
+            onOpenSessionSettings?.(sessionId);
+          }}
+        >
+          Open session settings
+        </Button>
+      </Space>
+    </div>
+  );
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      trigger="click"
+      placement="top"
+      getPopupContainer={(trigger) => trigger.parentElement ?? document.body}
+      title={null}
+      content={content}
+    >
+      <Tag
+        icon={<ApiOutlined />}
+        color="default"
+        title={`${summary.tooltip}. Click to add or change MCP servers.`}
+        style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
+      >
+        <span>MCP</span>
+        <AntTag
+          color={
+            summary.tone === 'error' ? 'error' : summary.tone === 'warning' ? 'warning' : undefined
+          }
+          style={{
+            marginInlineStart: token.sizeUnit,
+            marginInlineEnd: 0,
+            minWidth: 16,
+            height: 14,
+            paddingInline: 4,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            lineHeight: '12px',
+            fontSize: 10,
+            textAlign: 'center',
+            fontVariantNumeric: 'tabular-nums',
+            verticalAlign: 'middle',
+          }}
+        >
+          {summary.attachedCount}
+        </AntTag>
+        <PlusOutlined style={{ marginLeft: token.sizeUnit * 1.5 }} />
+      </Tag>
+    </Popover>
+  );
+};
+
+// ---------------------------------------------------------------------------
+
+interface SessionRunSettingsPopoverProps {
+  client: AgorClient | null;
+  session: Session;
+  modelLabel?: string;
+  modelConfig?: ModelConfig;
+  onModelConfigChange: (config: ModelConfig) => void;
+  effortLevel: EffortLevel;
+  onEffortChange: (effort: EffortLevel) => void;
+  permissionMode: PermissionMode;
+  onPermissionModeChange: (mode: PermissionMode) => void;
+  codexSandboxMode: CodexSandboxMode;
+  codexApprovalPolicy: CodexApprovalPolicy;
+  onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
+}
+
+const SessionRunSettingsPopover: React.FC<SessionRunSettingsPopoverProps> = ({
+  client,
+  session,
+  modelLabel,
+  modelConfig,
+  onModelConfigChange,
+  effortLevel,
+  onEffortChange,
+  permissionMode,
+  onPermissionModeChange,
+  codexSandboxMode,
+  codexApprovalPolicy,
+  onCodexPermissionChange,
+}) => {
+  const { token } = theme.useToken();
+
+  const getModelDisplayName = (modelId: string) => {
+    if (modelId.includes('sonnet')) {
+      const match = modelId.match(/sonnet-(\d)-(\d)/);
+      return match ? `sonnet-${match[1]}.${match[2]}` : 'sonnet';
+    }
+    if (modelId.includes('haiku')) {
+      const match = modelId.match(/haiku-(\d)-(\d)/);
+      return match ? `haiku-${match[1]}.${match[2]}` : 'haiku';
+    }
+    if (modelId.includes('opus')) {
+      const match = modelId.match(/opus-(\d)-(\d)/);
+      return match ? `opus-${match[1]}.${match[2]}` : 'opus';
+    }
+    return modelId;
+  };
+
+  const content = (
+    <div style={{ width: 320, maxWidth: 'min(320px, 80vw)' }}>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <div>
+          <Typography.Text strong>Quick session settings</Typography.Text>
+        </div>
+
+        {modelLabel && (
+          <div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Model
+            </Typography.Text>
+            <div style={{ marginTop: token.sizeUnit }}>
+              <ModelSelector
+                value={modelConfig}
+                onChange={onModelConfigChange}
+                agentic_tool={session.agentic_tool}
+                client={client}
+                compact
+              />
+            </div>
+          </div>
+        )}
+
+        {session.agentic_tool === 'claude-code' && (
+          <div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Reasoning effort
+            </Typography.Text>
+            <div style={{ marginTop: token.sizeUnit }}>
+              <EffortSelector
+                value={effortLevel}
+                onChange={onEffortChange}
+                size="small"
+                compact
+                plain
+                fullWidth
+              />
+            </div>
+          </div>
+        )}
+
+        <div>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Permissions
+          </Typography.Text>
+          <div style={{ marginTop: token.sizeUnit }}>
+            <PermissionModeSelector
+              value={permissionMode}
+              onChange={onPermissionModeChange}
+              agentic_tool={session.agentic_tool}
+              codexSandboxMode={codexSandboxMode}
+              codexApprovalPolicy={codexApprovalPolicy}
+              onCodexChange={onCodexPermissionChange}
+              compact
+              iconOnly={false}
+              plain
+              fullWidth
+              size="small"
+            />
+          </div>
+        </div>
+      </Space>
+    </div>
+  );
+
+  const trigger = modelLabel ? (
+    <Tag
+      icon={<RobotOutlined />}
+      color="default"
+      title="Model and run settings"
+      style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
+    >
+      <span>{getModelDisplayName(modelLabel)}</span>
+      <SettingOutlined style={{ marginLeft: token.sizeUnit * 1.5 }} />
+    </Tag>
+  ) : (
+    <Tag
+      icon={<SettingOutlined />}
+      color="default"
+      style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
+    >
+      Run
+    </Tag>
+  );
+
+  return (
+    <Popover
+      trigger="click"
+      placement="top"
+      getPopupContainer={(node) => node.parentElement ?? document.body}
+      content={content}
+      title={null}
+    >
+      {trigger}
+    </Popover>
+  );
+};
 
 // ---------------------------------------------------------------------------
 
@@ -683,6 +1011,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
+  const handleModelConfigChange = (newConfig: ModelConfig) => {
+    if (session && onUpdateSession) {
+      onUpdateSession(session.session_id, {
+        model_config: {
+          ...session.model_config,
+          mode: newConfig.mode,
+          model: newConfig.model,
+          ...(newConfig.provider ? { provider: newConfig.provider } : {}),
+          updated_at: new Date().toISOString(),
+        },
+      });
+    }
+  };
+
   const getStatusColor = () => {
     switch (session.status) {
       case 'running':
@@ -697,6 +1039,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         return 'default';
     }
   };
+
+  const modelLabel =
+    session.model_config?.model &&
+    session.agentic_tool === 'opencode' &&
+    session.model_config.provider
+      ? `${session.model_config.provider}/${session.model_config.model}`
+      : session.model_config?.model;
+  const modelConfig: ModelConfig | undefined = session.model_config?.model
+    ? {
+        mode: session.model_config.mode || 'alias',
+        model: session.model_config.model,
+        provider: session.model_config.provider,
+      }
+    : undefined;
 
   // Footer controls
   const footerControls = (
@@ -747,7 +1103,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 not authenticated — click to sign in.
               </span>
             }
-            style={{ marginBottom: 0 }}
+            style={{ marginBottom: 0, borderRadius: token.borderRadius }}
             banner
           />
         )}
@@ -792,6 +1148,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           }}
         >
           <Space size={4} wrap>
+            <SessionMcpFooterControl
+              client={client}
+              sessionId={session.session_id}
+              sessionMcpServerIds={sessionMcpServerIds}
+              mcpServerById={mcpServerById}
+              userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
+              onOpenSessionSettings={onOpenSettings}
+            />
             {footerTimerTask && (
               <TimerPill
                 status={footerTimerTask.status}
@@ -806,17 +1170,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               />
             )}
             <SessionIdsButton session={session} />
-            {session.model_config?.model && (
-              <ModelPill
-                model={
-                  session.agentic_tool === 'opencode' &&
-                  session.model_config.provider &&
-                  session.model_config.model
-                    ? `${session.model_config.provider}/${session.model_config.model}`
-                    : session.model_config.model
-                }
-              />
-            )}
             {tokenBreakdown.total > 0 && (
               <TokenCountPill
                 count={tokenBreakdown.total}
@@ -836,27 +1189,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             )}
           </Space>
           <Space size={4} wrap style={{ marginLeft: 'auto' }}>
-            {session.agentic_tool === 'claude-code' && (
-              <EffortSelector
-                value={effortLevel}
-                onChange={handleEffortChange}
-                size="small"
-                compact
-              />
-            )}
-            <PermissionModeSelector
-              value={permissionMode}
-              onChange={handlePermissionModeChange}
-              agentic_tool={session.agentic_tool}
-              codexSandboxMode={codexSandboxMode}
-              codexApprovalPolicy={codexApprovalPolicy}
-              onCodexChange={handleCodexPermissionChange}
-              compact
-              iconOnly
-              size="small"
-            />
             {isRunning && <Spin size="small" />}
             <CallbackToggleButton session={session} />
+            <SessionRunSettingsPopover
+              client={client}
+              session={session}
+              modelLabel={modelLabel}
+              modelConfig={modelConfig}
+              onModelConfigChange={handleModelConfigChange}
+              effortLevel={effortLevel}
+              onEffortChange={handleEffortChange}
+              permissionMode={permissionMode}
+              onPermissionModeChange={handlePermissionModeChange}
+              codexSandboxMode={codexSandboxMode}
+              codexApprovalPolicy={codexApprovalPolicy}
+              onCodexPermissionChange={handleCodexPermissionChange}
+            />
             <Space.Compact>
               <Tooltip
                 title={

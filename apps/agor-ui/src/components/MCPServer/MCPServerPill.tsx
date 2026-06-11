@@ -77,6 +77,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
   // waiting for a full MCPServer re-fetch from the parent.
   const [expiresAtOverride, setExpiresAtOverride] = useState<number | undefined>(undefined);
 
+  const isOAuthServer = server.auth?.type === 'oauth';
   const expiresAt = expiresAtOverride ?? server.auth?.oauth_token_expires_at;
 
   const handleOAuthClick = async () => {
@@ -154,7 +155,9 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
   // see both the relative countdown and the absolute wall-clock time — handy
   // for spotting providers with suspiciously short or long TTLs.
   let authedTooltip: React.ReactNode;
-  if (expiresAt) {
+  if (!isOAuthServer) {
+    authedTooltip = `${server.transport.toUpperCase()} MCP server`;
+  } else if (expiresAt) {
     const date = new Date(expiresAt);
     const { verb, phrase } = formatExpiresIn(expiresAt);
     authedTooltip = (
@@ -193,8 +196,8 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
           icon={
             needsAuth ? <LoginOutlined /> : refreshing ? <ReloadOutlined spin /> : <ApiOutlined />
           }
-          style={{ cursor: refreshing ? 'wait' : 'pointer' }}
-          onClick={needsAuth ? handleOAuthClick : handleRefreshClick}
+          style={{ cursor: refreshing ? 'wait' : isOAuthServer ? 'pointer' : 'default' }}
+          onClick={needsAuth ? handleOAuthClick : isOAuthServer ? handleRefreshClick : undefined}
         >
           {server.display_name || server.name}
           {isAdmin && (
