@@ -325,7 +325,25 @@ export async function stampGitStateAtTaskStart(
  *
  * Returns resolution result with key, source, and useNativeAuth flag
  */
-async function resolveApiKeyForTask(
+function shouldFallbackToLocalApiKeyResolution(err: unknown): boolean {
+  const code = (err as { code?: number })?.code;
+  if (code === 400 || code === 401 || code === 403) {
+    return false;
+  }
+
+  const message = err instanceof Error ? err.message : String(err);
+  if (
+    message.includes('Executor token is not valid') ||
+    message.includes('not authorized') ||
+    message.includes('Forbidden')
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+export async function resolveApiKeyForTask(
   keyName: ApiKeyName,
   client: AgorClient,
   taskId: TaskID,
@@ -345,10 +363,12 @@ async function resolveApiKeyForTask(
     return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const code = (err as { code?: number })?.code;
-    const log =
-      code === 403 || message.includes('Executor token is not valid') ? sdkDebug : console.warn;
-    log(`[API Key Resolution] Falling back to local resolution: ${message}`);
+    if (!shouldFallbackToLocalApiKeyResolution(err)) {
+      sdkDebug(`[API Key Resolution] Daemon rejected API key resolution: ${message}`);
+      throw err;
+    }
+
+    console.warn(`[API Key Resolution] Falling back to local resolution: ${message}`);
     // Fall back to sync resolution (config + env only, no per-user keys)
     return resolveApiKey(keyName, {});
   }

@@ -2126,7 +2126,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     after: {
       get: [
         async (context) => {
-          // Regenerate MCP token for fetched session (deterministic, no DB storage)
+          // Attach an MCP token for fetched session (cached/reused when still valid).
           if (config.daemon?.mcpEnabled === false) {
             return context;
           }
@@ -2160,10 +2160,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             userId as import('@agor/core/types').UserID
           );
 
-          mcpTokenDebug(`🔄 Regenerated MCP token for session ${shortId(session.session_id)}`);
+          mcpTokenDebug(`🔄 Resolved MCP token for session ${shortId(session.session_id)}`);
 
-          // Add token to result (not stored in DB, regenerated on-demand with
-          // a fresh `jti` and `exp`)
+          // Add token to result. Tokens are not stored on the session row; the
+          // token module may reuse a still-valid issued token or mint a new one.
           context.result = { ...session, mcp_token: mcpToken };
 
           return context;
@@ -2216,7 +2216,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             return context;
           }
 
-          // Mint MCP token for this session (jti + exp + gen embedded)
+          // Resolve MCP token for this session (cached/reused when still valid).
           const { generateSessionToken } = await import('./mcp/tokens.js');
           const session = context.result as Session;
           const userId = session.created_by || 'unknown';

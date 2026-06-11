@@ -64,7 +64,7 @@ export async function configureSessionGitSafeDirectories(
         const repo = (await client.service('repos').get(branch.repo_id)) as RepoForSafeDirectory;
         if (repo?.local_path) paths.push(repo.local_path);
       } catch (error) {
-        gitSafeDirectoryDebug(
+        console.warn(
           `${logPrefix} Failed to load repo ${branch.repo_id} for safe.directory setup:`,
           error instanceof Error ? error.message : String(error)
         );
