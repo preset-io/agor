@@ -178,6 +178,14 @@ export function permissionModeForCli(
  */
 export function buildClaudeCliSpawn(cfg: ClaudeCliSpawnConfig): BuiltSpawn {
   const args: string[] = [];
+  const emittedBetas = new Set<string>();
+  const pushBetas = (betas: string[]) => {
+    for (const beta of betas) {
+      if (emittedBetas.has(beta)) continue;
+      emittedBetas.add(beta);
+      args.push('--betas', beta);
+    }
+  };
 
   if (cfg.resumeSessionId) {
     args.push('--resume', cfg.resumeSessionId);
@@ -193,9 +201,7 @@ export function buildClaudeCliSpawn(cfg: ClaudeCliSpawnConfig): BuiltSpawn {
   if (cfg.model) {
     const { model, betas } = parseModelWithBetas(cfg.model);
     args.push('--model', model);
-    for (const beta of betas) {
-      args.push('--betas', beta);
-    }
+    pushBetas(betas);
   }
 
   if (cfg.effort) {
@@ -203,7 +209,9 @@ export function buildClaudeCliSpawn(cfg: ClaudeCliSpawnConfig): BuiltSpawn {
   }
 
   if (cfg.advisorModel) {
-    args.push('--advisor', cfg.advisorModel);
+    const { model, betas } = parseModelWithBetas(cfg.advisorModel);
+    args.push('--advisor', model);
+    pushBetas(betas);
   }
 
   if (cfg.permissionMode) {

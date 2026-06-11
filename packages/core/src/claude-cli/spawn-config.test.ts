@@ -82,6 +82,11 @@ describe('buildClaudeCliSpawn', () => {
     expect(args).toEqual(['--advisor', 'opus']);
   });
 
+  it('strips [1m] suffix and emits beta flag for advisor model', () => {
+    const { args } = buildClaudeCliSpawn({ advisorModel: 'claude-opus-4-7[1m]' });
+    expect(args).toEqual(['--advisor', 'claude-opus-4-7', '--betas', 'context-1m-2025-08-07']);
+  });
+
   it('builds a full realistic spawn', () => {
     const { args } = buildClaudeCliSpawn({
       sessionId: '019e2747-cd3c-7669-af2e-aeb5b1e80ed9',

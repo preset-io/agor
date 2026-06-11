@@ -102,28 +102,6 @@ const CURSOR_MODEL_OPTIONS = [
   },
 ];
 
-const CLAUDE_ADVISOR_MODEL_OPTIONS = [
-  {
-    value: 'opus',
-    label: 'Opus',
-    description: 'Most capable advisor for hard reasoning',
-  },
-  {
-    value: 'sonnet',
-    label: 'Sonnet',
-    description: 'Balanced advisor',
-  },
-  {
-    value: 'fable',
-    label: 'Fable',
-    description: 'Latest-generation advisor, when available',
-  },
-  {
-    value: 'claude-haiku-4-5',
-    label: 'Haiku 4.5',
-    description: 'Fastest/cheapest advisor',
-  },
-];
 function preferDefaultModel<T extends { id: string }>(models: T[], defaultModel: string): T[] {
   const defaultIndex = models.findIndex((model) => model.id === defaultModel);
   if (defaultIndex <= 0) return models;
@@ -345,6 +323,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           {mode === 'alias' && (
             <div style={{ marginLeft: 24, marginTop: 8 }}>
               <Select
+                showSearch
+                optionFilterProp="label"
                 value={value?.model || fallbackModel}
                 onChange={handleModelChange}
                 style={{ width: '100%', minWidth: 400 }}
@@ -449,13 +429,15 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           </Space>
           <Select
             allowClear
+            showSearch
+            optionFilterProp="label"
             placeholder="Not set"
             value={value?.advisorModel}
             onChange={handleAdvisorModelChange}
             style={{ width: '100%', minWidth: 400, marginTop: 8 }}
-            options={CLAUDE_ADVISOR_MODEL_OPTIONS.map((option) => ({
-              value: option.value,
-              label: `${option.label} · ${option.description}`,
+            options={AVAILABLE_CLAUDE_MODEL_ALIASES.map((model) => ({
+              value: model.id,
+              label: model.id,
             }))}
           />
         </div>

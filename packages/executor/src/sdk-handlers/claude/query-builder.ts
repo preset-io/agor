@@ -177,6 +177,7 @@ export async function setupQuery(
   const modelConfig = session.model_config;
   const rawModel = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
   const { model, betas } = parseModelWithBetas(rawModel);
+  const sdkBetas = new Set(betas);
 
   // Determine CWD from branch (if session has one)
   let cwd = process.cwd();
@@ -311,8 +312,10 @@ export async function setupQuery(
   // Configure Claude Code's server-side advisor tool model when a session-level
   // override is present. The Agent SDK exposes this through Claude Code settings
   // (not as a first-class top-level option or MCP tool declaration).
-  const advisorModel = session.model_config?.advisorModel?.trim();
-  if (advisorModel) {
+  const rawAdvisorModel = session.model_config?.advisorModel?.trim();
+  if (rawAdvisorModel) {
+    const { model: advisorModel, betas: advisorBetas } = parseModelWithBetas(rawAdvisorModel);
+    for (const beta of advisorBetas) sdkBetas.add(beta);
     queryOptions.settings = {
       ...((queryOptions.settings as Record<string, unknown> | undefined) ?? {}),
       advisorModel,
@@ -321,9 +324,10 @@ export async function setupQuery(
   }
 
   // Add beta flags (e.g., 1M context window for [1m] model variants)
-  if (betas.length > 0) {
-    queryOptions.betas = betas;
-    console.log(`🔬 Beta flags: ${betas.join(', ')}`);
+  const betaList = [...sdkBetas];
+  if (betaList.length > 0) {
+    queryOptions.betas = betaList;
+    console.log(`🔬 Beta flags: ${betaList.join(', ')}`);
   }
 
   // Add canUseTool callback if permission service is available and taskId provided.
