@@ -63,10 +63,25 @@ describe('DrizzleService event emission', () => {
     const repo = makeRepo([{ id: 'w1', name: 'from repo' }]);
     const { service } = makeService(repo);
 
-    const result = await service.get('w1', { _agorPrefetchedRecord: prefetched } as never);
+    const result = await service.get('w1', {
+      _agorPrefetchedRecord: { id: 'w1', idField: 'id', record: prefetched },
+    } as never);
 
     expect(result).toBe(prefetched);
     expect(repo.findById).not.toHaveBeenCalled();
+  });
+
+  it('ignores a hook-prefetched record for a different id field', async () => {
+    const prefetched = { id: 'w1', name: 'from hook' };
+    const repo = makeRepo([{ id: 'w1', name: 'from repo' }]);
+    const { service } = makeService(repo);
+
+    const result = await service.get('w1', {
+      _agorPrefetchedRecord: { id: 'w1', idField: 'session_id', record: prefetched },
+    } as never);
+
+    expect(result).toEqual({ id: 'w1', name: 'from repo' });
+    expect(repo.findById).toHaveBeenCalledTimes(1);
   });
 
   it('emits only `created` on create()', async () => {

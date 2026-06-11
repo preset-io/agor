@@ -57,13 +57,24 @@ const REQUEST_RBAC_CACHE_LIMIT = 32;
 interface RequestScopedRbacCache {
   sessions: Map<string, Session>;
   branches: Map<string, Branch>;
+  branchAccess: Map<
+    string,
+    {
+      isOwner: boolean;
+      branchPermission: BranchPermissionLevel;
+    }
+  >;
 }
 
 type PrefetchParams = AuthenticatedParams & {
   branch?: Branch;
   session?: Session;
   _agorRbacCache?: RequestScopedRbacCache;
-  _agorPrefetchedRecord?: unknown;
+  _agorPrefetchedRecord?: {
+    id: string;
+    idField: string;
+    record: unknown;
+  };
 };
 
 function getRequestRbacCache(params: AuthenticatedParams): RequestScopedRbacCache {
@@ -72,6 +83,7 @@ function getRequestRbacCache(params: AuthenticatedParams): RequestScopedRbacCach
     prefetchParams._agorRbacCache = {
       sessions: new Map(),
       branches: new Map(),
+      branchAccess: new Map(),
     };
   }
   return prefetchParams._agorRbacCache;
@@ -86,8 +98,32 @@ function rememberBounded<T>(map: Map<string, T>, key: string, value: T): T {
   return value;
 }
 
-function rememberPrefetchedRecord(context: HookContext, record: unknown): void {
-  (context.params as PrefetchParams)._agorPrefetchedRecord = record;
+function inferIdFieldForPath(path: string): string | undefined {
+  switch (path) {
+    case 'branches':
+      return 'branch_id';
+    case 'sessions':
+      return 'session_id';
+    case 'tasks':
+      return 'task_id';
+    case 'messages':
+      return 'message_id';
+    default:
+      return undefined;
+  }
+}
+
+function rememberPrefetchedRecord(
+  context: HookContext,
+  record: unknown,
+  idField: string,
+  id: string
+): void {
+  (context.params as PrefetchParams)._agorPrefetchedRecord = {
+    id,
+    idField,
+    record,
+  };
 }
 
 async function loadCachedSession(
@@ -216,13 +252,21 @@ export async function cacheBranchAccess(
   branchRepo: BranchRepository,
   branch: Branch
 ): Promise<void> {
-  rememberBounded(getRequestRbacCache(params).branches, branch.branch_id as string, branch);
+  const cache = getRequestRbacCache(params);
+  rememberBounded(cache.branches, branch.branch_id as string, branch);
 
   const userId = params.user?.user_id as UUID | undefined;
-  const isOwner = userId ? await branchRepo.isOwner(branch.branch_id, userId) : false;
-  const branchPermission = userId
-    ? await branchRepo.resolveUserPermission(branch, userId)
-    : (branch.others_can ?? 'session');
+  const accessKey = `${branch.branch_id}:${userId ?? '__anonymous__'}`;
+  let access = cache.branchAccess.get(accessKey);
+  if (!access) {
+    access = {
+      isOwner: userId ? await branchRepo.isOwner(branch.branch_id, userId) : false,
+      branchPermission: userId
+        ? await branchRepo.resolveUserPermission(branch, userId)
+        : (branch.others_can ?? 'session'),
+    };
+    rememberBounded(cache.branchAccess, accessKey, access);
+  }
 
   const rbacParams = params as AuthenticatedParams & {
     branch?: Branch;
@@ -230,8 +274,8 @@ export async function cacheBranchAccess(
     branchPermission?: BranchPermissionLevel;
   };
   rbacParams.branch = branch;
-  rbacParams.isBranchOwner = isOwner;
-  rbacParams.branchPermission = branchPermission;
+  rbacParams.isBranchOwner = access.isOwner;
+  rbacParams.branchPermission = access.branchPermission;
 }
 
 /**
@@ -332,7 +376,7 @@ export function loadBranch(branchRepo: BranchRepository, branchIdField = 'branch
 
     const branch = await loadCachedBranch(context.params, branchRepo, branchId);
     if (context.path === 'branches' && context.id && String(context.id) === branchId) {
-      rememberPrefetchedRecord(context, branch);
+      rememberPrefetchedRecord(context, branch, 'branch_id', branchId);
     }
 
     // Cache on context for downstream hooks (type-safe via RBACParams)
@@ -734,7 +778,10 @@ export function loadSessionBranch(
               provider: undefined, // Bypass provider to avoid recursion
             });
             sessionId = existingRecord?.session_id;
-            if (existingRecord) rememberPrefetchedRecord(context, existingRecord);
+            const idField = inferIdFieldForPath(context.path);
+            if (existingRecord && idField) {
+              rememberPrefetchedRecord(context, existingRecord, idField, String(context.id));
+            }
           } catch (error) {
             console.error(
               `[loadSessionBranch] Failed to load existing ${context.path} record for session_id:`,
@@ -756,7 +803,7 @@ export function loadSessionBranch(
 
     const session = await loadCachedSession(context.params, sessionService, sessionId);
     if (context.path === 'sessions' && context.id && String(context.id) === sessionId) {
-      rememberPrefetchedRecord(context, session);
+      rememberPrefetchedRecord(context, session, 'session_id', sessionId);
     }
 
     const branch = await loadCachedBranch(context.params, branchRepo, session.branch_id);
@@ -822,7 +869,10 @@ export function resolveSessionContext() {
               provider: undefined,
             });
             sessionId = existing?.session_id;
-            if (existing) rememberPrefetchedRecord(context, existing);
+            const idField = inferIdFieldForPath(context.path);
+            if (existing && idField) {
+              rememberPrefetchedRecord(context, existing, idField, String(context.id));
+            }
           } catch (error) {
             console.error(`[resolveSessionContext] Failed to load existing record:`, error);
           }
@@ -873,7 +923,7 @@ export function loadSession(
 
     const session = await loadCachedSession(context.params, sessionService, sessionId);
     if (context.path === 'sessions' && context.id && String(context.id) === sessionId) {
-      rememberPrefetchedRecord(context, session);
+      rememberPrefetchedRecord(context, session, 'session_id', sessionId);
     }
 
     // Cache on context for downstream hooks (type-safe via RBACParams)

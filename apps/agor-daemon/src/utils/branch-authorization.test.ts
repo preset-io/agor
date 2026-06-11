@@ -324,6 +324,8 @@ describe('request-scoped RBAC loading', () => {
 
     expect(sessionService.get).toHaveBeenCalledTimes(1);
     expect(branchRepo.findById).toHaveBeenCalledTimes(1);
+    expect(branchRepo.isOwner).toHaveBeenCalledTimes(1);
+    expect(branchRepo.resolveUserPermission).toHaveBeenCalledTimes(1);
   });
 
   it('marks sessions.get hook-loaded session as prefetched for the service get()', async () => {
@@ -343,7 +345,13 @@ describe('request-scoped RBAC loading', () => {
 
     expect(sessionService.get).toHaveBeenCalledTimes(1);
     expect(ctx.params.session).toBe(session);
-    expect((ctx.params as { _agorPrefetchedRecord?: unknown })._agorPrefetchedRecord).toBe(session);
+    expect(
+      (ctx.params as { _agorPrefetchedRecord?: { record: unknown } })._agorPrefetchedRecord
+    ).toMatchObject({
+      id: session.session_id,
+      idField: 'session_id',
+      record: session,
+    });
   });
 
   it('resolves id-addressed message context from the stored record, not spoofed query', async () => {
@@ -368,9 +376,13 @@ describe('request-scoped RBAC loading', () => {
     await resolveSessionContext()(ctx);
 
     expect(ctx.params.sessionId).toBe(session.session_id);
-    expect((ctx.params as { _agorPrefetchedRecord?: unknown })._agorPrefetchedRecord).toBe(
-      existingMessage
-    );
+    expect(
+      (ctx.params as { _agorPrefetchedRecord?: { record: unknown } })._agorPrefetchedRecord
+    ).toMatchObject({
+      id: existingMessage.message_id,
+      idField: 'message_id',
+      record: existingMessage,
+    });
   });
 });
 
