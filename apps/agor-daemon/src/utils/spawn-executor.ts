@@ -32,6 +32,7 @@ import {
   isSecretEnvKey,
   prepareImpersonationEnv,
 } from '@agor/core/unix';
+import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
@@ -39,10 +40,7 @@ import { withResolvedConfig } from './build-resolved-config-slice.js';
 let configuredDaemonUrl: string | null = null;
 
 function resolveExecutorLogLevel(env: Record<string, string>): string {
-  if (env.LOG_LEVEL) return env.LOG_LEVEL;
-  const debug = process.env.DEBUG;
-  if (debug === '*' || debug?.includes('agor')) return 'debug';
-  return process.env.NODE_ENV === 'production' ? 'info' : 'debug';
+  return env.LOG_LEVEL || getCurrentLogLevel();
 }
 
 function withDaemonExecutorEnv(
@@ -91,6 +89,7 @@ export interface ExecutorTemplateVariables {
   unix_user_gid?: number;
   session_id?: string;
   branch_id?: string;
+  log_level?: string;
 }
 
 export interface SpawnExecutorOptions {
@@ -151,6 +150,7 @@ export function substituteTemplateVariables(
     unix_user_gid: variables.unix_user_gid,
     session_id: variables.session_id,
     branch_id: variables.branch_id,
+    log_level: variables.log_level,
   };
 
   for (const [key, value] of Object.entries(substitutions)) {
@@ -235,6 +235,7 @@ export function spawnExecutor(
         command: payloadWithConfig.command as string,
         task_id: generateTaskId(),
         unix_user: asUser,
+        log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
         ...templateVariables,
       },
       logPrefix,
@@ -389,6 +390,7 @@ function spawnExecutorWithTemplate(
   }
 ): void {
   const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
+  const logLevel = templateVariables.log_level ?? getCurrentLogLevel();
 
   const command = substituteTemplateVariables(executorCommandTemplate, templateVariables);
 
@@ -398,6 +400,7 @@ function spawnExecutorWithTemplate(
   console.log(`${logPrefix} Template command (first 200 chars): ${command.slice(0, 200)}...`);
 
   const executorProcess = spawn('sh', ['-c', command], {
+    env: { ...process.env, LOG_LEVEL: logLevel },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
@@ -508,6 +511,7 @@ export async function runExecutorCommand(
         command: payloadWithConfig.command as string,
         task_id: generateTaskId(),
         unix_user: asUser,
+        log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
         ...templateVariables,
       },
       logPrefix,
@@ -684,6 +688,7 @@ function runExecutorCommandWithTemplate(
     logPrefix = '[Executor]',
     timeoutMs = 60_000,
   } = options;
+  const logLevel = templateVariables.log_level ?? getCurrentLogLevel();
   const command = substituteTemplateVariables(executorCommandTemplate, templateVariables);
 
   console.log(`${logPrefix} Running templated executor command: ${payload.command ?? '?'}`);
@@ -694,6 +699,7 @@ function runExecutorCommandWithTemplate(
     let settled = false;
 
     const child = spawn('sh', ['-c', command], {
+      env: { ...process.env, LOG_LEVEL: logLevel },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

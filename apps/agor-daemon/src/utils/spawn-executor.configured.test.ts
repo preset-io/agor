@@ -78,7 +78,7 @@ describe('configured executor spawning', () => {
         '-c',
         expect.stringMatching(/^kubectl run executor-[0-9a-f]{8} --user agor-exec -- prompt$/),
       ],
-      { stdio: ['pipe', 'pipe', 'pipe'] }
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
     );
     expect(JSON.parse(proc.written)).toMatchObject({
       command: 'prompt',
@@ -104,9 +104,11 @@ describe('configured executor spawning', () => {
       }
     );
 
-    expect(spawnMock).toHaveBeenCalledWith('sh', ['-c', 'explicit explicit-user git.clone'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'explicit explicit-user git.clone'],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
   });
 
   it('calls onExit for templated spawns', async () => {
@@ -139,9 +141,33 @@ describe('configured executor spawning', () => {
 
     injectedSpawner({ command: 'prompt' });
 
-    expect(spawnMock).toHaveBeenCalledWith('sh', ['-c', 'injected injected-user prompt'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'injected injected-user prompt'],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
+  });
+
+  it('passes LOG_LEVEL to templated executor processes and exposes a template variable', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { spawnExecutor } = await import('./spawn-executor');
+
+    spawnExecutor(
+      { command: 'prompt' },
+      {
+        executorCommandTemplate: 'run --log-level={log_level} -- {command}',
+        env: { LOG_LEVEL: 'warn' },
+      }
+    );
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'run --log-level=warn -- prompt'],
+      expect.objectContaining({
+        env: expect.objectContaining({ LOG_LEVEL: 'warn' }),
+      })
+    );
   });
 
   it('propagates an explicit LOG_LEVEL to local executor processes at startup', async () => {
