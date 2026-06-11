@@ -253,6 +253,8 @@ export interface ArtifactPayload {
   dependencies?: Record<string, string>;
   entry?: string;
   content_hash: string;
+  /** DB file-map hash, excluding per-viewer synthesized files. Used to reject stale browser reports. */
+  artifact_content_hash?: string;
   /** Names of env vars the artifact requires (without prefix). */
   required_env_vars?: string[];
   /** Grants the artifact requested. */
@@ -328,6 +330,8 @@ export interface ArtifactStatus {
   sandpack_error?: SandpackError | null;
   /** Sandpack bundler status: 'idle', 'running', 'timeout', etc. */
   sandpack_status?: string;
+  /** ISO timestamp for the latest current-content browser runtime report from this viewer. */
+  runtime_observed_at?: string;
   console_logs: ArtifactConsoleEntry[];
   content_hash?: string;
 }

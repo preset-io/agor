@@ -92,4 +92,22 @@ describe('artifact MCP tool input schemas', () => {
       message: 'requiredEnvVars[] cannot be empty.',
     });
   });
+
+  it('accepts waitForStatus publish options', () => {
+    const parsed = captureConfig('agor_artifacts_publish').inputSchema?.safeParse({
+      folderPath: '/tmp/artifact',
+      waitForStatus: true,
+      waitTimeoutMs: 15000,
+    });
+
+    expect(parsed?.success).toBe(true);
+  });
+
+  it('registers validate_folder as the clearer build-check alias', () => {
+    const parsed = captureConfig('agor_artifacts_validate_folder').inputSchema?.safeParse({
+      folderPath: '/tmp/artifact',
+    });
+
+    expect(parsed?.success).toBe(true);
+  });
 });

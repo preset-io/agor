@@ -128,6 +128,8 @@ DECLARATIVE CONFIG:
 
 CONSENT MODEL (TOFU): when the viewer is NOT the artifact author, the daemon does NOT inject env vars or grants without an explicit trust grant. Untrusted artifacts render with empty env values and a "Trust to render with secrets" badge.
 
+SYNCHRONOUS-ISH VALIDATION: pass \`waitForStatus: true\` to wait briefly for YOUR browser render to report Sandpack boot status, errors, and console output. This is not a headless/server build: Sandpack runs in the browser, and logs are per-viewer to avoid leaking secret-derived output. If no browser tab for you is viewing the artifact, the validation returns \`observed:false\` with a note instead of pretending success.
+
 IMPORTANT:
 - Secret VALUES are never sent to the LLM as-is — they're only injected into the served \`.env\` at view time. CAVEAT: if your artifact renders a secret-derived value into the DOM (e.g. \`<div>API: {key}</div>\`), an agent calling \`agor_artifacts_query_dom\` against your own running render WILL see the rendered text. Treat any \`agor_artifacts_query_*\` reply as potentially carrying secret-derived output if the artifact renders one.
 - Missing user env vars render as "" — your app should detect that and surface a "configure SOMETHING in Settings" message rather than calling APIs with empty creds.
@@ -192,6 +194,16 @@ IMPORTANT:
           .number()
           .optional()
           .describe('Height in pixels (default: 400, only used on create)'),
+        waitForStatus: z
+          .boolean()
+          .optional()
+          .describe(
+            "If true, wait for this user's browser render to report Sandpack status/errors/console logs before returning. Requires an open board/fullscreen tab for this user; otherwise returns observed:false after timeout."
+          ),
+        waitTimeoutMs: mcpOptionalPositiveInt(
+          'waitTimeoutMs',
+          'Maximum milliseconds to wait for browser-reported Sandpack status when waitForStatus=true (default 10000, max 60000).'
+        ),
       }),
     },
     async (args) => {
@@ -233,12 +245,43 @@ IMPORTANT:
         ctx.authenticatedUser.role as UserRole
       );
 
+      const publishValidation = args.waitForStatus
+        ? await service.waitForRuntimeStatus(artifact.artifact_id, ctx.userId, {
+            timeoutMs: args.waitTimeoutMs,
+          })
+        : undefined;
+      const publishDiagnostic = publishValidation
+        ? service.buildStatusDiagnostic(publishValidation)
+        : undefined;
+
       const { files: _files, ...artifactSummary } = artifact;
+      const baseInstructions = args.artifactId
+        ? 'Artifact updated. Changes are live on the board.'
+        : 'Artifact created and placed on the board. To update it later, call agor_artifacts_publish again with the artifact_id.';
+      const validationInstructions = publishValidation
+        ? publishValidation.ok
+          ? ' Browser runtime validation observed a successful Sandpack boot.'
+          : publishValidation.observed
+            ? ' Browser runtime validation observed a failure; inspect publish_validation.build_errors, sandpack_error, and console_logs, then fix and republish.'
+            : publishValidation.timed_out
+              ? ' Browser runtime validation was inconclusive because no current browser render reported status before the timeout. Open the artifact as this user and call agor_artifacts_status, or republish with waitForStatus once the board/fullscreen view is open.'
+              : ' Publish validation failed before browser boot; inspect publish_validation.build_errors, then fix and republish.'
+        : '';
       return textResult({
         artifact: artifactSummary,
-        instructions: args.artifactId
-          ? 'Artifact updated. Changes are live on the board.'
-          : 'Artifact created and placed on the board. To update it later, call agor_artifacts_publish again with the artifact_id.',
+        urls: {
+          board: artifactSummary.url ?? null,
+          fullscreen: artifactSummary.fullscreen_url ?? null,
+        },
+        next_actions: {
+          open_fullscreen: artifactSummary.fullscreen_url ?? null,
+          check_status: `agor_artifacts_status({ artifactId: "${artifact.artifact_id}" })`,
+          republish: `agor_artifacts_publish({ artifactId: "${artifact.artifact_id}", ... })`,
+        },
+        ...(publishValidation
+          ? { publish_validation: { ...publishValidation, diagnostic: publishDiagnostic } }
+          : {}),
+        instructions: `${baseInstructions}${validationInstructions}`,
       });
     }
   );
@@ -248,7 +291,7 @@ IMPORTANT:
     'agor_artifacts_check_build',
     {
       description:
-        'Check build readiness of artifact files in a branch-relative folder (branchId + subpath preferred) or legacy absolute folderPath. Verifies source files exist and are non-empty (does not run a real build or syntax check). Use this before publishing to verify basic structure.',
+        'Browserless artifact folder validation in a branch-relative folder (branchId + subpath preferred) or legacy absolute folderPath. Checks source presence/non-empty files, package.json syntax, configured entry existence, missing local imports, and common env/template footguns. Does NOT run Sandpack; use publish(waitForStatus=true) or agor_artifacts_status for browser runtime validation.',
       inputSchema: z.object({
         folderPath: mcpOptionalString(
           'folderPath',
@@ -291,6 +334,59 @@ IMPORTANT:
       return textResult({
         build_status: result.status,
         build_errors: result.errors,
+        build_warnings: result.warnings,
+        diagnostics: result.diagnostics,
+      });
+    }
+  );
+
+  // Tool 2b: agor_artifacts_validate_folder
+  server.registerTool(
+    'agor_artifacts_validate_folder',
+    {
+      description:
+        'Browserless artifact folder validation. Clearer alias for agor_artifacts_check_build: verifies source files, package.json syntax, configured entry existence, missing local imports, and common env/template footguns. It still does NOT run Sandpack; use agor_artifacts_publish(waitForStatus=true) or agor_artifacts_status for browser runtime validation.',
+      inputSchema: z.object({
+        folderPath: mcpOptionalString(
+          'folderPath',
+          'Legacy absolute path to the artifact folder. Prefer branchId + subpath.'
+        ),
+        branchId: mcpOptionalId(
+          'branchId',
+          'Branch',
+          'Branch ID (UUID or short ID). Prefer this with subpath.'
+        ),
+        subpath: mcpOptionalString(
+          'subpath',
+          'Branch-relative subpath pointing at the artifact folder (required with branchId).'
+        ),
+      }),
+    },
+    async (args) => {
+      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
+      const branchIdRaw = coerceString(args.branchId);
+      const resolvedBranchId = branchIdRaw ? await resolveBranchId(ctx, branchIdRaw) : undefined;
+      const folderPath = coerceString(args.folderPath);
+      const subpath = coerceString(args.subpath);
+      if (!folderPath && (!resolvedBranchId || !subpath)) {
+        throw new Error(
+          'Provide either legacy folderPath or branchId + subpath to validate artifact files.'
+        );
+      }
+      const result = await service.checkBuildFromFolder(
+        {
+          folderPath,
+          branch_id: resolvedBranchId,
+          subpath,
+        },
+        ctx.userId,
+        ctx.authenticatedUser.role as UserRole
+      );
+      return textResult({
+        build_status: result.status,
+        build_errors: result.errors,
+        build_warnings: result.warnings,
+        diagnostics: result.diagnostics,
       });
     }
   );
@@ -306,8 +402,10 @@ build_status reflects both file validation AND Sandpack runtime state. If the Sa
 Fields:
 - build_status: 'success' | 'error' | 'unknown' — reflects the worst of file validation and Sandpack runtime
 - build_errors: array of error messages (includes Sandpack errors prefixed with [Sandpack])
+- diagnostic: compact deterministic diagnosis + suggested_fix when an error/no-observation pattern is recognized
 - sandpack_error: the raw Sandpack bundler/runtime error object (null if no error)
 - sandpack_status: Sandpack bundler status ('idle', 'running', 'timeout', etc.)
+- runtime_observed_at: when your browser last reported current-content status/logs
 - console_logs: console.log/warn/error output from the running app
 
 NOTE: sandpack_error and console_logs require a browser to be viewing the artifact. They are scoped to the calling user's render — you only see your own console output, never another viewer's.`,
@@ -319,7 +417,10 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
     async (args) => {
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const status = await service.getStatus(coerceString(args.artifactId)!, ctx.userId);
-      return textResult(status);
+      return textResult({
+        ...status,
+        diagnostic: service.buildStatusDiagnostic(status),
+      });
     }
   );
 
@@ -435,6 +536,16 @@ Caller must own the artifact (or be an admin).`,
         agorRuntime: AgorRuntimeSchema.describe(
           "Replace the artifact's agor_runtime config (controls agor-runtime.js injection)."
         ),
+        waitForStatus: z
+          .boolean()
+          .optional()
+          .describe(
+            "If true, wait for this user's browser render to report Sandpack status/errors/console logs after the metadata update. Most useful when changing sandpackConfig, requiredEnvVars, agorGrants, or agorRuntime."
+          ),
+        waitTimeoutMs: mcpOptionalPositiveInt(
+          'waitTimeoutMs',
+          'Maximum milliseconds to wait for browser-reported Sandpack status when waitForStatus=true (default 10000, max 60000).'
+        ),
       }),
     },
     async (args) => {
@@ -465,10 +576,34 @@ Caller must own the artifact (or be an admin).`,
         ctx.authenticatedUser.role as UserRole
       );
 
+      const updateValidation = args.waitForStatus
+        ? await service.waitForRuntimeStatus(updated.artifact_id, ctx.userId, {
+            timeoutMs: args.waitTimeoutMs,
+          })
+        : undefined;
+      const updateDiagnostic = updateValidation
+        ? service.buildStatusDiagnostic(updateValidation)
+        : undefined;
+
       const { files: _files, ...artifactSummary } = updated;
       return textResult({
         artifact: artifactSummary,
-        instructions: 'Artifact metadata updated.',
+        urls: {
+          board: artifactSummary.url ?? null,
+          fullscreen: artifactSummary.fullscreen_url ?? null,
+        },
+        next_actions: {
+          open_fullscreen: artifactSummary.fullscreen_url ?? null,
+          check_status: `agor_artifacts_status({ artifactId: "${updated.artifact_id}" })`,
+        },
+        ...(updateValidation
+          ? { publish_validation: { ...updateValidation, diagnostic: updateDiagnostic } }
+          : {}),
+        instructions: updateValidation
+          ? updateValidation.ok
+            ? 'Artifact metadata updated. Browser runtime validation observed a successful Sandpack boot.'
+            : 'Artifact metadata updated, but validation did not observe a successful render. Inspect publish_validation for details.'
+          : 'Artifact metadata updated.',
       });
     }
   );

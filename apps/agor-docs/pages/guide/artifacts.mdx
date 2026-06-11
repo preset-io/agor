@@ -125,18 +125,21 @@ Agents manage artifacts through Agor's [MCP tools](/guide/internal-mcp):
 
 | Tool | Purpose |
 |------|---------|
-| `agor_artifacts_publish` | Publish a folder as a new artifact, OR re-publish an existing one with `artifactId` |
+| `agor_artifacts_publish` | Publish a folder as a new artifact, OR re-publish an existing one with `artifactId`. Optional `waitForStatus: true` waits for this user's browser-reported Sandpack status/logs. |
 | `agor_artifacts_get` | Read an artifact's full file map + declarative metadata |
 | `agor_artifacts_land` | Materialize an artifact's stored files back into a branch (round-trip with publish) |
 | `agor_artifacts_update` | Patch metadata only (board move, name, `requiredEnvVars`, `agorGrants`, `sandpackConfig`) |
-| `agor_artifacts_check_build` | Verify source files exist and are non-empty |
-| `agor_artifacts_status` | Get build status + Sandpack errors + console logs for debugging |
+| `agor_artifacts_check_build` | Browserless folder validation: source presence, package.json syntax, configured entry, missing local imports, env/template warnings. Does not run Sandpack. |
+| `agor_artifacts_validate_folder` | Clearer alias for `agor_artifacts_check_build`; prefer this name for new agent workflows. |
+| `agor_artifacts_status` | Get build status + Sandpack errors + console logs + compact diagnostic suggestions for debugging |
 | `agor_artifacts_list` | List visible artifacts (optionally filtered by board) |
 | `agor_artifacts_delete` | Remove an artifact (DB record + board placement) |
 | `agor_artifacts_export_codesandbox` | Eject the artifact to CodeSandbox (returns a sandbox URL). Daemon-supplied capabilities won't work there — set required env vars via CodeSandbox Secret Keys |
 | `agor_artifacts_query_dom` | Query the rendered DOM via CSS selector. Round-trips through the viewer's open tab (no headless browser). Requires `agor_runtime.enabled !== false` and a browser tab logged in as you currently viewing the artifact |
 
 The typical agent workflow: **publish** the folder, **iterate** by editing files locally and republishing with the same `artifactId`. To pick up where you left off from another branch, **land** the artifact back to disk first.
+
+`agor_artifacts_publish({ waitForStatus: true })` is synchronous-ish, not a server-side build. Sandpack boots in the viewer's browser, and runtime logs are scoped per viewer because rendered code may include secret-derived values. If the publishing user has the artifact open on the board or fullscreen page, publish waits for that browser to report Sandpack status, bundler/runtime errors, and early `console.error` output. If no browser render reports before `waitTimeoutMs`, the tool returns `publish_validation.observed: false` with guidance instead of claiming the artifact rendered successfully. `agor_artifacts_validate_folder` / `agor_artifacts_check_build` are browserless smoke checks only: they catch obvious file/import/config mistakes, but they do not run Sandpack.
 
 ---
 

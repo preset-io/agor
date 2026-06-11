@@ -658,7 +658,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       '/artifacts/:id/console',
       {
         async create(
-          data: { entries: Array<{ timestamp: number; level: string; message: string }> },
+          data: {
+            entries: Array<{ timestamp: number; level: string; message: string }>;
+            content_hash?: string;
+          },
           _params: RouteParams
         ) {
           const artifactId = _params.route?.id;
@@ -673,7 +676,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           if (!artifactsService.isVisibleTo(artifact, userId)) {
             throw new Error(`Artifact ${artifactId} not found`);
           }
-          artifactsService.appendConsoleLogs(artifactId, userId, data.entries as never);
+          await artifactsService.appendConsoleLogs(
+            artifactId,
+            userId,
+            data.entries as never,
+            data.content_hash
+          );
           return { success: true };
         },
       },
@@ -691,6 +699,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           data: {
             error: import('@agor/core/types').SandpackError | null;
             status?: string;
+            content_hash?: string;
           },
           _params: RouteParams
         ) {
@@ -703,7 +712,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           if (!artifactsService.isVisibleTo(artifact, userId)) {
             throw new Error(`Artifact ${artifactId} not found`);
           }
-          artifactsService.setSandpackError(artifactId, userId, data.error, data.status);
+          await artifactsService.setSandpackError(
+            artifactId,
+            userId,
+            data.error,
+            data.status,
+            data.content_hash
+          );
           return { success: true };
         },
       },
