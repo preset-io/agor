@@ -389,7 +389,7 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
             key: 'all-sessions',
             label: 'All sessions',
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)' }}>
+              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
                 <BoardSessionList
                   board={board}
                   currentBoardId={board.board_id}
