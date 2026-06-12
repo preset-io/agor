@@ -27,7 +27,7 @@
   "devDependencies": {
     "@types/node": "^24.6.0",
     "glob": "^11.1.0",
-    "oclif": "^4.23.10",
+    "oclif": "^4.23.14",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8",
