@@ -62,7 +62,16 @@ export function InitialLoadingScreen({
               </Flex>
               <Tag
                 color={done ? 'success' : 'default'}
-                style={{ marginInlineEnd: 0, minWidth: 28 }}
+                style={{
+                  alignItems: 'center',
+                  boxSizing: 'border-box',
+                  display: 'inline-flex',
+                  fontVariantNumeric: 'tabular-nums',
+                  justifyContent: 'center',
+                  lineHeight: 1,
+                  marginInlineEnd: 0,
+                  minWidth: 28,
+                }}
               >
                 {count}
               </Tag>
