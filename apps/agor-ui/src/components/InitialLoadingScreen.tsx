@@ -1,6 +1,7 @@
 import { CheckCircleFilled } from '@ant-design/icons';
-import { Flex, Spin, Tag, Typography, theme } from 'antd';
+import { Flex, Spin, Typography, theme } from 'antd';
 import type { InitialLoadItem, LoaderPhase } from '../hooks';
+import { Tag } from './Tag';
 
 interface Props {
   phase?: LoaderPhase;

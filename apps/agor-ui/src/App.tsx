@@ -25,7 +25,7 @@ import {
   sessionPath,
   UI_MOUNT_PATH,
 } from '@agor-live/client';
-import { Alert, App as AntApp, ConfigProvider, Spin, theme } from 'antd';
+import { Alert, App as AntApp, ConfigProvider } from 'antd';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
@@ -179,7 +179,6 @@ function DeviceRouter() {
 }
 
 function AppContent() {
-  const { token } = theme.useToken();
   const { showSuccess, showError, showWarning, showLoading, destroy } = useThemedMessage();
   const navigate = useNavigate();
   const location = useLocation();
@@ -347,19 +346,7 @@ function AppContent() {
   const routeFallback = workspaceSurfaceShouldRun ? (
     workspaceLoadingFallback
   ) : (
-    <div
-      style={{
-        height: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: token.colorBgLayout,
-      }}
-    >
-      <Spin size="large" />
-      <div style={{ marginTop: 16, color: token.colorTextSecondary }}>Loading surface...</div>
-    </div>
+    <InitialLoadingScreen message="Loading surface…" />
   );
 
   // Get current user from users Map (real-time updates via WebSocket)

@@ -60,7 +60,7 @@ export const CodePreviewModal = ({ file, open, onClose, loading }: CodePreviewMo
       ]}
     >
       {loading ? (
-        <Spin style={{ display: 'block', padding: '2rem' }} tip="Loading file…" />
+        <Spin style={{ display: 'block', padding: '2rem' }} description="Loading file…" />
       ) : (
         <ThemedSyntaxHighlighter language={language} showLineNumbers>
           {file.content}
