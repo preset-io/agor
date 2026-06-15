@@ -46,6 +46,12 @@ export function InitialLoadingScreen({
   const showItems = !connecting && items.length > 0;
   const primaryItems = items.filter((item) => PRIMARY_INITIAL_LOAD_ITEMS.has(item.key));
   const detailItems = items.filter((item) => !PRIMARY_INITIAL_LOAD_ITEMS.has(item.key));
+  const loadedDetailItems = detailItems.filter((item) => item.done).length;
+  const pendingDetailItems = detailItems.length - loadedDetailItems;
+  const showDetailsLabel =
+    pendingDetailItems > 0
+      ? `Show details (${pendingDetailItems} pending)`
+      : `Show details (${loadedDetailItems}/${detailItems.length} loaded)`;
 
   const renderLoadItem = ({ key, label, done, count }: InitialLoadItem) => (
     <Flex key={key} align="center" justify="space-between" gap={token.sizeSM}>
@@ -98,7 +104,7 @@ export function InitialLoadingScreen({
                 onClick={() => setShowDetails((value) => !value)}
                 style={{ alignSelf: 'center', paddingInline: 0 }}
               >
-                {showDetails ? 'Hide details' : 'Show details'}
+                {showDetails ? 'Hide details' : showDetailsLabel}
               </Button>
               {showDetails && detailItems.map(renderLoadItem)}
             </>
