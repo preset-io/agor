@@ -278,6 +278,7 @@ function AppContent() {
     userAuthenticatedMcpServerIds,
     initialLoadItems,
     initialLoadComplete,
+    loadingStage,
     loading,
     error: dataError,
   } = useAgorData(client, {
@@ -339,6 +340,7 @@ function AppContent() {
     <InitialLoadingScreen
       phase={loaderPhase === 'done' ? 'fading' : loaderPhase}
       connecting={connecting}
+      loadingStage={loadingStage}
       items={initialLoadItems}
     />
   );

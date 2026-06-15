@@ -31,11 +31,16 @@ import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
+  { key: 'board-objects', label: 'Board objects' },
+  { key: 'board-comments', label: 'Board comments' },
   { key: 'branches', label: 'Branches' },
   { key: 'repos', label: 'Repos' },
   { key: 'users', label: 'Users' },
   { key: 'cards', label: 'Cards' },
+  { key: 'card-types', label: 'Card types' },
   { key: 'mcp-servers', label: 'MCP servers' },
+  { key: 'session-mcp-servers', label: 'Session MCP links' },
+  { key: 'gateway-channels', label: 'Gateway channels' },
   { key: 'artifacts', label: 'Artifacts' },
 ] as const;
 
@@ -96,6 +101,7 @@ const EMPTY_MAPS: DataMaps = {
 interface UseAgorDataResult extends DataMaps {
   initialLoadItems: InitialLoadItem[];
   initialLoadComplete: boolean;
+  loadingStage: 'idle' | 'fetching' | 'indexing';
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
@@ -169,6 +175,7 @@ export function useAgorData(
   const setSessionMcpServerIds = setMapSlice('sessionMcpServerIds');
   const setUserAuthenticatedMcpServerIds = setMapSlice('userAuthenticatedMcpServerIds');
   const [loading, setLoading] = useState(true);
+  const [loadingStage, setLoadingStage] = useState<'idle' | 'fetching' | 'indexing'>('idle');
   const [error, setError] = useState<string | null>(null);
   // Per-item counts captured at fetch-resolution time. Presence in this
   // record means the item is "done"; the value is the size of the fetched
@@ -210,7 +217,6 @@ export function useAgorData(
   // bubbled up. Silent failures are logged for observability; the UI continues
   // to render whatever byId state was last successfully fetched, and the next
   // reconnect or token refresh gets another shot.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: setter helpers only close over stable setMaps; listing them would add noise without preventing stale closures
   const fetchData = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
       if (!client || !enabled) {
@@ -220,6 +226,7 @@ export function useAgorData(
       try {
         if (!silent) {
           setLoading(true);
+          setLoadingStage('fetching');
           setError(null);
           setItemCounts({});
         }
@@ -268,13 +275,24 @@ export function useAgorData(
             'boards',
             client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
-          client.service('board-objects').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          client.service('board-comments').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          track(
+            'board-objects',
+            client.service('board-objects').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
+          track(
+            'board-comments',
+            client
+              .service('board-comments')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
           track(
             'cards',
             client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
-          client.service('card-types').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          track(
+            'card-types',
+            client.service('card-types').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
           track(
             'repos',
             client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
@@ -293,21 +311,68 @@ export function useAgorData(
             'mcp-servers',
             client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
-          client
-            .service('session-mcp-servers')
-            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          client
-            .service('gateway-channels')
-            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          track(
+            'session-mcp-servers',
+            client
+              .service('session-mcp-servers')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
+          track(
+            'gateway-channels',
+            client
+              .service('gateway-channels')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
           track(
             'artifacts',
-            client.service('artifacts').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            client.service('artifacts').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                $select: [
+                  'artifact_id',
+                  'branch_id',
+                  'board_id',
+                  'name',
+                  'description',
+                  'path',
+                  'template',
+                  'build_status',
+                  'build_errors',
+                  'content_hash',
+                  'public',
+                  'created_by',
+                  'created_at',
+                  'updated_at',
+                  'archived',
+                  'archived_at',
+                  'fullscreen_url',
+                  'url',
+                ],
+              },
+            })
           ),
           client
             .service('mcp-servers/oauth-status')
             .find()
             .catch(() => ({ authenticated_server_ids: [] })),
         ]);
+
+        if (!silent) {
+          setLoadingStage('indexing');
+          // Give the browser one paint opportunity so large instances can
+          // visibly advance from "loading lists" to "indexing workspace data"
+          // before the synchronous Map construction below.
+          await new Promise<void>((resolve) => {
+            if (
+              typeof window === 'undefined' ||
+              typeof window.requestAnimationFrame !== 'function'
+            ) {
+              resolve();
+              return;
+            }
+            window.requestAnimationFrame(() => resolve());
+          });
+        }
 
         // Build session Maps for efficient lookups
         const sessionsById = new Map<string, Session>();
@@ -325,86 +390,61 @@ export function useAgorData(
           sessionsByBranchId.get(branchId)!.push(session);
         }
 
-        setSessionById(sessionsById);
-        setSessionsByBranch(sessionsByBranchId);
-
         // Build board Map for efficient lookups
         const boardsMap = new Map<string, Board>();
         for (const board of boardsList) {
           boardsMap.set(board.board_id, board);
         }
-        setBoardById(boardsMap);
-
         // Build board object Map for efficient lookups
         const boardObjectsMap = new Map<string, BoardEntityObject>();
         for (const boardObject of boardObjectsList) {
           boardObjectsMap.set(boardObject.object_id, boardObject);
         }
-        setBoardObjectById(boardObjectsMap);
-
         // Build comment Map for efficient lookups
         const commentsMap = new Map<string, BoardComment>();
         for (const comment of commentsList) {
           commentsMap.set(comment.comment_id, comment);
         }
-        setCommentById(commentsMap);
-
         // Build card Map for efficient lookups
         const cardsMap = new Map<string, CardWithType>();
         for (const card of cardsList) {
           cardsMap.set(card.card_id, card);
         }
-        setCardById(cardsMap);
-
         // Build card type Map for efficient lookups
         const cardTypesMap = new Map<string, CardType>();
         for (const cardType of cardTypesList) {
           cardTypesMap.set(cardType.card_type_id, cardType);
         }
-        setCardTypeById(cardTypesMap);
-
         // Build repo Map for efficient lookups
         const reposMap = new Map<string, Repo>();
         for (const repo of reposList) {
           reposMap.set(repo.repo_id, repo);
         }
-        setRepoById(reposMap);
-
         // Build branch Map for efficient lookups
         const branchesMap = new Map<string, Branch>();
         for (const branch of branchesList) {
           branchesMap.set(branch.branch_id, branch);
         }
-        setBranchById(branchesMap);
-
         // Build user Map for efficient lookups
         const usersMap = new Map<string, User>();
         for (const user of usersList) {
           usersMap.set(user.user_id, user);
         }
-        setUserById(usersMap);
-
         // Build MCP server Map for efficient lookups
         const mcpServersMap = new Map<string, MCPServer>();
         for (const mcpServer of mcpServersList) {
           mcpServersMap.set(mcpServer.mcp_server_id, mcpServer);
         }
-        setMcpServerById(mcpServersMap);
-
         // Build gateway channel Map for efficient lookups
         const gatewayChannelsMap = new Map<string, GatewayChannel>();
         for (const channel of gatewayChannelsList) {
           gatewayChannelsMap.set(channel.id, channel);
         }
-        setGatewayChannelById(gatewayChannelsMap);
-
         // Build artifact Map for efficient lookups
         const artifactsMap = new Map<string, Artifact>();
         for (const artifact of artifactsList) {
           artifactsMap.set(artifact.artifact_id, artifact);
         }
-        setArtifactById(artifactsMap);
-
         // Group session-MCP relationships by session_id
         const sessionMcpMap = new Map<string, string[]>();
         for (const relationship of sessionMcpList) {
@@ -413,11 +453,27 @@ export function useAgorData(
           }
           sessionMcpMap.get(relationship.session_id)!.push(relationship.mcp_server_id);
         }
-        setSessionMcpServerIds(sessionMcpMap);
-
         // Set per-user OAuth auth status
         const oauthStatus = oauthStatusResult as { authenticated_server_ids?: string[] };
-        setUserAuthenticatedMcpServerIds(new Set(oauthStatus?.authenticated_server_ids ?? []));
+        const userAuthenticatedMcpServerIds = new Set(oauthStatus?.authenticated_server_ids ?? []);
+
+        setMaps({
+          sessionById: sessionsById,
+          sessionsByBranch: sessionsByBranchId,
+          boardById: boardsMap,
+          boardObjectById: boardObjectsMap,
+          commentById: commentsMap,
+          cardById: cardsMap,
+          cardTypeById: cardTypesMap,
+          repoById: reposMap,
+          branchById: branchesMap,
+          userById: usersMap,
+          mcpServerById: mcpServersMap,
+          gatewayChannelById: gatewayChannelsMap,
+          artifactById: artifactsMap,
+          sessionMcpServerIds: sessionMcpMap,
+          userAuthenticatedMcpServerIds,
+        });
 
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.
@@ -438,6 +494,7 @@ export function useAgorData(
       } finally {
         if (!silent) {
           setLoading(false);
+          setLoadingStage('idle');
         }
       }
     },
@@ -468,6 +525,7 @@ export function useAgorData(
     if (!client || !enabled) {
       // No client or disabled = not ready for data fetch, set loading to false
       setLoading(false);
+      setLoadingStage('idle');
       return;
     }
 
@@ -1234,6 +1292,7 @@ export function useAgorData(
     ...maps,
     initialLoadItems,
     initialLoadComplete,
+    loadingStage,
     loading,
     error,
     refetch: fetchData,

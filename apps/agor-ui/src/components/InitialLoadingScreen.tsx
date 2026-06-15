@@ -6,6 +6,7 @@ import { Tag } from './Tag';
 interface Props {
   phase?: LoaderPhase;
   connecting?: boolean;
+  loadingStage?: 'idle' | 'fetching' | 'indexing';
   items?: InitialLoadItem[];
   message?: string;
 }
@@ -13,11 +14,18 @@ interface Props {
 export function InitialLoadingScreen({
   phase = 'loading',
   connecting = false,
+  loadingStage = 'fetching',
   items = [],
   message,
 }: Props) {
   const { token } = theme.useToken();
-  const statusMessage = message ?? (connecting ? 'Connecting to daemon…' : 'Loading workspace…');
+  const statusMessage =
+    message ??
+    (connecting
+      ? 'Connecting to daemon…'
+      : loadingStage === 'indexing'
+        ? 'Indexing workspace data…'
+        : 'Loading workspace data…');
   const showItems = !connecting && items.length > 0;
 
   return (
