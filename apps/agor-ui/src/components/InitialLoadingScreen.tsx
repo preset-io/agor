@@ -1,7 +1,6 @@
 import { CheckCircleFilled } from '@ant-design/icons';
-import { Flex, Spin, Typography, theme } from 'antd';
+import { Flex, Spin, Tag, Typography, theme } from 'antd';
 import type { InitialLoadItem, LoaderPhase } from '../hooks';
-import { Tag } from './Tag';
 
 interface Props {
   phase?: LoaderPhase;
@@ -61,17 +60,8 @@ export function InitialLoadingScreen({
                 </Typography.Text>
               </Flex>
               <Tag
-                color={done ? 'success' : 'default'}
-                style={{
-                  alignItems: 'center',
-                  boxSizing: 'border-box',
-                  display: 'inline-flex',
-                  fontVariantNumeric: 'tabular-nums',
-                  justifyContent: 'center',
-                  lineHeight: 1,
-                  marginInlineEnd: 0,
-                  minWidth: 28,
-                }}
+                color={done ? 'success' : undefined}
+                style={{ marginInlineEnd: 0, minWidth: 28, textAlign: 'center' }}
               >
                 {count}
               </Tag>
