@@ -43,6 +43,20 @@ describe('surface route registry', () => {
     expect(routeUsesSharedUserSettings(path)).toBe(false);
   });
 
+  it('classifies /usage as a lightweight shared-shell surface', () => {
+    expect(getRouteSurface('/usage').id).toBe('usage');
+    expect(isKnowledgeRoutePath('/usage')).toBe(false);
+    expect(isWorkspaceRoutePath('/usage')).toBe(false);
+    expect(routeStartsWorkspaceRuntime('/usage')).toBe(false);
+    expect(routeUsesDeviceRouter('/usage')).toBe(false);
+    expect(routeUsesSharedUserSettings('/usage')).toBe(true);
+  });
+
+  it('does not treat similarly prefixed paths as Usage', () => {
+    expect(getRouteSurface('/usages').id).toBe('workspace');
+    expect(getRouteSurface('/usage/extra').id).toBe('workspace');
+  });
+
   it.each(['/a/artifact/fullscreen'])('classifies %s as Artifact fullscreen', (path) => {
     expect(getRouteSurface(path).id).toBe('artifact-fullscreen');
     expect(isKnowledgeRoutePath(path)).toBe(false);

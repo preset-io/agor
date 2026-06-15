@@ -93,3 +93,36 @@ describe('AppHeader Knowledge link', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
+
+describe('AppHeader Usage link', () => {
+  beforeEach(() => {
+    mockNavigate.mockClear();
+  });
+
+  it('renders a basename-aware href and is visible to all users', () => {
+    renderHeader();
+
+    expect(screen.getByRole('link', { name: 'Usage' })).toHaveAttribute('href', '/ui/usage');
+  });
+
+  it('uses SPA navigation and prevents default for plain left clicks', () => {
+    renderHeader();
+
+    const eventWasNotCancelled = fireEvent.click(screen.getByRole('link', { name: 'Usage' }));
+
+    expect(eventWasNotCancelled).toBe(false);
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/usage');
+  });
+
+  it('lets modified clicks fall through to the browser', () => {
+    renderHeader();
+
+    const usageLink = screen.getByRole('link', { name: 'Usage' });
+    usageLink.removeAttribute('href');
+
+    const eventWasNotCancelled = fireEvent.click(usageLink, { metaKey: true });
+
+    expect(eventWasNotCancelled).toBe(true);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});

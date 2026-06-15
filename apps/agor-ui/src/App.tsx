@@ -55,6 +55,7 @@ import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
   routeUsesDeviceRouter,
+  USAGE_ROUTE_PATHS,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import { isMobileDevice } from './utils/deviceDetection';
@@ -91,6 +92,11 @@ const loadKnowledgePage = cacheRouteLoader(
   () => import('./pages/KnowledgePage'),
   (module) => ({ default: module.KnowledgePage })
 );
+const loadUsagePage = cacheRouteLoader(
+  'usage',
+  () => import('./pages/UsagePage'),
+  (module) => ({ default: module.UsagePage })
+);
 const loadArtifactFullscreenPage = cacheRouteLoader(
   'artifact-fullscreen',
   () => import('./pages/ArtifactFullscreenPage'),
@@ -109,6 +115,7 @@ const loadStreamdownDemoPage = cacheRouteLoader(
 
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
+const UsagePage = lazy(loadUsagePage);
 const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
 const MobileApp = lazy(loadMobileApp);
 const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
@@ -116,6 +123,7 @@ const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
 const routeModuleLoaders = {
   workspace: loadAgorApp,
   knowledge: loadKnowledgePage,
+  usage: loadUsagePage,
   'artifact-fullscreen': loadArtifactFullscreenPage,
   demo: loadStreamdownDemoPage,
   mobile: loadMobileApp,
@@ -1487,6 +1495,15 @@ function AppContent() {
     />
   );
 
+  const usagePageElement = (
+    <UsagePage
+      client={client}
+      currentUser={currentUser}
+      onUserSettingsClick={() => setOpenUserSettings(true)}
+      onLogout={logout}
+    />
+  );
+
   const artifactFullscreenElement = (
     <ArtifactFullscreenPage
       client={client}
@@ -1662,6 +1679,11 @@ function AppContent() {
             {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
             {KNOWLEDGE_ROUTE_PATHS.map((path) => (
               <Route key={path} path={path} element={knowledgePageElement} />
+            ))}
+
+            {/* Usage analytics surface. */}
+            {USAGE_ROUTE_PATHS.map((path) => (
+              <Route key={path} path={path} element={usagePageElement} />
             ))}
 
             {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,

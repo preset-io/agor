@@ -37,6 +37,7 @@
     "antd": "^6.4.3",
     "cronstrue": "^3.14.0",
     "d3-force": "^3.0.0",
+    "dayjs": "^1.11.21",
     "diff": "^7.0.0",
     "emoji-picker-react": "^4.19.1",
     "emojibase": "^17.0.0",
@@ -49,6 +50,7 @@
     "react-router-dom": "^7.16.0",
     "react-syntax-highlighter": "^16.1.1",
     "reactflow": "^11.11.4",
+    "recharts": "^2.15.0",
     "streamdown": "^1.5.1"
   },
   "devDependencies": {

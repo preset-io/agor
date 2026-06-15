@@ -328,6 +328,54 @@ describe('LeaderboardService dimensions', () => {
     );
     expect(aliceOpus?.totalTokens).toBe(6_000);
   });
+
+  dbTest('groupBy: "repo" populates repoName from the repo slug', async ({ db }) => {
+    await seedCanonicalDataset(db);
+    const service = new LeaderboardService(db);
+
+    const result = await service.find({ query: { groupBy: 'repo' } });
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].repoId).toBeDefined();
+    expect(result.data[0].repoName).toBe('main');
+  });
+
+  dbTest('repoName resolves per-repo when multiple repos exist', async ({ db }) => {
+    await seedCanonicalDataset(db);
+    // Second repo + branch + session + task attributed to Bob.
+    await seedRepoAndBranch(db, {
+      slug: 'analytics',
+      branchId: 'wt-analytics',
+      branchName: 'analytics-wt',
+      uniqueId: 2,
+    });
+    await seedSession(db, { sessionId: 'sess-analytics', branchId: 'wt-analytics', tool: 'codex' });
+    await seedTask(db, {
+      sessionId: 'sess-analytics',
+      createdBy: 'user-bob',
+      createdAt: tsAt({ daysOffset: 0 }),
+      model: 'gpt-5',
+      inputTokens: 100,
+      outputTokens: 50,
+      costUsd: 0.01,
+      durationMs: 500,
+    });
+    const service = new LeaderboardService(db);
+
+    const result = await service.find({ query: { groupBy: 'repo' } });
+    const byName = new Map(result.data.map((r) => [r.repoName, r]));
+    expect(new Set(byName.keys())).toEqual(new Set(['main', 'analytics']));
+    expect(byName.get('analytics')?.taskCount).toBe(1);
+  });
+
+  dbTest('repoName is absent when repo is not in groupBy', async ({ db }) => {
+    await seedCanonicalDataset(db);
+    const service = new LeaderboardService(db);
+
+    const result = await service.find({ query: { groupBy: 'user' } });
+    for (const row of result.data) {
+      expect(row.repoName).toBeUndefined();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

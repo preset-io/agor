@@ -10,6 +10,7 @@ import type {
 } from '@agor-live/client';
 import {
   ApiOutlined,
+  AreaChartOutlined,
   BookOutlined,
   CommentOutlined,
   QuestionCircleOutlined,
@@ -150,6 +151,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
+  const usageHref = useHref('/usage');
   // Single source of truth for "is the daemon usable right now?". Captures
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.
@@ -312,6 +314,29 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             />
           </Tooltip>
         )}
+        <Tooltip title="Usage" placement="bottom">
+          <Button
+            type="text"
+            icon={<AreaChartOutlined style={{ fontSize: token.fontSizeLG }} />}
+            style={headerIconButtonStyle}
+            href={usageHref}
+            aria-label="Usage"
+            onClick={(event) => {
+              if (event.defaultPrevented) return;
+              if (
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              ) {
+                return;
+              }
+              event.preventDefault();
+              navigate('/usage');
+            }}
+          />
+        </Tooltip>
         <Tooltip title="Knowledge" placement="bottom">
           <Button
             type="text"

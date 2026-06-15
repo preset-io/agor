@@ -18,85 +18,25 @@ import {
   gte,
   jsonExtract,
   lte,
+  repos,
   type SQL,
   sessions,
   sql,
   tasks,
   users,
 } from '@agor/core/db';
+import type {
+  LeaderboardDimension,
+  LeaderboardEntry,
+  LeaderboardQuery,
+  LeaderboardResult,
+} from '@agor/core/types';
 
 interface Params {
   query?: Record<string, unknown>;
 }
 
-/**
- * Supported groupBy dimensions. Callers can combine these in a comma-separated string,
- * e.g. `'user,model'` or `'tool,branch,repo'`.
- */
-export type LeaderboardDimension = 'user' | 'branch' | 'repo' | 'model' | 'tool';
-
 const ALL_DIMENSIONS: LeaderboardDimension[] = ['user', 'branch', 'repo', 'model', 'tool'];
-
-export interface LeaderboardQuery {
-  // Filters
-  userId?: string;
-  branchId?: string;
-  repoId?: string;
-
-  // Time period (optional - ISO timestamps)
-  startDate?: string;
-  endDate?: string;
-
-  // Group by dimensions (optional, comma-separated). Default matches legacy behaviour.
-  // Supported values: 'user' | 'branch' | 'repo' | 'model' | 'tool' (any combination).
-  groupBy?: string;
-
-  // Time bucket (optional). When set, adds a `bucket` field (ISO-8601 UTC timestamp
-  // truncated to the given granularity) to each row and to the GROUP BY.
-  bucket?: DateBucket;
-
-  // Sorting. When bucket is set, results are ordered by bucket ASC first, then by
-  // sortBy within each bucket.
-  sortBy?: 'tokens' | 'cost';
-  sortOrder?: 'asc' | 'desc';
-
-  // Pagination
-  limit?: number;
-  offset?: number;
-}
-
-export interface LeaderboardEntry {
-  // Dimension fields (present only when the corresponding dimension is in groupBy)
-  userId?: string;
-  userName?: string;
-  userEmail?: string;
-  userEmoji?: string;
-  branchId?: string;
-  branchName?: string;
-  repoId?: string;
-  repoName?: string;
-  model?: string;
-  tool?: string;
-
-  // Time-series field (present only when `bucket` is set)
-  bucket?: string;
-
-  // Metrics (always present)
-  totalTokens: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalCost: number;
-  taskCount: number;
-  sessionCount: number;
-  totalDurationMs: number;
-}
-
-export interface LeaderboardResult {
-  data: LeaderboardEntry[];
-  total: number;
-  limit: number;
-  offset: number;
-}
 
 const VALID_BUCKETS = new Set<DateBucket>(['hour', 'day', 'week', 'month']);
 
@@ -268,6 +208,7 @@ export class LeaderboardService {
     }
     if (includeRepo) {
       selectFields.repoId = branches.repo_id;
+      selectFields.repoName = repos.slug;
     }
     if (includeModel) {
       selectFields.model = sql<string>`${modelExpr}`.as('model');
@@ -295,7 +236,10 @@ export class LeaderboardService {
       groupByFields.push(branches.branch_id);
       groupByFields.push(branches.name);
     }
-    if (includeRepo) groupByFields.push(branches.repo_id);
+    if (includeRepo) {
+      groupByFields.push(branches.repo_id);
+      groupByFields.push(repos.slug);
+    }
     if (includeModel) groupByFields.push(sql`${modelExpr}`);
     if (includeTool) groupByFields.push(sessions.agentic_tool);
     if (bucketExpr) groupByFields.push(sql`${bucketExpr}`);
@@ -319,6 +263,9 @@ export class LeaderboardService {
 
     if (includeUser) {
       qb = qb.leftJoin(users, eq(tasks.created_by, users.user_id));
+    }
+    if (includeRepo) {
+      qb = qb.leftJoin(repos, eq(branches.repo_id, repos.repo_id));
     }
 
     const results = await qb
@@ -347,6 +294,9 @@ export class LeaderboardService {
       if (includeUser) {
         countInner = countInner.leftJoin(users, eq(tasks.created_by, users.user_id));
       }
+      if (includeRepo) {
+        countInner = countInner.leftJoin(repos, eq(branches.repo_id, repos.repo_id));
+      }
 
       const groupedSubquery = countInner
         .where(whereClause)
@@ -370,6 +320,7 @@ export class LeaderboardService {
       branchId?: string;
       branchName?: string;
       repoId?: string;
+      repoName?: string | null;
       model?: string | null;
       tool?: string | null;
       bucket?: string | null;
@@ -396,7 +347,7 @@ export class LeaderboardService {
           branchId: r.branchId as string,
           branchName: r.branchName as string,
         }),
-        ...(includeRepo && { repoId: r.repoId as string }),
+        ...(includeRepo && { repoId: r.repoId as string, repoName: r.repoName || undefined }),
         ...(includeModel && { model: r.model || undefined }),
         ...(includeTool && { tool: r.tool || undefined }),
         ...(bucketExpr && { bucket: r.bucket || undefined }),
