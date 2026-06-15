@@ -76,6 +76,17 @@ export function isNaturalCompletion(status: TaskStatus): boolean {
   return status === TaskStatus.COMPLETED || status === TaskStatus.FAILED;
 }
 
+export const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  TaskStatus.COMPLETED,
+  TaskStatus.FAILED,
+  TaskStatus.STOPPED,
+  TaskStatus.TIMED_OUT,
+]);
+
+export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
+  return status !== undefined && TERMINAL_TASK_STATUSES.has(status);
+}
+
 /**
  * Authoritative context-window snapshot captured at task completion.
  *

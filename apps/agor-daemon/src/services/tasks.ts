@@ -22,7 +22,12 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { type TaskMetadata, TaskStatus } from '@agor/core/types';
+import {
+  isTerminalTaskStatus,
+  SessionStatus,
+  type TaskMetadata,
+  TaskStatus,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import {
@@ -30,7 +35,6 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
-import { isTerminalTaskStatus } from '../utils/session-task-state.js';
 import type { SessionsService } from './sessions';
 
 /**
@@ -278,9 +282,19 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     );
     const failedTask = result as Task;
+    if (failedTask.status !== TaskStatus.FAILED) {
+      console.log(
+        `⏭️ [TasksService] Skipping heartbeat session failure for task ${shortId(failedTask.task_id)}; task is already ${failedTask.status}`
+      );
+      return failedTask;
+    }
     await this.app
       .service('sessions')
-      .patch(failedTask.session_id, { status: 'failed', ready_for_prompt: true }, params)
+      .patch(
+        failedTask.session_id,
+        { status: SessionStatus.FAILED, ready_for_prompt: true },
+        params
+      )
       .catch((error: unknown) => {
         console.warn(
           `[executor-heartbeat] Failed to mark session ${shortId(failedTask.session_id)} failed after stale heartbeat:`,

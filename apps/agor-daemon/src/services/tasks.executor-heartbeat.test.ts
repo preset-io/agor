@@ -79,11 +79,51 @@ describe('TasksService executor heartbeat helpers', () => {
     expect(triggerQueueProcessing).not.toHaveBeenCalled();
   });
 
-  it('does not let a late terminal executor patch rewrite a heartbeat failure', async () => {
+  it('does not mark session failed when heartbeat failure loses to normal completion', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000003';
-    const failedTask = {
+    const completedTask = {
       task_id: taskId,
       session_id: '018f0000-0000-7000-8000-000000000004',
+      status: TaskStatus.COMPLETED,
+      created_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:00:04.000Z',
+    };
+    const sessionsPatch = vi.fn();
+    const service = Object.create(TasksService.prototype) as TasksService & {
+      app: unknown;
+      get: ReturnType<typeof vi.fn>;
+      repository: { update: ReturnType<typeof vi.fn> };
+      id: string;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    service.get = vi.fn().mockResolvedValue(completedTask);
+    service.repository = { update: vi.fn() };
+    service.id = 'task_id';
+    service.emit = vi.fn();
+    service.app = {
+      service: (name: string) => {
+        if (name === 'sessions') {
+          return { patch: sessionsPatch };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    };
+
+    const result = await service.failForLostHeartbeat(taskId, {
+      completed_at: '2026-01-01T00:00:05.000Z',
+      error_message: 'Executor heartbeat lost',
+    });
+
+    expect(result).toBe(completedTask);
+    expect(service.repository.update).not.toHaveBeenCalled();
+    expect(sessionsPatch).not.toHaveBeenCalled();
+  });
+
+  it('does not let a late terminal executor patch rewrite a heartbeat failure', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000005';
+    const failedTask = {
+      task_id: taskId,
+      session_id: '018f0000-0000-7000-8000-000000000006',
       status: TaskStatus.FAILED,
       created_at: '2026-01-01T00:00:00.000Z',
       completed_at: '2026-01-01T00:00:05.000Z',

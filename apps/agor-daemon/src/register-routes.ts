@@ -1578,7 +1578,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return await withSessionTurnLock(sessionTurnLocks, task.session_id, async () => {
           // Re-read session state inside the lock — it may have flipped to
           // RUNNING while we waited for our turn.
-          const session = await sessionsService.get(task.session_id, params);
+          const session = await reconcileSessionPromptStateIfStuck(
+            await sessionsService.get(task.session_id, params),
+            taskRepo,
+            params
+          );
 
           if (session.status === SessionStatus.STOPPING) {
             throw new BadRequest('Cannot run task: session is currently stopping');

@@ -1,16 +1,5 @@
 import type { Session, Task } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
-
-export const TERMINAL_TASK_STATUSES: ReadonlySet<Task['status']> = new Set<Task['status']>([
-  TaskStatus.COMPLETED,
-  TaskStatus.FAILED,
-  TaskStatus.STOPPED,
-  TaskStatus.TIMED_OUT,
-]);
-
-export function isTerminalTaskStatus(status: Task['status'] | undefined): boolean {
-  return status !== undefined && TERMINAL_TASK_STATUSES.has(status);
-}
+import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 
 export function isTaskBlockingPrompt(task: Task): boolean {
   return task.status !== TaskStatus.QUEUED && !isTerminalTaskStatus(task.status);
