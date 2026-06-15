@@ -926,14 +926,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   async function reconcileSessionPromptStateIfStuck(
     session: Session,
     taskRepo: TaskRepository,
-    params: RouteParams
+    params: RouteParams,
+    options: { ignoredTaskIds?: readonly string[] } = {}
   ): Promise<Session> {
     if (session.status !== SessionStatus.FAILED || session.ready_for_prompt === true) {
       return session;
     }
 
     const sessionTasks = await taskRepo.findBySession(session.session_id);
-    if (!shouldReconcileSessionPromptState(session, sessionTasks)) return session;
+    if (!shouldReconcileSessionPromptState(session, sessionTasks, options)) return session;
 
     console.warn(
       `🧹 [PromptState] Repairing stuck session ${shortId(session.session_id)} ` +
@@ -1581,7 +1582,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const session = await reconcileSessionPromptStateIfStuck(
             await sessionsService.get(task.session_id, params),
             taskRepo,
-            params
+            params,
+            { ignoredTaskIds: [task.task_id] }
           );
 
           if (session.status === SessionStatus.STOPPING) {

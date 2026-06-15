@@ -40,13 +40,6 @@ import type { SessionsService } from './sessions';
 /**
  * Task service params
  */
-const ANALYTICS_TERMINAL_TASK_STATUSES = new Set<Task['status']>([
-  TaskStatus.COMPLETED,
-  TaskStatus.FAILED,
-  TaskStatus.STOPPED,
-  TaskStatus.TIMED_OUT,
-]);
-
 const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
   TaskStatus.COMPLETED,
   TaskStatus.FAILED,
@@ -54,7 +47,7 @@ const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
 ]);
 
 function isAnalyticsTerminalTaskStatus(status: Task['status'] | undefined): boolean {
-  return status !== undefined && ANALYTICS_TERMINAL_TASK_STATUSES.has(status);
+  return isTerminalTaskStatus(status);
 }
 
 function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): boolean {
@@ -282,9 +275,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     );
     const failedTask = result as Task;
-    if (failedTask.status !== TaskStatus.FAILED) {
+    const heartbeatFailureWon =
+      failedTask.status === TaskStatus.FAILED &&
+      failedTask.error_message === data.error_message &&
+      (!data.completed_at || failedTask.completed_at === data.completed_at);
+    if (!heartbeatFailureWon) {
       console.log(
-        `⏭️ [TasksService] Skipping heartbeat session failure for task ${shortId(failedTask.task_id)}; task is already ${failedTask.status}`
+        `⏭️ [TasksService] Skipping heartbeat session failure for task ${shortId(failedTask.task_id)}; ` +
+          `heartbeat failure did not win (status=${failedTask.status})`
       );
       return failedTask;
     }

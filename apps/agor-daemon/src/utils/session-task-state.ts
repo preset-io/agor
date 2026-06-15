@@ -16,8 +16,13 @@ export function sessionCanStartTask(status: Session['status'], readyForPrompt?: 
  * but there is no active task left to own that busy state. QUEUED tasks are not
  * blockers: they need the session to become promptable so the drainer can run.
  */
-export function shouldReconcileSessionPromptState(session: Session, tasks: Task[]): boolean {
+export function shouldReconcileSessionPromptState(
+  session: Session,
+  tasks: Task[],
+  options: { ignoredTaskIds?: readonly string[] } = {}
+): boolean {
   if (session.status !== SessionStatus.FAILED) return false;
   if (session.ready_for_prompt === true) return false;
-  return !tasks.some(isTaskBlockingPrompt);
+  const ignoredTaskIds = new Set(options.ignoredTaskIds ?? []);
+  return !tasks.some((task) => !ignoredTaskIds.has(task.task_id) && isTaskBlockingPrompt(task));
 }

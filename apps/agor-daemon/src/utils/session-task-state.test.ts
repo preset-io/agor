@@ -41,4 +41,15 @@ describe('session task state reconciliation', () => {
       ])
     ).toBe(false);
   });
+
+  it('can ignore a just-created task that is about to own the session turn', () => {
+    const createdTask = task(TaskStatus.CREATED);
+
+    expect(shouldReconcileSessionPromptState(baseSession, [createdTask])).toBe(false);
+    expect(
+      shouldReconcileSessionPromptState(baseSession, [createdTask], {
+        ignoredTaskIds: [createdTask.task_id],
+      })
+    ).toBe(true);
+  });
 });
