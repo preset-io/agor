@@ -14,6 +14,7 @@ export const blogPosts: BlogPost[] = [
     description:
       'High-level considerations for scoping, operating, governing, and building trust with persistent agents that help teams manage real workflows.',
     date: '2026-06-15',
+    image: '/images/blog/agent-modeling-101.png',
   },
   {
     slug: 'agor-assistants',
