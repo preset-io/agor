@@ -1,11 +1,12 @@
 import { CheckCircleFilled } from '@ant-design/icons';
-import { Flex, Spin, Tag, Typography, theme } from 'antd';
-import type { InitialLoadItem, LoaderPhase } from '../hooks';
+import { Flex, Spin, Typography, theme } from 'antd';
+import type { InitialLoadItem, InitialLoadingStage, LoaderPhase } from '../hooks';
+import { Tag } from './Tag';
 
 interface Props {
   phase?: LoaderPhase;
   connecting?: boolean;
-  loadingStage?: 'idle' | 'fetching' | 'indexing';
+  loadingStage?: InitialLoadingStage;
   items?: InitialLoadItem[];
   message?: string;
 }
@@ -61,6 +62,7 @@ export function InitialLoadingScreen({
               </Flex>
               <Tag
                 color={done ? 'success' : undefined}
+                variant="filled"
                 style={{ marginInlineEnd: 0, minWidth: 28, textAlign: 'center' }}
               >
                 {count}

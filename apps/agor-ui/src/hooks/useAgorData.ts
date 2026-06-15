@@ -56,6 +56,8 @@ export interface InitialLoadItem {
   count: number;
 }
 
+export type InitialLoadingStage = 'idle' | 'fetching' | 'indexing';
+
 /**
  * All server-backed data maps held in a single state object.
  *
@@ -101,7 +103,7 @@ const EMPTY_MAPS: DataMaps = {
 interface UseAgorDataResult extends DataMaps {
   initialLoadItems: InitialLoadItem[];
   initialLoadComplete: boolean;
-  loadingStage: 'idle' | 'fetching' | 'indexing';
+  loadingStage: InitialLoadingStage;
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
@@ -175,7 +177,7 @@ export function useAgorData(
   const setSessionMcpServerIds = setMapSlice('sessionMcpServerIds');
   const setUserAuthenticatedMcpServerIds = setMapSlice('userAuthenticatedMcpServerIds');
   const [loading, setLoading] = useState(true);
-  const [loadingStage, setLoadingStage] = useState<'idle' | 'fetching' | 'indexing'>('idle');
+  const [loadingStage, setLoadingStage] = useState<InitialLoadingStage>('idle');
   const [error, setError] = useState<string | null>(null);
   // Per-item counts captured at fetch-resolution time. Presence in this
   // record means the item is "done"; the value is the size of the fetched
