@@ -237,6 +237,28 @@ For now, expect a mixed model:
 
 The key requirement is traceability. Every meaningful tool call should be traceable back to the agent, the user, the session, the credential source, and the approval path. If you cannot answer "which identity did this, with whose permission, and from which session?" the model is not ready for important workflows.
 
+## How Agor supports this kind of modeling
+
+This is the layer Agor is trying to make concrete.
+
+The point is not just to run agents. It is to give teams the primitives they need to model, operate, and govern long-lived agents in one shared place.
+
+Some of the pieces:
+
+- **Persisted assistants.** [Agor Assistants](/guide/assistants) are the long-lived agent primitive: durable identity, memory, schedules, skills, and a branch-backed home where the agent can accumulate context over time.
+- **Scoped work surfaces.** [Boards](/guide/boards) and [branches](/guide/branches) have their own access controls, so teams can decide who can see, prompt, manage, or own the places where agent work happens.
+- **Assistant ACLs.** Assistants can be scoped by who has access to the assistant and which [Knowledge](/guide/knowledge) namespaces it can use.
+- **Knowledge namespace ACLs.** Knowledge is segmented by namespace with read/write/owner-style access. The useful pattern is tandem authorization: the user and the assistant both need the right access to use a namespace in a workflow.
+- **MCP governance.** Agor has its own [MCP registry](/guide/internal-mcp). Registered MCP servers, auth methods, and tool availability are managed centrally rather than configured ad hoc on every laptop.
+- **Gateway identity choices.** The [Message Gateway](/guide/message-gateway) is where Slack, GitHub, and similar channels connect to agents. A channel can define whether the agent runs as itself, runs as a specific Agor user, or aligns the Slack/GitHub user to an Agor user by email so the session uses that user's credentials and permissions.
+- **Session-level observability.** [Sessions](/guide/sessions) persist the details: messages, tool calls, model, agentic runtime, permission mode, branch context, and the history of what happened.
+
+That last point is bigger than basic auditability. Once AI work is durable and queryable, the team can ask questions that are impossible when everything lives in local terminals: which session deleted this file? Which model is this team actually using? Who is burning tokens? What prompting patterns work best? How often do agents ask for approval before acting? Which workflows became recurring habits?
+
+Agor's bias is archive over delete: keep the record, make it inspectable, and let the team learn from it. Over time, some organizations may want even stricter policies where ordinary users can archive sessions but only admins can hard-delete them. That opens the door to append-only agent operations, deeper analytics, and team-wide visibility across agentic workflows.
+
+There is a much bigger post to write about this. Centralizing agent work in a team command center enables far more than observability: it turns AI usage into something the team can inspect, compare, teach, govern, and improve together.
+
 ## A simple checklist for modeling a new agent
 
 When creating a long-lived team agent, I would start with this checklist:
