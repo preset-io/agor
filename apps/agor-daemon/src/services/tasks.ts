@@ -30,6 +30,7 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
+import { isTerminalTaskStatus } from '../utils/session-task-state.js';
 import type { SessionsService } from './sessions';
 
 /**
@@ -276,7 +277,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         suppressTerminalQueueProcessing: true,
       }
     );
-    return result as Task;
+    const failedTask = result as Task;
+    await this.app
+      .service('sessions')
+      .patch(failedTask.session_id, { status: 'failed', ready_for_prompt: true }, params)
+      .catch((error: unknown) => {
+        console.warn(
+          `[executor-heartbeat] Failed to mark session ${shortId(failedTask.session_id)} failed after stale heartbeat:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    return failedTask;
   }
 
   private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
@@ -315,6 +326,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const mayTransitionStatus =
       nextStatus === TaskStatus.RUNNING || isAnalyticsTerminalTaskStatus(nextStatus);
     const currentTask = mayTransitionStatus ? await this.get(id, params) : undefined;
+    if (
+      currentTask &&
+      isTerminalTaskStatus(currentTask.status) &&
+      isTerminalTaskStatus(nextStatus)
+    ) {
+      console.warn(
+        `⏭️ [TasksService] Ignoring terminal status rewrite for task ${shortId(currentTask.task_id)} ` +
+          `(${currentTask.status} → ${nextStatus})`
+      );
+      return currentTask;
+    }
     const isAnalyticsTerminalTransition =
       isAnalyticsTerminalTaskStatus(nextStatus) &&
       !isAnalyticsTerminalTaskStatus(currentTask?.status);

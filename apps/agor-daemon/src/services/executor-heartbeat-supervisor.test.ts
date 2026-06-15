@@ -13,7 +13,6 @@ describe('ExecutorHeartbeatSupervisor', () => {
       last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
     };
     const failForLostHeartbeat = vi.fn().mockResolvedValue({});
-    const sessionsPatch = vi.fn().mockResolvedValue({});
     const app = {
       service: (name: string) => {
         if (name === 'tasks') {
@@ -22,9 +21,6 @@ describe('ExecutorHeartbeatSupervisor', () => {
             get: vi.fn().mockResolvedValue(staleTask),
             failForLostHeartbeat,
           };
-        }
-        if (name === 'sessions') {
-          return { patch: sessionsPatch };
         }
         throw new Error(`unknown service ${name}`);
       },
@@ -46,10 +42,6 @@ describe('ExecutorHeartbeatSupervisor', () => {
     expect(failForLostHeartbeat).toHaveBeenCalledWith(staleTask.task_id, {
       completed_at: '2026-01-01T00:00:05.000Z',
       error_message: EXECUTOR_HEARTBEAT_LOST_MESSAGE,
-    });
-    expect(sessionsPatch).toHaveBeenCalledWith(staleTask.session_id, {
-      status: 'failed',
-      ready_for_prompt: true,
     });
   });
 
