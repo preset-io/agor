@@ -457,21 +457,7 @@ function AppContent() {
   // NOW handle conditional rendering based on state
   // Show loading while fetching auth config
   if (authConfigLoading) {
-    return (
-      <div
-        style={{
-          height: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: token.colorBgLayout,
-        }}
-      >
-        <Spin size="large" />
-        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>Loading...</div>
-      </div>
-    );
+    return <InitialLoadingScreen message="Loading…" />;
   }
 
   // Show auth config error ONLY if we don't have a config yet (first load)
@@ -529,42 +515,12 @@ function AppContent() {
   // Show reconnecting state if we have tokens but lost connection.
   // ONLY show fullscreen on initial connection, not during reconnections.
   if (hasTokens && (!connected || !authenticated) && workspaceSurfaceShouldRun && !hasLoadedOnce) {
-    return (
-      <div
-        style={{
-          height: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: token.colorBgLayout,
-        }}
-      >
-        <Spin size="large" />
-        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>
-          Reconnecting to daemon...
-        </div>
-      </div>
-    );
+    return <InitialLoadingScreen message="Reconnecting to daemon…" />;
   }
 
   // Show loading while checking authentication
   if (authLoading) {
-    return (
-      <div
-        style={{
-          height: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: token.colorBgLayout,
-        }}
-      >
-        <Spin size="large" />
-        <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>Authenticating...</div>
-      </div>
-    );
+    return <InitialLoadingScreen message="Authenticating…" />;
   }
 
   // Show connection error

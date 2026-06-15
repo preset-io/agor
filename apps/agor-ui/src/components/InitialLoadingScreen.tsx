@@ -1,80 +1,66 @@
-import { Spin, theme } from 'antd';
+import { CheckCircleFilled } from '@ant-design/icons';
+import { Flex, Spin, Tag, Typography, theme } from 'antd';
 import type { InitialLoadItem, LoaderPhase } from '../hooks';
-import { Tag } from './Tag';
 
 interface Props {
-  phase: LoaderPhase;
-  connecting: boolean;
-  items: InitialLoadItem[];
+  phase?: LoaderPhase;
+  connecting?: boolean;
+  items?: InitialLoadItem[];
+  message?: string;
 }
 
-export function InitialLoadingScreen({ phase, connecting, items }: Props) {
+export function InitialLoadingScreen({
+  phase = 'loading',
+  connecting = false,
+  items = [],
+  message,
+}: Props) {
   const { token } = theme.useToken();
-  const statusMessage = connecting ? 'Connecting to daemon…' : 'Loading workspace…';
+  const statusMessage = message ?? (connecting ? 'Connecting to daemon…' : 'Loading workspace…');
+  const showItems = !connecting && items.length > 0;
 
   return (
-    <div
+    <Flex
+      vertical
+      align="center"
+      justify="center"
       style={{
-        height: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
+        minHeight: '100vh',
         backgroundColor: token.colorBgLayout,
         opacity: phase === 'fading' ? 0 : 1,
         transition: 'opacity 280ms ease-out',
       }}
     >
       <Spin size="large" />
-      <div style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>{statusMessage}</div>
-      {!connecting && (
-        <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Typography.Text type="secondary" style={{ marginTop: token.marginMD }}>
+        {statusMessage}
+      </Typography.Text>
+      {showItems && (
+        <Flex vertical gap={token.sizeXXS} style={{ marginTop: token.marginLG, minWidth: 200 }}>
           {items.map(({ key, label, done, count }) => (
-            <div
-              key={key}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10,
-                minWidth: 200,
-                color: done ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.35)',
-              }}
-            >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span
-                  style={{
-                    width: 16,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
+            <Flex key={key} align="center" justify="space-between" gap={token.sizeSM}>
+              <Flex align="center" gap={token.sizeSM}>
+                <Flex align="center" justify="center" style={{ width: token.sizeMD }}>
                   {done ? (
-                    <span style={{ color: token.colorSuccess }}>✓</span>
+                    <CheckCircleFilled style={{ color: token.colorSuccess }} />
                   ) : (
                     <Spin size="small" />
                   )}
-                </span>
-                <span style={{ fontSize: 13 }}>{label}</span>
-              </span>
+                </Flex>
+                <Typography.Text type={done ? 'secondary' : undefined} disabled={!done}>
+                  {label}
+                </Typography.Text>
+              </Flex>
               <Tag
                 color={done ? 'success' : 'default'}
-                style={{
-                  margin: 0,
-                  fontSize: 11,
-                  lineHeight: '16px',
-                  padding: '0 6px',
-                  minWidth: 28,
-                  textAlign: 'center',
-                }}
+                style={{ marginInlineEnd: 0, minWidth: 28 }}
               >
                 {count}
               </Tag>
-            </div>
+            </Flex>
           ))}
-        </div>
+        </Flex>
       )}
-    </div>
+    </Flex>
   );
 }

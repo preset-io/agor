@@ -5,7 +5,7 @@
  */
 
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Divider, Form, Input, Space, Typography } from 'antd';
+import { Alert, Button, Card, Divider, Form, Input, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { BrandLogo } from '../BrandLogo';
 import { ParticleBackground } from './ParticleBackground';
@@ -28,6 +28,7 @@ export function LoginPage({
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
   const [showLocalLogin, setShowLocalLogin] = useState(false);
+  const { token } = theme.useToken();
   const useExternalLaunch = !!externalLaunchLoginRedirectUrl;
   const showLoginForm = !useExternalLaunch || showLocalLogin;
   const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;
@@ -134,7 +135,7 @@ export function LoginPage({
                     style={{
                       marginTop: 8,
                       paddingTop: 8,
-                      borderTop: '1px solid rgba(255,255,255,0.1)',
+                      borderTop: `1px solid ${token.colorBorderSecondary}`,
                     }}
                   >
                     <Text type="secondary" style={{ fontSize: 12 }}>
@@ -197,7 +198,7 @@ export function LoginPage({
                 ]}
               >
                 <Input
-                  prefix={<MailOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
+                  prefix={<MailOutlined style={{ color: token.colorTextQuaternary }} />}
                   placeholder="Email address"
                   autoComplete="email"
                 />
@@ -208,7 +209,7 @@ export function LoginPage({
                 rules={[{ required: true, message: 'Please enter your password' }]}
               >
                 <Input.Password
-                  prefix={<LockOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
+                  prefix={<LockOutlined style={{ color: token.colorTextQuaternary }} />}
                   placeholder="Password"
                   autoComplete="current-password"
                 />

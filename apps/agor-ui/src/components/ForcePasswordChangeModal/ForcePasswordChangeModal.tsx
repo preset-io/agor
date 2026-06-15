@@ -7,7 +7,7 @@
 
 import type { User } from '@agor-live/client';
 import { LockOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Form, Input, Modal, Typography } from 'antd';
+import { Alert, Form, Input, Modal, Typography, theme } from 'antd';
 import { useState } from 'react';
 
 const { Text } = Typography;
@@ -28,6 +28,7 @@ export function ForcePasswordChangeModal({
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { token } = theme.useToken();
 
   const handleSubmit = async () => {
     if (!user) return;
@@ -56,7 +57,7 @@ export function ForcePasswordChangeModal({
     <Modal
       title={
         <span>
-          <WarningOutlined style={{ color: '#faad14', marginRight: 8 }} />
+          <WarningOutlined style={{ color: token.colorWarning, marginRight: 8 }} />
           Password Change Required
         </span>
       }
@@ -99,7 +100,7 @@ export function ForcePasswordChangeModal({
           ]}
         >
           <Input.Password
-            prefix={<LockOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
+            prefix={<LockOutlined style={{ color: token.colorTextQuaternary }} />}
             placeholder="Enter new password"
             autoComplete="new-password"
           />
@@ -122,7 +123,7 @@ export function ForcePasswordChangeModal({
           ]}
         >
           <Input.Password
-            prefix={<LockOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
+            prefix={<LockOutlined style={{ color: token.colorTextQuaternary }} />}
             placeholder="Confirm new password"
             autoComplete="new-password"
           />

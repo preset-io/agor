@@ -363,7 +363,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 }))}
               />
               {effectiveTool === 'copilot' && copilotSource && (
-                <div style={{ marginTop: 6, fontSize: 12, color: 'rgba(255, 255, 255, 0.45)' }}>
+                <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary }}>
                   {copilotSource === 'dynamic' ? (
                     <>
                       Live list from your Copilot account (via SDK <code>listModels()</code>).
@@ -377,7 +377,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 </div>
               )}
               {effectiveTool === 'cursor' && cursorSource && (
-                <div style={{ marginTop: 6, fontSize: 12, color: 'rgba(255, 255, 255, 0.45)' }}>
+                <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary }}>
                   {cursorSource === 'dynamic' ? (
                     <>
                       Live list from your Cursor account (via SDK <code>Cursor.models.list()</code>
@@ -421,7 +421,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 }
                 style={{ width: '100%', minWidth: 400 }}
               />
-              <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255, 255, 255, 0.45)' }}>
+              <div style={{ marginTop: 8, fontSize: 12, color: token.colorTextTertiary }}>
                 Enter any model ID to pin to a specific version.{' '}
                 <a
                   href={
