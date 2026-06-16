@@ -7,6 +7,7 @@
  */
 
 import {
+  BranchRepository,
   type Database,
   GatewayChannelRepository,
   MCPServerRepository,
@@ -28,6 +29,7 @@ import {
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   AgenticToolName,
+  Branch,
   ChannelType,
   GatewayChannel,
   MCPServerID,
@@ -211,6 +213,60 @@ function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): Ga
   }
 }
 
+export interface ResolvedGatewaySessionDefaults {
+  agenticTool: AgenticToolName;
+  permissionConfig: NonNullable<Session['permission_config']>;
+  modelConfig?: NonNullable<Session['model_config']>;
+  mcpServerIds: string[];
+}
+
+/**
+ * Resolve the session config for a new gateway-created session.
+ *
+ * Gateway channel forms historically persisted `mcpServerIds: []` as the
+ * default empty form value. Treat that as "no channel-level MCP override" when
+ * the target branch has defaults configured, otherwise Slack/GitHub sessions
+ * bypass the BranchModal → General "Default MCP servers" setting. Non-empty
+ * gateway MCP selections remain explicit channel overrides; an empty selection
+ * still suppresses user-level defaults when the branch has no MCP defaults.
+ */
+export function resolveGatewaySessionDefaults(args: {
+  channel: GatewayChannel;
+  user: Pick<User, 'default_agentic_config'>;
+  branch?: Pick<Branch, 'mcp_server_ids'> | null;
+}): ResolvedGatewaySessionDefaults {
+  const { channel, user, branch } = args;
+  const agenticConfig = channel.agentic_config;
+  const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
+
+  const channelMcpServerIds = agenticConfig?.mcpServerIds;
+  const branchHasMcpDefaults = !!branch?.mcp_server_ids?.length;
+  const mcpServerIdsOverride =
+    channelMcpServerIds !== undefined && (channelMcpServerIds.length > 0 || !branchHasMcpDefaults)
+      ? channelMcpServerIds
+      : undefined;
+
+  const {
+    permission_config: permissionConfig,
+    model_config: modelConfig,
+    mcp_server_ids: mcpServerIds,
+  } = resolveSessionDefaults({
+    agenticTool,
+    user,
+    branch,
+    overrides: {
+      permissionMode: agenticConfig?.permissionMode,
+      modelConfig: agenticConfig?.modelConfig,
+      codexSandboxMode: agenticConfig?.codexSandboxMode,
+      codexApprovalPolicy: agenticConfig?.codexApprovalPolicy,
+      codexNetworkAccess: agenticConfig?.codexNetworkAccess,
+      mcpServerIds: mcpServerIdsOverride,
+    },
+  });
+
+  return { agenticTool, permissionConfig, modelConfig, mcpServerIds };
+}
+
 /**
  * Gateway routing service
  */
@@ -218,6 +274,7 @@ export class GatewayService {
   private channelRepo: GatewayChannelRepository;
   private threadMapRepo: ThreadSessionMapRepository;
   private usersRepo: UsersRepository;
+  private branchRepo: BranchRepository;
 
   private mcpServerRepo: MCPServerRepository;
   private userTokenRepo: UserMCPOAuthTokenRepository;
@@ -247,6 +304,7 @@ export class GatewayService {
     this.channelRepo = new GatewayChannelRepository(db);
     this.threadMapRepo = new ThreadSessionMapRepository(db);
     this.usersRepo = new UsersRepository(db);
+    this.branchRepo = new BranchRepository(db);
 
     this.mcpServerRepo = new MCPServerRepository(db);
     this.userTokenRepo = new UserMCPOAuthTokenRepository(db);
@@ -521,30 +579,37 @@ export class GatewayService {
     let created = false;
     let mcpAuthWarning: string | undefined;
 
-    // Resolve agentic config: channel config > user defaults > system defaults.
-    // Channel-level agentic_config maps to the helper's `overrides` (it's the
-    // gateway's analogue of an MCP tool's explicit args). Codex sub-config and
-    // MCP server lists are first-class fields on `GatewayAgenticConfig`, so
-    // thread them all through the helper — otherwise the executor's per-tool
-    // settings (which Codex reads from `permission_config.codex`, not `mode`)
-    // get silently dropped.
-    const agenticConfig = channel.agentic_config;
-    const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
+    let targetBranch: Branch | null = null;
+    try {
+      targetBranch = await this.branchRepo.findById(channel.target_branch_id);
+      if (!targetBranch) {
+        console.warn(
+          `[gateway] Target branch ${shortId(channel.target_branch_id)} not found while resolving session defaults`
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `[gateway] Failed to load target branch ${shortId(channel.target_branch_id)} for session defaults:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
+    // Resolve agentic config: channel config > branch defaults > user defaults
+    // > system defaults. Channel-level agentic_config maps to the helper's
+    // `overrides` (it's the gateway's analogue of an MCP tool's explicit args).
+    // Codex sub-config and MCP server lists are first-class fields on
+    // `GatewayAgenticConfig`, so thread them all through the helper — otherwise
+    // the executor's per-tool settings (which Codex reads from
+    // `permission_config.codex`, not `mode`) get silently dropped.
     const {
-      permission_config: gatewayPermissionConfig,
-      model_config: gatewayModelConfig,
-      mcp_server_ids: gatewayMcpServerIds,
-    } = resolveSessionDefaults({
       agenticTool,
+      permissionConfig: gatewayPermissionConfig,
+      modelConfig: gatewayModelConfig,
+      mcpServerIds: gatewayMcpServerIds,
+    } = resolveGatewaySessionDefaults({
+      channel,
       user,
-      overrides: {
-        permissionMode: agenticConfig?.permissionMode,
-        modelConfig: agenticConfig?.modelConfig,
-        codexSandboxMode: agenticConfig?.codexSandboxMode,
-        codexApprovalPolicy: agenticConfig?.codexApprovalPolicy,
-        codexNetworkAccess: agenticConfig?.codexNetworkAccess,
-        mcpServerIds: agenticConfig?.mcpServerIds,
-      },
+      branch: targetBranch,
     });
     const permissionMode = gatewayPermissionConfig.mode;
 
