@@ -42,7 +42,7 @@ Session: "Built user authentication feature"
 └─ Fork: "Generate API documentation"
 ```
 
-Use forks when downstream work needs the *same starting knowledge* but different focus. (Currently Claude Code only — other SDKs don't yet expose conversation copy.)
+Use forks when downstream work needs the _same starting knowledge_ but different focus. (Currently Claude Code only — other SDKs don't yet expose conversation copy.)
 
 ### Spawn — delegate with fresh context
 
@@ -102,9 +102,9 @@ Spawning is more than "start a child." Subsessions in Agor have first-class **ca
 - **Cross-tool** — Spawn a Codex child from a Claude parent, or a Gemini child from a Codex parent. Pick the right tool per subtask.
 
 <img
-  src="/screenshots/spawn-advanced-modal.png"
-  alt="Advanced spawn modal showing configuration options"
-  style={{ maxWidth: '400px' }}
+  src="/screenshots/subsession-spawn-codex-review.png"
+  alt="Conversation showing an agent spawning a Codex subsession for review"
+  style={{ maxWidth: '600px' }}
 />
 
 ### Configuration options
@@ -121,14 +121,14 @@ When spawning, you can override:
 
 If you've used [Claude Code's subagent feature](https://docs.claudecode.com/subagents), Agor's subsessions go further:
 
-| Feature | Claude Code Subagents | Agor Subsessions |
-|---|---|---|
-| **Parent blocking** | Parent locks while subagent runs | Parent stays responsive |
-| **Callback queuing** | N/A | Callbacks queue if parent is busy |
-| **Introspection** | Limited | Full conversation & git history |
-| **Post-completion prompting** | No | Can prompt child after it's done |
-| **Hierarchical spawning** | No | Children can spawn their own children |
-| **Multi-tool support** | Claude Code only | Claude, Codex, Gemini, OpenCode |
+| Feature                       | Claude Code Subagents            | Agor Subsessions                      |
+| ----------------------------- | -------------------------------- | ------------------------------------- |
+| **Parent blocking**           | Parent locks while subagent runs | Parent stays responsive               |
+| **Callback queuing**          | N/A                              | Callbacks queue if parent is busy     |
+| **Introspection**             | Limited                          | Full conversation & git history       |
+| **Post-completion prompting** | No                               | Can prompt child after it's done      |
+| **Hierarchical spawning**     | No                               | Children can spawn their own children |
+| **Multi-tool support**        | Claude Code only                 | Claude, Codex, Gemini, OpenCode       |
 
 **Crucially**, neither Codex, Gemini, nor OpenCode SDKs natively support spawning subsessions. **Agor unlocks this for all supported agents.**
 
