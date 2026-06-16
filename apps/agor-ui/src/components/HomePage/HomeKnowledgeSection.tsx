@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor-live/client';
-import { BookOutlined, FileOutlined } from '@ant-design/icons';
+import { BulbOutlined, FileOutlined } from '@ant-design/icons';
 import { Card, Empty, List, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useState } from 'react';
@@ -112,7 +112,7 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
     >
       <HomeSectionHeader
         title="Recent Knowledge"
-        icon={<BookOutlined />}
+        icon={<BulbOutlined />}
         info={`Up to ${HOME_KNOWLEDGE_LIMIT} recently updated readable Knowledge documents from kb/documents. Access checks remain server-side through the existing Knowledge service.`}
       />
       <div style={{ overflow: 'auto', minHeight: 0 }}>

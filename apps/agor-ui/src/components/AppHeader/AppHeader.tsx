@@ -10,7 +10,7 @@ import type {
 } from '@agor-live/client';
 import {
   ApiOutlined,
-  BookOutlined,
+  BulbOutlined,
   CommentOutlined,
   QuestionCircleOutlined,
   SettingOutlined,
@@ -315,7 +315,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <Tooltip title="Knowledge" placement="bottom">
           <Button
             type="text"
-            icon={<BookOutlined style={{ fontSize: token.fontSizeLG }} />}
+            icon={<BulbOutlined style={{ fontSize: token.fontSizeLG }} />}
             style={headerIconButtonStyle}
             href={knowledgeHref}
             aria-label="Knowledge"

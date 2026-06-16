@@ -26,6 +26,7 @@ import type { AgorClient, Group, User } from '@agor-live/client';
 import {
   ApartmentOutlined,
   ArrowLeftOutlined,
+  BulbOutlined,
   DeleteOutlined,
   DownOutlined,
   EditOutlined,
@@ -2865,8 +2866,19 @@ export function KnowledgePage({
               if (await confirmDiscardUnsavedChanges()) navigate('/');
             }}
           />
-          <BrandLogo level={5} />
-          <Text strong style={{ fontSize: 15, cursor: 'pointer' }} onClick={goToGraphHome}>
+          <BrandLogo level={3} style={{ marginTop: -4 }} />
+          <Text
+            strong
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 15,
+              cursor: 'pointer',
+            }}
+            onClick={goToGraphHome}
+          >
+            <BulbOutlined style={{ color: token.colorTextSecondary }} />
             Knowledge
           </Text>
           <Tooltip title="Knowledge is in beta — expect rough edges while the data model, MCP tools, and editor settle.">
