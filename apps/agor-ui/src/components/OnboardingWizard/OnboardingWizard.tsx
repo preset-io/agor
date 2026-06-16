@@ -1704,19 +1704,13 @@ export function OnboardingWizard({
         }
 
         return (
-          <>
-            <Paragraph type="secondary" style={{ marginBottom: 8 }}>
-              Paste an <Text code>OPENAI_API_KEY</Text> from{' '}
-              <Typography.Link href="https://platform.openai.com/api-keys" target="_blank">
-                OpenAI Platform
-              </Typography.Link>{' '}
-              for API billing, automation, or team-managed keys.
-            </Paragraph>
-            <Paragraph type="secondary" style={{ marginBottom: 16, fontSize: 12 }}>
-              Defaults: auto-approves tool calls inside the branch sandbox. Tighten in{' '}
-              <Text strong>Session Settings</Text>.
-            </Paragraph>
-          </>
+          <Paragraph type="secondary" style={{ marginBottom: 16 }}>
+            Paste an <Text code>OPENAI_API_KEY</Text> from{' '}
+            <Typography.Link href="https://platform.openai.com/api-keys" target="_blank">
+              OpenAI Platform
+            </Typography.Link>{' '}
+            for API billing, automation, or team-managed keys.
+          </Paragraph>
         );
       }
 
