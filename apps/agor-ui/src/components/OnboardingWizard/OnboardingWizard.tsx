@@ -286,7 +286,7 @@ const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string }
     label: 'platform.claude.com/settings/keys',
     url: 'https://platform.claude.com/settings/keys',
   },
-  codex: { label: 'platform.openai.com', url: 'https://platform.openai.com/api-keys' },
+  codex: { label: 'platform.openai.com/api-keys', url: 'https://platform.openai.com/api-keys' },
   gemini: { label: 'aistudio.google.com', url: 'https://aistudio.google.com/apikey' },
   copilot: { label: 'github.com/features/copilot', url: 'https://github.com/features/copilot' },
   cursor: { label: 'cursor.com', url: 'https://cursor.com' },
@@ -1709,8 +1709,11 @@ export function OnboardingWizard({
         return (
           <>
             <Paragraph type="secondary" style={{ marginBottom: 8 }}>
-              Paste an <Text code>OPENAI_API_KEY</Text> from OpenAI Platform. Best for API billing,
-              automation, or team-managed keys.
+              Paste an <Text code>OPENAI_API_KEY</Text> from{' '}
+              <Typography.Link href="https://platform.openai.com/api-keys" target="_blank">
+                OpenAI Platform
+              </Typography.Link>{' '}
+              for API billing, automation, or team-managed keys.
             </Paragraph>
             <Paragraph type="secondary" style={{ marginBottom: 16, fontSize: 12 }}>
               Defaults: auto-approves tool calls inside the branch sandbox. Tighten in{' '}
