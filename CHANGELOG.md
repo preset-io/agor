@@ -33,6 +33,26 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 _No user-visible changes yet._
 
+## 0.21.2 (TBD)
+
+### Features
+
+- **Home dashboard and faster workspace loading** — adds the Home dashboard while improving initial loading feedback, board-object loading, session-list ergonomics, and settings search. ([#1403](https://github.com/preset-io/agor/pull/1403), [#1419](https://github.com/preset-io/agor/pull/1419), [#1447](https://github.com/preset-io/agor/pull/1447), [#1450](https://github.com/preset-io/agor/pull/1450), [#1454](https://github.com/preset-io/agor/pull/1454))
+- **Knowledge and artifact polish** — improves Knowledge MCP search and outline ergonomics, namespace selection, graph labels, document icons, assistant namespace memory, and artifact publish validation. ([#1397](https://github.com/preset-io/agor/pull/1397), [#1420](https://github.com/preset-io/agor/pull/1420), [#1426](https://github.com/preset-io/agor/pull/1426), [#1427](https://github.com/preset-io/agor/pull/1427), [#1431](https://github.com/preset-io/agor/pull/1431), [#1432](https://github.com/preset-io/agor/pull/1432), [#1451](https://github.com/preset-io/agor/pull/1451))
+- **Board-level RBAC defaults and tighter runtime controls** — adds board-level permission defaults and refines branch/environment runtime controls. ([#1396](https://github.com/preset-io/agor/pull/1396), [#1415](https://github.com/preset-io/agor/pull/1415))
+- **Claude advisor/run settings UX** — supports Claude advisor model configuration and improves the session footer MCP/run settings surface. ([#1423](https://github.com/preset-io/agor/pull/1423), [#1425](https://github.com/preset-io/agor/pull/1425))
+
+### Fixes
+
+- **Session, task, and realtime stability** — fixes session/task state divergence, per-prompt MCP attribution, runtime-scope guard rejection, cold-start races, and realtime event filtering. ([#1391](https://github.com/preset-io/agor/pull/1391), [#1406](https://github.com/preset-io/agor/pull/1406), [#1411](https://github.com/preset-io/agor/pull/1411), [#1418](https://github.com/preset-io/agor/pull/1418), [#1444](https://github.com/preset-io/agor/pull/1444))
+- **Authentication, tokens, and permission fixes** — scopes runtime tokens, restricts config key resolution, authorizes executor API key resolution, persists MCP OAuth refresh endpoints, and fixes group RBAC for environment actions. ([#1389](https://github.com/preset-io/agor/pull/1389), [#1395](https://github.com/preset-io/agor/pull/1395), [#1399](https://github.com/preset-io/agor/pull/1399), [#1410](https://github.com/preset-io/agor/pull/1410), [#1429](https://github.com/preset-io/agor/pull/1429))
+- **Navigation and UI polish** — stabilizes Home navigation, fixes Knowledge route flicker, app loading colors, the All sessions scrollbar, global presence, and branch-card destructive-action visibility. ([#1407](https://github.com/preset-io/agor/pull/1407), [#1413](https://github.com/preset-io/agor/pull/1413), [#1414](https://github.com/preset-io/agor/pull/1414), [#1424](https://github.com/preset-io/agor/pull/1424), [#1438](https://github.com/preset-io/agor/pull/1438), [#1442](https://github.com/preset-io/agor/pull/1442))
+- **Branch, clone, and migration reliability** — validates clone source refs, fixes archived-branch zone queries, exposes migration root causes, and avoids bumping session recency when clearing highlights. ([#1390](https://github.com/preset-io/agor/pull/1390), [#1408](https://github.com/preset-io/agor/pull/1408), [#1417](https://github.com/preset-io/agor/pull/1417), [#1421](https://github.com/preset-io/agor/pull/1421))
+
+### Chores
+
+- **Docs, onboarding, dependencies, and logging** — clarifies CLI auth options, refreshes feature-guide IA, setup defaults, SDK metadata, dependency pins, and trims daemon log noise. ([#1394](https://github.com/preset-io/agor/pull/1394), [#1402](https://github.com/preset-io/agor/pull/1402), [#1416](https://github.com/preset-io/agor/pull/1416), [#1428](https://github.com/preset-io/agor/pull/1428), [#1435](https://github.com/preset-io/agor/pull/1435), [#1436](https://github.com/preset-io/agor/pull/1436), [#1437](https://github.com/preset-io/agor/pull/1437), [#1452](https://github.com/preset-io/agor/pull/1452), [#1453](https://github.com/preset-io/agor/pull/1453))
+
 ## 0.21.1 (TBD)
 
 ### Features
