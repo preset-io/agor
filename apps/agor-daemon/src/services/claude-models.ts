@@ -6,15 +6,11 @@
  * AVAILABLE_CLAUDE_MODEL_ALIASES when no API key is configured or the call fails.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { resolveApiKey } from '@agor/core/config';
 import { type Database, shortId } from '@agor/core/db';
-import {
-  AVAILABLE_CLAUDE_MODEL_ALIASES,
-  DEFAULT_CLAUDE_MODEL,
-  type ClaudeModel,
-} from '@agor/core/models';
+import { AVAILABLE_CLAUDE_MODEL_ALIASES, DEFAULT_CLAUDE_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
+import Anthropic from '@anthropic-ai/sdk';
 
 export interface ClaudeModelOption {
   id: string;
@@ -53,8 +49,6 @@ interface AuthenticatedParams extends Params {
 function isAlias(id: string): boolean {
   return /^claude-[a-z]+-\d+-\d+$/.test(id);
 }
-
-const ONE_M_BETA = 'context-1m-2025-08-07';
 
 /**
  * Models whose alias form supports the 1M context beta.

@@ -390,20 +390,19 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                   label: m.id,
                 }))}
               />
-              {(effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli') && claudeSource && (
-                <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary }}>
-                  {claudeSource === 'dynamic' ? (
-                    <>
-                      Live list from the Anthropic Models API.
-                    </>
-                  ) : (
-                    <>
-                      Showing static fallback. Set <code>ANTHROPIC_API_KEY</code> to see the live
-                      model list.
-                    </>
-                  )}
-                </div>
-              )}
+              {(effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli') &&
+                claudeSource && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary }}>
+                    {claudeSource === 'dynamic' ? (
+                      <>Live list from the Anthropic Models API.</>
+                    ) : (
+                      <>
+                        Showing static fallback. Set <code>ANTHROPIC_API_KEY</code> to see the live
+                        model list.
+                      </>
+                    )}
+                  </div>
+                )}
               {effectiveTool === 'copilot' && copilotSource && (
                 <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary }}>
                   {copilotSource === 'dynamic' ? (
