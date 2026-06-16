@@ -158,7 +158,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
           displayName: 'Bootstrap Bot',
           emoji: '🤖',
           agent: 'claude-code',
-          permissionMode: 'acceptEdits',
+          permissionMode: 'auto',
         }),
         expect.objectContaining({ onStatusChange: expect.any(Function) })
       );
