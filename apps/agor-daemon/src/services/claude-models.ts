@@ -50,17 +50,14 @@ function isAlias(id: string): boolean {
   return /^claude-[a-z]+-\d+-\d+$/.test(id);
 }
 
-/**
- * Models whose alias form supports the 1M context beta.
- * Maintained here because the Models API doesn't advertise beta eligibility.
- */
-const SUPPORTS_1M = new Set([
-  'claude-opus-4-7',
-  'claude-sonnet-4-6',
-  'claude-opus-4-6',
-  'claude-sonnet-4-5',
-]);
+const CONTEXT_1M_BETA = 'context-1m-2025-08-07';
+const ONE_MILLION_TOKENS = 900_000; // threshold to detect 1M-eligible models
 
+/**
+ * Build the option list from the API response. Models whose
+ * `max_input_tokens` >= 900k (when fetched with the 1M beta flag) get a
+ * `[1m]` variant — no static allowlist required.
+ */
 function toModelOptions(models: Anthropic.ModelInfo[]): ClaudeModelOption[] {
   const aliases = models.filter((m) => isAlias(m.id));
 
@@ -72,11 +69,11 @@ function toModelOptions(models: Anthropic.ModelInfo[]): ClaudeModelOption[] {
       description: undefined,
       source: 'dynamic',
     });
-    if (SUPPORTS_1M.has(m.id)) {
+    if (m.max_input_tokens && m.max_input_tokens >= ONE_MILLION_TOKENS) {
       options.push({
         id: `${m.id}[1m]`,
         displayName: `${m.display_name} (1M context)`,
-        description: `${m.display_name.split(' ').slice(-2).join(' ')} with extended 1M token context window`,
+        description: `${m.display_name} with extended 1M token context window`,
         source: 'dynamic',
       });
     }
@@ -118,8 +115,10 @@ export class ClaudeModelsService {
 
     try {
       const client = new Anthropic({ apiKey: resolution.apiKey });
+      // Pass the 1M beta so eligible models report their extended
+      // max_input_tokens — used to derive [1m] variants dynamically.
       const page = await withTimeout(
-        client.models.list({ limit: 100 }),
+        client.models.list({ limit: 100, betas: [CONTEXT_1M_BETA] }),
         CLAUDE_MODELS_TIMEOUT_MS,
         'Anthropic models.list() timed out'
       );
