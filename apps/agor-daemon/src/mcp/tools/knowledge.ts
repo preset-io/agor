@@ -39,6 +39,7 @@ import { z } from 'zod';
 import {
   markdownOutline,
   resolveHeadingRange,
+  resolveSectionRefRange,
   splitMarkdownLines,
 } from '../../knowledge/markdown-outline.js';
 import {
@@ -1166,7 +1167,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_outline',
     {
       description:
-        'Return a markdown heading outline for a Knowledge document, including 1-based line ranges and the current version token. Use this before targeted edits to avoid reading the full document.',
+        'Return a compact markdown heading outline/skeleton for a Knowledge document, including 1-based line ranges, title breadcrumbs, sectionRef selectors like root.h1[1].h2[2], per-section char counts, and the current version token. Use this before targeted reads/edits to avoid loading the full document.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
@@ -1217,7 +1218,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_get_range',
     {
       description:
-        'Read a bounded line range or heading section from a Knowledge document. Returns current version metadata and optional line numbers so agents can edit without loading the full document.',
+        'Read a bounded line range, section, or section-relative page from a Knowledge document. Prefer sectionRef from agor_kb_outline for title-independent section reads; headingPath + occurrence is also supported for convenience. Returns current version metadata and optional line numbers so agents can edit without loading the full document.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
@@ -1234,6 +1235,10 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         startLine: mcpOptionalPositiveInt('startLine', '1-based inclusive start line'),
         endLine: mcpOptionalPositiveInt('endLine', '1-based inclusive end line'),
         headingPath: mcpOptionalNonBlankString('headingPath', 'Heading path from agor_kb_outline'),
+        sectionRef: mcpOptionalNonBlankString(
+          'sectionRef',
+          'Title-independent section selector from agor_kb_outline, e.g. root.h1[1].h2[2]'
+        ),
         occurrence: mcpOptionalPositiveInt(
           'occurrence',
           'Occurrence for duplicate heading paths (default: 1)'
@@ -1247,6 +1252,27 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .max(20, 'contextLines must be less than or equal to 20.')
           .optional()
           .describe('Extra lines before/after the requested range (default: 2)'),
+        offsetLines: z
+          .number({
+            error: 'offsetLines must be a non-negative integer when provided.',
+          })
+          .int('offsetLines must be an integer.')
+          .min(0, 'offsetLines must be greater than or equal to 0.')
+          .optional()
+          .describe(
+            'Skip this many lines from the selected line range/section before reading (default: 0). Useful for paging through large sections.'
+          ),
+        maxLines: z
+          .number({
+            error: 'maxLines must be a positive integer when provided.',
+          })
+          .int('maxLines must be an integer.')
+          .positive('maxLines must be greater than 0.')
+          .max(1000, 'maxLines must be less than or equal to 1000.')
+          .optional()
+          .describe(
+            'Maximum selected lines to read after offsetLines, before contextLines are added (max: 1000). Omit to read the full selected range/section.'
+          ),
         includeLineNumbers: z
           .boolean()
           .optional()
@@ -1266,18 +1292,35 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const lines = splitMarkdownLines(content);
       let startLine = args.startLine;
       let endLine = args.endLine;
+      const sectionRef = coerceString(args.sectionRef);
       const headingPath = coerceString(args.headingPath);
-      if (headingPath) {
-        const heading = resolveHeadingRange(markdownOutline(content), headingPath, args.occurrence);
+      if (sectionRef || headingPath) {
+        const outline = markdownOutline(content);
+        const heading = sectionRef
+          ? resolveSectionRefRange(outline, sectionRef)
+          : resolveHeadingRange(outline, headingPath as string, args.occurrence);
         startLine = heading.startLine;
         endLine = heading.endLine;
       }
       if (!startLine || !endLine) {
-        throw new Error('Provide startLine + endLine, or headingPath.');
+        throw new Error('Provide startLine + endLine, sectionRef, or headingPath.');
       }
       if (endLine < startLine)
         throw new Error('endLine must be greater than or equal to startLine');
       if (endLine > lines.length) throw new Error('Requested range exceeds document length');
+      const selectedStartLine = startLine;
+      const selectedEndLine = endLine;
+      const isPaged = args.offsetLines !== undefined || args.maxLines !== undefined;
+      if (isPaged) {
+        const offsetLines = args.offsetLines ?? 0;
+        const selectedLineCount = endLine - startLine + 1;
+        if (offsetLines >= selectedLineCount) {
+          throw new Error('offsetLines must be less than the selected range length');
+        }
+        startLine = startLine + offsetLines;
+        endLine =
+          args.maxLines === undefined ? endLine : Math.min(endLine, startLine + args.maxLines - 1);
+      }
       const contextLines = args.contextLines ?? 2;
       const contextStartLine = Math.max(1, startLine - contextLines);
       const contextEndLine = Math.min(lines.length, endLine + contextLines);
@@ -1297,6 +1340,16 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
             endLine,
             contextStartLine,
             contextEndLine,
+            ...(isPaged
+              ? {
+                  sourceRange: {
+                    startLine: selectedStartLine,
+                    endLine: selectedEndLine,
+                    omittedBefore: Math.max(0, startLine - selectedStartLine),
+                    omittedAfter: Math.max(0, selectedEndLine - endLine),
+                  },
+                }
+              : {}),
             content: rangeContent,
             numberedContent,
             contentMd5: md5(lines.slice(startLine - 1, endLine).join('\n')),

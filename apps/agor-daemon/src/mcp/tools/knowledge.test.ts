@@ -185,6 +185,132 @@ describe('Knowledge MCP input schemas', () => {
     );
   });
 
+  it('returns structural section refs from Knowledge outlines', async () => {
+    const get = vi.fn().mockResolvedValue({
+      document: {
+        document_id: 'doc-1',
+        path: 'guide.md',
+        uri: 'agor://kb/global/guide.md',
+      },
+      current_version: {
+        version_id: 'ver-1',
+        document_id: 'doc-1',
+        version_number: 1,
+      },
+      content: ['# Guide', 'intro', '## Setup', 'steps', '## Setup', 'more steps'].join('\n'),
+    });
+    const tools = await captureKnowledgeTools({ 'kb/documents': { get } });
+
+    const result = textResultJson(
+      await tools.agor_kb_outline.handler?.({ documentId: 'doc-1' })
+    ) as Record<string, any>;
+
+    expect(result.headings).toMatchObject([
+      {
+        headingPath: 'Guide',
+        sectionRef: 'root.h1[1]',
+        startLine: 1,
+        endLine: 6,
+        chars: '# Guide\nintro\n## Setup\nsteps\n## Setup\nmore steps'.length,
+      },
+      {
+        headingPath: 'Guide > Setup',
+        occurrence: 1,
+        sectionRef: 'root.h1[1].h2[1]',
+        startLine: 3,
+        endLine: 4,
+      },
+      {
+        headingPath: 'Guide > Setup',
+        occurrence: 2,
+        sectionRef: 'root.h1[1].h2[2]',
+        startLine: 5,
+        endLine: 6,
+      },
+    ]);
+    expect(result.version).toEqual({
+      version_id: 'ver-1',
+      version_number: 1,
+      content_sha256: null,
+      etag: 'kbv:ver-1',
+    });
+  });
+
+  it('reads Knowledge sections by sectionRef from the outline', async () => {
+    const get = vi.fn().mockResolvedValue({
+      document: {
+        document_id: 'doc-1',
+        path: 'guide.md',
+        uri: 'agor://kb/global/guide.md',
+      },
+      current_version: {
+        version_id: 'ver-1',
+        document_id: 'doc-1',
+        version_number: 1,
+      },
+      content: ['# Guide', 'intro', '## Setup', 'steps', '## Setup', 'more steps'].join('\n'),
+    });
+    const tools = await captureKnowledgeTools({ 'kb/documents': { get } });
+
+    const result = textResultJson(
+      await tools.agor_kb_get_range.handler?.({
+        documentId: 'doc-1',
+        sectionRef: 'root.h1[1].h2[2]',
+        contextLines: 0,
+      })
+    ) as Record<string, any>;
+
+    expect(result.range).toMatchObject({
+      startLine: 5,
+      endLine: 6,
+      contextStartLine: 5,
+      contextEndLine: 6,
+      content: '## Setup\nmore steps',
+      numberedContent: '5: ## Setup\n6: more steps',
+    });
+    expect(result.range).not.toHaveProperty('sourceRange');
+  });
+
+  it('pages within a Knowledge section using offsetLines and maxLines', async () => {
+    const get = vi.fn().mockResolvedValue({
+      document: {
+        document_id: 'doc-1',
+        path: 'guide.md',
+        uri: 'agor://kb/global/guide.md',
+      },
+      current_version: {
+        version_id: 'ver-1',
+        document_id: 'doc-1',
+        version_number: 1,
+      },
+      content: ['# Guide', 'intro', '## Large', 'a', 'b', 'c', 'd', 'e'].join('\n'),
+    });
+    const tools = await captureKnowledgeTools({ 'kb/documents': { get } });
+
+    const result = textResultJson(
+      await tools.agor_kb_get_range.handler?.({
+        documentId: 'doc-1',
+        sectionRef: 'root.h1[1].h2[1]',
+        offsetLines: 2,
+        maxLines: 2,
+        contextLines: 0,
+      })
+    ) as Record<string, any>;
+
+    expect(result.range).toMatchObject({
+      startLine: 5,
+      endLine: 6,
+      sourceRange: {
+        startLine: 3,
+        endLine: 8,
+        omittedBefore: 2,
+        omittedAfter: 2,
+      },
+      content: 'b\nc',
+      numberedContent: '5: b\n6: c',
+    });
+  });
+
   it('omits full Knowledge search content by default while returning snippets for text search', async () => {
     const find = vi.fn().mockResolvedValue([
       {

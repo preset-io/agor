@@ -108,6 +108,7 @@ Common workflows:
 
 - **Search and load context** with `agor_kb_search`, `agor_kb_get`, `agor_kb_outline`, and `agor_kb_get_range`.
   `agor_kb_search` is optimized for discovery: non-empty searches return metadata plus short snippets by default, while browse/listing calls with `query: ""` return metadata only. Use `contentMode: "none" | "snippet" | "full"` and `snippetLines` to control result verbosity, and prefer `agor_kb_get` or `agor_kb_get_range` when you need to read document content.
+  For large markdown docs, use `agor_kb_outline` as the map: it returns heading titles, line ranges, compact size hints, duplicate-heading occurrences, and `sectionRef` selectors such as `root.h1[1].h2[2]`. Then call `agor_kb_get_range` with that `sectionRef` (or a line range / `headingPath` + `occurrence`) to read only the needed section with nearby context. For very large sections, page through the selected section with `offsetLines` and `maxLines`.
 - **File new context** with `agor_kb_put` when an agent discovers something worth keeping.
 - **Make targeted edits** with `agor_kb_edit`, including version checks and dry runs.
 - **Round-trip through a worktree** with `agor_kb_materialize` and `agor_kb_publish_from_worktree`, where branch permissions allow local workspace access.

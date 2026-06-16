@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { Heading, RootContent } from 'mdast';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
@@ -7,21 +6,31 @@ import { unified } from 'unified';
 export interface MarkdownHeadingRange {
   level: number;
   title: string;
+  /**
+   * Title-based breadcrumb, intended for display and convenience selection.
+   * Duplicate title paths are disambiguated by `occurrence`.
+   */
   headingPath: string;
+  /**
+   * Structural selector for this heading, e.g. `root.h1[1].h2[2]`.
+   * This is title-independent within a document version, so it survives heading
+   * renames better than `headingPath`, but it can still change when nearby
+   * headings are inserted, deleted, or reordered.
+   */
+  sectionRef: string;
+  /** Alias for `sectionRef` for callers that prefer explicit terminology. */
+  ordinalPath: string;
   occurrence: number;
   startLine: number;
   endLine: number;
   contentStartLine: number;
+  /** Raw markdown character count for the section, including its heading line. */
+  chars: number;
   anchor: string;
-  contentMd5: string;
 }
 
 export function splitMarkdownLines(content: string): string[] {
   return content.replace(/\r\n/g, '\n').split('\n');
-}
-
-function md5(text: string): string {
-  return createHash('md5').update(text).digest('hex');
 }
 
 function headingAnchor(title: string): string {
@@ -61,14 +70,25 @@ export function markdownOutline(content: string, maxDepth = 6): MarkdownHeadingR
     }))
     .filter((heading) => heading.title.length > 0 && heading.level <= maxDepth);
 
-  const pathStack: string[] = [];
+  const titleStack: string[] = [];
+  const ordinalStack: string[] = [];
   const occurrenceByPath = new Map<string, number>();
+  const ordinalCountsByParentAndLevel = new Map<string, number>();
   return raw.map((heading, index) => {
-    pathStack.length = heading.level - 1;
-    pathStack[heading.level - 1] = heading.title;
-    const headingPath = pathStack.filter(Boolean).join(' > ');
+    while (titleStack.length > heading.level - 1) titleStack.pop();
+    titleStack.push(heading.title);
+    const headingPath = titleStack.join(' > ');
     const occurrence = (occurrenceByPath.get(headingPath) ?? 0) + 1;
     occurrenceByPath.set(headingPath, occurrence);
+
+    while (ordinalStack.length > heading.level - 1) ordinalStack.pop();
+    const parentOrdinalPath = ordinalStack.length > 0 ? ordinalStack.join('.') : 'root';
+    const ordinalCountKey = `${parentOrdinalPath}/h${heading.level}`;
+    const ordinal = (ordinalCountsByParentAndLevel.get(ordinalCountKey) ?? 0) + 1;
+    ordinalCountsByParentAndLevel.set(ordinalCountKey, ordinal);
+    ordinalStack.push(`h${heading.level}[${ordinal}]`);
+    const sectionRef = `root.${ordinalStack.join('.')}`;
+
     const next = raw.slice(index + 1).find((candidate) => candidate.level <= heading.level);
     const endLine = next ? next.line - 1 : lines.length;
     const sectionContent = lines.slice(heading.line - 1, endLine).join('\n');
@@ -76,12 +96,14 @@ export function markdownOutline(content: string, maxDepth = 6): MarkdownHeadingR
       level: heading.level,
       title: heading.title,
       headingPath,
+      sectionRef,
+      ordinalPath: sectionRef,
       occurrence,
       startLine: heading.line,
       endLine,
       contentStartLine: Math.min(heading.line + 1, endLine),
+      chars: sectionContent.length,
       anchor: headingAnchor(heading.title),
-      contentMd5: md5(sectionContent),
     };
   });
 }
@@ -102,5 +124,17 @@ export function resolveHeadingRange(
       `Heading "${headingPath}" occurrence ${occurrence} not found (matches: ${matches.length})`
     );
   }
+  return match;
+}
+
+export function resolveSectionRefRange(
+  headings: MarkdownHeadingRange[],
+  sectionRef: string
+): MarkdownHeadingRange {
+  const normalized = sectionRef.trim();
+  const match = headings.find(
+    (heading) => heading.sectionRef === normalized || heading.ordinalPath === normalized
+  );
+  if (!match) throw new Error(`Section ref not found: ${sectionRef}`);
   return match;
 }

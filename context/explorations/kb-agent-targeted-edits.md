@@ -334,17 +334,19 @@ agor_kb_outline({
     level: number;
     title: string;
     headingPath: string;       // display/convenience, not a permanent id
+    sectionRef: string;        // structural selector, e.g. "root.h1[1].h2[2]"
+    ordinalPath: string;       // alias for sectionRef
     occurrence: number;        // disambiguates duplicate heading paths
     startLine: number;         // 1-based inclusive
     endLine: number;           // 1-based inclusive section end
     contentStartLine: number;  // first line after heading
+    chars: number;             // raw markdown chars in this section
     anchor?: string;
-    contentMd5?: string;       // hash of this section in this version
   }>;
 }
 ```
 
-Implementation can reuse/extend `knowledgeUnitsForMarkdown` or add a lightweight markdown-outline utility. Do not expose `kb_document_units.unit_id` as a stable edit id in V1.
+`headingPath` is easy to read but collides when titles repeat and changes when titles are renamed. `occurrence` disambiguates duplicates. `sectionRef` is the preferred selector for agent follow-up reads: it is title-independent within a document version and therefore survives heading renames, but can still change when sections are inserted, deleted, or reordered. Keep outline metadata dense: line counts are inferable from `startLine`/`endLine`, and one `chars` hint is enough for agents to decide whether to read or page a section. Do not expose `kb_document_units.unit_id` as a stable edit id in V1.
 
 ### 5.4 `agor_kb_get_range`
 
@@ -363,8 +365,11 @@ agor_kb_get_range({
 
   headingPath?: string;
   occurrence?: number;
+  sectionRef?: string; // preferred selector copied from agor_kb_outline
 
   contextLines?: number; // default 2, cap e.g. 20
+  offsetLines?: number; // section/range-relative pagination offset
+  maxLines?: number; // cap selected lines before adding context
   includeLineNumbers?: boolean; // default true
 }) -> {
   document: KnowledgeDocument;
@@ -375,6 +380,12 @@ agor_kb_get_range({
     endLine: number;
     contextStartLine: number;
     contextEndLine: number;
+    sourceRange?: {           // present only when offsetLines/maxLines paged a larger selection
+      startLine: number;
+      endLine: number;
+      omittedBefore: number;
+      omittedAfter: number;
+    };
     content: string;
     numberedContent?: string;
     contentMd5: string;
