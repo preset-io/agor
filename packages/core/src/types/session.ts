@@ -44,6 +44,7 @@ export type SessionStatus = (typeof SessionStatus)[keyof typeof SessionStatus];
  * - acceptEdits: Auto-accept file edits, ask for other tools (recommended)
  * - bypassPermissions: Allow all operations without prompting
  * - plan: Plan mode (generate plan without executing)
+ * - auto: Model classifier approves/denies prompts; unresolved ones fall through to Agor's UI
  * - dontAsk: Legacy mode for backward compatibility
  *
  * Gemini modes (Gemini CLI SDK - ApprovalMode):

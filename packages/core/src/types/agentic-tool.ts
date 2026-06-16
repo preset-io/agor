@@ -73,12 +73,15 @@ export interface AgenticTool {
  *
  * Unified permission model - single mode controls tool approval behavior.
  * SDK 0.1.55+ includes 'dontAsk' mode for backward compatibility.
+ * 'auto' uses a model classifier to approve/deny permission prompts; anything
+ * it doesn't auto-resolve still falls through to Agor's canUseTool UI.
  */
 export type ClaudeCodePermissionMode =
   | 'default'
   | 'acceptEdits'
   | 'bypassPermissions'
   | 'plan'
+  | 'auto'
   | 'dontAsk';
 
 /**
