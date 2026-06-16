@@ -265,6 +265,7 @@ function AppContent() {
     sessionsByBranch,
     boardById,
     boardObjectById,
+    boardObjectsByBoardId,
     commentById,
     cardById,
     cardTypeById,
@@ -1457,6 +1458,7 @@ function AppContent() {
       availableAgents={AVAILABLE_AGENTS}
       boardById={boardById}
       boardObjectById={boardObjectById}
+      boardObjectsByBoardId={boardObjectsByBoardId}
       commentById={commentById}
       cardById={cardById}
       cardTypeById={cardTypeById}

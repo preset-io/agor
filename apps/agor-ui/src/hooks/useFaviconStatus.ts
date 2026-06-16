@@ -16,7 +16,7 @@ import { createFaviconWithDot } from '../utils/faviconDot';
 export function useFaviconStatus(
   currentBoardId: string | null,
   sessionsByBranch: Map<string, Session[]>,
-  boardObjects: BoardEntityObject[]
+  boardObjectsForCurrentBoard: BoardEntityObject[]
 ) {
   const [baseFaviconUrl] = useState(`${import.meta.env.BASE_URL}favicon.png`);
   const { token } = theme.useToken();
@@ -33,11 +33,8 @@ export function useFaviconStatus(
       return;
     }
 
-    // Find branches on current board
     const branchesOnBoard = new Set(
-      boardObjects
-        .filter((obj) => obj.board_id === currentBoardId && obj.branch_id)
-        .map((obj) => obj.branch_id!)
+      boardObjectsForCurrentBoard.filter((obj) => obj.branch_id).map((obj) => obj.branch_id!)
     );
 
     // Find sessions for those branches using O(1) Map lookups
@@ -61,5 +58,11 @@ export function useFaviconStatus(
         }
       }
     );
-  }, [currentBoardId, sessionsByBranch, boardObjects, baseFaviconUrl, token.colorSuccessText]);
+  }, [
+    currentBoardId,
+    sessionsByBranch,
+    boardObjectsForCurrentBoard,
+    baseFaviconUrl,
+    token.colorSuccessText,
+  ]);
 }

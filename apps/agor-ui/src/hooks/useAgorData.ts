@@ -70,6 +70,14 @@ type DataMaps = {
   sessionsByBranch: Map<string, Session[]>;
   boardById: Map<string, Board>;
   boardObjectById: Map<string, BoardEntityObject>;
+  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
+  // Global placement lookup. Branch placements are unique because a branch can
+  // only have one board-object row at a time.
+  boardObjectByBranchId: Map<string, BoardEntityObject>;
+  // Global placement lookup. Cards follow the same one-row-per-card service
+  // contract as branches; callers needing board-scoped iteration should use
+  // boardObjectsByBoardId instead.
+  boardObjectByCardId: Map<string, BoardEntityObject>;
   commentById: Map<string, BoardComment>;
   cardById: Map<string, CardWithType>;
   cardTypeById: Map<string, CardType>;
@@ -88,6 +96,9 @@ const EMPTY_MAPS: DataMaps = {
   sessionsByBranch: new Map(),
   boardById: new Map(),
   boardObjectById: new Map(),
+  boardObjectsByBoardId: new Map(),
+  boardObjectByBranchId: new Map(),
+  boardObjectByCardId: new Map(),
   commentById: new Map(),
   cardById: new Map(),
   cardTypeById: new Map(),
@@ -129,6 +140,130 @@ function replaceIfChanged<T extends object>(
   return next;
 }
 
+function removeBoardObjectFromBoardBucket(
+  buckets: Map<string, BoardEntityObject[]>,
+  boardObject: BoardEntityObject
+): Map<string, BoardEntityObject[]> {
+  const bucket = buckets.get(boardObject.board_id);
+  if (!bucket?.some((item) => item.object_id === boardObject.object_id)) return buckets;
+
+  const next = new Map(buckets);
+  const filtered = bucket.filter((item) => item.object_id !== boardObject.object_id);
+  if (filtered.length > 0) next.set(boardObject.board_id, filtered);
+  else next.delete(boardObject.board_id);
+  return next;
+}
+
+function upsertBoardObjectInMaps(
+  prev: DataMaps,
+  boardObject: BoardEntityObject,
+  mode: 'create' | 'patch'
+): DataMaps {
+  const existing = prev.boardObjectById.get(boardObject.object_id);
+  if (mode === 'create' && existing) return prev;
+  if (mode === 'patch' && existing && shallowEqualEntity(existing, boardObject)) return prev;
+
+  const boardObjectById = new Map(prev.boardObjectById);
+  boardObjectById.set(boardObject.object_id, boardObject);
+
+  let boardObjectsByBoardId = prev.boardObjectsByBoardId;
+  if (existing && existing.board_id !== boardObject.board_id) {
+    boardObjectsByBoardId = removeBoardObjectFromBoardBucket(boardObjectsByBoardId, existing);
+  }
+
+  const bucket = boardObjectsByBoardId.get(boardObject.board_id) ?? [];
+  const bucketIndex = bucket.findIndex((item) => item.object_id === boardObject.object_id);
+  if (
+    bucketIndex === -1 ||
+    bucket[bucketIndex] !== boardObject ||
+    !shallowEqualEntity(bucket[bucketIndex], boardObject)
+  ) {
+    const nextBuckets = new Map(boardObjectsByBoardId);
+    if (bucketIndex === -1) {
+      nextBuckets.set(boardObject.board_id, [...bucket, boardObject]);
+    } else {
+      const updatedBucket = [...bucket];
+      updatedBucket[bucketIndex] = boardObject;
+      nextBuckets.set(boardObject.board_id, updatedBucket);
+    }
+    boardObjectsByBoardId = nextBuckets;
+  }
+
+  let boardObjectByBranchId = prev.boardObjectByBranchId;
+  if (existing?.branch_id && existing.branch_id !== boardObject.branch_id) {
+    boardObjectByBranchId = new Map(boardObjectByBranchId);
+    boardObjectByBranchId.delete(existing.branch_id);
+  }
+  if (boardObject.branch_id) {
+    const existingByBranch = boardObjectByBranchId.get(boardObject.branch_id);
+    if (!existingByBranch || !shallowEqualEntity(existingByBranch, boardObject)) {
+      boardObjectByBranchId =
+        boardObjectByBranchId === prev.boardObjectByBranchId
+          ? new Map(boardObjectByBranchId)
+          : boardObjectByBranchId;
+      boardObjectByBranchId.set(boardObject.branch_id, boardObject);
+    }
+  }
+
+  let boardObjectByCardId = prev.boardObjectByCardId;
+  if (existing?.card_id && existing.card_id !== boardObject.card_id) {
+    boardObjectByCardId = new Map(boardObjectByCardId);
+    boardObjectByCardId.delete(existing.card_id);
+  }
+  if (boardObject.card_id) {
+    const existingByCard = boardObjectByCardId.get(boardObject.card_id);
+    if (!existingByCard || !shallowEqualEntity(existingByCard, boardObject)) {
+      boardObjectByCardId =
+        boardObjectByCardId === prev.boardObjectByCardId
+          ? new Map(boardObjectByCardId)
+          : boardObjectByCardId;
+      boardObjectByCardId.set(boardObject.card_id, boardObject);
+    }
+  }
+
+  return {
+    ...prev,
+    boardObjectById,
+    boardObjectsByBoardId,
+    boardObjectByBranchId,
+    boardObjectByCardId,
+  };
+}
+
+function removeBoardObjectFromMaps(prev: DataMaps, boardObject: BoardEntityObject): DataMaps {
+  const existing = prev.boardObjectById.get(boardObject.object_id);
+  if (!existing) return prev;
+
+  const boardObjectById = new Map(prev.boardObjectById);
+  boardObjectById.delete(existing.object_id);
+
+  let boardObjectByBranchId = prev.boardObjectByBranchId;
+  if (
+    existing.branch_id &&
+    boardObjectByBranchId.get(existing.branch_id)?.object_id === existing.object_id
+  ) {
+    boardObjectByBranchId = new Map(boardObjectByBranchId);
+    boardObjectByBranchId.delete(existing.branch_id);
+  }
+
+  let boardObjectByCardId = prev.boardObjectByCardId;
+  if (
+    existing.card_id &&
+    boardObjectByCardId.get(existing.card_id)?.object_id === existing.object_id
+  ) {
+    boardObjectByCardId = new Map(boardObjectByCardId);
+    boardObjectByCardId.delete(existing.card_id);
+  }
+
+  return {
+    ...prev,
+    boardObjectById,
+    boardObjectsByBoardId: removeBoardObjectFromBoardBucket(prev.boardObjectsByBoardId, existing),
+    boardObjectByBranchId,
+    boardObjectByCardId,
+  };
+}
+
 /**
  * Fetch and subscribe to Agor data from daemon
  *
@@ -165,7 +300,6 @@ export function useAgorData(
   const setSessionById = setMapSlice('sessionById');
   const setSessionsByBranch = setMapSlice('sessionsByBranch');
   const setBoardById = setMapSlice('boardById');
-  const setBoardObjectById = setMapSlice('boardObjectById');
   const setCommentById = setMapSlice('commentById');
   const setCardById = setMapSlice('cardById');
   const setCardTypeById = setMapSlice('cardTypeById');
@@ -412,10 +546,27 @@ export function useAgorData(
         for (const board of boardsList) {
           boardsMap.set(board.board_id, board);
         }
-        // Build board object Map for efficient lookups
+        // Build board object Maps for efficient lookups
         const boardObjectsMap = new Map<string, BoardEntityObject>();
+        const boardObjectsByBoardMap = new Map<string, BoardEntityObject[]>();
+        const boardObjectByBranchMap = new Map<string, BoardEntityObject>();
+        const boardObjectByCardMap = new Map<string, BoardEntityObject>();
         for (const boardObject of boardObjectsList) {
           boardObjectsMap.set(boardObject.object_id, boardObject);
+
+          const boardObjectsForBoard = boardObjectsByBoardMap.get(boardObject.board_id);
+          if (boardObjectsForBoard) {
+            boardObjectsForBoard.push(boardObject);
+          } else {
+            boardObjectsByBoardMap.set(boardObject.board_id, [boardObject]);
+          }
+
+          if (boardObject.branch_id) {
+            boardObjectByBranchMap.set(boardObject.branch_id, boardObject);
+          }
+          if (boardObject.card_id) {
+            boardObjectByCardMap.set(boardObject.card_id, boardObject);
+          }
         }
         // Build comment Map for efficient lookups
         const commentsMap = new Map<string, BoardComment>();
@@ -479,6 +630,9 @@ export function useAgorData(
           sessionsByBranch: sessionsByBranchId,
           boardById: boardsMap,
           boardObjectById: boardObjectsMap,
+          boardObjectsByBoardId: boardObjectsByBoardMap,
+          boardObjectByBranchId: boardObjectByBranchMap,
+          boardObjectByCardId: boardObjectByCardMap,
           commentById: commentsMap,
           cardById: cardsMap,
           cardTypeById: cardTypesMap,
@@ -737,23 +891,13 @@ export function useAgorData(
     // Subscribe to board object events
     const boardObjectsService = client.service('board-objects');
     const handleBoardObjectCreated = (boardObject: BoardEntityObject) => {
-      setBoardObjectById((prev) => {
-        if (prev.has(boardObject.object_id)) return prev; // Already exists, shouldn't happen
-        const next = new Map(prev);
-        next.set(boardObject.object_id, boardObject);
-        return next;
-      });
+      setMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'create'));
     };
     const handleBoardObjectPatched = (boardObject: BoardEntityObject) => {
-      setBoardObjectById((prev) => replaceIfChanged(prev, boardObject.object_id, boardObject));
+      setMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'patch'));
     };
     const handleBoardObjectRemoved = (boardObject: BoardEntityObject) => {
-      setBoardObjectById((prev) => {
-        if (!prev.has(boardObject.object_id)) return prev; // Doesn't exist, nothing to remove
-        const next = new Map(prev);
-        next.delete(boardObject.object_id);
-        return next;
-      });
+      setMaps((prev) => removeBoardObjectFromMaps(prev, boardObject));
     };
 
     boardObjectsService.on('created', handleBoardObjectCreated);
