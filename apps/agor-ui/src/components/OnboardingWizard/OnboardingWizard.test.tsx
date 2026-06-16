@@ -111,6 +111,8 @@ describe('OnboardingWizard', () => {
     const codexOption = providerOptions.find((option) => option.value === 'codex');
     expect(claudeOption).toBeInstanceOf(HTMLInputElement);
     expect(claudeOption).toBeChecked();
+    expect(screen.getAllByText(/ANTHROPIC_API_KEY/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText('Subscription'));
     expect(screen.getByText(/claude setup-token/)).toBeInTheDocument();
     expect(codexOption).toBeInstanceOf(HTMLInputElement);
     expect(codexOption).not.toBeChecked();
@@ -139,7 +141,7 @@ describe('OnboardingWizard', () => {
     fireEvent.click(screen.getByRole('button', { name: /create your assistant/i }));
     fireEvent.click(await screen.findByRole('button', { name: /^continue$/i }));
 
-    fireEvent.click(await screen.findByLabelText(/use claude subscription token/i));
+    fireEvent.click(await screen.findByText('Subscription'));
     fireEvent.change(screen.getByPlaceholderText('sk-ant-oat01-...'), {
       target: { value: 'sk-ant-oat01-test' },
     });

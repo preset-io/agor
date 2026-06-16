@@ -295,14 +295,12 @@ function authMethodOptionsForAgent(agent: AgenticToolName) {
   if (agent === 'claude-code') {
     return [
       {
-        value: 'api-key' as const,
-        label: 'Use Anthropic API key',
-        description: 'Best for pay-as-you-go API billing.',
+        value: 'claude-subscription-token' as const,
+        label: 'Subscription',
       },
       {
-        value: 'claude-subscription-token' as const,
-        label: 'Use Claude subscription token',
-        description: 'Run claude setup-token, then paste the token here.',
+        value: 'api-key' as const,
+        label: 'API key',
       },
     ];
   }
@@ -311,13 +309,11 @@ function authMethodOptionsForAgent(agent: AgenticToolName) {
     return [
       {
         value: 'codex-cli-auth' as const,
-        label: 'Use Codex CLI account auth',
-        description: 'Run codex login --device-auth on this machine.',
+        label: 'CLI sign-in',
       },
       {
         value: 'api-key' as const,
-        label: 'Use OpenAI API key',
-        description: 'Best for API billing, automation, or team-managed keys.',
+        label: 'API key',
       },
     ];
   }
@@ -1869,18 +1865,35 @@ export function OnboardingWizard({
                 }}
                 style={{ width: '100%', marginBottom: 16 }}
               >
-                <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-                  {authMethodOptions.map((option) => (
-                    <Radio key={option.value} value={option.value} style={{ width: '100%' }}>
-                      <Space orientation="vertical" size={0}>
-                        <Text strong>{option.label}</Text>
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          {option.description}
-                        </Text>
-                      </Space>
-                    </Radio>
-                  ))}
-                </Space>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                    gap: 8,
+                  }}
+                >
+                  {authMethodOptions.map((option) => {
+                    const selected = authMethod === option.value;
+                    return (
+                      <Radio
+                        key={option.value}
+                        value={option.value}
+                        style={{
+                          alignItems: 'center',
+                          border: selected
+                            ? '1px solid var(--ant-color-primary)'
+                            : '1px solid var(--ant-color-border)',
+                          borderRadius: 8,
+                          display: 'flex',
+                          marginInlineEnd: 0,
+                          padding: '8px 12px',
+                        }}
+                      >
+                        <Text strong={selected}>{option.label}</Text>
+                      </Radio>
+                    );
+                  })}
+                </div>
               </Radio.Group>
             )}
 
