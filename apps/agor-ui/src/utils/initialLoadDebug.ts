@@ -141,8 +141,7 @@ export function createInitialLoadDebugTimer(items: readonly InitialLoadDebugItem
         label: 'Agor initial load',
         startedAt,
         totalMs: roundMs(getNow() - start),
-        fetchPhaseMs:
-          fetchStart === null ? null : roundMs((fetchEnd ?? getNow()) - fetchStart),
+        fetchPhaseMs: fetchStart === null ? null : roundMs((fetchEnd ?? getNow()) - fetchStart),
         indexingMs:
           indexingStart === null ? null : roundMs((indexingEnd ?? getNow()) - indexingStart),
         status,

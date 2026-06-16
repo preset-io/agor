@@ -22,11 +22,8 @@ import type {
 } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { shallowEqualEntity } from '../utils/shallowEqual';
-import {
-  createInitialLoadDebugTimer,
-  isInitialLoadDebugEnabled,
-} from '../utils/initialLoadDebug';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 // Canonical list of initial-load items tracked by the loading checklist.

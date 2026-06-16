@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createInitialLoadDebugTimer,
+  type InitialLoadDebugTimings,
   isInitialLoadDebugEnabled,
   syncInitialLoadDebugFlagFromUrl,
-  type InitialLoadDebugTimings,
 } from './initialLoadDebug';
 
 const originalUrl = window.location.href;
