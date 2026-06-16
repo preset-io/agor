@@ -1688,7 +1688,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             platforms grants anyone who can message your bot potential access to Agor sessions and
             the underlying branch environment.{' '}
             <Typography.Link
-              href="https://docs.agor.live/guide/message-gateway"
+              href="https://agor.live/guide/message-gateway"
               target="_blank"
               rel="noopener noreferrer"
             >
