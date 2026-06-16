@@ -4,14 +4,22 @@
  * Type-safe CRUD operations for sessions with short ID support.
  */
 
-import type { BranchID, Session, SessionID, UUID } from '@agor/core/types';
+import type { BranchID, InitialSessionSummary, Session, SessionID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  jsonExtract,
+  lockRowForUpdate,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
 import {
   branches,
   branchOwners,
@@ -38,6 +46,49 @@ export interface SessionWithLastMessage extends Session {
   last_message?: string;
 }
 
+type InitialSessionSummaryRow = {
+  session_id: string;
+  created_at: Date | string | number;
+  updated_at: Date | string | number | null;
+  created_by: string;
+  unix_username: string | null;
+  status: Session['status'];
+  agentic_tool: Session['agentic_tool'];
+  branch_id: string;
+  branch_board_id: string | null;
+  parent_session_id: string | null;
+  forked_from_session_id: string | null;
+  scheduled_run_at: number | null;
+  scheduled_from_branch: boolean | number | null;
+  schedule_id: string | null;
+  ready_for_prompt: boolean | number | null;
+  archived: boolean | number;
+  archived_reason: Session['archived_reason'] | null;
+  agentic_tool_version: unknown;
+  sdk_session_id: unknown;
+  title: unknown;
+  first_prompt_preview: unknown;
+  git_state: unknown;
+  genealogy_children: unknown;
+  fork_point_task_id: unknown;
+  fork_point_message_index: unknown;
+  spawn_point_task_id: unknown;
+  spawn_point_message_index: unknown;
+  contextFiles: unknown;
+  permission_config: unknown;
+  model_config: unknown;
+  callback_config: unknown;
+  fork_origin: unknown;
+  current_context_usage: unknown;
+  context_window_limit: unknown;
+  last_context_update_at: unknown;
+  billing_mode: unknown;
+  gateway_source: unknown;
+  slash_commands: unknown;
+  skills: unknown;
+  scheduled_run: unknown;
+};
+
 /**
  * Patches that only acknowledge UI attention state should not make a session
  * look recently active. Keep this intentionally value-aware: setting
@@ -50,6 +101,52 @@ export interface SessionWithLastMessage extends Session {
 function isSessionTimestampNeutralPatch(updates: Partial<Session>): boolean {
   const keys = Object.keys(updates);
   return keys.length === 1 && keys[0] === 'ready_for_prompt' && updates.ready_for_prompt === false;
+}
+
+function parseJsonValue<T>(value: unknown, fallback: T): T {
+  if (value == null) return fallback;
+  if (typeof value !== 'string') return value as T;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function parseJsonArray<T>(value: unknown): T[] {
+  const parsed = parseJsonValue<unknown>(value, []);
+  return Array.isArray(parsed) ? (parsed as T[]) : [];
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
+  const parsed = parseJsonValue<unknown>(value, undefined);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function deriveTitle(title: unknown, descriptionPreview: unknown): string | undefined {
+  const storedTitle = asString(title);
+  if (storedTitle) return storedTitle;
+
+  const description = asString(descriptionPreview)?.trim();
+  if (!description) return undefined;
+
+  const collapsed = description.replace(/\s+/g, ' ');
+  return collapsed.length > 80 ? `${collapsed.slice(0, 80)}...` : collapsed;
 }
 
 /**
@@ -111,6 +208,152 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       current_context_usage: row.data.current_context_usage,
       context_window_limit: row.data.context_window_limit,
       last_context_update_at: row.data.last_context_update_at,
+    };
+  }
+
+  /**
+   * SQL projection for the initial UI load.
+   *
+   * Avoid selecting sessions.data wholesale: the data blob contains the largest
+   * initial payload fields (full description/first prompt, custom_context,
+   * tasks). Extract only the small JSON paths the board/session-list UI needs.
+   */
+  private initialSummaryColumns() {
+    const description = jsonExtract(this.db, sessions.data, 'description');
+    return {
+      session_id: sessions.session_id,
+      created_at: sessions.created_at,
+      updated_at: sessions.updated_at,
+      created_by: sessions.created_by,
+      unix_username: sessions.unix_username,
+      status: sessions.status,
+      agentic_tool: sessions.agentic_tool,
+      branch_id: sessions.branch_id,
+      branch_board_id: branches.board_id,
+      parent_session_id: sessions.parent_session_id,
+      forked_from_session_id: sessions.forked_from_session_id,
+      scheduled_run_at: sessions.scheduled_run_at,
+      scheduled_from_branch: sessions.scheduled_from_branch,
+      schedule_id: sessions.schedule_id,
+      ready_for_prompt: sessions.ready_for_prompt,
+      archived: sessions.archived,
+      archived_reason: sessions.archived_reason,
+      agentic_tool_version: jsonExtract(this.db, sessions.data, 'agentic_tool_version'),
+      sdk_session_id: jsonExtract(this.db, sessions.data, 'sdk_session_id'),
+      title: jsonExtract(this.db, sessions.data, 'title'),
+      first_prompt_preview: sql<string | null>`substr(${description}, 1, 320)`,
+      git_state: jsonExtract(this.db, sessions.data, 'git_state'),
+      genealogy_children: jsonExtract(this.db, sessions.data, 'genealogy.children'),
+      fork_point_task_id: jsonExtract(this.db, sessions.data, 'genealogy.fork_point_task_id'),
+      fork_point_message_index: jsonExtract(
+        this.db,
+        sessions.data,
+        'genealogy.fork_point_message_index'
+      ),
+      spawn_point_task_id: jsonExtract(this.db, sessions.data, 'genealogy.spawn_point_task_id'),
+      spawn_point_message_index: jsonExtract(
+        this.db,
+        sessions.data,
+        'genealogy.spawn_point_message_index'
+      ),
+      contextFiles: jsonExtract(this.db, sessions.data, 'contextFiles'),
+      permission_config: jsonExtract(this.db, sessions.data, 'permission_config'),
+      model_config: jsonExtract(this.db, sessions.data, 'model_config'),
+      callback_config: jsonExtract(this.db, sessions.data, 'callback_config'),
+      fork_origin: jsonExtract(this.db, sessions.data, 'fork_origin'),
+      current_context_usage: jsonExtract(this.db, sessions.data, 'current_context_usage'),
+      context_window_limit: jsonExtract(this.db, sessions.data, 'context_window_limit'),
+      last_context_update_at: jsonExtract(this.db, sessions.data, 'last_context_update_at'),
+      billing_mode: jsonExtract(this.db, sessions.data, 'billing_mode'),
+      gateway_source: jsonExtract(this.db, sessions.data, 'custom_context.gateway_source'),
+      slash_commands: jsonExtract(this.db, sessions.data, 'custom_context.slash_commands'),
+      skills: jsonExtract(this.db, sessions.data, 'custom_context.skills'),
+      scheduled_run: jsonExtract(this.db, sessions.data, 'custom_context.scheduled_run'),
+    };
+  }
+
+  private rowToInitialSummary(
+    row: InitialSessionSummaryRow,
+    baseUrl?: string
+  ): InitialSessionSummary {
+    const sessionId = row.session_id as SessionID;
+    const boardId = (row.branch_board_id ?? null) as UUID | null;
+    const firstPromptPreview = asString(row.first_prompt_preview);
+
+    const customContext: NonNullable<InitialSessionSummary['custom_context']> = {};
+    const gatewaySource = parseJsonObject(row.gateway_source);
+    const slashCommands = parseJsonArray<unknown>(row.slash_commands);
+    const skills = parseJsonArray<unknown>(row.skills);
+    const scheduledRun = parseJsonObject(row.scheduled_run);
+    if (gatewaySource) customContext.gateway_source = gatewaySource;
+    if (slashCommands.length > 0) customContext.slash_commands = slashCommands;
+    if (skills.length > 0) customContext.skills = skills;
+    if (scheduledRun) {
+      customContext.scheduled_run = scheduledRun as unknown as NonNullable<
+        Session['custom_context']
+      >['scheduled_run'];
+    }
+
+    return {
+      session_id: sessionId,
+      status: row.status,
+      agentic_tool: row.agentic_tool,
+      agentic_tool_version: asString(row.agentic_tool_version),
+      sdk_session_id: asString(row.sdk_session_id),
+      created_at: new Date(row.created_at).toISOString(),
+      last_updated: row.updated_at
+        ? new Date(row.updated_at).toISOString()
+        : new Date(row.created_at).toISOString(),
+      created_by: row.created_by,
+      unix_username: row.unix_username || null,
+      branch_id: row.branch_id as UUID,
+      branch_board_id: boardId,
+      url: baseUrl && boardId ? getSessionUrl(sessionId, baseUrl) : null,
+      git_state: parseJsonValue<Session['git_state']>(row.git_state, {
+        ref: 'main',
+        base_sha: '',
+        current_sha: '',
+      }),
+      contextFiles: parseJsonValue<Session['contextFiles']>(row.contextFiles, []),
+      genealogy: {
+        parent_session_id: (row.parent_session_id as UUID | null) ?? undefined,
+        forked_from_session_id: (row.forked_from_session_id as UUID | null) ?? undefined,
+        fork_point_task_id: asString(row.fork_point_task_id) as UUID | undefined,
+        fork_point_message_index: asNumber(row.fork_point_message_index),
+        spawn_point_task_id: asString(row.spawn_point_task_id) as UUID | undefined,
+        spawn_point_message_index: asNumber(row.spawn_point_message_index),
+        children: parseJsonValue<string[]>(row.genealogy_children, []).map((id) => id as UUID),
+      },
+      title: deriveTitle(row.title, firstPromptPreview),
+      first_prompt_preview: firstPromptPreview,
+      permission_config: parseJsonValue<Session['permission_config'] | undefined>(
+        row.permission_config,
+        undefined
+      ),
+      model_config: parseJsonValue<Session['model_config'] | undefined>(
+        row.model_config,
+        undefined
+      ),
+      callback_config: parseJsonValue<Session['callback_config'] | undefined>(
+        row.callback_config,
+        undefined
+      ),
+      fork_origin: asString(row.fork_origin) === 'btw' ? 'btw' : undefined,
+      custom_context: Object.keys(customContext).length > 0 ? customContext : undefined,
+      current_context_usage: asNumber(row.current_context_usage),
+      context_window_limit: asNumber(row.context_window_limit),
+      last_context_update_at: asString(row.last_context_update_at),
+      billing_mode: ['subscription', 'api-key', 'unknown'].includes(
+        asString(row.billing_mode) ?? ''
+      )
+        ? (row.billing_mode as InitialSessionSummary['billing_mode'])
+        : undefined,
+      scheduled_run_at: row.scheduled_run_at ?? undefined,
+      scheduled_from_branch: Boolean(row.scheduled_from_branch),
+      schedule_id: (row.schedule_id as UUID | null) ?? undefined,
+      ready_for_prompt: Boolean(row.ready_for_prompt),
+      archived: Boolean(row.archived),
+      archived_reason: row.archived_reason ?? undefined,
     };
   }
 
@@ -316,6 +559,85 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all sessions: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Find lightweight session summaries for initial UI loads.
+   *
+   * This path filters archived rows in SQL and projects only needed columns /
+   * JSON paths instead of hydrating the full Session data blob.
+   */
+  async findInitialSummaries(options?: {
+    archived?: boolean;
+    sortUpdatedDesc?: boolean;
+  }): Promise<InitialSessionSummary[]> {
+    try {
+      const baseUrl = await getBaseUrl();
+      const conditions = [];
+      if (typeof options?.archived === 'boolean') {
+        conditions.push(eq(sessions.archived, options.archived));
+      }
+
+      const query = select(this.db, this.initialSummaryColumns())
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+        .where(conditions.length > 0 ? and(...conditions) : sql`true`)
+        .orderBy(options?.sortUpdatedDesc ? desc(sessions.updated_at) : sql`1`);
+
+      const results = await query.all();
+      return (results as InitialSessionSummaryRow[]).map((row) =>
+        this.rowToInitialSummary(row, baseUrl)
+      );
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find initial session summaries: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Find lightweight session summaries scoped to branches visible to a user.
+   *
+   * Mirrors findAccessibleSessions' set-based RBAC logic but keeps the initial
+   * load projection slim.
+   */
+  async findAccessibleInitialSummaries(
+    userId: UUID,
+    options?: { archived?: boolean; sortUpdatedDesc?: boolean }
+  ): Promise<InitialSessionSummary[]> {
+    try {
+      const baseUrl = await getBaseUrl();
+      const conditions = [visibleBranchAccessCondition(this.db, userId)];
+      if (typeof options?.archived === 'boolean') {
+        conditions.push(eq(sessions.archived, options.archived));
+      }
+
+      const results = await select(this.db, this.initialSummaryColumns())
+        .from(sessions)
+        .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
+        .leftJoin(
+          branchOwners,
+          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+        )
+        .where(and(...conditions))
+        .orderBy(options?.sortUpdatedDesc ? desc(sessions.updated_at) : sql`1`)
+        .all();
+
+      const seen = new Set<string>();
+      const sessionsOut: InitialSessionSummary[] = [];
+      for (const row of results as InitialSessionSummaryRow[]) {
+        if (seen.has(row.session_id)) continue;
+        seen.add(row.session_id);
+        sessionsOut.push(this.rowToInitialSummary(row, baseUrl));
+      }
+      return sessionsOut;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find accessible initial session summaries: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

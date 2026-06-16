@@ -1,4 +1,4 @@
-import type { Branch, Session } from '@agor-live/client';
+import type { Branch, InitialSessionSummary } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   BranchesOutlined,
@@ -146,7 +146,7 @@ export const HomeActivitySection: React.FC<
   );
 
   const sessionMessage = useCallback(
-    (session: Session) => {
+    (session: InitialSessionSummary) => {
       const branch = branchById.get(session.branch_id);
       const board = branch?.board_id ? boardById.get(branch.board_id) : undefined;
       const actor = userById.get(session.created_by);

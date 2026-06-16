@@ -15,6 +15,7 @@ import type {
   CardType,
   CardWithType,
   GatewayChannel,
+  InitialSessionSummary,
   MCPServer,
   Repo,
   Session,
@@ -66,8 +67,8 @@ export type InitialLoadingStage = 'idle' | 'fetching' | 'indexing';
  * `setMaps(EMPTY_MAPS)` in the reset effect covers every field automatically.
  */
 type DataMaps = {
-  sessionById: Map<string, Session>;
-  sessionsByBranch: Map<string, Session[]>;
+  sessionById: Map<string, InitialSessionSummary>;
+  sessionsByBranch: Map<string, InitialSessionSummary[]>;
   boardById: Map<string, Board>;
   boardObjectById: Map<string, BoardEntityObject>;
   commentById: Map<string, BoardComment>;
@@ -280,10 +281,11 @@ export function useAgorData(
             client.service('sessions').findAll({
               query: {
                 archived: false,
+                initial_summary: true,
                 $limit: PAGINATION.DEFAULT_LIMIT,
                 $sort: { updated_at: -1 },
               },
-            })
+            }) as Promise<InitialSessionSummary[]>
           ),
           track(
             'boards',
@@ -392,8 +394,8 @@ export function useAgorData(
         }
 
         // Build session Maps for efficient lookups
-        const sessionsById = new Map<string, Session>();
-        const sessionsByBranchId = new Map<string, Session[]>();
+        const sessionsById = new Map<string, InitialSessionSummary>();
+        const sessionsByBranchId = new Map<string, InitialSessionSummary[]>();
 
         for (const session of sessionsList) {
           // sessionById: O(1) ID lookups

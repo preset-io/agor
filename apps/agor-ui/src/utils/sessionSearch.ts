@@ -1,10 +1,10 @@
 import {
+  type InitialSessionSummary,
   matchSearchTokens,
-  SEARCHABLE_FIELDS,
   type Session,
   tokenizeSearchQuery,
 } from '@agor-live/client';
-import { getSessionDisplayTitle } from './sessionTitle';
+import { getSessionDisplayTitle, getSessionPromptPreview } from './sessionTitle';
 
 export const SESSION_SORT_STORAGE_KEY = 'agor:session-sort';
 export const SESSION_SEARCH_MIN_QUERY_LENGTH = 2;
@@ -12,7 +12,7 @@ export const SESSION_SEARCH_MIN_QUERY_LENGTH = 2;
 export type SessionSort = 'recent' | 'oldest' | 'alpha';
 
 export interface SearchSessionResult {
-  session: Session;
+  session: InitialSessionSummary;
   score: number;
 }
 
@@ -45,13 +45,18 @@ export function getSearchTerms(query: string, minLength = 1): string[] {
   return uniqueTerms(tokenizeSearchQuery(query).filter((part) => part.length >= minLength));
 }
 
-export function scoreSession(session: Session, query: string, now = Date.now()): number {
+export function scoreSession(
+  session: InitialSessionSummary | Session,
+  query: string,
+  now = Date.now()
+): number {
   const q = normalizeSessionQuery(query);
   if (!q) return 0;
 
   const words = getSearchTerms(q);
-  const displayTitle = (session.title || session.description || '').toLowerCase();
-  const desc = (session.description ?? '').toLowerCase();
+  const promptPreview = getSessionPromptPreview(session) ?? '';
+  const displayTitle = (session.title || promptPreview || '').toLowerCase();
+  const desc = promptPreview.toLowerCase();
   const tool = session.agentic_tool.toLowerCase();
 
   let score = 0;
@@ -108,7 +113,7 @@ export function scoreSession(session: Session, query: string, now = Date.now()):
 }
 
 export function searchSessions(
-  sessions: Session[],
+  sessions: InitialSessionSummary[],
   query: string,
   options: { now?: number } = {}
 ): SearchSessionResult[] {
@@ -117,7 +122,15 @@ export function searchSessions(
   const tokens = tokenizeSearchQuery(q);
 
   return sessions
-    .filter((session) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(session)))
+    .filter((session) =>
+      matchSearchTokens(tokens, [
+        session.title,
+        getSessionPromptPreview(session),
+        session.agentic_tool,
+        session.status,
+        session.session_id,
+      ])
+    )
     .map((session) => ({ session, score: scoreSession(session, q, options.now) }))
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score || compareByRecent(a.session, b.session));
@@ -127,7 +140,10 @@ export function isSessionSearchActive(query: string): boolean {
   return normalizeSessionQuery(query).length >= SESSION_SEARCH_MIN_QUERY_LENGTH;
 }
 
-export function sessionToolMatches(session: Session, query: string): boolean {
+export function sessionToolMatches(
+  session: InitialSessionSummary | Session,
+  query: string
+): boolean {
   const terms = getSearchTerms(query);
   if (terms.length === 0) return false;
   const tool = session.agentic_tool.toLowerCase();
@@ -161,7 +177,10 @@ export function getMatchSnippet(text: string, query: string, contextLen = 60): s
   return `${prefix}${text.slice(start, end)}${suffix}`;
 }
 
-export function sortSessions(sessions: Session[], sort: SessionSort): Session[] {
+export function sortSessions(
+  sessions: InitialSessionSummary[],
+  sort: SessionSort
+): InitialSessionSummary[] {
   const copy = [...sessions];
 
   switch (sort) {
@@ -174,15 +193,24 @@ export function sortSessions(sessions: Session[], sort: SessionSort): Session[] 
   }
 }
 
-function compareByRecent(a: Session, b: Session): number {
+function compareByRecent(
+  a: InitialSessionSummary | Session,
+  b: InitialSessionSummary | Session
+): number {
   return new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime();
 }
 
-function compareByOldest(a: Session, b: Session): number {
+function compareByOldest(
+  a: InitialSessionSummary | Session,
+  b: InitialSessionSummary | Session
+): number {
   return new Date(a.last_updated).getTime() - new Date(b.last_updated).getTime();
 }
 
-function compareByTitle(a: Session, b: Session): number {
+function compareByTitle(
+  a: InitialSessionSummary | Session,
+  b: InitialSessionSummary | Session
+): number {
   return getSessionDisplayTitle(a, { includeAgentFallback: true }).localeCompare(
     getSessionDisplayTitle(b, { includeAgentFallback: true }),
     undefined,

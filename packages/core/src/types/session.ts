@@ -480,6 +480,34 @@ export interface Session {
 }
 
 /**
+ * Lightweight session shape used by initial UI workspace loads.
+ *
+ * The full Session row can carry large, rarely-needed fields in the JSON data
+ * blob (notably tasks, full description, and arbitrary custom_context). Initial
+ * load should only ship data needed to render boards, session lists, search
+ * previews, relationship trees, and prompt controls. Consumers that need the
+ * full editable session payload should fetch the session by id.
+ */
+export type InitialSessionSummary = Omit<Session, 'tasks' | 'description' | 'custom_context'> & {
+  /**
+   * Short preview of the legacy `description` field, which usually stores the
+   * first prompt rather than a user-authored description. Full `description`
+   * remains available from the full Session GET path.
+   */
+  first_prompt_preview?: string;
+  /**
+   * Small allowlist of custom_context keys needed during normal workspace
+   * rendering. Full custom_context is deferred to session detail/settings GETs.
+   */
+  custom_context?: Partial<
+    Pick<
+      NonNullable<Session['custom_context']>,
+      'gateway_source' | 'slash_commands' | 'skills' | 'scheduled_run'
+    >
+  >;
+};
+
+/**
  * Gateway source metadata denormalized into session.custom_context.gateway_source
  *
  * Present on sessions created via messaging platform integrations (Slack, Discord, GitHub).

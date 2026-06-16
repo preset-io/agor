@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Branch, Repo, Session } from '@agor-live/client';
+import type { AgorClient, Board, Branch, InitialSessionSummary, Repo } from '@agor-live/client';
 import { isAssistant } from '@agor-live/client';
 import {
   AimOutlined,
@@ -38,7 +38,7 @@ interface BranchesTableProps {
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
+  sessionsByBranch: Map<string, InitialSessionSummary[]>; // O(1) branch filtering
   onArchiveOrDelete?: (
     branchId: string,
     options: {

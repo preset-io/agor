@@ -1,4 +1,4 @@
-import type { Branch, MCPServer, Repo, Session, User } from '@agor-live/client';
+import type { Branch, InitialSessionSummary, MCPServer, Repo, User } from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext, useMemo } from 'react';
 
@@ -51,9 +51,9 @@ export interface AppEntityDataContextValue
 
 export interface AppLiveDataContextValue {
   // Sessions and branches — patched on every status flip / activity tick
-  sessionById: Map<string, Session>;
+  sessionById: Map<string, InitialSessionSummary>;
   branchById: Map<string, Branch>;
-  sessionsByBranch: Map<string, Session[]>; // Indexed for quick filtering
+  sessionsByBranch: Map<string, InitialSessionSummary[]>; // Indexed for quick filtering
 }
 
 const AppRepoDataContext = createContext<AppRepoDataContextValue | undefined>(undefined);

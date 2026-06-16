@@ -260,6 +260,59 @@ describe('SessionRepository.create', () => {
   });
 });
 
+describe('SessionRepository.findInitialSummaries', () => {
+  dbTest(
+    'returns a slim Session-like summary without full tasks/custom context/description',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const taskIds = [generateId(), generateId()];
+      const longDescription = 'x'.repeat(1000);
+
+      const created = await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          title: '',
+          description: longDescription,
+          tasks: taskIds,
+          custom_context: {
+            huge: 'y'.repeat(1000),
+            slash_commands: ['/test'],
+            skills: ['skill-a'],
+            gateway_source: {
+              channel_id: 'c1',
+              channel_name: 'general',
+              channel_type: 'slack',
+              thread_id: 't1',
+            },
+          },
+        })
+      );
+
+      const summaries = await repo.findInitialSummaries({
+        archived: false,
+        sortUpdatedDesc: true,
+      });
+      const summary = summaries.find((s) => s.session_id === created.session_id);
+
+      expect(summary).toBeDefined();
+      expect(summary?.first_prompt_preview).toHaveLength(320);
+      expect(summary?.title).toMatch(/^x{80}\.\.\.$/);
+      expect(summary?.custom_context).toEqual({
+        slash_commands: ['/test'],
+        skills: ['skill-a'],
+        gateway_source: {
+          channel_id: 'c1',
+          channel_name: 'general',
+          channel_type: 'slack',
+          thread_id: 't1',
+        },
+      });
+      expect(summary?.git_state).toEqual(created.git_state);
+    }
+  );
+});
+
 // ============================================================================
 // FindById (with short ID support)
 // ============================================================================

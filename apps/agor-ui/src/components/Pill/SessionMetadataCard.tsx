@@ -5,7 +5,7 @@
  * Compact, read-only design focused on quick context ("what is this session?")
  */
 
-import type { Branch, Repo, Session, User } from '@agor-live/client';
+import type { Branch, InitialSessionSummary, Repo, User } from '@agor-live/client';
 import { FolderOutlined } from '@ant-design/icons';
 import { Space, Typography, theme } from 'antd';
 import type React from 'react';
@@ -19,7 +19,7 @@ import { ForkPill, PILL_COLORS, RepoPill, SpawnPill, StatusPill } from './Pill';
 const { Text } = Typography;
 
 export interface SessionMetadataCardProps {
-  session: Session;
+  session: InitialSessionSummary;
   branch?: Branch;
   repo?: Repo;
   userById?: Map<string, User>;

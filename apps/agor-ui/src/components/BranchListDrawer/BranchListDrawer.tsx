@@ -1,4 +1,4 @@
-import type { Board, Branch, Repo, Session } from '@agor-live/client';
+import type { Board, Branch, InitialSessionSummary, Repo, Session } from '@agor-live/client';
 import { SearchOutlined } from '@ant-design/icons';
 import { Badge, Drawer, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
@@ -14,7 +14,7 @@ import {
   sortSessions,
 } from '../../utils/sessionSearch';
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
-import { getSessionDisplayTitle } from '../../utils/sessionTitle';
+import { getSessionDisplayTitle, getSessionPromptPreview } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
 import { HighlightMatch } from '../HighlightMatch';
 import { BranchPill } from '../Pill';
@@ -30,7 +30,7 @@ interface BranchListDrawerProps {
   onBoardChange: (boardId: string) => void;
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
-  sessionsByBranch: Map<string, Session[]>;
+  sessionsByBranch: Map<string, InitialSessionSummary[]>;
   onSessionClick: (sessionId: string) => void;
 }
 
@@ -39,7 +39,7 @@ export interface BoardSessionListProps {
   currentBoardId: string;
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
-  sessionsByBranch: Map<string, Session[]>;
+  sessionsByBranch: Map<string, InitialSessionSummary[]>;
   onSessionClick: (sessionId: string) => void;
   onAfterSessionClick?: () => void;
 }
@@ -200,8 +200,8 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
               includeAgentFallback: true,
             });
             const descriptionSnippet =
-              searchActive && session.title && session.description
-                ? getMatchSnippet(session.description, trimmedQuery)
+              searchActive && session.title && getSessionPromptPreview(session)
+                ? getMatchSnippet(getSessionPromptPreview(session)!, trimmedQuery)
                 : null;
             const toolMatches = searchActive && sessionToolMatches(session, trimmedQuery);
 

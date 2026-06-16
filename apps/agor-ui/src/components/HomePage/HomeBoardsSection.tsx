@@ -1,4 +1,4 @@
-import type { Board, Branch, Session } from '@agor-live/client';
+import type { Board, Branch, InitialSessionSummary, Session } from '@agor-live/client';
 import { getAssistantConfig } from '@agor-live/client';
 import {
   ApartmentOutlined,
@@ -29,7 +29,7 @@ const activeStatuses = new Set<Session['status']>([
 interface BoardHomeRow {
   board: Board;
   branches: Branch[];
-  sessions: Session[];
+  sessions: InitialSessionSummary[];
   primaryAssistant?: Branch;
   latest: number;
   visitRank: number;
@@ -47,9 +47,9 @@ const groupBranchesByBoard = (branchById: Map<string, Branch>): Map<string, Bran
 };
 
 const groupVisibleSessionsByBranch = (
-  sessionsByBranch: Map<string, Session[]>
-): Map<string, Session[]> => {
-  const grouped = new Map<string, Session[]>();
+  sessionsByBranch: Map<string, InitialSessionSummary[]>
+): Map<string, InitialSessionSummary[]> => {
+  const grouped = new Map<string, InitialSessionSummary[]>();
   for (const [branchId, sessions] of sessionsByBranch) {
     const visibleSessions = sessions.filter((session) => !session.archived);
     if (visibleSessions.length > 0) grouped.set(branchId, visibleSessions);
@@ -101,7 +101,7 @@ const deriveBoardRows = ({
 const BoardHomeCard: React.FC<{
   board: Board;
   branches: Branch[];
-  sessions: Session[];
+  sessions: InitialSessionSummary[];
   primaryAssistant?: Branch;
   onClick: () => void;
 }> = ({ board, branches, sessions, primaryAssistant, onClick }) => {

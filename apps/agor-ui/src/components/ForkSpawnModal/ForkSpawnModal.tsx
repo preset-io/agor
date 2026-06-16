@@ -8,8 +8,8 @@
 import type {
   AgenticToolName,
   AgorClient,
+  InitialSessionSummary,
   MCPServer,
-  Session,
   SpawnConfig,
   User,
 } from '@agor-live/client';
@@ -17,6 +17,7 @@ import { getDefaultPermissionMode } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Checkbox, Collapse, Form, Modal, Radio, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
@@ -28,7 +29,7 @@ export type ForkSpawnAction = 'fork' | 'spawn';
 export interface ForkSpawnModalProps {
   open: boolean;
   action: ForkSpawnAction;
-  session: Session | null;
+  session: InitialSessionSummary | null;
   currentUser?: User | null;
   mcpServerById?: Map<string, MCPServer>;
   initialPrompt?: string;
@@ -196,7 +197,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
       title={
         <div>
           <Typography.Text strong>
-            {actionLabel} Session: {session?.title || session?.description || 'Untitled'}
+            {actionLabel} Session: {session ? getSessionDisplayTitle(session) : 'Untitled'}
           </Typography.Text>
         </div>
       }

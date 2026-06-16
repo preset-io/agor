@@ -1,4 +1,12 @@
-import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Branch,
+  InitialSessionSummary,
+  Repo,
+  Session,
+  SpawnConfig,
+  User,
+} from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   BranchesOutlined,
@@ -30,7 +38,7 @@ const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
 interface BranchCardProps {
   branch: Branch;
   repo: Repo;
-  sessions: Session[]; // Sessions for this specific branch
+  sessions: InitialSessionSummary[]; // Sessions for this specific branch
   userById: Map<string, User>;
   currentUserId?: string;
   selectedSessionId?: string | null; // Currently open session in drawer
@@ -118,7 +126,9 @@ const BranchCardComponent = ({
   );
   const peekableSessionById = useMemo(
     () =>
-      new Map<string, Session>(peekableSessions.map((session) => [session.session_id, session])),
+      new Map<string, InitialSessionSummary>(
+        peekableSessions.map((session) => [session.session_id, session])
+      ),
     [peekableSessions]
   );
 

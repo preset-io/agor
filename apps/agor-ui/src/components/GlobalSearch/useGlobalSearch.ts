@@ -5,6 +5,7 @@ import {
   tokenizeSearchQuery,
 } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { getSessionPromptPreview } from '../../utils/sessionTitle';
 import {
   type ChipFilter,
   EMPTY_COUNTS,
@@ -89,7 +90,15 @@ export function useGlobalSearch({
     // Sessions (timestamp field is `last_updated`, not `updated_at`)
     const sessions = Array.from(sessionById.values())
       .filter((s) => !ownedByMe || s.created_by === currentUserId)
-      .filter((s) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(s)))
+      .filter((s) =>
+        matchSearchTokens(tokens, [
+          s.title,
+          getSessionPromptPreview(s),
+          s.agentic_tool,
+          s.status,
+          s.session_id,
+        ])
+      )
       .sort(byTimestamp((s) => s.last_updated));
 
     // Branches + Assistants share one registry entry: the field set covers

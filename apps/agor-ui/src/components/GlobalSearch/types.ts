@@ -1,4 +1,4 @@
-import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
+import type { Artifact, Board, Branch, InitialSessionSummary, MCPServer } from '@agor-live/client';
 
 export type SearchEntityType = 'session' | 'branch' | 'assistant' | 'artifact' | 'board' | 'mcp';
 
@@ -56,7 +56,7 @@ export const SECTION_LABELS: Record<SearchEntityType, string> = {
 };
 
 export type SearchResultItem =
-  | { type: 'session'; item: Session; parentBranch?: Branch }
+  | { type: 'session'; item: InitialSessionSummary; parentBranch?: Branch }
   | { type: 'branch'; item: Branch }
   | { type: 'assistant'; item: Branch }
   | { type: 'artifact'; item: Artifact; parentBranch?: Branch }
@@ -109,7 +109,7 @@ export const EMPTY_COUNTS: SearchCounts = {
  * hook can all consume the same shape via composition.
  */
 export interface GlobalSearchEntityMaps {
-  sessionById: Map<string, Session>;
+  sessionById: Map<string, InitialSessionSummary>;
   branchById: Map<string, Branch>;
   artifactById: Map<string, Artifact>;
   boardById: Map<string, Board>;

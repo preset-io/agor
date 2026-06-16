@@ -10,6 +10,7 @@ import type {
   Branch,
   BranchID,
   CardWithType,
+  InitialSessionSummary,
   MCPServer,
   Repo,
   Session,
@@ -93,8 +94,8 @@ import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
 interface SessionCanvasProps {
   board: Board | null;
   client: AgorClient | null;
-  sessionById: Map<string, Session>; // O(1) ID lookups
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
+  sessionById: Map<string, InitialSessionSummary>; // O(1) ID lookups
+  sessionsByBranch: Map<string, InitialSessionSummary[]>; // O(1) branch filtering
   userById: Map<string, User>; // Map-based user storage
   repoById: Map<string, Repo>; // Map-based repo storage
   branches: Branch[];
@@ -166,7 +167,7 @@ interface SessionNodeData {
 // `sessionsByBranch.get(id) || []` produces a new `[]` on every render,
 // breaking referential equality and forcing memoized children to re-render
 // on every unrelated socket event.
-const EMPTY_SESSIONS: Session[] = [];
+const EMPTY_SESSIONS: InitialSessionSummary[] = [];
 
 // Custom node component that renders SessionCard (memoized to prevent re-renders on unrelated node changes)
 const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
@@ -193,7 +194,7 @@ const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
 interface BranchNodeData {
   branch: Branch;
   repo: Repo;
-  sessions: Session[];
+  sessions: InitialSessionSummary[];
   userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;

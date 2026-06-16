@@ -644,19 +644,31 @@ export function scopeSessionQuery(
     const userRole = context.params.user?.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
 
+    const q = context.params.query as Record<string, unknown> | undefined;
+    const wantsInitialSummary = q?.initial_summary === true || q?.initial_summary === 'true';
+
     // Use optimized repository method (single SQL query with JOINs)
-    const accessibleSessions = isSuperAdmin(userRole, allowSuperadmin)
-      ? await sessionRepo.findAll()
-      : await sessionRepo.findAccessibleSessions(userId);
+    const accessibleSessions = wantsInitialSummary
+      ? isSuperAdmin(userRole, allowSuperadmin)
+        ? await sessionRepo.findInitialSummaries({
+            archived: typeof q?.archived === 'boolean' ? q.archived : undefined,
+            sortUpdatedDesc: (q?.$sort as Record<string, unknown> | undefined)?.updated_at === -1,
+          })
+        : await sessionRepo.findAccessibleInitialSummaries(userId, {
+            archived: typeof q?.archived === 'boolean' ? q.archived : undefined,
+            sortUpdatedDesc: (q?.$sort as Record<string, unknown> | undefined)?.updated_at === -1,
+          })
+      : isSuperAdmin(userRole, allowSuperadmin)
+        ? await sessionRepo.findAll()
+        : await sessionRepo.findAccessibleSessions(userId);
 
     // Apply remaining query filters (branch_id, schedule_id, status, etc.)
     // client-side. Without this pass, `sessions.find({ schedule_id })`
     // silently returns all accessible sessions — which is what the
     // ScheduleRunsPanel was hitting before this fix.
-    context.result = paginateClientSide(
-      accessibleSessions,
-      context.params.query as Record<string, unknown> | undefined
-    );
+    const queryForClientPagination = { ...(q ?? {}) };
+    delete queryForClientPagination.initial_summary;
+    context.result = paginateClientSide(accessibleSessions, queryForClientPagination);
     return context;
   };
 }

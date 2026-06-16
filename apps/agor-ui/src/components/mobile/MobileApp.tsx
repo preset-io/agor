@@ -3,8 +3,8 @@ import type {
   Board,
   BoardComment,
   Branch,
+  InitialSessionSummary,
   Repo,
-  Session,
   User,
 } from '@agor-live/client';
 import { Drawer, Layout, Typography } from 'antd';
@@ -21,8 +21,8 @@ const { Text } = Typography;
 interface MobileAppProps {
   client: AgorClient | null;
   user?: User | null;
-  sessionById: Map<string, Session>; // O(1) ID lookups
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
+  sessionById: Map<string, InitialSessionSummary>; // O(1) ID lookups
+  sessionsByBranch: Map<string, InitialSessionSummary[]>; // O(1) branch filtering
   boardById: Map<string, Board>;
   commentById: Map<string, BoardComment>;
   repoById: Map<string, Repo>;

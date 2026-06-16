@@ -1,4 +1,4 @@
-import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
+import type { Board, BoardComment, Branch, InitialSessionSummary } from '@agor-live/client';
 import { CommentOutlined, DownOutlined } from '@ant-design/icons';
 import { Badge, Button, Collapse, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
@@ -11,7 +11,7 @@ const { Text } = Typography;
 interface MobileNavTreeProps {
   boardById: Map<string, Board>;
   branchById: Map<string, Branch>;
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
+  sessionsByBranch: Map<string, InitialSessionSummary[]>; // O(1) branch filtering
   commentById: Map<string, BoardComment>;
   onNavigate?: () => void;
 }
@@ -68,7 +68,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   );
 
   // Get session title with mobile-friendly 50-char limit
-  const getSessionTitle = (session: Session): string => {
+  const getSessionTitle = (session: InitialSessionSummary): string => {
     return getSessionDisplayTitle(session, {
       fallbackChars: 50,
       includeIdFallback: true,
@@ -76,7 +76,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   };
 
   // Get session status icon
-  const getSessionStatusIcon = (session: Session): string => {
+  const getSessionStatusIcon = (session: InitialSessionSummary): string => {
     if (session.status === 'running') return '▶️';
     if (session.status === 'completed') return '✅';
     if (session.status === 'failed') return '❌';

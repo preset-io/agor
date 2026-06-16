@@ -3,8 +3,8 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  InitialSessionSummary,
   PermissionMode,
-  Session,
 } from '@agor-live/client';
 import { RobotOutlined, SettingOutlined } from '@ant-design/icons';
 import { Popover, Space, Typography, theme } from 'antd';
@@ -17,7 +17,7 @@ import { Tag } from '../Tag';
 
 export interface SessionRunSettingsPopoverProps {
   client: AgorClient | null;
-  session: Session;
+  session: InitialSessionSummary;
   modelLabel?: string;
   modelConfig?: ModelConfig;
   onModelConfigChange: (config: ModelConfig) => void;

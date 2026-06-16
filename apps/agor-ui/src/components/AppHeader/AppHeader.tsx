@@ -4,8 +4,8 @@ import type {
   Board,
   BoardID,
   Branch,
+  InitialSessionSummary,
   MCPServer,
-  Session,
   User,
 } from '@agor-live/client';
 import {
@@ -70,7 +70,7 @@ export interface AppHeaderProps {
   /** Live entity maps for the global-search dropdown. Passed through from App.tsx.
    * GlobalSearch calls useAppNavigation directly, so it needs boardById (for
    * slug-aware path building) on top of the entity maps. */
-  sessionById: Map<string, Session>;
+  sessionById: Map<string, InitialSessionSummary>;
   artifactById: Map<string, Artifact>;
   mcpServerById: Map<string, MCPServer>;
 }

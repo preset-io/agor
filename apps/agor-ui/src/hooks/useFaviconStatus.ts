@@ -7,7 +7,7 @@
  * - No dots: Nothing active on current board
  */
 
-import type { BoardEntityObject, Session } from '@agor-live/client';
+import type { BoardEntityObject, InitialSessionSummary } from '@agor-live/client';
 import { SessionStatus } from '@agor-live/client';
 import { theme } from 'antd';
 import { useEffect, useState } from 'react';
@@ -15,7 +15,7 @@ import { createFaviconWithDot } from '../utils/faviconDot';
 
 export function useFaviconStatus(
   currentBoardId: string | null,
-  sessionsByBranch: Map<string, Session[]>,
+  sessionsByBranch: Map<string, InitialSessionSummary[]>,
   boardObjects: BoardEntityObject[]
 ) {
   const [baseFaviconUrl] = useState(`${import.meta.env.BASE_URL}favicon.png`);

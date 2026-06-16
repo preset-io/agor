@@ -5,14 +5,14 @@
  * Returns Ant Design Tree DataNode format
  */
 
-import type { Session } from '@agor-live/client';
+import type { InitialSessionSummary } from '@agor-live/client';
 import type { DataNode } from 'antd/es/tree';
 
 export type SessionRelationshipType = 'root' | 'spawn' | 'fork';
 
 export interface SessionTreeNode extends DataNode {
   key: string;
-  session: Session;
+  session: InitialSessionSummary;
   relationshipType: SessionRelationshipType;
   children?: SessionTreeNode[];
 }
@@ -22,10 +22,10 @@ export interface SessionTreeNode extends DataNode {
  *
  * Returns array of root sessions (no parent/fork) with their full subtrees in DataNode format
  */
-export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
-  const sessionMap = new Map<string, Session>();
-  const childrenMap = new Map<string, Session[]>();
-  const roots: Session[] = [];
+export function buildSessionTree(sessions: InitialSessionSummary[]): SessionTreeNode[] {
+  const sessionMap = new Map<string, InitialSessionSummary>();
+  const childrenMap = new Map<string, InitialSessionSummary[]>();
+  const roots: InitialSessionSummary[] = [];
 
   // Build maps
   for (const session of sessions) {
@@ -53,7 +53,7 @@ export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
   }
 
   // Build tree recursively
-  function buildNode(session: Session, isRoot = false): SessionTreeNode {
+  function buildNode(session: InitialSessionSummary, isRoot = false): SessionTreeNode {
     const children = childrenMap.get(session.session_id) || [];
 
     // Determine relationship type

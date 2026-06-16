@@ -3,9 +3,9 @@ import type {
   Board,
   BoardEntityObject,
   Branch,
+  InitialSessionSummary,
   MCPServer,
   Repo,
-  Session,
   User,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
@@ -38,7 +38,7 @@ export interface BranchModalProps {
   onClose: () => void;
   branch: Branch | null;
   repo: Repo | null;
-  sessions: Session[]; // Used for GeneralTab session count
+  sessions: InitialSessionSummary[]; // Used for GeneralTab session count
   boardById?: Map<string, Board>;
   boardObjects?: BoardEntityObject[];
   mcpServerById?: Map<string, MCPServer>;

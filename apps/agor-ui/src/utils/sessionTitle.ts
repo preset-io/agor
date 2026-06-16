@@ -5,7 +5,7 @@
  * Uses CSS line-clamp for responsive truncation that adapts to container width.
  */
 
-import type { Session } from '@agor-live/client';
+import type { InitialSessionSummary, Session } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import type { CSSProperties } from 'react';
 
@@ -46,8 +46,19 @@ export interface FormatSessionTitleOptions {
  * </Typography.Text>
  * ```
  */
+type SessionTitleLike = Pick<Session, 'title' | 'agentic_tool' | 'session_id'> &
+  Partial<Pick<Session, 'description'>> &
+  Partial<Pick<InitialSessionSummary, 'first_prompt_preview'>>;
+
+export function getSessionPromptPreview(
+  session: Partial<Pick<Session, 'description'>> &
+    Partial<Pick<InitialSessionSummary, 'first_prompt_preview'>>
+): string | undefined {
+  return session.first_prompt_preview ?? session.description;
+}
+
 export function getSessionDisplayTitle(
-  session: Pick<Session, 'title' | 'description' | 'agentic_tool' | 'session_id'>,
+  session: SessionTitleLike,
   options: FormatSessionTitleOptions = {}
 ): string {
   const { fallbackChars = 200, includeAgentFallback = false, includeIdFallback = false } = options;
@@ -57,15 +68,16 @@ export function getSessionDisplayTitle(
     return session.title;
   }
 
-  // 2. Use description (first prompt) - let CSS handle truncation in most cases
-  if (session.description) {
+  // 2. Use first prompt preview / legacy description fallback.
+  const firstPromptPreview = getSessionPromptPreview(session);
+  if (firstPromptPreview) {
     // Only truncate EXTREMELY long descriptions to prevent performance issues
     // CSS line-clamp will handle the visual truncation at 2 lines
-    if (session.description.length > fallbackChars) {
-      return `${session.description.substring(0, fallbackChars)}...`;
+    if (firstPromptPreview.length > fallbackChars) {
+      return `${firstPromptPreview.substring(0, fallbackChars)}...`;
     }
     // Return full description, CSS will clamp to 2 lines at any container width
-    return session.description;
+    return firstPromptPreview;
   }
 
   // 3. Fallback to agentic tool name if enabled

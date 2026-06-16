@@ -1,4 +1,4 @@
-import type { Session } from '@agor-live/client';
+import type { InitialSessionSummary } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import { PhoneOutlined } from '@ant-design/icons';
 import { Badge, Button, Tooltip, Typography, theme } from 'antd';
@@ -8,7 +8,7 @@ import { useAppLiveData } from '../../contexts/AppDataContext';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 
 interface CallbackToggleButtonProps {
-  session: Session;
+  session: InitialSessionSummary;
 }
 
 /**

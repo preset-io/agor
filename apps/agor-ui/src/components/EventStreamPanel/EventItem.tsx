@@ -2,7 +2,14 @@
  * EventItem - Display a single socket event with timestamp, type, and data
  */
 
-import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Branch,
+  InitialSessionSummary,
+  Repo,
+  SpawnConfig,
+  User,
+} from '@agor-live/client';
 import {
   AimOutlined,
   ApiOutlined,
@@ -38,8 +45,8 @@ export interface BranchActions {
 export interface EventItemProps {
   event: SocketEvent;
   branchById: Map<string, Branch>;
-  sessionById: Map<string, Session>;
-  sessionsByBranch: Map<string, Session[]>;
+  sessionById: Map<string, InitialSessionSummary>;
+  sessionsByBranch: Map<string, InitialSessionSummary[]>;
   repos: Repo[];
   userById: Map<string, User>;
   currentUserId?: string;

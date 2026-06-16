@@ -8,7 +8,7 @@ import type {
   BoardEntityObject,
   BoardObject,
   Branch,
-  Session,
+  InitialSessionSummary,
 } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import type { Node } from 'reactflow';
@@ -17,7 +17,7 @@ import { mapToArray } from '@/utils/mapHelpers';
 interface UseBoardObjectsProps {
   board: Board | null;
   client: AgorClient | null;
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
+  sessionsByBranch: Map<string, InitialSessionSummary[]>; // O(1) branch filtering
   branches: Branch[];
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;

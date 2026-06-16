@@ -10,6 +10,7 @@ export interface InitialLoadDebugFetchTiming {
   label: string;
   durationMs: number;
   count: number | null;
+  approxBytes?: number;
   status: 'success' | 'error';
   error?: string;
 }
@@ -52,6 +53,18 @@ function roundMs(ms: number): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function approxJsonBytes(value: unknown): number | undefined {
+  try {
+    const json = JSON.stringify(value);
+    if (typeof TextEncoder !== 'undefined') {
+      return new TextEncoder().encode(json).length;
+    }
+    return json.length;
+  } catch {
+    return undefined;
+  }
 }
 
 export function syncInitialLoadDebugFlagFromUrl(win = getWindow()): boolean {
@@ -119,6 +132,7 @@ export function createInitialLoadDebugTimer(items: readonly InitialLoadDebugItem
             label: labels.get(key) ?? key,
             durationMs: roundMs(getNow() - itemStart),
             count: result.length,
+            approxBytes: approxJsonBytes(result),
             status: 'success',
           });
           return result;

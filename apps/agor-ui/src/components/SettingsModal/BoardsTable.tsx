@@ -6,7 +6,7 @@ import type {
   BranchFsAccessLevel,
   BranchPermissionLevel,
   Group,
-  Session,
+  InitialSessionSummary,
   User,
   UUID,
 } from '@agor-live/client';
@@ -43,7 +43,7 @@ import { JSONEditor, validateJSON } from '../JSONEditor';
 interface BoardsTableProps {
   client: AgorClient | null;
   boardById: Map<string, Board>;
-  sessionsByBranch: Map<string, Session[]>;
+  sessionsByBranch: Map<string, InitialSessionSummary[]>;
   branchById: Map<string, Branch>;
   onCreate?: (board: Partial<Board>) => void;
   onUpdate?: (boardId: string, updates: Partial<Board>) => void;

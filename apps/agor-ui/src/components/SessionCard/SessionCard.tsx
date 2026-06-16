@@ -1,4 +1,4 @@
-import type { Session, Task, User } from '@agor-live/client';
+import type { InitialSessionSummary, Task, User } from '@agor-live/client';
 import {
   BranchesOutlined,
   CloseOutlined,
@@ -13,7 +13,11 @@ import {
 import { App, Button, Card, Collapse, Space, Typography } from 'antd';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { parseGitStateSha } from '../../utils/gitState';
-import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import {
+  getSessionDisplayTitle,
+  getSessionPromptPreview,
+  getSessionTitleStyles,
+} from '../../utils/sessionTitle';
 import { CreatedByTag } from '../metadata';
 import { Tag } from '../Tag';
 import TaskListItem from '../TaskListItem';
@@ -23,7 +27,7 @@ import { ToolIcon } from '../ToolIcon';
 const SESSION_CARD_MAX_WIDTH = 560;
 
 interface SessionCardProps {
-  session: Session;
+  session: InitialSessionSummary;
   tasks?: Task[]; // Optional snapshot passed by parent
   userById: Map<string, User>;
   currentUserId?: string;
@@ -235,7 +239,7 @@ const SessionCard = ({
       {/* Session metadata */}
       <div className="nodrag">
         {/* Title/Description */}
-        {(session.title || session.description) && (
+        {(session.title || getSessionPromptPreview(session)) && (
           <Typography.Text
             strong
             style={{

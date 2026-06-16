@@ -1,4 +1,10 @@
-import type { AgorClient, Message, Session, StreamingMessageState, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  InitialSessionSummary,
+  Message,
+  StreamingMessageState,
+  User,
+} from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
 import { Alert, Button, Empty, Input, Spin, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -11,7 +17,7 @@ import { chooseLatestSessionTask } from './latestSessionTask';
 
 interface SessionLatestTaskPeekProps {
   client: AgorClient | null;
-  session: Session;
+  session: InitialSessionSummary;
   userById: Map<string, User>;
   currentUserId?: string;
   branchName?: string;

@@ -1,4 +1,4 @@
-import type { Session } from '@agor-live/client';
+import type { InitialSessionSummary } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import { LinkOutlined, PhoneOutlined } from '@ant-design/icons';
 import { Badge, Space, Typography, theme } from 'antd';
@@ -8,7 +8,7 @@ import { useAppLiveData } from '../../contexts/AppDataContext';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 
 interface CallbackTargetDisplayProps {
-  session: Session;
+  session: InitialSessionSummary;
   /** Called after the user clicks the parent link, so the host modal can close. */
   onNavigate?: () => void;
 }

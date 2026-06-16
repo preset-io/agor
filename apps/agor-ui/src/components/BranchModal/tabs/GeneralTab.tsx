@@ -1,4 +1,4 @@
-import type { Board, Branch, MCPServer, Repo, Session } from '@agor-live/client';
+import type { Board, Branch, InitialSessionSummary, MCPServer, Repo } from '@agor-live/client';
 import { isAssistant } from '@agor-live/client';
 import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
@@ -18,7 +18,7 @@ const { TextArea } = Input;
 interface GeneralTabProps {
   branch: Branch;
   repo: Repo;
-  sessions: Session[]; // Used to gauge environment risk on Archive/Delete
+  sessions: InitialSessionSummary[]; // Used to gauge environment risk on Archive/Delete
   boards?: Board[];
   mcpServers?: MCPServer[];
   canEdit: boolean;

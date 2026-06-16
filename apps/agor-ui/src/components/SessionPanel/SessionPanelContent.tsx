@@ -1,4 +1,10 @@
-import type { AgorClient, Branch, Session, SpawnConfig, Task } from '@agor-live/client';
+import type {
+  AgorClient,
+  Branch,
+  InitialSessionSummary,
+  SpawnConfig,
+  Task,
+} from '@agor-live/client';
 import { getAssistantConfig, isAssistant, sessionPath, shortId } from '@agor-live/client';
 import {
   CodeOutlined,
@@ -23,7 +29,7 @@ import { IssuePill, PullRequestPill } from '../Pill';
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;
-  session: Session;
+  session: InitialSessionSummary;
   branch?: Branch | null;
   currentUserId?: string;
   sessionMcpServerIds?: string[];

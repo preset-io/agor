@@ -10,9 +10,9 @@ import type {
   AgorClient,
   Branch,
   BranchID,
+  InitialSessionSummary,
   MCPServer,
   PermissionMode,
-  Session,
   User,
   ZoneTrigger,
 } from '@agor-live/client';
@@ -25,7 +25,7 @@ import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Spin, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { AgenticToolOption } from '../../../types';
-import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
+import { getSessionDisplayTitle, getSessionPromptPreview } from '../../../utils/sessionTitle';
 // Async server-side renderer — keeps Handlebars out of the browser bundle so
 // the page doesn't need CSP `script-src 'unsafe-eval'`.
 import { renderTemplate } from '../../../utils/templates';
@@ -39,7 +39,7 @@ interface ZoneTriggerModalProps {
   client: AgorClient | null;
   branchId: BranchID;
   branch: Branch | undefined;
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
+  sessionsByBranch: Map<string, InitialSessionSummary[]>; // O(1) branch filtering
   zoneName: string;
   trigger: ZoneTrigger;
   boardName?: string;
@@ -213,30 +213,46 @@ export const ZoneTriggerModal = ({
       setIsRendering(false);
       return;
     }
-    const selectedSessionForCtx =
-      mode === 'reuse_existing' && selectedSessionId
-        ? branchSessions.find((s) => s.session_id === selectedSessionId)
-        : undefined;
-    const context = buildZoneTriggerContext({
-      branch,
-      board: {
-        name: boardName,
-        description: boardDescription,
-        custom_context: boardCustomContext,
-      },
-      zone: { label: zoneName },
-      session: selectedSessionForCtx
-        ? {
-            description: selectedSessionForCtx.description,
-            custom_context: selectedSessionForCtx.custom_context,
-          }
-        : undefined,
-    });
-
     setIsRendering(true);
-    renderTemplate(client, trigger.template, context, 'raw').then((rendered) => {
+
+    const render = async () => {
+      const selectedSessionForCtx =
+        mode === 'reuse_existing' && selectedSessionId
+          ? branchSessions.find((s) => s.session_id === selectedSessionId)
+          : undefined;
+      const fullSelectedSession =
+        selectedSessionForCtx && client
+          ? await client
+              .service('sessions')
+              .get(selectedSessionForCtx.session_id)
+              .catch(() => selectedSessionForCtx)
+          : undefined;
+      const context = buildZoneTriggerContext({
+        branch,
+        board: {
+          name: boardName,
+          description: boardDescription,
+          custom_context: boardCustomContext,
+        },
+        zone: { label: zoneName },
+        session: fullSelectedSession
+          ? {
+              description: getSessionPromptPreview(fullSelectedSession),
+              custom_context: fullSelectedSession.custom_context,
+            }
+          : undefined,
+      });
+
+      const rendered = await renderTemplate(client, trigger.template, context, 'raw');
       if (!cancelled) {
         setEditableTemplate(rendered);
+        setIsRendering(false);
+      }
+    };
+
+    render().catch(() => {
+      if (!cancelled) {
+        setEditableTemplate(trigger.template);
         setIsRendering(false);
       }
     });

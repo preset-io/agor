@@ -21,6 +21,7 @@ import { resolveChildSessionConfig } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
   Branch,
+  InitialSessionSummary,
   MCPServerID,
   Paginated,
   QueryParams,
@@ -80,6 +81,7 @@ export type SessionParams = QueryParams<{
   board_id?: string;
   include_last_message?: boolean | 'true' | 'false'; // Opt-in last message enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
+  initial_summary?: boolean | 'true' | 'false'; // Slim list projection for initial UI load
 }> &
   AuthenticatedParams &
   InternalEnrichmentParams & {
@@ -102,7 +104,12 @@ export type ExecuteTaskData = {
 /**
  * Extended sessions service with custom methods
  */
-export class SessionsService extends DrizzleService<Session, Partial<Session>, SessionParams> {
+export class SessionsService extends DrizzleService<
+  Session,
+  Partial<Session>,
+  SessionParams,
+  Session | InitialSessionSummary
+> {
   private sessionRepo: SessionRepository;
   private app: Application;
   private sessionMCPRepo: SessionMCPServerRepository;
@@ -732,7 +739,17 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    *
    * Note: Last message is NOT included in list operations - only on single GET
    */
-  async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
+  async find(
+    params?: SessionParams
+  ): Promise<Paginated<Session | InitialSessionSummary> | Array<Session | InitialSessionSummary>> {
+    const initialSummary = params?.query?.initial_summary;
+    if (initialSummary === true || initialSummary === 'true') {
+      return this.sessionRepo.findInitialSummaries({
+        archived: typeof params?.query?.archived === 'boolean' ? params.query.archived : undefined,
+        sortUpdatedDesc: params?.query?.$sort?.updated_at === -1,
+      });
+    }
+
     // Use default find to ensure all hooks and scoping are applied
     return super.find(params);
   }

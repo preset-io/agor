@@ -1,4 +1,4 @@
-import type { Board, Branch, Repo, Session } from '@agor-live/client';
+import type { Board, Branch, InitialSessionSummary, Repo, Session } from '@agor-live/client';
 import { UnorderedListOutlined } from '@ant-design/icons';
 import { Badge, Card, Empty, List, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
@@ -14,7 +14,7 @@ import {
   sortSessions,
 } from '../../utils/sessionSearch';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
-import { getSessionDisplayTitle } from '../../utils/sessionTitle';
+import { getSessionDisplayTitle, getSessionPromptPreview } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
 import { HighlightMatch } from '../HighlightMatch';
 import { BoardPill, BranchPill } from '../Pill';
@@ -35,7 +35,7 @@ const attentionStatuses = new Set<Session['status']>([
 ]);
 
 const HomeSessionRow: React.FC<{
-  session: Session;
+  session: InitialSessionSummary;
   branch?: Branch;
   board?: Board;
   repo?: Repo;
@@ -47,8 +47,8 @@ const HomeSessionRow: React.FC<{
   const title = getSessionDisplayTitle(session, { includeAgentFallback: true });
   const tone = getSessionStatusTone(session.status);
   const descriptionSnippet =
-    searchActive && session.title && session.description
-      ? getMatchSnippet(session.description, searchQuery)
+    searchActive && session.title && getSessionPromptPreview(session)
+      ? getMatchSnippet(getSessionPromptPreview(session)!, searchQuery)
       : null;
   const toolMatches = searchActive && sessionToolMatches(session, searchQuery);
   return (

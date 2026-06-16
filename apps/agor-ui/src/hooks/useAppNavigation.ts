@@ -24,7 +24,15 @@
  * a flipping identity would defeat the memoization, cascading
  * re-renders on every stream patch.
  */
-import type { Artifact, ArtifactID, Branch, BranchID, Session, SessionID } from '@agor-live/client';
+import type {
+  Artifact,
+  ArtifactID,
+  Branch,
+  BranchID,
+  InitialSessionSummary,
+  Session,
+  SessionID,
+} from '@agor-live/client';
 import { artifactPath, branchPath, sessionPath } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -48,7 +56,7 @@ interface UseAppNavigationOptions {
    *  only needed for the same-URL recenter fallback (re-click on the
    *  entity that's already focused), which silently no-ops when the
    *  map is empty. */
-  sessionById?: Map<string, Session>;
+  sessionById?: Map<string, InitialSessionSummary>;
   branchById?: Map<string, Branch>;
   artifactById?: Map<string, Artifact>;
 }

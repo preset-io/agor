@@ -1,5 +1,12 @@
 import type { KnowledgeDocument as CoreKnowledgeDocument } from '@agor/core/types';
-import type { AgorClient, Board, Branch, Repo, Session, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  Branch,
+  InitialSessionSummary,
+  Repo,
+  User,
+} from '@agor-live/client';
 
 export interface HomePageProps {
   client: AgorClient | null;
@@ -8,8 +15,8 @@ export interface HomePageProps {
   recentBoardIds?: string[];
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
-  sessionById: Map<string, Session>;
-  sessionsByBranch: Map<string, Session[]>;
+  sessionById: Map<string, InitialSessionSummary>;
+  sessionsByBranch: Map<string, InitialSessionSummary[]>;
   userById: Map<string, User>;
   currentUserId?: string;
   onBoardClick: (boardId: string) => void;

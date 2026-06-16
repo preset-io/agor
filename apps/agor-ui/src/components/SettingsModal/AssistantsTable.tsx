@@ -3,8 +3,8 @@ import type {
   Board,
   Branch,
   CreateRepoRequest,
+  InitialSessionSummary,
   Repo,
-  Session,
   User,
 } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
@@ -40,7 +40,7 @@ interface AssistantsTableProps {
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
-  sessionsByBranch: Map<string, Session[]>;
+  sessionsByBranch: Map<string, InitialSessionSummary[]>;
   userById: Map<string, User>;
   client: AgorClient | null;
   onArchiveOrDelete?: (

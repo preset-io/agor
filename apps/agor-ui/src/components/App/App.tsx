@@ -13,6 +13,7 @@ import type {
   CreateRepoRequest,
   CreateUserInput,
   GatewayChannel,
+  InitialSessionSummary,
   MCPServer,
   PermissionMode,
   Repo,
@@ -91,8 +92,8 @@ export interface AppProps {
   user?: User | null;
   connected?: boolean;
   connecting?: boolean;
-  sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch-scoped filtering
+  sessionById: Map<string, InitialSessionSummary>; // O(1) lookups by session_id - efficient, stable references
+  sessionsByBranch: Map<string, InitialSessionSummary[]>; // O(1) branch-scoped filtering
   availableAgents: AgenticToolOption[];
   boardById: Map<string, Board>; // Map-based board storage
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
@@ -450,6 +451,9 @@ export const App: React.FC<AppProps> = ({
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
   const [terminalBranchId, setTerminalBranchId] = useState<string | undefined>(undefined);
   const [sessionSettingsId, setSessionSettingsId] = useState<string | null>(null);
+  const [sessionSettingsFullSession, setSessionSettingsFullSession] = useState<Session | null>(
+    null
+  );
   const [branchModalBranchId, setBranchModalBranchId] = useState<string | null>(null);
   const [branchModalTab, setBranchModalTab] = useState<BranchModalTab | undefined>(undefined);
   const [logsModalBranchId, setLogsModalBranchId] = useState<string | null>(null);
@@ -858,7 +862,30 @@ export const App: React.FC<AppProps> = ({
     }
   }, [selectedSessionId, sessionById]);
 
-  const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
+  const sessionSettingsSession = sessionSettingsId ? sessionSettingsFullSession : null;
+
+  useEffect(() => {
+    if (!client || !sessionSettingsId) {
+      setSessionSettingsFullSession(null);
+      return;
+    }
+
+    let cancelled = false;
+    client
+      .service('sessions')
+      .get(sessionSettingsId)
+      .then((session) => {
+        if (!cancelled) setSessionSettingsFullSession(session as Session);
+      })
+      .catch((error) => {
+        console.warn('Failed to fetch full session for settings:', error);
+        if (!cancelled) setSessionSettingsFullSession(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, sessionSettingsId]);
   const primaryAssistantId = currentBoard?.primary_assistant_id ?? null;
   const primaryAssistantBranch = primaryAssistantId
     ? branchById.get(primaryAssistantId)

@@ -72,7 +72,7 @@ export interface Repository<T> {
  * Emits events for real-time WebSocket broadcasting.
  */
 // biome-ignore lint/suspicious/noExplicitAny: Generic service adapter needs default any type
-export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> {
+export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params, F = T> {
   id: string;
   paginate?: PaginationOptions;
   multi: boolean | string[];
@@ -190,7 +190,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   /**
    * Apply pagination to data
    */
-  private paginateData(data: T[], query: Query, total: number): Paginated<T> | T[] {
+  private paginateData(data: F[], query: Query, total: number): Paginated<F> | F[] {
     const limit = query.$limit ?? this.paginate?.default ?? data.length;
     const skip = query.$skip ?? 0;
 
@@ -217,7 +217,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   /**
    * Find records
    */
-  async find(params?: P): Promise<Paginated<T> | T[]> {
+  async find(params?: P): Promise<Paginated<F> | F[]> {
     const query = this.getQuery(params);
 
     // Get all data from repository
@@ -236,7 +236,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     const selected = this.selectFields(data, query.$select);
 
     // Apply pagination
-    return this.paginateData(selected as T[], query, total);
+    return this.paginateData(selected as F[], query, total);
   }
 
   /**

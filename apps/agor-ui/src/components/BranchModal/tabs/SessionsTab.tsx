@@ -1,4 +1,10 @@
-import type { AgorClient, Branch, Session, SessionID } from '@agor-live/client';
+import type {
+  AgorClient,
+  Branch,
+  InitialSessionSummary,
+  Session,
+  SessionID,
+} from '@agor-live/client';
 import { EyeInvisibleOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
 import { Badge, Input, Space, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -12,10 +18,12 @@ import { ToolIcon } from '../../ToolIcon/ToolIcon';
 
 interface SessionsTabProps {
   branch: Branch;
-  sessions: Session[];
+  sessions: InitialSessionSummary[];
   client: AgorClient | null;
   onSessionClick?: (sessionId: string) => void;
 }
+
+type DisplaySession = InitialSessionSummary | Session;
 
 const SessionsTabInner: React.FC<SessionsTabProps> = ({
   branch,
@@ -27,9 +35,9 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
   const { showSuccess, showError } = useThemedMessage();
   const [searchText, setSearchText] = useState('');
   const [showArchived, setShowArchived] = useState(false);
-  const [activeSessions, setActiveSessions] = useState<Session[]>([]);
+  const [activeSessions, setActiveSessions] = useState<DisplaySession[]>([]);
   const [activeLoading, setActiveLoading] = useState(false);
-  const [archivedSessions, setArchivedSessions] = useState<Session[]>([]);
+  const [archivedSessions, setArchivedSessions] = useState<DisplaySession[]>([]);
   const [archivedLoaded, setArchivedLoaded] = useState(false);
   const [archivedLoading, setArchivedLoading] = useState(false);
   const [archivingIds, setArchivingIds] = useState<Set<string>>(new Set());
@@ -42,14 +50,17 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
   const clientRef = useRef(client);
   clientRef.current = client;
 
-  const upsertSession = useCallback((list: Session[], session: Session): Session[] => {
-    const index = list.findIndex((s) => s.session_id === session.session_id);
-    if (index === -1) return [session, ...list];
-    if (list[index] === session) return list;
-    const next = [...list];
-    next[index] = session;
-    return next;
-  }, []);
+  const upsertSession = useCallback(
+    (list: DisplaySession[], session: DisplaySession): DisplaySession[] => {
+      const index = list.findIndex((s) => s.session_id === session.session_id);
+      if (index === -1) return [session, ...list];
+      if (list[index] === session) return list;
+      const next = [...list];
+      next[index] = session;
+      return next;
+    },
+    []
+  );
 
   const loadActiveSessions = useCallback(async () => {
     const currentClient = clientRef.current;
@@ -214,7 +225,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
   const combinedSessions = useMemo(() => {
     if (!showArchived) return activeSessions;
     const seen = new Set<string>();
-    const merged: Session[] = [];
+    const merged: DisplaySession[] = [];
     for (const session of activeSessions) {
       seen.add(session.session_id);
       merged.push(session);
@@ -263,7 +274,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
   const activeCount = activeSessions.length;
   const archivedCount = archivedSessions.length;
 
-  const columns: ColumnsType<Session> = [
+  const columns: ColumnsType<DisplaySession> = [
     {
       title: 'Session',
       key: 'title',
@@ -403,7 +414,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
         </div>
 
         {/* Sessions table */}
-        <Table<Session>
+        <Table<DisplaySession>
           columns={columns}
           dataSource={filteredSessions}
           rowKey="session_id"

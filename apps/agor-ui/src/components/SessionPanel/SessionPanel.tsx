@@ -4,8 +4,8 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  InitialSessionSummary,
   PermissionMode,
-  Session,
   SessionID,
   SpawnConfig,
   Task,
@@ -215,7 +215,7 @@ PromptInput.displayName = 'PromptInput';
 
 export interface SessionPanelProps {
   client: AgorClient | null;
-  session: Session | null;
+  session: InitialSessionSummary | null;
   branch?: Branch | null;
   currentUserId?: string;
   sessionMcpServerIds?: string[];

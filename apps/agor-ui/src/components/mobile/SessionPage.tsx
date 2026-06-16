@@ -1,9 +1,9 @@
 import type {
   AgorClient,
   Branch,
+  InitialSessionSummary,
   PermissionMode,
   Repo,
-  Session,
   SessionID,
   User,
 } from '@agor-live/client';
@@ -17,7 +17,7 @@ import { MobilePromptInput } from './MobilePromptInput';
 
 interface SessionPageProps {
   client: AgorClient | null;
-  sessionById: Map<string, Session>; // O(1) ID lookups
+  sessionById: Map<string, InitialSessionSummary>; // O(1) ID lookups
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   userById: Map<string, User>;

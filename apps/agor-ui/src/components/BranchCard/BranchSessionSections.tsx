@@ -1,4 +1,12 @@
-import type { AgorClient, Branch, Session, SessionID, SpawnConfig, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Branch,
+  InitialSessionSummary,
+  Session,
+  SessionID,
+  SpawnConfig,
+  User,
+} from '@agor-live/client';
 import {
   getGatewaySource as getGatewaySourceCore,
   isGatewaySession as isGatewaySessionCore,
@@ -39,7 +47,11 @@ import {
   sessionToolMatches,
   sortSessions,
 } from '../../utils/sessionSearch';
-import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import {
+  getSessionDisplayTitle,
+  getSessionPromptPreview,
+  getSessionTitleStyles,
+} from '../../utils/sessionTitle';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { HighlightMatch } from '../HighlightMatch';
@@ -57,7 +69,7 @@ export type BranchSessionSectionsMode = 'card' | 'panel';
 
 export interface BranchSessionSectionsProps {
   branch: Branch;
-  sessions: Session[];
+  sessions: InitialSessionSummary[];
   userById: Map<string, User>;
   currentUserId?: string;
   selectedSessionId?: string | null;
@@ -261,11 +273,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   );
 
   const getGatewaySource = useCallback(
-    (session: Session) => getGatewaySourceCore(session) ?? undefined,
+    (session: InitialSessionSummary) => getGatewaySourceCore(session) ?? undefined,
     []
   );
 
-  const isGatewaySession = useCallback((session: Session): boolean => {
+  const isGatewaySession = useCallback((session: InitialSessionSummary): boolean => {
     return isGatewaySessionCore(session);
   }, []);
 
@@ -336,7 +348,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     setExpandedKeys(collectKeysWithChildren(sessionTreeData));
   }, [sessionTreeData]);
 
-  const sessionRowStyle = (session: Session): React.CSSProperties => {
+  const sessionRowStyle = (session: InitialSessionSummary): React.CSSProperties => {
     const isSessionSelected = session.session_id === selectedSessionId;
     return {
       border: session.ready_for_prompt
@@ -357,7 +369,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   };
 
   const renderSessionTitle = (
-    session: Session,
+    session: InitialSessionSummary,
     options: { strong?: boolean; secondary?: boolean; query?: string } = {}
   ) => {
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
@@ -378,12 +390,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     );
   };
 
-  const renderFlatSessionRow = (session: Session, query = '') => {
+  const renderFlatSessionRow = (session: InitialSessionSummary, query = '') => {
     const isActive = session.status === 'running' || session.status === 'stopping';
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
     const descriptionSnippet =
-      query && session.title && session.description
-        ? getMatchSnippet(session.description, query)
+      query && session.title && getSessionPromptPreview(session)
+        ? getMatchSnippet(getSessionPromptPreview(session)!, query)
         : null;
     const toolMatches = query ? sessionToolMatches(session, query) : false;
     const sourceLabel = session.scheduled_from_branch

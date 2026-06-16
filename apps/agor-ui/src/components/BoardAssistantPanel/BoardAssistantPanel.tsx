@@ -4,8 +4,8 @@ import type {
   BoardComment,
   BoardObject,
   Branch,
+  InitialSessionSummary,
   Repo,
-  Session,
   SpawnConfig,
   User,
 } from '@agor-live/client';
@@ -43,7 +43,7 @@ interface BoardAssistantPanelProps {
   primaryAssistantBranch?: Branch;
   primaryAssistantRepo?: Repo;
   primaryAssistantInaccessible: boolean;
-  sessionsByBranch: Map<string, Session[]>;
+  sessionsByBranch: Map<string, InitialSessionSummary[]>;
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   userById: Map<string, User>;
