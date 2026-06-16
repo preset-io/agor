@@ -100,8 +100,8 @@ importers:
         specifier: workspace:*
         version: link:../agor-daemon
       '@oclif/core':
-        specifier: ^4.11.4
-        version: 4.11.4
+        specifier: ^4.11.6
+        version: 4.11.6
       '@oclif/plugin-help':
         specifier: ^6.2.50
         version: 6.2.50
@@ -143,8 +143,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       '@cursor/sdk':
-        specifier: ^1.0.18
-        version: 1.0.18
+        specifier: ^1.0.19
+        version: 1.0.19
       '@github/copilot-sdk':
         specifier: ^0.2.2
         version: 0.2.2
@@ -197,8 +197,8 @@ importers:
         specifier: ^2.1.2
         version: 2.1.2
       multer:
-        specifier: ^2.1.1
-        version: 2.1.1
+        specifier: ^2.2.0
+        version: 2.2.0
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
@@ -467,8 +467,8 @@ importers:
         specifier: ^0.100.0
         version: 0.100.0(zod@4.4.3)
       '@cursor/sdk':
-        specifier: ^1.0.18
-        version: 1.0.18
+        specifier: ^1.0.19
+        version: 1.0.19
       '@feathersjs/authentication':
         specifier: ^5.0.45
         version: 5.0.45(typescript@6.0.3)
@@ -518,8 +518,8 @@ importers:
         specifier: '>=1.27.1 <2'
         version: 1.27.1(zod@4.4.3)
       '@oclif/core':
-        specifier: ^4.11.4
-        version: 4.11.4
+        specifier: ^4.11.6
+        version: 4.11.6
       '@oclif/plugin-help':
         specifier: ^6.2.50
         version: 6.2.50
@@ -614,8 +614,8 @@ importers:
         specifier: ^2.1.2
         version: 2.1.2
       multer:
-        specifier: ^2.1.1
-        version: 2.1.1
+        specifier: ^2.2.0
+        version: 2.2.0
       node-pty:
         specifier: ^1.2.0-beta.12
         version: 1.2.0-beta.12
@@ -847,8 +847,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@cursor/sdk':
-        specifier: ^1.0.18
-        version: 1.0.18
+        specifier: ^1.0.19
+        version: 1.0.19
       '@github/copilot-sdk':
         specifier: ^0.2.2
         version: 0.2.2
@@ -1318,9 +1318,8 @@ packages:
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
 
-  '@connectrpc/connect-node@1.7.0':
-    resolution: {integrity: sha512-6vaPIkG/NyhxlYgytLoR9KYbPhczEboFB2OYWkA9qvUz1K7efXfeGrlRxoLtpa+r8VxyIOw73w5ktNe743nD+A==}
-    engines: {node: '>=16.0.0'}
+  '@connectrpc/connect-web@1.7.0':
+    resolution: {integrity: sha512-qyP0YOnUPRWwCc/VfsoydMJvkb7EyUPr2q9sHgBuJzbADjiqck1gKH5V5ZPzPhTLBvmz5UvG+wiZ5sMRQHU1MQ==}
     peerDependencies:
       '@bufbuild/protobuf': ^1.10.0
       '@connectrpc/connect': 1.7.0
@@ -1365,39 +1364,39 @@ packages:
     resolution: {integrity: sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw==}
     engines: {node: '>=18'}
 
-  '@cursor/sdk-darwin-arm64@1.0.18':
-    resolution: {integrity: sha512-gXfNz+n3uf2hWCUcSdU/gBYT7TFlWwJjZAAjXFzBJ3jGu+l7ShQRa9QI2sEKvPNRtUMC/18EcQ26ks1o261Bnw==}
+  '@cursor/sdk-darwin-arm64@1.0.19':
+    resolution: {integrity: sha512-CPhqcpDaqjjqkkVGMLsdfXv7PGznL5L6U5CJXps/oaGW5mtHoxDpsRNj1rszCRQXNAvmMU+EFxLWnBwlE8mUNg==}
     cpu: [arm64]
     os: [darwin]
     hasBin: true
 
-  '@cursor/sdk-darwin-x64@1.0.18':
-    resolution: {integrity: sha512-nzcPqCvPPnYsuz21olPgandVgGUzDZkHN4cUls4ukm7mddp6XqujFJv8lh9qKmVefl0/3UL2R6GFANggjwifnA==}
+  '@cursor/sdk-darwin-x64@1.0.19':
+    resolution: {integrity: sha512-6/Jj0hxrxEs9V9wtYEApSkMcJwYAaT4Vwna9xBzgN6CK1K4Ws0E1/PfiddahAAFZpkp9pgjb8wQXwG7qJ2g77A==}
     cpu: [x64]
     os: [darwin]
     hasBin: true
 
-  '@cursor/sdk-linux-arm64@1.0.18':
-    resolution: {integrity: sha512-MJyhVryN+0czP48SgMak/KA9xGneQ/gdsnDk1ZTJF+LemaFc+Tv7P1GT80h+3JBfu69kPyIX4epJVjroTMoFEA==}
+  '@cursor/sdk-linux-arm64@1.0.19':
+    resolution: {integrity: sha512-Dq/BhGT1jAZ6eHJwy1Vugi/Upc+yoL0X/LN6ppd9cVPM9OAB1xX5KIbvIwsGlNiZccPLVXFv/1KOp5SBK+y+jQ==}
     cpu: [arm64]
     os: [linux]
     hasBin: true
 
-  '@cursor/sdk-linux-x64@1.0.18':
-    resolution: {integrity: sha512-IaJqcKtXxtQEdPxivQjDWbvynw3UX31V8RdagcZ6RgHOo+B/i/P95D8svSNC4V9nbTHwVbNGfIDQ5S64gMS2hg==}
+  '@cursor/sdk-linux-x64@1.0.19':
+    resolution: {integrity: sha512-ZHgHH+SdEwYwfPg/uVKqZRVOIMCV3/3vghxc/usOMYMrhbY9TYXZxYqwWTduVLzCXH7Dz0aT19mSJHmhwkQ1CA==}
     cpu: [x64]
     os: [linux]
     hasBin: true
 
-  '@cursor/sdk-win32-x64@1.0.18':
-    resolution: {integrity: sha512-iqcGt1l/3xgnaT+PotY3237oyK3VnOZHtjUxSRP3Q7ahjaqsZVTnCwwljj+nal8ouvXidBHnxQLqGMSC2G6LTg==}
+  '@cursor/sdk-win32-x64@1.0.19':
+    resolution: {integrity: sha512-XGIQmx3J0K8uKkA00qnoy1FJHFdFdwNdcmUqtRF1PXLcYup91YYetAHk9afXM7S/v1t0L4EatydsirL8uz7SIw==}
     cpu: [x64]
     os: [win32]
     hasBin: true
 
-  '@cursor/sdk@1.0.18':
-    resolution: {integrity: sha512-ha5EGHliMuTNuAqnPHzKFNnND4y6erddTqtxwIt9/p8ER+QsmMoRcP38PwA2sXfZnGvIBiozveBZqa4XwUddCw==}
-    engines: {node: '>=18'}
+  '@cursor/sdk@1.0.19':
+    resolution: {integrity: sha512-DJbVnGeRJq7iwt9mz1cMACqVfAYP15IB+Q8Iz2eDtEN4A8Dp83yB0Y31YREj1jeA9EPUEdRZJRIYch/s+Wi9Ow==}
+    engines: {node: '>=22.13'}
 
   '@drizzle-team/brocli@0.10.2':
     resolution: {integrity: sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w==}
@@ -2676,8 +2675,8 @@ packages:
     engines: {node: '>=10'}
     deprecated: This functionality has been moved to @npmcli/fs
 
-  '@oclif/core@4.11.4':
-    resolution: {integrity: sha512-URwiQ5ALx/sJ2iH4vzXEd+H4K6NAI7LRs6Jag3hrgKEpGmaE6alfRC8qjO4GIgb6A3ACaJumqP9twi/M9ywdHQ==}
+  '@oclif/core@4.11.6':
+    resolution: {integrity: sha512-8OTkBkWA0HJz2bSIQI0AoiIeL7ok4bZhUaJNEzfLu+iAn3liAyj4KmXRdXAUZBCjPEfdBTpyxKDAg1l/BDJKVg==}
     engines: {node: '>=18.0.0'}
 
   '@oclif/plugin-help@6.2.50':
@@ -7291,8 +7290,8 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
-  multer@2.1.1:
-    resolution: {integrity: sha512-mo+QTzKlx8R7E5ylSXxWzGoXoZbOsRMpyitcht8By2KHvMbf3tjwosZ/Mu/XYU6UuJ3VZnODIrak5ZrPiPyB6A==}
+  multer@2.2.0:
+    resolution: {integrity: sha512-6rdyFg2kLrMh9Jee7/BMPuV9lEAd7lLW2YUpF9/YxR7njyoUwwQ0ZPh3TaIY50Sw6vlyD2HW3wGOkTS4P79xrQ==}
     engines: {node: '>= 10.16.0'}
 
   mute-stream@1.0.0:
@@ -8185,11 +8184,6 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  semver@7.8.1:
-    resolution: {integrity: sha512-rkVq3IXh+4FDGch+KwzX3aV9W3kO54GyEgpvBzSyctDA6Xtd7RJQV1xmXbeQp5v7+VzLOfVqiutSE6GICgPFvg==}
-    engines: {node: '>=10'}
-    hasBin: true
-
   semver@7.8.2:
     resolution: {integrity: sha512-c8jsqUZm3omBOI66G90z1Dyw5z622G8oLG+omfsHBJf3CWQTlOcwOjvOG6wtiNfW6anKm/eA39LMwMtMez2TiQ==}
     engines: {node: '>=10'}
@@ -8617,10 +8611,6 @@ packages:
     resolution: {integrity: sha512-j2Zq4NyQYG5XMST4cbs02Ak8iJUdxRM0XI5QyxXuZOzKOINmWurp3smXu3y5wDcJrptwpSjgXHzIQxR0omXljQ==}
     engines: {node: '>=12.0.0'}
 
-  tinyglobby@0.2.16:
-    resolution: {integrity: sha512-pn99VhoACYR8nFHhxqix+uvsbXineAasWm5ojXoN8xEwK5Kd3/TrhNn1wByuD52UxWRLy8pu+kRMniEi6Eq9Zg==}
-    engines: {node: '>=12.0.0'}
-
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
@@ -8786,10 +8776,6 @@ packages:
 
   undici@7.25.0:
     resolution: {integrity: sha512-xXnp4kTyor2Zq+J1FfPI6Eq3ew5h6Vl0F/8d9XU5zZQf1tX9s2Su1/3PiMmUANFULpmksxkClamIZcaUqryHsQ==}
-    engines: {node: '>=20.18.1'}
-
-  undici@7.27.2:
-    resolution: {integrity: sha512-uZsKNuzQxDMUY6M3pIMvy5tvlGmtq8XJ2oLAkfRKGNu+1VQAIvLy2xIVG5ATZl5wDXl/tddByAWCizRbOme+TA==}
     engines: {node: '>=20.18.1'}
 
   unicorn-magic@0.1.0:
@@ -9932,11 +9918,10 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@connectrpc/connect-node@1.7.0(@bufbuild/protobuf@1.10.0)(@connectrpc/connect@1.7.0(@bufbuild/protobuf@1.10.0))':
+  '@connectrpc/connect-web@1.7.0(@bufbuild/protobuf@1.10.0)(@connectrpc/connect@1.7.0(@bufbuild/protobuf@1.10.0))':
     dependencies:
       '@bufbuild/protobuf': 1.10.0
       '@connectrpc/connect': 1.7.0(@bufbuild/protobuf@1.10.0)
-      undici: 7.27.2
 
   '@connectrpc/connect@1.7.0(@bufbuild/protobuf@1.10.0)':
     dependencies:
@@ -9966,38 +9951,34 @@ snapshots:
 
   '@csstools/css-tokenizer@3.0.4': {}
 
-  '@cursor/sdk-darwin-arm64@1.0.18':
+  '@cursor/sdk-darwin-arm64@1.0.19':
     optional: true
 
-  '@cursor/sdk-darwin-x64@1.0.18':
+  '@cursor/sdk-darwin-x64@1.0.19':
     optional: true
 
-  '@cursor/sdk-linux-arm64@1.0.18':
+  '@cursor/sdk-linux-arm64@1.0.19':
     optional: true
 
-  '@cursor/sdk-linux-x64@1.0.18':
+  '@cursor/sdk-linux-x64@1.0.19':
     optional: true
 
-  '@cursor/sdk-win32-x64@1.0.18':
+  '@cursor/sdk-win32-x64@1.0.19':
     optional: true
 
-  '@cursor/sdk@1.0.18':
+  '@cursor/sdk@1.0.19':
     dependencies:
       '@bufbuild/protobuf': 1.10.0
       '@connectrpc/connect': 1.7.0(@bufbuild/protobuf@1.10.0)
-      '@connectrpc/connect-node': 1.7.0(@bufbuild/protobuf@1.10.0)(@connectrpc/connect@1.7.0(@bufbuild/protobuf@1.10.0))
+      '@connectrpc/connect-web': 1.7.0(@bufbuild/protobuf@1.10.0)(@connectrpc/connect@1.7.0(@bufbuild/protobuf@1.10.0))
       '@statsig/js-client': 3.31.0
-      sqlite3: 5.1.7
       zod: 4.4.3
     optionalDependencies:
-      '@cursor/sdk-darwin-arm64': 1.0.18
-      '@cursor/sdk-darwin-x64': 1.0.18
-      '@cursor/sdk-linux-arm64': 1.0.18
-      '@cursor/sdk-linux-x64': 1.0.18
-      '@cursor/sdk-win32-x64': 1.0.18
-    transitivePeerDependencies:
-      - bluebird
-      - supports-color
+      '@cursor/sdk-darwin-arm64': 1.0.19
+      '@cursor/sdk-darwin-x64': 1.0.19
+      '@cursor/sdk-linux-arm64': 1.0.19
+      '@cursor/sdk-linux-x64': 1.0.19
+      '@cursor/sdk-win32-x64': 1.0.19
 
   '@drizzle-team/brocli@0.10.2': {}
 
@@ -11460,7 +11441,7 @@ snapshots:
       rimraf: 3.0.2
     optional: true
 
-  '@oclif/core@4.11.4':
+  '@oclif/core@4.11.6':
     dependencies:
       ansi-escapes: 4.3.2
       ansis: 3.17.0
@@ -11473,22 +11454,22 @@ snapshots:
       is-wsl: 2.2.0
       lilconfig: 3.1.3
       minimatch: 10.2.5
-      semver: 7.8.1
+      semver: 7.8.4
       string-width: 4.2.3
       supports-color: 8.1.1
-      tinyglobby: 0.2.16
+      tinyglobby: 0.2.17
       widest-line: 3.1.0
       wordwrap: 1.0.0
       wrap-ansi: 7.0.0
 
   '@oclif/plugin-help@6.2.50':
     dependencies:
-      '@oclif/core': 4.11.4
+      '@oclif/core': 4.11.6
 
   '@oclif/plugin-not-found@3.2.87(@types/node@24.10.0)':
     dependencies:
       '@inquirer/prompts': 7.10.1(@types/node@24.10.0)
-      '@oclif/core': 4.11.4
+      '@oclif/core': 4.11.6
       ansis: 3.17.0
       fast-levenshtein: 3.0.0
     transitivePeerDependencies:
@@ -11496,7 +11477,7 @@ snapshots:
 
   '@oclif/plugin-warn-if-update-available@3.1.65':
     dependencies:
-      '@oclif/core': 4.11.4
+      '@oclif/core': 4.11.6
       ansis: 3.17.0
       debug: 4.4.3(supports-color@8.1.1)
       http-call: 5.3.0
@@ -13826,12 +13807,14 @@ snapshots:
   bindings@1.5.0:
     dependencies:
       file-uri-to-path: 1.0.0
+    optional: true
 
   bl@4.1.0:
     dependencies:
       buffer: 5.7.1
       inherits: 2.0.4
       readable-stream: 3.6.2
+    optional: true
 
   body-parser@1.20.5:
     dependencies:
@@ -13892,6 +13875,7 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
       ieee754: 1.2.1
+    optional: true
 
   buffer@6.0.3:
     dependencies:
@@ -14040,9 +14024,11 @@ snapshots:
     dependencies:
       readdirp: 4.1.2
 
-  chownr@1.1.4: {}
+  chownr@1.1.4:
+    optional: true
 
-  chownr@2.0.0: {}
+  chownr@2.0.0:
+    optional: true
 
   cjs-module-lexer@2.2.0: {}
 
@@ -14488,7 +14474,8 @@ snapshots:
     dependencies:
       mimic-response: 3.1.0
 
-  deep-extend@0.6.0: {}
+  deep-extend@0.6.0:
+    optional: true
 
   deepmerge@4.3.1: {}
 
@@ -14916,7 +14903,8 @@ snapshots:
       strip-final-newline: 4.0.0
       yoctocolors: 2.1.2
 
-  expand-template@2.0.3: {}
+  expand-template@2.0.3:
+    optional: true
 
   expect-type@1.3.0: {}
 
@@ -15100,7 +15088,8 @@ snapshots:
     dependencies:
       is-unicode-supported: 2.1.0
 
-  file-uri-to-path@1.0.0: {}
+  file-uri-to-path@1.0.0:
+    optional: true
 
   filelist@1.0.6:
     dependencies:
@@ -15195,7 +15184,8 @@ snapshots:
 
   fresh@2.0.0: {}
 
-  fs-constants@1.0.0: {}
+  fs-constants@1.0.0:
+    optional: true
 
   fs-extra@10.1.0:
     dependencies:
@@ -15218,6 +15208,7 @@ snapshots:
   fs-minipass@2.1.0:
     dependencies:
       minipass: 3.3.6
+    optional: true
 
   fsevents@2.3.3:
     optional: true
@@ -15330,7 +15321,8 @@ snapshots:
 
   git-hooks-list@3.2.0: {}
 
-  github-from-package@0.0.0: {}
+  github-from-package@0.0.0:
+    optional: true
 
   github-slugger@2.0.0: {}
 
@@ -17007,8 +16999,10 @@ snapshots:
   minipass@3.3.6:
     dependencies:
       yallist: 4.0.0
+    optional: true
 
-  minipass@5.0.0: {}
+  minipass@5.0.0:
+    optional: true
 
   minipass@7.1.2: {}
 
@@ -17016,12 +17010,15 @@ snapshots:
     dependencies:
       minipass: 3.3.6
       yallist: 4.0.0
+    optional: true
 
   mj-context-menu@0.6.1: {}
 
-  mkdirp-classic@0.5.3: {}
+  mkdirp-classic@0.5.3:
+    optional: true
 
-  mkdirp@1.0.4: {}
+  mkdirp@1.0.4:
+    optional: true
 
   mlly@1.8.0:
     dependencies:
@@ -17040,7 +17037,7 @@ snapshots:
 
   ms@2.1.3: {}
 
-  multer@2.1.1:
+  multer@2.2.0:
     dependencies:
       append-field: 1.0.0
       busboy: 1.6.0
@@ -17062,7 +17059,8 @@ snapshots:
 
   nanoid@3.3.12: {}
 
-  napi-build-utils@2.0.0: {}
+  napi-build-utils@2.0.0:
+    optional: true
 
   negotiator@0.6.3: {}
 
@@ -17186,6 +17184,7 @@ snapshots:
   node-abi@3.92.0:
     dependencies:
       semver: 7.8.4
+    optional: true
 
   node-addon-api@4.3.0:
     optional: true
@@ -17280,7 +17279,7 @@ snapshots:
       '@inquirer/confirm': 3.2.0
       '@inquirer/input': 2.3.0
       '@inquirer/select': 2.5.0
-      '@oclif/core': 4.11.4
+      '@oclif/core': 4.11.6
       '@oclif/plugin-help': 6.2.50
       '@oclif/plugin-not-found': 3.2.87(@types/node@24.10.0)
       '@oclif/plugin-warn-if-update-available': 3.1.65
@@ -17564,6 +17563,7 @@ snapshots:
       simple-get: 4.0.1
       tar-fs: 2.1.4
       tunnel-agent: 0.6.0
+    optional: true
 
   prettier@3.8.3: {}
 
@@ -17705,6 +17705,7 @@ snapshots:
       ini: 1.3.8
       minimist: 1.2.8
       strip-json-comments: 2.0.1
+    optional: true
 
   react-devtools-inline@4.4.0:
     dependencies:
@@ -18230,8 +18231,6 @@ snapshots:
 
   semver@7.7.3: {}
 
-  semver@7.8.1: {}
-
   semver@7.8.2: {}
 
   semver@7.8.4: {}
@@ -18424,13 +18423,15 @@ snapshots:
 
   signal-exit@4.1.0: {}
 
-  simple-concat@1.0.1: {}
+  simple-concat@1.0.1:
+    optional: true
 
   simple-get@4.0.1:
     dependencies:
       decompress-response: 6.0.0
       once: 1.4.0
       simple-concat: 1.0.1
+    optional: true
 
   simple-git@3.36.0:
     dependencies:
@@ -18591,6 +18592,7 @@ snapshots:
     transitivePeerDependencies:
       - bluebird
       - supports-color
+    optional: true
 
   ssri@8.0.1:
     dependencies:
@@ -18709,7 +18711,8 @@ snapshots:
     dependencies:
       min-indent: 1.0.1
 
-  strip-json-comments@2.0.1: {}
+  strip-json-comments@2.0.1:
+    optional: true
 
   strip-json-comments@3.1.1: {}
 
@@ -18776,6 +18779,7 @@ snapshots:
       mkdirp-classic: 0.5.3
       pump: 3.0.4
       tar-stream: 2.2.0
+    optional: true
 
   tar-stream@2.2.0:
     dependencies:
@@ -18784,6 +18788,7 @@ snapshots:
       fs-constants: 1.0.0
       inherits: 2.0.4
       readable-stream: 3.6.2
+    optional: true
 
   tar@6.2.1:
     dependencies:
@@ -18793,6 +18798,7 @@ snapshots:
       minizlib: 2.1.2
       mkdirp: 1.0.4
       yallist: 4.0.0
+    optional: true
 
   teeny-request@10.1.2:
     dependencies:
@@ -18833,11 +18839,6 @@ snapshots:
   tinyexec@1.2.4: {}
 
   tinyglobby@0.2.15:
-    dependencies:
-      fdir: 6.5.0(picomatch@4.0.4)
-      picomatch: 4.0.4
-
-  tinyglobby@0.2.16:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
@@ -18992,8 +18993,6 @@ snapshots:
   undici-types@7.24.6: {}
 
   undici@7.25.0: {}
-
-  undici@7.27.2: {}
 
   unicorn-magic@0.1.0: {}
 
@@ -19336,7 +19335,8 @@ snapshots:
 
   y18n@5.0.8: {}
 
-  yallist@4.0.0: {}
+  yallist@4.0.0:
+    optional: true
 
   yaml@2.8.3: {}
 
