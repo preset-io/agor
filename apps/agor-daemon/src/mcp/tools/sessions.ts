@@ -1466,6 +1466,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         'claude-code': {
           default: DEFAULT_CLAUDE_MODEL,
           models: claudeModels,
+          note: 'Claude models are also fetched live via /claude-models (uses the Anthropic Models API). This is the static fallback.',
         },
         // Claude Code CLI shares the same Anthropic model lineup as the
         // SDK path; surface the same list so MCP clients can pass any
@@ -1473,6 +1474,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         'claude-code-cli': {
           default: DEFAULT_CLAUDE_MODEL,
           models: claudeModels,
+          note: 'Claude models are also fetched live via /claude-models (uses the Anthropic Models API). This is the static fallback.',
         },
         codex: {
           default: DEFAULT_CODEX_MODEL,
