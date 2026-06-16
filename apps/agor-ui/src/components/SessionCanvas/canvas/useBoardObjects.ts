@@ -12,14 +12,13 @@ import type {
 } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import type { Node } from 'reactflow';
-import { mapToArray } from '@/utils/mapHelpers';
 
 interface UseBoardObjectsProps {
   board: Board | null;
   client: AgorClient | null;
   sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
   branches: Branch[];
-  boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
+  boardObjectsForBoard: BoardEntityObject[];
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   deletedObjectsRef: React.MutableRefObject<Set<string>>;
   eraserMode?: boolean;
@@ -36,7 +35,7 @@ export const useBoardObjects = ({
   client,
   sessionsByBranch,
   branches,
-  boardObjectById,
+  boardObjectsForBoard,
   setNodes,
   deletedObjectsRef,
   eraserMode = false,
@@ -283,7 +282,7 @@ export const useBoardObjects = ({
         let sessionCount = 0;
         if (objectData.type === 'zone') {
           // Count branches pinned to this zone via board_objects.zone_id
-          for (const boardObj of mapToArray(boardObjectById)) {
+          for (const boardObj of boardObjectsForBoard) {
             if (boardObj.zone_id === objectId) {
               // Count sessions in this branch using O(1) Map lookup
               const branchSessions = boardObj.branch_id
@@ -333,7 +332,7 @@ export const useBoardObjects = ({
       });
   }, [
     boardObjects, // Use stabilized boardObjects instead of board?.objects
-    boardObjectById,
+    boardObjectsForBoard,
     sessionsByBranch,
     handleUpdateObject,
     deleteZone,

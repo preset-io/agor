@@ -33,11 +33,9 @@ export function useFaviconStatus(
       return;
     }
 
-    // Find branches on current board
+    // `boardObjects` is already scoped to the current board by the caller.
     const branchesOnBoard = new Set(
-      boardObjects
-        .filter((obj) => obj.board_id === currentBoardId && obj.branch_id)
-        .map((obj) => obj.branch_id!)
+      boardObjects.filter((obj) => obj.branch_id).map((obj) => obj.branch_id!)
     );
 
     // Find sessions for those branches using O(1) Map lookups
