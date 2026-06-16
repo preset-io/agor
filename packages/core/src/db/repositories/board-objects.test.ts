@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { boards } from '../schema';
+import { boardObjects, boards } from '../schema';
 import { dbTest } from '../test-helpers';
 import { EntityNotFoundError, RepositoryError } from './base';
 import { BoardObjectRepository } from './board-objects';
@@ -323,6 +323,7 @@ describe('BoardObjectRepository.findAll', () => {
     );
     await wtRepo.update(hiddenBranch.branch_id, { others_can: 'none' });
     const boardId = await createBoard(db);
+    const layoutObjectId = generateId();
 
     await boRepo.create({
       board_id: boardId,
@@ -334,13 +335,23 @@ describe('BoardObjectRepository.findAll', () => {
       branch_id: hiddenBranch.branch_id,
       position: { x: 100, y: 100 },
     });
+    await (db as any).insert(boardObjects).values({
+      object_id: layoutObjectId,
+      board_id: boardId,
+      created_at: new Date(),
+      branch_id: null,
+      card_id: null,
+      data: { position: { x: 200, y: 200 } },
+    });
 
     const userId = generateId() as UUID;
 
-    await expect(boRepo.countVisibleToUser(userId, { board_id: boardId })).resolves.toBe(1);
-    await expect(boRepo.findVisibleToUser(userId, { board_id: boardId })).resolves.toMatchObject([
-      { branch_id: visibleBranch.branch_id },
-    ]);
+    await expect(boRepo.countVisibleToUser(userId, { board_id: boardId })).resolves.toBe(2);
+
+    const visibleObjects = await boRepo.findVisibleToUser(userId, { board_id: boardId });
+    expect(visibleObjects.map((object) => object.object_id)).toContain(layoutObjectId);
+    expect(visibleObjects.map((object) => object.branch_id)).toContain(visibleBranch.branch_id);
+    expect(visibleObjects.map((object) => object.branch_id)).not.toContain(hiddenBranch.branch_id);
   });
 
   dbTest('should include all fields in returned objects', async ({ db }) => {

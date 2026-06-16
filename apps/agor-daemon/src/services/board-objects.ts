@@ -5,7 +5,12 @@
  * Supports both session cards and branch cards (Phase 1: Hybrid support).
  */
 
-import { BoardObjectRepository, type Database } from '@agor/core/db';
+import {
+  type BoardObjectFindFilters,
+  type BoardObjectFindOptions,
+  BoardObjectRepository,
+  type Database,
+} from '@agor/core/db';
 import type {
   BoardEntityObject,
   BoardEntityType,
@@ -38,6 +43,36 @@ export type BoardObjectParams = QueryParams<{
   zone_id?: string;
   entity_type?: BoardEntityType;
 }>;
+
+export interface NormalizedBoardObjectFindQuery {
+  filters: BoardObjectFindFilters;
+  pagination: BoardObjectFindOptions;
+  limit: number;
+  skip: number;
+}
+
+export function normalizeBoardObjectFindQuery(
+  query: BoardObjectParams['query'] = {}
+): NormalizedBoardObjectFindQuery {
+  const { board_id, branch_id, card_id, zone_id, entity_type } = query;
+  const requestedSkip = Number(query.$skip ?? 0);
+  const requestedLimit = typeof query.$limit === 'number' ? query.$limit : undefined;
+  const filters = Object.fromEntries(
+    Object.entries({ board_id, branch_id, card_id, zone_id, entity_type }).filter(
+      ([, value]) => value !== undefined
+    )
+  ) as BoardObjectFindFilters;
+
+  return {
+    filters,
+    pagination:
+      requestedLimit !== undefined || requestedSkip > 0
+        ? { limit: requestedLimit, offset: requestedSkip }
+        : {},
+    limit: requestedLimit ?? 100,
+    skip: requestedSkip,
+  };
+}
 
 /**
  * Board objects service implementation
@@ -90,28 +125,16 @@ export class BoardObjectsService {
    * Find board objects
    */
   async find(params?: BoardObjectParams) {
-    const { board_id, branch_id, card_id, zone_id, entity_type } = params?.query || {};
-    const requestedSkip = params?.query?.$skip ?? 0;
-    const requestedLimit = params?.query?.$limit;
-    const filters = Object.fromEntries(
-      Object.entries({ board_id, branch_id, card_id, zone_id, entity_type }).filter(
-        ([, value]) => value !== undefined
-      )
-    );
+    const normalized = normalizeBoardObjectFindQuery(params?.query);
     const [total, data] = await Promise.all([
-      this.boardObjectRepo.count(filters),
-      this.boardObjectRepo.findAll(
-        filters,
-        requestedLimit !== undefined || requestedSkip > 0
-          ? { limit: requestedLimit, offset: requestedSkip }
-          : {}
-      ),
+      this.boardObjectRepo.count(normalized.filters),
+      this.boardObjectRepo.findAll(normalized.filters, normalized.pagination),
     ]);
 
     return {
       total,
-      limit: requestedLimit ?? 100,
-      skip: requestedSkip,
+      limit: normalized.limit,
+      skip: normalized.skip,
       data,
     };
   }

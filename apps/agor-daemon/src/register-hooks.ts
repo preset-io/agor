@@ -68,6 +68,7 @@ import type {
 } from './declarations.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import type { ArtifactsService } from './services/artifacts.js';
+import { normalizeBoardObjectFindQuery } from './services/board-objects.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
 import { isLocalAuthenticationLookup } from './services/users.js';
@@ -502,44 +503,31 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 const userId = context.params.user?.user_id as
                   | import('@agor/core/types').UUID
                   | undefined;
-                const query = context.params.query ?? {};
-                const requestedSkip = Number(query.$skip ?? 0);
-                const requestedLimit = typeof query.$limit === 'number' ? query.$limit : undefined;
+                const normalized = normalizeBoardObjectFindQuery(context.params.query);
 
                 if (!userId) {
                   context.result = {
                     total: 0,
-                    limit: requestedLimit ?? 100,
-                    skip: requestedSkip,
+                    limit: normalized.limit,
+                    skip: normalized.skip,
                     data: [],
                   };
                   return context;
                 }
 
-                const filters = Object.fromEntries(
-                  Object.entries({
-                    board_id: query.board_id,
-                    branch_id: query.branch_id,
-                    card_id: query.card_id,
-                    zone_id: query.zone_id,
-                    entity_type: query.entity_type,
-                  }).filter(([, value]) => value !== undefined)
-                );
                 const [total, data] = await Promise.all([
-                  boardObjectRepository.countVisibleToUser(userId, filters),
+                  boardObjectRepository.countVisibleToUser(userId, normalized.filters),
                   boardObjectRepository.findVisibleToUser(
                     userId,
-                    filters,
-                    requestedLimit !== undefined || requestedSkip > 0
-                      ? { limit: requestedLimit, offset: requestedSkip }
-                      : {}
+                    normalized.filters,
+                    normalized.pagination
                   ),
                 ]);
 
                 context.result = {
                   total,
-                  limit: requestedLimit ?? 100,
-                  skip: requestedSkip,
+                  limit: normalized.limit,
+                  skip: normalized.skip,
                   data,
                 };
                 (context.params as { _boardObjectsRbacScoped?: boolean })._boardObjectsRbacScoped =

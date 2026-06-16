@@ -13,7 +13,7 @@ import type {
   CardID,
   UUID,
 } from '@agor/core/types';
-import { and, eq, getTableColumns, isNotNull, isNull, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, isNotNull, isNull, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { toAbsolutePosition } from '../../utils/board-placement.js';
 import type { Database } from '../client';
@@ -94,6 +94,7 @@ export class BoardObjectRepository {
       if (conditions.length > 0) {
         query = query.where(and(...conditions));
       }
+      query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
       if (options.limit !== undefined) {
         query = query.limit(options.limit);
       }
@@ -156,6 +157,7 @@ export class BoardObjectRepository {
         )
         .where(and(...conditions));
 
+      query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
       if (options.limit !== undefined) {
         query = query.limit(options.limit);
       }
@@ -205,19 +207,7 @@ export class BoardObjectRepository {
    * Find all board objects for a board
    */
   async findByBoardId(boardId: BoardID): Promise<BoardEntityObject[]> {
-    try {
-      const rows = await select(this.db)
-        .from(boardObjects)
-        .where(eq(boardObjects.board_id, boardId))
-        .all();
-
-      return rows.map(this.rowToEntity);
-    } catch (error) {
-      throw new RepositoryError(
-        `Failed to find board objects: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
-    }
+    return this.findAll({ board_id: boardId });
   }
 
   /**
