@@ -1659,12 +1659,10 @@ export function OnboardingWizard({
               type="info"
               showIcon
               style={{ marginBottom: 16, textAlign: 'left' }}
-              title="Generate a Claude subscription token"
               description={
                 <span>
-                  On the machine Agor runs sessions on, run <Text code>claude setup-token</Text>,
-                  then paste the printed token below. Agor stores it for your user as{' '}
-                  <Text code>CLAUDE_CODE_OAUTH_TOKEN</Text>.
+                  Run <Text code>claude setup-token</Text> on the machine Agor runs sessions on,
+                  then paste the printed token below.
                 </span>
               }
             />
