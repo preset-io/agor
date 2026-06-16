@@ -104,6 +104,16 @@ const makeSession = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const makeBoardObject = (overrides: Record<string, unknown> = {}) => ({
+  object_id: 'bo-1',
+  board_id: 'board-1',
+  branch_id: 'b-1',
+  entity_type: 'branch',
+  position: { x: 10, y: 20 },
+  created_at: '2026-01-01T00:00:00Z',
+  ...overrides,
+});
+
 /**
  * Wait until the hook has finished its initial fetch AND populated the
  * byId maps. The two flip in separate setState calls — `itemCounts` is
@@ -306,5 +316,98 @@ describe('useAgorData — socket-event bailouts', () => {
     act(() => emit('artifacts', 'patched', { ...artifact }));
 
     expect(result.current.artifactById).toBe(before);
+  });
+
+  it('builds derived board-object indexes during initial load', async () => {
+    const branchObject = makeBoardObject({ object_id: 'bo-branch', branch_id: 'b-1' });
+    const cardObject = makeBoardObject({
+      object_id: 'bo-card',
+      branch_id: undefined,
+      card_id: 'c-1',
+      entity_type: 'card',
+    });
+    const otherBoardObject = makeBoardObject({
+      object_id: 'bo-other',
+      board_id: 'board-2',
+      branch_id: 'b-2',
+    });
+    const { client } = makeMockClient({
+      'board-objects': [branchObject, cardObject, otherBoardObject],
+    });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    expect(result.current.boardObjectById.get('bo-branch')).toMatchObject({ branch_id: 'b-1' });
+    expect(result.current.boardObjectsByBoardId.get('board-1')?.map((bo) => bo.object_id)).toEqual([
+      'bo-branch',
+      'bo-card',
+    ]);
+    expect(result.current.boardObjectsByBoardId.get('board-2')?.map((bo) => bo.object_id)).toEqual([
+      'bo-other',
+    ]);
+    expect(result.current.boardObjectByBranchId.get('b-1')?.object_id).toBe('bo-branch');
+    expect(result.current.boardObjectByCardId.get('c-1')?.object_id).toBe('bo-card');
+  });
+
+  it('keeps board-object derived indexes in sync across patch and remove events', async () => {
+    const boardObject = makeBoardObject({
+      object_id: 'bo-1',
+      board_id: 'board-1',
+      branch_id: 'b-1',
+      zone_id: 'zone-a',
+    });
+    const { client, emit } = makeMockClient({ 'board-objects': [boardObject] });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    act(() =>
+      emit('board-objects', 'patched', {
+        ...boardObject,
+        board_id: 'board-2',
+        branch_id: 'b-2',
+        zone_id: 'zone-b',
+      })
+    );
+
+    expect(result.current.boardObjectsByBoardId.has('board-1')).toBe(false);
+    expect(result.current.boardObjectsByBoardId.get('board-2')?.map((bo) => bo.object_id)).toEqual([
+      'bo-1',
+    ]);
+    expect(result.current.boardObjectByBranchId.has('b-1')).toBe(false);
+    expect(result.current.boardObjectByBranchId.get('b-2')?.zone_id).toBe('zone-b');
+
+    act(() => emit('board-objects', 'removed', { ...boardObject, board_id: 'board-2' }));
+
+    expect(result.current.boardObjectById.has('bo-1')).toBe(false);
+    expect(result.current.boardObjectsByBoardId.has('board-2')).toBe(false);
+    expect(result.current.boardObjectByBranchId.has('b-2')).toBe(false);
+  });
+
+  it('keeps unrelated board-object buckets reference-stable on other-board patches', async () => {
+    const currentBoardObject = makeBoardObject({ object_id: 'bo-current', board_id: 'board-1' });
+    const otherBoardObject = makeBoardObject({
+      object_id: 'bo-other',
+      board_id: 'board-2',
+      branch_id: 'b-2',
+    });
+    const { client, emit } = makeMockClient({
+      'board-objects': [currentBoardObject, otherBoardObject],
+    });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    const beforeCurrentBoardBucket = result.current.boardObjectsByBoardId.get('board-1');
+
+    act(() =>
+      emit('board-objects', 'patched', {
+        ...otherBoardObject,
+        zone_id: 'zone-on-other-board',
+      })
+    );
+
+    expect(result.current.boardObjectsByBoardId.get('board-1')).toBe(beforeCurrentBoardBucket);
+    expect(result.current.boardObjectsByBoardId.get('board-2')?.[0]?.zone_id).toBe(
+      'zone-on-other-board'
+    );
   });
 });

@@ -96,6 +96,7 @@ export interface AppProps {
   availableAgents: AgenticToolOption[];
   boardById: Map<string, Board>; // Map-based board storage
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
+  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
   commentById: Map<string, BoardComment>; // Map-based comment storage
   cardById: Map<string, CardWithType>; // Map-based card storage
   cardTypeById: Map<string, CardType>; // Map-based card type storage
@@ -196,6 +197,9 @@ export interface AppProps {
 // common no-MCP case so that downstream React.memo bailouts are not defeated.
 // Frozen at runtime; the consuming components only read it.
 const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
+const EMPTY_BOARD_OBJECTS: BoardEntityObject[] = Object.freeze(
+  [] as BoardEntityObject[]
+) as BoardEntityObject[];
 
 // 320px keeps the three left-panel tabs (Assistant / All sessions / Comments)
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
@@ -218,6 +222,7 @@ export const App: React.FC<AppProps> = ({
   availableAgents,
   boardById,
   boardObjectById,
+  boardObjectsByBoardId,
   commentById,
   cardById,
   cardTypeById,
@@ -572,8 +577,16 @@ export const App: React.FC<AppProps> = ({
     }
   }, [currentBoardId, createDialogOpen]);
 
+  const currentBoardObjects = useMemo(
+    () =>
+      currentBoardId
+        ? boardObjectsByBoardId.get(currentBoardId) || EMPTY_BOARD_OBJECTS
+        : EMPTY_BOARD_OBJECTS,
+    [boardObjectsByBoardId, currentBoardId]
+  );
+
   // Update favicon based on session activity on current board
-  useFaviconStatus(currentBoardId, sessionsByBranch, mapToArray(boardObjectById));
+  useFaviconStatus(currentBoardId, sessionsByBranch, currentBoardObjects);
 
   // Check if event stream is enabled in user preferences (default: true)
   const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? true;
@@ -917,11 +930,11 @@ export const App: React.FC<AppProps> = ({
   // every BranchCard re-rendering.
   const boardBranches = useMemo(
     () =>
-      mapToArray(boardObjectById)
-        .filter((bo: BoardEntityObject) => bo.board_id === currentBoard?.board_id && bo.branch_id)
+      currentBoardObjects
+        .filter((bo: BoardEntityObject) => bo.branch_id)
         .map((bo: BoardEntityObject) => branchById.get(bo.branch_id!))
         .filter((wt): wt is Branch => wt !== undefined),
-    [boardObjectById, currentBoard?.board_id, branchById]
+    [currentBoardObjects, branchById]
   );
 
   // Check if current user is mentioned in active comments
@@ -1238,6 +1251,7 @@ export const App: React.FC<AppProps> = ({
                             primaryAssistantId={primaryAssistantId}
                             branchById={branchById}
                             boardObjectById={boardObjectById}
+                            boardObjectsByBoardId={boardObjectsByBoardId}
                             commentById={commentById}
                             cardById={cardById}
                             currentUserId={user?.user_id}
