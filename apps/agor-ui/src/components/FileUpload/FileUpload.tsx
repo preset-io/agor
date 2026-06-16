@@ -2,7 +2,7 @@ import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
 import { Button, Checkbox, Input, Modal, Radio, Space, Typography, Upload } from 'antd';
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
-import { forwardRef, useEffect, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
 import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 
@@ -44,18 +44,46 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const [agentMessage, setAgentMessage] = useState('Please review this file: {filepath}');
   const [uploading, setUploading] = useState(false);
 
+  // Mirror fileList in a ref so cleanup (unmount/reset) can revoke object URLs
+  // without re-running effects on every keystroke.
+  const fileListRef = useRef<UploadFile[]>([]);
+  fileListRef.current = fileList;
+
+  // Build an UploadFile, generating a local thumbnail URL for images so Ant
+  // Design's picture list can render a preview without any server round-trip.
+  const buildUploadFile = useCallback((file: File): UploadFile => {
+    const rc = file as RcFile; // Ant Design's extended File type
+    const isImage = file.type.startsWith('image/');
+    return {
+      uid: rc.uid || `${Date.now()}-${file.name}`,
+      name: file.name,
+      status: 'done',
+      originFileObj: rc,
+      thumbUrl: isImage ? URL.createObjectURL(file) : undefined,
+    };
+  }, []);
+
+  const revokeThumb = useCallback((file: UploadFile) => {
+    if (file.thumbUrl?.startsWith('blob:')) {
+      URL.revokeObjectURL(file.thumbUrl);
+    }
+  }, []);
+
+  const resetFileList = useCallback(() => {
+    fileListRef.current.forEach(revokeThumb);
+    setFileList([]);
+  }, [revokeThumb]);
+
+  // Revoke any outstanding object URLs when the modal unmounts.
+  useEffect(() => () => fileListRef.current.forEach(revokeThumb), [revokeThumb]);
+
   // Populate fileList when initialFiles are provided (replaces existing list to prevent duplicates)
   useEffect(() => {
     if (initialFiles && initialFiles.length > 0 && open) {
-      const uploadFiles: UploadFile[] = initialFiles.map((file) => ({
-        uid: `${Date.now()}-${file.name}`,
-        name: file.name,
-        status: 'done',
-        originFileObj: file as RcFile, // Cast File to RcFile (Ant Design's extended File type)
-      }));
-      setFileList(uploadFiles); // Replace instead of append to prevent duplicate accumulation
+      fileListRef.current.forEach(revokeThumb);
+      setFileList(initialFiles.map(buildUploadFile)); // Replace to prevent duplicate accumulation
     }
-  }, [initialFiles, open]);
+  }, [initialFiles, open, buildUploadFile, revokeThumb]);
 
   const handleUpload = async () => {
     if (fileList.length === 0) {
@@ -96,7 +124,10 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         method: 'POST',
         headers,
         body: formData,
-        credentials: 'include', // Include cookies for session
+        // No `credentials: 'include'` — the upload endpoint is Bearer-only
+        // (cookie auth was removed to avoid CSRF). Sending credentials would
+        // also force a non-wildcard Access-Control-Allow-Origin, which the
+        // daemon's CORS layer answers with '*', breaking the preflight.
       });
 
       if (!response.ok) {
@@ -134,7 +165,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       }
 
       // Reset and close
-      setFileList([]);
+      resetFileList();
       setNotifyAgent(false);
       setAgentMessage('Please review this file: {filepath}');
       onClose();
@@ -147,7 +178,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   };
 
   const handleCancel = () => {
-    setFileList([]);
+    resetFileList();
     setNotifyAgent(false);
     setAgentMessage('Please review this file: {filepath}');
     onClose();
@@ -168,19 +199,14 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         {/* File selector */}
         <Upload
           multiple
+          listType="picture"
           fileList={fileList}
           beforeUpload={(file) => {
-            // Create UploadFile object with originFileObj preserved
-            const uploadFile: UploadFile = {
-              uid: file.uid || `${Date.now()}-${file.name}`,
-              name: file.name,
-              status: 'done',
-              originFileObj: file,
-            };
-            setFileList((prev) => [...prev, uploadFile]);
+            setFileList((prev) => [...prev, buildUploadFile(file)]);
             return false; // Prevent auto upload
           }}
           onRemove={(file) => {
+            revokeThumb(file);
             setFileList((prev) => prev.filter((f) => f.uid !== file.uid));
           }}
         >
