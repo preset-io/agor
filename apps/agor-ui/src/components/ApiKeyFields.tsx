@@ -48,7 +48,7 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
       label: 'Anthropic API Key',
       description: '(pay-as-you-go / Console)',
       placeholder: 'sk-ant-api03-...',
-      docUrl: 'https://console.anthropic.com',
+      docUrl: 'https://platform.claude.com/settings/keys',
       helper: (
         <Text type="secondary" style={{ fontSize: 12 }}>
           If you use a Claude subscription, use the Claude Subscription Token below instead.
@@ -141,7 +141,7 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
       label: 'Anthropic API Key',
       description: '(pay-as-you-go / Console)',
       placeholder: 'sk-ant-api03-...',
-      docUrl: 'https://console.anthropic.com',
+      docUrl: 'https://platform.claude.com/settings/keys',
       helper: (
         <Text type="secondary" style={{ fontSize: 12 }}>
           If you use a Claude subscription, use the Claude Subscription Token below instead.

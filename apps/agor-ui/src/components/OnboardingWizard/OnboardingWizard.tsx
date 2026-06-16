@@ -277,9 +277,15 @@ const RECOMMENDED_AGENT_VALUES = new Set<AgenticToolName>(
 );
 
 const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
-  'claude-code': { label: 'console.anthropic.com', url: 'https://console.anthropic.com/' },
+  'claude-code': {
+    label: 'platform.claude.com/settings/keys',
+    url: 'https://platform.claude.com/settings/keys',
+  },
   // Claude Code CLI uses the same Anthropic credentials.
-  'claude-code-cli': { label: 'console.anthropic.com', url: 'https://console.anthropic.com/' },
+  'claude-code-cli': {
+    label: 'platform.claude.com/settings/keys',
+    url: 'https://platform.claude.com/settings/keys',
+  },
   codex: { label: 'platform.openai.com', url: 'https://platform.openai.com/api-keys' },
   gemini: { label: 'aistudio.google.com', url: 'https://aistudio.google.com/apikey' },
   copilot: { label: 'github.com/features/copilot', url: 'https://github.com/features/copilot' },
@@ -1671,8 +1677,11 @@ export function OnboardingWizard({
 
         return (
           <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-            Paste an <Text code>ANTHROPIC_API_KEY</Text> from Anthropic Console. Best for
-            pay-as-you-go API billing.
+            Paste an <Text code>ANTHROPIC_API_KEY</Text> from{' '}
+            <Typography.Link href="https://platform.claude.com/settings/keys" target="_blank">
+              Claude Console
+            </Typography.Link>{' '}
+            for pay-as-you-go API billing.
           </Paragraph>
         );
       }
