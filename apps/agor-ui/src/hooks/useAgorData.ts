@@ -71,7 +71,12 @@ type DataMaps = {
   boardById: Map<string, Board>;
   boardObjectById: Map<string, BoardEntityObject>;
   boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
+  // Global placement lookup. Branch placements are unique because a branch can
+  // only have one board-object row at a time.
   boardObjectByBranchId: Map<string, BoardEntityObject>;
+  // Global placement lookup. Cards follow the same one-row-per-card service
+  // contract as branches; callers needing board-scoped iteration should use
+  // boardObjectsByBoardId instead.
   boardObjectByCardId: Map<string, BoardEntityObject>;
   commentById: Map<string, BoardComment>;
   cardById: Map<string, CardWithType>;

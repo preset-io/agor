@@ -266,8 +266,6 @@ function AppContent() {
     boardById,
     boardObjectById,
     boardObjectsByBoardId,
-    boardObjectByBranchId,
-    boardObjectByCardId,
     commentById,
     cardById,
     cardTypeById,
@@ -1461,8 +1459,6 @@ function AppContent() {
       boardById={boardById}
       boardObjectById={boardObjectById}
       boardObjectsByBoardId={boardObjectsByBoardId}
-      boardObjectByBranchId={boardObjectByBranchId}
-      boardObjectByCardId={boardObjectByCardId}
       commentById={commentById}
       cardById={cardById}
       cardTypeById={cardTypeById}

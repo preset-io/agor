@@ -102,8 +102,6 @@ interface SessionCanvasProps {
   branchById: Map<string, Branch>;
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
   boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
-  boardObjectByBranchId: Map<string, BoardEntityObject>;
-  boardObjectByCardId: Map<string, BoardEntityObject>;
   commentById: Map<string, BoardComment>; // Map-based comment storage
   cardById: Map<string, CardWithType>; // Map-based card storage for this board
   currentUserId?: string;

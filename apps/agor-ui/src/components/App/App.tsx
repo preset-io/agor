@@ -97,8 +97,6 @@ export interface AppProps {
   boardById: Map<string, Board>; // Map-based board storage
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
   boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
-  boardObjectByBranchId: Map<string, BoardEntityObject>;
-  boardObjectByCardId: Map<string, BoardEntityObject>;
   commentById: Map<string, BoardComment>; // Map-based comment storage
   cardById: Map<string, CardWithType>; // Map-based card storage
   cardTypeById: Map<string, CardType>; // Map-based card type storage
@@ -225,8 +223,6 @@ export const App: React.FC<AppProps> = ({
   boardById,
   boardObjectById,
   boardObjectsByBoardId,
-  boardObjectByBranchId,
-  boardObjectByCardId,
   commentById,
   cardById,
   cardTypeById,
@@ -1256,8 +1252,6 @@ export const App: React.FC<AppProps> = ({
                             branchById={branchById}
                             boardObjectById={boardObjectById}
                             boardObjectsByBoardId={boardObjectsByBoardId}
-                            boardObjectByBranchId={boardObjectByBranchId}
-                            boardObjectByCardId={boardObjectByCardId}
                             commentById={commentById}
                             cardById={cardById}
                             currentUserId={user?.user_id}
