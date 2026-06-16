@@ -69,10 +69,10 @@ const ApiKeyTabContent: React.FC<{
       <Alert
         title={
           <span>
-            This is the <strong>global API key</strong> for all users. Per-user keys can be set in
-            the Users tab.{' '}
+            This is the <strong>global API key</strong> fallback for users without their own
+            credentials. CLI login alternatives are configured on the machine Agor runs sessions on.{' '}
             <a
-              href="https://agor.live/guide/authentication"
+              href="https://agor.live/guide/extended-install#authentication"
               target="_blank"
               rel="noopener noreferrer"
             >

@@ -111,6 +111,7 @@ describe('OnboardingWizard', () => {
     const codexOption = providerOptions.find((option) => option.value === 'codex');
     expect(claudeOption).toBeInstanceOf(HTMLInputElement);
     expect(claudeOption).toBeChecked();
+    expect(screen.getByText('claude setup-token')).toBeInTheDocument();
     expect(codexOption).toBeInstanceOf(HTMLInputElement);
     expect(codexOption).not.toBeChecked();
     codexOption?.focus();
@@ -128,6 +129,7 @@ describe('OnboardingWizard', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /use a different provider/i }));
     expect(codexOption).toBeChecked();
     expect(screen.queryByText('Configure Your Agent')).not.toBeInTheDocument();
+    expect(screen.getByText('codex login --device-auth')).toBeInTheDocument();
   });
 
   it('detects an existing Cursor credential when selecting Cursor', async () => {

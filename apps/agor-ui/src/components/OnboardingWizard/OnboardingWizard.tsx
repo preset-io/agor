@@ -1587,7 +1587,7 @@ export function OnboardingWizard({
     const hasKey = hasKeyForAgent(selectedAgent);
     // "Already auth'd" covers both stored credentials (agentic_tools / env vars
     // / system credentials) AND ambient CLI auth detected by onCheckAuth —
-    // e.g. the user already ran `claude auth login` outside the wizard.
+    // e.g. the user already configured Claude/Codex CLI auth outside the wizard.
     // Auto-flip to "{tool} is configured → Continue" ONLY when the current
     // user has THEIR OWN stored per-user credential. We intentionally do not
     // gate on `detectedAuth?.authenticated` here: the ambient probe reads
@@ -1606,8 +1606,9 @@ export function OnboardingWizard({
         // Bash/MCP). Users can flip to bypass per-session in Session Settings.
         return (
           <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-            Paste an <Text code>ANTHROPIC_API_KEY</Text>, or run <Text code>claude auth login</Text>{' '}
-            on the host.
+            Paste an <Text code>ANTHROPIC_API_KEY</Text>. For Claude subscription auth, run{' '}
+            <Text code>claude setup-token</Text> on the machine Agor runs sessions on, then paste
+            the token in <Text strong>Settings → Agentic Tools → Claude Code</Text>.
           </Paragraph>
         );
       }
@@ -1618,8 +1619,8 @@ export function OnboardingWizard({
         return (
           <>
             <Paragraph type="secondary" style={{ marginBottom: 8 }}>
-              Paste an <Text code>OPENAI_API_KEY</Text>, or run <Text code>codex login</Text> in
-              Agor's terminal.
+              Paste an <Text code>OPENAI_API_KEY</Text>, or run{' '}
+              <Text code>codex login --device-auth</Text> on the machine Agor runs sessions on.
             </Paragraph>
             <Paragraph type="secondary" style={{ marginBottom: 16, fontSize: 12 }}>
               Defaults: auto-approves tool calls inside the branch sandbox. Tighten in{' '}
