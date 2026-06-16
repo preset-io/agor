@@ -2,8 +2,9 @@
  * Tests for session.ts runtime behavior
  *
  * Per-tool defaults:
- * - Claude Code: acceptEdits (auto-accept edits; Bash still asks; MCP
- *   tool calls are auto-approved in the executor via canUseTool)
+ * - Claude Code: auto (model classifier approves/denies prompts; unresolved
+ *   ones fall through to Agor's UI; MCP tool calls are auto-approved in the
+ *   executor via canUseTool)
  * - Codex: allow-all (sandbox workspace-write + approval never +
  *   network-on; MCP elicitation auto-approved via per-server
  *   default_tools_approval_mode in the executor)
@@ -21,8 +22,12 @@ describe('getDefaultPermissionMode', () => {
     expect(getDefaultPermissionMode('codex')).toBe('allow-all');
   });
 
-  it('returns "acceptEdits" for claude-code (auto-edit; Bash asks; MCP auto-approved in executor)', () => {
-    expect(getDefaultPermissionMode('claude-code')).toBe('acceptEdits');
+  it('returns "auto" for claude-code (model classifier; unresolved prompts fall through to Agor UI)', () => {
+    expect(getDefaultPermissionMode('claude-code')).toBe('auto');
+  });
+
+  it('returns "auto" for claude-code-cli (shares the Claude default)', () => {
+    expect(getDefaultPermissionMode('claude-code-cli')).toBe('auto');
   });
 
   it('returns "autoEdit" for gemini (native Gemini mode)', () => {
@@ -37,10 +42,10 @@ describe('getDefaultPermissionMode', () => {
     expect(getDefaultPermissionMode('cursor')).toBe('bypassPermissions');
   });
 
-  it('returns "acceptEdits" for any unknown tool (default case)', () => {
+  it('returns "auto" for any unknown tool (default case)', () => {
     // Type assertion to test default behavior with invalid input
     const unknownTool = 'unknown-tool' as AgenticToolName;
-    expect(getDefaultPermissionMode(unknownTool)).toBe('acceptEdits');
+    expect(getDefaultPermissionMode(unknownTool)).toBe('auto');
   });
 
   describe('permission mode characteristics', () => {
@@ -49,9 +54,9 @@ describe('getDefaultPermissionMode', () => {
       expect(mode).toBe('allow-all');
     });
 
-    it('claude-code uses acceptEdits (auto-edit; Bash asks; MCP auto-approved in executor)', () => {
+    it('claude-code uses auto (model classifier; unresolved prompts fall through to Agor UI)', () => {
       const mode = getDefaultPermissionMode('claude-code');
-      expect(mode).toBe('acceptEdits');
+      expect(mode).toBe('auto');
     });
 
     it('gemini uses native Gemini SDK mode', () => {
@@ -88,7 +93,8 @@ describe('getDefaultPermissionMode', () => {
         results[tool] = getDefaultPermissionMode(tool);
       }
 
-      expect(results['claude-code']).toBe('acceptEdits');
+      expect(results['claude-code']).toBe('auto');
+      expect(results['claude-code-cli']).toBe('auto');
       expect(results.codex).toBe('allow-all');
       expect(results.gemini).toBe('autoEdit');
       expect(results.opencode).toBe('autoEdit');
