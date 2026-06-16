@@ -1693,13 +1693,10 @@ export function OnboardingWizard({
               type="info"
               showIcon
               style={{ marginBottom: 16, textAlign: 'left' }}
-              title="Use Codex CLI account auth"
               description={
                 <span>
-                  On the machine Agor runs sessions on, run{' '}
-                  <Text code>codex login --device-auth</Text>. Agor will use that local Codex auth
-                  when no <Text code>OPENAI_API_KEY</Text> is configured. Use Test Connection to
-                  verify this machine is signed in.
+                  Run <Text code>codex login --device-auth</Text> on the machine Agor runs sessions
+                  on; Agor uses that local auth when no <Text code>OPENAI_API_KEY</Text> is set.
                 </span>
               }
             />
