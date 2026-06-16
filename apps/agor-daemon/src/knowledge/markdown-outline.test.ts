@@ -46,4 +46,21 @@ describe('markdownOutline', () => {
       'root.h1[2].h3[1]',
     ]);
   });
+
+  it('uses heading depth rather than stack length when skipped levels return upward', () => {
+    const headings = markdownOutline(['# A', '#### D', '### C', '## B'].join('\n'));
+
+    expect(headings.map((heading) => heading.headingPath)).toEqual([
+      'A',
+      'A > D',
+      'A > C',
+      'A > B',
+    ]);
+    expect(headings.map((heading) => heading.sectionRef)).toEqual([
+      'root.h1[1]',
+      'root.h1[1].h4[1]',
+      'root.h1[1].h3[1]',
+      'root.h1[1].h2[1]',
+    ]);
+  });
 });

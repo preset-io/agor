@@ -335,7 +335,6 @@ agor_kb_outline({
     title: string;
     headingPath: string;       // display/convenience, not a permanent id
     sectionRef: string;        // structural selector, e.g. "root.h1[1].h2[2]"
-    ordinalPath: string;       // alias for sectionRef
     occurrence: number;        // disambiguates duplicate heading paths
     startLine: number;         // 1-based inclusive
     endLine: number;           // 1-based inclusive section end
@@ -898,7 +897,7 @@ Then add filesystem materialization as an explicit Agor workspace feature, not a
 - `kb/document-edits` service applies `KnowledgeEditOp[]` sequentially and reuses `putDocument` so only one version is minted per successful call. Dry runs skip the commit and can optionally return the post-edit content via `returnContent:"full"`.
 - The MCP tool `agor_kb_edit` surfaces the same guarantee and encourages batching to avoid version spam.
 - Artifact publish/check now prefer `branchId + subpath` and enforce branch RBAC when paths resolve inside a registered worktree; legacy `folderPath` is still accepted but inherits the same permission gate. The service-level `branchId` path now requires a non-empty branch-relative `subpath` so branch-root reads are not implicit.
-- `agor_kb_outline` and `agor_kb_get_range` provide bounded remote reads for large documents, returning line ranges, content hashes, and the current version token.
+- `agor_kb_outline` and `agor_kb_get_range` provide bounded remote reads for large documents, returning line ranges, compact outline size hints, exact-read content hashes, and the current version token.
 - `agor_kb_materialize` writes a KB markdown snapshot plus a `.agor-kb.json` sidecar into a branch worktree after branch `session` permission and containment checks. `agor_kb_publish_from_worktree` reads the branch-relative file back, uses the sidecar for document/version context when present, and updates existing documents through the targeted edit service so one publish creates one KB version.
 - Automatic markdown link extraction is KB-document-link oriented. Links to sessions, boards, branches, external URLs, etc. should be represented with explicit `agor_kb_link` calls until/unless broader auto-link extraction is intentionally added.
 - Review follow-up moved branch workspace path/RBAC/canonical containment into a shared daemon utility used by KB and artifacts, and moved markdown outline/range parsing into a shared daemon knowledge helper backed by the existing remark parser so fenced code blocks do not create false headings.

@@ -18,8 +18,6 @@ export interface MarkdownHeadingRange {
    * headings are inserted, deleted, or reordered.
    */
   sectionRef: string;
-  /** Alias for `sectionRef` for callers that prefer explicit terminology. */
-  ordinalPath: string;
   occurrence: number;
   startLine: number;
   endLine: number;
@@ -70,24 +68,27 @@ export function markdownOutline(content: string, maxDepth = 6): MarkdownHeadingR
     }))
     .filter((heading) => heading.title.length > 0 && heading.level <= maxDepth);
 
-  const titleStack: string[] = [];
-  const ordinalStack: string[] = [];
+  const titleStack: Array<{ depth: number; title: string }> = [];
+  const ordinalStack: Array<{ depth: number; segment: string }> = [];
   const occurrenceByPath = new Map<string, number>();
   const ordinalCountsByParentAndLevel = new Map<string, number>();
   return raw.map((heading, index) => {
-    while (titleStack.length > heading.level - 1) titleStack.pop();
-    titleStack.push(heading.title);
-    const headingPath = titleStack.join(' > ');
+    while (titleStack.at(-1) && titleStack.at(-1)!.depth >= heading.level) titleStack.pop();
+    titleStack.push({ depth: heading.level, title: heading.title });
+    const headingPath = titleStack.map((item) => item.title).join(' > ');
     const occurrence = (occurrenceByPath.get(headingPath) ?? 0) + 1;
     occurrenceByPath.set(headingPath, occurrence);
 
-    while (ordinalStack.length > heading.level - 1) ordinalStack.pop();
-    const parentOrdinalPath = ordinalStack.length > 0 ? ordinalStack.join('.') : 'root';
+    while (ordinalStack.at(-1) && ordinalStack.at(-1)!.depth >= heading.level) {
+      ordinalStack.pop();
+    }
+    const parentOrdinalPath =
+      ordinalStack.length > 0 ? ordinalStack.map((item) => item.segment).join('.') : 'root';
     const ordinalCountKey = `${parentOrdinalPath}/h${heading.level}`;
     const ordinal = (ordinalCountsByParentAndLevel.get(ordinalCountKey) ?? 0) + 1;
     ordinalCountsByParentAndLevel.set(ordinalCountKey, ordinal);
-    ordinalStack.push(`h${heading.level}[${ordinal}]`);
-    const sectionRef = `root.${ordinalStack.join('.')}`;
+    ordinalStack.push({ depth: heading.level, segment: `h${heading.level}[${ordinal}]` });
+    const sectionRef = `root.${ordinalStack.map((item) => item.segment).join('.')}`;
 
     const next = raw.slice(index + 1).find((candidate) => candidate.level <= heading.level);
     const endLine = next ? next.line - 1 : lines.length;
@@ -97,7 +98,6 @@ export function markdownOutline(content: string, maxDepth = 6): MarkdownHeadingR
       title: heading.title,
       headingPath,
       sectionRef,
-      ordinalPath: sectionRef,
       occurrence,
       startLine: heading.line,
       endLine,
@@ -132,9 +132,7 @@ export function resolveSectionRefRange(
   sectionRef: string
 ): MarkdownHeadingRange {
   const normalized = sectionRef.trim();
-  const match = headings.find(
-    (heading) => heading.sectionRef === normalized || heading.ordinalPath === normalized
-  );
+  const match = headings.find((heading) => heading.sectionRef === normalized);
   if (!match) throw new Error(`Section ref not found: ${sectionRef}`);
   return match;
 }
