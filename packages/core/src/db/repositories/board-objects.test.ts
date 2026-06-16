@@ -262,6 +262,87 @@ describe('BoardObjectRepository.findAll', () => {
     );
   });
 
+  dbTest(
+    'should apply filters, count, and pagination in SQL-facing findAll APIs',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const wtRepo = new BranchRepository(db);
+      const boRepo = new BoardObjectRepository(db);
+
+      const repo = await repoRepo.create(createRepoData());
+      const wt1 = await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name: 'wt1' }));
+      const wt2 = await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name: 'wt2' }));
+      const wt3 = await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name: 'wt3' }));
+      const boardId1 = await createBoard(db, { name: 'Board 1' });
+      const boardId2 = await createBoard(db, { name: 'Board 2' });
+
+      await boRepo.create({
+        board_id: boardId1,
+        branch_id: wt1.branch_id,
+        position: { x: 0, y: 0 },
+        zone_id: 'zone-review',
+      });
+      await boRepo.create({
+        board_id: boardId1,
+        branch_id: wt2.branch_id,
+        position: { x: 100, y: 100 },
+        zone_id: 'zone-review',
+      });
+      await boRepo.create({
+        board_id: boardId2,
+        branch_id: wt3.branch_id,
+        position: { x: 200, y: 200 },
+        zone_id: 'zone-done',
+      });
+
+      await expect(
+        boRepo.count({ board_id: boardId1, zone_id: 'zone-review', entity_type: 'branch' })
+      ).resolves.toBe(2);
+
+      const page = await boRepo.findAll(
+        { board_id: boardId1, zone_id: 'zone-review', entity_type: 'branch' },
+        { limit: 1, offset: 1 }
+      );
+
+      expect(page).toHaveLength(1);
+      expect([wt1.branch_id, wt2.branch_id]).toContain(page[0].branch_id);
+    }
+  );
+
+  dbTest('should scope visible board objects with SQL RBAC predicates', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const boRepo = new BoardObjectRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const visibleBranch = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'visible' })
+    );
+    const hiddenBranch = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'hidden' })
+    );
+    await wtRepo.update(hiddenBranch.branch_id, { others_can: 'none' });
+    const boardId = await createBoard(db);
+
+    await boRepo.create({
+      board_id: boardId,
+      branch_id: visibleBranch.branch_id,
+      position: { x: 0, y: 0 },
+    });
+    await boRepo.create({
+      board_id: boardId,
+      branch_id: hiddenBranch.branch_id,
+      position: { x: 100, y: 100 },
+    });
+
+    const userId = generateId() as UUID;
+
+    await expect(boRepo.countVisibleToUser(userId, { board_id: boardId })).resolves.toBe(1);
+    await expect(boRepo.findVisibleToUser(userId, { board_id: boardId })).resolves.toMatchObject([
+      { branch_id: visibleBranch.branch_id },
+    ]);
+  });
+
   dbTest('should include all fields in returned objects', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);

@@ -6,34 +6,8 @@ import { BoardObjectsService } from './board-objects.js';
 describe('BoardObjectsService.find', () => {
   it('filters board entities by zone/type and applies explicit pagination', async () => {
     const service = new BoardObjectsService({} as Database);
-    const findByBoardId = vi.fn(async () => [
-      {
-        object_id: 'obj-1',
-        board_id: 'board-1',
-        branch_id: 'branch-1',
-        entity_type: 'branch',
-        position: { x: 0, y: 0 },
-        zone_id: 'zone-review',
-        created_at: '2026-06-01T00:00:00.000Z',
-      },
-      {
-        object_id: 'obj-2',
-        board_id: 'board-1',
-        card_id: 'card-1',
-        entity_type: 'card',
-        position: { x: 10, y: 10 },
-        zone_id: 'zone-review',
-        created_at: '2026-06-01T00:00:00.000Z',
-      },
-      {
-        object_id: 'obj-3',
-        board_id: 'board-1',
-        branch_id: 'branch-2',
-        entity_type: 'branch',
-        position: { x: 20, y: 20 },
-        zone_id: 'zone-done',
-        created_at: '2026-06-01T00:00:00.000Z',
-      },
+    const count = vi.fn(async () => 2);
+    const findAll = vi.fn(async () => [
       {
         object_id: 'obj-4',
         board_id: 'board-1',
@@ -48,10 +22,11 @@ describe('BoardObjectsService.find', () => {
     (
       service as unknown as {
         boardObjectRepo: {
-          findByBoardId: typeof findByBoardId;
+          count: typeof count;
+          findAll: typeof findAll;
         };
       }
-    ).boardObjectRepo = { findByBoardId };
+    ).boardObjectRepo = { count, findAll };
 
     const result = await service.find({
       query: {
@@ -63,7 +38,19 @@ describe('BoardObjectsService.find', () => {
       },
     });
 
-    expect(findByBoardId).toHaveBeenCalledWith('board-1');
+    expect(count).toHaveBeenCalledWith({
+      board_id: 'board-1',
+      zone_id: 'zone-review',
+      entity_type: 'branch',
+    });
+    expect(findAll).toHaveBeenCalledWith(
+      {
+        board_id: 'board-1',
+        zone_id: 'zone-review',
+        entity_type: 'branch',
+      },
+      { offset: 1, limit: 1 }
+    );
     expect(result.total).toBe(2);
     expect(result.skip).toBe(1);
     expect(result.limit).toBe(1);
@@ -73,6 +60,7 @@ describe('BoardObjectsService.find', () => {
 
   it('preserves legacy unpaginated data when no $limit/$skip is requested', async () => {
     const service = new BoardObjectsService({} as Database);
+    const count = vi.fn(async () => 2);
     const findAll = vi.fn(async () => [
       {
         object_id: 'obj-1',
@@ -95,13 +83,16 @@ describe('BoardObjectsService.find', () => {
     (
       service as unknown as {
         boardObjectRepo: {
+          count: typeof count;
           findAll: typeof findAll;
         };
       }
-    ).boardObjectRepo = { findAll };
+    ).boardObjectRepo = { count, findAll };
 
     const result = await service.find();
 
+    expect(count).toHaveBeenCalledWith({});
+    expect(findAll).toHaveBeenCalledWith({}, {});
     expect(result.total).toBe(2);
     expect(result.limit).toBe(100);
     expect(result.skip).toBe(0);
