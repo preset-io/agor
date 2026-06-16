@@ -23,6 +23,10 @@ import type {
 import { PAGINATION } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { shallowEqualEntity } from '../utils/shallowEqual';
+import {
+  createInitialLoadDebugTimer,
+  isInitialLoadDebugEnabled,
+} from '../utils/initialLoadDebug';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 // Canonical list of initial-load items tracked by the loading checklist.
@@ -225,10 +229,18 @@ export function useAgorData(
         return;
       }
 
+      const debugTimer =
+        !silent && isInitialLoadDebugEnabled()
+          ? createInitialLoadDebugTimer(INITIAL_LOAD_ITEMS)
+          : null;
+      let debugFinishStatus: 'success' | 'error' | null = null;
+      let debugFinishError: unknown;
+
       try {
         if (!silent) {
           setLoading(true);
           setLoadingStage('fetching');
+          debugTimer?.markStage('fetching');
           setError(null);
           setItemCounts({});
         }
@@ -239,14 +251,17 @@ export function useAgorData(
         const track = <T extends ReadonlyArray<unknown>>(
           key: InitialLoadItemKey,
           p: Promise<T>
-        ): Promise<T> =>
-          p.then((r) => {
+        ): Promise<T> => {
+          const timedPromise = debugTimer?.track(key, p) ?? p;
+          return timedPromise.then((r) => {
             if (!silent) setItemCounts((prev) => ({ ...prev, [key]: r.length }));
             return r;
           });
+        };
 
         // Fetch sessions, boards, board-objects, comments, repos, branches, users, mcp servers, session-mcp relationships in parallel.
         // Task/message detail now comes from per-session reactive state in conversation components.
+        debugTimer?.startFetchPhase();
         const [
           sessionsList,
           boardsList,
@@ -358,9 +373,12 @@ export function useAgorData(
             .find()
             .catch(() => ({ authenticated_server_ids: [] })),
         ]);
+        debugTimer?.endFetchPhase();
 
         if (!silent) {
           setLoadingStage('indexing');
+          debugTimer?.markStage('indexing');
+          debugTimer?.startIndexing();
           // Give the browser one paint opportunity so large instances can
           // visibly advance from "loading lists" to "indexing workspace data"
           // before the synchronous Map construction below.
@@ -476,6 +494,8 @@ export function useAgorData(
           sessionMcpServerIds: sessionMcpMap,
           userAuthenticatedMcpServerIds,
         });
+        debugTimer?.endIndexing();
+        debugFinishStatus = 'success';
 
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.
@@ -491,12 +511,18 @@ export function useAgorData(
           console.warn('[useAgorData] silent refetch failed:', err);
           lastSilentFetchFailedRef.current = true;
         } else {
+          debugFinishStatus = 'error';
+          debugFinishError = err;
           setError(err instanceof Error ? err.message : 'Failed to fetch data');
         }
       } finally {
         if (!silent) {
           setLoading(false);
           setLoadingStage('idle');
+          debugTimer?.markStage('idle');
+          if (debugFinishStatus) {
+            debugTimer?.finish(debugFinishStatus, debugFinishError);
+          }
         }
       }
     },
