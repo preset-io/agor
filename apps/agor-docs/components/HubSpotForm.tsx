@@ -19,6 +19,8 @@ declare global {
   }
 }
 
+// Source form (edit submit button copy, fields, etc. in HubSpot):
+// https://app.hubspot.com/forms/5901754/editor/f76e3259-8c31-4e39-8147-8e23fa53be74/edit
 const HUBSPOT_PORTAL_ID = '5901754';
 const HUBSPOT_FORM_ID = 'f76e3259-8c31-4e39-8147-8e23fa53be74';
 const HUBSPOT_REGION = 'na1';
