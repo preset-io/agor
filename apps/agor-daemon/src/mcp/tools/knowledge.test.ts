@@ -113,6 +113,18 @@ describe('Knowledge MCP input schemas', () => {
     expect(issueMessages(empty?.error)).toContain('slug cannot be empty.');
   });
 
+  it('requires agor_kb_tree namespace to be non-blank', async () => {
+    const tools = await captureKnowledgeTools();
+
+    const missing = tools.agor_kb_tree.cfg.inputSchema?.safeParse({});
+    const blank = tools.agor_kb_tree.cfg.inputSchema?.safeParse({ namespace: '   ' });
+
+    expect(missing?.success).toBe(false);
+    expect(issueMessages(missing?.error)).toContain('namespace is required and must be a string.');
+    expect(blank?.success).toBe(false);
+    expect(issueMessages(blank?.error)).toContain('namespace cannot be blank.');
+  });
+
   it('allows metadata-only document put payloads for existing documents', async () => {
     const tools = await captureKnowledgeTools();
 
@@ -434,6 +446,121 @@ describe('Knowledge MCP input schemas', () => {
     expect(result[0]).not.toHaveProperty('snippet');
     expect(result[0].current_version).not.toHaveProperty('content_text');
     expect(result[0].document.reference_uri).toBe('agor://kb/document/doc-1');
+  });
+
+  it('returns a compact Knowledge namespace tree without content or version metadata', async () => {
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'runbooks/deploy.md',
+          uri: 'agor://kb/global/runbooks/deploy.md',
+          title: 'Deploy',
+          icon_emoji: '📘',
+          kind: 'doc',
+          visibility: 'public',
+          status: 'published',
+          edit_policy: 'namespace',
+          metadata: { noisy: true },
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: {
+          version_id: 'ver-1',
+          document_id: 'doc-1',
+          version_number: 1,
+          content_text: 'sensitive body',
+        },
+        snippet: 'sensitive body',
+        score: 0,
+      },
+      {
+        document: {
+          document_id: 'doc-2',
+          namespace_id: 'ns-1',
+          path: 'notes/today.md',
+          uri: 'agor://kb/global/notes/today.md',
+          title: 'Today',
+          kind: 'note',
+          visibility: 'private',
+          status: 'draft',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: {
+          version_id: 'ver-2',
+          document_id: 'doc-2',
+          version_number: 1,
+          content_text: 'draft body',
+        },
+        snippet: 'draft body',
+        score: 0,
+      },
+    ]);
+    const tools = await captureKnowledgeTools({ 'kb/search': { find } });
+
+    const result = textResultJson(
+      await tools.agor_kb_tree.handler?.({ namespace: 'global', depth: 2 })
+    ) as Record<string, any>;
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          q: '',
+          namespace_slug: 'global',
+          include_my_drafts: true,
+          include_other_user_drafts: false,
+          limit: 100,
+        }),
+      })
+    );
+    expect(result).toEqual({
+      namespace: 'global',
+      path_prefix: null,
+      depth: 2,
+      count: 2,
+      truncated: false,
+      tree: [
+        {
+          type: 'folder',
+          name: 'notes',
+          path: 'notes',
+          document_count: 1,
+          children: [
+            {
+              type: 'doc',
+              title: 'Today',
+              kind: 'note',
+              path: 'notes/today.md',
+              uri: 'agor://kb/global/notes/today.md',
+              reference_uri: 'agor://kb/document/doc-2',
+              status: 'draft',
+            },
+          ],
+        },
+        {
+          type: 'folder',
+          name: 'runbooks',
+          path: 'runbooks',
+          document_count: 1,
+          children: [
+            {
+              type: 'doc',
+              icon: '📘',
+              title: 'Deploy',
+              kind: 'doc',
+              path: 'runbooks/deploy.md',
+              uri: 'agor://kb/global/runbooks/deploy.md',
+              reference_uri: 'agor://kb/document/doc-1',
+              status: 'published',
+            },
+          ],
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain('sensitive body');
+    expect(JSON.stringify(result)).not.toContain('current_version');
+    expect(JSON.stringify(result)).not.toContain('metadata');
   });
 
   it('includes full Knowledge search content only when explicitly requested', async () => {

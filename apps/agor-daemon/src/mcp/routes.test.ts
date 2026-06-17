@@ -106,6 +106,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_user_create');
     expect(toolNames).toContain('agor_kb_namespaces_list');
     expect(toolNames).toContain('agor_kb_namespace_put');
+    expect(toolNames).toContain('agor_kb_tree');
     expect(toolNames).toContain('agor_kb_search');
     expect(toolNames).toContain('agor_kb_get');
     expect(toolNames).toContain('agor_kb_put');
