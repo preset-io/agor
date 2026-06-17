@@ -1,0 +1,77 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 2rem 1rem;
+  overflow-y: auto;
+  cursor: pointer;
+}
+
+.content {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  margin: auto;
+  padding: 2rem 1.5rem 1.5rem;
+  background: linear-gradient(135deg, rgba(15, 31, 30, 0.98) 0%, rgba(10, 20, 19, 0.98) 100%);
+  border: 1px solid rgba(127, 232, 223, 0.2);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  cursor: default;
+  color: inherit;
+}
+
+.title {
+  margin: 0 2rem 0.5rem 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  background: linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.closeButton {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  border-radius: 6px;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.closeButton:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.closeButton:focus-visible {
+  outline: 2px solid #a8f5ed;
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .backdrop {
+    padding: 1rem 0.5rem;
+  }
+  .content {
+    padding: 1.5rem 1rem 1rem;
+  }
+  .title {
+    font-size: 1.25rem;
+  }
+}

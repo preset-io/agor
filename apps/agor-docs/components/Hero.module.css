@@ -109,11 +109,14 @@
   padding: 0.875rem 2rem;
   font-size: 1.125rem;
   font-weight: 600;
+  font-family: inherit;
   color: var(--nx-colors-gray-11);
   background: transparent;
   border: 2px solid var(--nx-colors-gray-6);
   border-radius: 8px;
   text-decoration: none;
+  cursor: pointer;
+  appearance: none;
   transition: all 0.2s ease;
 }
 

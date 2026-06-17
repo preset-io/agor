@@ -1,7 +1,9 @@
 import Link from 'next/link';
+import { useState } from 'react';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { GifGallery } from './GifGallery';
 import styles from './Hero.module.css';
+import { HubSpotFormModal } from './HubSpotFormModal';
 import { ParticleBackground } from './ParticleBackground';
 
 interface HeroProps {
@@ -23,6 +25,7 @@ export function Hero({
   imageSrc,
   imageAlt = 'Hero image',
 }: HeroProps) {
+  const [isContactOpen, setIsContactOpen] = useState(false);
   return (
     <div className={styles.heroWrapper}>
       <ParticleBackground />
@@ -39,6 +42,13 @@ export function Hero({
             <Link href={ctaLink} className={styles.primaryButton}>
               {ctaText}
             </Link>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={() => setIsContactOpen(true)}
+            >
+              Contact us →
+            </button>
             <Link
               href={GITHUB_REPO_URL}
               target="_blank"
@@ -80,6 +90,8 @@ export function Hero({
       >
         🤍 tsparticles
       </a>
+
+      <HubSpotFormModal isOpen={isContactOpen} onClose={() => setIsContactOpen(false)} />
     </div>
   );
 }
