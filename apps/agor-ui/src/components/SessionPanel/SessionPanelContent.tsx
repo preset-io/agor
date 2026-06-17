@@ -16,11 +16,11 @@ import { useAppMcpData, useAppRepoData, useAppUserData } from '../../contexts/Ap
 import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 import { BranchHeaderPill } from '../BranchHeaderPill';
-import { ChildSessionsSection } from './ChildSessionsSection';
 import { ConversationView } from '../ConversationView';
 import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminal';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 import { IssuePill, PullRequestPill } from '../Pill';
+import { ChildSessionsSection } from './ChildSessionsSection';
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;

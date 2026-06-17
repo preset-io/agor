@@ -1,6 +1,6 @@
 import type { Session } from '@agor-live/client';
 import { BranchesOutlined } from '@ant-design/icons';
-import { Badge, Collapse, ConfigProvider, Space, Spin, Typography, Tree, theme } from 'antd';
+import { Badge, Collapse, ConfigProvider, Space, Spin, Tree, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -105,7 +105,10 @@ export const ChildSessionsSection: React.FC<ChildSessionsSectionProps> = ({ sess
   const renderSessionNode = (node: SessionTreeNode) => {
     const s = node.session;
     const isActive = s.status === 'running' || s.status === 'stopping';
-    const title = getSessionDisplayTitle(s, { includeAgentFallback: true, includeIdFallback: true });
+    const title = getSessionDisplayTitle(s, {
+      includeAgentFallback: true,
+      includeIdFallback: true,
+    });
 
     return (
       <div
