@@ -12,6 +12,33 @@ import { ParticleBackground } from './ParticleBackground';
 
 const { Text } = Typography;
 
+const ADMIN_SETUP_COMMAND = 'agor user create-admin';
+
+function AdminSetupHint() {
+  const { token } = theme.useToken();
+
+  return (
+    <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        First-time server setup? Create the initial admin account:
+      </Text>
+      <Text
+        code
+        copyable={{ text: ADMIN_SETUP_COMMAND }}
+        style={{
+          fontSize: 12,
+          background: token.colorFillTertiary,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: token.borderRadiusSM,
+          padding: '2px 6px',
+        }}
+      >
+        {ADMIN_SETUP_COMMAND}
+      </Text>
+    </Space>
+  );
+}
+
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<boolean>;
   loading?: boolean;
@@ -138,11 +165,7 @@ export function LoginPage({
                       borderTop: `1px solid ${token.colorBorderSecondary}`,
                     }}
                   >
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      💡 First time setting up? Create an admin user:
-                    </Text>
-                    <br />
-                    <code style={{ fontSize: 11 }}>agor user create-admin</code>
+                    <AdminSetupHint />
                   </div>
                 )}
               </Space>
@@ -225,13 +248,9 @@ export function LoginPage({
         )}
 
         {/* Footer */}
-        {showLoginForm && (
+        {showLoginForm && !error && (
           <div style={{ textAlign: 'center', marginTop: 24 }}>
-            <Space orientation="vertical" size={4}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                New user? <code>agor user create-admin</code>
-              </Text>
-            </Space>
+            <AdminSetupHint />
           </div>
         )}
       </Card>
