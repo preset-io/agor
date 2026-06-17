@@ -99,7 +99,9 @@ import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
+import { useSurfaceBranding } from '../hooks/useSurfaceBranding';
 import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
+import { KNOWLEDGE_SURFACE } from '../surfaces/surfaceRegistry';
 import {
   buildKnowledgeRoutePath,
   decodeKnowledgeRoutePath,
@@ -810,9 +812,7 @@ export function KnowledgePage({
   const sidebarResizeDraggingRef = useRef(false);
   const globalSearchContainerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    document.title = 'Knowledge · Agor';
-  }, []);
+  useSurfaceBranding(KNOWLEDGE_SURFACE);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;

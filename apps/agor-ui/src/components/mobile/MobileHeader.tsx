@@ -1,6 +1,7 @@
 import type { User } from '@agor-live/client';
 import { UnorderedListOutlined } from '@ant-design/icons';
 import { Button, Layout, Space, Typography, theme } from 'antd';
+import { BRAND, brandMarkHref } from '../../branding/brand';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -38,8 +39,8 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       <Space size={8} align="center" style={{ flex: 1 }}>
         {showLogo && (
           <img
-            src={`${import.meta.env.BASE_URL}favicon.png`}
-            alt="Agor logo"
+            src={brandMarkHref()}
+            alt={BRAND.name}
             style={{
               height: 32, // Smaller for mobile
               borderRadius: '50%',

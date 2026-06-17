@@ -10,6 +10,7 @@ import type {
 import { Drawer, Layout, Typography } from 'antd';
 import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
+import { BRAND, brandMarkHref } from '../../branding/brand';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileHeader } from './MobileHeader';
 import { MobileNavTree } from './MobileNavTree';
@@ -106,8 +107,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 }}
               >
                 <img
-                  src={`${import.meta.env.BASE_URL}favicon.png`}
-                  alt="Agor"
+                  src={brandMarkHref()}
+                  alt={BRAND.name}
                   style={{
                     width: 160,
                     height: 160,

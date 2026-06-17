@@ -25,6 +25,7 @@ import { Bubble } from '@ant-design/x';
 import { Tooltip, theme } from 'antd';
 
 import React from 'react';
+import { BRAND, brandMarkHref } from '../../branding/brand';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -215,8 +216,8 @@ function getAgentAvatar({
   if (isCallback) {
     return (
       <img
-        src={`${import.meta.env.BASE_URL}favicon.png`}
-        alt="Agor"
+        src={brandMarkHref()}
+        alt={BRAND.name}
         style={{ width: 32, height: 32, borderRadius: '50%' }}
       />
     );

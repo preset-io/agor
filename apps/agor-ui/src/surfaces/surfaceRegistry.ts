@@ -1,4 +1,5 @@
 import { matchPath } from 'react-router-dom';
+import { surfaceTitle } from '../branding/brand';
 
 export type RouteSurfaceId = 'workspace' | 'knowledge' | 'artifact-fullscreen' | 'demo';
 
@@ -14,6 +15,22 @@ export interface RouteSurfaceDefinition {
   usesDeviceRouter: boolean;
   /** Whether user settings are owned by the shared shell instead of Workspace App. */
   usesSharedUserSettings: boolean;
+  /**
+   * Branding behavior for the browser tab (favicon + title).
+   *
+   * - `'dynamic'`: the surface manages the favicon/title itself at runtime
+   *   (the Workspace shell rewrites the favicon with status dots via
+   *   useFaviconStatus and sets the title from the active board). Exactly one
+   *   surface may be dynamic.
+   * - a string: a static document title applied via useSurfaceBranding, which
+   *   also pins the favicon to the absolute brand mark so deep-linked nested
+   *   routes don't fall back to the relative index.html href (which 404s).
+   *
+   * Build with surfaceTitle() so the wordmark/separator stay centralized. Every
+   * surface MUST declare this so new surfaces can't silently inherit a broken
+   * favicon — enforced by surfaceRegistry.test.ts.
+   */
+  branding: 'dynamic' | string;
 }
 
 const normalizePathname = (pathname: string): string =>
@@ -45,6 +62,7 @@ export const KNOWLEDGE_SURFACE = defineSurface({
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: true,
+  branding: surfaceTitle('Knowledge'),
 });
 
 export const ARTIFACT_FULLSCREEN_ROUTE_PATHS = ['/a/:artifactShortId/fullscreen'] as const;
@@ -56,6 +74,7 @@ export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: true,
+  branding: surfaceTitle('Artifact'),
 });
 
 export const DEMO_SURFACE = defineSurface({
@@ -65,6 +84,7 @@ export const DEMO_SURFACE = defineSurface({
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: false,
+  branding: surfaceTitle('Streamdown demo'),
 });
 
 export const WORKSPACE_SURFACE = defineSurface({
@@ -74,6 +94,9 @@ export const WORKSPACE_SURFACE = defineSurface({
   startsWorkspaceRuntime: true,
   usesDeviceRouter: true,
   usesSharedUserSettings: false,
+  // The Workspace shell drives favicon (status dots) and title (active board)
+  // at runtime via useFaviconStatus / useBoardTitle.
+  branding: 'dynamic',
 });
 
 export const SURFACE_REGISTRY = [

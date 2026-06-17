@@ -4,11 +4,15 @@ import { useConfig } from 'nextra-theme-docs';
 import { NavbarCloudCTA } from './components/NavbarCloudCTA';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from './lib/links';
 import {
+  BRAND_NAME,
   DEFAULT_DESCRIPTION,
+  FAVICON_PATH,
   getBasePath,
   getCanonicalUrl,
   getSiteUrl,
   getSocialImage,
+  LOGO_PATH,
+  THEME_COLOR,
 } from './lib/siteMetadata';
 
 const basePath = getBasePath();
@@ -20,8 +24,8 @@ const config: DocsThemeConfig = {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       {/* biome-ignore lint/performance/noImgElement: Using img for static assets in docs */}
       <img
-        src={`${basePath}/logo.png`}
-        alt="agor"
+        src={`${basePath}${LOGO_PATH}`}
+        alt={BRAND_NAME}
         style={{ height: '42px', width: '42px', borderRadius: '50%' }}
         suppressHydrationWarning
       />
@@ -135,7 +139,7 @@ const config: DocsThemeConfig = {
 
         {/* Open Graph */}
         <meta property="og:type" content={ogType} />
-        <meta property="og:site_name" content="agor" />
+        <meta property="og:site_name" content={BRAND_NAME} />
         <meta property="og:title" content={fullTitle} />
         <meta property="og:description" content={description} />
         <meta property="og:image" content={socialImage} />
@@ -151,8 +155,8 @@ const config: DocsThemeConfig = {
         <meta name="twitter:image" content={socialImage} />
 
         {/* Additional Meta */}
-        <meta name="theme-color" content="#2e9a92" />
-        <link rel="icon" type="image/png" href={`${basePath}/favicon.png`} />
+        <meta name="theme-color" content={THEME_COLOR} />
+        <link rel="icon" type="image/png" href={`${basePath}${FAVICON_PATH}`} />
         <link rel="canonical" href={canonicalUrl} />
 
         {/* JSON-LD Structured Data */}
@@ -179,7 +183,7 @@ const config: DocsThemeConfig = {
                       name: 'Agor',
                       logo: {
                         '@type': 'ImageObject',
-                        url: `${siteUrl}${basePath}/logo.png`,
+                        url: `${siteUrl}${basePath}${LOGO_PATH}`,
                       },
                     },
                   }

@@ -15,6 +15,7 @@ import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useCopyToClipboard } from '../../utils/clipboard';
@@ -561,8 +562,8 @@ export const ConversationView = React.memo<ConversationViewProps>(
           }}
         >
           <img
-            src={`${import.meta.env.BASE_URL}favicon.png`}
-            alt="Agor"
+            src={brandMarkHref()}
+            alt={BRAND.name}
             style={{
               width: 160,
               height: 160,

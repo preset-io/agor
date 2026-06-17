@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons';
 import { Badge, Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { useHref, useNavigate } from 'react-router-dom';
+import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
@@ -186,8 +187,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           }}
         >
           <img
-            src={`${import.meta.env.BASE_URL}favicon.png`}
-            alt="Agor logo"
+            src={brandMarkHref()}
+            alt={BRAND.name}
             style={{
               height: 50,
               borderRadius: '50%',

@@ -7,8 +7,9 @@
 
 import type { Board } from '@agor-live/client';
 import { useEffect } from 'react';
+import { surfaceTitle } from '../branding/brand';
 
-const DEFAULT_TITLE = 'Agor';
+const DEFAULT_TITLE = surfaceTitle();
 
 export function useBoardTitle(currentBoard: Board | undefined) {
   useEffect(() => {

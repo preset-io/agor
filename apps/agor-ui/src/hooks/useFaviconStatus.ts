@@ -11,6 +11,7 @@ import type { BoardEntityObject, Session } from '@agor-live/client';
 import { SessionStatus } from '@agor-live/client';
 import { theme } from 'antd';
 import { useEffect, useState } from 'react';
+import { brandMarkHref } from '../branding/brand';
 import { createFaviconWithDot } from '../utils/faviconDot';
 
 export function useFaviconStatus(
@@ -18,7 +19,7 @@ export function useFaviconStatus(
   sessionsByBranch: Map<string, Session[]>,
   boardObjectsForCurrentBoard: BoardEntityObject[]
 ) {
-  const [baseFaviconUrl] = useState(`${import.meta.env.BASE_URL}favicon.png`);
+  const [baseFaviconUrl] = useState(brandMarkHref());
   const { token } = theme.useToken();
 
   useEffect(() => {

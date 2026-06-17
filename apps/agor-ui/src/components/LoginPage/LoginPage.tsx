@@ -7,6 +7,7 @@
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Divider, Form, Input, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
+import { BRAND, brandMarkHref } from '../../branding/brand';
 import { BrandLogo } from '../BrandLogo';
 import { ParticleBackground } from './ParticleBackground';
 
@@ -127,8 +128,8 @@ export function LoginPage({
         <Space orientation="vertical" size="large" style={{ width: '100%', marginBottom: 24 }}>
           <div style={{ textAlign: 'center' }}>
             <img
-              src={`${import.meta.env.BASE_URL}favicon.png`}
-              alt="Agor Logo"
+              src={brandMarkHref()}
+              alt={BRAND.name}
               style={{
                 width: 72,
                 height: 72,

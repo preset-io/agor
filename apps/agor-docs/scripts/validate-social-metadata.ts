@@ -3,9 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_SOCIAL_IMAGE,
+  FAVICON_PATH,
   type FrontMatterLike,
   getSocialImage,
   isAbsoluteUrl,
+  LOGO_PATH,
   SOCIAL_IMAGE_FIELDS,
 } from '../lib/siteMetadata';
 
@@ -82,6 +84,8 @@ const pages: PageMetadata[] = walk(pagesDir)
 const errors: string[] = [];
 
 assertLocalPublicImageExists(DEFAULT_SOCIAL_IMAGE, 'default social image', errors);
+assertLocalPublicImageExists(FAVICON_PATH, 'favicon (siteMetadata.FAVICON_PATH)', errors);
+assertLocalPublicImageExists(LOGO_PATH, 'logo (siteMetadata.LOGO_PATH)', errors);
 
 for (const page of pages) {
   const socialImage = getSocialImage(page.frontMatter);

@@ -1,5 +1,18 @@
 const DEFAULT_SITE_URL = 'https://agor.live';
 
+/**
+ * Docs-site branding. Deliberately distinct from the in-app (agor-ui) brand,
+ * which lives in apps/agor-ui/src/branding/brand.ts: the docs use a lowercase
+ * "agor" wordmark and an en-dash title separator. Centralized here so
+ * theme.config.tsx and the social-metadata validator share one source and the
+ * favicon/logo/theme-color can't drift. Asset paths are public/-relative and
+ * get the Next.js basePath applied at render time.
+ */
+export const BRAND_NAME = 'agor';
+export const THEME_COLOR = '#2e9a92';
+export const FAVICON_PATH = '/favicon.png';
+export const LOGO_PATH = '/logo.png';
+
 export const DEFAULT_DESCRIPTION =
   'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.';
 
