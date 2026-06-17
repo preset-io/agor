@@ -1,0 +1,347 @@
+---
+title: 'Raise a Team Helper Agent in an Afternoon'
+description: 'A practical recipe for turning an Agor Assistant into a PM-style teammate that remembers context, coordinates work, reports progress, and keeps a team aligned.'
+date: 2026-06-17
+image: '/images/blog/raise-team-helper-agent.png'
+---
+
+# Raise a Team Helper Agent in an Afternoon
+
+Imagine a teammate who is always caught up.
+
+Every engineer gets the slice of context they need to be effective. New work lands with the relevant roadmap notes, owner hints, open questions, and coordination risks attached. Stakeholders can ask, “where are we on this?” and get a detailed answer instead of a vague status ping. Daily and weekly updates appear without someone spending Friday afternoon spelunking through Slack, GitHub, and sprint notes.
+
+That is the shape of a good team-helper agent in Agor: a 24/7 PM-style assistant with memory, access, cadence, and enough initiative to turn messy team activity into clear next actions.
+
+Not an omniscient robot. Not a manager replacement. A practical coordination layer.
+
+This post is a fast recipe for raising one with [Agor Assistants](/guide/assistants), [Knowledge](/guide/knowledge), [Boards](/guide/boards), [branches](/guide/branches), [sessions](/guide/sessions), the [scheduler](/guide/scheduler), and MCP-connected tools where useful.
+
+## What the agent should do
+
+A useful team-helper agent can help with work like:
+
+- keeping roadmap and sprint context organized,
+- helping people know who to coordinate with and about what,
+- producing daily standup briefs and weekly progress reports,
+- answering stakeholder questions with links and supporting detail,
+- surfacing risks, stale decisions, blocked work, and owner gaps,
+- turning messy notes into decisions, questions, workstreams, and next actions,
+- and holding the team lightly accountable without becoming noise.
+
+The key is to raise it like a strong new teammate: give it a clear role, a place to write things down, access to the systems where work happens, and a small set of recurring rituals.
+
+## The quick-raise loop
+
+Do not start by trying to write the perfect system prompt.
+
+Start with a loop:
+
+1. **Identity** — who the assistant serves and how it should behave.
+2. **Memory** — where durable team context lives.
+3. **Context dump** — goals, people, roadmap, risks, meetings, rituals.
+4. **Tool access** — the work surfaces the team already uses.
+5. **Visible value** — useful summaries and docs immediately.
+6. **Cadence** — daily and weekly routines through schedules.
+7. **Correction** — humans review, correct, and improve the assistant over time.
+
+That loop is faster than a formal requirements workshop. You can get useful output the same day, then keep tightening the assistant as the team uses it.
+
+## 1. Give it a job, not just a name
+
+An [Assistant](/guide/assistants) is a persistent agent with identity, memory, skills, and scheduled heartbeats. Treat the first hour like onboarding.
+
+Write a short operating brief:
+
+```md
+You are the team helper for the Atlas product team.
+
+Your job is to help the team stay aligned across roadmap planning, sprint execution,
+stakeholder updates, and cross-functional coordination.
+
+Prefer useful summaries over chatter. Ask only when the answer is not already in
+Knowledge or the connected tools. When you learn something durable, file it.
+When you see risk, owner ambiguity, or stale follow-up, flag it clearly.
+
+Do not post externally, comment on issues, or change source-of-truth systems without
+explicit approval unless a scheduled runbook says that action is safe.
+```
+
+The important parts are scope and judgment:
+
+- Who does it serve?
+- What work should it help coordinate?
+- What can it do autonomously?
+- What requires approval?
+- What tone should it use when pushing back?
+
+For a PM-style helper, “useful but not noisy” is a good default.
+
+## 2. Give it shared memory
+
+Do not rely on chat history alone. Chat transcripts are useful, but team memory should be visible, searchable, and editable by humans.
+
+Create a canonical [Knowledge](/guide/knowledge) space for the team or project. Use it for the context the assistant should preserve across sessions:
+
+```text
+README.md
+team/roster.md
+memory/YYYY-MM-DD.md
+roadmap/current.md
+planning/sprint-notes.md
+product/requirements.md
+research/customer-notes.md
+architecture/overview.md
+risks/open-risks.md
+runbooks/daily-standup.md
+runbooks/weekly-report.md
+```
+
+Keep the structure boring. The assistant can reorganize later, but it needs somewhere obvious to write today.
+
+A good first instruction:
+
+> When you learn a durable fact, decision, risk, preference, owner, recurring process, or open question, file it in Knowledge. If the right page does not exist, create a small one and link it from the README.
+
+That turns the agent from a transient chat into a teammate with a shared notebook.
+
+## 3. Dump context fast, then ask it to structure the mess
+
+The fastest way to raise a team assistant is not a polished prompt. It is a messy context dump followed by organization.
+
+Give it raw material:
+
+- who is on the team,
+- what each person owns,
+- what the roadmap is trying to accomplish,
+- what the current sprint is about,
+- what customers or stakeholders are asking for,
+- where the project is risky,
+- where decisions are still open,
+- which channels, meetings, repos, and boards matter,
+- what a good daily or weekly update should include.
+
+Then ask the assistant to file the dump into useful pages:
+
+```md
+Turn the context above into:
+
+1. a team roster with owners and coordination notes,
+2. a current roadmap brief,
+3. a sprint planning note,
+4. an open risks page,
+5. a stakeholder FAQ,
+6. and a list of questions you still need answered.
+
+Keep everything concise. Link pages from the Knowledge README.
+```
+
+This pattern is extremely effective:
+
+> Human dumps messy context → agent extracts facts, decisions, questions, owners, and risks → agent files structured docs → human corrects → agent updates memory.
+
+You are not trying to make the first version perfect. You are creating the substrate the assistant can keep improving.
+
+## 4. Connect the real work surfaces
+
+A team-helper agent becomes valuable when it can inspect the places where work already happens.
+
+In Agor, the built-in [MCP server](/guide/internal-mcp) gives agents self-awareness about boards, branches, sessions, schedules, and Knowledge. You can also attach external MCP servers or integrations for systems like Slack, GitHub, Linear, Jira, calendars, meeting notes, support tools, or internal APIs.
+
+Start read-heavy and approval-oriented. Good first tasks are:
+
+- summarize the last week of team activity,
+- extract customer signal from meeting notes,
+- scan recent branches and sessions for progress,
+- identify blocked or ownerless work,
+- build a sprint brief from current tickets,
+- produce a stakeholder update draft,
+- capture unresolved questions in Knowledge.
+
+If you connect Slack or GitHub through a [Message Gateway](/guide/message-gateway) or MCP server, be deliberate about permission mode, credentials, and who can reach the assistant. A team helper that can post or comment should usually draft first and act after approval until its runbooks are proven.
+
+## 5. Put active work on a board
+
+Use [Boards](/guide/boards) for active coordination, not just decoration.
+
+A simple setup:
+
+- **Inbox** — work that needs triage.
+- **Planning** — work being shaped.
+- **In progress** — active branches and sessions.
+- **Needs coordination** — work blocked on people or decisions.
+- **Ready for update** — work that should appear in the next report.
+- **Done / shipped** — completed or archived work.
+
+Because Agor boards are branch-centric, each card can hold sessions, environment status, PR links, notes, and spatial meaning. The assistant can use that structure to answer questions like:
+
+- “What is active right now?”
+- “Which work needs a human?”
+- “What moved since yesterday?”
+- “Which branches are stale?”
+- “What should go into the weekly update?”
+
+Zones can also trigger templated prompts when a branch is dropped into them. For example, a “Needs coordination” zone can prompt the assistant to identify owners, summarize the blocker, and draft a coordination note.
+
+## 6. Prove value immediately
+
+Trust comes from artifacts, not promises.
+
+Ask for a useful artifact in the first session:
+
+- a team roster,
+- a roadmap brief,
+- a sprint plan,
+- a risk register,
+- a stakeholder FAQ,
+- a daily standup digest,
+- a weekly progress report,
+- a decision log,
+- a “who should coordinate with whom” map.
+
+For example:
+
+```md
+Using Knowledge, the board, and recent sessions, write a daily team brief.
+
+Include:
+
+- what changed since yesterday,
+- decisions made,
+- open blockers,
+- who should coordinate with whom,
+- risks to raise,
+- and suggested next actions.
+
+File the brief in Knowledge under updates/daily/YYYY-MM-DD.md.
+Do not post it anywhere yet.
+```
+
+That gives the team something concrete to review. The corrections become training data for the next runbook.
+
+## 7. Add cadence with the scheduler
+
+Once the assistant has enough context, give it recurring jobs through the [Branch Scheduler](/guide/scheduler).
+
+Keep schedule prompts short. Put the detailed process in Knowledge runbooks.
+
+A daily schedule prompt can be as small as:
+
+```md
+Boot up, read Knowledge runbooks/daily-standup.md, then execute the daily team-helper routine.
+```
+
+A weekly prompt:
+
+```md
+Boot up, read Knowledge runbooks/weekly-report.md, then draft the weekly progress report.
+File it in Knowledge and list anything that needs human review before sharing.
+```
+
+Good recurring routines:
+
+- weekday standup briefs,
+- Friday progress reports,
+- sprint planning prep,
+- stale branch review,
+- stakeholder FAQ refresh,
+- decision log cleanup,
+- risk and blocker scan.
+
+Keep recurring work idempotent. The assistant should write where it wrote, link what it used, and avoid double-posting.
+
+## 8. Teach it how to slice work
+
+A PM-like assistant should not only summarize. It should help convert ambiguity into tractable work.
+
+A useful division of labor is:
+
+- **Knowledge** for context, decisions, runbooks, and memory.
+- **Boards** for active orchestration and visual state.
+- **Branches and sessions** for execution, experiments, and investigation.
+- **External task systems** for whatever your organization already treats as source of truth.
+
+Ask the assistant to propose workstreams:
+
+```md
+Given the roadmap brief and current board, propose the next five workstreams.
+For each one, include:
+
+- goal,
+- likely owner or collaborators,
+- dependencies,
+- risks,
+- recommended branch/session shape in Agor,
+- and what should be tracked outside Agor.
+```
+
+This is where the assistant starts feeling PM-like: it notices the coordination cost, not just the tasks.
+
+## 9. Make accountability explicit
+
+A team helper is most useful when it can raise flags without creating drama.
+
+Give it language and rules for accountability:
+
+- Flag ownerless work.
+- Flag decisions that keep reappearing.
+- Flag risks with no mitigation.
+- Flag stakeholder questions with no answer.
+- Flag branches or sessions that have gone stale.
+- Separate “blocked,” “needs decision,” and “FYI.”
+- Prefer one synthesized note over five pings.
+
+A good report section looks like:
+
+```md
+## Flags
+
+- **Needs decision:** Pricing page scope is still unclear; Alex and Priya should align before implementation starts.
+- **Blocked:** The onboarding branch needs API credential guidance before QA can test it.
+- **Stale:** The analytics export investigation has not moved in three days; recommend either closing it or assigning an owner.
+```
+
+That is accountability as visibility, not nagging.
+
+## 10. Keep improving the assistant like a product
+
+The first version will miss things. That is fine.
+
+When it produces a weak report, correct the output and update the runbook. When it asks something already documented, point it to the right Knowledge page. When it posts too much detail, tighten the format. When it misses a risk, add a checklist item.
+
+Also let the assistant capture its own friction:
+
+- Which tools were hard to use?
+- Which docs were missing?
+- Which permissions blocked useful work?
+- Which reports were too noisy?
+- Which questions did humans keep correcting?
+
+That feedback is valuable whether you are improving the assistant, the team process, or Agor itself.
+
+## A practical starter checklist
+
+If you want to do this quickly, start here:
+
+1. Create an [Assistant](/guide/assistants) for the team.
+2. Write a short identity and operating brief.
+3. Create a team [Knowledge](/guide/knowledge) space with a README.
+4. Add a roster, roadmap brief, current risks, and daily/weekly runbooks.
+5. Dump messy project context and ask the assistant to structure it.
+6. Put active work on a [Board](/guide/boards) with simple zones.
+7. Connect only the tools it needs for the first useful workflows.
+8. Ask for one immediate artifact: daily brief, sprint plan, or stakeholder FAQ.
+9. Review and correct the artifact.
+10. Add a daily or weekly [schedule](/guide/scheduler) that points to a runbook.
+11. Keep actions approval-gated until the team trusts the routine.
+12. Revisit memory and runbooks weekly until the assistant feels boringly useful.
+
+## The mindset
+
+Do not try to create a magical all-knowing bot.
+
+Raise a teammate.
+
+Give it context. Give it access carefully. Give it a shared memory. Let it do useful work immediately. Correct it. Put it into the team’s rituals. Make its output visible. Keep the loop tight.
+
+That is enough to change the texture of team coordination: fewer status scavenger hunts, fewer repeated questions, better handoffs, clearer risks, and a shared assistant that helps everyone get exactly what they need to be effective.
