@@ -73,7 +73,6 @@ import { SettingsModal, UserSettingsModal } from '../SettingsModal';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import { getShowCommentsPanelState, getToggleBoardPanelState } from './boardPanelActions';
-import { getPrimaryAssistantSessionToRestore } from './primaryAssistantRestore';
 
 const { Content } = Layout;
 
@@ -307,7 +306,6 @@ export const App: React.FC<AppProps> = ({
     y: number;
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const autoOpenedAssistantBoardRef = useRef<string | null>(null);
   // Active URL deep-link target (branch or artifact). Folds into the
   // unified dashed "selected" outline alongside `selectedSessionId` —
   // both answer "what am I looking at right now?" so they share one
@@ -372,7 +370,6 @@ export const App: React.FC<AppProps> = ({
   // Props take precedence for backward compatibility with onboarding flow
   const settingsOpen = settingsRouteOpen || !!openSettingsTab;
   const effectiveSettingsTab = openSettingsTab || settingsRouteSection;
-  const shouldAutoRestorePrimaryAssistant = !settingsRouteOpen && !hasExplicitEntityTarget;
 
   // Handle external user settings modal control (e.g., from onboarding "Configure API Keys")
   const effectiveUserSettingsOpen = userSettingsOpen || !!openUserSettings;
@@ -875,29 +872,6 @@ export const App: React.FC<AppProps> = ({
     setLeftPanelTab(primaryAssistantInaccessible ? 'all-sessions' : 'assistant');
   }, [currentBoard?.board_id, primaryAssistantInaccessible]);
 
-  useEffect(() => {
-    const latestSessionId = getPrimaryAssistantSessionToRestore({
-      currentBoardId: currentBoard?.board_id,
-      primaryAssistantBranchId: primaryAssistantBranch?.branch_id,
-      effectiveSelectedSessionId,
-      autoOpenedAssistantBoardId: autoOpenedAssistantBoardRef.current,
-      restoreAllowed: shouldAutoRestorePrimaryAssistant,
-      sessions: primaryAssistantBranch
-        ? sessionsByBranch.get(primaryAssistantBranch.branch_id) || []
-        : [],
-    });
-    if (latestSessionId && currentBoard) {
-      autoOpenedAssistantBoardRef.current = currentBoard.board_id;
-      navigation.goToSession(latestSessionId);
-    }
-  }, [
-    currentBoard,
-    primaryAssistantBranch,
-    sessionsByBranch,
-    effectiveSelectedSessionId,
-    shouldAutoRestorePrimaryAssistant,
-    navigation,
-  ]);
 
   // Update browser tab title based on current board
   useBoardTitle(currentBoard);
