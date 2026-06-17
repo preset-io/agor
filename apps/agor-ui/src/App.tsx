@@ -49,6 +49,7 @@ import {
   useServerVersion,
   useSessionActions,
 } from './hooks';
+import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
@@ -185,6 +186,12 @@ function AppContent() {
   const { currentSurface, workspaceSurfaceShouldRun } = useWorkspaceSurfaceLifecycle(
     location.pathname
   );
+  // Apply each surface's declared favicon/title centrally. Non-dynamic surfaces
+  // get the absolute brand mark + static title here; the 'dynamic' Workspace
+  // shell no-ops and manages its own via useFaviconStatus/useBoardTitle. This
+  // makes the registry's `branding` field the single enforcement point so a new
+  // static surface can't forget to wire it.
+  useSurfaceBranding(currentSurface);
   const sharedSurfaceOwnsUserSettings = currentSurface.usesSharedUserSettings;
   const routeModuleKey = getRouteModuleKey(currentSurface.id, location.pathname);
   const [routeModuleReady, setRouteModuleReady] = useState(() =>

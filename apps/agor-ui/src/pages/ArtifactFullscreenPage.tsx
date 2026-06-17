@@ -23,8 +23,6 @@ import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
 import { withBodyReset } from '../components/SessionCanvas/canvas/utils/sandpackDefaults';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
-import { useSurfaceBranding } from '../hooks/useSurfaceBranding';
-import { ARTIFACT_FULLSCREEN_SURFACE } from '../surfaces/surfaceRegistry';
 
 ensureSandpackCryptoSubtle();
 
@@ -149,7 +147,6 @@ export function ArtifactFullscreenPage({
   onUserSettingsClick,
   onLogout,
 }: ArtifactFullscreenPageProps) {
-  useSurfaceBranding(ARTIFACT_FULLSCREEN_SURFACE);
   const { token } = theme.useToken();
   const { artifactShortId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();

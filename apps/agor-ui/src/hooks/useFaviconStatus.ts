@@ -23,15 +23,26 @@ export function useFaviconStatus(
   const { token } = theme.useToken();
 
   useEffect(() => {
+    // createFaviconWithDot is async (it decodes an <img> and rasterizes to a
+    // canvas). If it resolves after this effect re-runs or the Workspace shell
+    // unmounts (e.g. navigating to a static surface that pins its own favicon),
+    // applying the stale result would clobber the new favicon. Guard with a
+    // cancellation flag cleared on cleanup.
+    let cancelled = false;
+    const applyFavicon = (dataUrl: string) => {
+      if (cancelled) return;
+      const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+      if (link) {
+        link.href = dataUrl;
+      }
+    };
+
     if (!currentBoardId) {
       // No board selected - restore default favicon
-      createFaviconWithDot(baseFaviconUrl, false, false, token.colorSuccessText).then((dataUrl) => {
-        const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-        if (link) {
-          link.href = dataUrl;
-        }
-      });
-      return;
+      createFaviconWithDot(baseFaviconUrl, false, false, token.colorSuccessText).then(applyFavicon);
+      return () => {
+        cancelled = true;
+      };
     }
 
     const branchesOnBoard = new Set(
@@ -52,13 +63,12 @@ export function useFaviconStatus(
     // Update favicon with appropriate dots
     // White dot (lower-left) for running, green dot (lower-right) for ready
     createFaviconWithDot(baseFaviconUrl, hasRunning, hasReady, token.colorSuccessText).then(
-      (dataUrl) => {
-        const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-        if (link) {
-          link.href = dataUrl;
-        }
-      }
+      applyFavicon
     );
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     currentBoardId,
     sessionsByBranch,
