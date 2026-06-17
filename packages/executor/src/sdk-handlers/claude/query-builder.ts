@@ -310,17 +310,28 @@ export async function setupQuery(
   }
 
   // Configure Claude Code's server-side advisor tool model when a session-level
-  // override is present. The Agent SDK exposes this through Claude Code settings
-  // (not as a first-class top-level option or MCP tool declaration).
+  // override is present. Pass it through the CLI's first-class `--advisor` flag
+  // (via the SDK's `extraArgs`) — NOT through the `settings` object.
+  //
+  // Why not `settings`: passing `settings` as an object makes the Agent SDK emit
+  // `--settings '<inline JSON>'`, which the Claude CLI can materialize into a
+  // CONTENT-ADDRESSED temp file at `${os.tmpdir()}/claude-settings-<hash>.json`
+  // when it hands the resolved flag-settings layer to its workers. In the daemon,
+  // `os.tmpdir()` resolves to the shared, sticky-bit `/tmp` (the daemon runs with
+  // TMPDIR stripped), so every session with identical advisor settings targets the
+  // SAME path. The first writer owns it mode 0600; later sessions — or other Unix
+  // users under insulated/strict isolation — then fail to open it with
+  // `EACCES ... claude-settings-*.json`, crashing the CLI before the first message.
+  // `--advisor <model>` is the CLI's dedicated, server-validated flag (Claude Code
+  // >= 2.1.175) and writes no settings file, so it sidesteps the collision entirely.
   const rawAdvisorModel = session.model_config?.advisorModel?.trim();
   if (rawAdvisorModel) {
     const { model: advisorModel, betas: advisorBetas } = parseModelWithBetas(rawAdvisorModel);
     for (const beta of advisorBetas) sdkBetas.add(beta);
-    queryOptions.settings = {
-      ...((queryOptions.settings as Record<string, unknown> | undefined) ?? {}),
-      advisorModel,
-    };
-    console.log(`🧭 Advisor model: ${advisorModel}`);
+    const extraArgs = (queryOptions.extraArgs as Record<string, string | null> | undefined) ?? {};
+    extraArgs.advisor = advisorModel;
+    queryOptions.extraArgs = extraArgs;
+    console.log(`🧭 Advisor model: ${advisorModel} (via --advisor)`);
   }
 
   // Add beta flags (e.g., 1M context window for [1m] model variants)

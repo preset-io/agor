@@ -84,7 +84,7 @@ describe('setupQuery - Local Settings Support', () => {
     expect(callArgs.options.disallowedTools).toEqual([...CLAUDE_CODE_DISALLOWED_TOOLS]);
   });
 
-  it('passes session advisorModel through Claude Code SDK settings', async () => {
+  it('passes session advisorModel through the --advisor CLI flag, NOT settings', async () => {
     const deps = createMockDeps();
     vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
       session_id: 'test-session' as SessionID,
@@ -100,10 +100,15 @@ describe('setupQuery - Local Settings Support', () => {
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
-    expect(callArgs.options.settings).toMatchObject({ advisorModel: 'opus' });
+    // The advisor goes through the SDK's extraArgs → `--advisor opus`.
+    expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'opus' });
+    // EACCES regression guard: we must NOT pass `settings` as an object, which
+    // makes the CLI materialize a content-addressed /tmp/claude-settings-*.json
+    // that collides across sessions/users (EACCES on open). See query-builder.ts.
+    expect(callArgs.options.settings).toBeUndefined();
   });
 
-  it('strips advisorModel [1m] suffix and adds the required SDK beta', async () => {
+  it('strips advisorModel [1m] suffix, passes base model via --advisor, adds the SDK beta', async () => {
     const deps = createMockDeps();
     vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
       session_id: 'test-session' as SessionID,
@@ -119,8 +124,55 @@ describe('setupQuery - Local Settings Support', () => {
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
-    expect(callArgs.options.settings).toMatchObject({ advisorModel: 'claude-opus-4-7' });
+    expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'claude-opus-4-7' });
+    expect(callArgs.options.settings).toBeUndefined();
     expect(callArgs.options.betas).toEqual(['context-1m-2025-08-07']);
+  });
+
+  it('omits --advisor (and settings) entirely when no advisorModel is set', async () => {
+    // Turn-off contract: clearing the advisor leaves no --advisor flag and no
+    // settings object, so the session starts exactly as it did pre-advisor.
+    const deps = createMockDeps();
+    vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+      session_id: 'test-session' as SessionID,
+      branch_id: 'test-branch' as BranchID,
+      model_config: {
+        mode: 'alias',
+        model: 'claude-sonnet-4-6',
+        updated_at: '2026-06-11T00:00:00.000Z',
+        // no advisorModel
+      },
+    } as any);
+
+    await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(
+      (callArgs.options.extraArgs as Record<string, unknown> | undefined)?.advisor
+    ).toBeUndefined();
+    expect(callArgs.options.settings).toBeUndefined();
+  });
+
+  it('ignores a whitespace-only advisorModel (no --advisor, no settings)', async () => {
+    const deps = createMockDeps();
+    vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+      session_id: 'test-session' as SessionID,
+      branch_id: 'test-branch' as BranchID,
+      model_config: {
+        mode: 'alias',
+        model: 'claude-sonnet-4-6',
+        updated_at: '2026-06-11T00:00:00.000Z',
+        advisorModel: '   ',
+      },
+    } as any);
+
+    await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(
+      (callArgs.options.extraArgs as Record<string, unknown> | undefined)?.advisor
+    ).toBeUndefined();
+    expect(callArgs.options.settings).toBeUndefined();
   });
 });
 

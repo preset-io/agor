@@ -688,15 +688,23 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleModelConfigChange = (newConfig: ModelConfig) => {
     if (session && onUpdateSession) {
-      onUpdateSession(session.session_id, {
-        model_config: {
-          ...session.model_config,
-          mode: newConfig.mode,
-          model: newConfig.model,
-          ...(newConfig.provider ? { provider: newConfig.provider } : {}),
-          updated_at: new Date().toISOString(),
-        },
-      });
+      const nextConfig: NonNullable<Session['model_config']> = {
+        ...session.model_config,
+        mode: newConfig.mode,
+        model: newConfig.model,
+        ...(newConfig.provider ? { provider: newConfig.provider } : {}),
+        updated_at: new Date().toISOString(),
+      };
+      // Honor the advisor selector's clear action. `model_config` is
+      // column-replaced on patch, so we must DELETE the key when the user clears
+      // it (allowClear → undefined) — the spread above would otherwise silently
+      // carry the previous value forward (root cause of "no way to turn it off").
+      if (newConfig.advisorModel) {
+        nextConfig.advisorModel = newConfig.advisorModel;
+      } else {
+        delete nextConfig.advisorModel;
+      }
+      onUpdateSession(session.session_id, { model_config: nextConfig });
     }
   };
 
@@ -726,6 +734,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         mode: session.model_config.mode || 'alias',
         model: session.model_config.model,
         provider: session.model_config.provider,
+        advisorModel: session.model_config.advisorModel,
       }
     : undefined;
 

@@ -350,7 +350,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       options.unshift({ value: currentValue, label: currentValue });
     }
 
-    return (
+    const modelSelect = (
       <Select
         value={currentValue}
         onChange={handleModelChange}
@@ -361,6 +361,33 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         style={{ width: '100%', fontSize: token.fontSizeSM }}
         options={options}
       />
+    );
+
+    // Surface the optional Claude Code advisor model in compact contexts too
+    // (e.g. the session run-settings popover) so it can be set OR cleared per
+    // session. `allowClear` → undefined removes the session-level override.
+    const showAdvisor = effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli';
+    if (!showAdvisor) return modelSelect;
+
+    return (
+      <Space orientation="vertical" size={6} style={{ width: '100%' }}>
+        {modelSelect}
+        <Select
+          allowClear
+          showSearch
+          size="small"
+          optionFilterProp="label"
+          placeholder="Advisor model: off"
+          value={value?.advisorModel}
+          onChange={handleAdvisorModelChange}
+          popupMatchSelectWidth={false}
+          style={{ width: '100%', fontSize: token.fontSizeSM }}
+          options={(claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES).map((model) => ({
+            value: model.id,
+            label: `Advisor: ${model.id}`,
+          }))}
+        />
+      </Space>
     );
   }
 

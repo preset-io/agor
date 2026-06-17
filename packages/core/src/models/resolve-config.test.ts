@@ -206,6 +206,25 @@ describe('resolveModelConfigWithFallback', () => {
     });
   });
 
+  it('does not inherit a lower-priority advisorModel onto a higher-priority model source (turn-off contract)', () => {
+    // Regression guard for "remove the advisor": once a higher-priority source
+    // supplies its own model WITHOUT an advisor (e.g. an explicit session-level
+    // model_config), a lower-priority source's advisorModel (e.g. the user
+    // default) must NOT leak back in. The high-priority full config wins
+    // first-wins, so advisor stays cleared.
+    const result = resolveModelConfigWithFallback(
+      'claude-code',
+      [{ model: 'claude-opus-4-6' }, { model: 'claude-sonnet-4-6', advisorModel: 'opus' }],
+      { now }
+    );
+    expect(result).toEqual({
+      mode: 'alias',
+      model: 'claude-opus-4-6',
+      updated_at: '2026-04-23T00:00:00.000Z',
+    });
+    expect(result).not.toHaveProperty('advisorModel');
+  });
+
   it('does not carry model-less mode/provider onto a fallback model', () => {
     const result = resolveModelConfigWithFallback(
       'claude-code',
