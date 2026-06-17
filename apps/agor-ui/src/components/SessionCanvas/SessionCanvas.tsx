@@ -1131,7 +1131,11 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
             if (positionConfirmed) {
               delete localPositionsRef.current[newNode.id];
-              return { ...newNode, selected: existingNode?.selected, zIndex: existingNode?.zIndex ?? newNode.zIndex };
+              return {
+                ...newNode,
+                selected: existingNode?.selected,
+                zIndex: existingNode?.zIndex ?? newNode.zIndex,
+              };
             }
 
             let positionToUse = localPosition;
@@ -1144,10 +1148,19 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               }
             }
 
-            return { ...newNode, position: positionToUse, selected: existingNode?.selected, zIndex: existingNode?.zIndex ?? newNode.zIndex };
+            return {
+              ...newNode,
+              position: positionToUse,
+              selected: existingNode?.selected,
+              zIndex: existingNode?.zIndex ?? newNode.zIndex,
+            };
           }
 
-          return { ...newNode, selected: existingNode?.selected, zIndex: existingNode?.zIndex ?? newNode.zIndex };
+          return {
+            ...newNode,
+            selected: existingNode?.selected,
+            zIndex: existingNode?.zIndex ?? newNode.zIndex,
+          };
         });
       },
       []
