@@ -47,7 +47,7 @@ export function Hero({
               className={styles.secondaryButton}
               onClick={() => setIsContactOpen(true)}
             >
-              Join the Private Beta →
+              Contact us →
             </button>
             <Link
               href={GITHUB_REPO_URL}
