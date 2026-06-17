@@ -1,7 +1,9 @@
 import {
   BoardRepository,
   BranchRepository,
+  type Database,
   GroupRepository,
+  KnowledgeNamespaceRepository,
   RepoRepository,
   UsersRepository,
 } from '@agor/core/db';
@@ -806,6 +808,189 @@ describe('BranchesService managed environment control authorization', () => {
       service.startEnvironment(branch.branch_id, paramsFor(member.user_id, 'member'))
     ).rejects.toThrow(/'all' branch permission or admin access/);
     expect(getSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('BranchesService assistant home Knowledge namespace guard', () => {
+  async function createAssistantKbHarness(db: Database) {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branches = new BranchRepository(db);
+    const namespaces = new KnowledgeNamespaceRepository(db);
+
+    const owner = await users.create({
+      email: 'assistant-kb-owner@example.com',
+      name: 'Assistant KB Owner',
+      role: 'member',
+    });
+    const namespaceOwner = await users.create({
+      email: 'assistant-kb-namespace-owner@example.com',
+      name: 'Assistant KB Namespace Owner',
+      role: 'member',
+    });
+    const repo = await repos.create({
+      name: 'assistant-kb-repo',
+      slug: 'assistant-kb-repo',
+      repo_type: 'local',
+      local_path: '/tmp/assistant-kb-repo',
+      default_branch: 'main',
+    });
+
+    const currentNamespace = await namespaces.create({
+      slug: 'assistant-current-home',
+      display_name: 'Assistant Current Home',
+      owner_user_id: namespaceOwner.user_id,
+      others_can: 'read',
+    });
+    const branch = await branches.create({
+      branch_id: '019f0000-0000-7000-8000-00000000e101' as BranchID,
+      repo_id: repo.repo_id,
+      name: 'assistant-kb',
+      ref: 'assistant-kb',
+      path: '/tmp/assistant-kb-repo/assistant-kb',
+      created_by: owner.user_id as UUID,
+      branch_unique_id: 9101,
+      new_branch: true,
+      custom_context: {
+        assistant: {
+          kind: 'assistant',
+          displayName: 'Assistant KB',
+          kb: {
+            primary_namespace_id: currentNamespace.namespace_id,
+            primary_namespace_slug: currentNamespace.slug,
+            memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
+            default_visibility: currentNamespace.visibility_default,
+            global_access: 'write',
+            grants: [],
+          },
+        },
+      },
+    });
+
+    const app = {
+      service(path: string) {
+        if (path === 'branches') return { find: vi.fn(async () => []) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+
+    return {
+      owner,
+      namespaceOwner,
+      branch,
+      namespaces,
+      service: new BranchesService(db, app),
+      params: { provider: 'rest', user: owner } as never,
+    };
+  }
+
+  function homeNamespacePatch(namespaceId: string, namespaceSlug: string) {
+    return {
+      custom_context: {
+        assistant: {
+          kb: {
+            primary_namespace_id: namespaceId,
+            primary_namespace_slug: namespaceSlug,
+            memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
+            default_visibility: 'public',
+            global_access: 'write',
+            grants: [],
+          },
+        },
+      },
+    };
+  }
+
+  dbTest('allows saving policy when the home namespace is unchanged', async ({ db }) => {
+    const { branch, service, params } = await createAssistantKbHarness(db);
+    const currentKb = (
+      branch.custom_context?.assistant as
+        | { kb?: { primary_namespace_id?: string; primary_namespace_slug?: string } }
+        | undefined
+    )?.kb;
+
+    await expect(
+      service.patch(
+        branch.branch_id,
+        {
+          custom_context: {
+            assistant: {
+              kb: {
+                primary_namespace_id: currentKb?.primary_namespace_id,
+                primary_namespace_slug: currentKb?.primary_namespace_slug,
+                memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
+                default_visibility: 'public',
+                global_access: 'read',
+                grants: [],
+              },
+            },
+          },
+        } as never,
+        params
+      )
+    ).resolves.toMatchObject({ branch_id: branch.branch_id });
+  });
+
+  dbTest('rejects changing home namespace to a namespace without write access', async ({ db }) => {
+    const { branch, namespaceOwner, namespaces, service, params } =
+      await createAssistantKbHarness(db);
+    const readOnly = await namespaces.create({
+      slug: 'assistant-read-only-home',
+      display_name: 'Assistant Read Only Home',
+      owner_user_id: namespaceOwner.user_id,
+      others_can: 'read',
+    });
+
+    await expect(
+      service.patch(
+        branch.branch_id,
+        homeNamespacePatch(readOnly.namespace_id, readOnly.slug) as never,
+        params
+      )
+    ).rejects.toThrow(/write access/);
+  });
+
+  dbTest('rejects changing home namespace when ID and slug disagree', async ({ db }) => {
+    const { branch, namespaces, service, params } = await createAssistantKbHarness(db);
+    const writable = await namespaces.create({
+      slug: 'assistant-writable-home',
+      display_name: 'Assistant Writable Home',
+      others_can: 'write',
+    });
+
+    await expect(
+      service.patch(
+        branch.branch_id,
+        homeNamespacePatch(writable.namespace_id, 'wrong-slug') as never,
+        params
+      )
+    ).rejects.toThrow(/slug does not match/);
+  });
+
+  dbTest('allows changing home namespace to a writable namespace', async ({ db }) => {
+    const { branch, namespaces, service, params } = await createAssistantKbHarness(db);
+    const writable = await namespaces.create({
+      slug: 'assistant-writable-home-ok',
+      display_name: 'Assistant Writable Home OK',
+      others_can: 'write',
+    });
+
+    await expect(
+      service.patch(
+        branch.branch_id,
+        homeNamespacePatch(writable.namespace_id, writable.slug) as never,
+        params
+      )
+    ).resolves.toMatchObject({
+      custom_context: {
+        assistant: {
+          kb: {
+            primary_namespace_id: writable.namespace_id,
+            primary_namespace_slug: writable.slug,
+          },
+        },
+      },
+    });
   });
 });
 

@@ -27,7 +27,6 @@ interface KnowledgeTabProps {
   branch: Branch;
   client: AgorClient | null;
   canEdit: boolean;
-  onBranchUpdated?: (branch: Branch) => void;
 }
 
 type EditableGrant = AssistantKnowledgeGrant & { key: string };
@@ -58,12 +57,7 @@ function namespaceSelectLabel(namespace: KnowledgeNamespace) {
   return `${namespace.display_name} (${namespace.slug}) · ${permission}`;
 }
 
-export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({
-  branch,
-  client,
-  canEdit,
-  onBranchUpdated,
-}) => {
+export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canEdit }) => {
   const { showSuccess, showError } = useThemedMessage();
   const assistant = useMemo(() => getAssistantConfig(branch), [branch]);
   const initialKb = assistant?.kb;
@@ -135,7 +129,6 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({
       setNamespace(result.namespace);
       const nextKb = getAssistantConfig(result.branch)?.kb ?? kb;
       setKb(nextKb);
-      onBranchUpdated?.(result.branch);
       showSuccess('Assistant Knowledge namespace is ready');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -152,16 +145,13 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({
     try {
       const updated = (await client.service('branches').patch(branch.branch_id, {
         custom_context: {
-          ...(branch.custom_context ?? {}),
           assistant: {
-            ...assistant,
             kb: nextKb,
           },
         },
       } as Partial<Branch>)) as Branch;
       const savedKb = getAssistantConfig(updated)?.kb ?? nextKb;
       setKb(savedKb);
-      onBranchUpdated?.(updated);
       showSuccess('Assistant Knowledge policy saved');
     } catch (err) {
       showError(err instanceof Error ? err.message : String(err));
