@@ -1,4 +1,11 @@
-import type { AgorClient, AssistantConfig, Branch, Repo, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  AssistantConfig,
+  Branch,
+  KnowledgeNamespace,
+  Repo,
+  User,
+} from '@agor-live/client';
 import { render } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactElement, ReactNode } from 'react';
@@ -28,6 +35,7 @@ export interface StubClientOptions {
   failBranchPatch?: boolean;
   /** Throw a 500-style error on the initial owners.find load. */
   failOwnersFind?: boolean;
+  namespaces?: KnowledgeNamespace[];
 }
 
 export function makeStubClient(opts: StubClientOptions = {}): {
@@ -70,7 +78,20 @@ export function makeStubClient(opts: StubClientOptions = {}): {
           if (path === 'branches/:id/effective-access') {
             return opts.effectiveAccess ?? { can: 'session', is_owner: false, source: 'others' };
           }
+          if (path === 'kb/namespaces') {
+            return opts.namespaces ?? [];
+          }
           return [];
+        },
+        async get(id: string) {
+          if (path === 'kb/namespaces') {
+            const namespace = opts.namespaces?.find((item) => item.namespace_id === id);
+            if (namespace) return namespace;
+            const err = new Error('not found') as Error & { code?: number };
+            err.code = 404;
+            throw err;
+          }
+          return { id };
         },
         async findAll(args: unknown) {
           calls.push({ service: path, method: 'findAll', args: [args] });

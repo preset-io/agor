@@ -7,7 +7,7 @@
  */
 
 import type { AgorClient, Branch, User } from '@agor-live/client';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { BranchModal } from './BranchModal';
 import {
@@ -89,5 +89,82 @@ describe('BranchModal — permissions tab visibility', () => {
 
     expect(await screen.findByRole('tab', { name: /assistant/i })).toBeInTheDocument();
     expect(await screen.findByRole('tab', { name: /permissions/i })).toBeInTheDocument();
+  });
+
+  it('lets assistant owners change the home Knowledge namespace from the Knowledge tab', async () => {
+    const seb = makeUser({ user_id: 'seb', role: 'member' });
+    const branch = makeAssistantBranch(
+      { created_by: seb.user_id },
+      {
+        kb: {
+          primary_namespace_id: 'ns-old',
+          primary_namespace_slug: 'old-home',
+          memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
+          default_visibility: 'public',
+          global_access: 'write',
+          grants: [],
+        },
+      }
+    );
+    const { client, calls } = makeStubClient({
+      owners: [seb],
+      users: [seb],
+      namespaces: [
+        {
+          namespace_id: 'ns-old',
+          slug: 'old-home',
+          display_name: 'Old Home',
+          kind: 'branch',
+          visibility_default: 'public',
+          others_can: 'write',
+          effective_permission: 'own',
+          created_at: new Date(),
+          archived: false,
+        },
+        {
+          namespace_id: 'ns-new',
+          slug: 'new-home',
+          display_name: 'New Home',
+          kind: 'team',
+          visibility_default: 'private',
+          others_can: 'none',
+          effective_permission: 'write',
+          created_at: new Date(),
+          archived: false,
+        },
+      ],
+    });
+
+    renderBranchModal({ branch, currentUser: seb, client });
+
+    fireEvent.click(await screen.findByRole('tab', { name: /knowledge/i }));
+    fireEvent.mouseDown(await screen.findByLabelText(/home knowledge namespace/i));
+    fireEvent.click(await screen.findByText(/New Home/));
+    fireEvent.click(screen.getByRole('button', { name: /save home/i }));
+
+    await waitFor(() => {
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            service: 'branches',
+            method: 'patch',
+            args: expect.arrayContaining([
+              branch.branch_id,
+              expect.objectContaining({
+                custom_context: expect.objectContaining({
+                  assistant: expect.objectContaining({
+                    kb: expect.objectContaining({
+                      primary_namespace_id: 'ns-new',
+                      primary_namespace_slug: 'new-home',
+                      default_visibility: 'private',
+                    }),
+                  }),
+                }),
+              }),
+            ]),
+          }),
+        ])
+      );
+    });
   });
 });

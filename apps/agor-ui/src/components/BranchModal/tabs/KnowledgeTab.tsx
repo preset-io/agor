@@ -38,6 +38,8 @@ const ACCESS_OPTIONS: Array<{ label: string; value: AssistantKnowledgeGrantAcces
   { label: 'Write', value: 'write' },
 ];
 
+const HOME_NAMESPACE_PERMISSIONS = new Set(['write', 'own']);
+
 function emptyKbConfig(): Partial<AssistantKnowledgeConfig> {
   return {
     memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
@@ -49,6 +51,11 @@ function emptyKbConfig(): Partial<AssistantKnowledgeConfig> {
 
 function grantKey(grant: Pick<AssistantKnowledgeGrant, 'namespace_id' | 'namespace_slug'>) {
   return grant.namespace_id || grant.namespace_slug;
+}
+
+function namespaceSelectLabel(namespace: KnowledgeNamespace) {
+  const permission = namespace.effective_permission ?? 'unknown';
+  return `${namespace.display_name} (${namespace.slug}) · ${permission}`;
 }
 
 export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({
@@ -145,6 +152,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({
     try {
       const updated = (await client.service('branches').patch(branch.branch_id, {
         custom_context: {
+          ...(branch.custom_context ?? {}),
           assistant: {
             ...assistant,
             kb: nextKb,
@@ -160,6 +168,19 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({
     } finally {
       setSavingPolicy(false);
     }
+  };
+
+  const selectHomeNamespace = (namespaceId: string) => {
+    const selected = namespaceById.get(namespaceId);
+    if (!selected) return;
+    setKb((current) => ({
+      ...current,
+      primary_namespace_id: selected.namespace_id,
+      primary_namespace_slug: selected.slug,
+      default_visibility: selected.visibility_default,
+      memory_path_template: current.memory_path_template ?? 'memory/{{YYYY-MM-DD}}.md',
+    }));
+    setNamespace(selected);
   };
 
   const updateGrant = (key: string, patch: Partial<AssistantKnowledgeGrant>) => {
@@ -233,39 +254,81 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({
             </Space>
           }
         >
-          {loading ? (
-            <Spin />
-          ) : missing ? (
-            <Alert
-              type="warning"
-              showIcon
-              message="Home namespace is missing or unavailable"
-              description={error || 'namespace for this agent is not set up'}
-            />
-          ) : (
-            <Descriptions column={1} size="small">
-              <Descriptions.Item label="Name">{namespace?.display_name}</Descriptions.Item>
-              <Descriptions.Item label="Slug">
-                <Typography.Text code>
-                  {namespace?.slug ?? kb.primary_namespace_slug}
-                </Typography.Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Your permission">
-                <Tag>{namespace?.effective_permission ?? 'unknown'}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Default document visibility">
-                <Tag>{namespace?.visibility_default ?? kb.default_visibility}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Others can">
-                <Tag>{namespace?.others_can ?? 'unknown'}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Memory path">
-                <Typography.Text code>
-                  {kb.memory_path_template ?? 'memory/{{YYYY-MM-DD}}.md'}
-                </Typography.Text>
-              </Descriptions.Item>
-            </Descriptions>
-          )}
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              The home namespace is where this assistant stores its memory and where
+              assistant-specific Knowledge tools start by default. Choose a namespace you can write
+              to.
+            </Typography.Paragraph>
+
+            {canEdit && (
+              <Space.Compact style={{ width: '100%' }}>
+                <Select
+                  showSearch
+                  aria-label="Home Knowledge namespace"
+                  placeholder="Select home Knowledge namespace"
+                  value={kb.primary_namespace_id}
+                  loading={loading}
+                  disabled={!client || repairing}
+                  optionFilterProp="label"
+                  onChange={selectHomeNamespace}
+                  style={{ minWidth: 360, flex: 1 }}
+                  options={namespaces.map((item) => {
+                    const canUseAsHome = HOME_NAMESPACE_PERMISSIONS.has(
+                      item.effective_permission ?? 'none'
+                    );
+                    return {
+                      label: namespaceSelectLabel(item),
+                      value: item.namespace_id,
+                      disabled: !canUseAsHome && item.namespace_id !== kb.primary_namespace_id,
+                    };
+                  })}
+                />
+                <Button
+                  type="primary"
+                  onClick={() => patchKb(kb)}
+                  loading={savingPolicy}
+                  disabled={!client || !kb.primary_namespace_id}
+                >
+                  Save home
+                </Button>
+              </Space.Compact>
+            )}
+
+            {loading ? (
+              <Spin />
+            ) : missing ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="Home namespace is missing or unavailable"
+                description={error || 'namespace for this agent is not set up'}
+              />
+            ) : (
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label="Name">{namespace?.display_name}</Descriptions.Item>
+                <Descriptions.Item label="Slug">
+                  <Typography.Text code>
+                    {namespace?.slug ?? kb.primary_namespace_slug}
+                  </Typography.Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="Your permission">
+                  <Tag>{namespace?.effective_permission ?? 'unknown'}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Default document visibility">
+                  <Tag>{namespace?.visibility_default ?? kb.default_visibility}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Others can">
+                  <Tag>{namespace?.others_can ?? 'unknown'}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Memory path">
+                  <Typography.Text code>
+                    {kb.memory_path_template ?? 'memory/{{YYYY-MM-DD}}.md'}
+                  </Typography.Text>
+                </Descriptions.Item>
+              </Descriptions>
+            )}
+          </Space>
         </Card>
 
         <Card
