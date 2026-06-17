@@ -3,7 +3,6 @@ import { SearchOutlined } from '@ant-design/icons';
 import { Badge, Drawer, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
-import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import {
   getMatchSnippet,
@@ -17,6 +16,7 @@ import {
 import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
+import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
 import { HighlightMatch } from '../HighlightMatch';
 import { BranchPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
