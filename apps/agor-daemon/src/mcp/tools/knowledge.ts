@@ -500,11 +500,15 @@ function shapeKnowledgeTreeResponse(
   const foldersByPath = new Map<string, KnowledgeTreeFolder>([[prefix, root]]);
   for (const doc of docs) {
     const relativePath =
-      prefix && doc.path.startsWith(`${prefix}/`) ? doc.path.slice(prefix.length + 1) : doc.path;
+      prefix && doc.path === prefix
+        ? (doc.path.split('/').filter(Boolean).at(-1) ?? doc.path)
+        : prefix && doc.path.startsWith(`${prefix}/`)
+          ? doc.path.slice(prefix.length + 1)
+          : doc.path;
     const segments = relativePath.split('/').filter(Boolean);
     if (segments.length === 0) continue;
     const folderSegments = segments.slice(0, -1);
-    const visibleFolderSegments = folderSegments.slice(0, Math.max(depth - 1, 0));
+    const visibleFolderSegments = folderSegments.slice(0, depth);
     let current = root;
     incrementFolderCounts(current);
     let currentPath = prefix;

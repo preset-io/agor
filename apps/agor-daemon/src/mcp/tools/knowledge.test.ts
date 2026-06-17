@@ -563,6 +563,133 @@ describe('Knowledge MCP input schemas', () => {
     expect(JSON.stringify(result)).not.toContain('metadata');
   });
 
+  it('places an exact pathPrefix document at the tree root', async () => {
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'runbooks/deploy.md',
+          uri: 'agor://kb/global/runbooks/deploy.md',
+          title: 'Deploy',
+          kind: 'doc',
+          visibility: 'public',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: null,
+        score: 0,
+      },
+    ]);
+    const tools = await captureKnowledgeTools({ 'kb/search': { find } });
+
+    const result = textResultJson(
+      await tools.agor_kb_tree.handler?.({
+        namespace: 'global',
+        pathPrefix: 'runbooks/deploy.md',
+      })
+    ) as Record<string, any>;
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          path_prefix: 'runbooks/deploy.md',
+        }),
+      })
+    );
+    expect(result.tree).toEqual([
+      {
+        type: 'doc',
+        title: 'Deploy',
+        kind: 'doc',
+        path: 'runbooks/deploy.md',
+        uri: 'agor://kb/global/runbooks/deploy.md',
+        reference_uri: 'agor://kb/document/doc-1',
+        status: 'published',
+      },
+    ]);
+  });
+
+  it('expands depth as folder levels below the prefix and groups deeper docs', async () => {
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'guides/a.md',
+          uri: 'agor://kb/global/guides/a.md',
+          title: 'A',
+          kind: 'doc',
+          visibility: 'public',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: null,
+        score: 0,
+      },
+      {
+        document: {
+          document_id: 'doc-2',
+          namespace_id: 'ns-1',
+          path: 'guides/nested/b.md',
+          uri: 'agor://kb/global/guides/nested/b.md',
+          title: 'B',
+          kind: 'doc',
+          visibility: 'public',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: null,
+        score: 0,
+      },
+    ]);
+    const tools = await captureKnowledgeTools({ 'kb/search': { find } });
+
+    const result = textResultJson(
+      await tools.agor_kb_tree.handler?.({ namespace: 'global', depth: 1 })
+    ) as Record<string, any>;
+
+    expect(result.tree).toEqual([
+      {
+        type: 'folder',
+        name: 'guides',
+        path: 'guides',
+        document_count: 2,
+        children: [
+          {
+            type: 'folder',
+            name: '…',
+            path: 'guides/…',
+            document_count: 1,
+            children: [
+              {
+                type: 'doc',
+                title: 'B',
+                kind: 'doc',
+                path: 'guides/nested/b.md',
+                uri: 'agor://kb/global/guides/nested/b.md',
+                reference_uri: 'agor://kb/document/doc-2',
+                status: 'published',
+              },
+            ],
+          },
+          {
+            type: 'doc',
+            title: 'A',
+            kind: 'doc',
+            path: 'guides/a.md',
+            uri: 'agor://kb/global/guides/a.md',
+            reference_uri: 'agor://kb/document/doc-1',
+            status: 'published',
+          },
+        ],
+      },
+    ]);
+  });
+
   it('includes full Knowledge search content only when explicitly requested', async () => {
     const find = vi.fn().mockResolvedValue([
       {
