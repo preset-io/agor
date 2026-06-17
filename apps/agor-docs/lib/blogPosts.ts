@@ -9,6 +9,14 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'agent-modeling-101',
+    title: 'Agent Modeling 101: Designing Long-Lived Agents for Teams',
+    description:
+      'High-level considerations for scoping, operating, governing, and building trust with persistent agents that help teams manage real workflows.',
+    date: '2026-06-15',
+    image: '/images/blog/agent-modeling-101.png',
+  },
+  {
     slug: 'agor-assistants',
     title: 'Introducing Agor Assistants',
     description:

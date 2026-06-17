@@ -1,25 +1,29 @@
 ---
-title: Features Overview
-description: A map of what Agor does — branches, sessions, boards, assistants, Knowledge, MCP server, rich chat UX, multiplayer, environments, scheduler, cards, artifacts, message gateway.
+title: Feature Map
+description: A grouped map of Agor's core workflow, agents and context, team workflow, product experience, and technical reference surfaces.
 ---
 
-# Features Overview
+# Feature Map
 
-A map of what Agor does. The first three are the foundation everything else builds on — start there if you're new. Click into any feature for the full story.
+Agor is the **team command center for all things agentic**: branches, sessions, boards, assistants, shared context, and runtime surfaces in one workspace.
+
+If you're new, start with the core workflow. Everything else extends one of these primitives.
 
 ---
 
-## 🌳 [Branches](/guide/branches)
+## Core workflow
+
+These are the concepts that deserve first-read visibility because they explain how Agor organizes work.
+
+### 🌳 [Branches](/guide/branches)
 
 **The unit of work in Agor.** A git branch pinned to a board — branch, isolated environment, sessions, and conversations all attached. Multiple branches coexist with their own ports, dependencies, and database state, so parallel work doesn't collide.
 
-**Use when:** Always. Branches are how Agor organizes everything — you'll create one for each issue, PR, or experiment.
+**Use when:** Always. Branches are how Agor organizes each issue, PR, or experiment.
 
----
+### 🧵 [Sessions & Trees](/guide/sessions)
 
-## 🧵 [Sessions & Trees](/guide/sessions)
-
-**Agent conversations with genealogy.** A session is one Claude Code / Codex / Gemini conversation pinned to a branch. Fork to explore alternatives without losing the original path; spawn subsessions for focused subtasks that report back to the parent. The result is a visual tree of how a piece of work actually unfolded.
+**Agent conversations with genealogy.** A session is one Claude Code / Codex / Gemini conversation inside a branch. Fork to explore alternatives without losing the original path; spawn subsessions for focused subtasks that report back to the parent.
 
 **Use when:** You want to branch a conversation, delegate a subtask, or keep a clean trail of what each agent did and why.
 
@@ -29,100 +33,105 @@ A map of what Agor does. The first three are the foundation everything else buil
   style={{ maxWidth: '400px', borderRadius: '8px' }}
 />
 
----
+### 🗺️ [Boards & Zones](/guide/boards)
 
-## 🗺️ [Boards & Zones](/guide/boards)
+**Spatial canvas for branches.** A board is a 2D Figma-like canvas where branches live as cards. Zones are regions on the board that organize work and can trigger templated prompts when you drop a branch into them.
 
-**Spatial canvas for branches.** A board is a 2D Figma-style canvas where branches live as cards. Zones are regions on the board that organize work — and can trigger templated prompts when you drop a branch into them ("analyze this issue", "review this PR", "deploy"). Build kanban flows or freeform pipelines.
-
-**Use when:** You need an at-a-glance view of in-flight work, or want to automate "when something lands here, run this prompt."
+**Use when:** You need an at-a-glance view of in-flight work, or want to automate “when something lands here, run this prompt.”
 
 ---
 
-## 🤖 [Assistants](/guide/assistants)
+## Agents & context
 
-**Persistent AI companions that live in your workspace.** Long-lived agents with file-based memory, identity, and skills, running on heartbeat schedules and orchestrating work across boards. Inspired by [OpenClaw](https://openclaw.ai/), adapted for teams.
+These features explain how Agor becomes a durable team workspace, not just a place to run one-off prompts.
+
+### 🤖 [Assistants](/guide/assistants)
+
+**Persistent AI companions that live in your workspace.** Long-lived agents with file-based memory, identity, and skills, running on heartbeat schedules and orchestrating work across boards.
 
 **Use when:** You want an agent that _remembers_ across sessions and proactively manages a project — not a one-off conversation.
 
----
+### 🧠 [Knowledge](/guide/knowledge)
 
-## 🧠 [Knowledge](/guide/knowledge)
-
-**Built-in context for humans and agents.** A default place to file decisions, runbooks, prompts, assistant memory, and operational notes when there is no obvious home yet. Markdown pages get version history, rich Streamdown rendering, text search by default, optional semantic/hybrid search, and graph links between documents.
+**Built-in context for humans and agents.** A default place to file decisions, runbooks, prompts, assistant memory, and operational notes when there is no obvious home yet.
 
 **Use when:** Context should be easy for the whole Agor workspace to find, update, link, and reuse across branches, sessions, assistants, and people.
 
----
+### 🔌 [Agor MCP Server](/guide/internal-mcp)
 
-## 🔌 [Agor MCP Server](/guide/internal-mcp)
+**Anything a user can do in Agor, an agent can do too.** The daemon exposes MCP tools for sessions, branches, boards, zones, users, environments, and more. Every session is auto-issued an MCP token, so agents are self-aware and can act on their own context.
 
-**Anything a user can do in Agor, an agent can do too.** The daemon exposes a Model Context Protocol (MCP) server with tools for sessions, branches, boards, zones, users, environments, and more. Every session is auto-issued an MCP token, so agents are self-aware and can act on their own context.
-
-**Use when:** You want agents to _operate_ Agor itself — spawn peers, reorganize the board, create branches, prompt other sessions.
-
-This is the foundational layer that makes assistants, scheduled prompts, message gateway, cards, and artifacts all possible.
+**Use when:** You want agents to operate Agor itself — spawn peers, reorganize boards, create branches, prompt other sessions, or publish reports.
 
 ---
 
-## 💬 [Rich Chat UX](/guide/rich-chat-ux)
+## Team workflow
 
-**A CLI can't show you this.** Per-prompt token and dollar accounting, model and effort selectors, live context-window meter, structured tool blocks, todo lists, message queueing, file/user autocomplete, favicon status dots, completion chimes, and Streamdown-rendered markdown with Mermaid + KaTeX + syntax highlighting.
+These features make the workspace collaborative, automated, and usable across multiple branches and teammates.
 
-**Use when:** Always. This is what makes Agor's surface objectively richer than running a coding agent in a terminal.
+### 👥 [Multiplayer & Social](/guide/multiplayer-social)
 
----
+**Live collaboration around agent work.** Live cursors, facepile, real-time branch movement, scoped comments, attention pulses for completed work, and shared multiplayer terminal sessions.
 
-## 👥 [Multiplayer & Social](/guide/multiplayer-social)
+**Use when:** Working with teammates on the same board, or when you want spatial awareness of where work stands.
 
-**Figma for AI coding.** Live cursors, facepile, real-time branch movement, scoped/spatial comments on boards/zones/branches/sessions, attention pulse for completed work, and shared multiplayer terminal sessions via tmux.
+### 🌳 [Environments](/guide/environment-configuration)
 
-**Use when:** Working with teammates on the same board, or just want spatial awareness of where you've been.
+**One-click dev servers per branch, with no port collisions.** Configure start/stop commands once on the repo, with templates that derive unique ports from each branch's ID. Everyone on your team gets one-click start/stop, health checks, and logs.
 
----
+**Use when:** Working on multiple PRs simultaneously and tired of “kill your dev server so I can test mine.”
 
-## 🌳 [Environments](/guide/environment-configuration)
+### ⏰ [Scheduler](/guide/scheduler)
 
-**One-click dev servers per branch, with no port collisions.** Configure start/stop commands once on the repo, with templates that derive unique ports from each branch's ID. Everyone on your team gets one-click start/stop on every branch, with health checks and live logs.
-
-**Use when:** Working on multiple PRs simultaneously and tired of "kill your dev server so I can test mine."
-
----
-
-## ⏰ [Scheduler](/guide/scheduler)
-
-**Cron-style triggers for templated prompts.** Run a prompt every hour, every Monday, on a custom cadence. Targets a specific branch or session. Powers [assistant](/guide/assistants) heartbeats, daily standups, scheduled audits, periodic backlog grooming.
+**Cron-style triggers for templated prompts.** Run a prompt every hour, every Monday, or on a custom cadence. Scheduler powers assistant heartbeats, daily standups, scheduled audits, and periodic backlog grooming.
 
 **Use when:** Something should happen on a cadence without you remembering to trigger it.
 
+### 📨 [Message Gateway](/guide/message-gateway)
+
+**Slack and GitHub as portals to Agor sessions.** DM a Slack bot or `@agor` mention on a PR — Agor spins up a session on the right branch with the right agent, then routes responses back.
+
+**Use when:** You want to drive Agor from where conversations already happen — chat and PR threads — without switching contexts.
+
 ---
 
-## 🃏 [Cards](/guide/cards) (Beta)
+## Product experience & extensions
 
-**Generic workflow entities on boards.** Not every board entity is a git branch — support tickets, sales leads, patient records, content pieces. Cards are spatial workflow units that an [assistant](/guide/assistants) creates and manages via MCP.
+These pages explain the richer UI surfaces and emerging non-code workflow primitives.
+
+### 💬 [Rich Chat UX](/guide/rich-chat-ux)
+
+**A CLI can't show you this.** Per-prompt token and dollar accounting, model and effort selectors, live context-window meter, structured tool blocks, todo lists, message queueing, autocomplete, status dots, completion chimes, and rich markdown rendering.
+
+**Use when:** Always. This is what makes Agor's conversation surface richer than running a coding agent in a terminal.
+
+### 🧩 [In-Conversation Widgets](/guide/in-conversation-widgets)
+
+**Structured UI inside agent conversations.** Widgets turn specific agent actions into editable UI affordances, such as reviewing environment variables before applying them.
+
+**Use when:** You want agent outputs to become safer, clearer product interactions instead of raw text blobs.
+
+### 🃏 [Cards](/guide/cards) (Beta)
+
+**Generic workflow entities on boards.** Not every board entity is a git branch — support tickets, sales leads, patient records, content pieces. Cards are spatial workflow units that an assistant creates and manages via MCP.
 
 **Use when:** You want spatial oversight of a non-code workflow, with agents driving state changes.
 
----
+### 🎨 [Artifacts](/guide/artifacts)
 
-## 🎨 [Artifacts](/guide/artifacts)
+**Live, interactive applications rendered on the board.** Agents scaffold a small app via MCP and the board shows it running — no deploy, no preview URL.
 
-**Live, interactive applications rendered on the board.** Powered by [Sandpack](https://sandpack.codesandbox.io/), agents scaffold a small app via MCP and the board shows it running — no deploy, no preview URL. Custom dashboards, data visualizations, design mockups, calculators, redline viewers.
-
-**Use when:** You need _visual_ output during agent collaboration. Agents can build interactive UIs in minutes that would take days to hand-roll.
+**Use when:** You need visual output during agent collaboration: dashboards, data visualizations, design mockups, calculators, or redline viewers.
 
 ---
 
-## 📨 [Message Gateway](/guide/message-gateway)
+## Technical reference
 
-**Slack and GitHub as portals to Agor sessions.** DM a Slack bot or `@agor` mention on a PR — Agor spins up a session on the right branch with the right agent, then routes responses back to the platform.
+These pages are important, but they should not compete with the first-read product story.
 
-**Use when:** You want to drive Agor from where conversations already happen — chat, PR threads — without switching contexts.
-
----
-
-## Reference
-
-- **[Architecture](/guide/architecture)** — System design, data flow, the typed TypeScript client
-- **[SDK Comparison](/guide/sdk-comparison)** — Capability matrix across Claude / Codex / Gemini / OpenCode
-- **[Security](/security)** — Deployment modes (simple / insulated / strict), trust boundaries, RBAC
+- **[Architecture](/guide/architecture)** — System design, data flow, and real-time sync.
+- **[TypeScript Client](/guide/typescript-client)** — REST and WebSocket client usage.
+- **[SDK Comparison](/guide/sdk-comparison)** — Capability matrix across Claude / Codex / Gemini / OpenCode.
+- **[API Proxies](/guide/api-proxies)** — CORS bypass infrastructure for artifacts.
+- **[One-Time Launch Auth](/guide/one-time-launch-auth)** — External launch-code handoff into Agor.
+- **[Security](/security)** — Deployment modes, trust boundaries, RBAC, and isolation.

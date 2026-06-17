@@ -6,7 +6,7 @@
  * session from a Claude session with equivalent permissions).
  *
  * Native modes by agent:
- * - Claude Code: default, acceptEdits, bypassPermissions, plan, dontAsk
+ * - Claude Code: default, acceptEdits, bypassPermissions, plan, dontAsk, auto
  * - Gemini: default, autoEdit, yolo
  * - Codex: ask, auto, on-failure, allow-all
  * - Cursor: default, acceptEdits, bypassPermissions (experimental surface)
@@ -38,7 +38,7 @@ export function mapPermissionMode(
     case 'claude-code':
     case 'copilot':
     case 'cursor':
-      // Claude Code native modes: default, acceptEdits, bypassPermissions, plan, dontAsk
+      // Claude Code native modes: default, acceptEdits, bypassPermissions, plan, dontAsk, auto
       switch (mode) {
         // Native Claude modes - pass through
         case 'default':
@@ -47,6 +47,11 @@ export function mapPermissionMode(
         case 'plan':
         case 'dontAsk':
           return mode;
+        // 'auto' (model-classifier permissions) is native to the Claude Agent
+        // SDK / CLI only. Copilot and Cursor SDKs don't expose it, so map it
+        // to their closest equivalent (acceptEdits) for those targets.
+        case 'auto':
+          return agenticTool === 'claude-code' ? 'auto' : 'acceptEdits';
         // Gemini modes → Claude equivalents
         case 'autoEdit':
           return 'acceptEdits';
@@ -55,8 +60,6 @@ export function mapPermissionMode(
         // Codex modes → Claude equivalents
         case 'ask':
           return 'default';
-        case 'auto':
-          return 'acceptEdits';
         case 'on-failure':
           return 'acceptEdits';
         case 'allow-all':

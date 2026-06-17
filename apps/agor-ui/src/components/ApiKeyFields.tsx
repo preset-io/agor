@@ -48,7 +48,12 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
       label: 'Anthropic API Key',
       description: '(pay-as-you-go / Console)',
       placeholder: 'sk-ant-api03-...',
-      docUrl: 'https://console.anthropic.com',
+      docUrl: 'https://platform.claude.com/settings/keys',
+      helper: (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          If you use a Claude subscription, use the Claude Subscription Token below instead.
+        </Text>
+      ),
     },
     {
       field: 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -78,6 +83,18 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
       description: '(Codex)',
       placeholder: 'sk-proj-...',
       docUrl: 'https://platform.openai.com/api-keys',
+      helper: (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Alternative: on the machine Agor runs sessions on, run{' '}
+          <Text code style={{ fontSize: 12 }}>
+            codex login --device-auth
+          </Text>{' '}
+          to use Codex CLI account auth without storing an OpenAI key in Agor.{' '}
+          <Link href="https://agor.live/guide/extended-install#authentication" target="_blank">
+            Learn more →
+          </Link>
+        </Text>
+      ),
     },
     {
       field: 'OPENAI_BASE_URL',
@@ -124,7 +141,12 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
       label: 'Anthropic API Key',
       description: '(pay-as-you-go / Console)',
       placeholder: 'sk-ant-api03-...',
-      docUrl: 'https://console.anthropic.com',
+      docUrl: 'https://platform.claude.com/settings/keys',
+      helper: (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          If you use a Claude subscription, use the Claude Subscription Token below instead.
+        </Text>
+      ),
     },
     {
       field: 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -287,12 +309,12 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
           {/* Built-in per-field helpers retained from the legacy component. */}
           {field === 'CLAUDE_CODE_OAUTH_TOKEN' && !isSet && (
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              Run{' '}
+              On the machine Agor runs sessions on, run{' '}
               <Text code style={{ fontSize: token.fontSizeSM }}>
                 claude setup-token
               </Text>{' '}
-              in a terminal where the Claude CLI is installed and signed in to your Pro/Max plan,
-              then paste the resulting token here.
+              and paste the printed token here. This uses Claude subscription auth instead of a raw
+              API key.
             </Text>
           )}
           {field === 'ANTHROPIC_AUTH_TOKEN' && (

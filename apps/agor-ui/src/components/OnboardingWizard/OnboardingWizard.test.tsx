@@ -111,6 +111,9 @@ describe('OnboardingWizard', () => {
     const codexOption = providerOptions.find((option) => option.value === 'codex');
     expect(claudeOption).toBeInstanceOf(HTMLInputElement);
     expect(claudeOption).toBeChecked();
+    expect(screen.getAllByText(/ANTHROPIC_API_KEY/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText('Subscription'));
+    expect(screen.getByText(/claude setup-token/)).toBeInTheDocument();
     expect(codexOption).toBeInstanceOf(HTMLInputElement);
     expect(codexOption).not.toBeChecked();
     codexOption?.focus();
@@ -128,6 +131,30 @@ describe('OnboardingWizard', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /use a different provider/i }));
     expect(codexOption).toBeChecked();
     expect(screen.queryByText('Configure Your Agent')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/codex login --device-auth/).length).toBeGreaterThan(0);
+  });
+
+  it('can save a Claude subscription token during onboarding', async () => {
+    const onUpdateUser = vi.fn();
+    renderWizard({ onUpdateUser });
+
+    fireEvent.click(screen.getByRole('button', { name: /create your assistant/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^continue$/i }));
+
+    fireEvent.click(await screen.findByText('Subscription'));
+    fireEvent.change(screen.getByPlaceholderText('sk-ant-oat01-...'), {
+      target: { value: 'sk-ant-oat01-test' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save & continue/i }));
+
+    expect(onUpdateUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        agentic_tools: {
+          'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-test' },
+        },
+      })
+    );
   });
 
   it('detects an existing Cursor credential when selecting Cursor', async () => {

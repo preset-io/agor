@@ -31,6 +31,7 @@ import {
   KNOWLEDGE_GRAPH_NODE_TYPES,
   KNOWLEDGE_VISIBILITIES,
   normalizeKnowledgeDocumentIconEmoji,
+  normalizeKnowledgeFolderPath,
   parseKnowledgeUri,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -39,6 +40,7 @@ import { z } from 'zod';
 import {
   markdownOutline,
   resolveHeadingRange,
+  resolveSectionRefRange,
   splitMarkdownLines,
 } from '../../knowledge/markdown-outline.js';
 import {
@@ -405,6 +407,165 @@ function shapeKnowledgeSearchResponse(
   const contentMode = resolveKnowledgeSearchContentMode(args);
   const snippetLines = clampKbSearchSnippetLines(args.snippetLines);
   return shapeKnowledgeSearchResult(enrichWithReferenceUri(result), { contentMode, snippetLines });
+}
+
+type KnowledgeTreeDoc = {
+  type: 'doc';
+  icon?: string | null;
+  title?: string;
+  kind?: string;
+  path: string;
+  uri?: string;
+  reference_uri?: string;
+  status?: string;
+};
+
+type KnowledgeTreeFolder = {
+  type: 'folder';
+  name: string;
+  path: string;
+  document_count: number;
+  children: Array<KnowledgeTreeFolder | KnowledgeTreeDoc>;
+};
+
+function knowledgeSearchRows(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value as Array<Record<string, unknown>>;
+  const data = (value as { data?: unknown } | undefined)?.data;
+  return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
+}
+
+function compactKnowledgeTreeDoc(row: Record<string, unknown>): KnowledgeTreeDoc | null {
+  const document = row.document as Record<string, unknown> | undefined;
+  if (!document || typeof document !== 'object') return null;
+  const documentId = coerceString(document.document_id);
+  const path = coerceString(document.path);
+  if (!path) return null;
+
+  const doc: KnowledgeTreeDoc = {
+    type: 'doc',
+    path,
+  };
+  if (document.icon_emoji !== undefined) doc.icon = coerceString(document.icon_emoji) ?? null;
+  const title = coerceString(document.title);
+  if (title) doc.title = title;
+  const kind = coerceString(document.kind);
+  if (kind) doc.kind = kind;
+  const uri = coerceString(document.uri);
+  if (uri) doc.uri = uri;
+  if (documentId) doc.reference_uri = buildKnowledgeDocumentUri(documentId);
+  const status = coerceString(document.status);
+  if (status) doc.status = status;
+  return doc;
+}
+
+function folderSortKey(item: KnowledgeTreeFolder | KnowledgeTreeDoc): string {
+  return item.type === 'folder' ? `0:${item.name}` : `1:${item.path}`;
+}
+
+function sortKnowledgeTree(folder: KnowledgeTreeFolder): KnowledgeTreeFolder {
+  folder.children.sort((a, b) => folderSortKey(a).localeCompare(folderSortKey(b)));
+  for (const child of folder.children) {
+    if (child.type === 'folder') sortKnowledgeTree(child);
+  }
+  return folder;
+}
+
+function incrementFolderCounts(folder: KnowledgeTreeFolder, count = 1): void {
+  folder.document_count += count;
+}
+
+function shapeKnowledgeTreeResponse(
+  result: unknown,
+  args: {
+    namespace?: unknown;
+    pathPrefix?: unknown;
+    normalizedPathPrefix?: unknown;
+    depth?: unknown;
+    limit?: unknown;
+  }
+): unknown {
+  const rows = knowledgeSearchRows(enrichWithReferenceUri(result));
+  const docs = rows
+    .map(compactKnowledgeTreeDoc)
+    .filter((doc): doc is KnowledgeTreeDoc => Boolean(doc))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const depth = typeof args.depth === 'number' && Number.isFinite(args.depth) ? args.depth : 3;
+  const prefix =
+    coerceString(args.normalizedPathPrefix) ??
+    normalizeKnowledgeFolderPath(coerceString(args.pathPrefix));
+  const root: KnowledgeTreeFolder = {
+    type: 'folder',
+    name: coerceString(args.namespace) ?? 'knowledge',
+    path: prefix,
+    document_count: 0,
+    children: [],
+  };
+
+  const foldersByPath = new Map<string, KnowledgeTreeFolder>([[prefix, root]]);
+  for (const doc of docs) {
+    const relativePath =
+      prefix && doc.path === prefix
+        ? (doc.path.split('/').filter(Boolean).at(-1) ?? doc.path)
+        : prefix && doc.path.startsWith(`${prefix}/`)
+          ? doc.path.slice(prefix.length + 1)
+          : doc.path;
+    const segments = relativePath.split('/').filter(Boolean);
+    if (segments.length === 0) continue;
+    const folderSegments = segments.slice(0, -1);
+    const visibleFolderSegments = folderSegments.slice(0, depth);
+    let current = root;
+    incrementFolderCounts(current);
+    let currentPath = prefix;
+
+    for (const segment of visibleFolderSegments) {
+      currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+      let folder = foldersByPath.get(currentPath);
+      if (!folder) {
+        folder = {
+          type: 'folder',
+          name: segment,
+          path: currentPath,
+          document_count: 0,
+          children: [],
+        };
+        foldersByPath.set(currentPath, folder);
+        current.children.push(folder);
+      }
+      incrementFolderCounts(folder);
+      current = folder;
+    }
+
+    if (folderSegments.length > visibleFolderSegments.length) {
+      const hiddenName = '…';
+      const hiddenPath = currentPath ? `${currentPath}/…` : '…';
+      let hidden = foldersByPath.get(hiddenPath);
+      if (!hidden) {
+        hidden = {
+          type: 'folder',
+          name: hiddenName,
+          path: hiddenPath,
+          document_count: 0,
+          children: [],
+        };
+        foldersByPath.set(hiddenPath, hidden);
+        current.children.push(hidden);
+      }
+      incrementFolderCounts(hidden);
+      current = hidden;
+    }
+
+    current.children.push(doc);
+  }
+
+  const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) ? args.limit : 100;
+  return {
+    namespace: coerceString(args.namespace) ?? null,
+    path_prefix: prefix || null,
+    depth,
+    count: docs.length,
+    truncated: docs.length >= limit,
+    tree: sortKnowledgeTree(root).children,
+  };
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -985,10 +1146,90 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
   );
 
   server.registerTool(
+    'agor_kb_tree',
+    {
+      description:
+        'Browse a Knowledge namespace as a compact folder/document tree. Use this for “show me what is in this namespace” before calling agor_kb_get, agor_kb_outline, or agor_kb_get_range. Returns icon/title/kind/path/URI/reference_uri/status only; no version metadata or content. Uses the same readable namespace and draft visibility rules as agor_kb_search.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        namespace: z
+          .string({
+            error: 'namespace is required and must be a string.',
+          })
+          .refine((value) => value.trim().length > 0, 'namespace cannot be blank.')
+          .describe('Namespace/space slug to browse'),
+        pathPrefix: mcpOptionalNonBlankString(
+          'pathPrefix',
+          'Optional folder/document path prefix inside the namespace'
+        ),
+        depth: z
+          .number({
+            error: 'depth must be a positive integer when provided.',
+          })
+          .int('depth must be an integer.')
+          .positive('depth must be greater than 0.')
+          .max(10, 'depth must be less than or equal to 10.')
+          .optional()
+          .describe('Folder depth to expand below pathPrefix (default: 3, max: 10).'),
+        kind: KnowledgeDocumentKindSchema.optional().describe('Filter by document kind'),
+        status: KnowledgeDocumentStatusSchema.optional().describe(
+          'Filter by lifecycle status: draft or published'
+        ),
+        includeMyDrafts: z
+          .boolean()
+          .optional()
+          .describe('Include documents you authored with status=draft (default: true)'),
+        includeOtherUserDrafts: z
+          .boolean()
+          .optional()
+          .describe(
+            "Include other users' draft documents in browsing (default: false). Drafts remain directly accessible by URL when visibility permits."
+          ),
+        includeArchived: z
+          .boolean()
+          .optional()
+          .describe('Include archived documents (admins only; default: false)'),
+        limit: z
+          .number({
+            error: 'limit must be a positive integer when provided.',
+          })
+          .int('limit must be an integer.')
+          .positive('limit must be greater than 0.')
+          .max(100, 'limit must be less than or equal to 100.')
+          .optional()
+          .describe('Maximum number of documents to include (default: 100, max: 100).'),
+      }),
+    },
+    async (args) => {
+      const service = getOptionalService(ctx, 'kb/search');
+      if (!service) return knowledgeNotImplementedResult('agor_kb_tree', ['kb/search']);
+
+      const normalizedPathPrefix = normalizeKnowledgeFolderPath(coerceString(args.pathPrefix));
+      const query: Record<string, unknown> = {
+        q: '',
+        namespace_slug: coerceString(args.namespace),
+        include_archived: args.includeArchived === true,
+        include_my_drafts: args.includeMyDrafts !== false,
+        include_other_user_drafts: args.includeOtherUserDrafts === true,
+        limit: args.limit ?? 100,
+      };
+      if (normalizedPathPrefix) query.path_prefix = normalizedPathPrefix;
+      if (args.kind) query.kind = args.kind as KnowledgeDocumentKind;
+      if (args.status) query.status = args.status as KnowledgeDocumentStatus;
+
+      if (service.find) {
+        const result = await service.find(mcpParams(ctx, query));
+        return textResult(shapeKnowledgeTreeResponse(result, { ...args, normalizedPathPrefix }));
+      }
+      return knowledgeNotImplementedResult('agor_kb_tree', ['kb/search.find']);
+    }
+  );
+
+  server.registerTool(
     'agor_kb_search',
     {
       description:
-        'Search or browse Agor Knowledge documents. Use this to find candidate docs from metadata and short snippets, then use agor_kb_get, agor_kb_outline, or agor_kb_get_range to read needed content. Supports text, semantic, and hybrid modes when Knowledge embeddings are enabled/configured. Each result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
+        'Search Agor Knowledge documents. For “show me what is in this namespace” browsing, prefer agor_kb_tree for a compact folder tree. Use search to find candidate docs from metadata and short snippets, then use agor_kb_get, agor_kb_outline, or agor_kb_get_range to read needed content. Supports text, semantic, and hybrid modes when Knowledge embeddings are enabled/configured. Each result carries a `reference_uri` (agor://kb/document/<id>) — embed that link in another doc to create a graph edge to it.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         query: z
@@ -1166,7 +1407,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_outline',
     {
       description:
-        'Return a markdown heading outline for a Knowledge document, including 1-based line ranges and the current version token. Use this before targeted edits to avoid reading the full document.',
+        'Return a compact markdown heading outline/skeleton for a Knowledge document, including 1-based line ranges, title breadcrumbs, sectionRef selectors like root.h1[1].h2[2], per-section char counts, and the current version token. Use this before targeted reads/edits to avoid loading the full document.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
@@ -1217,7 +1458,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_get_range',
     {
       description:
-        'Read a bounded line range or heading section from a Knowledge document. Returns current version metadata and optional line numbers so agents can edit without loading the full document.',
+        'Read a bounded line range, section, or section-relative page from a Knowledge document. Prefer sectionRef from agor_kb_outline for title-independent section reads; headingPath + occurrence is also supported for convenience. Returns current version metadata and optional line numbers so agents can edit without loading the full document.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
@@ -1234,6 +1475,10 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         startLine: mcpOptionalPositiveInt('startLine', '1-based inclusive start line'),
         endLine: mcpOptionalPositiveInt('endLine', '1-based inclusive end line'),
         headingPath: mcpOptionalNonBlankString('headingPath', 'Heading path from agor_kb_outline'),
+        sectionRef: mcpOptionalNonBlankString(
+          'sectionRef',
+          'Title-independent section selector from agor_kb_outline, e.g. root.h1[1].h2[2]'
+        ),
         occurrence: mcpOptionalPositiveInt(
           'occurrence',
           'Occurrence for duplicate heading paths (default: 1)'
@@ -1247,6 +1492,27 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .max(20, 'contextLines must be less than or equal to 20.')
           .optional()
           .describe('Extra lines before/after the requested range (default: 2)'),
+        offsetLines: z
+          .number({
+            error: 'offsetLines must be a non-negative integer when provided.',
+          })
+          .int('offsetLines must be an integer.')
+          .min(0, 'offsetLines must be greater than or equal to 0.')
+          .optional()
+          .describe(
+            'Skip this many lines from the selected line range/section before reading (default: 0). Useful for paging through large sections.'
+          ),
+        maxLines: z
+          .number({
+            error: 'maxLines must be a positive integer when provided.',
+          })
+          .int('maxLines must be an integer.')
+          .positive('maxLines must be greater than 0.')
+          .max(1000, 'maxLines must be less than or equal to 1000.')
+          .optional()
+          .describe(
+            'Maximum selected lines to read after offsetLines, before contextLines are added (max: 1000). Omit to read the full selected range/section.'
+          ),
         includeLineNumbers: z
           .boolean()
           .optional()
@@ -1266,18 +1532,35 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const lines = splitMarkdownLines(content);
       let startLine = args.startLine;
       let endLine = args.endLine;
+      const sectionRef = coerceString(args.sectionRef);
       const headingPath = coerceString(args.headingPath);
-      if (headingPath) {
-        const heading = resolveHeadingRange(markdownOutline(content), headingPath, args.occurrence);
+      if (sectionRef || headingPath) {
+        const outline = markdownOutline(content);
+        const heading = sectionRef
+          ? resolveSectionRefRange(outline, sectionRef)
+          : resolveHeadingRange(outline, headingPath as string, args.occurrence);
         startLine = heading.startLine;
         endLine = heading.endLine;
       }
       if (!startLine || !endLine) {
-        throw new Error('Provide startLine + endLine, or headingPath.');
+        throw new Error('Provide startLine + endLine, sectionRef, or headingPath.');
       }
       if (endLine < startLine)
         throw new Error('endLine must be greater than or equal to startLine');
       if (endLine > lines.length) throw new Error('Requested range exceeds document length');
+      const selectedStartLine = startLine;
+      const selectedEndLine = endLine;
+      const isPaged = args.offsetLines !== undefined || args.maxLines !== undefined;
+      if (isPaged) {
+        const offsetLines = args.offsetLines ?? 0;
+        const selectedLineCount = endLine - startLine + 1;
+        if (offsetLines >= selectedLineCount) {
+          throw new Error('offsetLines must be less than the selected range length');
+        }
+        startLine = startLine + offsetLines;
+        endLine =
+          args.maxLines === undefined ? endLine : Math.min(endLine, startLine + args.maxLines - 1);
+      }
       const contextLines = args.contextLines ?? 2;
       const contextStartLine = Math.max(1, startLine - contextLines);
       const contextEndLine = Math.min(lines.length, endLine + contextLines);
@@ -1297,6 +1580,16 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
             endLine,
             contextStartLine,
             contextEndLine,
+            ...(isPaged
+              ? {
+                  sourceRange: {
+                    startLine: selectedStartLine,
+                    endLine: selectedEndLine,
+                    omittedBefore: Math.max(0, startLine - selectedStartLine),
+                    omittedAfter: Math.max(0, selectedEndLine - endLine),
+                  },
+                }
+              : {}),
             content: rangeContent,
             numberedContent,
             contentMd5: md5(lines.slice(startLine - 1, endLine).join('\n')),

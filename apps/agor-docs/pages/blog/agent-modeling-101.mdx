@@ -1,0 +1,302 @@
+---
+title: 'Agent Modeling 101: Designing Long-Lived Agents for Teams'
+description: 'High-level considerations for scoping, operating, governing, and building trust with persistent agents that help teams manage real workflows.'
+date: 2026-06-15
+image: '/images/blog/agent-modeling-101.png'
+---
+
+# Agent Modeling 101: Designing Long-Lived Agents for Teams
+
+Most conversations about agents still start with capabilities: which model, which tools, which benchmark, which workflow, which automation.
+
+That is useful, but it misses the question teams eventually run into:
+
+> What kind of agent are we actually raising?
+
+I do mean _raising_. A long-lived agent is not just a prompt with a tool belt. It has some kind of identity. It accumulates memory. It has access to systems. It may act on behalf of people. It may show up in Slack, GitHub, Linear, a CRM, a data warehouse, or a weekly planning process. It may produce work that other people depend on.
+
+Once an agent crosses that line, you are no longer only designing an automation. You are designing a participant in a workflow.
+
+That means you need to think about scope, context, skills, ownership, observability, trust, and credentials. Not as enterprise theater. As the practical shape of whether the agent becomes useful, safe, and adopted.
+
+## Start by deciding what kind of agent this is
+
+There is a big difference between:
+
+- a one-off coding session that edits a branch,
+- a scheduled summarizer that posts a weekly report,
+- a personal assistant that borrows one user's tools,
+- a team assistant that participates in a shared channel,
+- a domain agent that owns recurring workflows across several systems,
+- and a broad company agent that tries to answer everything.
+
+This post is about the middle and upper parts of that list: long-lived, persisted agents that have memory, use tools, access real systems, and help teams manage important workflows over time.
+
+Those agents need to be modeled. Not over-modeled. Not buried in governance before they produce value. But modeled enough that the team knows what the agent is for, where it operates, what it can see, what it can change, who supervises it, and how it improves.
+
+A useful first pass is to answer five questions:
+
+1. **Scope:** What domain of work does this agent serve?
+2. **Access:** What systems and knowledge does it need?
+3. **Workflows:** What recurring jobs should it help manage?
+4. **Ownership:** Who is responsible for the agent and the workflows it touches?
+5. **Trust:** What oversight loop does it need today, and how can that evolve?
+
+## Scope agents like you scope roles
+
+Agent scoping is one of the hardest design problems.
+
+If an agent is too narrow, you end up with a swarm of hyper-targeted assistants that cannot see enough context to be useful. One agent can read tickets but cannot see the repo. Another can read dashboards but cannot see incidents. Another can write GitHub comments but does not understand the customer thread that triggered the work.
+
+That creates agent sprawl: too many names, too many partial memories, too many places to ask, and too many missing permissions.
+
+If an agent is too broad, it becomes the opposite problem. It sees too much, knows too little about any one workflow, has unclear ownership, and starts acting like a generic chat interface with extra risk attached. The model has too much context, the humans have too little confidence, and nobody knows who is supposed to correct it.
+
+The useful middle looks a lot like employee scope.
+
+A data analyst does not need access to every system in the company, but they probably need access to the warehouse, dashboards, metric definitions, data quality alerts, and the Slack channels where analytics questions happen. A product manager does not need production database credentials, but they may need tickets, roadmap docs, customer feedback, GitHub issues, and release notes. A support operations agent may need the help desk, CRM, incident history, macros, and escalation channels.
+
+That is the right mental model: not one workflow per agent, and not one agent for the whole company. Instead, give an agent a coherent domain where its access, memory, skills, and human supervisors line up.
+
+A scoped agent should have a simple sentence:
+
+> This agent helps **this team** manage **this kind of work** across **these systems**.
+
+If you cannot write that sentence, the agent probably is not modeled yet.
+
+## Give the agent a behavior model, not just a job description
+
+Scope says what the agent does. Personality says how it should show up.
+
+This is easy to dismiss as cosmetic. It is not. Long-lived agents interact with people repeatedly. They interrupt workflows, ask for approvals, push back, summarize messy situations, remind humans to do things, and sometimes tell a team something it does not want to hear. Tone is part of the product surface.
+
+Some agents should be calm and precise. Some should be warm and encouraging. Some should be a little annoying because the workflow needs pressure. Some should be funny because the team will interact with them every week, and a little bit of personality makes the agent feel less like plumbing. The personality can be reinforced in small ways: the Slack avatar, the name, the default greeting, the reminder style, and the agent's equivalent of a [`SOUL.md`](/blog/agor-openclaw) — a thought-through identity file that says how it should behave.
+
+At Preset, we have had fun giving assistants stronger identities:
+
+- **Saul** is legal-oriented, loosely modeled on _Better Call Saul_: contracts, redlines, deal risk, and the kind of careful pushback you want around legal work.
+- **Jarvis** carries the obvious all-things-IT assistant reference.
+- **Blake** helps with deal desk work, with a light nod toward the sales-room intensity people associate with _Glengarry Glen Ross_.
+- **Peggy** helps propose, optimize, and review ad campaigns, with a wink toward the classic advertising persona.
+- **Phoenix** is a debugging and remediation agent: ruthless about root cause and permanent fixes.
+- **Milton**, our accounting-flavored red-stapler-energy agent, had to be tuned down because it drifted too far into character.
+
+The references are not the point by themselves. They are handles. They help the team immediately understand the posture: careful legal pushback, IT concierge, sales urgency, ad-review polish, root-cause discipline. But the last example is important: personality is useful until it gets in the way of judgment, clarity, or trust. An agent can be memorable without turning every interaction into improv.
+
+The deeper question is cultural: what behavior would help this team?
+
+Does the sales team need a hard-ass assistant that says, in effect, "stop whining and go close the deal"? Maybe. Does a code review bot need to counter a culture that is too lax about quality? Maybe. Does it need to soften a culture that is already too harsh? Also maybe.
+
+Agents can reinforce culture, but they can also tune it. A reviewer agent can model the review culture you want: direct but kind, strict on correctness, generous on style preferences. A legal agent can be cautious without becoming a blocker. A support agent can be empathetic without hiding operational risk. A sales agent can create urgency without becoming cringe.
+
+The behavior model should answer questions like:
+
+- Should the agent be deferential, peer-like, managerial, or adversarial?
+- Should it push back when humans are being sloppy?
+- Should it be funny? If so, how much is too much?
+- Should it use a character reference, or only a few traits from one?
+- Should it optimize for speed, precision, caution, morale, or accountability?
+- What should it never joke about?
+- When should it drop the persona and become plain-spoken?
+
+A good agent personality is not a mask pasted on top of the workflow. It is an operating style. It should fit the domain, the risk level, and the culture of the team that has to live with it.
+
+## Reuse context and skills without creating a context landfill
+
+Humans share context across functions. Agents need to as well.
+
+A sales agent, support agent, and product agent may all need the same pricing definitions. Several engineering agents may need the same release process. A data agent and executive reporting agent may both need metric definitions, but not the same write permissions or operating procedures.
+
+The answer is not to paste everything into every agent's instructions. That turns context into sludge. The answer is a segmented knowledge base with clear ownership and access boundaries.
+
+In Agor, this shows up as namespaces: a knowledge namespace can hold docs, memory, prompts, decisions, or skills for a particular domain, and agents or users can be granted read/write access to the namespaces they need. That gives teams a way to reuse context while still controlling who can consume it and who can change it.
+
+The same principle applies to skills. Skills should usually be fairly atomic and reusable:
+
+- how to triage a bug report,
+- how to inspect a failing dashboard,
+- how to prepare a release note,
+- how to draft a customer follow-up,
+- how to query a particular internal API,
+- how to evaluate whether a PR matches a team convention.
+
+An agent then becomes a composition of domain scope, memory, knowledge access, system access, and reusable skills.
+
+The mistake is treating each agent as a bespoke snowflake. The opposite mistake is forcing all agents through one giant shared context. The durable pattern is closer to a permissioned library: small reusable pieces, namespaced ownership, and explicit grants.
+
+## Model workflows, not just capabilities
+
+A well-scoped agent should usually manage multiple workflows.
+
+That might sound like it conflicts with the warning against generalists, but it does not. The distinction is domain coherence.
+
+A data agent might answer metric questions, triage broken dashboards, produce weekly usage reports, help review analytics PRs, and notify owners when a pipeline fails. Those are different workflows, but they belong to the same area of work. They use overlapping context, systems, stakeholders, and review loops.
+
+This is where ownership becomes important. People do not want to operate someone else's agent. They do not want to be assigned as the human-in-the-loop for a workflow they did not help shape. Agents get adopted when the people responsible for the workflow feel like they helped give birth to the agent: they shaped its job, corrected its early work, connected it to the right source of truth, and decided where it should show up.
+
+So do not start with "we built an agent; please use it." Start with a workflow the team already cares about:
+
+1. Pick a recurring pain with clear owners.
+2. Connect the agent to one trusted source of truth, read-only if possible.
+3. Produce a concrete artifact: report, triage list, draft, recommendation, or risk assessment.
+4. Correct it live.
+5. Ask whether it should happen again.
+6. Ask where it should be delivered.
+7. Invite the people who also own that workflow.
+
+That sequence turns a demo into a habit. It also gives the agent a manager, a working environment, and a reason to exist.
+
+## Operate where the team operates
+
+The trust loop is much easier when the agent works in the same place as the team.
+
+If a data team handles analytics questions in `#team-data`, the analytics agent should probably spend a lot of its life there. If release work happens in GitHub and Slack, the release agent should be visible in GitHub and Slack. If support escalations live in a particular channel and ticket queue, the support agent should operate there.
+
+This sounds obvious, but it is one of the most important design choices. Agents should not disappear into private side channels where the owner cannot see their work, correct bad answers, or understand how the team is reacting.
+
+A good default is:
+
+> Have the agent operate where the team doing the work already operates.
+
+That makes oversight natural. The agent's manager can open threads, read the answers it gave, watch the byproducts of its work, and course-correct when it is incomplete, misleading, or simply not aligned with how the team thinks.
+
+This is how we have been operating `@datagor`, our analytics agent. Most of its interaction happens in the team data channel. That means I can see the questions it answers, how it reasons, where it struggles, and when it needs correction. The channel becomes both the work surface and the supervision surface.
+
+The analogy is a new employee or intern. You do not put a new hire in a sealed room with customers and hope it goes well. You place them near the team, give them bounded responsibilities, watch the early interactions, and increase autonomy as they demonstrate judgment.
+
+Agents should be managed the same way.
+
+## Trust is built through collaboration, not configuration
+
+Trust does not arrive because an agent has a policy file. Trust is built through repeated useful work, visible correction, and a clear escalation path.
+
+Early on, the oversight loop should be tight. The agent should ask before taking risky actions. It should cite what it used. It should operate in visible channels. It should produce artifacts that humans can inspect. The owner should watch a meaningful sample of its interactions.
+
+Over time, the loop can loosen.
+
+Maybe the agent starts read-only. Then it can draft actions. Then it can perform low-risk actions with approval. Then it can perform some actions autonomously and report afterward. The right level of human-in-the-loop is not static. It changes as the agent, workflow, and team mature.
+
+The important questions are operational:
+
+- Who is overseeing this agent?
+- What interactions should they review?
+- Where do corrections get recorded?
+- What happens if the agent misleads someone?
+- What actions require approval?
+- What actions are allowed autonomously?
+- How does the team know what the agent did and why?
+- When should the oversight policy change?
+
+This is not just safety work. It is product work. If the oversight loop is too heavy, the agent never becomes useful. If it is too loose too early, one bad interaction can destroy trust. The art is changing the loop as evidence accumulates.
+
+## Governance and observability are the scaling surface
+
+Speed is the adoption wedge. Governance is what lets the workflow survive success.
+
+A single person trying one agent can get by with a chat window and vibes. A team running persistent assistants across Slack, GitHub, a ticketing system, a warehouse, and scheduled workflows needs more than that.
+
+You need to know:
+
+- which agent did what,
+- who asked it to do it,
+- which credentials or identity it used,
+- which systems it touched,
+- what context it read,
+- what tools it called,
+- what it changed,
+- what it said to humans,
+- and how to replay or inspect the session later.
+
+This is the durable work surface. Day-to-day interaction may happen in Slack, GitHub, email, or tickets, but the agent's work needs a place where it becomes inspectable, governable, and repeatable.
+
+That is one of the reasons Agor exists: not because every interaction should happen on a board, but because once agent work becomes parallel, collaborative, and long-running, teams need a shared place to see the work, inspect the history, manage permissions, and improve the system.
+
+## Decide how identity and credentials work
+
+Agent identity is still an unsettled area, and most teams will live with mixed models for a while.
+
+There are two common patterns.
+
+The first is **credential borrowing**: the agent acts with a user's credentials, either implicitly or after asking for permission. A user says, "open a pull request," and the PR is opened with that user's GitHub token. A user says, "notify these customers," and the action is performed through that user's connected account.
+
+The second is **agent identity**: the agent has its own account, token, or service identity. The PR is opened by the agent. The CRM note is written by the agent. The Slack message comes from the agent.
+
+Both models are valid. Both have problems.
+
+Credential borrowing works well today because most SaaS tools already understand user accounts, OAuth, and personal access tokens. It also preserves user-level permissions: if Alice cannot access a repo, her agent session usually cannot either. But borrowing can be dangerous. A user may be a CRM admin without wanting every agent they prompt to inherit that power. It can also blur accountability if the system cannot clearly show that an agent performed an action using a user's credentials in a specific session.
+
+Agent identity is cleaner in some ways. The audit trail can say, "this named agent did this." Permissions can be scoped to the agent's job. The agent can be onboarded and offboarded like a service account or employee. But many organizations and SaaS tools are not ready for this yet. RBAC is already complicated; adding joint access between users, agents, sessions, and tools adds another dimension.
+
+The future probably looks like Okta for agents: named agents with managed identities, scoped access, approval flows, and centralized audit trails. But most teams are not fully there today.
+
+For now, expect a mixed model:
+
+- some actions happen through operator-provided credentials,
+- some systems give the agent its own account,
+- some workflows require explicit elevation,
+- and some moments require the agent to ask: "I do not have access to this private repo with my own token. Can I use your credentials for this operation?"
+
+The key requirement is traceability. Every meaningful tool call should be traceable back to the agent, the user, the session, the credential source, and the approval path. If you cannot answer "which identity did this, with whose permission, and from which session?" the model is not ready for important workflows.
+
+## How Agor supports this kind of modeling
+
+This is the layer Agor is trying to make concrete.
+
+The point is not just to run agents. It is to give teams the primitives they need to model, operate, and govern long-lived agents in one shared place.
+
+Some of the pieces:
+
+- **Persisted assistants.** [Agor Assistants](/guide/assistants) are the long-lived agent primitive: durable identity, memory, schedules, skills, and a branch-backed home where the agent can accumulate context over time.
+- **Scoped work surfaces.** [Boards](/guide/boards) and [branches](/guide/branches) have their own access controls, so teams can decide who can see, prompt, manage, or own the places where agent work happens.
+- **Assistant ACLs.** Assistants can be scoped by who has access to the assistant and which [Knowledge](/guide/knowledge) namespaces it can use.
+- **Knowledge namespace ACLs.** Knowledge is segmented by namespace with read/write/owner-style access. The useful pattern is tandem authorization: the user and the assistant both need the right access to use a namespace in a workflow.
+- **MCP governance.** Agor has its own [MCP registry](/guide/internal-mcp). Registered MCP servers, auth methods, and tool availability are managed centrally rather than configured ad hoc on every laptop.
+- **Gateway identity choices.** The [Message Gateway](/guide/message-gateway) is where Slack, GitHub, and similar channels connect to agents. A channel can define whether the agent runs as itself, runs as a specific Agor user, or aligns the Slack/GitHub user to an Agor user by email so the session uses that user's credentials and permissions.
+- **Session-level observability.** [Sessions](/guide/sessions) persist the details: messages, tool calls, model, agentic runtime, permission mode, branch context, and the history of what happened.
+
+That last point is bigger than basic auditability. Once AI work is durable and queryable, the team can ask questions that are impossible when everything lives in local terminals: which session deleted this file? Which model is this team actually using? Who is burning tokens? What prompting patterns work best? How often do agents ask for approval before acting? Which workflows became recurring habits?
+
+Agor's bias is archive over delete: keep the record, make it inspectable, and let the team learn from it. Over time, some organizations may want even stricter policies where ordinary users can archive sessions but only admins can hard-delete them. That opens the door to append-only agent operations, deeper analytics, and team-wide visibility across agentic workflows.
+
+There is a much bigger post to write about this. Centralizing agent work in a team command center enables far more than observability: it turns AI usage into something the team can inspect, compare, teach, govern, and improve together.
+
+## A simple checklist for modeling a new agent
+
+When creating a long-lived team agent, I would start with this checklist:
+
+1. **Name the domain.** What area of work does this agent serve?
+2. **Name the owner.** Who is responsible for its behavior and evolution?
+3. **Name the behavior model.** How should it act, push back, joke, encourage, or drop the persona?
+4. **Name the workflows.** What recurring jobs should it help manage?
+5. **Name the work surfaces.** Where will the team interact with it, and where will its durable history live?
+6. **Name the knowledge namespaces.** What context can it read? What can it write?
+7. **Name the skills.** Which reusable capabilities does it need?
+8. **Name the systems.** Which SaaS tools, MCP servers, repos, channels, and databases does it need?
+9. **Name the identities.** Does it act as itself, as the user, or both?
+10. **Name the approval boundaries.** What can it do read-only, draft-only, approval-gated, or autonomously?
+11. **Name the oversight loop.** Who reviews its work, where, and how often?
+12. **Name the trust milestones.** What evidence would justify loosening or tightening oversight?
+13. **Name the failure path.** What happens when it gives a bad answer, takes a wrong action, or loses trust?
+
+This may sound heavy, but it does not need to be a committee process. For an early agent, each answer can be one sentence. The point is not bureaucracy. The point is that long-lived agents become organizational actors, and organizational actors need shape.
+
+## The high-level pattern
+
+The pattern I keep coming back to is this:
+
+- scope agents like roles,
+- model behavior as part of the agent, not decoration,
+- compose them from reusable context and skills,
+- start with workflows people already own,
+- operate where the team operates,
+- build trust through visible collaboration,
+- make governance the scaling surface,
+- and keep identity traceable from action back to session.
+
+That is agent modeling.
+
+Not prompt engineering. Not just workflow automation. The design of persistent, system-connected agents that teams can actually live with.
+
+We are still early. The right patterns will keep changing as models improve, SaaS vendors adapt, and agent identity becomes more formal. But the core questions are already clear: what is this agent for, what can it touch, who owns it, where does it work, how do we trust it, and how do we know what happened?
+
+Answer those, and the agent has a much better chance of becoming part of the team instead of becoming one more clever automation that nobody wants to operate.

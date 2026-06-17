@@ -56,6 +56,7 @@ describe('SessionCanvas zoom shortcuts', () => {
         branches={[]}
         branchById={new Map()}
         boardObjectById={new Map()}
+        boardObjectsByBoardId={new Map()}
         commentById={new Map()}
         cardById={new Map()}
       />

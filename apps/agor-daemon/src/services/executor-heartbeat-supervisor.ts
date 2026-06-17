@@ -60,15 +60,6 @@ export class ExecutorHeartbeatSupervisor {
             completed_at: this.now().toISOString(),
             error_message: EXECUTOR_HEARTBEAT_LOST_MESSAGE,
           });
-          await this.options.app
-            .service('sessions')
-            .patch(task.session_id, { status: 'failed', ready_for_prompt: true })
-            .catch((error: unknown) => {
-              console.warn(
-                `[executor-heartbeat] Failed to mark session ${shortId(task.session_id)} failed after stale heartbeat:`,
-                error instanceof Error ? error.message : String(error)
-              );
-            });
           console.warn(
             `[executor-heartbeat] Marked task ${shortId(task.task_id)} failed after stale heartbeat (${nowMs - currentHeartbeatMs}ms old)`
           );

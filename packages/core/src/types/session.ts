@@ -44,6 +44,7 @@ export type SessionStatus = (typeof SessionStatus)[keyof typeof SessionStatus];
  * - acceptEdits: Auto-accept file edits, ask for other tools (recommended)
  * - bypassPermissions: Allow all operations without prompting
  * - plan: Plan mode (generate plan without executing)
+ * - auto: Model classifier approves/denies prompts; unresolved ones fall through to Agor's UI
  * - dontAsk: Legacy mode for backward compatibility
  *
  * Gemini modes (Gemini CLI SDK - ApprovalMode):
@@ -88,13 +89,16 @@ export type {
  * Get the default permission mode for a given agentic tool
  *
  * Per tool:
- * - Claude Code: 'acceptEdits' — auto-accept file edits. Bash/shell tool
- *   prompts still flow through Agor's permission UI; MCP tool calls for
- *   the built-in `agor` server and any attached MCP servers are
- *   auto-approved by the executor's canUseTool hook (see
- *   sdk-handlers/claude/permissions/permission-hooks.ts), so MCP-heavy
- *   sessions don't death-by-modal. Users can flip a running session to
- *   `bypassPermissions` mid-flight from the session UI.
+ * - Claude Code: 'auto' — the SDK's model classifier approves/denies each
+ *   permission prompt; anything it doesn't confidently auto-resolve still
+ *   falls through to Agor's permission UI via the executor's canUseTool hook
+ *   (see sdk-handlers/claude/permissions/permission-hooks.ts). MCP tool calls
+ *   for the built-in `agor` server and any attached MCP servers are
+ *   auto-approved by that same hook, so MCP-heavy sessions don't
+ *   death-by-modal. Users can flip a running session to `acceptEdits` or
+ *   `bypassPermissions` mid-flight from the session UI. Applies to both the
+ *   Claude Agent SDK (`claude-code`) and interactive CLI (`claude-code-cli`)
+ *   paths, which share this default.
  * - Codex: 'allow-all' — maps to sandbox `workspace-write` + approval
  *   `never` + network-on. Codex's MCP auto-approve is wired through
  *   `default_tools_approval_mode = "approve"` on each server config
@@ -122,7 +126,7 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
     case 'cursor':
       return 'bypassPermissions'; // Cursor SDK is experimental/autonomous until permission callbacks exist
     default:
-      return 'acceptEdits'; // Claude Code
+      return 'auto'; // Claude Code (SDK + CLI): model-classifier permissions
   }
 }
 

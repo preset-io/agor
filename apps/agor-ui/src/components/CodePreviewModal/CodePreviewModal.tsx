@@ -1,6 +1,6 @@
 import type { FileDetail } from '@agor-live/client';
 import { CopyOutlined } from '@ant-design/icons';
-import { Button, Modal } from 'antd';
+import { Button, Modal, Spin } from 'antd';
 import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
 import { copyToClipboard } from '@/utils/clipboard';
 import { getLanguageFromPath } from '@/utils/language';
@@ -60,7 +60,7 @@ export const CodePreviewModal = ({ file, open, onClose, loading }: CodePreviewMo
       ]}
     >
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '2rem' }}>Loading...</div>
+        <Spin style={{ display: 'block', padding: '2rem' }} description="Loading file…" />
       ) : (
         <ThemedSyntaxHighlighter language={language} showLineNumbers>
           {file.content}

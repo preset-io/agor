@@ -22,6 +22,7 @@ import type {
 } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { shallowEqualEntity } from '../utils/shallowEqual';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
@@ -31,11 +32,16 @@ import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
+  { key: 'board-objects', label: 'Board objects' },
+  { key: 'board-comments', label: 'Board comments' },
   { key: 'branches', label: 'Branches' },
   { key: 'repos', label: 'Repos' },
   { key: 'users', label: 'Users' },
   { key: 'cards', label: 'Cards' },
+  { key: 'card-types', label: 'Card types' },
   { key: 'mcp-servers', label: 'MCP servers' },
+  { key: 'session-mcp-servers', label: 'Session MCP links' },
+  { key: 'gateway-channels', label: 'Gateway channels' },
   { key: 'artifacts', label: 'Artifacts' },
 ] as const;
 
@@ -51,6 +57,8 @@ export interface InitialLoadItem {
   count: number;
 }
 
+export type InitialLoadingStage = 'idle' | 'fetching' | 'indexing';
+
 /**
  * All server-backed data maps held in a single state object.
  *
@@ -62,6 +70,14 @@ type DataMaps = {
   sessionsByBranch: Map<string, Session[]>;
   boardById: Map<string, Board>;
   boardObjectById: Map<string, BoardEntityObject>;
+  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
+  // Global placement lookup. Branch placements are unique because a branch can
+  // only have one board-object row at a time.
+  boardObjectByBranchId: Map<string, BoardEntityObject>;
+  // Global placement lookup. Cards follow the same one-row-per-card service
+  // contract as branches; callers needing board-scoped iteration should use
+  // boardObjectsByBoardId instead.
+  boardObjectByCardId: Map<string, BoardEntityObject>;
   commentById: Map<string, BoardComment>;
   cardById: Map<string, CardWithType>;
   cardTypeById: Map<string, CardType>;
@@ -80,6 +96,9 @@ const EMPTY_MAPS: DataMaps = {
   sessionsByBranch: new Map(),
   boardById: new Map(),
   boardObjectById: new Map(),
+  boardObjectsByBoardId: new Map(),
+  boardObjectByBranchId: new Map(),
+  boardObjectByCardId: new Map(),
   commentById: new Map(),
   cardById: new Map(),
   cardTypeById: new Map(),
@@ -96,6 +115,7 @@ const EMPTY_MAPS: DataMaps = {
 interface UseAgorDataResult extends DataMaps {
   initialLoadItems: InitialLoadItem[];
   initialLoadComplete: boolean;
+  loadingStage: InitialLoadingStage;
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
@@ -118,6 +138,130 @@ function replaceIfChanged<T extends object>(
   const next = new Map(prev);
   next.set(id, entity);
   return next;
+}
+
+function removeBoardObjectFromBoardBucket(
+  buckets: Map<string, BoardEntityObject[]>,
+  boardObject: BoardEntityObject
+): Map<string, BoardEntityObject[]> {
+  const bucket = buckets.get(boardObject.board_id);
+  if (!bucket?.some((item) => item.object_id === boardObject.object_id)) return buckets;
+
+  const next = new Map(buckets);
+  const filtered = bucket.filter((item) => item.object_id !== boardObject.object_id);
+  if (filtered.length > 0) next.set(boardObject.board_id, filtered);
+  else next.delete(boardObject.board_id);
+  return next;
+}
+
+function upsertBoardObjectInMaps(
+  prev: DataMaps,
+  boardObject: BoardEntityObject,
+  mode: 'create' | 'patch'
+): DataMaps {
+  const existing = prev.boardObjectById.get(boardObject.object_id);
+  if (mode === 'create' && existing) return prev;
+  if (mode === 'patch' && existing && shallowEqualEntity(existing, boardObject)) return prev;
+
+  const boardObjectById = new Map(prev.boardObjectById);
+  boardObjectById.set(boardObject.object_id, boardObject);
+
+  let boardObjectsByBoardId = prev.boardObjectsByBoardId;
+  if (existing && existing.board_id !== boardObject.board_id) {
+    boardObjectsByBoardId = removeBoardObjectFromBoardBucket(boardObjectsByBoardId, existing);
+  }
+
+  const bucket = boardObjectsByBoardId.get(boardObject.board_id) ?? [];
+  const bucketIndex = bucket.findIndex((item) => item.object_id === boardObject.object_id);
+  if (
+    bucketIndex === -1 ||
+    bucket[bucketIndex] !== boardObject ||
+    !shallowEqualEntity(bucket[bucketIndex], boardObject)
+  ) {
+    const nextBuckets = new Map(boardObjectsByBoardId);
+    if (bucketIndex === -1) {
+      nextBuckets.set(boardObject.board_id, [...bucket, boardObject]);
+    } else {
+      const updatedBucket = [...bucket];
+      updatedBucket[bucketIndex] = boardObject;
+      nextBuckets.set(boardObject.board_id, updatedBucket);
+    }
+    boardObjectsByBoardId = nextBuckets;
+  }
+
+  let boardObjectByBranchId = prev.boardObjectByBranchId;
+  if (existing?.branch_id && existing.branch_id !== boardObject.branch_id) {
+    boardObjectByBranchId = new Map(boardObjectByBranchId);
+    boardObjectByBranchId.delete(existing.branch_id);
+  }
+  if (boardObject.branch_id) {
+    const existingByBranch = boardObjectByBranchId.get(boardObject.branch_id);
+    if (!existingByBranch || !shallowEqualEntity(existingByBranch, boardObject)) {
+      boardObjectByBranchId =
+        boardObjectByBranchId === prev.boardObjectByBranchId
+          ? new Map(boardObjectByBranchId)
+          : boardObjectByBranchId;
+      boardObjectByBranchId.set(boardObject.branch_id, boardObject);
+    }
+  }
+
+  let boardObjectByCardId = prev.boardObjectByCardId;
+  if (existing?.card_id && existing.card_id !== boardObject.card_id) {
+    boardObjectByCardId = new Map(boardObjectByCardId);
+    boardObjectByCardId.delete(existing.card_id);
+  }
+  if (boardObject.card_id) {
+    const existingByCard = boardObjectByCardId.get(boardObject.card_id);
+    if (!existingByCard || !shallowEqualEntity(existingByCard, boardObject)) {
+      boardObjectByCardId =
+        boardObjectByCardId === prev.boardObjectByCardId
+          ? new Map(boardObjectByCardId)
+          : boardObjectByCardId;
+      boardObjectByCardId.set(boardObject.card_id, boardObject);
+    }
+  }
+
+  return {
+    ...prev,
+    boardObjectById,
+    boardObjectsByBoardId,
+    boardObjectByBranchId,
+    boardObjectByCardId,
+  };
+}
+
+function removeBoardObjectFromMaps(prev: DataMaps, boardObject: BoardEntityObject): DataMaps {
+  const existing = prev.boardObjectById.get(boardObject.object_id);
+  if (!existing) return prev;
+
+  const boardObjectById = new Map(prev.boardObjectById);
+  boardObjectById.delete(existing.object_id);
+
+  let boardObjectByBranchId = prev.boardObjectByBranchId;
+  if (
+    existing.branch_id &&
+    boardObjectByBranchId.get(existing.branch_id)?.object_id === existing.object_id
+  ) {
+    boardObjectByBranchId = new Map(boardObjectByBranchId);
+    boardObjectByBranchId.delete(existing.branch_id);
+  }
+
+  let boardObjectByCardId = prev.boardObjectByCardId;
+  if (
+    existing.card_id &&
+    boardObjectByCardId.get(existing.card_id)?.object_id === existing.object_id
+  ) {
+    boardObjectByCardId = new Map(boardObjectByCardId);
+    boardObjectByCardId.delete(existing.card_id);
+  }
+
+  return {
+    ...prev,
+    boardObjectById,
+    boardObjectsByBoardId: removeBoardObjectFromBoardBucket(prev.boardObjectsByBoardId, existing),
+    boardObjectByBranchId,
+    boardObjectByCardId,
+  };
 }
 
 /**
@@ -156,7 +300,6 @@ export function useAgorData(
   const setSessionById = setMapSlice('sessionById');
   const setSessionsByBranch = setMapSlice('sessionsByBranch');
   const setBoardById = setMapSlice('boardById');
-  const setBoardObjectById = setMapSlice('boardObjectById');
   const setCommentById = setMapSlice('commentById');
   const setCardById = setMapSlice('cardById');
   const setCardTypeById = setMapSlice('cardTypeById');
@@ -169,6 +312,7 @@ export function useAgorData(
   const setSessionMcpServerIds = setMapSlice('sessionMcpServerIds');
   const setUserAuthenticatedMcpServerIds = setMapSlice('userAuthenticatedMcpServerIds');
   const [loading, setLoading] = useState(true);
+  const [loadingStage, setLoadingStage] = useState<InitialLoadingStage>('idle');
   const [error, setError] = useState<string | null>(null);
   // Per-item counts captured at fetch-resolution time. Presence in this
   // record means the item is "done"; the value is the size of the fetched
@@ -210,16 +354,24 @@ export function useAgorData(
   // bubbled up. Silent failures are logged for observability; the UI continues
   // to render whatever byId state was last successfully fetched, and the next
   // reconnect or token refresh gets another shot.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: setter helpers only close over stable setMaps; listing them would add noise without preventing stale closures
   const fetchData = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
       if (!client || !enabled) {
         return;
       }
 
+      const debugTimer =
+        !silent && isInitialLoadDebugEnabled()
+          ? createInitialLoadDebugTimer(INITIAL_LOAD_ITEMS)
+          : null;
+      let debugFinishStatus: 'success' | 'error' | null = null;
+      let debugFinishError: unknown;
+
       try {
         if (!silent) {
           setLoading(true);
+          setLoadingStage('fetching');
+          debugTimer?.markStage('fetching');
           setError(null);
           setItemCounts({});
         }
@@ -230,14 +382,17 @@ export function useAgorData(
         const track = <T extends ReadonlyArray<unknown>>(
           key: InitialLoadItemKey,
           p: Promise<T>
-        ): Promise<T> =>
-          p.then((r) => {
+        ): Promise<T> => {
+          const timedPromise = debugTimer?.track(key, p) ?? p;
+          return timedPromise.then((r) => {
             if (!silent) setItemCounts((prev) => ({ ...prev, [key]: r.length }));
             return r;
           });
+        };
 
         // Fetch sessions, boards, board-objects, comments, repos, branches, users, mcp servers, session-mcp relationships in parallel.
         // Task/message detail now comes from per-session reactive state in conversation components.
+        debugTimer?.startFetchPhase();
         const [
           sessionsList,
           boardsList,
@@ -268,13 +423,24 @@ export function useAgorData(
             'boards',
             client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
-          client.service('board-objects').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          client.service('board-comments').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          track(
+            'board-objects',
+            client.service('board-objects').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
+          track(
+            'board-comments',
+            client
+              .service('board-comments')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
           track(
             'cards',
             client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
-          client.service('card-types').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          track(
+            'card-types',
+            client.service('card-types').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
           track(
             'repos',
             client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
@@ -293,21 +459,71 @@ export function useAgorData(
             'mcp-servers',
             client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
-          client
-            .service('session-mcp-servers')
-            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          client
-            .service('gateway-channels')
-            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          track(
+            'session-mcp-servers',
+            client
+              .service('session-mcp-servers')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
+          track(
+            'gateway-channels',
+            client
+              .service('gateway-channels')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
           track(
             'artifacts',
-            client.service('artifacts').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            client.service('artifacts').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                $select: [
+                  'artifact_id',
+                  'branch_id',
+                  'board_id',
+                  'name',
+                  'description',
+                  'path',
+                  'template',
+                  'build_status',
+                  'build_errors',
+                  'content_hash',
+                  'public',
+                  'created_by',
+                  'created_at',
+                  'updated_at',
+                  'archived',
+                  'archived_at',
+                  'fullscreen_url',
+                  'url',
+                ],
+              },
+            })
           ),
           client
             .service('mcp-servers/oauth-status')
             .find()
             .catch(() => ({ authenticated_server_ids: [] })),
         ]);
+        debugTimer?.endFetchPhase();
+
+        if (!silent) {
+          setLoadingStage('indexing');
+          debugTimer?.markStage('indexing');
+          debugTimer?.startIndexing();
+          // Give the browser one paint opportunity so large instances can
+          // visibly advance from "loading lists" to "indexing workspace data"
+          // before the synchronous Map construction below.
+          await new Promise<void>((resolve) => {
+            if (
+              typeof window === 'undefined' ||
+              typeof window.requestAnimationFrame !== 'function'
+            ) {
+              resolve();
+              return;
+            }
+            window.requestAnimationFrame(() => resolve());
+          });
+        }
 
         // Build session Maps for efficient lookups
         const sessionsById = new Map<string, Session>();
@@ -325,86 +541,78 @@ export function useAgorData(
           sessionsByBranchId.get(branchId)!.push(session);
         }
 
-        setSessionById(sessionsById);
-        setSessionsByBranch(sessionsByBranchId);
-
         // Build board Map for efficient lookups
         const boardsMap = new Map<string, Board>();
         for (const board of boardsList) {
           boardsMap.set(board.board_id, board);
         }
-        setBoardById(boardsMap);
-
-        // Build board object Map for efficient lookups
+        // Build board object Maps for efficient lookups
         const boardObjectsMap = new Map<string, BoardEntityObject>();
+        const boardObjectsByBoardMap = new Map<string, BoardEntityObject[]>();
+        const boardObjectByBranchMap = new Map<string, BoardEntityObject>();
+        const boardObjectByCardMap = new Map<string, BoardEntityObject>();
         for (const boardObject of boardObjectsList) {
           boardObjectsMap.set(boardObject.object_id, boardObject);
-        }
-        setBoardObjectById(boardObjectsMap);
 
+          const boardObjectsForBoard = boardObjectsByBoardMap.get(boardObject.board_id);
+          if (boardObjectsForBoard) {
+            boardObjectsForBoard.push(boardObject);
+          } else {
+            boardObjectsByBoardMap.set(boardObject.board_id, [boardObject]);
+          }
+
+          if (boardObject.branch_id) {
+            boardObjectByBranchMap.set(boardObject.branch_id, boardObject);
+          }
+          if (boardObject.card_id) {
+            boardObjectByCardMap.set(boardObject.card_id, boardObject);
+          }
+        }
         // Build comment Map for efficient lookups
         const commentsMap = new Map<string, BoardComment>();
         for (const comment of commentsList) {
           commentsMap.set(comment.comment_id, comment);
         }
-        setCommentById(commentsMap);
-
         // Build card Map for efficient lookups
         const cardsMap = new Map<string, CardWithType>();
         for (const card of cardsList) {
           cardsMap.set(card.card_id, card);
         }
-        setCardById(cardsMap);
-
         // Build card type Map for efficient lookups
         const cardTypesMap = new Map<string, CardType>();
         for (const cardType of cardTypesList) {
           cardTypesMap.set(cardType.card_type_id, cardType);
         }
-        setCardTypeById(cardTypesMap);
-
         // Build repo Map for efficient lookups
         const reposMap = new Map<string, Repo>();
         for (const repo of reposList) {
           reposMap.set(repo.repo_id, repo);
         }
-        setRepoById(reposMap);
-
         // Build branch Map for efficient lookups
         const branchesMap = new Map<string, Branch>();
         for (const branch of branchesList) {
           branchesMap.set(branch.branch_id, branch);
         }
-        setBranchById(branchesMap);
-
         // Build user Map for efficient lookups
         const usersMap = new Map<string, User>();
         for (const user of usersList) {
           usersMap.set(user.user_id, user);
         }
-        setUserById(usersMap);
-
         // Build MCP server Map for efficient lookups
         const mcpServersMap = new Map<string, MCPServer>();
         for (const mcpServer of mcpServersList) {
           mcpServersMap.set(mcpServer.mcp_server_id, mcpServer);
         }
-        setMcpServerById(mcpServersMap);
-
         // Build gateway channel Map for efficient lookups
         const gatewayChannelsMap = new Map<string, GatewayChannel>();
         for (const channel of gatewayChannelsList) {
           gatewayChannelsMap.set(channel.id, channel);
         }
-        setGatewayChannelById(gatewayChannelsMap);
-
         // Build artifact Map for efficient lookups
         const artifactsMap = new Map<string, Artifact>();
         for (const artifact of artifactsList) {
           artifactsMap.set(artifact.artifact_id, artifact);
         }
-        setArtifactById(artifactsMap);
-
         // Group session-MCP relationships by session_id
         const sessionMcpMap = new Map<string, string[]>();
         for (const relationship of sessionMcpList) {
@@ -413,11 +621,32 @@ export function useAgorData(
           }
           sessionMcpMap.get(relationship.session_id)!.push(relationship.mcp_server_id);
         }
-        setSessionMcpServerIds(sessionMcpMap);
-
         // Set per-user OAuth auth status
         const oauthStatus = oauthStatusResult as { authenticated_server_ids?: string[] };
-        setUserAuthenticatedMcpServerIds(new Set(oauthStatus?.authenticated_server_ids ?? []));
+        const userAuthenticatedMcpServerIds = new Set(oauthStatus?.authenticated_server_ids ?? []);
+
+        setMaps({
+          sessionById: sessionsById,
+          sessionsByBranch: sessionsByBranchId,
+          boardById: boardsMap,
+          boardObjectById: boardObjectsMap,
+          boardObjectsByBoardId: boardObjectsByBoardMap,
+          boardObjectByBranchId: boardObjectByBranchMap,
+          boardObjectByCardId: boardObjectByCardMap,
+          commentById: commentsMap,
+          cardById: cardsMap,
+          cardTypeById: cardTypesMap,
+          repoById: reposMap,
+          branchById: branchesMap,
+          userById: usersMap,
+          mcpServerById: mcpServersMap,
+          gatewayChannelById: gatewayChannelsMap,
+          artifactById: artifactsMap,
+          sessionMcpServerIds: sessionMcpMap,
+          userAuthenticatedMcpServerIds,
+        });
+        debugTimer?.endIndexing();
+        debugFinishStatus = 'success';
 
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.
@@ -433,11 +662,18 @@ export function useAgorData(
           console.warn('[useAgorData] silent refetch failed:', err);
           lastSilentFetchFailedRef.current = true;
         } else {
+          debugFinishStatus = 'error';
+          debugFinishError = err;
           setError(err instanceof Error ? err.message : 'Failed to fetch data');
         }
       } finally {
         if (!silent) {
           setLoading(false);
+          setLoadingStage('idle');
+          debugTimer?.markStage('idle');
+          if (debugFinishStatus) {
+            debugTimer?.finish(debugFinishStatus, debugFinishError);
+          }
         }
       }
     },
@@ -468,6 +704,7 @@ export function useAgorData(
     if (!client || !enabled) {
       // No client or disabled = not ready for data fetch, set loading to false
       setLoading(false);
+      setLoadingStage('idle');
       return;
     }
 
@@ -654,23 +891,13 @@ export function useAgorData(
     // Subscribe to board object events
     const boardObjectsService = client.service('board-objects');
     const handleBoardObjectCreated = (boardObject: BoardEntityObject) => {
-      setBoardObjectById((prev) => {
-        if (prev.has(boardObject.object_id)) return prev; // Already exists, shouldn't happen
-        const next = new Map(prev);
-        next.set(boardObject.object_id, boardObject);
-        return next;
-      });
+      setMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'create'));
     };
     const handleBoardObjectPatched = (boardObject: BoardEntityObject) => {
-      setBoardObjectById((prev) => replaceIfChanged(prev, boardObject.object_id, boardObject));
+      setMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'patch'));
     };
     const handleBoardObjectRemoved = (boardObject: BoardEntityObject) => {
-      setBoardObjectById((prev) => {
-        if (!prev.has(boardObject.object_id)) return prev; // Doesn't exist, nothing to remove
-        const next = new Map(prev);
-        next.delete(boardObject.object_id);
-        return next;
-      });
+      setMaps((prev) => removeBoardObjectFromMaps(prev, boardObject));
     };
 
     boardObjectsService.on('created', handleBoardObjectCreated);
@@ -1234,6 +1461,7 @@ export function useAgorData(
     ...maps,
     initialLoadItems,
     initialLoadComplete,
+    loadingStage,
     loading,
     error,
     refetch: fetchData,

@@ -46,6 +46,7 @@ import type {
   ScheduleID,
   ServiceGroupName,
   ServiceTier,
+  Session,
   SessionID,
   SessionMCPServer,
   StreamingEventType,
@@ -116,6 +117,10 @@ import {
 } from './utils/mcp-header-secrets.js';
 import { canControlCliSession } from './utils/mcp-token-authorization.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
+import {
+  sessionCanStartTask,
+  shouldReconcileSessionPromptState,
+} from './utils/session-task-state.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
@@ -893,12 +898,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    */
   const sessionTurnLocks: SessionTurnLocks = new Map();
 
-  function sessionCanStartTask(status: SessionStatus, readyForPrompt?: boolean): boolean {
-    return (
-      status === SessionStatus.IDLE || (status === SessionStatus.FAILED && readyForPrompt === true)
-    );
-  }
-
   /**
    * Helper: Safely patch an entity, returning false if it was deleted mid-execution
    */
@@ -922,6 +921,33 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       }
       throw error;
     }
+  }
+
+  async function reconcileSessionPromptStateIfStuck(
+    session: Session,
+    taskRepo: TaskRepository,
+    params: RouteParams,
+    options: { ignoredTaskIds?: readonly string[] } = {}
+  ): Promise<Session> {
+    if (session.status !== SessionStatus.FAILED || session.ready_for_prompt === true) {
+      return session;
+    }
+
+    const sessionTasks = await taskRepo.findBySession(session.session_id);
+    if (!shouldReconcileSessionPromptState(session, sessionTasks, options)) return session;
+
+    console.warn(
+      `🧹 [PromptState] Repairing stuck session ${shortId(session.session_id)} ` +
+        `(status=${session.status}, ready_for_prompt=${session.ready_for_prompt})`
+    );
+    return (await app.service('sessions').patch(
+      session.session_id,
+      {
+        status: SessionStatus.IDLE,
+        ready_for_prompt: true,
+      },
+      params
+    )) as Session;
   }
 
   /**
@@ -1345,13 +1371,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const createdBy = params.user.user_id;
 
         return await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
-          const lockedSession = await sessionsService.get(id, params);
+          let lockedSession = await sessionsService.get(id, params);
           if (lockedSession.status === SessionStatus.STOPPING) {
             // The earlier STOPPING check was against pre-lock state — re-check
             // here so a session that entered STOPPING while we waited for our
             // turn doesn't accept a prompt.
             throw new Error('Cannot send prompt: session is currently stopping');
           }
+          lockedSession = await reconcileSessionPromptStateIfStuck(lockedSession, taskRepo, params);
           const queuedTasks = await taskRepo.findQueued(id as SessionID);
           const shouldQueue =
             !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
@@ -1552,7 +1579,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return await withSessionTurnLock(sessionTurnLocks, task.session_id, async () => {
           // Re-read session state inside the lock — it may have flipped to
           // RUNNING while we waited for our turn.
-          const session = await sessionsService.get(task.session_id, params);
+          const session = await reconcileSessionPromptStateIfStuck(
+            await sessionsService.get(task.session_id, params),
+            taskRepo,
+            params,
+            { ignoredTaskIds: [task.task_id] }
+          );
 
           if (session.status === SessionStatus.STOPPING) {
             throw new BadRequest('Cannot run task: session is currently stopping');
@@ -2204,7 +2236,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
     );
 
-    const session = await sessionsService.get(sessionId, taskParams);
+    const session = await reconcileSessionPromptStateIfStuck(
+      await sessionsService.get(sessionId, taskParams),
+      taskRepo,
+      taskParams
+    );
 
     if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
       console.log(

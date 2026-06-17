@@ -19,7 +19,16 @@ Agor uses [git branches](https://git-scm.com/docs/git-branch) under the hood, so
 └─ PR:     github.com/me/repo/pull/456
 ```
 
-<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'flex-start', marginTop: '16px', marginBottom: '16px' }}>
+<div
+  style={{
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '12px',
+    alignItems: 'flex-start',
+    marginTop: '16px',
+    marginBottom: '16px',
+  }}
+>
   <img
     src="/screenshots/branch-anatomy.png"
     alt="A branch card on the board showing branch and PR badges, env / files / schedule tabs, and a list of sessions running inside"
@@ -38,7 +47,7 @@ _Left: a branch's static anatomy — branch, PR, env, files, sessions in one til
 
 ## Why a workspace, not just a git branch
 
-A git branch is a ref. An Agor branch is a *workspace*.
+A git branch is a ref. An Agor branch is a _workspace_.
 
 - **Parallel work** — Run 5 features in 5 branches simultaneously. No `git stash`, no "kill your dev server so I can test mine."
 - **Spatial identity** — Each branch is a card on a board. You can see, drag, group, and zone them.
@@ -53,14 +62,14 @@ Each branch is fully isolated — changes in one don't affect another. AI agents
 
 A branch is a filesystem directory plus a database record. The record tracks:
 
-| Field | Purpose |
-|---|---|
-| `name` | Human-readable label shown on the card |
-| `branch` | Git branch checked out in the working directory |
-| `issue_url`, `pull_request_url` | GitHub linkage — auto-injected into zone prompts |
-| `owners` / `others_can` | RBAC permissions (when branch RBAC is enabled) |
-| `board_id` + `(x, y)` | Where the card lives on the canvas |
-| `environment` | Per-branch dev environment (start/stop, ports, URL) |
+| Field                           | Purpose                                             |
+| ------------------------------- | --------------------------------------------------- |
+| `name`                          | Human-readable label shown on the card              |
+| `branch`                        | Git branch checked out in the working directory     |
+| `issue_url`, `pull_request_url` | GitHub linkage — auto-injected into zone prompts    |
+| `owners` / `others_can`         | RBAC permissions (when branch RBAC is enabled)      |
+| `board_id` + `(x, y)`           | Where the card lives on the canvas                  |
+| `environment`                   | Per-branch dev environment (start/stop, ports, URL) |
 
 <img
   src="/screenshots/branch-modal.png"
@@ -164,13 +173,13 @@ The branch is also where several other features attach:
 
 When `execution.branch_rbac: true` is set, branches enforce ownership and a per-tier `others_can` permission:
 
-| Tier | What others can do |
-|---|---|
-| `none` | No access — completely private to owners |
-| `view` | Read branches, sessions, tasks, messages |
-| `session` | **Default.** Create their own sessions on this branch |
-| `prompt` | Prompt any session, including others' (but the session still runs as its creator's identity) |
-| `all` | Full control |
+| Tier      | What others can do                                                                           |
+| --------- | -------------------------------------------------------------------------------------------- |
+| `none`    | No access — completely private to owners                                                     |
+| `view`    | Read branches, sessions, tasks, messages                                                     |
+| `session` | **Default.** Create their own sessions on this branch                                        |
+| `prompt`  | Prompt any session, including others' (but the session still runs as its creator's identity) |
+| `all`     | Full control                                                                                 |
 
 See **[Security](/security)** for deployment modes and the trust boundary discussion.
 

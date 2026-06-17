@@ -21,7 +21,7 @@ describe('resolveSessionDefaults', () => {
   describe('permission_config', () => {
     it('falls back to system default when nothing else is set', () => {
       const r = resolveSessionDefaults({ agenticTool: 'claude-code' });
-      expect(r.permission_config).toEqual({ mode: 'acceptEdits' });
+      expect(r.permission_config).toEqual({ mode: 'auto' });
     });
 
     it("uses the user's tool default when present", () => {

@@ -11,14 +11,35 @@ import type {
   BoardID,
   BranchID,
   CardID,
+  UUID,
 } from '@agor/core/types';
-import { eq } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, isNotNull, isNull, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { toAbsolutePosition } from '../../utils/board-placement.js';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type BoardObjectInsert, type BoardObjectRow, boardObjects } from '../schema';
+import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
+import {
+  type BoardObjectInsert,
+  type BoardObjectRow,
+  boardObjects,
+  branches,
+  branchOwners,
+} from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
+import { visibleBranchAccessCondition } from './branch-access';
+
+export interface BoardObjectFindFilters {
+  board_id?: BoardID;
+  branch_id?: BranchID;
+  card_id?: CardID;
+  zone_id?: string;
+  entity_type?: BoardEntityType;
+}
+
+export interface BoardObjectFindOptions {
+  limit?: number;
+  offset?: number;
+}
 
 /**
  * Board object repository implementation
@@ -26,12 +47,62 @@ import { EntityNotFoundError, RepositoryError } from './base';
 export class BoardObjectRepository {
   constructor(private db: Database) {}
 
+  private buildFindConditions(filters: BoardObjectFindFilters = {}): SQL[] {
+    const conditions: SQL[] = [];
+
+    if (filters.board_id) {
+      conditions.push(eq(boardObjects.board_id, filters.board_id));
+    }
+    if (filters.branch_id) {
+      conditions.push(eq(boardObjects.branch_id, filters.branch_id));
+    }
+    if (filters.card_id) {
+      conditions.push(eq(boardObjects.card_id, filters.card_id));
+    }
+    if (filters.zone_id) {
+      conditions.push(
+        sql`${jsonExtract(this.db, boardObjects.data, 'zone_id')} = ${filters.zone_id}`
+      );
+    }
+    if (filters.entity_type === 'branch') {
+      conditions.push(isNull(boardObjects.card_id));
+    } else if (filters.entity_type === 'card') {
+      conditions.push(isNotNull(boardObjects.card_id));
+    }
+
+    return conditions;
+  }
+
+  private buildVisibleToUserCondition(userId: UUID): SQL {
+    return (
+      or(isNull(boardObjects.branch_id), visibleBranchAccessCondition(this.db, userId)) ??
+      sql`false`
+    );
+  }
+
   /**
    * Find all board objects
    */
-  async findAll(): Promise<BoardEntityObject[]> {
+  async findAll(
+    filters: BoardObjectFindFilters = {},
+    options: BoardObjectFindOptions = {}
+  ): Promise<BoardEntityObject[]> {
     try {
-      const rows = await select(this.db).from(boardObjects).all();
+      const conditions = this.buildFindConditions(filters);
+      let query = select(this.db).from(boardObjects);
+
+      if (conditions.length > 0) {
+        query = query.where(and(...conditions));
+      }
+      query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
+      if (options.limit !== undefined) {
+        query = query.limit(options.limit);
+      }
+      if (options.offset !== undefined) {
+        query = query.offset(options.offset);
+      }
+
+      const rows = await query.all();
 
       return rows.map(this.rowToEntity);
     } catch (error) {
@@ -43,22 +114,100 @@ export class BoardObjectRepository {
   }
 
   /**
-   * Find all board objects for a board
+   * Count board objects matching filters without hydrating/parsing JSON rows.
    */
-  async findByBoardId(boardId: BoardID): Promise<BoardEntityObject[]> {
+  async count(filters: BoardObjectFindFilters = {}): Promise<number> {
     try {
-      const rows = await select(this.db)
-        .from(boardObjects)
-        .where(eq(boardObjects.board_id, boardId))
-        .all();
+      const conditions = this.buildFindConditions(filters);
+      const query = select(this.db, { count: sql<number>`count(*)` }).from(boardObjects);
+      const row =
+        conditions.length > 0 ? await query.where(and(...conditions)).one() : await query.one();
 
-      return rows.map(this.rowToEntity);
+      return Number(row?.count ?? 0);
     } catch (error) {
       throw new RepositoryError(
-        `Failed to find board objects: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to count board objects: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
+  }
+
+  /**
+   * Find board objects visible to a user under branch RBAC.
+   *
+   * Branch-bound rows require view+ access to the referenced branch. Rows
+   * without a branch reference (card/layout rows) are preserved.
+   */
+  async findVisibleToUser(
+    userId: UUID,
+    filters: BoardObjectFindFilters = {},
+    options: BoardObjectFindOptions = {}
+  ): Promise<BoardEntityObject[]> {
+    try {
+      const conditions = [
+        ...this.buildFindConditions(filters),
+        this.buildVisibleToUserCondition(userId),
+      ];
+      let query = select(this.db, getTableColumns(boardObjects))
+        .from(boardObjects)
+        .leftJoin(branches, eq(branches.branch_id, boardObjects.branch_id))
+        .leftJoin(
+          branchOwners,
+          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+        )
+        .where(and(...conditions));
+
+      query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
+      if (options.limit !== undefined) {
+        query = query.limit(options.limit);
+      }
+      if (options.offset !== undefined) {
+        query = query.offset(options.offset);
+      }
+
+      const rows = await query.all();
+      return rows.map(this.rowToEntity);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find visible board objects: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Count board objects visible to a user without hydrating rows.
+   */
+  async countVisibleToUser(userId: UUID, filters: BoardObjectFindFilters = {}): Promise<number> {
+    try {
+      const conditions = [
+        ...this.buildFindConditions(filters),
+        this.buildVisibleToUserCondition(userId),
+      ];
+      const row = await select(this.db, { count: sql<number>`count(*)` })
+        .from(boardObjects)
+        .leftJoin(branches, eq(branches.branch_id, boardObjects.branch_id))
+        .leftJoin(
+          branchOwners,
+          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+        )
+        .where(and(...conditions))
+        .one();
+
+      return Number(row?.count ?? 0);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to count visible board objects: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Find all board objects for a board
+   */
+  async findByBoardId(boardId: BoardID): Promise<BoardEntityObject[]> {
+    return this.findAll({ board_id: boardId });
   }
 
   /**

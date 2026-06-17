@@ -68,3 +68,9 @@
 .drag-handle:active {
   cursor: grabbing;
 }
+
+/* Prevent nodrag children from inheriting grab cursor */
+.nodrag,
+.nodrag * {
+  cursor: auto;
+}

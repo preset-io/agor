@@ -44,6 +44,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Radio,
   Result,
   Select,
   Space,
@@ -78,6 +79,8 @@ const CLONE_TIMEOUT_MS = 120_000;
 type WizardPath = 'assistant' | 'own-repo';
 
 type WizardStep = 'welcome' | 'identity' | 'add-repo' | 'clone' | 'board' | 'branch' | 'api-keys';
+
+type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth';
 
 export interface OnboardingWizardProps {
   open: boolean;
@@ -154,13 +157,19 @@ function getStepIndex(steps: WizardStep[], step: WizardStep): number {
   return steps.indexOf(step);
 }
 
-function apiKeyNameForAgent(agent: AgenticToolName): string {
+function apiKeyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-key'): string {
+  if (agent === 'claude-code' && authMethod === 'claude-subscription-token') {
+    return 'CLAUDE_CODE_OAUTH_TOKEN';
+  }
   // opencode has no canonical key of its own; wizard collects an Anthropic key
   // and routes it to the claude-code bucket (see handleSaveApiKey).
   return TOOL_API_KEY_NAMES[agent] ?? 'ANTHROPIC_API_KEY';
 }
 
-function apiKeyPlaceholder(agent: AgenticToolName): string {
+function apiKeyPlaceholder(agent: AgenticToolName, authMethod: AuthMethod = 'api-key'): string {
+  if (agent === 'claude-code' && authMethod === 'claude-subscription-token') {
+    return 'sk-ant-oat01-...';
+  }
   switch (agent) {
     case 'claude-code':
       return 'sk-ant-...';
@@ -268,15 +277,55 @@ const RECOMMENDED_AGENT_VALUES = new Set<AgenticToolName>(
 );
 
 const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
-  'claude-code': { label: 'console.anthropic.com', url: 'https://console.anthropic.com/' },
+  'claude-code': {
+    label: 'platform.claude.com/settings/keys',
+    url: 'https://platform.claude.com/settings/keys',
+  },
   // Claude Code CLI uses the same Anthropic credentials.
-  'claude-code-cli': { label: 'console.anthropic.com', url: 'https://console.anthropic.com/' },
-  codex: { label: 'platform.openai.com', url: 'https://platform.openai.com/api-keys' },
+  'claude-code-cli': {
+    label: 'platform.claude.com/settings/keys',
+    url: 'https://platform.claude.com/settings/keys',
+  },
+  codex: { label: 'platform.openai.com/api-keys', url: 'https://platform.openai.com/api-keys' },
   gemini: { label: 'aistudio.google.com', url: 'https://aistudio.google.com/apikey' },
   copilot: { label: 'github.com/features/copilot', url: 'https://github.com/features/copilot' },
   cursor: { label: 'cursor.com', url: 'https://cursor.com' },
   opencode: null,
 };
+
+function defaultAuthMethodForAgent(agent: AgenticToolName): AuthMethod {
+  return agent === 'codex' ? 'codex-cli-auth' : 'api-key';
+}
+
+function authMethodOptionsForAgent(agent: AgenticToolName) {
+  if (agent === 'claude-code') {
+    return [
+      {
+        value: 'claude-subscription-token' as const,
+        label: 'Subscription',
+      },
+      {
+        value: 'api-key' as const,
+        label: 'API key',
+      },
+    ];
+  }
+
+  if (agent === 'codex') {
+    return [
+      {
+        value: 'codex-cli-auth' as const,
+        label: 'CLI sign-in',
+      },
+      {
+        value: 'api-key' as const,
+        label: 'API key',
+      },
+    ];
+  }
+
+  return null;
+}
 
 // ─── Component ──────────────────────────────────────────
 
@@ -331,6 +380,7 @@ export function OnboardingWizard({
   const [assistantDisplayName, setAssistantDisplayName] = useState('My Assistant');
   const [assistantEmoji, setAssistantEmoji] = useState('🤖');
   const [apiKey, setApiKey] = useState('');
+  const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
   const [lastRecommendedAgent, setLastRecommendedAgent] = useState<AgenticToolName>('claude-code');
   const [useDifferentProvider, setUseDifferentProvider] = useState(false);
@@ -425,6 +475,7 @@ export function OnboardingWizard({
   const selectAgent = useCallback(
     (agent: AgenticToolName, options: { useDifferentProvider?: boolean } = {}) => {
       setSelectedAgent(agent);
+      setAuthMethod(defaultAuthMethodForAgent(agent));
       if (RECOMMENDED_AGENT_VALUES.has(agent)) {
         setLastRecommendedAgent(agent);
       }
@@ -1163,7 +1214,7 @@ export function OnboardingWizard({
       // own (`OpencodeConfig` has no fields). The onboarding fallback for
       // opencode collects an Anthropic key, so we route it to claude-code's
       // bucket where it's modeled, surfaced in settings, and resolvable.
-      const keyName = apiKeyNameForAgent(selectedAgent);
+      const keyName = apiKeyNameForAgent(selectedAgent, authMethod);
       const targetTool: AgenticToolName =
         selectedAgent === 'opencode' ? 'claude-code' : selectedAgent;
       await onUpdateUser(user.user_id, {
@@ -1177,7 +1228,7 @@ export function OnboardingWizard({
       setLoading(false);
       setError(`Failed to save API key: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [user, apiKey, selectedAgent, path, onUpdateUser, setCurrentStep]);
+  }, [user, apiKey, authMethod, selectedAgent, path, onUpdateUser, setCurrentStep]);
 
   const handleAdvanceFromApiKeys = useCallback(() => {
     setCurrentStep(path === 'own-repo' ? 'add-repo' : 'clone');
@@ -1187,10 +1238,13 @@ export function OnboardingWizard({
     if (!onCheckAuth) return;
     setTestAuthLoading(true);
     setManualTestResult(null);
-    const result = await onCheckAuth(selectedAgent, apiKey.trim() || undefined);
+    const result = await onCheckAuth(
+      selectedAgent,
+      authMethod === 'codex-cli-auth' ? undefined : apiKey.trim() || undefined
+    );
     setTestAuthLoading(false);
     setManualTestResult(result);
-  }, [onCheckAuth, selectedAgent, apiKey]);
+  }, [onCheckAuth, selectedAgent, apiKey, authMethod]);
 
   const handleSkip = useCallback(() => {
     if (!user) return;
@@ -1587,7 +1641,7 @@ export function OnboardingWizard({
     const hasKey = hasKeyForAgent(selectedAgent);
     // "Already auth'd" covers both stored credentials (agentic_tools / env vars
     // / system credentials) AND ambient CLI auth detected by onCheckAuth —
-    // e.g. the user already ran `claude auth login` outside the wizard.
+    // e.g. the user already configured Claude/Codex CLI auth outside the wizard.
     // Auto-flip to "{tool} is configured → Continue" ONLY when the current
     // user has THEIR OWN stored per-user credential. We intentionally do not
     // gate on `detectedAuth?.authenticated` here: the ambient probe reads
@@ -1599,39 +1653,71 @@ export function OnboardingWizard({
     // the Save step.
     const isAuthenticated = hasKey;
 
+    const authMethodOptions = authMethodOptionsForAgent(selectedAgent);
+    const usesCodexCliAuth = selectedAgent === 'codex' && authMethod === 'codex-cli-auth';
+    const currentKeyName = apiKeyNameForAgent(selectedAgent, authMethod);
+
     const renderAuthHint = () => {
       if (selectedAgent === 'claude-code') {
-        // No "Permission defaults" note: Claude defaults to `acceptEdits`,
-        // which IS the SDK's recommended mode (auto-accept edits, prompt for
-        // Bash/MCP). Users can flip to bypass per-session in Session Settings.
+        if (authMethod === 'claude-subscription-token') {
+          return (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16, textAlign: 'left' }}
+              description={
+                <span>
+                  Run <Text code>claude setup-token</Text> on the machine Agor runs sessions on,
+                  then paste the printed token below.
+                </span>
+              }
+            />
+          );
+        }
+
         return (
           <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-            Paste an <Text code>ANTHROPIC_API_KEY</Text>, or run <Text code>claude auth login</Text>{' '}
-            on the host.
+            Paste an <Text code>ANTHROPIC_API_KEY</Text> from{' '}
+            <Typography.Link href="https://platform.claude.com/settings/keys" target="_blank">
+              Claude Console
+            </Typography.Link>{' '}
+            for pay-as-you-go API billing.
           </Paragraph>
         );
       }
+
       if (selectedAgent === 'codex') {
-        // Single-line surfacing of the non-obvious Codex default: auto-approve
-        // is wired through Codex's per-server MCP approval mode + workspace-write
-        // sandbox. Worth a one-liner so it's not a surprise.
+        if (usesCodexCliAuth) {
+          return (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16, textAlign: 'left' }}
+              description={
+                <span>
+                  Run <Text code>codex login --device-auth</Text> on the machine Agor runs sessions
+                  on; Agor uses that local auth when no <Text code>OPENAI_API_KEY</Text> is set.
+                </span>
+              }
+            />
+          );
+        }
+
         return (
-          <>
-            <Paragraph type="secondary" style={{ marginBottom: 8 }}>
-              Paste an <Text code>OPENAI_API_KEY</Text>, or run <Text code>codex login</Text> in
-              Agor's terminal.
-            </Paragraph>
-            <Paragraph type="secondary" style={{ marginBottom: 16, fontSize: 12 }}>
-              Defaults: auto-approves tool calls inside the branch sandbox. Tighten in{' '}
-              <Text strong>Session Settings</Text>.
-            </Paragraph>
-          </>
+          <Paragraph type="secondary" style={{ marginBottom: 16 }}>
+            Paste an <Text code>OPENAI_API_KEY</Text> from{' '}
+            <Typography.Link href="https://platform.openai.com/api-keys" target="_blank">
+              OpenAI Platform
+            </Typography.Link>{' '}
+            for API billing, automation, or team-managed keys.
+          </Paragraph>
         );
       }
+
       if (AGENT_KEY_CONSOLES[selectedAgent]) {
         return (
           <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-            Paste your {apiKeyNameForAgent(selectedAgent)} below. Get one at{' '}
+            Paste your {currentKeyName} below. Get one at{' '}
             <Typography.Link
               href={AGENT_KEY_CONSOLES[selectedAgent]?.url}
               target="_blank"
@@ -1770,6 +1856,48 @@ export function OnboardingWizard({
                 </Button>
               </div>
             )}
+            {authMethodOptions && (
+              <Radio.Group
+                value={authMethod}
+                onChange={(event) => {
+                  setAuthMethod(event.target.value);
+                  setApiKey('');
+                  setManualTestResult(null);
+                }}
+                style={{ width: '100%', marginBottom: 16 }}
+              >
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                    gap: 8,
+                  }}
+                >
+                  {authMethodOptions.map((option) => {
+                    const selected = authMethod === option.value;
+                    return (
+                      <Radio
+                        key={option.value}
+                        value={option.value}
+                        style={{
+                          alignItems: 'center',
+                          border: selected
+                            ? '1px solid var(--ant-color-primary)'
+                            : '1px solid var(--ant-color-border)',
+                          borderRadius: 8,
+                          display: 'flex',
+                          marginInlineEnd: 0,
+                          padding: '8px 12px',
+                        }}
+                      >
+                        <Text strong={selected}>{option.label}</Text>
+                      </Radio>
+                    );
+                  })}
+                </div>
+              </Radio.Group>
+            )}
+
             {renderAuthHint()}
 
             {selectedAgent === 'opencode' && (
@@ -1779,19 +1907,21 @@ export function OnboardingWizard({
               </Paragraph>
             )}
 
-            <Form layout="vertical">
-              <Form.Item label={apiKeyNameForAgent(selectedAgent)}>
-                <Input.Password
-                  placeholder={apiKeyPlaceholder(selectedAgent)}
-                  value={apiKey}
-                  onChange={(e) => {
-                    setApiKey(e.target.value);
-                    // Editing the key invalidates any prior test result.
-                    setManualTestResult(null);
-                  }}
-                />
-              </Form.Item>
-            </Form>
+            {!usesCodexCliAuth && (
+              <Form layout="vertical">
+                <Form.Item label={currentKeyName}>
+                  <Input.Password
+                    placeholder={apiKeyPlaceholder(selectedAgent, authMethod)}
+                    value={apiKey}
+                    onChange={(e) => {
+                      setApiKey(e.target.value);
+                      // Editing the key invalidates any prior test result.
+                      setManualTestResult(null);
+                    }}
+                  />
+                </Form.Item>
+              </Form>
+            )}
 
             {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
 
@@ -1802,7 +1932,12 @@ export function OnboardingWizard({
                   showIcon
                   style={{ marginBottom: 16, textAlign: 'left' }}
                   message="Connection works"
-                  description={manualTestResult.hint || 'Click Save & Continue to store this key.'}
+                  description={
+                    manualTestResult.hint ||
+                    (usesCodexCliAuth
+                      ? 'Click Continue with Codex CLI auth to use this machine login.'
+                      : 'Click Save & Continue to store this key.')
+                  }
                 />
               ) : (
                 <Alert
@@ -1815,23 +1950,31 @@ export function OnboardingWizard({
               ))}
 
             <Space wrap>
-              <Button
-                type="primary"
-                onClick={handleSaveApiKey}
-                loading={loading}
-                disabled={!apiKey.trim()}
-                icon={<KeyOutlined />}
-              >
-                Save & Continue
-              </Button>
+              {usesCodexCliAuth ? (
+                <Button type="primary" onClick={handleAdvanceFromApiKeys} disabled={loading}>
+                  Continue with Codex CLI auth
+                </Button>
+              ) : (
+                <Button
+                  type="primary"
+                  onClick={handleSaveApiKey}
+                  loading={loading}
+                  disabled={!apiKey.trim()}
+                  icon={<KeyOutlined />}
+                >
+                  Save & Continue
+                </Button>
+              )}
               {onCheckAuth && (
                 <Button onClick={handleTestAuth} loading={testAuthLoading} disabled={loading}>
                   Test Connection
                 </Button>
               )}
-              <Button onClick={handleAdvanceFromApiKeys} disabled={loading}>
-                Continue without key
-              </Button>
+              {!usesCodexCliAuth && (
+                <Button onClick={handleAdvanceFromApiKeys} disabled={loading}>
+                  Continue without key
+                </Button>
+              )}
             </Space>
           </>
         )}

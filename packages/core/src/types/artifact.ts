@@ -253,6 +253,12 @@ export interface ArtifactPayload {
   dependencies?: Record<string, string>;
   entry?: string;
   content_hash: string;
+  /**
+   * Non-secret hash of files plus persisted render-affecting metadata. Browser
+   * runtime reports include this so the daemon can reject stale reports after
+   * metadata-only render changes.
+   */
+  runtime_report_hash?: string;
   /** Names of env vars the artifact requires (without prefix). */
   required_env_vars?: string[];
   /** Grants the artifact requested. */
@@ -328,6 +334,8 @@ export interface ArtifactStatus {
   sandpack_error?: SandpackError | null;
   /** Sandpack bundler status: 'idle', 'running', 'timeout', etc. */
   sandpack_status?: string;
+  /** ISO timestamp for the latest current-content browser runtime report from this viewer. */
+  runtime_observed_at?: string;
   console_logs: ArtifactConsoleEntry[];
   content_hash?: string;
 }

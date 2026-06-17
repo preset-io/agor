@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { boards } from '../schema';
+import { boardObjects, boards } from '../schema';
 import { dbTest } from '../test-helpers';
 import { EntityNotFoundError, RepositoryError } from './base';
 import { BoardObjectRepository } from './board-objects';
@@ -260,6 +260,98 @@ describe('BoardObjectRepository.findAll', () => {
     expect(all.map((o) => o.branch_id).sort()).toEqual(
       [wt1.branch_id, wt2.branch_id, wt3.branch_id].sort()
     );
+  });
+
+  dbTest(
+    'should apply filters, count, and pagination in SQL-facing findAll APIs',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const wtRepo = new BranchRepository(db);
+      const boRepo = new BoardObjectRepository(db);
+
+      const repo = await repoRepo.create(createRepoData());
+      const wt1 = await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name: 'wt1' }));
+      const wt2 = await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name: 'wt2' }));
+      const wt3 = await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name: 'wt3' }));
+      const boardId1 = await createBoard(db, { name: 'Board 1' });
+      const boardId2 = await createBoard(db, { name: 'Board 2' });
+
+      await boRepo.create({
+        board_id: boardId1,
+        branch_id: wt1.branch_id,
+        position: { x: 0, y: 0 },
+        zone_id: 'zone-review',
+      });
+      await boRepo.create({
+        board_id: boardId1,
+        branch_id: wt2.branch_id,
+        position: { x: 100, y: 100 },
+        zone_id: 'zone-review',
+      });
+      await boRepo.create({
+        board_id: boardId2,
+        branch_id: wt3.branch_id,
+        position: { x: 200, y: 200 },
+        zone_id: 'zone-done',
+      });
+
+      await expect(
+        boRepo.count({ board_id: boardId1, zone_id: 'zone-review', entity_type: 'branch' })
+      ).resolves.toBe(2);
+
+      const page = await boRepo.findAll(
+        { board_id: boardId1, zone_id: 'zone-review', entity_type: 'branch' },
+        { limit: 1, offset: 1 }
+      );
+
+      expect(page).toHaveLength(1);
+      expect([wt1.branch_id, wt2.branch_id]).toContain(page[0].branch_id);
+    }
+  );
+
+  dbTest('should scope visible board objects with SQL RBAC predicates', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const boRepo = new BoardObjectRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const visibleBranch = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'visible' })
+    );
+    const hiddenBranch = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'hidden' })
+    );
+    await wtRepo.update(hiddenBranch.branch_id, { others_can: 'none' });
+    const boardId = await createBoard(db);
+    const layoutObjectId = generateId();
+
+    await boRepo.create({
+      board_id: boardId,
+      branch_id: visibleBranch.branch_id,
+      position: { x: 0, y: 0 },
+    });
+    await boRepo.create({
+      board_id: boardId,
+      branch_id: hiddenBranch.branch_id,
+      position: { x: 100, y: 100 },
+    });
+    await (db as any).insert(boardObjects).values({
+      object_id: layoutObjectId,
+      board_id: boardId,
+      created_at: new Date(),
+      branch_id: null,
+      card_id: null,
+      data: { position: { x: 200, y: 200 } },
+    });
+
+    const userId = generateId() as UUID;
+
+    await expect(boRepo.countVisibleToUser(userId, { board_id: boardId })).resolves.toBe(2);
+
+    const visibleObjects = await boRepo.findVisibleToUser(userId, { board_id: boardId });
+    expect(visibleObjects.map((object) => object.object_id)).toContain(layoutObjectId);
+    expect(visibleObjects.map((object) => object.branch_id)).toContain(visibleBranch.branch_id);
+    expect(visibleObjects.map((object) => object.branch_id)).not.toContain(hiddenBranch.branch_id);
   });
 
   dbTest('should include all fields in returned objects', async ({ db }) => {

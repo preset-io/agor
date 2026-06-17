@@ -6,10 +6,11 @@
  * admin/owner and partial-RBAC-data cases.
  */
 
-import type { AgorClient, Branch, User } from '@agor-live/client';
+import type { AgorClient, AssistantConfig, Branch, User } from '@agor-live/client';
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { BranchModal } from './BranchModal';
+import { buildAssistantKnowledgePatch } from './tabs/KnowledgeTab';
 import {
   makeAssistantBranch,
   makeBranch,
@@ -89,5 +90,53 @@ describe('BranchModal — permissions tab visibility', () => {
 
     expect(await screen.findByRole('tab', { name: /assistant/i })).toBeInTheDocument();
     expect(await screen.findByRole('tab', { name: /permissions/i })).toBeInTheDocument();
+  });
+
+  it('builds Knowledge patches against modern custom_context.assistant storage', () => {
+    const branch = makeAssistantBranch();
+    const kb = {
+      primary_namespace_id: 'ns-new',
+      primary_namespace_slug: 'new-home',
+      memory_path_template: 'memory/{{YYYY-MM-DD}}.md' as const,
+      default_visibility: 'private' as const,
+      global_access: 'write' as const,
+      grants: [],
+    };
+
+    expect(buildAssistantKnowledgePatch(branch, kb)).toEqual({
+      custom_context: {
+        assistant: {
+          kb,
+        },
+      },
+    });
+  });
+
+  it('builds Knowledge patches against legacy custom_context.agent storage', () => {
+    const branch = makeBranch({
+      custom_context: {
+        agent: {
+          kind: 'assistant',
+          displayName: 'Legacy Assistant',
+          emoji: '🤖',
+        } as AssistantConfig,
+      },
+    });
+    const kb = {
+      primary_namespace_id: 'ns-new',
+      primary_namespace_slug: 'new-home',
+      memory_path_template: 'memory/{{YYYY-MM-DD}}.md' as const,
+      default_visibility: 'private' as const,
+      global_access: 'write' as const,
+      grants: [],
+    };
+
+    expect(buildAssistantKnowledgePatch(branch, kb)).toEqual({
+      custom_context: {
+        agent: {
+          kb,
+        },
+      },
+    });
   });
 });

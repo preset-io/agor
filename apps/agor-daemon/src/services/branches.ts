@@ -17,6 +17,7 @@ import {
   BranchRepository,
   type BranchWithZoneAndSessions,
   type Database,
+  KnowledgeNamespaceRepository,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
@@ -42,7 +43,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { isAssistant } from '@agor/core/types';
+import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import { getGidFromGroupName, spawnEnvironmentCommand } from '@agor/core/unix';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
@@ -553,6 +554,63 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!isAssistant(branch)) return;
     if (!this.containsAssistantKnowledgeConfigMutation(data)) return;
     await this.assertCanManageAssistantKnowledge(branch, params);
+    await this.assertCanUseAssistantHomeNamespace(branch, data, params);
+  }
+
+  private extractAssistantKnowledgeConfigPatch(
+    data: Partial<Branch>
+  ): Record<string, unknown> | null {
+    const customContext = data.custom_context;
+    if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
+      return null;
+    }
+    for (const key of ['assistant', 'agent']) {
+      const assistantPatch = customContext[key];
+      if (!assistantPatch || typeof assistantPatch !== 'object' || Array.isArray(assistantPatch)) {
+        continue;
+      }
+      const kbPatch = (assistantPatch as Record<string, unknown>).kb;
+      if (kbPatch && typeof kbPatch === 'object' && !Array.isArray(kbPatch)) {
+        return kbPatch as Record<string, unknown>;
+      }
+    }
+    return null;
+  }
+
+  private async assertCanUseAssistantHomeNamespace(
+    branch: Branch,
+    data: Partial<Branch>,
+    params?: BranchParams
+  ): Promise<void> {
+    const kbPatch = this.extractAssistantKnowledgeConfigPatch(data);
+    const namespaceId = kbPatch?.primary_namespace_id;
+    if (typeof namespaceId !== 'string' || !namespaceId) return;
+
+    const currentNamespaceId = getAssistantConfig(branch)?.kb?.primary_namespace_id;
+    if (namespaceId === currentNamespaceId) return;
+
+    const namespaces = new KnowledgeNamespaceRepository(this.db);
+    const namespace = await namespaces.findById(namespaceId);
+    if (!namespace || namespace.archived) {
+      throw new BadRequest('Assistant home Knowledge namespace not found');
+    }
+
+    const namespaceSlug = kbPatch.primary_namespace_slug;
+    if (typeof namespaceSlug === 'string' && namespaceSlug && namespaceSlug !== namespace.slug) {
+      throw new BadRequest('Assistant home Knowledge namespace slug does not match its ID');
+    }
+
+    const user = params?.user;
+    if (isKnowledgeAdmin(user as never)) return;
+    const userId = user?.user_id as UserID | undefined;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+
+    const permission = await namespaces.resolveNamespacePermission(namespace.namespace_id, userId);
+    if (permission !== 'write' && permission !== 'own') {
+      throw new Forbidden(
+        'You need write access to use this Knowledge namespace as assistant home'
+      );
+    }
   }
 
   async ensureAssistantKnowledgeNamespace(

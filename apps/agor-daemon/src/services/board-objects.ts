@@ -5,7 +5,12 @@
  * Supports both session cards and branch cards (Phase 1: Hybrid support).
  */
 
-import { BoardObjectRepository, type Database } from '@agor/core/db';
+import {
+  type BoardObjectFindFilters,
+  type BoardObjectFindOptions,
+  BoardObjectRepository,
+  type Database,
+} from '@agor/core/db';
 import type {
   BoardEntityObject,
   BoardEntityType,
@@ -38,6 +43,36 @@ export type BoardObjectParams = QueryParams<{
   zone_id?: string;
   entity_type?: BoardEntityType;
 }>;
+
+export interface NormalizedBoardObjectFindQuery {
+  filters: BoardObjectFindFilters;
+  pagination: BoardObjectFindOptions;
+  limit: number;
+  skip: number;
+}
+
+export function normalizeBoardObjectFindQuery(
+  query: BoardObjectParams['query'] = {}
+): NormalizedBoardObjectFindQuery {
+  const { board_id, branch_id, card_id, zone_id, entity_type } = query;
+  const requestedSkip = Number(query.$skip ?? 0);
+  const requestedLimit = typeof query.$limit === 'number' ? query.$limit : undefined;
+  const filters = Object.fromEntries(
+    Object.entries({ board_id, branch_id, card_id, zone_id, entity_type }).filter(
+      ([, value]) => value !== undefined
+    )
+  ) as BoardObjectFindFilters;
+
+  return {
+    filters,
+    pagination:
+      requestedLimit !== undefined || requestedSkip > 0
+        ? { limit: requestedLimit, offset: requestedSkip }
+        : {},
+    limit: requestedLimit ?? 100,
+    skip: requestedSkip,
+  };
+}
 
 /**
  * Board objects service implementation
@@ -90,46 +125,16 @@ export class BoardObjectsService {
    * Find board objects
    */
   async find(params?: BoardObjectParams) {
-    const { board_id, branch_id, card_id, zone_id, entity_type } = params?.query || {};
-
-    let objects: BoardEntityObject[];
-
-    // If board_id filter is provided, use repository method
-    if (board_id) {
-      objects = await this.boardObjectRepo.findByBoardId(board_id);
-    } else {
-      // No board_id - return ALL board objects
-      objects = await this.boardObjectRepo.findAll();
-    }
-
-    if (branch_id) {
-      objects = objects.filter((object) => object.branch_id === branch_id);
-    }
-    if (card_id) {
-      objects = objects.filter((object) => object.card_id === card_id);
-    }
-    if (zone_id) {
-      objects = objects.filter((object) => object.zone_id === zone_id);
-    }
-    if (entity_type) {
-      objects = objects.filter((object) => object.entity_type === entity_type);
-    }
-
-    const total = objects.length;
-    const requestedSkip = params?.query?.$skip ?? 0;
-    const requestedLimit = params?.query?.$limit;
-    const data =
-      requestedLimit !== undefined || requestedSkip > 0
-        ? objects.slice(
-            requestedSkip,
-            requestedLimit === undefined ? undefined : requestedSkip + requestedLimit
-          )
-        : objects;
+    const normalized = normalizeBoardObjectFindQuery(params?.query);
+    const [total, data] = await Promise.all([
+      this.boardObjectRepo.count(normalized.filters),
+      this.boardObjectRepo.findAll(normalized.filters, normalized.pagination),
+    ]);
 
     return {
       total,
-      limit: requestedLimit ?? 100,
-      skip: requestedSkip,
+      limit: normalized.limit,
+      skip: normalized.skip,
       data,
     };
   }

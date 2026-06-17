@@ -286,6 +286,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         label: 'Integrations',
         type: 'group' as const,
         children: [
+          {
+            key: 'agentic-tools',
+            label: 'Agentic Tools',
+            icon: <ThunderboltOutlined />,
+          },
           ...(mcpEnabled && isAdmin
             ? [
                 {
@@ -295,11 +300,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 },
               ]
             : []),
-          {
-            key: 'agentic-tools',
-            label: 'Agentic Tools',
-            icon: <ThunderboltOutlined />,
-          },
           ...(gatewayEnabled && isAdmin
             ? [
                 {

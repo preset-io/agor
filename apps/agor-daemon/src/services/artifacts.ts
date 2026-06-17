@@ -150,6 +150,21 @@ interface ArtifactSidecar {
   agor_runtime?: AgorRuntimeConfig;
 }
 
+interface ArtifactValidationDiagnostic {
+  code: string;
+  severity: 'error' | 'warning';
+  message: string;
+  file?: string;
+  suggested_fix?: string;
+}
+
+interface ArtifactValidationResult {
+  status: ArtifactBuildStatus;
+  errors: string[];
+  warnings: string[];
+  diagnostics: ArtifactValidationDiagnostic[];
+}
+
 /**
  * Read `agor.artifact.json` from a folder if present. Returns null when the
  * file is missing or unparseable — the caller treats absence and corruption
@@ -223,6 +238,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /** In-memory Sandpack status, keyed by `${artifactId}:${userId}`. */
   private sandpackStatuses: Map<string, string> = new Map();
+
+  /** Latest browser runtime report time, keyed by `${artifactId}:${userId}`. */
+  private runtimeObservedAt: Map<string, string> = new Map();
+
+  /**
+   * Runtime-status waiters for synchronous-ish artifact publishing. Keyed by
+   * `${artifactId}:${userId}` so a caller can only wait on their own browser
+   * render; no other viewer's logs/errors are exposed.
+   */
+  private runtimeStatusWaiters: Map<string, Set<() => void>> = new Map();
 
   /**
    * Just-once / session-scope grants live here only — never persisted.
@@ -513,7 +538,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const contentHash = this.computeHashFromFiles(files);
 
     if (existing) {
-      const buildResult = this.validateFiles(files);
+      const buildResult = this.validateArtifactFiles(files, {
+        template,
+        sandpackConfig: resolvedSandpackConfig,
+        requiredEnvVars,
+      });
 
       const updated = await this.artifactRepo.update(existing.artifact_id, {
         name: resolvedName,
@@ -545,7 +574,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
 
     const artifactId = generateId();
-    const buildResult = this.validateFiles(files);
+    const buildResult = this.validateArtifactFiles(files, {
+      template,
+      sandpackConfig: resolvedSandpackConfig,
+      requiredEnvVars,
+    });
 
     const artifact = await this.artifactRepo.create({
       artifact_id: artifactId,
@@ -740,6 +773,15 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           // Old board may not have this object.
         }
       }
+    }
+
+    if (
+      updates.sandpack_config !== undefined ||
+      updates.required_env_vars !== undefined ||
+      updates.agor_grants !== undefined ||
+      updates.agor_runtime !== undefined
+    ) {
+      this.clearAllViewerBuffersFor(fullArtifactId);
     }
 
     this.app.service('artifacts').emit('patched', updated);
@@ -952,7 +994,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       ? withInjectedAgorRuntime(artifact.sandpack_config)
       : artifact.sandpack_config;
 
-    const contentHash = this.computeHashFromFiles(filesOut);
+    const contentHash = this.computeHashFromFiles({
+      ...filesOut,
+      '/.agor/sandpack-config.json': JSON.stringify(servedSandpackConfig ?? {}),
+    });
     const legacy = detectLegacyFormat(artifact);
 
     const payload: ArtifactPayload = {
@@ -965,6 +1010,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       dependencies: artifact.dependencies,
       entry: artifact.entry,
       content_hash: contentHash,
+      runtime_report_hash: this.computeRuntimeReportHash(artifact),
       required_env_vars: requiredEnvVars.length > 0 ? requiredEnvVars : undefined,
       agor_grants: Object.keys(grants).length > 0 ? grants : undefined,
       trust_state: trustState,
@@ -1582,16 +1628,28 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     input: { folderPath?: string; branch_id?: string; subpath?: string },
     userId?: string,
     userRole?: UserRole
-  ): Promise<{
-    status: ArtifactBuildStatus;
-    errors: string[];
-  }> {
+  ): Promise<ArtifactValidationResult> {
     const { folderPath } = await this.resolveArtifactSource(input, userId, userRole);
     if (!fs.existsSync(folderPath)) {
-      return { status: 'error', errors: [`Folder not found: ${folderPath}`] };
+      return {
+        status: 'error',
+        errors: [`Folder not found: ${folderPath}`],
+        warnings: [],
+        diagnostics: [
+          {
+            code: 'folder_not_found',
+            severity: 'error',
+            message: `Folder not found: ${folderPath}`,
+          },
+        ],
+      };
     }
+    const sidecar = readArtifactSidecar(folderPath);
+    const sandpackConfig = sanitizeSandpackConfig(sidecar?.sandpack_config);
+    const template = (sandpackConfig.template ?? sidecar?.template ?? 'react') as SandpackTemplate;
+    const requiredEnvVars = sanitizeEnvVarNames(sidecar?.required_env_vars);
     const files = this.readFilesRecursive(folderPath, folderPath);
-    return this.validateFiles(files);
+    return this.validateArtifactFiles(files, { template, sandpackConfig, requiredEnvVars });
   }
 
   async checkBuild(artifactId: string): Promise<{
@@ -1599,7 +1657,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     errors: string[];
   }> {
     const payload = await this.getPayload(artifactId);
-    const result = this.validateFiles(payload.files);
+    const result = this.validateArtifactFiles(payload.files, {
+      template: payload.sandpack_config?.template ?? payload.template,
+      sandpackConfig: payload.sandpack_config,
+      requiredEnvVars: payload.required_env_vars ?? [],
+    });
     await this.artifactRepo.updateBuildStatus(
       artifactId,
       result.status,
@@ -1625,9 +1687,21 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     for (const key of this.sandpackStatuses.keys()) {
       if (key.startsWith(prefix)) this.sandpackStatuses.delete(key);
     }
+    for (const key of this.runtimeObservedAt.keys()) {
+      if (key.startsWith(prefix)) this.runtimeObservedAt.delete(key);
+    }
+    for (const key of this.runtimeStatusWaiters.keys()) {
+      if (key.startsWith(prefix)) this.notifyRuntimeStatusWaiters(key);
+    }
   }
 
-  appendConsoleLogs(artifactId: string, userId: string, entries: ArtifactConsoleEntry[]): void {
+  async appendConsoleLogs(
+    artifactId: string,
+    userId: string,
+    entries: ArtifactConsoleEntry[],
+    contentHash?: string
+  ): Promise<void> {
+    if (!(await this.isCurrentRuntimeReportHash(artifactId, contentHash))) return;
     const key = this.viewerKey(artifactId, userId);
     const existing = this.consoleLogs.get(key) ?? [];
     const combined = [...existing, ...entries];
@@ -1636,19 +1710,71 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     } else {
       this.consoleLogs.set(key, combined);
     }
+    this.runtimeObservedAt.set(key, new Date().toISOString());
+    this.notifyRuntimeStatusWaiters(key);
   }
 
-  setSandpackError(
+  async setSandpackError(
     artifactId: string,
     userId: string,
     error: SandpackError | null,
-    status?: string
-  ): void {
+    status?: string,
+    contentHash?: string
+  ): Promise<void> {
+    if (!(await this.isCurrentRuntimeReportHash(artifactId, contentHash))) return;
     const key = this.viewerKey(artifactId, userId);
     this.sandpackErrors.set(key, error);
     if (status !== undefined) {
       this.sandpackStatuses.set(key, status);
     }
+    this.runtimeObservedAt.set(key, new Date().toISOString());
+    this.notifyRuntimeStatusWaiters(key);
+  }
+
+  private async isCurrentRuntimeReportHash(
+    artifactId: string,
+    runtimeReportHash?: string
+  ): Promise<boolean> {
+    if (!runtimeReportHash) return true;
+    const artifact = await this.artifactRepo.findById(artifactId);
+    if (!artifact) return false;
+    return this.computeRuntimeReportHash(artifact) === runtimeReportHash;
+  }
+
+  private computeRuntimeReportHash(
+    artifact: Pick<
+      Artifact,
+      | 'artifact_id'
+      | 'board_id'
+      | 'template'
+      | 'files'
+      | 'sandpack_config'
+      | 'required_env_vars'
+      | 'agor_grants'
+      | 'agor_runtime'
+      | 'entry'
+    >
+  ): string {
+    const files = artifact.files ?? {};
+    return this.computeHashFromFiles({
+      ...files,
+      '/.agor/runtime-report-inputs.json': JSON.stringify({
+        artifact_id: artifact.artifact_id,
+        board_id: artifact.board_id,
+        template: artifact.template,
+        entry: artifact.entry ?? null,
+        sandpack_config: artifact.sandpack_config ?? null,
+        required_env_vars: artifact.required_env_vars ?? [],
+        agor_grants: artifact.agor_grants ?? {},
+        agor_runtime_enabled: artifact.agor_runtime?.enabled !== false,
+      }),
+    });
+  }
+
+  private notifyRuntimeStatusWaiters(key: string): void {
+    const waiters = this.runtimeStatusWaiters.get(key);
+    if (!waiters) return;
+    for (const notify of waiters) notify();
   }
 
   /**
@@ -1667,6 +1793,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const key = userId ? this.viewerKey(artifactId, userId) : null;
     const sandpackError = key ? (this.sandpackErrors.get(key) ?? null) : null;
     const sandpackStatus = key ? this.sandpackStatuses.get(key) : undefined;
+    const runtimeObservedAt = key ? this.runtimeObservedAt.get(key) : undefined;
     const consoleLogs = key ? (this.consoleLogs.get(key) ?? []) : [];
 
     let buildStatus = artifact.build_status;
@@ -1684,9 +1811,220 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       build_errors: buildErrors ?? [],
       sandpack_error: sandpackError,
       sandpack_status: sandpackStatus,
+      runtime_observed_at: runtimeObservedAt,
       console_logs: consoleLogs,
       content_hash: artifact.content_hash,
     };
+  }
+
+  buildStatusDiagnostic(status: ArtifactStatus): {
+    diagnosis: string;
+    primary_error?: string;
+    suggested_fix?: string;
+  } | null {
+    const messages = [
+      status.sandpack_error?.message,
+      ...(status.build_errors ?? []),
+      ...status.console_logs
+        .filter((entry) => entry.level === 'error')
+        .map((entry) => entry.message),
+    ].filter((msg): msg is string => !!msg && msg.length > 0);
+    const primary = messages[0];
+    if (!primary) {
+      if (!status.runtime_observed_at) {
+        return {
+          diagnosis: 'no_browser_observation',
+          suggested_fix:
+            'Open the artifact on the board/fullscreen as this user, then call agor_artifacts_status or publish with waitForStatus=true.',
+        };
+      }
+      return null;
+    }
+
+    if (/could not find module|cannot find module|module not found/i.test(primary)) {
+      return {
+        diagnosis: 'missing_local_import_or_dependency',
+        primary_error: primary,
+        suggested_fix:
+          'If the missing specifier starts with ./ or ../, create that file or fix the import path. Otherwise add the package to package.json dependencies or sandpackConfig.customSetup.dependencies.',
+      };
+    }
+    if (/package\.json|JSON|Unexpected token/i.test(primary)) {
+      return {
+        diagnosis: 'malformed_package_json_or_syntax',
+        primary_error: primary,
+        suggested_fix: 'Check package.json and the referenced source file for syntax errors.',
+      };
+    }
+    if (/process is not defined|import\.meta|env/i.test(primary)) {
+      return {
+        diagnosis: 'environment_variable_access',
+        primary_error: primary,
+        suggested_fix:
+          'Check the template-specific env convention. React/CRA exposes declared vars as process.env.REACT_APP_NAME; Vite-style apps use import.meta.env.VITE_NAME.',
+      };
+    }
+    return {
+      diagnosis: 'runtime_or_build_error',
+      primary_error: primary,
+      suggested_fix:
+        'Inspect build_errors, sandpack_error, and console_logs; fix the referenced file and republish.',
+    };
+  }
+
+  /**
+   * Wait for the caller's own browser render to report a Sandpack status for
+   * the artifact. This is deliberately not a server-side build: Sandpack runs
+   * in the browser, and logs/errors are per-viewer because rendered code may
+   * contain secret-derived values.
+   *
+   * Resolution states:
+   * - observed + ok=true: Sandpack reached a non-running status and no quick
+   *   console.error arrived during the settle window.
+   * - observed + ok=false: Sandpack reported an error/timeout, or the app
+   *   emitted console.error.
+   * - observed=false: no browser for this user reported status before timeout.
+   */
+  async waitForRuntimeStatus(
+    artifactId: string,
+    userId: UserID | undefined,
+    options: { timeoutMs?: number; settleMs?: number } = {}
+  ): Promise<
+    ArtifactStatus & { ok: boolean; observed: boolean; timed_out: boolean; note?: string }
+  > {
+    if (!userId) {
+      const status = await this.getStatus(artifactId, userId);
+      return {
+        ...status,
+        ok: false,
+        observed: false,
+        timed_out: false,
+        note: 'Runtime validation requires an authenticated user so logs stay scoped to one viewer.',
+      };
+    }
+
+    // Visibility and not-found behavior are delegated to getStatus().
+    const timeoutMs = Math.min(Math.max(options.timeoutMs ?? 10000, 500), 60000);
+    const settleMs = Math.min(Math.max(options.settleMs ?? 1000, 0), 5000);
+    const key = this.viewerKey(artifactId, userId);
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const classify = async (): Promise<
+      | (ArtifactStatus & { ok: boolean; observed: boolean; timed_out: boolean; note?: string })
+      | null
+    > => {
+      const status = await this.getStatus(artifactId, userId);
+      const errorLogs = status.console_logs.filter((entry) => entry.level === 'error');
+      if (status.sandpack_error || status.sandpack_status === 'timeout' || errorLogs.length > 0) {
+        return {
+          ...status,
+          build_status: 'error',
+          build_errors: [
+            ...(status.build_errors ?? []),
+            ...errorLogs.map((entry) => `[console.error] ${entry.message}`),
+          ],
+          ok: false,
+          observed: true,
+          timed_out: false,
+          note: status.sandpack_error
+            ? 'Sandpack reported a bundler/runtime error in your browser render.'
+            : 'The artifact emitted console.error during boot/render.',
+        };
+      }
+      if (status.build_status === 'error' && (status.build_errors?.length ?? 0) > 0) {
+        return {
+          ...status,
+          ok: false,
+          observed: false,
+          timed_out: false,
+          note: 'Server-side file validation failed before browser runtime validation.',
+        };
+      }
+      if (status.sandpack_status && status.sandpack_status !== 'running') {
+        return { ...status, ok: true, observed: true, timed_out: false };
+      }
+      return null;
+    };
+
+    const initial = await classify();
+    if (initial && !initial.ok) return initial;
+    if (initial?.ok && settleMs === 0) return initial;
+
+    return new Promise((resolve) => {
+      const cleanup = () => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (settleTimer) clearTimeout(settleTimer);
+        const waiters = this.runtimeStatusWaiters.get(key);
+        if (waiters) {
+          waiters.delete(onUpdate);
+          if (waiters.size === 0) this.runtimeStatusWaiters.delete(key);
+        }
+      };
+
+      const finish = (
+        result: ArtifactStatus & {
+          ok: boolean;
+          observed: boolean;
+          timed_out: boolean;
+          note?: string;
+        }
+      ) => {
+        cleanup();
+        resolve(result);
+      };
+
+      const scheduleSuccess = (status: ArtifactStatus) => {
+        if (settleTimer) return;
+        settleTimer = setTimeout(async () => {
+          settleTimer = null;
+          const latest = await classify();
+          if (latest) finish(latest);
+        }, settleMs);
+      };
+
+      const onUpdate = () => {
+        void (async () => {
+          const latest = await classify();
+          if (!latest) return;
+          if (!latest.ok) {
+            finish(latest);
+            return;
+          }
+          if (settleMs === 0) {
+            finish(latest);
+          } else {
+            scheduleSuccess(latest);
+          }
+        })();
+      };
+
+      const waiters = this.runtimeStatusWaiters.get(key) ?? new Set<() => void>();
+      waiters.add(onUpdate);
+      this.runtimeStatusWaiters.set(key, waiters);
+
+      timeoutTimer = setTimeout(async () => {
+        const latest = await classify();
+        if (latest) {
+          finish(latest);
+          return;
+        }
+        const status = await this.getStatus(artifactId, userId);
+        finish({
+          ...status,
+          ok: false,
+          observed: false,
+          timed_out: true,
+          note: `No Sandpack status was reported by your browser within ${timeoutMs}ms. Open the artifact on the board/fullscreen as this user and retry, or use agor_artifacts_status after viewing it. Server-side publish can only validate the file map; Sandpack boot happens in the browser.`,
+        });
+      }, timeoutMs);
+
+      // Close the small race between the initial classify() and waiter
+      // registration: a browser POST may have updated the in-memory status
+      // just before we subscribed. Re-read once now that the waiter exists.
+      onUpdate();
+      if (initial?.ok) scheduleSuccess(initial);
+    });
   }
 
   /**
@@ -1770,27 +2108,198 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     );
   }
 
-  private validateFiles(files: Record<string, string>): {
-    status: ArtifactBuildStatus;
-    errors: string[];
-  } {
-    const errors: string[] = [];
+  private validateArtifactFiles(
+    files: Record<string, string>,
+    options: {
+      template?: SandpackTemplate;
+      sandpackConfig?: SandpackConfig;
+      requiredEnvVars?: string[];
+    } = {}
+  ): ArtifactValidationResult {
+    const diagnostics: ArtifactValidationDiagnostic[] = [];
+    const add = (
+      severity: 'error' | 'warning',
+      code: string,
+      message: string,
+      extra: Pick<ArtifactValidationDiagnostic, 'file' | 'suggested_fix'> = {}
+    ) => diagnostics.push({ severity, code, message, ...extra });
 
     const sourceFiles = Object.entries(files).filter(([fp]) =>
       /\.(js|jsx|ts|tsx|html|css)$/.test(fp)
     );
 
     if (sourceFiles.length === 0) {
-      errors.push('No source files found in artifact');
+      add('error', 'no_source_files', 'No source files found in artifact', {
+        suggested_fix: 'Add at least one .js, .jsx, .ts, .tsx, .html, or .css file.',
+      });
     }
 
     for (const [filePath, content] of sourceFiles) {
       if (!content || content.trim().length === 0) {
-        errors.push(`${filePath}: file is empty`);
+        add('error', 'empty_source_file', `${filePath}: file is empty`, {
+          file: filePath,
+          suggested_fix: 'Add source code to the file or remove the empty file.',
+        });
       }
     }
 
-    return { status: errors.length > 0 ? 'error' : 'success', errors };
+    const pkgPath = files['/package.json'] !== undefined ? '/package.json' : 'package.json';
+    const pkg = files[pkgPath];
+    if (pkg !== undefined) {
+      try {
+        JSON.parse(pkg);
+      } catch (err) {
+        add(
+          'error',
+          'malformed_package_json',
+          `${pkgPath}: package.json is not valid JSON (${err instanceof Error ? err.message : String(err)})`,
+          {
+            file: pkgPath,
+            suggested_fix: 'Fix package.json syntax, especially trailing commas and quotes.',
+          }
+        );
+      }
+    }
+
+    const entry = options.sandpackConfig?.customSetup?.entry;
+    if (entry && !this.hasFile(files, entry)) {
+      add('error', 'missing_custom_entry', `Configured Sandpack entry file not found: ${entry}`, {
+        file: entry,
+        suggested_fix: 'Create the entry file or update sandpackConfig.customSetup.entry.',
+      });
+    } else if (!entry && !this.findLikelyEntry(files)) {
+      add(
+        'warning',
+        'no_likely_entry',
+        'No common Sandpack entry file found (for example /src/index.tsx, /src/main.tsx, /index.js, or /index.html).',
+        {
+          suggested_fix:
+            'Add a conventional entry file or set sandpackConfig.customSetup.entry to the correct file.',
+        }
+      );
+    }
+
+    for (const [filePath, content] of Object.entries(files)) {
+      if (!/\.(js|jsx|ts|tsx)$/.test(filePath)) continue;
+      for (const specifier of this.extractRelativeImportSpecifiers(content)) {
+        if (!this.resolveRelativeImport(files, filePath, specifier)) {
+          add(
+            'error',
+            'missing_local_import',
+            `${filePath}: local import not found: ${specifier}`,
+            {
+              file: filePath,
+              suggested_fix: `Create the referenced module (${specifier}) or fix/remove the import in ${filePath}.`,
+            }
+          );
+        }
+      }
+    }
+
+    const template = options.template ?? 'react';
+    const requiredEnvVars = options.requiredEnvVars ?? [];
+    if (requiredEnvVars.length > 0 && envVarPrefixForTemplate(template) === null) {
+      add(
+        'warning',
+        'env_vars_not_injected_for_template',
+        `required_env_vars are declared, but template '${template}' has no verified dotenv injection path.`,
+        {
+          suggested_fix:
+            'Use a React/React-TS template or change the app to read configuration another way.',
+        }
+      );
+    }
+
+    const prefix = envVarPrefixForTemplate(template);
+    if (prefix) {
+      for (const [filePath, content] of Object.entries(files)) {
+        if (!/\.(js|jsx|ts|tsx)$/.test(filePath)) continue;
+        for (const envName of requiredEnvVars) {
+          const prefixed = `${prefix}${envName}`;
+          if (
+            content.includes(`process.env.${envName}`) &&
+            !content.includes(`process.env.${prefixed}`)
+          ) {
+            add(
+              'warning',
+              'possibly_unprefixed_env_var',
+              `${filePath}: '${envName}' is declared, but ${template} exposes it as '${prefixed}'.`,
+              {
+                file: filePath,
+                suggested_fix: `Read process.env.${prefixed} instead of process.env.${envName}.`,
+              }
+            );
+          }
+        }
+      }
+    }
+
+    const errors = diagnostics.filter((d) => d.severity === 'error').map((d) => d.message);
+    const warnings = diagnostics.filter((d) => d.severity === 'warning').map((d) => d.message);
+    return { status: errors.length > 0 ? 'error' : 'success', errors, warnings, diagnostics };
+  }
+
+  private hasFile(files: Record<string, string>, candidate: string): boolean {
+    const normalized = candidate.startsWith('/') ? candidate : `/${candidate}`;
+    return files[normalized] !== undefined || files[normalized.slice(1)] !== undefined;
+  }
+
+  private findLikelyEntry(files: Record<string, string>): string | null {
+    const candidates = [
+      '/src/index.tsx',
+      '/src/index.jsx',
+      '/src/index.ts',
+      '/src/index.js',
+      '/src/main.tsx',
+      '/src/main.jsx',
+      '/src/main.ts',
+      '/src/main.js',
+      '/index.tsx',
+      '/index.jsx',
+      '/index.ts',
+      '/index.js',
+      '/index.html',
+    ];
+    return candidates.find((candidate) => this.hasFile(files, candidate)) ?? null;
+  }
+
+  private extractRelativeImportSpecifiers(source: string): string[] {
+    const specs = new Set<string>();
+    const patterns = [
+      /(?:import|export)\s+(?:type\s+)?(?:[^'";]+?\s+from\s+)?['"](\.{1,2}\/[^'"]+)['"]/g,
+      /import\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g,
+      /require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g,
+    ];
+    for (const pattern of patterns) {
+      for (const match of source.matchAll(pattern)) {
+        if (match[1]) specs.add(match[1]);
+      }
+    }
+    return [...specs];
+  }
+
+  private resolveRelativeImport(
+    files: Record<string, string>,
+    fromFile: string,
+    specifier: string
+  ): boolean {
+    const fromDir = path.posix.dirname(fromFile.startsWith('/') ? fromFile : `/${fromFile}`);
+    const base = path.posix.normalize(path.posix.join(fromDir, specifier));
+    const candidates = [
+      base,
+      `${base}.ts`,
+      `${base}.tsx`,
+      `${base}.js`,
+      `${base}.jsx`,
+      `${base}.json`,
+      `${base}.css`,
+      path.posix.join(base, 'index.ts'),
+      path.posix.join(base, 'index.tsx'),
+      path.posix.join(base, 'index.js'),
+      path.posix.join(base, 'index.jsx'),
+      path.posix.join(base, 'index.css'),
+    ];
+    return candidates.some((candidate) => this.hasFile(files, candidate));
   }
 
   private extractDependenciesFromPackageJson(

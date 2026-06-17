@@ -873,8 +873,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         const authPane = (
           <>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-              Per-user credentials and config for {displayNames[toolName]}. Encrypted at rest; take
-              precedence over the daemon's global configuration and your global env vars.
+              Per-user credentials and config for {displayNames[toolName]}. Encrypted at rest;
+              injected into the agent runtime, not the prompt transcript; and preferred over daemon
+              globals and env vars.
             </Typography.Paragraph>
             <ApiKeyFields
               tool={toolName}

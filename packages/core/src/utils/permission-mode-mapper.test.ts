@@ -20,6 +20,7 @@ describe('mapPermissionMode', () => {
       expect(mapPermissionMode('bypassPermissions', 'claude-code')).toBe('bypassPermissions');
       expect(mapPermissionMode('plan', 'claude-code')).toBe('plan');
       expect(mapPermissionMode('dontAsk', 'claude-code')).toBe('dontAsk');
+      expect(mapPermissionMode('auto', 'claude-code')).toBe('auto');
     });
 
     it('maps Gemini modes to Claude equivalents', () => {
@@ -29,9 +30,14 @@ describe('mapPermissionMode', () => {
 
     it('maps Codex modes to Claude equivalents', () => {
       expect(mapPermissionMode('ask', 'claude-code')).toBe('default');
-      expect(mapPermissionMode('auto', 'claude-code')).toBe('acceptEdits');
       expect(mapPermissionMode('on-failure', 'claude-code')).toBe('acceptEdits');
       expect(mapPermissionMode('allow-all', 'claude-code')).toBe('bypassPermissions');
+    });
+
+    it('maps "auto" to acceptEdits for copilot/cursor (no native auto), passes through for claude', () => {
+      expect(mapPermissionMode('auto', 'claude-code')).toBe('auto');
+      expect(mapPermissionMode('auto', 'copilot')).toBe('acceptEdits');
+      expect(mapPermissionMode('auto', 'cursor')).toBe('acceptEdits');
     });
   });
 

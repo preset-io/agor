@@ -22,7 +22,12 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { type TaskMetadata, TaskStatus } from '@agor/core/types';
+import {
+  isTerminalTaskStatus,
+  SessionStatus,
+  type TaskMetadata,
+  TaskStatus,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import {
@@ -35,13 +40,6 @@ import type { SessionsService } from './sessions';
 /**
  * Task service params
  */
-const ANALYTICS_TERMINAL_TASK_STATUSES = new Set<Task['status']>([
-  TaskStatus.COMPLETED,
-  TaskStatus.FAILED,
-  TaskStatus.STOPPED,
-  TaskStatus.TIMED_OUT,
-]);
-
 const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
   TaskStatus.COMPLETED,
   TaskStatus.FAILED,
@@ -49,7 +47,7 @@ const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
 ]);
 
 function isAnalyticsTerminalTaskStatus(status: Task['status'] | undefined): boolean {
-  return status !== undefined && ANALYTICS_TERMINAL_TASK_STATUSES.has(status);
+  return isTerminalTaskStatus(status);
 }
 
 function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): boolean {
@@ -276,7 +274,32 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         suppressTerminalQueueProcessing: true,
       }
     );
-    return result as Task;
+    const failedTask = result as Task;
+    const heartbeatFailureWon =
+      failedTask.status === TaskStatus.FAILED &&
+      failedTask.error_message === data.error_message &&
+      (!data.completed_at || failedTask.completed_at === data.completed_at);
+    if (!heartbeatFailureWon) {
+      console.log(
+        `⏭️ [TasksService] Skipping heartbeat session failure for task ${shortId(failedTask.task_id)}; ` +
+          `heartbeat failure did not win (status=${failedTask.status})`
+      );
+      return failedTask;
+    }
+    await this.app
+      .service('sessions')
+      .patch(
+        failedTask.session_id,
+        { status: SessionStatus.FAILED, ready_for_prompt: true },
+        params
+      )
+      .catch((error: unknown) => {
+        console.warn(
+          `[executor-heartbeat] Failed to mark session ${shortId(failedTask.session_id)} failed after stale heartbeat:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    return failedTask;
   }
 
   private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
@@ -315,6 +338,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const mayTransitionStatus =
       nextStatus === TaskStatus.RUNNING || isAnalyticsTerminalTaskStatus(nextStatus);
     const currentTask = mayTransitionStatus ? await this.get(id, params) : undefined;
+    if (
+      currentTask &&
+      isTerminalTaskStatus(currentTask.status) &&
+      isTerminalTaskStatus(nextStatus)
+    ) {
+      console.warn(
+        `⏭️ [TasksService] Ignoring terminal status rewrite for task ${shortId(currentTask.task_id)} ` +
+          `(${currentTask.status} → ${nextStatus})`
+      );
+      return currentTask;
+    }
     const isAnalyticsTerminalTransition =
       isAnalyticsTerminalTaskStatus(nextStatus) &&
       !isAnalyticsTerminalTaskStatus(currentTask?.status);

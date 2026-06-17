@@ -5,12 +5,39 @@
  */
 
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Divider, Form, Input, Space, Typography } from 'antd';
+import { Alert, Button, Card, Divider, Form, Input, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { BrandLogo } from '../BrandLogo';
 import { ParticleBackground } from './ParticleBackground';
 
 const { Text } = Typography;
+
+const ADMIN_SETUP_COMMAND = 'agor user create-admin';
+
+function AdminSetupHint() {
+  const { token } = theme.useToken();
+
+  return (
+    <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        First-time server setup? Create the initial admin account:
+      </Text>
+      <Text
+        code
+        copyable={{ text: ADMIN_SETUP_COMMAND }}
+        style={{
+          fontSize: 12,
+          background: token.colorFillTertiary,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: token.borderRadiusSM,
+          padding: '2px 6px',
+        }}
+      >
+        {ADMIN_SETUP_COMMAND}
+      </Text>
+    </Space>
+  );
+}
 
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<boolean>;
@@ -28,6 +55,7 @@ export function LoginPage({
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
   const [showLocalLogin, setShowLocalLogin] = useState(false);
+  const { token } = theme.useToken();
   const useExternalLaunch = !!externalLaunchLoginRedirectUrl;
   const showLoginForm = !useExternalLaunch || showLocalLogin;
   const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;
@@ -134,14 +162,10 @@ export function LoginPage({
                     style={{
                       marginTop: 8,
                       paddingTop: 8,
-                      borderTop: '1px solid rgba(255,255,255,0.1)',
+                      borderTop: `1px solid ${token.colorBorderSecondary}`,
                     }}
                   >
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      💡 First time setting up? Create an admin user:
-                    </Text>
-                    <br />
-                    <code style={{ fontSize: 11 }}>agor user create-admin</code>
+                    <AdminSetupHint />
                   </div>
                 )}
               </Space>
@@ -197,7 +221,7 @@ export function LoginPage({
                 ]}
               >
                 <Input
-                  prefix={<MailOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
+                  prefix={<MailOutlined style={{ color: token.colorTextQuaternary }} />}
                   placeholder="Email address"
                   autoComplete="email"
                 />
@@ -208,7 +232,7 @@ export function LoginPage({
                 rules={[{ required: true, message: 'Please enter your password' }]}
               >
                 <Input.Password
-                  prefix={<LockOutlined style={{ color: 'rgba(255, 255, 255, 0.45)' }} />}
+                  prefix={<LockOutlined style={{ color: token.colorTextQuaternary }} />}
                   placeholder="Password"
                   autoComplete="current-password"
                 />
@@ -224,13 +248,9 @@ export function LoginPage({
         )}
 
         {/* Footer */}
-        {showLoginForm && (
+        {showLoginForm && !error && (
           <div style={{ textAlign: 'center', marginTop: 24 }}>
-            <Space orientation="vertical" size={4}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                New user? <code>agor user create-admin</code>
-              </Text>
-            </Space>
+            <AdminSetupHint />
           </div>
         )}
       </Card>

@@ -21,7 +21,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import type { Artifact, BoardID, BranchID, UUID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
-import { afterEach, beforeEach, describe, expect } from 'vitest';
+import { afterEach, beforeEach, describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { ArtifactsService } from './artifacts';
 
@@ -928,6 +928,44 @@ describe('ArtifactsService.grantTrust', () => {
   });
 });
 
+describe('ArtifactsService.checkBuildFromFolder validation diagnostics', () => {
+  dbTest('reports missing local imports and malformed package.json', async ({ db }) => {
+    const root = mkdtempSync(path.join(tmpdir(), 'agor-artifact-validate-'));
+    try {
+      writeFileSync(path.join(root, 'index.js'), "import './missing';\nconsole.log('hello');\n");
+      writeFileSync(path.join(root, 'package.json'), '{ invalid json');
+
+      const service = new ArtifactsService(db, makeFakeApp());
+      const result = await service.checkBuildFromFolder({ folderPath: root });
+
+      expect(result.status).toBe('error');
+      expect(result.diagnostics.map((d) => d.code)).toContain('missing_local_import');
+      expect(result.diagnostics.map((d) => d.code)).toContain('malformed_package_json');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  dbTest('warns about declared env vars on templates without dotenv injection', async ({ db }) => {
+    const root = mkdtempSync(path.join(tmpdir(), 'agor-artifact-validate-'));
+    try {
+      writeFileSync(path.join(root, 'index.js'), "console.log('hello');\n");
+      writeFileSync(
+        path.join(root, 'agor.artifact.json'),
+        JSON.stringify({ template: 'vanilla', required_env_vars: ['API_KEY'] })
+      );
+
+      const service = new ArtifactsService(db, makeFakeApp());
+      const result = await service.checkBuildFromFolder({ folderPath: root });
+
+      expect(result.status).toBe('success');
+      expect(result.diagnostics.map((d) => d.code)).toContain('env_vars_not_injected_for_template');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ArtifactsService.getStatus + console isolation', () => {
   dbTest('console logs and sandpack errors are scoped per viewer', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
@@ -946,13 +984,18 @@ describe('ArtifactsService.getStatus + console isolation', () => {
     // Two different viewers post console output. Viewer A's output may
     // contain values derived from their own injected secrets — those must
     // never leak into viewer B's status read.
-    service.appendConsoleLogs(created.artifact_id, 'viewer-A', [
+    await service.appendConsoleLogs(created.artifact_id, 'viewer-A', [
       { timestamp: 1, level: 'log', message: 'A_SECRET=alpha' },
     ]);
-    service.appendConsoleLogs(created.artifact_id, 'viewer-B', [
+    await service.appendConsoleLogs(created.artifact_id, 'viewer-B', [
       { timestamp: 2, level: 'log', message: 'B_SECRET=bravo' },
     ]);
-    service.setSandpackError(created.artifact_id, 'viewer-A', { message: 'A-only error' }, 'idle');
+    await service.setSandpackError(
+      created.artifact_id,
+      'viewer-A',
+      { message: 'A-only error' },
+      'idle'
+    );
 
     const statusA = await service.getStatus(created.artifact_id, 'viewer-A' as never);
     expect(statusA.console_logs.map((l) => l.message)).toEqual(['A_SECRET=alpha']);
@@ -962,6 +1005,127 @@ describe('ArtifactsService.getStatus + console isolation', () => {
     expect(statusB.console_logs.map((l) => l.message)).toEqual(['B_SECRET=bravo']);
     expect(statusB.sandpack_error).toBeNull();
   });
+
+  dbTest('waitForRuntimeStatus resolves with browser-reported Sandpack failure', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const board = await seedBoard(db);
+    const artifactRepo = new ArtifactRepository(db);
+    const created = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'wait-failure',
+      template: 'react',
+      files: { '/index.js': 'console.log("x")' },
+      public: true,
+      created_by: 'user-owner',
+    });
+
+    const waitPromise = service.waitForRuntimeStatus(created.artifact_id, 'viewer-A' as never, {
+      timeoutMs: 5000,
+      settleMs: 0,
+    });
+    await service.setSandpackError(
+      created.artifact_id,
+      'viewer-A',
+      { message: 'Cannot find module ./missing' },
+      'idle'
+    );
+
+    const result = await waitPromise;
+    expect(result.ok).toBe(false);
+    expect(result.observed).toBe(true);
+    expect(result.build_status).toBe('error');
+    expect(result.build_errors?.join('\n')).toMatch(/Cannot find module/);
+  });
+
+  dbTest(
+    'waitForRuntimeStatus ignores stale content-hash reports and times out',
+    async ({ db }) => {
+      vi.useFakeTimers();
+      try {
+        const service = new ArtifactsService(db, makeFakeApp());
+        const board = await seedBoard(db);
+        const artifactRepo = new ArtifactRepository(db);
+        const created = await artifactRepo.create({
+          artifact_id: generateId(),
+          board_id: board.board_id,
+          name: 'wait-stale',
+          template: 'react',
+          files: { '/index.js': 'console.log("x")' },
+          content_hash: 'current',
+          public: true,
+          created_by: 'user-owner',
+        });
+
+        const waitPromise = service.waitForRuntimeStatus(created.artifact_id, 'viewer-A' as never, {
+          timeoutMs: 500,
+          settleMs: 0,
+        });
+        await service.setSandpackError(created.artifact_id, 'viewer-A', null, 'idle', 'old');
+        await vi.advanceTimersByTimeAsync(600);
+
+        const result = await waitPromise;
+        expect(result.ok).toBe(false);
+        expect(result.observed).toBe(false);
+        expect(result.timed_out).toBe(true);
+        expect(result.sandpack_status).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  dbTest(
+    'waitForRuntimeStatus ignores stale reports after metadata-only render changes',
+    async ({ db }) => {
+      vi.useFakeTimers();
+      try {
+        const service = new ArtifactsService(db, makeFakeApp());
+        const board = await seedBoard(db);
+        const artifactRepo = new ArtifactRepository(db);
+        const created = await artifactRepo.create({
+          artifact_id: generateId(),
+          board_id: board.board_id,
+          name: 'wait-stale-metadata',
+          template: 'react',
+          files: { '/index.js': 'console.log("x")' },
+          content_hash: 'same-file-hash',
+          public: true,
+          created_by: 'user-owner',
+        });
+        const beforePayload = await service.getPayload(created.artifact_id, 'viewer-A' as never);
+
+        const updated = await service.updateMetadata(
+          created.artifact_id,
+          { sandpack_config: { options: { showNavigator: true } } },
+          'user-owner',
+          'admin'
+        );
+        expect(updated.content_hash).toBe('same-file-hash');
+
+        const waitPromise = service.waitForRuntimeStatus(created.artifact_id, 'viewer-A' as never, {
+          timeoutMs: 500,
+          settleMs: 0,
+        });
+        await service.setSandpackError(
+          created.artifact_id,
+          'viewer-A',
+          null,
+          'idle',
+          beforePayload.runtime_report_hash
+        );
+        await vi.advanceTimersByTimeAsync(600);
+
+        const result = await waitPromise;
+        expect(result.ok).toBe(false);
+        expect(result.observed).toBe(false);
+        expect(result.timed_out).toBe(true);
+        expect(result.sandpack_status).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
   dbTest('getStatus rejects when artifact is not visible to caller', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());

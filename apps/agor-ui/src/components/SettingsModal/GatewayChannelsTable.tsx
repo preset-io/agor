@@ -39,6 +39,7 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Radio,
   Result,
   Select,
   Space,
@@ -131,6 +132,77 @@ const SectionLabel: React.FC<{ icon: React.ReactNode; title: string; subtitle?: 
       )}
     </span>
   </Space>
+);
+
+const UserSelect: React.FC<{ userById: Map<string, User>; placeholder?: string }> = ({
+  userById,
+  placeholder = 'Select a user',
+}) => (
+  <Select placeholder={placeholder} showSearch optionFilterProp="children">
+    {Array.from(userById.values())
+      .sort((a, b) =>
+        (a.name || a.email || a.user_id).localeCompare(b.name || b.email || b.user_id)
+      )
+      .map((u) => (
+        <Select.Option key={u.user_id} value={u.user_id}>
+          {u.name || u.email || u.user_id}
+        </Select.Option>
+      ))}
+  </Select>
+);
+
+const getIdentitySubtitle = (alignUsers: boolean): string =>
+  alignUsers ? 'align users' : 'run as selected user';
+
+const PlatformIdentityFields: React.FC<{
+  alignFieldName: string;
+  alignLabel: string;
+  alignDescription: string;
+  alignUsers: boolean;
+  alignedContent: React.ReactNode;
+  userById: Map<string, User>;
+}> = ({ alignFieldName, alignLabel, alignDescription, alignUsers, alignedContent, userById }) => (
+  <>
+    <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+      Choose which Agor user identity gateway-created sessions run as.
+    </Typography.Text>
+
+    <Form.Item name={alignFieldName} initialValue={false}>
+      <Radio.Group style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
+          <Radio value={true}>
+            <Space orientation="vertical" size={0}>
+              <Typography.Text>{alignLabel}</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {alignDescription}
+              </Typography.Text>
+            </Space>
+          </Radio>
+          <Radio value={false}>
+            <Space orientation="vertical" size={0}>
+              <Typography.Text>Run as selected user</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Every message uses one configured Agor user.
+              </Typography.Text>
+            </Space>
+          </Radio>
+        </Space>
+      </Radio.Group>
+    </Form.Item>
+
+    {alignUsers ? (
+      alignedContent
+    ) : (
+      <Form.Item
+        label="Run as"
+        name="agor_user_id"
+        rules={[{ required: true, message: 'Please select a user' }]}
+        tooltip="All sessions from this channel will run as this Agor user"
+      >
+        <UserSelect userById={userById} />
+      </Form.Item>
+    )}
+  </>
 );
 
 // ============================================================================
@@ -355,25 +427,15 @@ const ChannelFormFields: React.FC<{
         <BranchSelect branchById={branchById} />
       </Form.Item>
 
-      {/* For GitHub channels, "Post messages as" lives in the User Alignment section */}
-      {channelType !== 'github' && (
+      {/* Slack and GitHub choose identity in their platform-specific Identity sections. */}
+      {channelType !== 'slack' && channelType !== 'github' && (
         <Form.Item
           label="Post messages as"
           name="agor_user_id"
           rules={[{ required: true, message: 'Please select a user' }]}
           tooltip="Sessions from this channel will run as this Agor user"
         >
-          <Select placeholder="Select a user" showSearch optionFilterProp="children">
-            {Array.from(userById.values())
-              .sort((a, b) =>
-                (a.name || a.email || a.user_id).localeCompare(b.name || b.email || b.user_id)
-              )
-              .map((u) => (
-                <Select.Option key={u.user_id} value={u.user_id}>
-                  {u.name || u.email || u.user_id}
-                </Select.Option>
-              ))}
-          </Select>
+          <UserSelect userById={userById} />
         </Form.Item>
       )}
 
@@ -598,7 +660,7 @@ const ChannelFormFields: React.FC<{
             <Collapse
               ghost
               destroyOnHidden={false}
-              defaultActiveKey={mode === 'create' ? ['github-config'] : []}
+              defaultActiveKey={mode === 'create' ? ['identity', 'github-config'] : []}
               style={{ marginLeft: -16, marginRight: -16 }}
               items={[
                 // ── Credentials (edit mode) ──
@@ -709,28 +771,24 @@ const ChannelFormFields: React.FC<{
                     </>
                   ),
                 },
-                // ── User Alignment ──
+                // ── Identity ──
                 {
-                  key: 'user-alignment',
+                  key: 'identity',
                   label: (
                     <SectionLabel
                       icon={<UserOutlined />}
-                      title="User Alignment"
-                      subtitle="Map GitHub users to Agor accounts"
+                      title="Identity"
+                      subtitle={getIdentitySubtitle(alignGithubUsers)}
                     />
                   ),
                   children: (
-                    <>
-                      <Form.Item
-                        label="Enable User Alignment"
-                        name="github_align_users"
-                        valuePropName="checked"
-                        initialValue={false}
-                        tooltip="When enabled, GitHub users are mapped to Agor users. Unmapped users are rejected."
-                      >
-                        <Switch />
-                      </Form.Item>
-                      {alignGithubUsers ? (
+                    <PlatformIdentityFields
+                      alignFieldName="github_align_users"
+                      alignLabel="Align GitHub users"
+                      alignDescription="Map GitHub logins to Agor users. Unmapped users are rejected."
+                      alignUsers={alignGithubUsers}
+                      userById={userById}
+                      alignedContent={
                         <Form.Item
                           label="User Map"
                           name="github_user_map"
@@ -742,33 +800,8 @@ const ChannelFormFields: React.FC<{
                             placeholder={'{\n  "octocat": "user@example.com"\n}'}
                           />
                         </Form.Item>
-                      ) : (
-                        <Form.Item
-                          label="Post messages as"
-                          name="agor_user_id"
-                          rules={[{ required: true, message: 'Please select a user' }]}
-                          tooltip="All sessions from this channel will run as this Agor user"
-                        >
-                          <Select
-                            placeholder="Select a user"
-                            showSearch
-                            optionFilterProp="children"
-                          >
-                            {Array.from(userById.values())
-                              .sort((a, b) =>
-                                (a.name || a.email || a.user_id).localeCompare(
-                                  b.name || b.email || b.user_id
-                                )
-                              )
-                              .map((u) => (
-                                <Select.Option key={u.user_id} value={u.user_id}>
-                                  {u.name || u.email || u.user_id}
-                                </Select.Option>
-                              ))}
-                          </Select>
-                        </Form.Item>
-                      )}
-                    </>
+                      }
+                    />
                   ),
                 },
                 // ── Agentic Tool Configuration ──
@@ -839,9 +872,43 @@ const ChannelFormFields: React.FC<{
         <Collapse
           ghost
           destroyOnHidden={false}
-          defaultActiveKey={mode === 'create' ? ['credentials'] : []}
+          defaultActiveKey={mode === 'create' ? ['identity', 'credentials'] : []}
           style={{ marginLeft: -16, marginRight: -16 }}
           items={[
+            // ── Identity ──
+            {
+              key: 'identity',
+              label: (
+                <SectionLabel
+                  icon={<TeamOutlined />}
+                  title="Identity"
+                  subtitle={getIdentitySubtitle(alignSlackUsers)}
+                />
+              ),
+              children: (
+                <PlatformIdentityFields
+                  alignFieldName="align_slack_users"
+                  alignLabel="Align Slack users"
+                  alignDescription="Match Slack profile email to an Agor user. Unmatched users are rejected."
+                  alignUsers={alignSlackUsers}
+                  userById={userById}
+                  alignedContent={
+                    <Alert
+                      type="info"
+                      showIcon
+                      title="Requires users:read.email scope"
+                      description={
+                        <span>
+                          Add <code>users:read.email</code> to your Slack app so Agor can match
+                          Slack profiles by email.
+                        </span>
+                      }
+                      style={{ fontSize: 12 }}
+                    />
+                  }
+                />
+              ),
+            },
             // ── Credentials ──
             {
               key: 'credentials',
@@ -1007,54 +1074,6 @@ const ChannelFormFields: React.FC<{
                             </li>
                           )}
                         </ul>
-                      }
-                      style={{ fontSize: 12 }}
-                    />
-                  )}
-                </>
-              ),
-            },
-
-            // ── User Alignment ──
-            {
-              key: 'user-alignment',
-              label: (
-                <SectionLabel
-                  icon={<TeamOutlined />}
-                  title="User Alignment"
-                  subtitle={alignSlackUsers ? 'enabled' : 'disabled'}
-                />
-              ),
-              children: (
-                <>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: 12, display: 'block', marginBottom: 16 }}
-                  >
-                    When enabled, messages are attributed to the Agor user whose email matches the
-                    Slack user&apos;s email. Users without a matching Agor account are rejected.
-                  </Typography.Text>
-
-                  <Form.Item
-                    label="Align Slack Users with Agor Users"
-                    name="align_slack_users"
-                    valuePropName="checked"
-                    initialValue={false}
-                  >
-                    <Switch />
-                  </Form.Item>
-
-                  {alignSlackUsers && (
-                    <Alert
-                      type="info"
-                      showIcon
-                      title="Requires users:read.email scope"
-                      description={
-                        <span>
-                          Add <code>users:read.email</code> to your Slack app to look up user
-                          emails. Without this scope, alignment silently falls back to the
-                          configured &quot;Post messages as&quot; user.
-                        </span>
                       }
                       style={{ fontSize: 12 }}
                     />
@@ -1390,8 +1409,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         : {}),
     };
 
-    // Form has preserve={true}, so agor_user_id is retained even when the
-    // "Post messages as" dropdown is hidden (GitHub alignment ON).
+    // Existing aligned channels may still carry a preserved agor_user_id from a
+    // previous run-as configuration, but newly-created aligned channels can omit it.
+    // The gateway only reads agor_user_id when alignment is OFF.
     return {
       name: values.name as string,
       channel_type: values.channel_type as ChannelType,
@@ -1688,7 +1708,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             platforms grants anyone who can message your bot potential access to Agor sessions and
             the underlying branch environment.{' '}
             <Typography.Link
-              href="https://docs.agor.live/guide/message-gateway"
+              href="https://agor.live/guide/message-gateway"
               target="_blank"
               rel="noopener noreferrer"
             >

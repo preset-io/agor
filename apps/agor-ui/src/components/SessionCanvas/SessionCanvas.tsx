@@ -101,6 +101,7 @@ interface SessionCanvasProps {
   primaryAssistantId?: string | null;
   branchById: Map<string, Branch>;
   boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
+  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
   commentById: Map<string, BoardComment>; // Map-based comment storage
   cardById: Map<string, CardWithType>; // Map-based card storage for this board
   currentUserId?: string;
@@ -335,6 +336,10 @@ const nodeTypes = {
   artifactNode: ArtifactNode,
 };
 
+const EMPTY_BOARD_ENTITY_OBJECTS: BoardEntityObject[] = Object.freeze(
+  [] as BoardEntityObject[]
+) as BoardEntityObject[];
+
 const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   (
     {
@@ -346,7 +351,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       branches,
       primaryAssistantId,
       branchById,
-      boardObjectById,
+      boardObjectsByBoardId,
       commentById,
       cardById,
       userById,
@@ -407,48 +412,32 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Note: sessionsByBranch is now passed as prop (no longer computed locally)
     // This enables efficient O(1) lookups and stable references across re-renders
 
-    // Stabilize board objects for this board using a JSON key for deep equality
-    // This prevents recomputation when board objects on OTHER boards change
-    // biome-ignore lint/correctness/useExhaustiveDependencies: Using board_id instead of board for targeted memoization
-    const boardObjectsKey = useMemo(() => {
-      if (!board) return '[]';
-      const boardObjectsArray: BoardEntityObject[] = [];
-      for (const boardObject of boardObjectById.values()) {
-        if (boardObject.board_id === board.board_id) {
-          boardObjectsArray.push(boardObject);
-        }
-      }
-      // Sort by object_id for stable JSON key
-      boardObjectsArray.sort((a, b) => a.object_id.localeCompare(b.object_id));
-      // Include full object data (position, zone_id) so changes trigger re-renders
-      return JSON.stringify(boardObjectsArray);
-    }, [board?.board_id, boardObjectById]);
+    const boardId = board?.board_id;
+    const boardObjectsForBoard = useMemo(
+      () =>
+        boardId
+          ? boardObjectsByBoardId.get(boardId) || EMPTY_BOARD_ENTITY_OBJECTS
+          : EMPTY_BOARD_ENTITY_OBJECTS,
+      [boardId, boardObjectsByBoardId]
+    );
 
-    // Index by branch_id for O(1) lookups
-    // biome-ignore lint/correctness/useExhaustiveDependencies: Using JSON key for deep equality of board objects
+    // Board-scoped placement maps: rebuild only when this board's object array
+    // changes. This replaces the old global scan + JSON.stringify stabilizer.
     const boardObjectByBranch = useMemo(() => {
-      if (!board) return new Map<string, BoardEntityObject>();
       const map = new Map<string, BoardEntityObject>();
-      for (const boardObject of boardObjectById.values()) {
-        if (boardObject.board_id === board.board_id && boardObject.branch_id) {
-          map.set(boardObject.branch_id, boardObject);
-        }
+      for (const boardObject of boardObjectsForBoard) {
+        if (boardObject.branch_id) map.set(boardObject.branch_id, boardObject);
       }
       return map;
-    }, [board?.board_id, boardObjectsKey]);
+    }, [boardObjectsForBoard]);
 
-    // Index by card_id for O(1) lookups
-    // biome-ignore lint/correctness/useExhaustiveDependencies: Using JSON key for deep equality of board objects
     const boardObjectByCard = useMemo(() => {
-      if (!board) return new Map<string, BoardEntityObject>();
       const map = new Map<string, BoardEntityObject>();
-      for (const boardObject of boardObjectById.values()) {
-        if (boardObject.board_id === board.board_id && boardObject.card_id) {
-          map.set(boardObject.card_id, boardObject);
-        }
+      for (const boardObject of boardObjectsForBoard) {
+        if (boardObject.card_id) map.set(boardObject.card_id, boardObject);
       }
       return map;
-    }, [board?.board_id, boardObjectsKey]);
+    }, [boardObjectsForBoard]);
 
     // Card modal state
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
@@ -585,7 +574,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       client,
       sessionsByBranch,
       branches,
-      boardObjectById,
+      boardObjectsForBoard,
       setNodes,
       deletedObjectsRef,
       eraserMode: activeTool === 'eraser',
@@ -737,6 +726,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         nodes.push({
           id: branch.branch_id,
           type: 'branchNode',
+          dragHandle: '.drag-handle',
           position, // When pinned (parentId set), this is relative to zone; otherwise absolute
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 500, // Above zones, below comments
@@ -878,6 +868,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         nodes.push({
           id: `card-${cardId}`,
           type: 'cardNode',
+          dragHandle: '.drag-handle',
           position,
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 500, // Same level as branches
@@ -1140,7 +1131,11 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
             if (positionConfirmed) {
               delete localPositionsRef.current[newNode.id];
-              return { ...newNode, selected: existingNode?.selected };
+              return {
+                ...newNode,
+                selected: existingNode?.selected,
+                zIndex: existingNode?.zIndex ?? newNode.zIndex,
+              };
             }
 
             let positionToUse = localPosition;
@@ -1153,10 +1148,19 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               }
             }
 
-            return { ...newNode, position: positionToUse, selected: existingNode?.selected };
+            return {
+              ...newNode,
+              position: positionToUse,
+              selected: existingNode?.selected,
+              zIndex: existingNode?.zIndex ?? newNode.zIndex,
+            };
           }
 
-          return { ...newNode, selected: existingNode?.selected };
+          return {
+            ...newNode,
+            selected: existingNode?.selected,
+            zIndex: existingNode?.zIndex ?? newNode.zIndex,
+          };
         });
       },
       []
@@ -2251,10 +2255,21 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return;
         }
 
-        // Branch cards handle their own session clicks internally
-        // (no canvas-level click handler needed for branchNode)
+        // Bring clicked card to front (zones and comments are excluded from this)
+        if (node.type !== 'zone' && node.type !== 'comment') {
+          setNodes((nds) => {
+            const raisable = nds.filter((n) => n.type !== 'zone' && n.type !== 'comment');
+            const currentZ = nds.find((n) => n.id === node.id)?.zIndex ?? 0;
+            const isAlreadyOnTop = raisable.every(
+              (n) => n.id === node.id || (n.zIndex ?? 0) < currentZ
+            );
+            if (isAlreadyOnTop) return nds;
+            const maxZ = Math.max(0, ...raisable.map((n) => n.zIndex ?? 0));
+            return nds.map((n) => (n.id === node.id ? { ...n, zIndex: maxZ + 1 } : n));
+          });
+        }
       },
-      [activeTool, deleteObject, mutationGate.canMutate]
+      [activeTool, deleteObject, mutationGate.canMutate, setNodes]
     );
 
     // Clear comment placement state when switching away from comment tool

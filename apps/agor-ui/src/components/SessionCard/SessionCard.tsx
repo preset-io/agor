@@ -132,8 +132,9 @@ const SessionCard = ({
         body: { padding: 16 },
       }}
     >
-      {/* Session header */}
+      {/* Session header — full-width drag handle */}
       <div
+        className="drag-handle"
         style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -184,10 +185,10 @@ const SessionCard = ({
           </div>
           <Button
             type="text"
-            size="small"
-            icon={<DragOutlined />}
+            icon={<DragOutlined style={{ fontSize: 16 }} />}
             className="drag-handle"
             title="Drag to reposition"
+            style={{ cursor: 'grab', padding: '4px 8px' }}
           />
           <div className="nodrag">
             {onSessionClick && (

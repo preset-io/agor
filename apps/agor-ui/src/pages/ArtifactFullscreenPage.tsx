@@ -325,8 +325,14 @@ export function ArtifactFullscreenPage({
               showOpenInCodeSandbox={false}
               showRefreshButton
             />
-            <ArtifactConsoleReporter artifactId={payload.artifact_id} />
-            <ArtifactSandpackErrorReporter artifactId={payload.artifact_id} />
+            <ArtifactConsoleReporter
+              artifactId={payload.artifact_id}
+              contentHash={payload.runtime_report_hash ?? payload.content_hash}
+            />
+            <ArtifactSandpackErrorReporter
+              artifactId={payload.artifact_id}
+              contentHash={payload.runtime_report_hash ?? payload.content_hash}
+            />
             <ArtifactRuntimeBridge artifactId={payload.artifact_id} />
           </SandpackProvider>
         </div>

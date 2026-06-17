@@ -17,7 +17,13 @@ const RUNTIME_QUERY_DEFAULT_TIMEOUT_MS = 6000;
  * Captures Sandpack console events and forwards them to the daemon.
  * Must be rendered inside a SandpackProvider.
  */
-export function ArtifactConsoleReporter({ artifactId }: { artifactId: string }) {
+export function ArtifactConsoleReporter({
+  artifactId,
+  contentHash,
+}: {
+  artifactId: string;
+  contentHash?: string;
+}) {
   const { logs } = useSandpackConsole({ resetOnPreviewRestart: false });
   const lastSentRef = useRef(0);
   const lastSendTimeRef = useRef(0);
@@ -50,7 +56,7 @@ export function ArtifactConsoleReporter({ artifactId }: { artifactId: string }) 
       fetch(`${getDaemonUrl()}/artifacts/${artifactId}/console`, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ entries }),
+        body: JSON.stringify({ entries, content_hash: contentHash }),
       }).catch(() => {});
     };
 
@@ -70,7 +76,7 @@ export function ArtifactConsoleReporter({ artifactId }: { artifactId: string }) 
         timerRef.current = null;
       }
     };
-  }, [logs, artifactId]);
+  }, [logs, artifactId, contentHash]);
 
   return null;
 }
@@ -79,7 +85,13 @@ export function ArtifactConsoleReporter({ artifactId }: { artifactId: string }) 
  * Captures Sandpack bundler/runtime errors and forwards them to the daemon.
  * Must be rendered inside a SandpackProvider.
  */
-export function ArtifactSandpackErrorReporter({ artifactId }: { artifactId: string }) {
+export function ArtifactSandpackErrorReporter({
+  artifactId,
+  contentHash,
+}: {
+  artifactId: string;
+  contentHash?: string;
+}) {
   const { sandpack } = useSandpack();
   const lastSentRef = useRef<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -118,7 +130,7 @@ export function ArtifactSandpackErrorReporter({ artifactId }: { artifactId: stri
       fetch(`${getDaemonUrl()}/artifacts/${artifactId}/sandpack-error`, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, content_hash: contentHash }),
       }).catch(() => {});
     };
 
@@ -136,7 +148,7 @@ export function ArtifactSandpackErrorReporter({ artifactId }: { artifactId: stri
         pendingSendRef.current?.();
       }
     };
-  }, [sandpack.error, sandpack.status, artifactId]);
+  }, [sandpack.error, sandpack.status, artifactId, contentHash]);
 
   return null;
 }

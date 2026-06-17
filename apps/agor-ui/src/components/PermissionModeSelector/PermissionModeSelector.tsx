@@ -68,6 +68,13 @@ const CLAUDE_CODE_MODES: ModeOption[] = [
     color: '#52c41a', // Green
   },
   {
+    mode: 'auto',
+    label: 'auto',
+    description: 'Model classifier approves/denies prompts, asks only when unsure',
+    icon: <SafetyOutlined />,
+    color: '#13c2c2', // Teal
+  },
+  {
     mode: 'bypassPermissions',
     label: 'bypassPermissions',
     description: 'Allow all operations without prompting',

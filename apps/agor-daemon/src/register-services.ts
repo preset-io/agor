@@ -63,6 +63,7 @@ import { createBranchesService } from './services/branches.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
+import { createClaudeModelsService } from './services/claude-models.js';
 import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
@@ -477,6 +478,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   app.use('/check-auth', createCheckAuthService(db));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
+  // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)
+  // and falls back to AVAILABLE_CLAUDE_MODEL_ALIASES if no key or API failure.
+  app.use('/claude-models', createClaudeModelsService(db));
+  app.service('/claude-models').hooks({ before: { find: [ctx.requireAuth] } });
 
   // Copilot dynamic model discovery via @github/copilot-sdk's listModels().
   // Resolves the GitHub token per-user (with config.yaml + env fallback)
