@@ -154,6 +154,57 @@ const UserSelect: React.FC<{ userById: Map<string, User>; placeholder?: string }
 const getIdentitySubtitle = (alignUsers: boolean): string =>
   alignUsers ? 'align users' : 'run as selected user';
 
+const PlatformIdentityFields: React.FC<{
+  alignFieldName: string;
+  alignLabel: string;
+  alignDescription: string;
+  alignUsers: boolean;
+  alignedContent: React.ReactNode;
+  userById: Map<string, User>;
+}> = ({ alignFieldName, alignLabel, alignDescription, alignUsers, alignedContent, userById }) => (
+  <>
+    <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+      Choose which Agor user identity gateway-created sessions run as.
+    </Typography.Text>
+
+    <Form.Item name={alignFieldName} initialValue={false}>
+      <Radio.Group style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
+          <Radio value={true}>
+            <Space orientation="vertical" size={0}>
+              <Typography.Text>{alignLabel}</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {alignDescription}
+              </Typography.Text>
+            </Space>
+          </Radio>
+          <Radio value={false}>
+            <Space orientation="vertical" size={0}>
+              <Typography.Text>Run as selected user</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Every message uses one configured Agor user.
+              </Typography.Text>
+            </Space>
+          </Radio>
+        </Space>
+      </Radio.Group>
+    </Form.Item>
+
+    {alignUsers ? (
+      alignedContent
+    ) : (
+      <Form.Item
+        label="Run as"
+        name="agor_user_id"
+        rules={[{ required: true, message: 'Please select a user' }]}
+        tooltip="All sessions from this channel will run as this Agor user"
+      >
+        <UserSelect userById={userById} />
+      </Form.Item>
+    )}
+  </>
+);
+
 // ============================================================================
 // Environment Variables Editor
 // ============================================================================
@@ -731,38 +782,13 @@ const ChannelFormFields: React.FC<{
                     />
                   ),
                   children: (
-                    <>
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                      >
-                        Choose which Agor user identity gateway-created sessions run as.
-                      </Typography.Text>
-
-                      <Form.Item name="github_align_users" initialValue={false}>
-                        <Radio.Group style={{ width: '100%' }}>
-                          <Space orientation="vertical" style={{ width: '100%' }}>
-                            <Radio value={true}>
-                              <Space orientation="vertical" size={0}>
-                                <Typography.Text>Align GitHub users</Typography.Text>
-                                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                                  Map GitHub logins to Agor users. Unmapped users are rejected.
-                                </Typography.Text>
-                              </Space>
-                            </Radio>
-                            <Radio value={false}>
-                              <Space orientation="vertical" size={0}>
-                                <Typography.Text>Run as selected user</Typography.Text>
-                                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                                  Every message uses one configured Agor user.
-                                </Typography.Text>
-                              </Space>
-                            </Radio>
-                          </Space>
-                        </Radio.Group>
-                      </Form.Item>
-
-                      {alignGithubUsers ? (
+                    <PlatformIdentityFields
+                      alignFieldName="github_align_users"
+                      alignLabel="Align GitHub users"
+                      alignDescription="Map GitHub logins to Agor users. Unmapped users are rejected."
+                      alignUsers={alignGithubUsers}
+                      userById={userById}
+                      alignedContent={
                         <Form.Item
                           label="User Map"
                           name="github_user_map"
@@ -774,17 +800,8 @@ const ChannelFormFields: React.FC<{
                             placeholder={'{\n  "octocat": "user@example.com"\n}'}
                           />
                         </Form.Item>
-                      ) : (
-                        <Form.Item
-                          label="Run as"
-                          name="agor_user_id"
-                          rules={[{ required: true, message: 'Please select a user' }]}
-                          tooltip="All sessions from this channel will run as this Agor user"
-                        >
-                          <UserSelect userById={userById} />
-                        </Form.Item>
-                      )}
-                    </>
+                      }
+                    />
                   ),
                 },
                 // ── Agentic Tool Configuration ──
@@ -869,39 +886,13 @@ const ChannelFormFields: React.FC<{
                 />
               ),
               children: (
-                <>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                  >
-                    Choose which Agor user identity gateway-created sessions run as.
-                  </Typography.Text>
-
-                  <Form.Item name="align_slack_users" initialValue={false}>
-                    <Radio.Group style={{ width: '100%' }}>
-                      <Space orientation="vertical" style={{ width: '100%' }}>
-                        <Radio value={true}>
-                          <Space orientation="vertical" size={0}>
-                            <Typography.Text>Align Slack users</Typography.Text>
-                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              Match Slack profile email to an Agor user. Unmatched users are
-                              rejected.
-                            </Typography.Text>
-                          </Space>
-                        </Radio>
-                        <Radio value={false}>
-                          <Space orientation="vertical" size={0}>
-                            <Typography.Text>Run as selected user</Typography.Text>
-                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              Every message uses one configured Agor user.
-                            </Typography.Text>
-                          </Space>
-                        </Radio>
-                      </Space>
-                    </Radio.Group>
-                  </Form.Item>
-
-                  {alignSlackUsers ? (
+                <PlatformIdentityFields
+                  alignFieldName="align_slack_users"
+                  alignLabel="Align Slack users"
+                  alignDescription="Match Slack profile email to an Agor user. Unmatched users are rejected."
+                  alignUsers={alignSlackUsers}
+                  userById={userById}
+                  alignedContent={
                     <Alert
                       type="info"
                       showIcon
@@ -914,17 +905,8 @@ const ChannelFormFields: React.FC<{
                       }
                       style={{ fontSize: 12 }}
                     />
-                  ) : (
-                    <Form.Item
-                      label="Run as"
-                      name="agor_user_id"
-                      rules={[{ required: true, message: 'Please select a user' }]}
-                      tooltip="All sessions from this channel will run as this Agor user"
-                    >
-                      <UserSelect userById={userById} />
-                    </Form.Item>
-                  )}
-                </>
+                  }
+                />
               ),
             },
             // ── Credentials ──
@@ -1427,8 +1409,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         : {}),
     };
 
-    // Form has preserve={true}, so agor_user_id is retained even when the
-    // run-as selector is hidden (Slack/GitHub alignment ON).
+    // Existing aligned channels may still carry a preserved agor_user_id from a
+    // previous run-as configuration, but newly-created aligned channels can omit it.
+    // The gateway only reads agor_user_id when alignment is OFF.
     return {
       name: values.name as string,
       channel_type: values.channel_type as ChannelType,
