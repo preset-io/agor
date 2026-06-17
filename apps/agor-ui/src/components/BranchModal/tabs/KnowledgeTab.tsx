@@ -143,9 +143,10 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
     if (!client) return;
     setSavingPolicy(true);
     try {
+      const assistantConfigKey = branch.custom_context?.assistant ? 'assistant' : 'agent';
       const updated = (await client.service('branches').patch(branch.branch_id, {
         custom_context: {
-          assistant: {
+          [assistantConfigKey]: {
             kb: nextKb,
           },
         },
