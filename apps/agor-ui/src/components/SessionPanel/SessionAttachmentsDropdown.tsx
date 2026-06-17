@@ -1,4 +1,4 @@
-import { GithubOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons';
+import { GithubOutlined, GlobalOutlined, LinkOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Badge, Button, Dropdown, Tooltip } from 'antd';
 import type React from 'react';
@@ -20,7 +20,7 @@ function getIcon(url: string): React.ReactNode {
   } catch {
     // ignore
   }
-  return <LinkOutlined />;
+  return <GlobalOutlined />;
 }
 
 export const SessionAttachmentsDropdown: React.FC<Props> = ({ items }) => {
@@ -51,7 +51,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({ items }) => {
     <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomRight">
       <Tooltip title="Attachments">
         <Badge count={items.length} size="small" offset={[-4, 4]}>
-          <Button type="text" icon={<PaperClipOutlined />} />
+          <Button type="text" icon={<LinkOutlined />} />
         </Badge>
       </Tooltip>
     </Dropdown>
