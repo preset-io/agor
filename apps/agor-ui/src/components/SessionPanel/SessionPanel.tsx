@@ -23,13 +23,16 @@ import {
   BranchesOutlined,
   CloseOutlined,
   CodeOutlined,
+  EllipsisOutlined,
   ForkOutlined,
+  InboxOutlined,
   QuestionCircleOutlined,
   SendOutlined,
   SettingOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Badge, Button, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import type { MenuProps } from 'antd';
+import { Alert, App, Badge, Button, Dropdown, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -42,7 +45,6 @@ import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
-import { ArchiveActionButton } from '../ArchiveButton';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CallbackToggleButton } from '../CallbackToggleButton';
 import { FileUpload, FileUploadButton } from '../FileUpload';
@@ -50,8 +52,11 @@ import { MCPServerPill } from '../MCPServer';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
 import { ContextWindowPill, TimerPill, TokenCountPill } from '../Pill';
+import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { SessionIdsButton } from '../SessionIds';
 import { ToolIcon } from '../ToolIcon';
+import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
+import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 import { SessionPanelContent } from './SessionPanelContent';
 import { SessionRunSettingsPopover } from './SessionRunSettingsPopover';
@@ -459,6 +464,25 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return null;
   }, [tasks, session?.agentic_tool]);
 
+  const attachmentItems = React.useMemo((): SessionAttachmentItem[] => {
+    const acc: SessionAttachmentItem[] = [];
+    if (branch?.issue_url) {
+      acc.push({
+        key: 'issue',
+        name: `Issue: ${getUrlDisplayLabel(branch.issue_url)}`,
+        url: branch.issue_url,
+      });
+    }
+    if (branch?.pull_request_url) {
+      acc.push({
+        key: 'pr',
+        name: `PR: ${getUrlDisplayLabel(branch.pull_request_url)}`,
+        url: branch.pull_request_url,
+      });
+    }
+    return acc;
+  }, [branch?.issue_url, branch?.pull_request_url]);
+
   const footerGradient = React.useMemo(() => {
     if (!latestContextWindow) return undefined;
     return getContextWindowGradient(
@@ -534,6 +558,48 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       },
     });
   };
+
+  const hasBranchActions = !!branch;
+  const moreMenuItems: MenuProps['items'] = [
+    ...(branch
+      ? [
+          {
+            key: 'center-map',
+            icon: <AimOutlined />,
+            label: 'Center map on branch',
+            onClick: () => recenterMap(branch.branch_id, { boardId: branch.board_id ?? undefined }),
+          },
+        ]
+      : []),
+    ...(onOpenTerminal && branch
+      ? [
+          {
+            key: 'terminal',
+            icon: <CodeOutlined />,
+            label: 'Open terminal',
+            onClick: () => onOpenTerminal([`cd ${branch.path}`], branch.branch_id),
+          },
+        ]
+      : []),
+    ...(hasBranchActions ? [{ type: 'divider' as const }] : []),
+    ...(onOpenSettings
+      ? [
+          {
+            key: 'settings',
+            icon: <SettingOutlined />,
+            label: 'Session Settings',
+            onClick: () => onOpenSettings(session.session_id),
+          },
+        ]
+      : []),
+    {
+      key: 'archive',
+      icon: <InboxOutlined />,
+      label: connectionDisabled ? 'Archive (disconnected)' : 'Archive session',
+      disabled: connectionDisabled || !client,
+      onClick: handleArchive,
+    },
+  ];
 
   const isRunning =
     session.status === SessionStatus.RUNNING || session.status === SessionStatus.STOPPING;
@@ -1017,43 +1083,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </Space>
           <Space size={4}>
-            {branch && (
-              <Tooltip title="Center map on branch">
-                <Button
-                  type="text"
-                  icon={<AimOutlined />}
-                  onClick={() =>
-                    recenterMap(branch.branch_id, {
-                      boardId: branch.board_id ?? undefined,
-                    })
-                  }
-                />
+            <SessionAttachmentsDropdown items={attachmentItems} />
+            <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
+              <Tooltip title="More actions">
+                <Button type="text" icon={<EllipsisOutlined />} />
               </Tooltip>
-            )}
-            {onOpenTerminal && branch && (
-              <Tooltip title="Open terminal in branch directory">
-                <Button
-                  type="text"
-                  icon={<CodeOutlined />}
-                  onClick={() => onOpenTerminal([`cd ${branch.path}`], branch.branch_id)}
-                />
-              </Tooltip>
-            )}
-            {onOpenSettings && (
-              <Tooltip title="Session Settings">
-                <Button
-                  type="text"
-                  icon={<SettingOutlined />}
-                  onClick={() => onOpenSettings(session.session_id)}
-                />
-              </Tooltip>
-            )}
-            <ArchiveActionButton
-              tooltip={connectionDisabled ? 'Disconnected from daemon' : 'Archive session'}
-              size="middle"
-              disabled={connectionDisabled || !client}
-              onClick={handleArchive}
-            />
+            </Dropdown>
             <Tooltip title="Close Panel">
               <Button
                 type="text"

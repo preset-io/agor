@@ -14,7 +14,9 @@ const agorConfig = (() => {
 })();
 
 const defaults = getDefaultConfig();
-const daemonPort = agorConfig.daemon?.port || defaults.daemon?.port || 3030;
+const daemonPort = process.env.VITE_DAEMON_PORT
+  ? Number(process.env.VITE_DAEMON_PORT)
+  : agorConfig.daemon?.port || defaults.daemon?.port || 3030;
 
 // https://vitejs.dev/config/
 export default defineConfig({
