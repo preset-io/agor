@@ -1,3 +1,7 @@
+/* Wrapper styling only. The form itself lives inside HubSpot's iframe
+ * and is themed via the `css` option passed to hbspt.forms.create — see
+ * HUBSPOT_FORM_CSS in HubSpotForm.tsx. */
+
 .wrapper {
   margin: 2.5rem auto;
   display: flex;
@@ -12,80 +16,6 @@
 .form {
   width: 100%;
   max-width: 560px;
-  padding: 1.75rem 1.5rem;
-  background: rgba(46, 154, 146, 0.05);
-  border: 1px solid rgba(127, 232, 223, 0.2);
-  border-radius: 12px;
-  box-shadow: 0 4px 18px rgba(46, 154, 146, 0.08);
-}
-
-.form :global(form) {
-  font-family: inherit;
-}
-
-/* Pull the embedded form's inputs closer to the surrounding docs styling
- * without fighting HubSpot's stylesheet too hard. */
-.form :global(.hs-form-field) {
-  margin-bottom: 1rem;
-}
-
-.form :global(.hs-form-field > label) {
-  display: block;
-  margin-bottom: 0.35rem;
-  font-weight: 600;
-  font-size: 0.95rem;
-}
-
-.form :global(input[type="text"]),
-.form :global(input[type="email"]),
-.form :global(input[type="tel"]),
-.form :global(input[type="number"]),
-.form :global(textarea),
-.form :global(select) {
-  width: 100%;
-  padding: 0.55rem 0.75rem;
-  font-size: 1rem;
-  font-family: inherit;
-  border-radius: 6px;
-  border: 1px solid rgba(127, 232, 223, 0.35);
-  background: rgba(10, 10, 10, 0.35);
-  color: inherit;
-  box-sizing: border-box;
-}
-
-.form :global(input[type="submit"]) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-top: 0.5rem;
-  padding: 0.85rem 1.85rem;
-  font-size: 1.0625rem;
-  font-weight: 700;
-  font-family: inherit;
-  color: #0a0a0a;
-  background: linear-gradient(135deg, #2e9a92 0%, #4ec4ba 100%);
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(46, 154, 146, 0.4);
-  transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease,
-    background 0.15s ease;
-}
-
-.form :global(input[type="submit"]:hover) {
-  transform: translateY(-1px);
-  background: linear-gradient(135deg, #3db4aa 0%, #6dd5cb 100%);
-  box-shadow: 0 6px 20px rgba(46, 154, 146, 0.55);
-}
-
-.form :global(.hs-error-msgs) {
-  list-style: none;
-  margin: 0.35rem 0 0;
-  padding: 0;
-  color: #ff8a8a;
-  font-size: 0.875rem;
 }
 
 .demoLine {
@@ -104,10 +34,4 @@
 .demoLink:hover {
   color: #a8f5ed;
   text-decoration: underline;
-}
-
-@media (max-width: 640px) {
-  .form {
-    padding: 1.25rem 1rem;
-  }
 }
