@@ -3,6 +3,7 @@ import { SearchOutlined } from '@ant-design/icons';
 import { Badge, Drawer, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
+import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import {
   getMatchSnippet,
@@ -253,6 +254,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
                     <HighlightMatch text={titleText} query={trimmedQuery} />
                   </Typography.Text>
                   <SessionRelationshipIcon session={session} />
+                  <BranchBoardLocatorIcon branch={branch} />
                 </div>
 
                 {toolMatches && (
