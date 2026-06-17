@@ -38,6 +38,11 @@ vi.mock('@agor/core/types', () => ({
   KNOWLEDGE_GRAPH_EDGE_TYPES: ['references', 'relates_to'],
   KNOWLEDGE_GRAPH_NODE_TYPES: ['document', 'external'],
   KNOWLEDGE_VISIBILITIES: ['public', 'private'],
+  normalizeKnowledgeFolderPath: (folder?: string | null) =>
+    (folder ?? '')
+      .trim()
+      .replace(/^\/+|\/+$/g, '')
+      .replace(/\/+/g, '/'),
   normalizeKnowledgeDocumentIconEmoji: (icon: string | null | undefined) =>
     typeof icon === 'string' && icon.trim() ? icon.trim() : null,
   parseKnowledgeUri: () => undefined,
@@ -605,6 +610,55 @@ describe('Knowledge MCP input schemas', () => {
         kind: 'doc',
         path: 'runbooks/deploy.md',
         uri: 'agor://kb/global/runbooks/deploy.md',
+        reference_uri: 'agor://kb/document/doc-1',
+        status: 'published',
+      },
+    ]);
+  });
+
+  it('normalizes pathPrefix before querying and shaping the tree', async () => {
+    const find = vi.fn().mockResolvedValue([
+      {
+        document: {
+          document_id: 'doc-1',
+          namespace_id: 'ns-1',
+          path: 'guides/a.md',
+          uri: 'agor://kb/global/guides/a.md',
+          title: 'A',
+          kind: 'doc',
+          visibility: 'public',
+          status: 'published',
+          edit_policy: 'namespace',
+        },
+        namespace: { namespace_id: 'ns-1', slug: 'global', display_name: 'Global' },
+        current_version: null,
+        score: 0,
+      },
+    ]);
+    const tools = await captureKnowledgeTools({ 'kb/search': { find } });
+
+    const result = textResultJson(
+      await tools.agor_kb_tree.handler?.({
+        namespace: 'global',
+        pathPrefix: '/guides//',
+      })
+    ) as Record<string, any>;
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          path_prefix: 'guides',
+        }),
+      })
+    );
+    expect(result.path_prefix).toBe('guides');
+    expect(result.tree).toEqual([
+      {
+        type: 'doc',
+        title: 'A',
+        kind: 'doc',
+        path: 'guides/a.md',
+        uri: 'agor://kb/global/guides/a.md',
         reference_uri: 'agor://kb/document/doc-1',
         status: 'published',
       },

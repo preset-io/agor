@@ -31,6 +31,7 @@ import {
   KNOWLEDGE_GRAPH_NODE_TYPES,
   KNOWLEDGE_VISIBILITIES,
   normalizeKnowledgeDocumentIconEmoji,
+  normalizeKnowledgeFolderPath,
   parseKnowledgeUri,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -478,6 +479,7 @@ function shapeKnowledgeTreeResponse(
   args: {
     namespace?: unknown;
     pathPrefix?: unknown;
+    normalizedPathPrefix?: unknown;
     depth?: unknown;
     limit?: unknown;
   }
@@ -488,7 +490,9 @@ function shapeKnowledgeTreeResponse(
     .filter((doc): doc is KnowledgeTreeDoc => Boolean(doc))
     .sort((a, b) => a.path.localeCompare(b.path));
   const depth = typeof args.depth === 'number' && Number.isFinite(args.depth) ? args.depth : 3;
-  const prefix = coerceString(args.pathPrefix) ?? '';
+  const prefix =
+    coerceString(args.normalizedPathPrefix) ??
+    normalizeKnowledgeFolderPath(coerceString(args.pathPrefix));
   const root: KnowledgeTreeFolder = {
     type: 'folder',
     name: coerceString(args.namespace) ?? 'knowledge',
@@ -1200,6 +1204,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const service = getOptionalService(ctx, 'kb/search');
       if (!service) return knowledgeNotImplementedResult('agor_kb_tree', ['kb/search']);
 
+      const normalizedPathPrefix = normalizeKnowledgeFolderPath(coerceString(args.pathPrefix));
       const query: Record<string, unknown> = {
         q: '',
         namespace_slug: coerceString(args.namespace),
@@ -1208,13 +1213,13 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         include_other_user_drafts: args.includeOtherUserDrafts === true,
         limit: args.limit ?? 100,
       };
-      if (args.pathPrefix) query.path_prefix = coerceString(args.pathPrefix);
+      if (normalizedPathPrefix) query.path_prefix = normalizedPathPrefix;
       if (args.kind) query.kind = args.kind as KnowledgeDocumentKind;
       if (args.status) query.status = args.status as KnowledgeDocumentStatus;
 
       if (service.find) {
         const result = await service.find(mcpParams(ctx, query));
-        return textResult(shapeKnowledgeTreeResponse(result, args));
+        return textResult(shapeKnowledgeTreeResponse(result, { ...args, normalizedPathPrefix }));
       }
       return knowledgeNotImplementedResult('agor_kb_tree', ['kb/search.find']);
     }
