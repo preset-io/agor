@@ -57,6 +57,20 @@ function namespaceSelectLabel(namespace: KnowledgeNamespace) {
   return `${namespace.display_name} (${namespace.slug}) · ${permission}`;
 }
 
+export function buildAssistantKnowledgePatch(
+  branch: Pick<Branch, 'custom_context'>,
+  nextKb: Partial<AssistantKnowledgeConfig>
+): Partial<Branch> {
+  const assistantConfigKey = branch.custom_context?.assistant ? 'assistant' : 'agent';
+  return {
+    custom_context: {
+      [assistantConfigKey]: {
+        kb: nextKb,
+      },
+    },
+  };
+}
+
 export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canEdit }) => {
   const { showSuccess, showError } = useThemedMessage();
   const assistant = useMemo(() => getAssistantConfig(branch), [branch]);
@@ -143,14 +157,9 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
     if (!client) return;
     setSavingPolicy(true);
     try {
-      const assistantConfigKey = branch.custom_context?.assistant ? 'assistant' : 'agent';
-      const updated = (await client.service('branches').patch(branch.branch_id, {
-        custom_context: {
-          [assistantConfigKey]: {
-            kb: nextKb,
-          },
-        },
-      } as Partial<Branch>)) as Branch;
+      const updated = (await client
+        .service('branches')
+        .patch(branch.branch_id, buildAssistantKnowledgePatch(branch, nextKb))) as Branch;
       const savedKb = getAssistantConfig(updated)?.kb ?? nextKb;
       setKb(savedKb);
       showSuccess('Assistant Knowledge policy saved');
