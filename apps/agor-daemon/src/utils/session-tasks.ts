@@ -14,6 +14,7 @@
  * drift. Keep this as the single source.
  */
 
+import type { Database } from '@agor/core/db';
 import {
   eq,
   lockRowForUpdate,
@@ -22,7 +23,6 @@ import {
   tasks as tasksTable,
   txAsDb,
 } from '@agor/core/db';
-import type { Database } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Message, Paginated, Params, SessionID, Task, TaskID } from '@agor/core/types';
 import { MessageRole, TaskStatus } from '@agor/core/types';

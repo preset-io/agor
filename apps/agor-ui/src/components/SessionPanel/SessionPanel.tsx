@@ -562,9 +562,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     setStopRequestInFlight(true);
     try {
-      const response = (await client
-        .service(`sessions/${session.session_id}/stop`)
-        .create({})) as { prompt_restored?: boolean; restored_prompt?: string };
+      const response = (await client.service(`sessions/${session.session_id}/stop`).create({})) as {
+        prompt_restored?: boolean;
+        restored_prompt?: string;
+      };
 
       // Edit-on-cancel: server dropped the orphan task because the agent
       // hadn't produced any output yet. Restore the prompt to the composer
