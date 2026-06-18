@@ -9,6 +9,7 @@
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type AgorConfig,
+  isPosixAclEnabled,
   isUnixImpersonationEnabled,
   loadConfig,
   type UnknownJson,
@@ -1105,6 +1106,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                       params: {
                         branchId: branch.branch_id,
                         daemonUser: config.daemon?.unix_user,
+                        aclEnabled: isPosixAclEnabled(),
                       },
                     },
                     { logPrefix: '[Executor/branch.patch]' }
@@ -2362,6 +2364,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                         params: {
                           branchId: session.branch_id,
                           daemonUser: config.daemon?.unix_user,
+                          aclEnabled: isPosixAclEnabled(),
                         },
                       },
                       { logPrefix: '[Executor/session.create.unix-group]' }

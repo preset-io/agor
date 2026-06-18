@@ -282,6 +282,7 @@ export default class SyncUnix extends Command {
       // (process.env.USER would return 'root' which is wrong)
       const config = await loadConfig();
       const daemonUser = config.daemon?.unix_user;
+      const aclEnabled = config.execution?.posix_acl_enabled !== false;
 
       if (!daemonUser) {
         this.error(
@@ -478,7 +479,8 @@ export default class SyncUnix extends Command {
               const rootCmds = UnixGroupCommands.setDirectoryGroupShallow(
                 repoPath,
                 expectedGroup,
-                REPO_GIT_PERMISSION_MODE
+                REPO_GIT_PERMISSION_MODE,
+                { aclEnabled }
               );
               const cmds = existsSync(gitPath)
                 ? [
@@ -486,7 +488,8 @@ export default class SyncUnix extends Command {
                     ...UnixGroupCommands.setDirectoryGroup(
                       gitPath,
                       expectedGroup,
-                      REPO_GIT_PERMISSION_MODE
+                      REPO_GIT_PERMISSION_MODE,
+                      { aclEnabled }
                     ),
                   ]
                 : rootCmds;
@@ -1209,7 +1212,8 @@ export default class SyncUnix extends Command {
           const permCmds = UnixGroupCommands.setDirectoryGroup(
             branchPath,
             rawBranch.unix_group,
-            permissionMode
+            permissionMode,
+            { aclEnabled }
           );
           if (await execAllCmds(permCmds)) {
             branchesSynced++;
@@ -1221,7 +1225,7 @@ export default class SyncUnix extends Command {
 
           // Apply daemon user ACL so the running daemon can access without restart
           if (daemonUser && (dirExists || action === 'create')) {
-            const aclCmds = UnixGroupCommands.setUserAcl(branchPath, daemonUser);
+            const aclCmds = UnixGroupCommands.setUserAcl(branchPath, daemonUser, { aclEnabled });
             if (await execAllCmds(aclCmds)) {
               daemonAclsApplied++;
               if (verbose) {

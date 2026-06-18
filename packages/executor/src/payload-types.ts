@@ -612,6 +612,13 @@ export const UnixSyncBranchPayloadSchema = BasePayloadSchema.extend({
     /** Daemon Unix user (added to all groups for daemon access) */
     daemonUser: z.string().optional(),
 
+    /**
+     * Whether POSIX ACLs (`setfacl`) are available on the target filesystem.
+     * Defaults to `true` in the handler when absent. Daemon sets this from
+     * `execution.posix_acl_enabled` since the executor can't read config.
+     */
+    aclEnabled: z.boolean().optional(),
+
     /** If true, delete the group instead of syncing (for branch removal) */
     delete: z.boolean().optional(),
   }),
@@ -641,6 +648,13 @@ export const UnixSyncRepoPayloadSchema = BasePayloadSchema.extend({
 
     /** Daemon Unix user (added to repo group for daemon access) */
     daemonUser: z.string().optional(),
+
+    /**
+     * Whether POSIX ACLs (`setfacl`) are available on the target filesystem.
+     * Defaults to `true` in the handler when absent. Daemon sets this from
+     * `execution.posix_acl_enabled` since the executor can't read config.
+     */
+    aclEnabled: z.boolean().optional(),
 
     /** If true, delete the group instead of syncing (for repo removal) */
     delete: z.boolean().optional(),

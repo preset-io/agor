@@ -18,6 +18,7 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
+import { isPosixAclEnabled } from '@agor/core/config';
 import type { BranchRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
@@ -268,6 +269,7 @@ export function setupBranchOwnersService(
               params: {
                 branchId,
                 daemonUser: config.daemonUser,
+                aclEnabled: isPosixAclEnabled(),
               },
             },
             { logPrefix: '[Executor/branch-owners.create]' }
@@ -302,6 +304,7 @@ export function setupBranchOwnersService(
               params: {
                 branchId,
                 daemonUser: config.daemonUser,
+                aclEnabled: isPosixAclEnabled(),
               },
             },
             { logPrefix: '[Executor/branch-owners.remove]' }

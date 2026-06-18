@@ -216,12 +216,24 @@ describe('group-manager', () => {
           'sudo -n setfacl -R -d -m u:agorpg:rwX "/data/branch"',
         ]);
       });
+
+      it('returns no commands when ACLs are disabled (no mode-bit equivalent)', () => {
+        const cmds = UnixGroupCommands.setUserAcl('/data/branch', 'agorpg', { aclEnabled: false });
+        expect(cmds).toEqual([]);
+      });
     });
 
     describe('setUserAclShallow', () => {
       it('returns non-recursive ACL command for a specific user', () => {
         const cmds = UnixGroupCommands.setUserAclShallow('/data/repo', 'agorpg');
         expect(cmds).toEqual(['sudo -n setfacl -m u:agorpg:rwX "/data/repo"']);
+      });
+
+      it('returns no commands when ACLs are disabled', () => {
+        const cmds = UnixGroupCommands.setUserAclShallow('/data/repo', 'agorpg', {
+          aclEnabled: false,
+        });
+        expect(cmds).toEqual([]);
       });
     });
 
@@ -264,6 +276,50 @@ describe('group-manager', () => {
           'sudo -n find "/data/public" -type d -exec chmod g+s {} +',
         ]);
       });
+
+      describe('when ACLs are disabled', () => {
+        it('never emits setfacl, falling back to chgrp + chmod + setgid', () => {
+          for (const mode of ['2770', '2775', '2777']) {
+            const cmds = UnixGroupCommands.setDirectoryGroup('/data/p', 'g', mode, {
+              aclEnabled: false,
+            });
+            expect(cmds.some((c) => c.includes('setfacl'))).toBe(false);
+          }
+        });
+
+        it('clears others bits for no-access mode (2770)', () => {
+          const cmds = UnixGroupCommands.setDirectoryGroup('/data/secret', 'admins', '2770', {
+            aclEnabled: false,
+          });
+          expect(cmds).toEqual([
+            'sudo -n chgrp -R admins "/data/secret"',
+            'sudo -n chmod -R u=rwX,g=rwX,o= "/data/secret"',
+            'sudo -n find "/data/secret" -type d -exec chmod g+s {} +',
+          ]);
+        });
+
+        it('grants others read for read mode (2775)', () => {
+          const cmds = UnixGroupCommands.setDirectoryGroup('/data/project', 'developers', '2775', {
+            aclEnabled: false,
+          });
+          expect(cmds).toEqual([
+            'sudo -n chgrp -R developers "/data/project"',
+            'sudo -n chmod -R u=rwX,g=rwX,o=rX "/data/project"',
+            'sudo -n find "/data/project" -type d -exec chmod g+s {} +',
+          ]);
+        });
+
+        it('grants others write for write mode (2777)', () => {
+          const cmds = UnixGroupCommands.setDirectoryGroup('/data/public', 'everyone', '2777', {
+            aclEnabled: false,
+          });
+          expect(cmds).toEqual([
+            'sudo -n chgrp -R everyone "/data/public"',
+            'sudo -n chmod -R u=rwX,g=rwX,o=rwX "/data/public"',
+            'sudo -n find "/data/public" -type d -exec chmod g+s {} +',
+          ]);
+        });
+      });
     });
 
     describe('setDirectoryGroupShallow', () => {
@@ -277,6 +333,23 @@ describe('group-manager', () => {
           'sudo -n setfacl -m m::rwX "/data/repo"',
           'sudo -n chmod g+s "/data/repo"',
         ]);
+      });
+
+      it('falls back to chgrp + chmod + setgid when ACLs are disabled', () => {
+        const cmds = UnixGroupCommands.setDirectoryGroupShallow(
+          '/data/repo',
+          'developers',
+          '2770',
+          {
+            aclEnabled: false,
+          }
+        );
+        expect(cmds).toEqual([
+          'sudo -n chgrp developers "/data/repo"',
+          'sudo -n chmod u=rwX,g=rwX,o= "/data/repo"',
+          'sudo -n chmod g+s "/data/repo"',
+        ]);
+        expect(cmds.some((c) => c.includes('setfacl'))).toBe(false);
       });
     });
   });

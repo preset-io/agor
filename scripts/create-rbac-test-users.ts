@@ -90,6 +90,7 @@ async function main() {
     unixIntegrationService = new UnixIntegrationService(db, new DirectExecutor(), {
       enabled: true,
       daemonUser,
+      aclEnabled: config.execution?.posix_acl_enabled !== false,
     });
   }
 

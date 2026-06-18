@@ -88,6 +88,10 @@ All filesystem operations are **strictly scoped** to Agor-managed paths:
 - PostgreSQL (recommended for production)
 - sudo access for initial setup
 - tmux (for multiplayer terminal sessions)
+- POSIX ACL support on the filesystem backing branches/repos (the `acl` package
+  providing `setfacl`/`getfacl`). On filesystems that reject `setfacl` — e.g.
+  some NFS mounts — set `execution.posix_acl_enabled: false` (see
+  [POSIX ACL Support](#4c-posix-acl-support) below) to fall back to plain mode bits.
 
 ### 1. PostgreSQL Configuration
 
@@ -287,6 +291,44 @@ When set to `false`:
 > For any deployment where you do not trust all members with daemon-level
 > access, either run in `insulated`/`strict` mode or set
 > `allow_web_terminal: false`.
+
+### 4c. POSIX ACL Support
+
+In `insulated` / `strict` mode, Agor manages branch and repo permissions with
+POSIX.1e ACLs (`setfacl`/`getfacl`) by default. ACLs provide two things plain
+Unix mode bits cannot:
+
+- **Default ACLs** — new files and directories inherit group access regardless
+  of the creating process's umask.
+- **A per-user grant** — the daemon user keeps direct access to branch files
+  even when its supplementary group list is stale (groups added after the
+  process started aren't picked up until restart).
+
+Some filesystems reject `setfacl` — most commonly certain **NFS mounts**. On
+those hosts, disable ACLs:
+
+```yaml
+execution:
+  posix_acl_enabled: false # default: true
+```
+
+When disabled, the permission commands fall back to `chgrp` + `chmod` + setgid:
+
+- The owner / group / others restriction is **still enforced** through mode
+  bits. A private (`others_fs_access: none`) branch still clears the "others"
+  bits — the fallback **fails closed**, never silently widening access.
+- ACL-only behavior is lost: new files rely on setgid + umask instead of default
+  ACLs, and there is no per-user daemon grant. Because of the latter, the
+  **daemon user must be a member of every repo and branch group**, and the
+  daemon may need a restart to pick up newly created groups.
+
+The daemon prints a single startup warning when `posix_acl_enabled: false` is
+combined with active Unix isolation.
+
+> ⚠️ This flag only **gates** ACL commands; it does not provide an alternative
+> isolation mechanism. If your filesystem can't do ACLs and you still need hard
+> isolation, supply it another way — dedicated per-branch mounts, a chroot, or a
+> custom executor command template.
 
 ### 5. Observability Setup
 

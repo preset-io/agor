@@ -179,6 +179,7 @@ export async function handleUnixSyncRepo(
     }
 
     const groupName = generateRepoGroupName(repoId as RepoID);
+    const aclEnabled = payload.params.aclEnabled ?? true;
     console.log(`[unix.sync-repo] Syncing repo ${shortId(repoId)} with group ${groupName}`);
 
     // Ensure group exists
@@ -193,12 +194,15 @@ export async function handleUnixSyncRepo(
     const permCommands = UnixGroupCommands.setDirectoryGroup(
       gitPath,
       groupName,
-      REPO_GIT_PERMISSION_MODE
+      REPO_GIT_PERMISSION_MODE,
+      { aclEnabled }
     );
     await runCommands(permCommands);
     // Set explicit user ACL for daemon to bypass stale supplementary groups
     if (payload.params.daemonUser) {
-      await runCommands(UnixGroupCommands.setUserAcl(gitPath, payload.params.daemonUser));
+      await runCommands(
+        UnixGroupCommands.setUserAcl(gitPath, payload.params.daemonUser, { aclEnabled })
+      );
     }
     console.log(`[unix.sync-repo] Set .git/ permissions`);
 
@@ -341,6 +345,7 @@ export async function handleUnixSyncBranch(
     }
 
     const groupName = generateBranchGroupName(branchId as BranchID);
+    const aclEnabled = payload.params.aclEnabled ?? true;
     console.log(`[unix.sync-branch] Syncing branch ${shortId(branchId)} with group ${groupName}`);
 
     // Ensure group exists
@@ -356,12 +361,15 @@ export async function handleUnixSyncBranch(
     const permCommands = UnixGroupCommands.setDirectoryGroup(
       branch.path,
       groupName,
-      permissionMode
+      permissionMode,
+      { aclEnabled }
     );
     await runCommands(permCommands);
     // Set explicit user ACL for daemon to bypass stale supplementary groups
     if (payload.params.daemonUser) {
-      await runCommands(UnixGroupCommands.setUserAcl(branch.path, payload.params.daemonUser));
+      await runCommands(
+        UnixGroupCommands.setUserAcl(branch.path, payload.params.daemonUser, { aclEnabled })
+      );
     }
     console.log(`[unix.sync-branch] Set branch permissions (mode: ${permissionMode})`);
 
@@ -539,13 +547,16 @@ export async function handleUnixSyncBranch(
               const fixCommands = UnixGroupCommands.setDirectoryGroup(
                 branchGitDir,
                 repo.unix_group,
-                REPO_GIT_PERMISSION_MODE
+                REPO_GIT_PERMISSION_MODE,
+                { aclEnabled }
               );
               await runCommands(fixCommands);
               // Set explicit user ACL for daemon to bypass stale supplementary groups
               if (payload.params.daemonUser) {
                 await runCommands(
-                  UnixGroupCommands.setUserAcl(branchGitDir, payload.params.daemonUser)
+                  UnixGroupCommands.setUserAcl(branchGitDir, payload.params.daemonUser, {
+                    aclEnabled,
+                  })
                 );
               }
               console.log(`[unix.sync-branch] Fixed .git/worktrees/${branchName}/ permissions`);

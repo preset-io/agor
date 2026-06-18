@@ -348,6 +348,21 @@ export interface AgorExecutionSettings {
   /** Unix user mode: simple (no isolation), insulated (branch groups), strict (enforce process impersonation) */
   unix_user_mode?: UnixUserMode;
 
+  /**
+   * Whether the host filesystem supports POSIX.1e ACLs (`setfacl`/`getfacl`).
+   * Default: `true`. Set to `false` on filesystems that reject `setfacl`
+   * (e.g. some NFS mounts).
+   *
+   * Only relevant under Unix isolation (`insulated`/`strict`). When disabled,
+   * branch/repo permission setup falls back to `chgrp` + `chmod` + setgid: the
+   * `others_fs_access` restriction is still enforced via mode bits, but ACL-only
+   * properties are dropped (default-ACL inheritance → setgid + umask; per-user
+   * daemon grant → group membership). Both losses fail closed. Provide finer
+   * isolation at another layer (mount/chroot/`executor_command_template`).
+   * See `context/guides/rbac-and-unix-isolation.md`.
+   */
+  posix_acl_enabled?: boolean;
+
   /** Enable branch RBAC and ownership system (default: false). When enabled, enforces permission checks and Unix group isolation. */
   branch_rbac?: boolean;
 

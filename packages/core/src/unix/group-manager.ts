@@ -104,6 +104,31 @@ export function isValidRepoGroupName(groupName: string): boolean {
 export const AGOR_USERS_GROUP = 'agor_users';
 
 /**
+ * Options for the directory/user permission command builders.
+ *
+ * `aclEnabled` defaults to `true`. When `false` (filesystems without POSIX
+ * ACL support, e.g. some NFS mounts), the builders fall back to
+ * `chgrp` + `chmod` + setgid instead of `setfacl`. See
+ * `execution.posix_acl_enabled`.
+ */
+export interface UnixPermissionCommandOptions {
+  aclEnabled?: boolean;
+}
+
+// Symbolic `chmod` "others" spec for the ACL-less fallback. Capital `X`
+// mirrors ACL `rwX`: execute only on directories, never forced onto files.
+function othersSymbolicChmod(othersDigit: string): string {
+  switch (othersDigit) {
+    case '7':
+      return 'rwX';
+    case '5':
+      return 'rX';
+    default:
+      return ''; // `o=` clears all "others" bits
+  }
+}
+
+/**
  * Unix group management commands
  *
  * Commands are returned as shell strings with sudo already included where needed.
@@ -194,13 +219,30 @@ export const UnixGroupCommands = {
    * @param path - Directory path
    * @param groupName - Group to own the directory
    * @param permissions - Permissions mode (e.g., '2770' for no others access)
+   * @param options - {@link UnixPermissionCommandOptions} (e.g. `aclEnabled`)
    * @returns Array of command strings with sudo to execute sequentially
    */
-  setDirectoryGroup: (path: string, groupName: string, permissions: string): string[] => {
+  setDirectoryGroup: (
+    path: string,
+    groupName: string,
+    permissions: string,
+    options: UnixPermissionCommandOptions = {}
+  ): string[] => {
     // Determine "others" ACL based on permissions mode
     // 2770 = no others, 2775 = others r-X, 2777 = others rwX
     // Using capital X means: execute only on directories, not files
     const othersDigit = permissions.charAt(3); // Last digit is "others"
+
+    // ACL-less fallback: same owner/group/others restriction via mode bits.
+    // Loses default-ACL inheritance (new files rely on setgid + umask).
+    if (options.aclEnabled === false) {
+      return [
+        `sudo -n chgrp -R ${groupName} "${path}"`,
+        `sudo -n chmod -R u=rwX,g=rwX,o=${othersSymbolicChmod(othersDigit)} "${path}"`,
+        `sudo -n find "${path}" -type d -exec chmod g+s {} +`,
+      ];
+    }
+
     let othersAcl: string;
     switch (othersDigit) {
       case '7':
@@ -249,8 +291,23 @@ export const UnixGroupCommands = {
    * @param permissions - Permissions mode (e.g., '2770' for no others access)
    * @returns Array of command strings with sudo to execute sequentially
    */
-  setDirectoryGroupShallow: (path: string, groupName: string, permissions: string): string[] => {
+  setDirectoryGroupShallow: (
+    path: string,
+    groupName: string,
+    permissions: string,
+    options: UnixPermissionCommandOptions = {}
+  ): string[] => {
     const othersDigit = permissions.charAt(3);
+
+    // ACL-less fallback: see setDirectoryGroup.
+    if (options.aclEnabled === false) {
+      return [
+        `sudo -n chgrp ${groupName} "${path}"`,
+        `sudo -n chmod u=rwX,g=rwX,o=${othersSymbolicChmod(othersDigit)} "${path}"`,
+        `sudo -n chmod g+s "${path}"`,
+      ];
+    }
+
     let othersAcl: string;
     switch (othersDigit) {
       case '7':
@@ -284,14 +341,25 @@ export const UnixGroupCommands = {
    *
    * @param path - Directory path
    * @param username - Unix username to grant access to
-   * @returns Array of command strings with sudo to execute sequentially
+   * @param options - {@link UnixPermissionCommandOptions} (e.g. `aclEnabled`)
+   * @returns Array of command strings with sudo to execute sequentially.
+   *          Empty when `aclEnabled === false` — there is no mode-bit
+   *          equivalent of a per-user grant, so the caller falls back to the
+   *          user's group membership for access.
    */
-  setUserAcl: (path: string, username: string): string[] => [
-    // Set ACL on all existing files and directories
-    `sudo -n setfacl -R -m u:${username}:rwX "${path}"`,
-    // Set default ACL so new files/dirs inherit the same access
-    `sudo -n setfacl -R -d -m u:${username}:rwX "${path}"`,
-  ],
+  setUserAcl: (
+    path: string,
+    username: string,
+    options: UnixPermissionCommandOptions = {}
+  ): string[] =>
+    options.aclEnabled === false
+      ? []
+      : [
+          // Set ACL on all existing files and directories
+          `sudo -n setfacl -R -m u:${username}:rwX "${path}"`,
+          // Set default ACL so new files/dirs inherit the same access
+          `sudo -n setfacl -R -d -m u:${username}:rwX "${path}"`,
+        ],
 
   /**
    * Set explicit user ACL on a single directory (non-recursive)
@@ -300,11 +368,16 @@ export const UnixGroupCommands = {
    *
    * @param path - Directory path
    * @param username - Unix username to grant access to
-   * @returns Array of command strings with sudo to execute sequentially
+   * @param options - {@link UnixPermissionCommandOptions} (e.g. `aclEnabled`)
+   * @returns Array of command strings with sudo to execute sequentially.
+   *          Empty when `aclEnabled === false`.
    */
-  setUserAclShallow: (path: string, username: string): string[] => [
-    `sudo -n setfacl -m u:${username}:rwX "${path}"`,
-  ],
+  setUserAclShallow: (
+    path: string,
+    username: string,
+    options: UnixPermissionCommandOptions = {}
+  ): string[] =>
+    options.aclEnabled === false ? [] : [`sudo -n setfacl -m u:${username}:rwX "${path}"`],
 } as const;
 
 /**

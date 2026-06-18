@@ -13,7 +13,7 @@
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getDaemonUser } from '@agor/core/config';
+import { getDaemonUser, isPosixAclEnabled } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import { shortId, UsersRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -60,6 +60,7 @@ export async function initializeRepoUnixGroup(
 ): Promise<string> {
   const groupName = generateRepoGroupName(repoId as RepoID);
   const daemonUser = getDaemonUser();
+  const aclEnabled = isPosixAclEnabled();
 
   console.log(`[unix-group-init] Creating repo group ${groupName} for repo ${shortId(repoId)}`);
 
@@ -78,13 +79,14 @@ export async function initializeRepoUnixGroup(
   const permCommands = UnixGroupCommands.setDirectoryGroup(
     repoPath,
     groupName,
-    REPO_GIT_PERMISSION_MODE
+    REPO_GIT_PERMISSION_MODE,
+    { aclEnabled }
   );
   await runCommands(permCommands);
 
-  // Set explicit user ACL for daemon
+  // Set explicit user ACL for daemon (skipped when ACLs disabled)
   if (daemonUser) {
-    await runCommands(UnixGroupCommands.setUserAcl(repoPath, daemonUser));
+    await runCommands(UnixGroupCommands.setUserAcl(repoPath, daemonUser, { aclEnabled }));
   }
   console.log(`[unix-group-init] Set repo directory permissions with group ${groupName}`);
 
@@ -139,6 +141,7 @@ export async function initializeBranchUnixGroup(
 ): Promise<string> {
   const groupName = generateBranchGroupName(branchId as BranchID);
   const daemonUser = getDaemonUser();
+  const aclEnabled = isPosixAclEnabled();
 
   console.log(
     `[unix-group-init] Creating branch group ${groupName} for branch ${shortId(branchId)}`
@@ -157,12 +160,14 @@ export async function initializeBranchUnixGroup(
 
   // Set permissions on branch directory
   const permissionMode = getBranchPermissionMode(othersAccess);
-  const permCommands = UnixGroupCommands.setDirectoryGroup(branchPath, groupName, permissionMode);
+  const permCommands = UnixGroupCommands.setDirectoryGroup(branchPath, groupName, permissionMode, {
+    aclEnabled,
+  });
   await runCommands(permCommands);
 
-  // Set explicit user ACL for daemon
+  // Set explicit user ACL for daemon (skipped when ACLs disabled)
   if (daemonUser) {
-    await runCommands(UnixGroupCommands.setUserAcl(branchPath, daemonUser));
+    await runCommands(UnixGroupCommands.setUserAcl(branchPath, daemonUser, { aclEnabled }));
   }
 
   // Add daemon user to branch group
@@ -222,11 +227,12 @@ export async function initializeBranchUnixGroup(
     const gitDirPermCommands = UnixGroupCommands.setDirectoryGroup(
       branchGitDir,
       repo.unix_group,
-      REPO_GIT_PERMISSION_MODE
+      REPO_GIT_PERMISSION_MODE,
+      { aclEnabled }
     );
     await runCommands(gitDirPermCommands);
     if (daemonUser) {
-      await runCommands(UnixGroupCommands.setUserAcl(branchGitDir, daemonUser));
+      await runCommands(UnixGroupCommands.setUserAcl(branchGitDir, daemonUser, { aclEnabled }));
     }
   }
 

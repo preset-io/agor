@@ -76,6 +76,10 @@ export interface UnixIntegrationConfig {
   /** Unix user the daemon runs as. Added to all Unix groups to ensure daemon has access.
    * Should be resolved via getAgorDaemonUser() before passing to the service. */
   daemonUser?: string;
+
+  /** Whether the host filesystem supports POSIX ACLs (`setfacl`). Default: true.
+   * When false, builders fall back to chmod-only permissions. */
+  aclEnabled?: boolean;
 }
 
 /**
@@ -93,7 +97,10 @@ export interface UnixOperationResult {
  * Orchestrates all Unix-level operations for Agor RBAC.
  */
 export class UnixIntegrationService {
-  private config: Required<Omit<UnixIntegrationConfig, 'daemonUser'>> & { daemonUser?: string };
+  private config: Required<Omit<UnixIntegrationConfig, 'daemonUser' | 'aclEnabled'>> & {
+    daemonUser?: string;
+  };
+  private aclEnabled: boolean;
   private executor: CommandExecutor;
   private branchRepo: BranchRepository;
   private usersRepo: UsersRepository;
@@ -113,6 +120,7 @@ export class UnixIntegrationService {
       autoManageSymlinks: config.autoManageSymlinks ?? config.enabled,
       daemonUser: config.daemonUser,
     };
+    this.aclEnabled = config.aclEnabled ?? true;
     this.executor = config.enabled ? executor : new NoOpExecutor();
     this.branchRepo = new BranchRepository(db);
     this.usersRepo = new UsersRepository(db);
@@ -400,14 +408,20 @@ export class UnixIntegrationService {
     );
 
     await this.executor.execAll(
-      UnixGroupCommands.setDirectoryGroup(branchPath, branch.unix_group, permissionMode)
+      UnixGroupCommands.setDirectoryGroup(branchPath, branch.unix_group, permissionMode, {
+        aclEnabled: this.aclEnabled,
+      })
     );
 
     // Set explicit user ACL for the daemon user so it can access branch files
     // even when its supplementary groups are stale (groups added after process
     // startup are not picked up by the running process)
     if (this.config.daemonUser) {
-      await this.executor.execAll(UnixGroupCommands.setUserAcl(branchPath, this.config.daemonUser));
+      await this.executor.execAll(
+        UnixGroupCommands.setUserAcl(branchPath, this.config.daemonUser, {
+          aclEnabled: this.aclEnabled,
+        })
+      );
     }
   }
 
@@ -555,13 +569,18 @@ export class UnixIntegrationService {
       UnixGroupCommands.setDirectoryGroupShallow(
         repoPath,
         repo.unix_group,
-        REPO_GIT_PERMISSION_MODE
+        REPO_GIT_PERMISSION_MODE,
+        {
+          aclEnabled: this.aclEnabled,
+        }
       )
     );
 
     if (gitExists) {
       await this.executor.execAll(
-        UnixGroupCommands.setDirectoryGroup(gitPath, repo.unix_group, REPO_GIT_PERMISSION_MODE)
+        UnixGroupCommands.setDirectoryGroup(gitPath, repo.unix_group, REPO_GIT_PERMISSION_MODE, {
+          aclEnabled: this.aclEnabled,
+        })
       );
     }
 
@@ -570,10 +589,16 @@ export class UnixIntegrationService {
     // - `.git` (recursive): git operations even with stale supplementary groups
     if (this.config.daemonUser) {
       await this.executor.execAll(
-        UnixGroupCommands.setUserAclShallow(repoPath, this.config.daemonUser)
+        UnixGroupCommands.setUserAclShallow(repoPath, this.config.daemonUser, {
+          aclEnabled: this.aclEnabled,
+        })
       );
       if (gitExists) {
-        await this.executor.execAll(UnixGroupCommands.setUserAcl(gitPath, this.config.daemonUser));
+        await this.executor.execAll(
+          UnixGroupCommands.setUserAcl(gitPath, this.config.daemonUser, {
+            aclEnabled: this.aclEnabled,
+          })
+        );
       }
     }
   }
@@ -617,13 +642,17 @@ export class UnixIntegrationService {
     );
 
     await this.executor.execAll(
-      UnixGroupCommands.setDirectoryGroup(branchGitDir, repo.unix_group, REPO_GIT_PERMISSION_MODE)
+      UnixGroupCommands.setDirectoryGroup(branchGitDir, repo.unix_group, REPO_GIT_PERMISSION_MODE, {
+        aclEnabled: this.aclEnabled,
+      })
     );
 
     // Set explicit user ACL for the daemon user on .git/worktrees/<name>
     if (this.config.daemonUser) {
       await this.executor.execAll(
-        UnixGroupCommands.setUserAcl(branchGitDir, this.config.daemonUser)
+        UnixGroupCommands.setUserAcl(branchGitDir, this.config.daemonUser, {
+          aclEnabled: this.aclEnabled,
+        })
       );
     }
   }

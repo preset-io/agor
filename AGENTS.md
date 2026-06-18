@@ -318,7 +318,37 @@ execution:
 
   # Web terminal (xterm.js modal) for members+
   allow_web_terminal: boolean # default: true
+
+  # POSIX ACL support on the host filesystem (setfacl/getfacl)
+  posix_acl_enabled: boolean # default: true
 ```
+
+### POSIX ACL Support (`posix_acl_enabled`)
+
+**Default: `true`.** Agor's Unix isolation (`insulated` / `strict`) normally uses
+POSIX.1e ACLs (`setfacl`/`getfacl`) to manage branch and repo permissions. ACLs
+give two things plain mode bits can't: **default ACLs** so new files inherit
+group access regardless of the creating process's umask, and a **per-user grant**
+that lets the daemon reach branch files even when its supplementary groups are
+stale.
+
+Some filesystems — notably certain **NFS mounts** — reject `setfacl`. Set
+`execution.posix_acl_enabled: false` there. When disabled, the permission
+builders fall back to `chgrp` + `chmod` + setgid:
+
+- The owner/group/others restriction is **preserved** via mode bits (e.g. a
+  private `none` branch still clears the others bits — the fallback fails closed,
+  not open).
+- What's lost is ACL-only behavior: default-ACL inheritance for new files (now
+  relies on setgid + umask) and the per-user daemon grant. Because of the latter,
+  the **daemon must be a member of every repo/branch group** and may need a
+  restart to pick up newly created groups.
+
+The daemon emits a single startup warning when `posix_acl_enabled: false` is
+combined with active Unix isolation. This flag only gates ACL commands; it does
+not provide an alternative isolation mechanism — operators on ACL-less
+filesystems should supply isolation another way (dedicated mounts, chroot, or an
+executor command template).
 
 ### Web Terminal Access
 

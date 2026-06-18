@@ -21,6 +21,7 @@ import {
   getDefaultConfig,
   getReposDir,
   initConfig,
+  isPosixAclEnabled,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
@@ -1249,5 +1250,47 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     // v0.20+ default allows both — operators have to opt out to forbid clone.
     expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
     expect(() => ensureBranchStorageModeAllowed('clone')).not.toThrow();
+  });
+});
+
+describe('isPosixAclEnabled', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-acl-test-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    __resetConfigCacheForTests();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    __resetConfigCacheForTests();
+  });
+
+  async function writeConfig(config: AgorConfig): Promise<void> {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump(config), 'utf-8');
+    __resetConfigCacheForTests();
+  }
+
+  it('defaults to true when no config file exists', () => {
+    expect(isPosixAclEnabled()).toBe(true);
+  });
+
+  it('defaults to true when execution.posix_acl_enabled is unset', async () => {
+    await writeConfig({ execution: { branch_rbac: true } });
+    expect(isPosixAclEnabled()).toBe(true);
+  });
+
+  it('returns true when explicitly enabled', async () => {
+    await writeConfig({ execution: { posix_acl_enabled: true } });
+    expect(isPosixAclEnabled()).toBe(true);
+  });
+
+  it('returns false only when explicitly disabled', async () => {
+    await writeConfig({ execution: { posix_acl_enabled: false } });
+    expect(isPosixAclEnabled()).toBe(false);
   });
 });

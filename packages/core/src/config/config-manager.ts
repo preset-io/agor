@@ -840,6 +840,26 @@ export function isUnixImpersonationEnabled(): boolean {
 }
 
 /**
+ * Check whether POSIX.1e ACLs (`setfacl`/`getfacl`) are enabled.
+ *
+ * Defaults to `true` — disabling is an explicit opt-out for filesystems that
+ * don't support POSIX ACLs (e.g. some NFS mounts). When `false`, Unix-group
+ * permission setup falls back to `chgrp` + `chmod` + setgid and skips all
+ * `setfacl` invocations. See {@link AgorExecutionSettings.posix_acl_enabled}.
+ *
+ * Returns `true` (the default) when config can't be loaded, preserving the
+ * historical always-on ACL behaviour.
+ */
+export function isPosixAclEnabled(): boolean {
+  try {
+    const config = loadConfigSync();
+    return config.execution?.posix_acl_enabled !== false;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Resolve `execution.branch_storage` with defaults applied.
  *
  * Default posture (v0.20+): both storage modes are enabled out of the box so

@@ -89,6 +89,7 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
     unixIntegrationService = new UnixIntegrationService(db, new DirectExecutor(), {
       enabled: true,
       daemonUser,
+      aclEnabled: config.execution?.posix_acl_enabled !== false,
     });
   }
 

@@ -485,6 +485,21 @@ export async function startup(ctx: StartupContext): Promise<void> {
     }
   }
 
+  // Notice: POSIX ACLs disabled while Unix isolation is active. Permission sync
+  // falls back to chmod-only (no per-user daemon grant, no default-ACL
+  // inheritance); the others-restriction still holds via mode bits.
+  if (config.execution?.posix_acl_enabled === false) {
+    const unixMode = config.execution?.unix_user_mode ?? 'simple';
+    if (config.execution?.branch_rbac || unixMode !== 'simple') {
+      console.warn(
+        '\x1b[33m⚠️  execution.posix_acl_enabled=false with Unix isolation active.\x1b[0m\n' +
+          '   setfacl/getfacl are skipped; permissions use chgrp + chmod only.\n' +
+          '   The daemon relies on group membership (no per-user ACL grant), so it\n' +
+          '   must be a member of every repo/branch group — restart after group changes.'
+      );
+    }
+  }
+
   // 5. Start executor heartbeat stale supervisor
   const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);
   const heartbeatSupervisor = new ExecutorHeartbeatSupervisor({ app, config: heartbeatConfig });
