@@ -564,13 +564,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     try {
       const response = (await client
         .service(`sessions/${session.session_id}/stop`)
-        .create({})) as { edit_on_cancel?: boolean; restored_prompt?: string };
+        .create({})) as { prompt_restored?: boolean; restored_prompt?: string };
 
       // Edit-on-cancel: server dropped the orphan task because the agent
       // hadn't produced any output yet. Restore the prompt to the composer
       // ONLY if the user hasn't started typing something new in the meantime
-      // — we never overwrite an in-progress draft.
-      if (response?.edit_on_cancel && response.restored_prompt) {
+      // — we never overwrite an in-progress draft. (If the user has typed,
+      // the server has already cleaned up; the original prompt is dropped
+      // on the floor by design.)
+      if (response?.prompt_restored && response.restored_prompt) {
         const draft = promptRef.current?.getValue() ?? '';
         if (!draft.trim()) {
           promptRef.current?.insertText(response.restored_prompt);

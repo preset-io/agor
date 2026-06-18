@@ -14,9 +14,11 @@
  * drift. Keep this as the single source.
  */
 
+import { MessagesRepository, TaskRepository, txAsDb } from '@agor/core/db';
+import type { Database } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Paginated, Params, SessionID, Task } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import type { Message, Paginated, Params, SessionID, Task, TaskID } from '@agor/core/types';
+import { MessageRole, TaskStatus } from '@agor/core/types';
 
 /** Statuses considered "active" — an executor may still be doing work. */
 export const ACTIVE_TASK_STATUSES: ReadonlySet<string> = new Set<string>([
@@ -82,4 +84,80 @@ export async function findHostTaskForSession(
   const all = await findTasksForSession(app, sessionId, params);
   if (all.length === 0) return undefined;
   return all.find((t) => ACTIVE_TASK_STATUSES.has(t.status)) ?? all[0];
+}
+
+/**
+ * Predicate: have we seen any user-visible output from the agent on this
+ * task yet? `text` and `tool_use` content blocks (or non-empty string
+ * content on an ASSISTANT message) count. Pure `thinking`,
+ * `system_status`, and other internal-only blocks do NOT — matching
+ * Claude Code CLI's "single-Esc while still internal" carve-out.
+ *
+ * Used by the stop route to decide between "edit-on-cancel" (drop the
+ * orphan task, hand the prompt back) and the regular "mark STOPPED"
+ * path. Centralized here to keep the definition single-sourced — other
+ * call sites that need "has this task started producing visible output"
+ * should reuse this instead of growing parallel checks.
+ */
+export function hasAgentOutput(messages: ReadonlyArray<Message>): boolean {
+  return messages.some((msg) => {
+    if (msg.role !== MessageRole.ASSISTANT) return false;
+    const content = msg.content;
+    if (typeof content === 'string') return content.trim().length > 0;
+    if (Array.isArray(content)) {
+      return content.some((block) => block.type === 'text' || block.type === 'tool_use');
+    }
+    return false;
+  });
+}
+
+/**
+ * Outcome of `discardTaskIfNoOutput`. The `discarded` branch is the only
+ * one that mutates DB state; callers use the returned rows to fire the
+ * matching `removed` WebSocket events so subscribed UIs reactively prune
+ * their transcripts.
+ */
+export type DiscardTaskOutcome =
+  | { kind: 'discarded'; removedMessages: Message[]; task: Task }
+  | { kind: 'has_output' }
+  | { kind: 'not_found' };
+
+/**
+ * Atomically drop a task and all its messages if the agent hasn't
+ * produced user-visible output yet. Wraps the predicate re-check + both
+ * deletes in a single DB transaction so a stray late executor write
+ * either lands before the snapshot (caught by `hasAgentOutput`, leaves
+ * the task as STOPPED) or after the set-based delete (FK violation —
+ * insert fails, no orphan).
+ *
+ * Why a set-based delete rather than the per-row snapshot? The snapshot
+ * could be stale by the time we commit — the set-based `deleteByTaskId`
+ * sweeps anything still tagged with that task_id, including writes that
+ * landed between snapshot and commit.
+ *
+ * Callers are responsible for emitting `messages.removed` / `tasks.removed`
+ * service events using the returned rows so connected clients prune
+ * their local state; the helper deliberately stays at the repo layer to
+ * keep the transaction atomic.
+ */
+export async function discardTaskIfNoOutput(
+  db: Database,
+  taskId: TaskID
+): Promise<DiscardTaskOutcome> {
+  return await db.transaction(async (tx) => {
+    const txDb = txAsDb(tx);
+    const txTasksRepo = new TaskRepository(txDb);
+    const txMessagesRepo = new MessagesRepository(txDb);
+
+    const task = await txTasksRepo.findById(taskId);
+    if (!task) return { kind: 'not_found' };
+
+    const messages = await txMessagesRepo.findByTaskId(taskId);
+    if (hasAgentOutput(messages)) return { kind: 'has_output' };
+
+    await txMessagesRepo.deleteByTaskId(taskId);
+    await txTasksRepo.delete(taskId);
+
+    return { kind: 'discarded', removedMessages: messages, task };
+  });
 }

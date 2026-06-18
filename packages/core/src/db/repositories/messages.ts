@@ -198,6 +198,19 @@ export class MessagesRepository {
   }
 
   /**
+   * Delete all messages belonging to a task in a single set-based statement.
+   *
+   * The messages.task_id FK is `onDelete: 'set null'`, so deleting the task
+   * row alone would leave its messages as orphans with task_id=null but
+   * still attached to the session — visible in the transcript. Callers that
+   * hard-delete a task must call this first (ideally in the same
+   * transaction) to keep the conversation consistent.
+   */
+  async deleteByTaskId(taskId: TaskID): Promise<void> {
+    await deleteFrom(this.db, messages).where(eq(messages.task_id, taskId)).run();
+  }
+
+  /**
    * Delete a single message
    */
   async delete(messageId: MessageID): Promise<void> {

@@ -121,7 +121,7 @@ import {
   sessionCanStartTask,
   shouldReconcileSessionPromptState,
 } from './utils/session-task-state.js';
-import { findActiveTasksForSession } from './utils/session-tasks.js';
+import { discardTaskIfNoOutput, findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -2096,47 +2096,49 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
-        // Edit-on-cancel: if the executor never emitted user-visible output
-        // (no assistant text/tool_use; pure "thinking" doesn't count), treat
-        // the prompt as never-really-sent — delete the task + its user
-        // message and hand the original prompt back to the caller so the UI
-        // can repopulate the composer. Otherwise, fall through to today's
-        // behavior (mark STOPPED, history intact).
-        let restoredPrompt: string | undefined;
-        try {
-          const taskMessages = await messagesService.findByTask(latestTask.task_id);
-          const hasAgentOutput = taskMessages.some((msg) => {
-            if (msg.role !== MessageRole.ASSISTANT) return false;
-            const content = msg.content;
-            if (typeof content === 'string') return content.trim().length > 0;
-            if (Array.isArray(content)) {
-              return content.some(
-                (block) => block.type === 'text' || block.type === 'tool_use'
-              );
-            }
-            return false;
-          });
+        // SIGTERM has a 3s grace period before SIGKILL (see executor-tracking.ts).
+        // Give the executor's handler a brief window to flush any in-flight
+        // writes before we snapshot — the set-based delete inside
+        // `discardTaskIfNoOutput` will sweep stragglers either way, but a
+        // small wait avoids spurious "agent has output" reads from writes
+        // that are essentially trailing edges of the killed turn.
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
-          if (!hasAgentOutput) {
-            // Delete by single id (per-row): the multi-remove path in the
-            // Drizzle adapter loads ALL messages via findAll before filtering,
-            // which is O(N) over the entire table. We already have the rows
-            // we want to drop in `taskMessages`, so delete them directly.
-            for (const msg of taskMessages) {
-              await messagesService.remove(msg.message_id, params);
+        // Edit-on-cancel: if the executor never emitted user-visible output,
+        // treat the prompt as never-really-sent — hard-delete the task and
+        // all its messages atomically, then return the original prompt so
+        // the UI can repopulate the composer. Otherwise, fall through to
+        // today's behavior (mark STOPPED, history intact).
+        type StopOutcome =
+          | { kind: 'restored'; prompt: string }
+          | { kind: 'stopped' }
+          | { kind: 'error' };
+        let outcome: StopOutcome;
+        try {
+          const discardResult = await discardTaskIfNoOutput(db, latestTask.task_id);
+
+          if (discardResult.kind === 'discarded') {
+            // The transaction skipped service-level emits; fire `removed`
+            // events manually so subscribed clients prune the bubble and
+            // queue entries reactively.
+            for (const msg of discardResult.removedMessages) {
+              app.service('messages').emit('removed', msg);
             }
-            await tasksService.remove(latestTask.task_id, params);
-            restoredPrompt = latestTask.full_prompt;
+            app.service('tasks').emit('removed', discardResult.task);
+
             console.log(
               `↩️  [Stop] Edit-on-cancel: dropped task ${shortId(latestTask.task_id)} (no agent output yet)`
             );
+            outcome = { kind: 'restored', prompt: latestTask.full_prompt };
+          } else {
+            outcome = { kind: 'stopped' };
           }
         } catch (error) {
           console.error(`❌ [Stop] Edit-on-cancel check failed:`, error);
-          restoredPrompt = undefined;
+          outcome = { kind: 'error' };
         }
 
-        if (restoredPrompt === undefined) {
+        if (outcome.kind === 'stopped' || outcome.kind === 'error') {
           try {
             await tasksService.patch(latestTask.task_id, {
               status: TaskStatus.STOPPED,
@@ -2151,14 +2153,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // ready_for_prompt: true so the post-patch hook drains any QUEUED tasks.
           // Stop is "skip current", not "wipe everything" — queued prompts represent
           // user intent and should still execute.
-          await app.service('sessions').patch(
-            id,
-            {
-              status: SessionStatus.IDLE,
-              ready_for_prompt: true,
-            },
-            params
-          );
+          //
+          // When the task was hard-deleted, also strip it from session.tasks
+          // so downstream consumers (CLI listings, footer pills) don't keep
+          // pointing at a ghost id.
+          const sessionPatch: Record<string, unknown> = {
+            status: SessionStatus.IDLE,
+            ready_for_prompt: true,
+          };
+          if (outcome.kind === 'restored') {
+            sessionPatch.tasks = session.tasks.filter((tid) => tid !== latestTask.task_id);
+          }
+          await app.service('sessions').patch(id, sessionPatch, params);
         } catch (error) {
           console.error(`❌ [Stop] Failed to patch session to IDLE:`, error);
         }
@@ -2166,8 +2172,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return {
           success: true,
           status: SessionStatus.IDLE,
-          edit_on_cancel: restoredPrompt !== undefined,
-          restored_prompt: restoredPrompt,
+          prompt_restored: outcome.kind === 'restored',
+          restored_prompt: outcome.kind === 'restored' ? outcome.prompt : undefined,
         };
       },
     },
