@@ -344,6 +344,10 @@ builders fall back to `chgrp` + `chmod` + setgid:
   the **daemon must be a member of every repo/branch group** and may need a
   restart to pick up newly created groups.
 
+Disabling the flag only stops Agor from issuing `setfacl`; it does **not** strip
+pre-existing ACLs on an ACL-capable filesystem. Use it for filesystems that
+reject ACLs, not as an ACL cleanup or migration mode.
+
 The daemon emits a single startup warning when `posix_acl_enabled: false` is
 combined with active Unix isolation. This flag only gates ACL commands; it does
 not provide an alternative isolation mechanism — operators on ACL-less

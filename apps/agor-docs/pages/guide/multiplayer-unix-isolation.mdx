@@ -325,6 +325,10 @@ When disabled, the permission commands fall back to `chgrp` + `chmod` + setgid:
 The daemon prints a single startup warning when `posix_acl_enabled: false` is
 combined with active Unix isolation.
 
+This fallback does **not** strip pre-existing ACLs on an ACL-capable filesystem
+— it simply stops issuing `setfacl`. Use it for filesystems that reject ACLs,
+not as an ACL cleanup or migration mode.
+
 > ⚠️ This flag only **gates** ACL commands; it does not provide an alternative
 > isolation mechanism. If your filesystem can't do ACLs and you still need hard
 > isolation, supply it another way — dedicated per-branch mounts, a chroot, or a
