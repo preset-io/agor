@@ -130,6 +130,42 @@ async function waitForInitialLoad(result: { current: ReturnType<typeof useAgorDa
 }
 
 describe('useAgorData — socket-event bailouts', () => {
+  it('hydrates a direct archived session and its archived branch by id without broadening active lists', async () => {
+    const archivedSession = makeSession({
+      session_id: 's-archived-full',
+      branch_id: 'b-archived',
+      archived: true,
+    });
+    const archivedBranch = makeBranch({
+      branch_id: 'b-archived',
+      archived: true,
+      board_id: 'board-archived',
+    });
+    const { client } = makeMockClient({
+      // Initial lists model the normal active-only fetches: the archived
+      // target is omitted until the direct /s/<id> fallback asks for it.
+      sessions: [],
+      branches: [],
+      'sessions:get': archivedSession,
+      'branches:get': archivedBranch,
+    });
+
+    const { result } = renderHook(() => useAgorData(client, { directSessionId: 's-archived' }));
+    await waitForInitialLoad(result);
+
+    expect(result.current.sessionById.get('s-archived-full')).toMatchObject({
+      archived: true,
+      branch_id: 'b-archived',
+    });
+    expect(result.current.sessionsByBranch.get('b-archived')?.map((s) => s.session_id)).toEqual([
+      's-archived-full',
+    ]);
+    expect(result.current.branchById.get('b-archived')).toMatchObject({
+      archived: true,
+      board_id: 'board-archived',
+    });
+  });
+
   it('drops a duplicate `sessions.patched` (content-equal) without changing byId references', async () => {
     const session = makeSession();
     const { client, emit } = makeMockClient({ sessions: [session] });
