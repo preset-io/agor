@@ -1,6 +1,8 @@
-import { render } from '@testing-library/react';
+import type { Board } from '@agor-live/client';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { MouseEventHandler, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import SessionCanvas from './SessionCanvas';
 
 let reactFlowProps: Record<string, unknown> | null = null;
@@ -64,5 +66,75 @@ describe('SessionCanvas zoom shortcuts', () => {
 
     expect(reactFlowProps?.panOnScroll).toBe(true);
     expect(reactFlowProps?.zoomActivationKeyCode).toEqual(['Meta', 'Control']);
+  });
+
+  it('opens the markdown note modal when the markdown tool clicks a board node', async () => {
+    render(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <SessionCanvas
+          board={
+            {
+              board_id: 'board-1',
+              name: 'Board',
+              slug: 'board',
+              objects: {
+                'zone-1': {
+                  type: 'zone',
+                  x: 0,
+                  y: 0,
+                  width: 1200,
+                  height: 900,
+                  label: 'Large Zone',
+                  borderColor: '#d9d9d9',
+                  backgroundColor: '#d9d9d91a',
+                },
+              },
+              created_at: '2026-06-18T00:00:00.000Z',
+              last_updated: '2026-06-18T00:00:00.000Z',
+              created_by: 'user-1',
+              url: 'http://localhost/ui/b/board/',
+              archived: false,
+            } as unknown as Board
+          }
+          client={null}
+          sessionById={new Map()}
+          sessionsByBranch={new Map()}
+          userById={new Map()}
+          repoById={new Map()}
+          branches={[]}
+          branchById={new Map()}
+          boardObjectById={new Map()}
+          boardObjectsByBoardId={new Map()}
+          commentById={new Map()}
+          cardById={new Map()}
+        />
+      </ConnectionProvider>
+    );
+
+    act(() => {
+      (reactFlowProps?.onInit as (instance: unknown) => void)?.({
+        screenToFlowPosition: ({ x, y }: { x: number; y: number }) => ({ x, y }),
+      });
+    });
+
+    // Zoom in/out/fit, select, zone, comment, markdown.
+    fireEvent.click(screen.getAllByRole('button')[6]);
+
+    act(() => {
+      (reactFlowProps?.onNodeClick as (event: unknown, node: unknown) => void)?.(
+        { clientX: 240, clientY: 320 },
+        { id: 'zone-1', type: 'zone' }
+      );
+    });
+
+    expect(await screen.findByText('Add Markdown Note')).toBeInTheDocument();
   });
 });

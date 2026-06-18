@@ -2255,6 +2255,26 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return;
         }
 
+        if (activeTool === 'markdown' && reactFlowInstanceRef.current) {
+          if (!mutationGate.canMutate) {
+            return;
+          }
+
+          // `onPaneClick` only fires when the pointer lands on the bare canvas.
+          // Boards often contain large zones/cards that cover the viewport; in
+          // those cases React Flow routes the click through `onNodeClick`
+          // instead. Treat node clicks as valid markdown placement clicks so
+          // the Add Markdown Note tool works regardless of what is under the
+          // cursor.
+          const position = reactFlowInstanceRef.current.screenToFlowPosition({
+            x: event.clientX,
+            y: event.clientY,
+          });
+
+          setMarkdownModal({ position });
+          return;
+        }
+
         // Bring clicked card to front (zones and comments are excluded from this)
         if (node.type !== 'zone' && node.type !== 'comment') {
           setNodes((nds) => {
