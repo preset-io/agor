@@ -13,9 +13,10 @@ sees a normal CORS response.
 
 This proxy is for **upstream API CORS** (for example Shortcut's API not allowing
 browser access). It is not a Chrome Private Network Access workaround by itself:
-when running Agor locally with the hosted Sandpack iframe, Chrome may still
-block `https://*.codesandbox.io → http://localhost:<port>` before the request
-reaches `/proxies/...`. See the [artifacts local Chrome note](/guide/artifacts#local-chrome-note-private-network-access) for that browser setting/debug path.
+when using the hosted Sandpack iframe, Chrome may still block
+`https://*.codesandbox.io → <local/private Agor URL>` (localhost, VPN/internal
+hosts, or sandbox hostnames that resolve privately) before the request reaches
+`/proxies/...`. See the [artifacts local Chrome note](/guide/artifacts#local-chrome-note-private-network-access) for that browser setting/debug path.
 
 ## What this is, and is not
 

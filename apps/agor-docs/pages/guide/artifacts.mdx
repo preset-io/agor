@@ -239,13 +239,14 @@ if (!apiKey) {
 
 #### Local Chrome note: Private Network Access
 
-When Agor runs locally, `AGOR_API_URL` is usually `http://localhost:3030`, but
-the default Sandpack preview iframe is hosted at `https://*.codesandbox.io`.
-Chrome treats `https://*.codesandbox.io → http://localhost` as a **Private
-Network Access / Local Network Access** request and may block the artifact's
-`fetch()` before the daemon sees it. The common symptom is a generic
-`TypeError: Failed to fetch` in the artifact, even though the URL and token were
-injected correctly.
+When an artifact uses the hosted Sandpack preview iframe
+(`https://*.codesandbox.io`) and calls an Agor URL that Chrome classifies as
+local/private — for example `http://localhost:3030`, or an internal/sandbox
+hostname such as `https://agor.sandbox.preset.zone` when it resolves to a
+private network address — Chrome may treat the request as **Private Network
+Access / Local Network Access** and block the artifact's `fetch()` before the
+daemon sees it. The common symptom is a generic `TypeError: Failed to fetch` in
+the artifact, even though the URL and token were injected correctly.
 
 To confirm this is Chrome-specific, open the same artifact in Firefox. If it
 works there but fails in Chrome or Edge, you're probably hitting Chrome's local
@@ -258,7 +259,7 @@ check for local development, and restart Chrome. Older Chrome builds may expose
 the related preflight flag as
 `chrome://flags/#private-network-access-respect-preflight-results`.
 
-Other ways around the Chrome-only local-network block:
+Other ways around the Chrome-only local/private-network block:
 
 - Build/run with Agor's self-hosted Sandpack bundler so the preview is served
   locally instead of from `https://*.codesandbox.io`.
@@ -267,7 +268,7 @@ Other ways around the Chrome-only local-network block:
 Agor's [API Proxies](/guide/api-proxies) solve a different problem: third-party
 APIs like Shortcut that do not allow browser CORS. They are useful once the
 artifact can reach the daemon, but they do not by themselves bypass Chrome's
-hosted-Sandpack → localhost block.
+hosted-Sandpack → local/private Agor URL block.
 
 ### TOFU consent
 
