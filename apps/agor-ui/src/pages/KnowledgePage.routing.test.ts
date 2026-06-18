@@ -9,6 +9,7 @@ import {
   isKnowledgeDocumentContentReady,
   matchesKnowledgeSidebarFilter,
   resolveActiveKnowledgeDocument,
+  resolveKnowledgeSpaceAfterNamespacesLoad,
   shouldDeferKnowledgeUrlMirrorForRoute,
   shouldShowKnowledgeGraphView,
   shouldShowKnowledgeRouteDocumentLoading,
@@ -226,6 +227,18 @@ describe('KnowledgePage global search helpers', () => {
 });
 
 describe('KnowledgePage namespace select helpers', () => {
+  it('keeps All Spaces selected after namespaces refresh', () => {
+    expect(
+      resolveKnowledgeSpaceAfterNamespacesLoad('all', [
+        {
+          namespace_id: 'ns-global',
+          slug: 'global',
+          display_name: 'Global',
+        },
+      ])
+    ).toBe('all');
+  });
+
   it('sorts namespace options by display name with slug fallback and searchable text', () => {
     expect(
       buildKnowledgeNamespaceSelectOptions([

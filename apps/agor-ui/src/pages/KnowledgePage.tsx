@@ -558,6 +558,16 @@ type KnowledgeNamespaceOptionSource = Pick<
 const knowledgeNamespaceDisplayName = (namespace: KnowledgeNamespaceOptionSource) =>
   namespace.display_name?.trim() || namespace.slug;
 
+export function resolveKnowledgeSpaceAfterNamespacesLoad(
+  activeSpace: string,
+  namespaces: KnowledgeNamespaceOptionSource[]
+) {
+  if (activeSpace === 'all' || namespaces.some((ns) => ns.slug === activeSpace)) {
+    return activeSpace;
+  }
+  return namespaces.find((ns) => ns.slug === 'global')?.slug ?? namespaces[0]?.slug ?? 'global';
+}
+
 export function buildKnowledgeNamespaceSelectOptions(namespaces: KnowledgeNamespaceOptionSource[]) {
   return [...namespaces]
     .sort((a, b) => {
@@ -1142,9 +1152,7 @@ export function KnowledgePage({
     const result = await client.service('kb/namespaces').find({ query: { archived: false } });
     const rows = normalizeFindResult<KnowledgeNamespace>(result as KnowledgeNamespace[]);
     setNamespaces(rows);
-    if (!rows.some((ns) => ns.slug === activeSpace)) {
-      setActiveSpace(rows.find((ns) => ns.slug === 'global')?.slug ?? rows[0]?.slug ?? 'global');
-    }
+    setActiveSpace(resolveKnowledgeSpaceAfterNamespacesLoad(activeSpace, rows));
   }, [client, activeSpace]);
 
   // Load every readable doc (no namespace/kind filter) so `@` can reference
