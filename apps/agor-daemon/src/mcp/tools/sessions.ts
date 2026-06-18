@@ -813,7 +813,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing branch. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing branch. When called from an MCP session context (the default for orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
@@ -859,6 +859,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe(
             'Callback firing mode: "once" (default) fires on first completion then auto-disables, "persistent" fires on every completion'
+          ),
+        parentSessionId: z
+          .string()
+          .min(1, 'parentSessionId cannot be empty when provided.')
+          .nullish()
+          .describe(
+            'Parent session ID to link this session to in the genealogy tree. When omitted and called from a session MCP context, automatically defaults to the calling session. Pass null to explicitly create a root session with no parent.'
           ),
         mcpServerIds: z
           .array(mcpRequiredId('mcpServerIds[]', 'MCP server'))
@@ -948,6 +955,17 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         callbackConfig.callback_mode = args.callbackMode ?? 'once';
       }
 
+      // Determine the parent session to link to in the genealogy:
+      // - explicit string: resolve (supports short IDs) and use
+      // - explicit null: opt out — create a root session with no parent
+      // - undefined (omitted): auto-link to the calling session when available
+      const resolvedParentSessionId =
+        args.parentSessionId !== undefined
+          ? args.parentSessionId !== null
+            ? await resolveSessionId(ctx, args.parentSessionId)
+            : undefined
+          : ctx.sessionId;
+
       const sessionData: Record<string, unknown> = {
         branch_id: branch.branch_id,
         agentic_tool: agenticTool,
@@ -965,11 +983,31 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           base_sha: currentSha,
           current_sha: currentSha,
         },
-        genealogy: { children: [] },
+        genealogy: {
+          ...(resolvedParentSessionId && { parent_session_id: resolvedParentSessionId }),
+          children: [],
+        },
         tasks: [],
       };
 
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);
+
+      // Update the parent session's children list to include the new session.
+      if (resolvedParentSessionId) {
+        const parentSession = await ctx.app
+          .service('sessions')
+          .get(resolvedParentSessionId, ctx.baseServiceParams);
+        await ctx.app.service('sessions').patch(
+          resolvedParentSessionId,
+          {
+            genealogy: {
+              ...parentSession.genealogy,
+              children: [...(parentSession.genealogy?.children ?? []), session.session_id],
+            },
+          },
+          ctx.baseServiceParams
+        );
+      }
 
       // Attach MCP servers (inherited from branch or user defaults, or
       // explicitly requested via args.mcpServerIds). Explicit failures are
@@ -1018,6 +1056,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ? ` Callback will be sent to session ${shortId(callbackConfig.callback_session_id as string)} on completion.`
         : '';
 
+      const parentNote = resolvedParentSessionId
+        ? ` Linked to parent session ${shortId(resolvedParentSessionId)}.`
+        : '';
+
       const mcpFailureNote =
         mcpAttachFailures.length > 0
           ? ` Warning: ${mcpAttachFailures.length} requested MCP server(s) failed to attach — see mcpAttachFailures.`
@@ -1027,8 +1069,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         session: redactSessionForMcp(session),
         taskId: initialTask?.task_id,
         note: args.initialPrompt
-          ? `Session created and initial prompt execution started.${callbackNote}${mcpFailureNote}`
-          : `Session created successfully.${callbackNote}${mcpFailureNote}`,
+          ? `Session created and initial prompt execution started.${parentNote}${callbackNote}${mcpFailureNote}`
+          : `Session created successfully.${parentNote}${callbackNote}${mcpFailureNote}`,
         ...(mcpAttachFailures.length > 0 && { mcpAttachFailures }),
       });
     }
