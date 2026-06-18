@@ -237,6 +237,38 @@ if (!apiKey) {
 | `agor_artifact_id: true` | `AGOR_ARTIFACT_ID` | Pure metadata — no consent. |
 | `agor_board_id: true` | `AGOR_BOARD_ID` | Pure metadata — no consent. |
 
+#### Local Chrome note: Private Network Access
+
+When Agor runs locally, `AGOR_API_URL` is usually `http://localhost:3030`, but
+the default Sandpack preview iframe is hosted at `https://*.codesandbox.io`.
+Chrome treats `https://*.codesandbox.io → http://localhost` as a **Private
+Network Access / Local Network Access** request and may block the artifact's
+`fetch()` before the daemon sees it. The common symptom is a generic
+`TypeError: Failed to fetch` in the artifact, even though the URL and token were
+injected correctly.
+
+To confirm this is Chrome-specific, open the same artifact in Firefox. If it
+works there but fails in Chrome or Edge, you're probably hitting Chrome's local
+network protection rather than an Agor token, CSP, or app-code bug.
+
+For local development in Chrome, allow local network access for the Agor/Sandpack
+page if Chrome shows that site permission. If your Chrome version exposes it
+only as a flag, open `chrome://flags/#local-network-access-check`, disable the
+check for local development, and restart Chrome. Older Chrome builds may expose
+the related preflight flag as
+`chrome://flags/#private-network-access-respect-preflight-results`.
+
+Other ways around the Chrome-only local-network block:
+
+- Build/run with Agor's self-hosted Sandpack bundler so the preview is served
+  locally instead of from `https://*.codesandbox.io`.
+- Use a public HTTPS Agor URL, as hosted Agor does.
+
+Agor's [API Proxies](/guide/api-proxies) solve a different problem: third-party
+APIs like Shortcut that do not allow browser CORS. They are useful once the
+artifact can reach the daemon, but they do not by themselves bypass Chrome's
+hosted-Sandpack → localhost block.
+
 ### TOFU consent
 
 When the viewer is **not** the artifact's author, the daemon won't inject secrets or grants without an explicit trust grant:

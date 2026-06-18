@@ -38,19 +38,19 @@ security:
   csp:
     # (1) APPEND to built-in defaults — the 95% case.
     extras:
-      script-src: ["https://plausible.io"]
-      connect-src: ["https://api.anthropic.com"]
-      frame-src: ["https://my-sandbox.example.com"]
+      script-src: ['https://plausible.io']
+      connect-src: ['https://api.anthropic.com']
+      frame-src: ['https://my-sandbox.example.com']
 
     # (2) REPLACE a directive wholesale — escape hatch, rare.
     # Setting a directive here wipes both defaults AND extras for that key.
     override:
-      img-src: ["'self'", "data:"]
+      img-src: ["'self'", 'data:']
 
     # (3) Reporting + debug toggles.
-    report_uri: "/api/csp-report"   # daemon mounts a handler here
-    report_only: false              # true = emit Content-Security-Policy-Report-Only
-    disabled: false                 # dev/debug only, emits loud warning
+    report_uri: '/api/csp-report' # daemon mounts a handler here
+    report_only: false # true = emit Content-Security-Policy-Report-Only
+    disabled: false # dev/debug only, emits loud warning
 ```
 
 **Why the split?** Every operator we've asked about CSP wanted "keep what
@@ -61,7 +61,7 @@ dropping the defaults and breaking unrelated features.
 
 **Empty override is meaningful.** `override: { "script-src": [] }` emits
 `script-src` with no sources — i.e. blocks that directive entirely. This is
-distinct from *omitting* the key, which means "use defaults+extras." If you
+distinct from _omitting_ the key, which means "use defaults+extras." If you
 find yourself reaching for this, double-check it's really what you meant.
 
 ### CORS: mode-based
@@ -69,27 +69,54 @@ find yourself reaching for this, double-check it's really what you meant.
 ```yaml
 security:
   cors:
-    mode: list                              # list | wildcard | reflect | null-origin
-    origins: ["https://agor.mydomain.com"]  # used when mode=list
-    credentials: true                       # default true; forced false in wildcard/reflect
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
-    allowed_headers: ["Authorization", "Content-Type", "X-MCP-Token"]
+    mode: list # list | wildcard | reflect | null-origin
+    origins: ['https://agor.mydomain.com'] # used when mode=list
+    credentials: true # default true; forced false in wildcard/reflect
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS']
+    allowed_headers: ['Authorization', 'Content-Type', 'X-MCP-Token']
     max_age_seconds: 600
-    allow_sandpack: true                    # include *.codesandbox.io (default true)
+    allow_sandpack: true # include *.codesandbox.io (default true)
 ```
 
 **Mode semantics:**
 
-| Mode          | Behaviour                                                         | Credentials |
-| ------------- | ----------------------------------------------------------------- | ----------- |
-| `list`        | Only origins in `origins[]` + built-ins (localhost, Sandpack)     | Allowed (default) |
-| `wildcard`    | Accept any origin (returns `Access-Control-Allow-Origin: *`)      | Forced off  |
-| `reflect`     | Echo the request's `Origin` header back                           | Forced off  |
-| `null-origin` | Accept `Origin: null` (sandboxed iframes, `file://` docs) plus no-origin non-browser clients (curl, server-to-server) | Allowed     |
+| Mode          | Behaviour                                                                                                             | Credentials       |
+| ------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `list`        | Only origins in `origins[]` + built-ins (localhost, Sandpack)                                                         | Allowed (default) |
+| `wildcard`    | Accept any origin (returns `Access-Control-Allow-Origin: *`)                                                          | Forced off        |
+| `reflect`     | Echo the request's `Origin` header back                                                                               | Forced off        |
+| `null-origin` | Accept `Origin: null` (sandboxed iframes, `file://` docs) plus no-origin non-browser clients (curl, server-to-server) | Allowed           |
 
 `credentials: true` + `mode: wildcard` (or `reflect`) is rejected at config
 load with a clear error — the CORS spec explicitly forbids this combination
 because it would allow credentialed requests from any origin.
+
+### Sandpack, localhost, and Chrome Private Network Access
+
+Local artifacts commonly render inside the hosted Sandpack iframe
+(`https://*.codesandbox.io`) while the daemon listens on
+`http://localhost:<port>`. Chromium treats that as a public HTTPS origin trying
+to reach a loopback/private HTTP address. Depending on Chrome version and flags,
+the browser may enforce Private Network Access / Local Network Access before the
+artifact's `fetch()` reaches Agor at all.
+
+This failure often surfaces only as `TypeError: Failed to fetch` inside the
+artifact. Quick triage:
+
+1. Try the same artifact in Firefox. If Firefox works and Chrome/Edge fail, it
+   is likely Chrome local-network enforcement, not CSP or an Agor token bug.
+2. In Chrome, allow local network access for the Agor/Sandpack page if that site
+   permission is shown.
+3. For local development, Chrome versions that expose the flag can disable the
+   check at `chrome://flags/#local-network-access-check` and then restart
+   Chrome. Older builds may expose the related preflight flag at
+   `chrome://flags/#private-network-access-respect-preflight-results`.
+
+Agor still keeps Sandpack on the non-credentialed side of CORS: browser cookies
+must not be sent to the multi-tenant hosted bundler. Artifacts should use
+explicit Bearer-token grants or configured `/proxies/<vendor>` URLs. The proxy
+feature solves third-party API CORS gaps (for example Shortcut), but it does not
+by itself bypass Chrome's hosted-Sandpack → localhost protection.
 
 ---
 
@@ -123,7 +150,7 @@ ships no Handlebars and never calls `new Function` / `eval`.
 The Sandpack origins (`https://*.codesandbox.io` + `blob:` for workers) are
 the load-bearing piece — without them the hosted bundler iframe renders but
 its workers fail to spawn and artifacts never mount. Setting
-`security.cors.allow_sandpack: false` removes them from *both* the CSP and
+`security.cors.allow_sandpack: false` removes them from _both_ the CSP and
 the CORS allow-list (the two need to stay in sync or you get weird
 half-broken states).
 
@@ -137,8 +164,8 @@ half-broken states).
 security:
   csp:
     extras:
-      script-src: ["https://plausible.io"]
-      connect-src: ["https://plausible.io"]
+      script-src: ['https://plausible.io']
+      connect-src: ['https://plausible.io']
 ```
 
 ### I want to embed an external iframe
@@ -147,7 +174,7 @@ security:
 security:
   csp:
     extras:
-      frame-src: ["https://my-embed.example.com"]
+      frame-src: ['https://my-embed.example.com']
 ```
 
 ### I want to relax CORS for a specific origin
@@ -155,7 +182,7 @@ security:
 ```yaml
 security:
   cors:
-    origins: ["https://dashboard.internal.example.com"]
+    origins: ['https://dashboard.internal.example.com']
 ```
 
 Regex patterns are supported inside `/slashes/`:
@@ -164,7 +191,7 @@ Regex patterns are supported inside `/slashes/`:
 security:
   cors:
     origins:
-      - "https://dashboard.example.com"
+      - 'https://dashboard.example.com'
       - "/\\.internal\\.example\\.com$/"
 ```
 
@@ -174,7 +201,7 @@ security:
 security:
   csp:
     report_only: true
-    report_uri: "/api/csp-report"
+    report_uri: '/api/csp-report'
 ```
 
 The daemon mounts a rate-limited handler at `report_uri` that logs incoming
