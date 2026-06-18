@@ -1225,15 +1225,23 @@ export default class SyncUnix extends Command {
 
           // Apply daemon user ACL so the running daemon can access without restart
           if (daemonUser && (dirExists || action === 'create')) {
-            const aclCmds = UnixGroupCommands.setUserAcl(branchPath, daemonUser, { aclEnabled });
-            if (await execAllCmds(aclCmds)) {
-              daemonAclsApplied++;
+            if (!aclEnabled) {
               if (verbose) {
-                this.log(chalk.green(`   ✓ Applied daemon ACL for ${daemonUser}`));
+                this.log(
+                  chalk.gray('   ⊘ Daemon ACL skipped (posix_acl_enabled=false; relies on group)')
+                );
               }
             } else {
-              syncErrors++;
-              this.log(chalk.red(`   ✗ Failed to set daemon ACL`));
+              const aclCmds = UnixGroupCommands.setUserAcl(branchPath, daemonUser, { aclEnabled });
+              if (await execAllCmds(aclCmds)) {
+                daemonAclsApplied++;
+                if (verbose) {
+                  this.log(chalk.green(`   ✓ Applied daemon ACL for ${daemonUser}`));
+                }
+              } else {
+                syncErrors++;
+                this.log(chalk.red(`   ✗ Failed to set daemon ACL`));
+              }
             }
           }
 

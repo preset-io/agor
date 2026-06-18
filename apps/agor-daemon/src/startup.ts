@@ -490,7 +490,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // inheritance); the others-restriction still holds via mode bits.
   if (config.execution?.posix_acl_enabled === false) {
     const unixMode = config.execution?.unix_user_mode ?? 'simple';
-    if (config.execution?.branch_rbac || unixMode !== 'simple') {
+    // Groups/ACLs only exist in insulated/strict — simple mode (even with RBAC)
+    // never runs setfacl, so the fallback warning is irrelevant there.
+    if (unixMode !== 'simple') {
       console.warn(
         '\x1b[33m⚠️  execution.posix_acl_enabled=false with Unix isolation active.\x1b[0m\n' +
           '   setfacl/getfacl are skipped; permissions use chgrp + chmod only.\n' +
