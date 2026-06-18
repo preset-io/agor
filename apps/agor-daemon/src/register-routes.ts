@@ -2096,13 +2096,55 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
+        // Edit-on-cancel: if the executor never emitted user-visible output
+        // (no assistant text/tool_use; pure "thinking" doesn't count), treat
+        // the prompt as never-really-sent — delete the task + its user
+        // message and hand the original prompt back to the caller so the UI
+        // can repopulate the composer. Otherwise, fall through to today's
+        // behavior (mark STOPPED, history intact).
+        let restoredPrompt: string | undefined;
         try {
-          await tasksService.patch(latestTask.task_id, {
-            status: TaskStatus.STOPPED,
-            completed_at: new Date().toISOString(),
+          const taskMessages = await messagesService.findByTask(latestTask.task_id);
+          const hasAgentOutput = taskMessages.some((msg) => {
+            if (msg.role !== MessageRole.ASSISTANT) return false;
+            const content = msg.content;
+            if (typeof content === 'string') return content.trim().length > 0;
+            if (Array.isArray(content)) {
+              return content.some(
+                (block) => block.type === 'text' || block.type === 'tool_use'
+              );
+            }
+            return false;
           });
+
+          if (!hasAgentOutput) {
+            // Delete by single id (per-row): the multi-remove path in the
+            // Drizzle adapter loads ALL messages via findAll before filtering,
+            // which is O(N) over the entire table. We already have the rows
+            // we want to drop in `taskMessages`, so delete them directly.
+            for (const msg of taskMessages) {
+              await messagesService.remove(msg.message_id, params);
+            }
+            await tasksService.remove(latestTask.task_id, params);
+            restoredPrompt = latestTask.full_prompt;
+            console.log(
+              `↩️  [Stop] Edit-on-cancel: dropped task ${shortId(latestTask.task_id)} (no agent output yet)`
+            );
+          }
         } catch (error) {
-          console.error(`❌ [Stop] Failed to patch task to STOPPED:`, error);
+          console.error(`❌ [Stop] Edit-on-cancel check failed:`, error);
+          restoredPrompt = undefined;
+        }
+
+        if (restoredPrompt === undefined) {
+          try {
+            await tasksService.patch(latestTask.task_id, {
+              status: TaskStatus.STOPPED,
+              completed_at: new Date().toISOString(),
+            });
+          } catch (error) {
+            console.error(`❌ [Stop] Failed to patch task to STOPPED:`, error);
+          }
         }
 
         try {
@@ -2121,7 +2163,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.error(`❌ [Stop] Failed to patch session to IDLE:`, error);
         }
 
-        return { success: true, status: SessionStatus.IDLE };
+        return {
+          success: true,
+          status: SessionStatus.IDLE,
+          edit_on_cancel: restoredPrompt !== undefined,
+          restored_prompt: restoredPrompt,
+        };
       },
     },
     {
