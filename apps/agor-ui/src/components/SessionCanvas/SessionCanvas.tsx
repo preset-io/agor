@@ -2025,6 +2025,23 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }
     }, [activeTool, drawingZone, board, client, setNodes, mutationGate.canMutate]);
 
+    const openMarkdownPlacementModal = useCallback(
+      (event: Pick<React.MouseEvent, 'clientX' | 'clientY'>): boolean => {
+        if (!mutationGate.canMutate || !reactFlowInstanceRef.current) {
+          return false;
+        }
+
+        const position = reactFlowInstanceRef.current.screenToFlowPosition({
+          x: event.clientX,
+          y: event.clientY,
+        });
+
+        setMarkdownModal({ position });
+        return true;
+      },
+      [mutationGate.canMutate]
+    );
+
     // Pane click handler for comment placement
     const handlePaneClick = useCallback(
       (event: React.MouseEvent) => {
@@ -2042,16 +2059,11 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         }
 
         // Markdown tool: click-to-place
-        if (activeTool === 'markdown' && reactFlowInstanceRef.current) {
-          const position = reactFlowInstanceRef.current.screenToFlowPosition({
-            x: event.clientX,
-            y: event.clientY,
-          });
-
-          setMarkdownModal({ position });
+        if (activeTool === 'markdown') {
+          openMarkdownPlacementModal(event);
         }
       },
-      [activeTool]
+      [activeTool, openMarkdownPlacementModal]
     );
 
     // Handler to create spatial comment
@@ -2255,23 +2267,14 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return;
         }
 
-        if (activeTool === 'markdown' && reactFlowInstanceRef.current) {
-          if (!mutationGate.canMutate) {
-            return;
-          }
-
+        if (activeTool === 'markdown') {
           // `onPaneClick` only fires when the pointer lands on the bare canvas.
           // Boards often contain large zones/cards that cover the viewport; in
           // those cases React Flow routes the click through `onNodeClick`
           // instead. Treat node clicks as valid markdown placement clicks so
           // the Add Markdown Note tool works regardless of what is under the
           // cursor.
-          const position = reactFlowInstanceRef.current.screenToFlowPosition({
-            x: event.clientX,
-            y: event.clientY,
-          });
-
-          setMarkdownModal({ position });
+          openMarkdownPlacementModal(event);
           return;
         }
 
@@ -2289,7 +2292,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           });
         }
       },
-      [activeTool, deleteObject, mutationGate.canMutate, setNodes]
+      [activeTool, deleteObject, mutationGate.canMutate, openMarkdownPlacementModal, setNodes]
     );
 
     // Clear comment placement state when switching away from comment tool
@@ -2512,6 +2515,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               >
                 <span>
                   <ControlButton
+                    aria-label="Add Markdown Note"
                     disabled={!mutationGate.canMutate}
                     onClick={(e) => {
                       e.stopPropagation();

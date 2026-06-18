@@ -1,6 +1,6 @@
 import type { Board } from '@agor-live/client';
-import { act, fireEvent, render, screen } from '@testing-library/react';
-import type { MouseEventHandler, ReactNode } from 'react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { ButtonHTMLAttributes, MouseEventHandler, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import SessionCanvas from './SessionCanvas';
@@ -12,11 +12,12 @@ vi.mock('reactflow', () => ({
   ControlButton: ({
     children,
     onClick,
+    ...props
   }: {
     children?: ReactNode;
     onClick?: MouseEventHandler<HTMLButtonElement>;
-  }) => (
-    <button type="button" onClick={onClick}>
+  } & ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button type="button" onClick={onClick} {...props}>
       {children}
     </button>
   ),
@@ -125,8 +126,8 @@ describe('SessionCanvas zoom shortcuts', () => {
       });
     });
 
-    // Zoom in/out/fit, select, zone, comment, markdown.
-    fireEvent.click(screen.getAllByRole('button')[6]);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Markdown Note' }));
+    await waitFor(() => expect(reactFlowProps?.className).toBe('tool-mode-markdown'));
 
     act(() => {
       (reactFlowProps?.onNodeClick as (event: unknown, node: unknown) => void)?.(
