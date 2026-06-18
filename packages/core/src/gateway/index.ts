@@ -17,4 +17,9 @@ export {
 } from './connectors/teams';
 export type { GatewayContext } from './context';
 export { formatGatewayContext } from './context';
-export { formatGatewaySystemMessage } from './system-message';
+export {
+  formatGatewayFollowUpRoutingMessage,
+  formatGatewayMarkdownSessionReference,
+  formatGatewaySessionCreatedMessage,
+  formatGatewaySystemMessage,
+} from './system-message';

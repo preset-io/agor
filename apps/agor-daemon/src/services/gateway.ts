@@ -19,6 +19,8 @@ import type { Application } from '@agor/core/feathers';
 import type { GatewayConnector, GatewayContext, InboundMessage } from '@agor/core/gateway';
 import {
   formatGatewayContext,
+  formatGatewayFollowUpRoutingMessage,
+  formatGatewaySessionCreatedMessage,
   formatGatewaySystemMessage,
   getConnector,
   hasConnector,
@@ -319,6 +321,22 @@ export class GatewayService {
     }
   }
 
+  private async fetchExistingSessionUrlForGatewayUser(
+    sessionId: SessionID,
+    user: User
+  ): Promise<string | null> {
+    try {
+      const sessionsService = this.app.service('sessions') as {
+        get: (id: string, params?: { user: User }) => Promise<Session & { url?: string | null }>;
+      };
+      const sessionWithUrl = await sessionsService.get(sessionId, { user });
+      return sessionWithUrl.url || null;
+    } catch (error) {
+      console.warn('[gateway] Failed to fetch session URL:', error);
+      return null;
+    }
+  }
+
   /**
    * Inbound routing: platform → session
    *
@@ -547,7 +565,7 @@ export class GatewayService {
       }
     }
 
-    let sessionId: string;
+    let sessionId: SessionID;
     let created = false;
     let mcpAuthWarning: string | undefined;
 
@@ -596,10 +614,11 @@ export class GatewayService {
         await this.threadMapRepo.updateMetadata(existingMapping.id, updatedMetadata);
       }
 
+      const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
       this.sendDebugMessage(
         channel,
         data.thread_id,
-        `Received follow-up, routing to session ${shortId(sessionId)}...`
+        formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl)
       );
     } else {
       // New thread → create session via FeathersJS service
@@ -717,24 +736,13 @@ export class GatewayService {
         metadata: data.metadata ?? null,
       });
 
-      // Get session URL from created session (URL is added by after hook)
-      // Fetch the session to get the URL property
-      let sessionUrl: string | null = null;
-      try {
-        const sessionsService = this.app.service('sessions') as {
-          get: (id: string, params?: { user: User }) => Promise<Session & { url?: string | null }>;
-        };
-        const sessionWithUrl = await sessionsService.get(sessionId, { user });
-        sessionUrl = sessionWithUrl.url || null;
-      } catch (error) {
-        console.warn('[gateway] Failed to fetch session URL:', error);
-      }
+      // The create path already returns a Session from SessionRepository.create(),
+      // which populates url when the branch is attached to a board. Avoid an
+      // immediate get() round trip here; only follow-ups need to fetch.
+      const sessionUrl = session.url ?? null;
 
       // Send debug message with session URL
-      const sessionIdShort = shortId(sessionId);
-      const message = sessionUrl
-        ? `Session created: ${sessionUrl}`
-        : `Session ${sessionIdShort} created, sending prompt to agent...`;
+      const message = formatGatewaySessionCreatedMessage(sessionId, sessionUrl);
 
       this.sendDebugMessage(channel, data.thread_id, message);
 
