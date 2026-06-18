@@ -2504,8 +2504,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               <Tooltip
                 title={
                   mutationGate.canMutate
-                    ? 'Add Markdown Note'
-                    : (mutationGate.message ?? 'Add Markdown Note')
+                    ? 'Add Markdown Note — click canvas to place'
+                    : (mutationGate.message ?? 'Add Markdown Note — click canvas to place')
                 }
                 placement="right"
                 mouseEnterDelay={0.3}
