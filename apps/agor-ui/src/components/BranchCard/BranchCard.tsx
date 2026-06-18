@@ -501,7 +501,7 @@ const BranchCardComponent = ({
             onViewLogs={onViewLogs}
             onNukeEnvironment={onNukeEnvironment}
             connectionDisabled={connectionDisabled}
-            showNukeEnvironment={false}
+            showNukeEnvironment={true}
           />
         </Space>
       </div>
