@@ -48,6 +48,7 @@ import type {
   SandpackConfig,
   SandpackError,
   SandpackTemplate,
+  SessionID,
   UserID,
   UserRole,
 } from '@agor/core/types';
@@ -357,6 +358,25 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
+   * Direct REST/service updates are metadata-only and must not rewrite
+   * provenance. `source_session_id` is stamped by publishArtifact() from the
+   * trusted MCP/session context; letting generic PATCH/UPDATE mutate it would
+   * make the "created by session" link spoofable.
+   */
+  private stripClientControlledProvenance(data: Partial<Artifact>): Partial<Artifact> {
+    const { source_session_id: _sourceSessionId, ...safeData } = data;
+    return safeData;
+  }
+
+  async update(id: string | number, data: Partial<Artifact>, params?: unknown): Promise<Artifact> {
+    return (await super.update(
+      id,
+      this.stripClientControlledProvenance(data),
+      params as never
+    )) as Artifact;
+  }
+
+  /**
    * Patch override: route board_id and placement changes through
    * updateMetadata so the board_objects entry is moved/resized alongside the
    * row update. Plain metadata patches fall through to the default
@@ -398,7 +418,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       );
     }
 
-    return (await super.patch(id, data as Partial<Artifact>, params as never)) as Artifact;
+    return (await super.patch(
+      id,
+      this.stripClientControlledProvenance(data) as Partial<Artifact>,
+      params as never
+    )) as Artifact;
   }
 
   /**
@@ -446,7 +470,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     data: {
       folderPath?: string;
       branch_id?: string;
-      source_session_id?: string | null;
+      source_session_id?: SessionID | null;
       subpath?: string;
       board_id?: string;
       name?: string;

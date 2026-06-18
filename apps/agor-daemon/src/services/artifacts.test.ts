@@ -218,6 +218,49 @@ describe('ArtifactRepository source session provenance', () => {
   });
 });
 
+describe('ArtifactsService source session provenance', () => {
+  dbTest('ignores source_session_id in generic metadata patch', async ({ db }) => {
+    const tmpRoot = mkdtempSync(path.join(tmpdir(), 'artifact-source-session-patch-'));
+    try {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const branch = await seedRepoAndBranch(db, tmpRoot);
+      const originalSession = await seedSession(db, branch.branch_id);
+      const spoofedSession = await seedSession(db, branch.branch_id);
+      const artifactRepo = new ArtifactRepository(db);
+
+      const artifact = await artifactRepo.create({
+        board_id: board.board_id,
+        name: 'Original',
+        template: 'react',
+        files: { '/index.js': 'console.log("hi")' },
+        source_session_id: originalSession.session_id,
+        created_by: 'user-owner',
+      });
+
+      const patched = await service.patch(artifact.artifact_id, {
+        name: 'Renamed',
+        source_session_id: spoofedSession.session_id,
+      });
+
+      expect(patched.name).toBe('Renamed');
+      expect(patched.source_session_id).toBe(originalSession.session_id);
+
+      const updated = await service.update(artifact.artifact_id, {
+        description: 'Updated metadata',
+        source_session_id: spoofedSession.session_id,
+      });
+
+      expect(updated.description).toBe('Updated metadata');
+      expect(updated.source_session_id).toBe(originalSession.session_id);
+      const fetched = await artifactRepo.findById(artifact.artifact_id);
+      expect(fetched?.source_session_id).toBe(originalSession.session_id);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ArtifactsService.updateMetadata', () => {
   dbTest('moves artifact to a new board and preserves placement', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
