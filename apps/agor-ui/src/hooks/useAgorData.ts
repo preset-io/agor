@@ -271,13 +271,16 @@ function removeBoardObjectFromMaps(prev: DataMaps, boardObject: BoardEntityObjec
  * @param options - Optional configuration
  * @param options.enabled - Whether to enable data fetching (default: true). Set to false to skip
  *                          all data fetching (useful when user needs to change password first).
+ * @param options.directSessionId - Optional session short/full ID from a direct URL. If the
+ *                                  active-list query omits it because it is archived, fetch it by ID.
  * @returns Sessions, boards, loading state, and refetch function
  */
 export function useAgorData(
   client: AgorClient | null,
-  options?: { enabled?: boolean }
+  options?: { enabled?: boolean; directSessionId?: string | null }
 ): UseAgorDataResult {
   const enabled = options?.enabled ?? true;
+  const directSessionId = options?.directSessionId ?? null;
   // Single state for all server-backed maps — reset is setMaps(EMPTY_MAPS), one call, can't miss a field.
   const [maps, setMaps] = useState<DataMaps>(EMPTY_MAPS);
 
@@ -479,6 +482,7 @@ export function useAgorData(
                 $select: [
                   'artifact_id',
                   'branch_id',
+                  'source_session_id',
                   'board_id',
                   'name',
                   'description',
@@ -505,6 +509,39 @@ export function useAgorData(
             .catch(() => ({ authenticated_server_ids: [] })),
         ]);
         debugTimer?.endFetchPhase();
+
+        // Direct /s/<id>/ opens should work for archived sessions without broadening
+        // the default active-session list. If the active query missed the URL target,
+        // fetch just that session (and its branch if necessary) by ID/short ID.
+        if (
+          directSessionId &&
+          !sessionsList.some((s) => s.session_id.startsWith(directSessionId))
+        ) {
+          try {
+            const directSession = (await client
+              .service('sessions')
+              .get(directSessionId)) as Session;
+            if (!sessionsList.some((s) => s.session_id === directSession.session_id)) {
+              sessionsList.push(directSession);
+            }
+            if (
+              directSession.branch_id &&
+              !branchesList.some((branch) => branch.branch_id === directSession.branch_id)
+            ) {
+              try {
+                const directBranch = (await client
+                  .service('branches')
+                  .get(directSession.branch_id)) as Branch;
+                branchesList.push(directBranch);
+              } catch {
+                // The session can still open; it just won't be able to switch/recenter
+                // if the branch is inaccessible or gone.
+              }
+            }
+          } catch {
+            // Leave normal URL resolution to report/not-heal unresolved session links.
+          }
+        }
 
         if (!silent) {
           setLoadingStage('indexing');
@@ -677,7 +714,7 @@ export function useAgorData(
         }
       }
     },
-    [client, enabled]
+    [client, directSessionId, enabled]
   );
 
   // Clear all data when client goes away (logout / token revocation).
@@ -697,6 +734,73 @@ export function useAgorData(
     setMaps(EMPTY_MAPS);
     setHasInitiallyFetched(false);
   }, [client]);
+
+  // If the user navigates to /s/<id>/ after the initial active-session fetch,
+  // load that one session by ID as well. This keeps direct links to archived
+  // sessions openable without changing the default list query.
+  useEffect(() => {
+    if (!client || !enabled || !hasInitiallyFetched || !directSessionId) return;
+    if (maps.sessionById.has(directSessionId)) return;
+    if ([...maps.sessionById.values()].some((s) => s.session_id.startsWith(directSessionId))) {
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const directSession = (await client.service('sessions').get(directSessionId)) as Session;
+        if (cancelled) return;
+
+        setSessionById((prev) => {
+          if (prev.has(directSession.session_id)) return prev;
+          const next = new Map(prev);
+          next.set(directSession.session_id, directSession);
+          return next;
+        });
+        setSessionsByBranch((prev) => {
+          const branchSessions = prev.get(directSession.branch_id) || [];
+          if (branchSessions.some((s) => s.session_id === directSession.session_id)) return prev;
+          const next = new Map(prev);
+          next.set(directSession.branch_id, [...branchSessions, directSession]);
+          return next;
+        });
+
+        if (directSession.branch_id && !maps.branchById.has(directSession.branch_id)) {
+          try {
+            const directBranch = (await client
+              .service('branches')
+              .get(directSession.branch_id)) as Branch;
+            if (cancelled) return;
+            setBranchById((prev) => {
+              if (prev.has(directBranch.branch_id)) return prev;
+              const next = new Map(prev);
+              next.set(directBranch.branch_id, directBranch);
+              return next;
+            });
+          } catch {
+            // Session can still be selected if its branch is inaccessible/gone.
+          }
+        }
+      } catch {
+        // Keep unresolved session URLs sticky; the normal URL resolver will
+        // avoid self-healing until a matching session exists.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    client,
+    directSessionId,
+    enabled,
+    hasInitiallyFetched,
+    maps.branchById,
+    maps.sessionById,
+    setBranchById,
+    setSessionById,
+    setSessionsByBranch,
+  ]);
 
   // Subscribe to real-time updates
   // biome-ignore lint/correctness/useExhaustiveDependencies: setter helpers only close over stable setMaps; listing them would add noise without preventing stale closures

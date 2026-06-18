@@ -3,8 +3,9 @@ import type {
   ArtifactID,
   ArtifactPayload,
   BoardObject,
+  SessionID,
 } from '@agor-live/client';
-import { artifactFullscreenPath, shortId } from '@agor-live/client';
+import { artifactFullscreenPath, sessionPath, shortId } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -15,6 +16,7 @@ import {
   FullscreenOutlined,
   LoadingOutlined,
   LockOutlined,
+  MessageOutlined,
   ReloadOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
@@ -235,6 +237,15 @@ export const ArtifactNode = ({
     window.dispatchEvent(new CustomEvent(`agor:export-codesandbox-${data.artifactId}`));
   }, [data.artifactId]);
 
+  const handleOpenCreatingSession = useCallback(() => {
+    if (!payload?.source_session_id) return;
+    window.open(
+      uiRouteHref(sessionPath(payload.source_session_id as SessionID)),
+      '_blank',
+      'noopener,noreferrer'
+    );
+  }, [payload?.source_session_id]);
+
   const handleOpenFullscreen = useCallback(() => {
     window.open(
       uiRouteHref(artifactFullscreenPath(data.artifactId as ArtifactID)),
@@ -308,6 +319,19 @@ export const ArtifactNode = ({
               onClick={(e) => {
                 e.stopPropagation();
                 setConsentOpen(true);
+              }}
+            />
+          </Tooltip>
+        )}
+        {payload?.source_session_id && (
+          <Tooltip title="Open session that created this artifact">
+            <Button
+              type="text"
+              size="small"
+              icon={<MessageOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenCreatingSession();
               }}
             />
           </Tooltip>

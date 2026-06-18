@@ -226,6 +226,7 @@ IMPORTANT:
         {
           folderPath,
           branch_id: resolvedBranchId,
+          source_session_id: ctx.sessionId,
           subpath,
           board_id: resolvedBoardId,
           name: coerceString(args.name),

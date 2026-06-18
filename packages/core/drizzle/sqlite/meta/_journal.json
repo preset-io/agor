@@ -400,6 +400,13 @@
       "when": 1781500000000,
       "tag": "0058_kb_document_icon_emoji",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1781600000000,
+      "tag": "0059_artifact_source_session",
+      "breakpoints": true
     }
   ]
 }

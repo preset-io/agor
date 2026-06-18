@@ -1357,6 +1357,12 @@ export const artifacts = sqliteTable(
     branch_id: text('branch_id', { length: 36 }).references(() => branches.branch_id, {
       onDelete: 'set null',
     }),
+    source_session_id: text('source_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
     board_id: text('board_id', { length: 36 })
       .notNull()
       .references(() => boards.board_id, { onDelete: 'cascade' }),
@@ -1383,6 +1389,7 @@ export const artifacts = sqliteTable(
   },
   (table) => ({
     branchIdx: index('artifacts_branch_idx').on(table.branch_id),
+    sourceSessionIdx: index('artifacts_source_session_idx').on(table.source_session_id),
     boardIdx: index('artifacts_board_idx').on(table.board_id),
     archivedIdx: index('artifacts_archived_idx').on(table.archived),
     publicIdx: index('artifacts_public_idx').on(table.public),

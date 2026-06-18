@@ -1,7 +1,9 @@
-import type { AgorClient, Artifact, ArtifactPayload, User } from '@agor-live/client';
+import type { AgorClient, Artifact, ArtifactPayload, SessionID, User } from '@agor-live/client';
+import { sessionPath } from '@agor-live/client';
 import {
   ArrowLeftOutlined,
   EyeInvisibleOutlined,
+  MessageOutlined,
   ReloadOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
@@ -18,6 +20,7 @@ import {
 import { getDaemonUrl } from '@/config/daemon';
 import { getAuthHeaders } from '@/utils/authHeaders';
 import { ensureSandpackCryptoSubtle } from '@/utils/sandpackCrypto';
+import { uiRouteHref } from '@/utils/uiRoutes';
 import { ArtifactConsentModal } from '../components/ArtifactConsentModal/ArtifactConsentModal';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
@@ -122,6 +125,22 @@ function ArtifactFullscreenNavbar({
         {trustBadge}
       </Space>
       <Space style={{ flexShrink: 0 }}>
+        {(payload?.source_session_id || artifact?.source_session_id) && (
+          <Tooltip title="Open session that created this artifact">
+            <Button
+              icon={<MessageOutlined />}
+              href={uiRouteHref(
+                sessionPath(
+                  (payload?.source_session_id ?? artifact?.source_session_id) as SessionID
+                )
+              )}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Session
+            </Button>
+          </Tooltip>
+        )}
         {artifact?.url && (
           <Button href={artifact.url} target="_blank" rel="noopener noreferrer">
             Open board link

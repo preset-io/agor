@@ -446,6 +446,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     data: {
       folderPath?: string;
       branch_id?: string;
+      source_session_id?: string | null;
       subpath?: string;
       board_id?: string;
       name?: string;
@@ -547,6 +548,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       const updated = await this.artifactRepo.update(existing.artifact_id, {
         name: resolvedName,
         branch_id: matchedBranchId ?? existing.branch_id ?? null,
+        source_session_id: data.source_session_id ?? existing.source_session_id ?? null,
         files,
         dependencies: cachedDeps,
         entry: cachedEntry,
@@ -584,6 +586,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       artifact_id: artifactId,
       board_id: resolvedBoardId,
       branch_id: matchedBranchId,
+      source_session_id: data.source_session_id ?? null,
       name: resolvedName,
       path: folderPath,
       template,
@@ -1002,6 +1005,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     const payload: ArtifactPayload = {
       artifact_id: artifact.artifact_id,
+      source_session_id: artifact.source_session_id ?? null,
       name: artifact.name,
       description: artifact.description,
       template: artifact.template,

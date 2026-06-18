@@ -262,6 +262,8 @@ function AppContent() {
   // rows). Mounted exactly once so all consumers share the same baseline.
   const { capturedSha, currentSha, outOfSync } = useServerVersion(client);
 
+  const directSessionIdFromPath = location.pathname.match(/^\/s\/([^/]+)\/?$/)?.[1] ?? null;
+
   // Pass the stable client lifetime, not `connected ? client : null`:
   // useAgorData owns reconnect refetches and `null` is reserved for logout /
   // token removal. See the reset-effect comment in useAgorData.ts for the full
@@ -291,6 +293,7 @@ function AppContent() {
     error: dataError,
   } = useAgorData(client, {
     enabled: workspaceSurfaceShouldRun && !user?.must_change_password,
+    directSessionId: directSessionIdFromPath,
   });
 
   // Session actions

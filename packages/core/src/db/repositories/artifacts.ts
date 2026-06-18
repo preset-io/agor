@@ -14,6 +14,7 @@ import type {
   BoardID,
   BranchID,
   SandpackTemplate,
+  SessionID,
   UUID,
 } from '@agor/core/types';
 import { and, eq, like, or } from 'drizzle-orm';
@@ -50,6 +51,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
     return {
       artifact_id: artifactId as UUID,
       branch_id: (row.branch_id as BranchID) ?? null,
+      source_session_id: (row.source_session_id as SessionID | null) ?? null,
       board_id: row.board_id as BoardID,
       name: row.name,
       description: row.description ?? undefined,
@@ -95,6 +97,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       const insertData: ArtifactInsert = {
         artifact_id: artifactId,
         branch_id: data.branch_id ?? null,
+        source_session_id: data.source_session_id ?? null,
         board_id: data.board_id ?? '',
         name: data.name ?? 'Untitled Artifact',
         description: data.description ?? null,
@@ -281,6 +284,9 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         setData.agor_grants = updates.agor_grants ?? null;
       }
       if (updates.public !== undefined) setData.public = updates.public;
+      if (updates.source_session_id !== undefined) {
+        setData.source_session_id = updates.source_session_id ?? null;
+      }
       if (updates.archived !== undefined) setData.archived = updates.archived;
       if (updates.archived_at !== undefined) {
         setData.archived_at = updates.archived_at ? new Date(updates.archived_at) : null;
