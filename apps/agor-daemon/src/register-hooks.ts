@@ -153,6 +153,10 @@ function itemHasAnyField(item: Record<string, unknown>, fields: readonly string[
   return fields.some((field) => Object.hasOwn(item, field));
 }
 
+export function shouldValidateRepoEnvironmentPayload(value: unknown): boolean {
+  return value !== undefined && value !== null;
+}
+
 async function getManagedEnvExecutionMode() {
   const config = await loadConfig();
   return config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
@@ -164,7 +168,10 @@ function validateRepoEnvPolicyHook() {
     const items = Array.isArray(context.data) ? context.data : [context.data];
 
     for (const item of items as Array<Record<string, unknown>>) {
-      if (Object.hasOwn(item, 'environment') && item.environment !== null) {
+      if (
+        Object.hasOwn(item, 'environment') &&
+        shouldValidateRepoEnvironmentPayload(item.environment)
+      ) {
         try {
           const env = validateRepoEnvironment(item.environment);
           validateRepoEnvironmentLifecyclePolicy(env, mode);
@@ -173,7 +180,10 @@ function validateRepoEnvPolicyHook() {
         }
       }
 
-      if (Object.hasOwn(item, 'environment_config') && item.environment_config !== null) {
+      if (
+        Object.hasOwn(item, 'environment_config') &&
+        shouldValidateRepoEnvironmentPayload(item.environment_config)
+      ) {
         try {
           const env = wrapV1AsV2(item.environment_config as Parameters<typeof wrapV1AsV2>[0]);
           if (env) validateRepoEnvironmentLifecyclePolicy(env, mode, 'legacy repo environment');

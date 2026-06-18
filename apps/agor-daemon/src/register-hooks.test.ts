@@ -19,8 +19,24 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isPromptFlowPatchOnly, PROMPT_FLOW_PATCH_FIELDS } from './register-hooks';
+import {
+  isPromptFlowPatchOnly,
+  PROMPT_FLOW_PATCH_FIELDS,
+  shouldValidateRepoEnvironmentPayload,
+} from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
+
+describe('shouldValidateRepoEnvironmentPayload', () => {
+  it('skips absent repo environment payloads', () => {
+    expect(shouldValidateRepoEnvironmentPayload(undefined)).toBe(false);
+    expect(shouldValidateRepoEnvironmentPayload(null)).toBe(false);
+  });
+
+  it('validates present repo environment payloads', () => {
+    expect(shouldValidateRepoEnvironmentPayload({})).toBe(true);
+    expect(shouldValidateRepoEnvironmentPayload('invalid shape')).toBe(true);
+  });
+});
 
 describe('isPromptFlowPatchOnly', () => {
   describe('accepts whitelisted-only patches', () => {
