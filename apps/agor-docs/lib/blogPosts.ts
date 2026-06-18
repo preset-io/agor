@@ -9,6 +9,14 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'raise-team-helper-agent',
+    title: 'Raise a Team Helper Agent in an Afternoon',
+    description:
+      'A practical recipe for turning an Agor Assistant into a PM-style teammate that remembers context, coordinates work, reports progress, and keeps a team aligned.',
+    date: '2026-06-17',
+    image: '/images/blog/raise-team-helper-agent.png',
+  },
+  {
     slug: 'agent-modeling-101',
     title: 'Agent Modeling 101: Designing Long-Lived Agents for Teams',
     description:

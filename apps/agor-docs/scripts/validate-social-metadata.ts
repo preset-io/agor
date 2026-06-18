@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { blogPosts } from '../lib/blogPosts';
 import {
   DEFAULT_SOCIAL_IMAGE,
   FAVICON_PATH,
@@ -57,6 +58,37 @@ function parseFrontMatter(filePath: string): FrontMatterLike {
   return frontMatter;
 }
 
+function assertBlogPostsMatchPages(pages: PageMetadata[], errors: string[]): void {
+  const blogPages = pages.filter(
+    (page) => page.filePath.startsWith('pages/blog/') && page.filePath.endsWith('.mdx')
+  );
+  const pageSlugs = new Set(
+    blogPages.map((page) => path.basename(page.filePath, path.extname(page.filePath)))
+  );
+  const listedSlugs = new Set(blogPosts.map((post) => post.slug));
+
+  for (const slug of pageSlugs) {
+    if (!listedSlugs.has(slug)) {
+      errors.push(`pages/blog/${slug}.mdx: missing entry in lib/blogPosts.ts`);
+    }
+  }
+
+  for (const post of blogPosts) {
+    if (!pageSlugs.has(post.slug)) {
+      errors.push(`lib/blogPosts.ts: entry has no matching pages/blog/${post.slug}.mdx`);
+    }
+  }
+
+  const sortedPosts = [...blogPosts].sort((a, b) => b.date.localeCompare(a.date));
+
+  for (const [index, post] of blogPosts.entries()) {
+    if (post.slug !== sortedPosts[index]?.slug) {
+      errors.push('lib/blogPosts.ts: blog posts should be ordered newest-first by date');
+      break;
+    }
+  }
+}
+
 function assertLocalPublicImageExists(value: string, filePath: string, errors: string[]): void {
   if (!value || isAbsoluteUrl(value)) {
     return;
@@ -86,6 +118,7 @@ const errors: string[] = [];
 assertLocalPublicImageExists(DEFAULT_SOCIAL_IMAGE, 'default social image', errors);
 assertLocalPublicImageExists(FAVICON_PATH, 'favicon (siteMetadata.FAVICON_PATH)', errors);
 assertLocalPublicImageExists(LOGO_PATH, 'logo (siteMetadata.LOGO_PATH)', errors);
+assertBlogPostsMatchPages(pages, errors);
 
 for (const page of pages) {
   const socialImage = getSocialImage(page.frontMatter);
