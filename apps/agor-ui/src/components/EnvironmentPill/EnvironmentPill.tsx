@@ -26,8 +26,6 @@ interface EnvironmentPillProps {
   onViewLogs?: (branchId: string) => void;
   canControlEnvironment?: boolean;
   connectionDisabled?: boolean; // Disable actions when disconnected
-  /** Whether to show the destructive Nuke action when available. Defaults to true. */
-  showNukeEnvironment?: boolean;
 }
 
 export function EnvironmentPill({
@@ -40,7 +38,6 @@ export function EnvironmentPill({
   onViewLogs,
   canControlEnvironment,
   connectionDisabled = false,
-  showNukeEnvironment = true,
 }: EnvironmentPillProps) {
   const { token } = theme.useToken();
   const confirmNuke = useConfirmNukeEnvironment();
@@ -350,7 +347,7 @@ export function EnvironmentPill({
                 />
               </Tooltip>
             )}
-            {showNukeEnvironment && onNukeEnvironment && branch.nuke_command && (
+            {onNukeEnvironment && branch.nuke_command && (
               <Tooltip
                 title={
                   controlDisabledTooltip ??

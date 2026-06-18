@@ -76,18 +76,16 @@ const defaultProps = {
 };
 
 describe('EnvironmentPill', () => {
-  it('can hide only the destructive nuke action while preserving other controls', () => {
-    render(<EnvironmentPill {...defaultProps} showNukeEnvironment={false} />);
-
-    expect(screen.getByRole('button', { name: 'Start environment' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Stop environment' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'View environment logs' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Nuke environment' })).not.toBeInTheDocument();
-  });
-
-  it('shows the destructive nuke action by default when configured', () => {
+  it('shows the destructive nuke action when nuke_command is configured', () => {
     render(<EnvironmentPill {...defaultProps} />);
 
     expect(screen.getByRole('button', { name: 'Nuke environment' })).toBeInTheDocument();
+  });
+
+  it('hides the destructive nuke action when nuke_command is not configured', () => {
+    render(<EnvironmentPill {...defaultProps} branch={{ ...branch, nuke_command: undefined }} />);
+
+    expect(screen.getByRole('button', { name: 'Start environment' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Nuke environment' })).not.toBeInTheDocument();
   });
 });
