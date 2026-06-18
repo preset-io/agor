@@ -14,7 +14,14 @@
  * drift. Keep this as the single source.
  */
 
-import { MessagesRepository, TaskRepository, txAsDb } from '@agor/core/db';
+import {
+  eq,
+  lockRowForUpdate,
+  MessagesRepository,
+  TaskRepository,
+  tasks as tasksTable,
+  txAsDb,
+} from '@agor/core/db';
 import type { Database } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Message, Paginated, Params, SessionID, Task, TaskID } from '@agor/core/types';
@@ -112,10 +119,16 @@ export function hasAgentOutput(messages: ReadonlyArray<Message>): boolean {
 }
 
 /**
- * Outcome of `discardTaskIfNoOutput`. The `discarded` branch is the only
- * one that mutates DB state; callers use the returned rows to fire the
- * matching `removed` WebSocket events so subscribed UIs reactively prune
- * their transcripts.
+ * Outcome of {@link discardTaskIfNoOutput}. The `discarded` branch is the
+ * only one that mutates DB state.
+ *
+ * Contract: callers MUST fire `messages.removed` for each row in
+ * `removedMessages` and `tasks.removed` for `task` after the call returns —
+ * the helper deliberately stays at the repo layer to keep its DELETEs
+ * atomic, so the matching WebSocket events are the caller's responsibility.
+ * `removedMessages` is the set-based DELETE's `RETURNING` output, so it
+ * includes any executor stragglers that landed between the predicate read
+ * and the DELETE.
  */
 export type DiscardTaskOutcome =
   | { kind: 'discarded'; removedMessages: Message[]; task: Task }
@@ -124,21 +137,17 @@ export type DiscardTaskOutcome =
 
 /**
  * Atomically drop a task and all its messages if the agent hasn't
- * produced user-visible output yet. Wraps the predicate re-check + both
+ * produced user-visible output yet. Wraps the predicate read + both
  * deletes in a single DB transaction so a stray late executor write
- * either lands before the snapshot (caught by `hasAgentOutput`, leaves
- * the task as STOPPED) or after the set-based delete (FK violation —
- * insert fails, no orphan).
+ * either lands before the read (caught by `hasAgentOutput`, leaves the
+ * task as STOPPED) or after — in which case the set-based
+ * `deleteByTaskId` returns it too, so the caller can emit the matching
+ * `removed` event and the UI reactively prunes the late bubble.
  *
- * Why a set-based delete rather than the per-row snapshot? The snapshot
- * could be stale by the time we commit — the set-based `deleteByTaskId`
- * sweeps anything still tagged with that task_id, including writes that
- * landed between snapshot and commit.
- *
- * Callers are responsible for emitting `messages.removed` / `tasks.removed`
- * service events using the returned rows so connected clients prune
- * their local state; the helper deliberately stays at the repo layer to
- * keep the transaction atomic.
+ * On Postgres, the function acquires `SELECT ... FOR UPDATE` on the task
+ * row at the top of the transaction so concurrent executor writes block
+ * until commit; on SQLite this is a no-op (the dialect serializes writes
+ * implicitly via its single-writer transaction model).
  */
 export async function discardTaskIfNoOutput(
   db: Database,
@@ -152,12 +161,20 @@ export async function discardTaskIfNoOutput(
     const task = await txTasksRepo.findById(taskId);
     if (!task) return { kind: 'not_found' };
 
+    // Block concurrent executor writes from racing the predicate check
+    // on Postgres. SQLite's transaction model already serializes writes.
+    await lockRowForUpdate(txDb, db, tasksTable, eq(tasksTable.task_id, task.task_id));
+
     const messages = await txMessagesRepo.findByTaskId(taskId);
     if (hasAgentOutput(messages)) return { kind: 'has_output' };
 
-    await txMessagesRepo.deleteByTaskId(taskId);
+    // Set-based DELETE with RETURNING: the returned rows are the
+    // ground-truth list of what was actually removed, including any
+    // stragglers the executor flushed after the predicate read but
+    // before this statement. Use these for emitting `removed` events.
+    const removedMessages = await txMessagesRepo.deleteByTaskId(taskId);
     await txTasksRepo.delete(taskId);
 
-    return { kind: 'discarded', removedMessages: messages, task };
+    return { kind: 'discarded', removedMessages, task };
   });
 }

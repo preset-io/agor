@@ -205,9 +205,19 @@ export class MessagesRepository {
    * still attached to the session — visible in the transcript. Callers that
    * hard-delete a task must call this first (ideally in the same
    * transaction) to keep the conversation consistent.
+   *
+   * Returns the rows actually deleted so callers can emit matching
+   * `messages.removed` service events. Using `.returning()` (rather than
+   * a separate pre-delete snapshot) catches anything the executor wrote
+   * between the predicate check and this statement — important when a
+   * SIGTERM'd executor flushes one last message before exit.
    */
-  async deleteByTaskId(taskId: TaskID): Promise<void> {
-    await deleteFrom(this.db, messages).where(eq(messages.task_id, taskId)).run();
+  async deleteByTaskId(taskId: TaskID): Promise<Message[]> {
+    const deleted = await deleteFrom(this.db, messages)
+      .where(eq(messages.task_id, taskId))
+      .returning()
+      .all();
+    return deleted.map((r: MessageRow) => this.rowToMessage(r));
   }
 
   /**

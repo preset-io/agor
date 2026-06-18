@@ -2030,6 +2030,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Stop endpoint
   // ============================================================================
 
+  // Brief settle period between SIGTERM and the edit-on-cancel predicate
+  // read, so the executor's exit handler has a window to flush any
+  // trailing-edge writes before we snapshot.
+  const SIGTERM_SETTLE_MS = 100;
+
   registerAuthenticatedRoute(
     app,
     '/sessions/:id/stop',
@@ -2098,11 +2103,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         // SIGTERM has a 3s grace period before SIGKILL (see executor-tracking.ts).
         // Give the executor's handler a brief window to flush any in-flight
-        // writes before we snapshot — the set-based delete inside
-        // `discardTaskIfNoOutput` will sweep stragglers either way, but a
-        // small wait avoids spurious "agent has output" reads from writes
+        // writes before we run the predicate — `discardTaskIfNoOutput`'s
+        // set-based DELETE...RETURNING will sweep stragglers either way, but
+        // a small wait avoids spurious "agent has output" reads from writes
         // that are essentially trailing edges of the killed turn.
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, SIGTERM_SETTLE_MS));
 
         // Edit-on-cancel: if the executor never emitted user-visible output,
         // treat the prompt as never-really-sent — hard-delete the task and
@@ -2156,13 +2161,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           //
           // When the task was hard-deleted, also strip it from session.tasks
           // so downstream consumers (CLI listings, footer pills) don't keep
-          // pointing at a ghost id.
+          // pointing at a ghost id. Re-fetch `session.tasks` right before the
+          // patch — the original snapshot is ~150ms stale by now and a
+          // concurrent queue-drain / callback may have appended a new task id
+          // that we'd otherwise clobber.
           const sessionPatch: Record<string, unknown> = {
             status: SessionStatus.IDLE,
             ready_for_prompt: true,
           };
           if (outcome.kind === 'restored') {
-            sessionPatch.tasks = session.tasks.filter((tid) => tid !== latestTask.task_id);
+            const fresh = await sessionsService.get(id, params);
+            sessionPatch.tasks = fresh.tasks.filter((tid) => tid !== latestTask.task_id);
           }
           await app.service('sessions').patch(id, sessionPatch, params);
         } catch (error) {
