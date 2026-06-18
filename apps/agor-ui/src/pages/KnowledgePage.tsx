@@ -2876,7 +2876,7 @@ export function KnowledgePage({
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 6,
+              gap: token.sizeUnit,
               fontSize: 15,
               cursor: 'pointer',
             }}
