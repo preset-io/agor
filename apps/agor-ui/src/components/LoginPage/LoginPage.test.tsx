@@ -62,6 +62,21 @@ describe('LoginPage external launch redirect', () => {
     );
   });
 
+  it('replaces an existing return_to on the external launcher URL', () => {
+    window.history.replaceState({}, '', '/ui/w/branch123/');
+
+    render(
+      <LoginPage
+        onLogin={vi.fn()}
+        externalLaunchLoginRedirectUrl="https://workspace.example.com/open?return_to=https%3A%2F%2Fevil.example%2F"
+      />
+    );
+
+    const returnLink = screen.getByRole('link', { name: 'Return to workspace' });
+    const href = new URL(returnLink.getAttribute('href') ?? '');
+    expect(href.searchParams.getAll('return_to')).toEqual([currentPath()]);
+  });
+
   it('offers local login as a secondary fallback for configured deployments', () => {
     render(
       <LoginPage

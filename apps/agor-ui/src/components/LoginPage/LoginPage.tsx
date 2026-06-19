@@ -6,7 +6,7 @@
 
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Divider, Form, Input, Space, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { BrandLogo } from '../BrandLogo';
 import { ParticleBackground } from './ParticleBackground';
@@ -54,11 +54,9 @@ export function LoginPage({
   const [showLocalLogin, setShowLocalLogin] = useState(false);
   const { token } = theme.useToken();
   const useExternalLaunch = !!externalLaunchLoginRedirectUrl;
-  const externalLaunchHref = useMemo(
-    () =>
-      externalLaunchLoginRedirectUrl ? addReturnToParam(externalLaunchLoginRedirectUrl) : undefined,
-    [externalLaunchLoginRedirectUrl]
-  );
+  const externalLaunchHref = externalLaunchLoginRedirectUrl
+    ? addReturnToParam(externalLaunchLoginRedirectUrl)
+    : undefined;
   const showLoginForm = !useExternalLaunch || showLocalLogin;
   const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;
 
