@@ -43,8 +43,13 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
   const { onSessionClick } = useAppActions();
   const { sessionById } = useAppLiveData();
 
+  const remoteParentId = session.remote_relationships?.as_target?.find(
+    (relationship) => relationship.relationship_type === 'remote_create'
+  )?.source_session_id;
   const targetId =
-    session.callback_config?.callback_session_id ?? session.genealogy?.parent_session_id;
+    session.callback_config?.callback_session_id ??
+    remoteParentId ??
+    session.genealogy?.parent_session_id;
 
   if (!targetId) return null;
 

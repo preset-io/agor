@@ -1,2 +1,2 @@
 export { CallbackTargetDisplay } from './CallbackTargetDisplay';
-export { CallbackToggleButton } from './CallbackToggleButton';
+export { CallbackToggleButton, RemoteParentButton } from './CallbackToggleButton';
