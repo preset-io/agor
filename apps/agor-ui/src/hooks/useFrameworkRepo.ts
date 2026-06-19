@@ -42,7 +42,7 @@ function findBestFrameworkRepo(repos: Repo[]): Repo | undefined {
 /**
  * Detects the framework repository from a list of repos.
  * Prefers agor-assistant-private over the public repo.
- * Used by AssistantTab, AssistantsTable, and OnboardingWizard.
+ * Used by AssistantTab and OnboardingWizard.
  */
 export function useFrameworkRepo(repos: Repo[]): Repo | undefined {
   return useMemo(() => findBestFrameworkRepo(repos), [repos]);

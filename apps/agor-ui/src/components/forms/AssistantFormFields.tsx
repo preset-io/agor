@@ -17,8 +17,7 @@ export interface AssistantFormFieldsProps {
 }
 
 /**
- * Shared assistant form fields used in both the CreateDialog AssistantTab
- * and the SettingsModal AssistantsTable create modal.
+ * Shared assistant form fields used by the CreateDialog Assistant tab.
  *
  * Renders: Name + icon, assistant board advice Alert, Advanced collapse
  * (Framework Repository, Branch Name, Source Branch).

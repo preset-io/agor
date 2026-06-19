@@ -1,5 +1,3 @@
-import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
-
 export interface AssistantBootstrapPromptInput {
   displayName: string;
   emoji?: string | null;
@@ -21,15 +19,33 @@ export interface AssistantBootstrapPromptContext {
   firstSession: true;
 }
 
-export const ASSISTANT_BOOTSTRAP_PROMPT_TEMPLATE = `### First boot instructions for Agor Assistant
+function formatAssistantBootstrapPrompt(context: AssistantBootstrapPromptContext): string {
+  const lines = [
+    '### First boot instructions for Agor Assistant',
+    '',
+    'Context:',
+    `- Assistant: ${context.assistant.displayName} ${context.assistant.emoji}`,
+  ];
 
-Context:
-- Assistant: {{assistant.displayName}} {{assistant.emoji}}
-{{#if assistant.description}}- Assistant description: {{assistant.description}}
-{{/if}}{{#if user.name}}- User: {{user.name}}{{#if user.email}} <{{user.email}}>{{/if}}
-{{else}}{{#if user.email}}- User email: {{user.email}}
-{{/if}}{{/if}}
-Read BOOTSTRAP.md, then say hello and ask only the next useful questions to shape this assistant.`;
+  if (context.assistant.description) {
+    lines.push(`- Assistant description: ${context.assistant.description}`);
+  }
+
+  if (context.user?.name) {
+    lines.push(
+      `- User: ${context.user.name}${context.user.email ? ` <${context.user.email}>` : ''}`
+    );
+  } else if (context.user?.email) {
+    lines.push(`- User email: ${context.user.email}`);
+  }
+
+  lines.push('');
+  lines.push(
+    'Read BOOTSTRAP.md, then say hello and ask only the next useful questions to shape this assistant.'
+  );
+
+  return lines.join('\n');
+}
 
 export function buildAssistantBootstrapPromptContext({
   displayName,
@@ -62,14 +78,12 @@ export function buildAssistantBootstrapPromptContext({
 /**
  * First prompt for a newly-created Assistant branch.
  *
- * Shared by onboarding and the board plus-button creation flow. The prompt is
- * intentionally a Handlebars template so both flows pass the same assistant
- * identity params through one rendering path.
+ * Shared by onboarding, the board plus-button creation flow, and Settings →
+ * Assistants creation. Keep this deterministic in the browser instead of
+ * using the shared Handlebars renderer: browser-side Handlebars compilation
+ * relies on `new Function`, which can violate CSP. Rich user-authored
+ * template rendering should go through the daemon `/templates` service.
  */
 export function buildAssistantBootstrapPrompt(input: AssistantBootstrapPromptInput): string {
-  return renderTemplate(
-    ASSISTANT_BOOTSTRAP_PROMPT_TEMPLATE,
-    buildAssistantBootstrapPromptContext(input) as unknown as Record<string, unknown>,
-    { onError: 'raw' }
-  );
+  return formatAssistantBootstrapPrompt(buildAssistantBootstrapPromptContext(input));
 }

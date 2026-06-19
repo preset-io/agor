@@ -1452,6 +1452,13 @@ export const App: React.FC<AppProps> = ({
               artifactById={artifactById}
               onUpdateArtifact={onUpdateArtifact}
               onDeleteArtifact={onDeleteArtifact}
+              onCreateAssistant={() => {
+                closeSettings();
+                onSettingsClose?.();
+                setNewBranchDefaultPosition(null);
+                setCreateDialogDefaultTab('assistant');
+                setCreateDialogOpen(true);
+              }}
               branchStorageConfig={branchStorageConfig}
             />
             {sessionSettingsSession && (

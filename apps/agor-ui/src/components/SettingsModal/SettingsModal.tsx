@@ -118,6 +118,7 @@ export interface SettingsModalProps {
   artifactById?: Map<string, Artifact>;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
+  onCreateAssistant?: () => void;
   branchStorageConfig?: BranchStorageConfig;
 }
 
@@ -164,6 +165,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   artifactById = new Map(),
   onUpdateArtifact,
   onDeleteArtifact,
+  onCreateAssistant,
   branchStorageConfig,
 }) => {
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
@@ -401,12 +403,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             boardById={boardById}
             sessionsByBranch={sessionsByBranch}
             userById={userById}
-            client={client}
             onArchiveOrDelete={onArchiveOrDeleteBranch}
             onRowClick={handleBranchRowClick}
-            onCreateBranch={onCreateBranch}
-            onUpdateBranch={onUpdateBranch}
-            onCreateRepo={onCreateRepo}
+            onCreateAssistant={onCreateAssistant}
             onClose={onClose}
           />
         );

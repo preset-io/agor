@@ -4,8 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { slugify } from '@/utils/repoSlug';
 
 /**
- * Shared assistant form logic used by both CreateDialog's AssistantTab
- * and SettingsModal's AssistantsTable create modal.
+ * Shared assistant form logic used by CreateDialog's Assistant tab.
  *
  * Encapsulates: form instance, validation, display-name-to-branch-name
  * auto-generation, framework repo auto-select, and custom repo tracking.

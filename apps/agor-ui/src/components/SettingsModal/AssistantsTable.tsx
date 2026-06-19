@@ -1,37 +1,11 @@
-import type {
-  AgorClient,
-  Board,
-  Branch,
-  CreateRepoRequest,
-  Repo,
-  Session,
-  User,
-} from '@agor-live/client';
+import type { Board, Branch, Repo, Session, User } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import {
-  Button,
-  Empty,
-  Form,
-  Input,
-  Modal,
-  Popover,
-  Space,
-  Table,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Button, Empty, Input, Popover, Space, Table, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
-import { useAssistantForm } from '@/hooks/useAssistantForm';
-import { useEnsureFrameworkRepo } from '@/hooks/useEnsureFrameworkRepo';
-import { createAssistantBranch } from '@/utils/assistantCreation';
-import { mapToArray } from '@/utils/mapHelpers';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
-import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
-import { AssistantFormFields } from '../forms/AssistantFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
@@ -42,7 +16,6 @@ interface AssistantsTableProps {
   boardById: Map<string, Board>;
   sessionsByBranch: Map<string, Session[]>;
   userById: Map<string, User>;
-  client: AgorClient | null;
   onArchiveOrDelete?: (
     branchId: string,
     options: {
@@ -51,19 +24,7 @@ interface AssistantsTableProps {
     }
   ) => void;
   onRowClick?: (branch: Branch) => void;
-  onCreateBranch?: (
-    repoId: string,
-    data: {
-      name: string;
-      ref: string;
-      createBranch: boolean;
-      sourceBranch: string;
-      pullLatest: boolean;
-      boardId?: string;
-    }
-  ) => Promise<Branch | null>;
-  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
-  onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
+  onCreateAssistant?: () => void;
   /** Close the parent Settings modal so the canvas isn't obscured by
    *  it after recenter. Wired by SettingsModal. */
   onClose?: () => void;
@@ -75,16 +36,11 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   boardById,
   sessionsByBranch,
   userById,
-  client,
   onArchiveOrDelete,
   onRowClick,
-  onCreateBranch,
-  onUpdateBranch,
-  onCreateRepo,
+  onCreateAssistant,
   onClose,
 }) => {
-  const repos = mapToArray(repoById);
-
   // Assistants ARE branches (just branches flagged via
   // `custom_context.assistant`), so navigation reuses the `/w/<short>/`
   // URL via `goToBranch` — no separate `/assistant/<short>/` route.
@@ -104,82 +60,10 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   );
   const { token } = theme.useToken();
 
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-
-  // Only auto-clone the framework repo when the create modal is open,
-  // so merely visiting the Assistants settings tab doesn't trigger a clone.
-  const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo, {
-    enabled: createModalOpen,
-  });
-  const {
-    form,
-    isFormValid,
-    customRepoSelected,
-    setCustomRepoSelected,
-    validateForm,
-    handleDisplayNameChange,
-    resetForm,
-  } = useAssistantForm(frameworkRepo);
-  const [creating, setCreating] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
-
-  const handleCreate = async () => {
-    try {
-      const values = await form.validateFields();
-      setCreating(true);
-
-      const repoId = values.repoId || frameworkRepo?.repo_id;
-      if (!repoId) {
-        form.setFields([
-          {
-            name: 'repoId',
-            errors: [
-              'Framework repository is still being registered. Please wait a moment and try again.',
-            ],
-          },
-        ]);
-        return;
-      }
-
-      if (!onCreateBranch || !onUpdateBranch) return;
-
-      const branch = await createAssistantBranch(
-        {
-          displayName: values.displayName.trim(),
-          description: values.description || undefined,
-          emoji: values.emoji || undefined,
-          repoId,
-          branchName: values.name || undefined,
-          sourceBranch: values.sourceBranch || undefined,
-        },
-        { client, repoById, onCreateBranch, onUpdateBranch }
-      );
-
-      setCreateModalOpen(false);
-      resetForm();
-
-      // Match the recenter-from-row behavior: close the Settings modal
-      // so the canvas isn't obscured, then push `/w/<short>/`. Cross-
-      // board switching (when the assistant landed on a freshly created
-      // board) is handled by useUrlState's URL→state effect.
-      if (branch) {
-        onClose?.();
-        navigation.goToBranch(branch.branch_id);
-      }
-    } catch (error) {
-      console.error('Assistant creation failed:', error);
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleCancel = () => {
-    setCreateModalOpen(false);
-    resetForm();
-  };
 
   const assistants = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -363,8 +247,8 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => setCreateModalOpen(true)}
-            disabled={!frameworkRepo && repos.length === 0}
+            onClick={onCreateAssistant}
+            disabled={!onCreateAssistant}
           >
             Create Assistant
           </Button>
@@ -404,33 +288,6 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           })}
         />
       )}
-
-      {/* Create Assistant Modal */}
-      <Modal
-        title="Create Assistant"
-        open={createModalOpen}
-        onOk={handleCreate}
-        onCancel={handleCancel}
-        okText="Create"
-        okButtonProps={{ disabled: !isFormValid, loading: creating }}
-      >
-        <Form
-          form={form}
-          layout="vertical"
-          onFieldsChange={validateForm}
-          initialValues={{ sourceBranch: 'main' }}
-        >
-          <AssistantFormFields
-            form={form}
-            repos={repos}
-            frameworkRepo={frameworkRepo}
-            isCloning={isCloning}
-            onDisplayNameChange={handleDisplayNameChange}
-            customRepoSelected={customRepoSelected}
-            onCustomRepoChange={setCustomRepoSelected}
-          />
-        </Form>
-      </Modal>
 
       {/* Archive/Delete Modal */}
       {selectedBranch && (

@@ -34,8 +34,7 @@ export interface AssistantCreationDeps {
 }
 
 /**
- * Shared assistant creation logic used by both the CreateDialog (via App.tsx)
- * and the SettingsModal AssistantsTable.
+ * Shared assistant creation logic used by CreateDialog (via App.tsx).
  *
  * Flow: resolve repo → create board → create branch → tag branch with
  * assistant metadata → designate the branch as the board primary.
