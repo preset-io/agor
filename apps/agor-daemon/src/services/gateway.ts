@@ -346,10 +346,10 @@ export class GatewayService {
    * Useful for giving the user visibility into what's happening.
    */
   private sendDebugMessage(channel: GatewayChannel, threadId: string, text: string): void {
-    // Skip debug messages for GitHub channels — the "Processing..." comment
-    // already serves as the status indicator and gets edited with the final response.
-    // Posting debug messages as separate comments clutters the issue thread.
-    if (channel.channel_type === 'github') return;
+    // Skip debug messages for GitHub and Slack channels. GitHub has its
+    // editable Processing comment; Slack now uses native assistant status and
+    // stream chrome, so extra content rows make the thread noisy.
+    if (channel.channel_type === 'github' || channel.channel_type === 'slack') return;
 
     if (!hasConnector(channel.channel_type as ChannelType)) return;
     try {
@@ -813,6 +813,50 @@ export class GatewayService {
     }
   }
 
+  private async ensureSlackTaskStream(req: {
+    taskId: string | undefined;
+    threadId: string;
+    connector: GatewayConnector;
+    metadata: Record<string, unknown>;
+  }): Promise<void> {
+    if (!req.taskId || this.slackStreamsByTask.has(req.taskId)) return;
+
+    const streamConnector = req.connector as GatewayConnector & {
+      startStream?: (startReq: {
+        threadId: string;
+        text?: string;
+        recipientUserId?: string;
+        recipientTeamId?: string;
+        taskDisplayMode?: 'plan' | 'timeline' | 'dense';
+      }) => Promise<string>;
+    };
+    if (!streamConnector.startStream) return;
+
+    const recipientUserId =
+      typeof req.metadata.slack_user_id === 'string' ? req.metadata.slack_user_id : undefined;
+    const recipientTeamId =
+      typeof req.metadata.slack_team_id === 'string' ? req.metadata.slack_team_id : undefined;
+
+    const ts = await streamConnector.startStream({
+      threadId: req.threadId,
+      text: ' ',
+      recipientUserId,
+      recipientTeamId,
+      taskDisplayMode: 'plan',
+    });
+    this.slackStreamsByTask.set(req.taskId, {
+      threadId: req.threadId,
+      ts,
+      hasContent: false,
+      taskId: req.taskId,
+    });
+
+    const todos = this.parseGatewayTodos(req.metadata.slack_status_todos);
+    if (todos.length > 0) {
+      await this.appendSlackTodoPlanToStream(req.taskId, req.connector, todos);
+    }
+  }
+
   private async stopSlackTaskStream(
     taskId: string | undefined,
     connector: GatewayConnector
@@ -909,6 +953,19 @@ export class GatewayService {
 
       if (connector.setThreadStatus) {
         try {
+          if (!isTerminal && data.state === 'working') {
+            try {
+              await this.ensureSlackTaskStream({
+                taskId: data.task_id,
+                threadId: mapping.thread_id,
+                connector,
+                metadata: metadataWithStart,
+              });
+            } catch (error) {
+              console.warn('[gateway] Failed to start Slack task stream:', error);
+            }
+          }
+
           const loadingMessage = this.buildSlackAssistantLoadingMessage(data, metadataWithStart);
           await connector.setThreadStatus({
             threadId: mapping.thread_id,
@@ -1075,7 +1132,7 @@ export class GatewayService {
             text: chunk,
             recipientUserId,
             recipientTeamId,
-            ...(todos.length > 0 ? { taskDisplayMode: 'plan' as const } : {}),
+            taskDisplayMode: 'plan',
           });
           this.slackStreamsByTask.set(taskKey, {
             threadId: mapping.thread_id,
