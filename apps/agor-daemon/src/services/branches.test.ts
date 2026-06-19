@@ -10,7 +10,7 @@ import {
 import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
-import { spawnExecutor } from '../utils/spawn-executor.js';
+import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
 vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
@@ -18,6 +18,7 @@ vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
   return {
     ...actual,
     spawnExecutor: vi.fn(),
+    runExecutorCommand: vi.fn(),
     getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   };
 });
@@ -172,9 +173,11 @@ function createServiceHarness() {
 }
 
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
+const mockedRunExecutorCommand = vi.mocked(runExecutorCommand);
 
 beforeEach(() => {
   mockedSpawnExecutor.mockReset();
+  mockedRunExecutorCommand.mockReset();
 });
 
 function createFindHarness(opts: {
@@ -292,6 +295,64 @@ describe('BranchesService environment start async behavior', () => {
           access_urls: [{ name: 'App', url: 'http://localhost:3000' }],
         }),
       ])
+    );
+  });
+
+  it('uses a reusable branch-scoped token when fetching shell logs via executor', async () => {
+    const { service } = createServiceHarness();
+    const app = (service as unknown as { app: Application }).app as unknown as {
+      sessionTokenService: { generateToken: ReturnType<typeof vi.fn> };
+    };
+    const branch = {
+      branch_id: 'wt-logs' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-logs',
+      path: '/tmp/wt-logs',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      logs_command: 'docker compose logs --tail=100',
+    };
+
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+      kind: 'shell',
+      command: branch.logs_command,
+    } as never);
+    vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+      env: { PATH: '/usr/bin:/bin' },
+      asUser: undefined,
+    } as never);
+    mockedRunExecutorCommand.mockResolvedValue({
+      success: true,
+      data: { logs: 'line 1\nline 2', timestamp: '2026-06-19T00:00:00.000Z' },
+    });
+
+    await expect(service.getLogs(branch.branch_id)).resolves.toMatchObject({
+      logs: 'line 1\nline 2',
+    });
+
+    expect(app.sessionTokenService.generateToken).toHaveBeenCalledWith(
+      'environment-logs',
+      branch.created_by,
+      { branchId: branch.branch_id, maxUses: -1 }
+    );
+    expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'environment.logs',
+        sessionToken: 'executor-token',
+        daemonUrl: 'http://daemon.test',
+        env: { PATH: '/usr/bin:/bin' },
+        params: expect.objectContaining({
+          branchId: branch.branch_id,
+          branchPath: branch.path,
+          logsCommand: branch.logs_command,
+        }),
+      }),
+      expect.objectContaining({
+        logPrefix: `[Environment.logs ${branch.name}]`,
+        timeoutMs: expect.any(Number),
+      })
     );
   });
 });

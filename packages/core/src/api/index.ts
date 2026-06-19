@@ -816,7 +816,11 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods('initializeUnixGroup', 'ensureAssistantKnowledgeNamespace');
+    branchesService.methods(
+      'updateEnvironment',
+      'initializeUnixGroup',
+      'ensureAssistantKnowledgeNamespace'
+    );
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }

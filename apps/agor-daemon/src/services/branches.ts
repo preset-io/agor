@@ -377,7 +377,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const sessionToken = await appWithToken.sessionTokenService?.generateToken(
       'environment-logs',
       userId,
-      { branchId: branch.branch_id, maxUses: 1 }
+      { branchId: branch.branch_id, maxUses: -1 }
     );
     if (!sessionToken) {
       throw new Error('Session token service unavailable; cannot fetch environment logs');

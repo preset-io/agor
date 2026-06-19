@@ -573,12 +573,13 @@ describe('createClient', () => {
       expect(reposService.methods).toHaveBeenCalledWith('initializeUnixGroup');
     });
 
-    it('registers branches.initializeUnixGroup custom method on client', () => {
+    it('registers branches custom methods on client', () => {
       const client = createClient();
       const branchesService = client.service('branches') as unknown as {
         methods: MockedFunction<(...names: string[]) => unknown>;
       };
       expect(branchesService.methods).toHaveBeenCalledWith(
+        'updateEnvironment',
         'initializeUnixGroup',
         'ensureAssistantKnowledgeNamespace'
       );
