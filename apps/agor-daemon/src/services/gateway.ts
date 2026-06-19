@@ -497,33 +497,27 @@ export class GatewayService {
     };
 
     const lines = todos.slice(0, 12).map((todo) => {
-      const label =
-        todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content;
-      return `${iconForStatus(todo.status)} ${this.truncateSlackInline(label, 120)}`;
+      const content = this.truncateSlackInline(todo.content, 90);
+      const activeForm =
+        todo.status === 'in_progress' &&
+        todo.activeForm &&
+        todo.activeForm.trim() !== todo.content.trim()
+          ? ` — ${this.truncateSlackInline(todo.activeForm, 50)}`
+          : '';
+      return `${iconForStatus(todo.status)} ${content}${activeForm}`;
     });
 
     if (todos.length > lines.length) {
       lines.push(`… ${todos.length - lines.length} more`);
     }
 
-    return [``, `*Plan*`, ...lines].join('\n');
+    return [`*Plan*`, ...lines].join('\n');
   }
 
   private buildSlackProgressText(
     data: GatewayProgressData,
     existingMetadata: Record<string, unknown>
   ): string {
-    const now = Date.now();
-    const startedAt =
-      typeof existingMetadata.slack_status_started_at === 'string'
-        ? Date.parse(existingMetadata.slack_status_started_at)
-        : now;
-    const elapsedSeconds = Math.max(0, Math.floor((now - startedAt) / 1000));
-    const elapsed =
-      elapsedSeconds < 60
-        ? `${elapsedSeconds}s`
-        : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
-
     if (data.state === 'queued') {
       const position =
         typeof data.queue_position === 'number' ? ` at position ${data.queue_position}` : '';
@@ -533,7 +527,7 @@ export class GatewayService {
     if (data.state === 'done') {
       const todos = this.parseGatewayTodos(existingMetadata.slack_status_todos);
       const plan = this.formatSlackTodoPlan(todos);
-      return `✅ Done.${plan}`;
+      return plan;
     }
 
     if (data.state === 'failed') {
@@ -555,7 +549,8 @@ export class GatewayService {
 
     const todos = this.parseGatewayTodos(existingMetadata.slack_status_todos);
     const plan = this.formatSlackTodoPlan(todos);
-    return `⏳ Still working (${elapsed}) · ${latestToolSummary}${plan}`;
+    const progress = `⏳ Still working · ${latestToolSummary}`;
+    return plan ? `${plan}\n${progress}` : progress;
   }
 
   private stripSlackProgressMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
@@ -586,19 +581,11 @@ export class GatewayService {
       );
     }
 
-    const [headline, ...details] = statusText.split('\n');
-    const detailText = details.join('\n').trim();
-    const blocks: unknown[] = [
-      {
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: markdownToMrkdwn(headline),
-          },
-        ],
-      },
-    ];
+    const lines = statusText.split('\n');
+    const lastLine = lines.at(-1)?.trim();
+    const progressLine = lastLine?.startsWith('⏳') ? lines.pop() : undefined;
+    const detailText = lines.join('\n').trim();
+    const blocks: unknown[] = [];
 
     if (detailText) {
       blocks.push({
@@ -607,6 +594,30 @@ export class GatewayService {
           type: 'mrkdwn',
           text: markdownToMrkdwn(detailText),
         },
+      });
+    }
+
+    if (progressLine) {
+      blocks.push({
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: markdownToMrkdwn(progressLine),
+          },
+        ],
+      });
+    }
+
+    if (blocks.length === 0) {
+      blocks.push({
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: markdownToMrkdwn(statusText || 'Done.'),
+          },
+        ],
       });
     }
 
