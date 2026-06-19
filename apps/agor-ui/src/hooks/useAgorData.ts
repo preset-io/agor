@@ -969,10 +969,11 @@ export function useAgorData(
         };
 
         if (isArchived) {
-          if (oldBranchId) {
-            removeFromBranch(oldBranchId);
+          for (const [branchId, bucket] of next) {
+            if (bucket.some((item) => item.session_id === session.session_id)) {
+              removeFromBranch(branchId);
+            }
           }
-          removeFromBranch(newBranchId);
           return changed ? next : prev;
         }
 
@@ -1005,6 +1006,30 @@ export function useAgorData(
         const updatedSessions = [...branchSessions];
         updatedSessions[index] = session;
         next.set(newBranchId, updatedSessions);
+
+        // Also update any remote/surrogate projections of this session that
+        // live in source-branch buckets. Preserve their local tree placement
+        // while refreshing status/callback_config/etc. from the canonical row.
+        for (const [branchId, bucket] of next) {
+          if (branchId === newBranchId) continue;
+
+          let bucketChanged = false;
+          const refreshedBucket = bucket.map((item) => {
+            if (item.session_id !== session.session_id) return item;
+            bucketChanged = true;
+            return {
+              ...session,
+              branch_id: item.branch_id,
+              genealogy: item.genealogy,
+              remote_surrogate: item.remote_surrogate,
+            };
+          });
+
+          if (bucketChanged) {
+            next.set(branchId, refreshedBucket);
+          }
+        }
+
         return next;
       });
     };

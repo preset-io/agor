@@ -5,9 +5,11 @@ import {
 } from '@agor-live/client';
 import {
   ClockCircleOutlined,
+  DisconnectOutlined,
   ExportOutlined,
   EyeOutlined,
   MessageOutlined,
+  PhoneOutlined,
   PlusOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
@@ -83,6 +85,12 @@ const SessionItemWithActions: React.FC<{
   onArchive: (sessionId: string, e: React.MouseEvent) => void;
   onSettings?: (sessionId: string, e: React.MouseEvent) => void;
   onTogglePeek?: (sessionId: string, e: React.MouseEvent) => void;
+  onToggleCallback?: (sessionId: string, e: React.MouseEvent) => void;
+  callbackToggle?: {
+    enabled: boolean;
+    disabled?: boolean;
+    tooltip: string;
+  };
   children: React.ReactNode;
 }> = ({
   sessionId,
@@ -91,6 +99,8 @@ const SessionItemWithActions: React.FC<{
   onArchive,
   onSettings,
   onTogglePeek,
+  onToggleCallback,
+  callbackToggle,
   children,
 }) => {
   const [hovered, setHovered] = useState(false);
@@ -157,6 +167,22 @@ const SessionItemWithActions: React.FC<{
             />
           </Tooltip>
         )}
+        {onToggleCallback && callbackToggle && (
+          <Tooltip title={callbackToggle.tooltip}>
+            <Button
+              type="text"
+              size="small"
+              disabled={callbackToggle.disabled}
+              icon={callbackToggle.enabled ? <PhoneOutlined /> : <DisconnectOutlined />}
+              onClick={(e) => onToggleCallback(sessionId, e)}
+              style={{
+                ...buttonStyle,
+                color: callbackToggle.enabled ? token.colorPrimary : token.colorTextTertiary,
+                background: callbackToggle.enabled ? token.colorPrimaryBg : buttonStyle.background,
+              }}
+            />
+          </Tooltip>
+        )}
         <ArchiveActionButton
           tooltip="Archive session"
           loading={isArchiving}
@@ -218,6 +244,82 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       onTogglePeekSession?.(sessionId);
     },
     [onTogglePeekSession]
+  );
+
+  const getCallbackRelationship = useCallback((session: Session) => {
+    return (
+      session.remote_surrogate?.relationship ??
+      session.remote_relationships?.as_target?.find(
+        (relationship) => relationship.relationship_type === 'remote_create'
+      )
+    );
+  }, []);
+
+  const getCallbackTargetId = useCallback(
+    (session: Session): string | undefined => {
+      const relationship = getCallbackRelationship(session);
+      return (
+        relationship?.callback_session_id ??
+        session.callback_config?.callback_session_id ??
+        session.genealogy?.parent_session_id ??
+        session.remote_surrogate?.source_session_id
+      );
+    },
+    [getCallbackRelationship]
+  );
+
+  const getCallbackToggle = useCallback(
+    (session: Session) => {
+      const targetId = getCallbackTargetId(session);
+      if (!targetId) return null;
+
+      const relationship = getCallbackRelationship(session);
+      const enabled =
+        session.callback_config?.enabled !== undefined
+          ? session.callback_config.enabled !== false
+          : (relationship?.callback_enabled ?? true);
+
+      return {
+        enabled,
+        disabled: connectionDisabled || !client,
+        tooltip: enabled
+          ? 'Callbacks linked — click to stop callback notifications while keeping the relationship'
+          : 'Callbacks unlinked — click to resume callback notifications for this relationship',
+      };
+    },
+    [client, connectionDisabled, getCallbackRelationship, getCallbackTargetId]
+  );
+
+  const handleToggleCallback = useCallback(
+    async (sessionId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!client) return;
+
+      const session = sessions.find((candidate) => candidate.session_id === sessionId);
+      if (!session) return;
+
+      const targetId = getCallbackTargetId(session);
+      if (!targetId) return;
+
+      const toggle = getCallbackToggle(session);
+      const nextEnabled = !(toggle?.enabled ?? false);
+
+      try {
+        await client.service('sessions').patch(session.session_id, {
+          callback_config: {
+            ...(session.callback_config ?? {}),
+            callback_session_id: targetId as SessionID,
+            enabled: nextEnabled,
+          },
+        });
+        showSuccess(nextEnabled ? 'Callbacks linked' : 'Callbacks unlinked');
+      } catch (error) {
+        showError(
+          `Failed to update callbacks: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    },
+    [client, getCallbackTargetId, getCallbackToggle, sessions, showError, showSuccess]
   );
 
   const handleForkSpawnConfirm = async (config: string | Partial<SpawnConfig>) => {
@@ -390,6 +492,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   const renderFlatSessionRow = (session: Session, query = '') => {
     const isActive = session.status === 'running' || session.status === 'stopping';
+    const callbackToggle = getCallbackToggle(session);
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
     const descriptionSnippet =
       query && session.title && session.description
@@ -408,6 +511,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         sessionId={session.session_id}
         isArchiving={archivingSessionIds.has(session.session_id)}
         onArchive={handleArchiveSession}
+        callbackToggle={callbackToggle ?? undefined}
+        onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
         onSettings={
           onOpenSessionSettings
             ? (id, e) => {
@@ -463,6 +568,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     const session = node.session;
     const isActive = session.status === 'running' || session.status === 'stopping';
     const isRemoteSurrogate = node.relationshipType === 'remote';
+    const callbackToggle = getCallbackToggle(session);
 
     return (
       <SessionItemWithActions
@@ -471,6 +577,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         isPeeked={peekedIds.has(session.session_id)}
         onArchive={handleArchiveSession}
         onTogglePeek={onTogglePeekSession ? handleTogglePeekSession : undefined}
+        callbackToggle={callbackToggle ?? undefined}
+        onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
         onSettings={
           onOpenSessionSettings
             ? (id, e) => {
@@ -588,6 +696,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {scheduledSessions.map((session) => {
         const isActive = session.status === 'running' || session.status === 'stopping';
+        const callbackToggle = getCallbackToggle(session);
         return (
           <SessionItemWithActions
             key={session.session_id}
@@ -596,6 +705,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             isPeeked={peekedIds.has(session.session_id)}
             onArchive={handleArchiveSession}
             onTogglePeek={onTogglePeekSession ? handleTogglePeekSession : undefined}
+            callbackToggle={callbackToggle ?? undefined}
+            onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
             onSettings={
               onOpenSessionSettings
                 ? (id, e) => {
@@ -651,6 +762,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       {gatewaySessions.map((session) => {
         const gatewaySource = getGatewaySource(session);
         const isActive = session.status === 'running' || session.status === 'stopping';
+        const callbackToggle = getCallbackToggle(session);
 
         return (
           <SessionItemWithActions
@@ -660,6 +772,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             isPeeked={peekedIds.has(session.session_id)}
             onArchive={handleArchiveSession}
             onTogglePeek={onTogglePeekSession ? handleTogglePeekSession : undefined}
+            callbackToggle={callbackToggle ?? undefined}
+            onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
             onSettings={
               onOpenSessionSettings
                 ? (id, e) => {
