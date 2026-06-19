@@ -109,6 +109,7 @@ interface SlackStreamState {
   threadId: string;
   ts: string;
   hasContent: boolean;
+  taskId?: string;
 }
 
 /**
@@ -311,6 +312,8 @@ export class GatewayService {
   private slackProgressQueues = new Map<string, Promise<void>>();
   private slackStreamsByMessage = new Map<string, SlackStreamState>();
   private slackStreamedMessageIds = new Set<string>();
+  private slackStreamedTaskIds = new Set<string>();
+  private slackStreamTaskByMessage = new Map<string, string>();
   private static SLACK_PROGRESS_MIN_UPDATE_MS = 2500;
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
@@ -675,11 +678,24 @@ export class GatewayService {
     return this.slackStreamedMessageIds.has(messageId);
   }
 
+  wasTaskStreamedToSlack(taskId?: string): boolean {
+    return !!taskId && this.slackStreamedTaskIds.has(taskId);
+  }
+
   private markMessageStreamedToSlack(messageId: string): void {
     this.slackStreamedMessageIds.add(messageId);
     if (this.slackStreamedMessageIds.size > GatewayService.SLACK_STREAMED_MESSAGE_CACHE_MAX) {
       const oldest = this.slackStreamedMessageIds.values().next().value;
       if (oldest) this.slackStreamedMessageIds.delete(oldest);
+    }
+  }
+
+  private markTaskStreamedToSlack(taskId?: string): void {
+    if (!taskId) return;
+    this.slackStreamedTaskIds.add(taskId);
+    if (this.slackStreamedTaskIds.size > GatewayService.SLACK_STREAMED_MESSAGE_CACHE_MAX) {
+      const oldest = this.slackStreamedTaskIds.values().next().value;
+      if (oldest) this.slackStreamedTaskIds.delete(oldest);
     }
   }
 
@@ -755,7 +771,7 @@ export class GatewayService {
             threadId: mapping.thread_id,
             status: this.buildSlackAssistantStatus(data, metadataWithStart),
             loadingMessages:
-              data.state === 'working'
+              data.state === 'working' && (isNewTask || isRestartingAfterTerminal)
                 ? ['Reading context…', 'Using tools…', 'Writing the response…']
                 : undefined,
             iconEmoji: ':hourglass_flowing_sand:',
@@ -849,6 +865,7 @@ export class GatewayService {
 
     const sessionId = typeof data.session_id === 'string' ? data.session_id : undefined;
     const messageId = typeof data.message_id === 'string' ? data.message_id : undefined;
+    const taskId = typeof data.task_id === 'string' ? data.task_id : undefined;
     if (!sessionId || !messageId) return;
 
     const mapping = await this.threadMapRepo.findBySession(sessionId);
@@ -891,6 +908,7 @@ export class GatewayService {
         typeof metadata.slack_team_id === 'string' ? metadata.slack_team_id : undefined;
 
       if (event === 'streaming:start') {
+        if (taskId) this.slackStreamTaskByMessage.set(messageId, taskId);
         return;
       }
 
@@ -909,6 +927,7 @@ export class GatewayService {
           threadId: mapping.thread_id,
           ts,
           hasContent: true,
+          taskId: taskId ?? this.slackStreamTaskByMessage.get(messageId),
         });
         return;
       }
@@ -935,11 +954,16 @@ export class GatewayService {
         });
         if (event === 'streaming:end' && stream.hasContent) {
           this.markMessageStreamedToSlack(messageId);
+          this.markTaskStreamedToSlack(
+            stream.taskId ?? this.slackStreamTaskByMessage.get(messageId)
+          );
         }
         this.slackStreamsByMessage.delete(messageId);
+        this.slackStreamTaskByMessage.delete(messageId);
       }
     } catch (error) {
       this.slackStreamsByMessage.delete(messageId);
+      this.slackStreamTaskByMessage.delete(messageId);
       console.warn('[gateway] Failed to mirror message stream to Slack:', error);
     }
   }
