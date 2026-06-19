@@ -1,6 +1,7 @@
 import type { ChannelType } from '../types/gateway';
 import type { SessionID } from '../types/id';
 import { shortId } from '../types/id';
+import type { OutboundPayload } from './connector';
 import { markdownToMrkdwn } from './connectors/slack';
 
 const GATEWAY_SYSTEM_PREFIX = 'Agor:';
@@ -56,4 +57,37 @@ export function formatGatewaySystemMessage(channelType: ChannelType, text: strin
   }
 
   return `${GATEWAY_SYSTEM_PREFIX} ${text}`;
+}
+
+/**
+ * Format gateway lifecycle/debug messages as an outbound payload.
+ *
+ * Slack renders these as a muted `context` block so transient lifecycle
+ * notices match the bottom progress/status row instead of competing with the
+ * user's prompt or the agent's final answer.
+ */
+export function formatGatewaySystemPayload(
+  channelType: ChannelType,
+  text: string
+): OutboundPayload {
+  const formatted = formatGatewaySystemMessage(channelType, text);
+
+  if (channelType !== 'slack') {
+    return { text: formatted };
+  }
+
+  return {
+    text: formatted,
+    blocks: [
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: formatted,
+          },
+        ],
+      },
+    ],
+  };
 }

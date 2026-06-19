@@ -27,7 +27,7 @@ import {
   formatGatewayContext,
   formatGatewayFollowUpRoutingMessage,
   formatGatewaySessionCreatedMessage,
-  formatGatewaySystemMessage,
+  formatGatewaySystemPayload,
   getConnector,
   hasConnector,
   markdownToMrkdwn,
@@ -354,7 +354,7 @@ export class GatewayService {
       connector
         .sendMessage({
           threadId,
-          text: formatGatewaySystemMessage(channel.channel_type as ChannelType, text),
+          ...formatGatewaySystemPayload(channel.channel_type as ChannelType, text),
         })
         .catch((err) => console.warn('[gateway] Debug message failed:', err));
     } catch {

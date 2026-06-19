@@ -22,4 +22,5 @@ export {
   formatGatewayMarkdownSessionReference,
   formatGatewaySessionCreatedMessage,
   formatGatewaySystemMessage,
+  formatGatewaySystemPayload,
 } from './system-message';
