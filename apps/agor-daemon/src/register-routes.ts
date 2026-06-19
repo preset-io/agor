@@ -170,6 +170,10 @@ interface RouteParams extends Params {
   user?: User;
 }
 
+function isServiceAccountRoute(params: RouteParams): boolean {
+  return (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
+}
+
 /**
  * Type guard to check if result is paginated
  */
@@ -654,10 +658,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) {
         app.service('messages').emit(data.event, data.data);
         if (
-          data.event === 'streaming:start' ||
-          data.event === 'streaming:chunk' ||
-          data.event === 'streaming:end' ||
-          data.event === 'streaming:error'
+          isServiceAccountRoute(params) &&
+          (data.event === 'streaming:start' ||
+            data.event === 'streaming:chunk' ||
+            data.event === 'streaming:end' ||
+            data.event === 'streaming:error')
         ) {
           void (app.service('gateway') as unknown as GatewayService).handleMessageStreamingEvent(
             data.event,
@@ -684,9 +689,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         },
         params: RouteParams
       ) {
-        const _ = params;
         app.service('tasks').emit(data.event, data.data);
-        if (data.event === 'tool:start') {
+        if (isServiceAccountRoute(params) && data.event === 'tool:start') {
           const sessionId =
             typeof data.data.session_id === 'string' ? data.data.session_id : undefined;
           const toolName =

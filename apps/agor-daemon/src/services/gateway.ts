@@ -1021,7 +1021,6 @@ export class GatewayService {
     if (event === 'streaming:start') {
       if (taskId) {
         this.slackStreamTaskByMessage.set(messageId, taskId);
-        this.markTaskStreamedToSlack(taskId);
       }
       return;
     }
