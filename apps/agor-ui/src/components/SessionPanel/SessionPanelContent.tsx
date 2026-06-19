@@ -20,7 +20,6 @@ import { ConversationView } from '../ConversationView';
 import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminal';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 import { IssuePill, PullRequestPill } from '../Pill';
-import { ChildSessionsSection } from './ChildSessionsSection';
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;
@@ -307,9 +306,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             }
           />
         </div>
-
-        {/* Child Sessions - sessions spawned or forked from this session */}
-        <ChildSessionsSection session={session} />
 
         {/* Queued Tasks Drawer - Above Footer.
             Reads tasks (status='queued') instead of messages now that the queue
