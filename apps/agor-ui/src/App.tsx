@@ -72,13 +72,10 @@ interface PendingEnvironmentToast {
   requestedAt: number;
 }
 
-const ENV_ACTION_COPY: Record<
-  EnvironmentAction,
-  { present: string; past: string; gerund: string }
-> = {
-  start: { present: 'start', past: 'started', gerund: 'Starting' },
-  stop: { present: 'stop', past: 'stopped', gerund: 'Stopping' },
-  nuke: { present: 'nuke', past: 'nuked', gerund: 'Nuking' },
+const ENV_ACTION_COPY: Record<EnvironmentAction, { present: string; gerund: string }> = {
+  start: { present: 'start', gerund: 'Starting' },
+  stop: { present: 'stop', gerund: 'Stopping' },
+  nuke: { present: 'nuke', gerund: 'Nuking' },
 };
 
 const loadedRouteModuleKeys = new Set<RouteModuleKey>();
@@ -289,11 +286,13 @@ function AppContent() {
 
       const copy = ENV_ACTION_COPY[pending.action];
       if (lastCommand.status === 'succeeded') {
-        showSuccess(`Environment ${copy.past}`, { key: pending.key });
+        showSuccess(`Environment ${copy.present} command executed successfully`, {
+          key: pending.key,
+        });
         pendingEnvironmentToastsRef.current.delete(branch.branch_id);
       } else if (lastCommand.status === 'failed') {
         const detail = lastCommand.message ? `: ${lastCommand.message}` : '';
-        showError(`Environment ${copy.present} failed${detail}`, { key: pending.key });
+        showError(`Environment ${copy.present} command failed${detail}`, { key: pending.key });
         pendingEnvironmentToastsRef.current.delete(branch.branch_id);
       }
     };
