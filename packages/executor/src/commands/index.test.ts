@@ -4,10 +4,10 @@
 
 import { describe, expect, it } from 'vitest';
 import type {
+  EnvironmentLifecyclePayload,
   GitBranchAddPayload,
   GitBranchRemovePayload,
   GitClonePayload,
-  EnvironmentLifecyclePayload,
   PromptPayload,
   ZellijAttachPayload,
 } from '../payload-types.js';
