@@ -50,7 +50,7 @@ export const BranchSessionPeekSection = React.memo<BranchSessionPeekSectionProps
               >
                 <Space size={6} align="center" style={{ minWidth: 0 }}>
                   <ToolIcon tool={session.agentic_tool} size={16} />
-                  <Typography.Text strong ellipsis style={{ maxWidth: 480, fontSize: 12 }}>
+                  <Typography.Text ellipsis style={{ maxWidth: 480, fontSize: 12 }}>
                     {getSessionDisplayTitle(session, { includeAgentFallback: true })}
                   </Typography.Text>
                 </Space>

@@ -413,7 +413,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             <SessionRelationshipIcon session={session} size={10} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              {renderSessionTitle(session, { strong: true, query })}
+              {renderSessionTitle(session, { query })}
               {(sourceLabel || toolMatches) && (
                 <Typography.Text
                   type="secondary"
@@ -482,7 +482,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             <SessionRelationshipIcon session={session} size={10} />
-            {renderSessionTitle(session, { strong: true })}
+            {renderSessionTitle(session)}
             <BranchBoardLocatorIcon branch={branch} />
           </div>
         </div>
