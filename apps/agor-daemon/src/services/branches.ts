@@ -1837,12 +1837,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('No start command configured for this branch');
     }
 
+    if (branch.environment_instance?.status !== 'running') {
+      return await this.startEnvironment(id, params);
+    }
+
     const startExecution = await this.resolveEnvironmentCommand(branch.start_command, 'start');
 
-    if (startExecution.kind === 'webhook') {
-      if (branch.environment_instance?.status === 'running') {
-        await this.stopEnvironment(id, params);
-      }
+    if (startExecution.kind === 'webhook' || !branch.stop_command) {
+      await this.stopEnvironment(id, params);
+      return await this.startEnvironment(id, params);
+    }
+
+    const stopExecution = await this.resolveEnvironmentCommand(branch.stop_command, 'stop');
+
+    if (stopExecution.kind === 'webhook') {
+      await this.stopEnvironment(id, params);
       return await this.startEnvironment(id, params);
     }
 

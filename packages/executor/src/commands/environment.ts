@@ -8,6 +8,7 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
+import { ENVIRONMENT } from '@agor/core/config';
 import { assertEnvCommandAllowed } from '@agor/core/unix';
 import type {
   EnvironmentLifecyclePayload,
@@ -17,7 +18,7 @@ import type {
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 
-const MAX_OUTPUT_LINES = 100;
+const MAX_OUTPUT_LINES = ENVIRONMENT.LOGS_MAX_LINES;
 
 function truncateOutput(outputChunks: string[]): string | undefined {
   const fullOutput = outputChunks.join('');

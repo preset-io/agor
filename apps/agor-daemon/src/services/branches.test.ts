@@ -298,6 +298,68 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
+  it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {
+    const { service } = createServiceHarness();
+    const kill = vi.fn();
+    const branch = {
+      branch_id: 'wt-restart-no-stop' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-restart-no-stop',
+      path: '/tmp/wt-restart-no-stop',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      start_command: 'docker compose up -d --build',
+      app_url: 'http://localhost:3000',
+      environment_instance: { status: 'running' },
+    };
+
+    let currentEnvironment: Record<string, unknown> = { ...branch.environment_instance };
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    vi.spyOn(service, 'get').mockImplementation(async () => {
+      return { ...branch, environment_instance: currentEnvironment } as never;
+    });
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+      kind: 'shell',
+      command: branch.start_command,
+    } as never);
+    vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+      env: { PATH: '/usr/bin:/bin' },
+      asUser: undefined,
+    } as never);
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
+      currentEnvironment = {
+        ...currentEnvironment,
+        ...(update as Record<string, unknown>),
+      };
+      return { ...branch, environment_instance: currentEnvironment } as never;
+    });
+
+    (
+      service as unknown as { processes: Map<BranchID, { process: { kill: () => void } }> }
+    ).processes.set(branch.branch_id, { process: { kill } });
+
+    await service.restartEnvironment(branch.branch_id);
+
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'environment.lifecycle',
+        params: expect.objectContaining({
+          action: 'start',
+          branchId: branch.branch_id,
+          startCommand: branch.start_command,
+        }),
+      }),
+      expect.objectContaining({ logPrefix: `[Environment.start ${branch.name}]` })
+    );
+    expect(mockedSpawnExecutor).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ action: 'restart' }),
+      }),
+      expect.anything()
+    );
+  });
+
   it('uses a reusable branch-scoped token when fetching shell logs via executor', async () => {
     const { service } = createServiceHarness();
     const app = (service as unknown as { app: Application }).app as unknown as {
