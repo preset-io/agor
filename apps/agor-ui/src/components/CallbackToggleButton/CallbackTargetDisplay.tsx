@@ -43,11 +43,13 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
   const { onSessionClick } = useAppActions();
   const { sessionById } = useAppLiveData();
 
-  const remoteParentId = session.remote_relationships?.as_target?.find(
+  const remoteRelationship = session.remote_relationships?.as_target?.find(
     (relationship) => relationship.relationship_type === 'remote_create'
-  )?.source_session_id;
+  );
+  const remoteParentId = remoteRelationship?.source_session_id;
   const targetId =
     session.callback_config?.callback_session_id ??
+    remoteRelationship?.callback_session_id ??
     remoteParentId ??
     session.genealogy?.parent_session_id;
 
@@ -56,7 +58,7 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
   const target = sessionById.get(targetId);
   // Mirror CallbackToggleButton's resolution: spawned sessions default to
   // enabled unless explicitly disabled.
-  const enabled = session.callback_config?.enabled !== false;
+  const enabled = session.callback_config?.enabled ?? remoteRelationship?.callback_enabled ?? true;
   const archived = target?.archived === true;
 
   const targetTitle = target

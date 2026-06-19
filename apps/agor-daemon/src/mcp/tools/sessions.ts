@@ -860,26 +860,30 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const repo = new SessionRelationshipRepository(ctx.db);
-      const relationship = await repo.setCallbackEnabled(
-        args.relationshipId as import('@agor/core/types').SessionRelationshipID,
-        args.callbackEnabled
-      );
+      const relationshipId =
+        args.relationshipId as import('@agor/core/types').SessionRelationshipID;
+      const existingRelationship = await repo.get(relationshipId);
 
-      // Keep the existing callback_config execution switch in sync. The
-      // relationship is durable provenance; callback_config.enabled controls
-      // whether TasksService actually queues completion callbacks today.
+      // Authorize visibility/access before mutating the durable relationship.
+      // Reading both sides through the sessions service keeps this tool aligned
+      // with normal session RBAC instead of treating relationship IDs as ambient
+      // authority.
+      await ctx.app
+        .service('sessions')
+        .get(existingRelationship.source_session_id, ctx.baseServiceParams);
       const targetSession = await ctx.app
         .service('sessions')
-        .get(relationship.target_session_id, ctx.baseServiceParams);
+        .get(existingRelationship.target_session_id, ctx.baseServiceParams);
+
+      const relationship = await repo.setCallbackEnabled(relationshipId, args.callbackEnabled);
+      const callbackSessionId = relationship.callback_session_id ?? relationship.source_session_id;
       await ctx.app.service('sessions').patch(
         relationship.target_session_id,
         {
           callback_config: {
             ...(targetSession.callback_config ?? {}),
             enabled: args.callbackEnabled,
-            ...(relationship.callback_session_id
-              ? { callback_session_id: relationship.callback_session_id }
-              : {}),
+            callback_session_id: callbackSessionId,
           },
         },
         {
@@ -1117,7 +1121,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             relationship_type: 'remote_create',
             created_by: ctx.userId,
             callback_enabled: Boolean(wantsCallback),
-            callback_session_id: wantsCallback
+            // Keep the durable relationship target even when callbacks are
+            // muted. callback_enabled/callback_config.enabled are the delivery
+            // switches; callback_session_id is the stable endpoint to re-enable.
+            callback_session_id: effectiveCallbackSessionId
               ? (effectiveCallbackSessionId as Session['session_id'])
               : null,
             data: {

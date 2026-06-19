@@ -35,6 +35,30 @@ vi.mock('@agor/core/db', () => ({
       ...data,
       created_at: new Date(0).toISOString(),
     }));
+    get = vi.fn(async (relationshipId: string) => ({
+      relationship_id: relationshipId,
+      source_session_id: 'sess-source',
+      target_session_id: 'sess-target',
+      relationship_type: 'remote_create',
+      created_by: 'user-1',
+      created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString(),
+      callback_enabled: false,
+      callback_session_id: null,
+      data: null,
+    }));
+    setCallbackEnabled = vi.fn(async (relationshipId: string, callbackEnabled: boolean) => ({
+      relationship_id: relationshipId,
+      source_session_id: 'sess-source',
+      target_session_id: 'sess-target',
+      relationship_type: 'remote_create',
+      created_by: 'user-1',
+      created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString(),
+      callback_enabled: callbackEnabled,
+      callback_session_id: null,
+      data: null,
+    }));
   },
   UserApiKeysRepository: class FakeUserApiKeysRepository {},
   shortId: (id: string) => id,
@@ -738,7 +762,54 @@ describe('agor_sessions_create', () => {
       target_session_id: 'sess-new',
       relationship_type: 'remote_create',
       callback_enabled: false,
+      callback_session_id: 'sess-caller',
     });
+  });
+
+  it('enables remote relationship callbacks using the source session as fallback target', async () => {
+    const patchCalls: unknown[] = [];
+    const getCalls: string[] = [];
+    const app = makeFakeApp({
+      sessions: {
+        get: async (id: string) => {
+          getCalls.push(id);
+          return {
+            session_id: id,
+            branch_id: id === 'sess-source' ? 'wt-source' : 'wt-target',
+            callback_config: {},
+          };
+        },
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+    });
+
+    const { agor_session_relationships_set_callback } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_session_relationships_set_callback']
+    );
+
+    await agor_session_relationships_set_callback({
+      relationshipId: 'rel-1',
+      callbackEnabled: true,
+    });
+
+    expect(getCalls).toEqual(['sess-source', 'sess-target']);
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]).toMatchObject([
+      'sess-target',
+      {
+        callback_config: {
+          enabled: true,
+          callback_session_id: 'sess-source',
+        },
+      },
+      {
+        _skipRelationshipCallbackSync: true,
+      },
+    ]);
   });
 
   it('rejects explicit parentSessionId from a different branch', async () => {

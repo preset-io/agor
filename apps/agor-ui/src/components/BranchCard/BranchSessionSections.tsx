@@ -308,8 +308,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     (session: Session): string | undefined => {
       const relationship = getCallbackRelationship(session);
       return (
-        relationship?.callback_session_id ??
         session.callback_config?.callback_session_id ??
+        relationship?.callback_session_id ??
         session.genealogy?.parent_session_id ??
         session.remote_surrogate?.source_session_id
       );
@@ -323,10 +323,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       if (!targetId) return null;
 
       const relationship = getCallbackRelationship(session);
-      const enabled =
-        session.callback_config?.enabled !== undefined
-          ? session.callback_config.enabled !== false
-          : (relationship?.callback_enabled ?? true);
+      const enabled = session.callback_config?.enabled ?? relationship?.callback_enabled ?? true;
 
       return {
         enabled,

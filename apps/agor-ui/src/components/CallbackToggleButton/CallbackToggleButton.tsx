@@ -11,17 +11,31 @@ interface CallbackToggleButtonProps {
   session: Session;
 }
 
-function getRemoteParentSessionId(session: Session): string | undefined {
+function getRemoteCreateRelationship(session: Session) {
   return session.remote_relationships?.as_target?.find(
     (relationship) => relationship.relationship_type === 'remote_create'
-  )?.source_session_id;
+  );
+}
+
+function getRemoteParentSessionId(session: Session): string | undefined {
+  return getRemoteCreateRelationship(session)?.source_session_id;
 }
 
 function getCallbackTargetSessionId(session: Session): string | undefined {
+  const relationship = getRemoteCreateRelationship(session);
   return (
     session.callback_config?.callback_session_id ??
+    relationship?.callback_session_id ??
     getRemoteParentSessionId(session) ??
     session.genealogy?.parent_session_id
+  );
+}
+
+function getCallbackEnabled(session: Session): boolean {
+  return (
+    session.callback_config?.enabled ??
+    getRemoteCreateRelationship(session)?.callback_enabled ??
+    true
   );
 }
 
@@ -43,8 +57,7 @@ export const CallbackToggleButton: React.FC<CallbackToggleButtonProps> = ({ sess
   // Default in core: spawned sessions (have parent_session_id) have callbacks
   // implicitly ON unless explicitly disabled. Only treat as enabled if there's
   // an actual target — there's nothing to call back to otherwise.
-  const explicitlyDisabled = session.callback_config?.enabled === false;
-  const enabled = !explicitlyDisabled && !!targetId;
+  const enabled = getCallbackEnabled(session) && !!targetId;
 
   if (!enabled) return null;
 

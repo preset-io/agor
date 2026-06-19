@@ -76,6 +76,23 @@ export class SessionRelationshipRepository {
     }
   }
 
+  async get(relationshipId: SessionRelationshipID): Promise<SessionRelationship> {
+    try {
+      const row = await select(this.db)
+        .from(sessionRelationships)
+        .where(eq(sessionRelationships.relationship_id, relationshipId))
+        .one();
+      if (!row) throw new EntityNotFoundError('SessionRelationship', relationshipId);
+      return this.rowToRelationship(row);
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to get session relationship: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   async findForSession(sessionId: SessionID): Promise<SessionRelationship[]> {
     try {
       const rows = await select(this.db)
@@ -194,7 +211,12 @@ export class SessionRelationshipRepository {
     try {
       await update(this.db, sessionRelationships)
         .set({ callback_enabled: callbackEnabled, updated_at: new Date() })
-        .where(eq(sessionRelationships.target_session_id, targetSessionId))
+        .where(
+          and(
+            eq(sessionRelationships.target_session_id, targetSessionId),
+            eq(sessionRelationships.relationship_type, 'remote_create')
+          )
+        )
         .run();
     } catch (error) {
       throw new RepositoryError(
