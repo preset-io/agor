@@ -554,6 +554,28 @@ export class GatewayService {
     return plan ? `${plan}\n${progress}` : progress;
   }
 
+  private buildSlackAssistantStatus(
+    data: GatewayProgressData,
+    existingMetadata: Record<string, unknown>
+  ): string {
+    if (data.state === 'done') return '';
+    if (data.state === 'failed') return 'ran into an error.';
+    if (data.state === 'queued') {
+      const position =
+        typeof data.queue_position === 'number' ? ` at position ${data.queue_position}` : '';
+      return `is queued${position}.`;
+    }
+
+    const latestToolName =
+      data.tool_name ??
+      (typeof existingMetadata.slack_status_tool_name === 'string'
+        ? existingMetadata.slack_status_tool_name
+        : undefined);
+    return latestToolName
+      ? `is using ${this.truncateSlackInline(latestToolName, 40)}.`
+      : 'is working on your request.';
+  }
+
   private stripSlackProgressMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
     const {
       slack_status_message_ts: _statusTs,
@@ -713,6 +735,38 @@ export class GatewayService {
     let updateTs = existingTs;
 
     try {
+      if (connector.setThreadStatus) {
+        try {
+          await connector.setThreadStatus({
+            threadId: mapping.thread_id,
+            status: this.buildSlackAssistantStatus(data, metadataWithStart),
+            loadingMessages:
+              data.state === 'working'
+                ? ['Reading context…', 'Using tools…', 'Writing the response…']
+                : undefined,
+            iconEmoji: ':hourglass_flowing_sand:',
+          });
+
+          if (existingTs && connector.deleteMessage) {
+            await connector.deleteMessage({
+              threadId: mapping.thread_id,
+              messageId: existingTs,
+            });
+          }
+
+          await this.threadMapRepo.updateMetadata(
+            mapping.id,
+            this.stripSlackProgressMetadata(metadataWithStart)
+          );
+          return;
+        } catch (error) {
+          console.warn(
+            '[gateway] Failed to set Slack assistant status; falling back to status row:',
+            error
+          );
+        }
+      }
+
       if (!isTerminal && isNewTask && existingTs) {
         if (connector.deleteMessage) {
           try {

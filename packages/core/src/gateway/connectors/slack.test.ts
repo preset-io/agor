@@ -596,6 +596,38 @@ describe('SlackConnector.sendMessage', () => {
     ]);
   });
 
+  it('sets Slack assistant thread status', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      assistant: {
+        threads: {
+          setStatus: async (args: unknown) => {
+            calls.push(args);
+            return { ok: true };
+          },
+        },
+      },
+    };
+
+    await connector.setThreadStatus?.({
+      threadId: 'C123-1700000000.000000',
+      status: 'is working on your request.',
+      loadingMessages: ['Reading context…'],
+      iconEmoji: ':hourglass_flowing_sand:',
+    });
+
+    expect(calls).toEqual([
+      {
+        channel_id: 'C123',
+        thread_ts: '1700000000.000000',
+        status: 'is working on your request.',
+        loading_messages: ['Reading context…'],
+        icon_emoji: ':hourglass_flowing_sand:',
+      },
+    ]);
+  });
+
   it('deletes a previously sent Slack message', async () => {
     const calls: unknown[] = [];
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });

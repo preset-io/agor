@@ -874,6 +874,39 @@ export class SlackConnector implements GatewayConnector {
     }
   }
 
+  async setThreadStatus(req: {
+    threadId: string;
+    status: string;
+    loadingMessages?: string[];
+    iconEmoji?: string;
+  }): Promise<void> {
+    const { channel, thread_ts } = parseThreadId(req.threadId);
+    const web = this.web as unknown as {
+      assistant?: {
+        threads?: {
+          setStatus?: (args: Record<string, unknown>) => Promise<{ ok?: boolean; error?: string }>;
+        };
+      };
+      apiCall?: (
+        method: string,
+        args: Record<string, unknown>
+      ) => Promise<{ ok?: boolean; error?: string }>;
+    };
+    const args = {
+      channel_id: channel,
+      thread_ts,
+      status: req.status,
+      ...(req.loadingMessages?.length ? { loading_messages: req.loadingMessages } : {}),
+      ...(req.iconEmoji ? { icon_emoji: req.iconEmoji } : {}),
+    };
+    const result = web.assistant?.threads?.setStatus
+      ? await web.assistant.threads.setStatus(args)
+      : await web.apiCall?.('assistant.threads.setStatus', args);
+    if (!result?.ok) {
+      throw new Error(`Slack assistant status error: ${result?.error ?? 'unknown error'}`);
+    }
+  }
+
   /**
    * Start listening for inbound messages via Socket Mode
    *
