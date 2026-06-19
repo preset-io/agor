@@ -51,7 +51,6 @@ import { getAssistantConfig, isAssistant } from '@agor/core/types';
 import {
   getGidFromGroupName,
   resolveUnixUserForImpersonation,
-  spawnEnvironmentCommand,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
@@ -62,7 +61,12 @@ import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
-import { generateSessionToken, getDaemonUrl, spawnExecutor } from '../utils/spawn-executor.js';
+import {
+  generateSessionToken,
+  getDaemonUrl,
+  runExecutorCommand,
+  spawnExecutor,
+} from '../utils/spawn-executor.js';
 import { ensureAssistantKnowledgeNamespace as ensureAssistantKnowledgeNamespaceForBranch } from './assistant-knowledge.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import type { InternalEnrichmentParams } from './sessions';
@@ -357,6 +361,59 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         },
       }
     );
+  }
+
+  private async fetchEnvironmentLogsViaExecutor(
+    branch: Branch,
+    logsCommand: string,
+    params?: BranchParams
+  ): Promise<{ stdout: string; stderr: string; truncated: boolean }> {
+    const userId =
+      ((params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined) ??
+      branch.created_by;
+    const appWithToken = this.app as unknown as {
+      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
+    };
+    const sessionToken = await appWithToken.sessionTokenService?.generateToken(
+      'environment-logs',
+      userId,
+      { branchId: branch.branch_id, maxUses: 1 }
+    );
+    if (!sessionToken) {
+      throw new Error('Session token service unavailable; cannot fetch environment logs');
+    }
+
+    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch);
+    const result = await runExecutorCommand(
+      {
+        command: 'environment.logs',
+        sessionToken,
+        daemonUrl: getDaemonUrl(),
+        env,
+        params: {
+          branchId: branch.branch_id,
+          branchPath: branch.path,
+          logsCommand,
+        },
+      },
+      {
+        logPrefix: `[Environment.logs ${branch.name}]`,
+        asUser,
+        preparedEnv: env,
+        timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS,
+        templateVariables: {
+          branch_id: branch.branch_id,
+        },
+      }
+    );
+
+    if (!result.success) {
+      const details = result.error?.details as { output?: string } | undefined;
+      throw new Error(result.error?.message || details?.output || 'Failed to fetch logs');
+    }
+
+    const data = (result.data ?? {}) as { logs?: string; truncated?: boolean };
+    return { stdout: data.logs ?? '', stderr: '', truncated: data.truncated ?? false };
   }
 
   /**
@@ -2048,69 +2105,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               triggeredBy: this.extractTriggeredBy(params),
               maxBytes: ENVIRONMENT.LOGS_MAX_BYTES,
             }).then(({ body, truncated }) => ({ stdout: body, stderr: '', truncated }))
-          : await new Promise<{
-              stdout: string;
-              stderr: string;
-              truncated: boolean;
-            }>((resolve, reject) => {
-              // Execute command with timeout and output limits
-              spawnEnvironmentCommand({
-                command: execution.command,
-                branch,
-                db: this.db,
-                commandType: 'logs',
-                stdio: 'pipe', // Need to capture output for logs
-                triggeredBy: this.extractTriggeredBy(params),
-              })
-                .then((childProcess) => {
-                  let stdout = '';
-                  let stderr = '';
-                  let truncated = false;
-
-                  // Set timeout
-                  const timeout = setTimeout(() => {
-                    childProcess.kill('SIGTERM');
-                    reject(
-                      new Error(
-                        `Logs command timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`
-                      )
-                    );
-                  }, ENVIRONMENT.LOGS_TIMEOUT_MS);
-
-                  // Capture stdout with size limit
-                  childProcess.stdout?.on('data', (data: Buffer) => {
-                    const chunk = data.toString();
-                    if (stdout.length + chunk.length <= ENVIRONMENT.LOGS_MAX_BYTES) {
-                      stdout += chunk;
-                    } else {
-                      // Truncate to max bytes
-                      stdout += chunk.substring(0, ENVIRONMENT.LOGS_MAX_BYTES - stdout.length);
-                      truncated = true;
-                      childProcess.kill('SIGTERM');
-                    }
-                  });
-
-                  // Capture stderr
-                  childProcess.stderr?.on('data', (data: Buffer) => {
-                    stderr += data.toString();
-                  });
-
-                  childProcess.on('exit', (code: number | null) => {
-                    clearTimeout(timeout);
-                    if (code === 0 || stdout.length > 0) {
-                      resolve({ stdout, stderr, truncated });
-                    } else {
-                      reject(new Error(stderr || `Logs command exited with code ${code}`));
-                    }
-                  });
-
-                  childProcess.on('error', (error: Error) => {
-                    clearTimeout(timeout);
-                    reject(error);
-                  });
-                })
-                .catch(reject);
-            });
+          : await this.fetchEnvironmentLogsViaExecutor(branch, execution.command, params);
 
       // Process output: split into lines and keep last N lines
       const allLines = result.stdout.split('\n');

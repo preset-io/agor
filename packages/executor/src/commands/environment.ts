@@ -9,7 +9,11 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { assertEnvCommandAllowed } from '@agor/core/unix';
-import type { EnvironmentLifecyclePayload, ExecutorResult } from '../payload-types.js';
+import type {
+  EnvironmentLifecyclePayload,
+  EnvironmentLogsPayload,
+  ExecutorResult,
+} from '../payload-types.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 
@@ -58,7 +62,7 @@ async function runShellCommand(options: {
   command: string;
   cwd: string;
   env?: Record<string, string>;
-  commandType: 'start' | 'stop' | 'nuke';
+  commandType: 'start' | 'stop' | 'nuke' | 'logs';
 }): Promise<{ pid?: number; output?: string }> {
   const { command, cwd, env, commandType } = options;
   assertEnvCommandAllowed(command, commandType);
@@ -97,6 +101,56 @@ async function runShellCommand(options: {
   });
 
   return { pid: child.pid, output: truncateOutput(outputChunks) };
+}
+
+export async function handleEnvironmentLogs(
+  payload: EnvironmentLogsPayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  if (options.dryRun) {
+    return {
+      success: true,
+      data: {
+        dryRun: true,
+        command: 'environment.logs',
+        branchId: payload.params.branchId,
+      },
+    };
+  }
+
+  const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
+  const client = await createExecutorClient(daemonUrl, payload.sessionToken);
+  const branch = await client.service('branches').get(payload.params.branchId);
+  const cwd = payload.params.branchPath || branch.path;
+
+  try {
+    const result = await runShellCommand({
+      command: payload.params.logsCommand,
+      cwd,
+      env: payload.env,
+      commandType: 'logs',
+    });
+
+    return {
+      success: true,
+      data: {
+        logs: result.output ?? '',
+        timestamp: new Date().toISOString(),
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const output =
+      error instanceof Error ? (error as Error & { output?: string }).output : undefined;
+    return {
+      success: false,
+      error: {
+        code: 'ENVIRONMENT_LOGS_FAILED',
+        message,
+        details: { output },
+      },
+    };
+  }
 }
 
 export async function handleEnvironmentLifecycle(

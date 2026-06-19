@@ -602,6 +602,30 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
 
 export type EnvironmentLifecyclePayload = z.infer<typeof EnvironmentLifecyclePayloadSchema>;
 
+/**
+ * Environment logs payload - run shell-based logs command from executor.
+ * Webhook logs stay daemon-owned.
+ */
+export const EnvironmentLogsPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('environment.logs'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Branch ID whose environment logs are being fetched */
+    branchId: z.string().uuid(),
+
+    /** Branch checkout path. Executor refetches the branch but this avoids ambiguity. */
+    branchPath: z.string().optional(),
+
+    /** Shell logs command */
+    logsCommand: z.string(),
+  }),
+});
+
+export type EnvironmentLogsPayload = z.infer<typeof EnvironmentLogsPayloadSchema>;
+
 // ═══════════════════════════════════════════════════════════
 // Git Repo Realign Origin Payload
 // ═══════════════════════════════════════════════════════════
@@ -867,6 +891,7 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   BranchAgorYmlImportPayloadSchema,
   BranchAgorYmlExportPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
+  EnvironmentLogsPayloadSchema,
   GitRepoRealignOriginPayloadSchema,
   GitRepoDeletePayloadSchema,
   UnixSyncBranchPayloadSchema,
@@ -930,6 +955,7 @@ export function getSupportedCommands(): string[] {
     'branch.agor-yml.import',
     'branch.agor-yml.export',
     'environment.lifecycle',
+    'environment.logs',
     'git.repo.realign-origin',
     'git.repo.delete',
     'unix.sync-branch',

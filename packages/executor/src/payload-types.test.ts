@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ExecutorPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
+  EnvironmentLogsPayloadSchema,
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
   GitClonePayloadSchema,
@@ -255,6 +256,24 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         },
       })
     ).toThrow();
+  });
+});
+
+describe('EnvironmentLogsPayloadSchema', () => {
+  it('should parse valid environment logs payload', () => {
+    const payload = {
+      command: 'environment.logs',
+      sessionToken: 'jwt-token-here',
+      params: {
+        branchId: '550e8400-e29b-41d4-a716-446655440000',
+        branchPath: '/data/agor/worktrees/repo/feature',
+        logsCommand: 'docker compose logs --tail=100',
+      },
+    };
+
+    const result = EnvironmentLogsPayloadSchema.parse(payload);
+    expect(result.command).toBe('environment.logs');
+    expect(result.params.logsCommand).toBe('docker compose logs --tail=100');
   });
 });
 
@@ -608,6 +627,7 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
     expect(commands).toContain('environment.lifecycle');
+    expect(commands).toContain('environment.logs');
     expect(commands).toContain('git.repo.realign-origin');
     expect(commands).toContain('git.repo.delete');
     expect(commands).toContain('unix.sync-branch');
@@ -615,6 +635,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands.length).toBe(17);
+    expect(commands.length).toBe(18);
   });
 });
