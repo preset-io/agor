@@ -45,6 +45,19 @@ function collectOutput(child: ChildProcess, outputChunks: string[]): void {
   collect(child.stderr, process.stderr);
 }
 
+function successMessage(action: EnvironmentLifecyclePayload['params']['action']): string {
+  switch (action) {
+    case 'start':
+      return 'Start command completed';
+    case 'stop':
+      return 'Stop command completed';
+    case 'restart':
+      return 'Restart command completed';
+    case 'nuke':
+      return 'Nuke command completed';
+  }
+}
+
 function commandForAction(payload: EnvironmentLifecyclePayload): string {
   switch (payload.params.action) {
     case 'start':
@@ -210,6 +223,7 @@ export async function handleEnvironmentLifecycle(
         },
         last_health_check: undefined,
         last_error: undefined,
+        last_command: undefined,
         ...(payload.params.appUrl
           ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
           : {}),
@@ -231,6 +245,13 @@ export async function handleEnvironmentLifecycle(
         ...(payload.params.appUrl
           ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
           : {}),
+        last_command: {
+          action: payload.params.action,
+          status: 'succeeded',
+          timestamp: new Date().toISOString(),
+          message: successMessage(payload.params.action),
+          ...(result.output ? { output: result.output } : {}),
+        },
       });
 
       return { success: true, data: { branchId, action: payload.params.action } };
@@ -238,7 +259,7 @@ export async function handleEnvironmentLifecycle(
 
     const command = commandForAction(payload);
     const commandType = payload.params.action;
-    await runShellCommand({
+    const result = await runShellCommand({
       command,
       cwd,
       env: payload.env,
@@ -255,6 +276,14 @@ export async function handleEnvironmentLifecycle(
           payload.params.action === 'nuke'
             ? 'Environment nuked - all data and volumes destroyed'
             : 'Environment stopped',
+      },
+      last_error: undefined,
+      last_command: {
+        action: payload.params.action,
+        status: 'succeeded',
+        timestamp: new Date().toISOString(),
+        message: successMessage(payload.params.action),
+        ...(result.output ? { output: result.output } : {}),
       },
     });
 
@@ -279,6 +308,13 @@ export async function handleEnvironmentLifecycle(
             message,
           },
           last_error: output || message,
+          last_command: {
+            action: payload.params.action,
+            status: 'failed',
+            timestamp: new Date().toISOString(),
+            message,
+            ...(output ? { output } : {}),
+          },
         });
       }
     } catch (patchError) {

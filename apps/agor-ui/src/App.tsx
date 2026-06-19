@@ -26,7 +26,7 @@ import {
   UI_MOUNT_PATH,
 } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider } from 'antd';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
@@ -63,6 +63,23 @@ import { useThemedMessage } from './utils/message';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
+
+type EnvironmentAction = 'start' | 'stop' | 'nuke';
+
+interface PendingEnvironmentToast {
+  action: EnvironmentAction;
+  key: string;
+  requestedAt: number;
+}
+
+const ENV_ACTION_COPY: Record<
+  EnvironmentAction,
+  { present: string; past: string; gerund: string }
+> = {
+  start: { present: 'start', past: 'started', gerund: 'Starting' },
+  stop: { present: 'stop', past: 'stopped', gerund: 'Stopping' },
+  nuke: { present: 'nuke', past: 'nuked', gerund: 'Nuking' },
+};
 
 const loadedRouteModuleKeys = new Set<RouteModuleKey>();
 
@@ -254,6 +271,38 @@ function AppContent() {
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
   });
+  const pendingEnvironmentToastsRef = useRef<Map<string, PendingEnvironmentToast>>(new Map());
+
+  useEffect(() => {
+    if (!client) return;
+
+    const branchesService = client.service('branches');
+    const handleBranchPatched = (branch: Branch) => {
+      const pending = pendingEnvironmentToastsRef.current.get(branch.branch_id);
+      if (!pending) return;
+
+      const lastCommand = branch.environment_instance?.last_command;
+      if (!lastCommand || lastCommand.action !== pending.action) return;
+
+      const completedAt = Date.parse(lastCommand.timestamp);
+      if (Number.isFinite(completedAt) && completedAt + 1000 < pending.requestedAt) return;
+
+      const copy = ENV_ACTION_COPY[pending.action];
+      if (lastCommand.status === 'succeeded') {
+        showSuccess(`Environment ${copy.past}`, { key: pending.key });
+        pendingEnvironmentToastsRef.current.delete(branch.branch_id);
+      } else if (lastCommand.status === 'failed') {
+        const detail = lastCommand.message ? `: ${lastCommand.message}` : '';
+        showError(`Environment ${copy.present} failed${detail}`, { key: pending.key });
+        pendingEnvironmentToastsRef.current.delete(branch.branch_id);
+      }
+    };
+
+    branchesService.on('patched', handleBranchPatched);
+    return () => {
+      branchesService.removeListener('patched', handleBranchPatched);
+    };
+  }, [client, showError, showSuccess]);
 
   // Track FE/BE drift: capture the daemon's build SHA on first load (via
   // /health) and flip outOfSync when the daemon later reports a different
@@ -1160,42 +1209,63 @@ function AppContent() {
   // Handle environment control
   const handleStartEnvironment = async (branchId: string) => {
     if (!client) return;
+    const key = `start-env-${branchId}`;
     try {
-      showLoading('Starting environment...', { key: 'start-env' });
+      pendingEnvironmentToastsRef.current.set(branchId, {
+        action: 'start',
+        key,
+        requestedAt: Date.now(),
+      });
+      showLoading('Starting environment...', { key });
       await client.service(`branches/${branchId}/start`).create({});
-      showSuccess('Environment start requested', { key: 'start-env' });
+      showSuccess('Environment start requested', { key });
     } catch (error) {
+      pendingEnvironmentToastsRef.current.delete(branchId);
       showError(
         `Failed to start environment: ${error instanceof Error ? error.message : String(error)}`,
-        { key: 'start-env' }
+        { key }
       );
     }
   };
 
   const handleStopEnvironment = async (branchId: string) => {
     if (!client) return;
+    const key = `stop-env-${branchId}`;
     try {
-      showLoading('Stopping environment...', { key: 'stop-env' });
+      pendingEnvironmentToastsRef.current.set(branchId, {
+        action: 'stop',
+        key,
+        requestedAt: Date.now(),
+      });
+      showLoading('Stopping environment...', { key });
       await client.service(`branches/${branchId}/stop`).create({});
-      showSuccess('Environment stop requested', { key: 'stop-env' });
+      showSuccess('Environment stop requested', { key });
     } catch (error) {
+      pendingEnvironmentToastsRef.current.delete(branchId);
       showError(
         `Failed to stop environment: ${error instanceof Error ? error.message : String(error)}`,
-        { key: 'stop-env' }
+        { key }
       );
     }
   };
 
   const handleNukeEnvironment = async (branchId: string) => {
     if (!client) return;
+    const key = `nuke-env-${branchId}`;
     try {
-      showLoading('Nuking environment...', { key: 'nuke-env' });
+      pendingEnvironmentToastsRef.current.set(branchId, {
+        action: 'nuke',
+        key,
+        requestedAt: Date.now(),
+      });
+      showLoading('Nuking environment...', { key });
       await client.service(`branches/${branchId}/nuke`).create({});
-      showSuccess('Environment nuke requested', { key: 'nuke-env' });
+      showSuccess('Environment nuke requested', { key });
     } catch (error) {
+      pendingEnvironmentToastsRef.current.delete(branchId);
       showError(
         `Failed to nuke environment: ${error instanceof Error ? error.message : String(error)}`,
-        { key: 'nuke-env' }
+        { key }
       );
     }
   };

@@ -497,6 +497,21 @@ export interface BranchEnvironmentInstance {
    * Cleared on the next successful start.
    */
   last_error?: string;
+
+  /**
+   * Last managed-environment command outcome reported by the executor.
+   *
+   * This is separate from health because shell command completion and app
+   * readiness are different milestones: start may finish successfully while
+   * the health monitor still waits for the app to become reachable.
+   */
+  last_command?: {
+    action: 'start' | 'stop' | 'restart' | 'nuke';
+    status: 'succeeded' | 'failed';
+    timestamp: string;
+    message?: string;
+    output?: string;
+  };
 }
 
 /**
