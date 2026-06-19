@@ -6,8 +6,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppLiveData } from '../../contexts/AppDataContext';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
-import { buildSessionTree, type SessionTreeNode } from '../BranchCard/buildSessionTree';
 import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
+import { buildSessionTree, type SessionTreeNode } from '../BranchCard/buildSessionTree';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
 

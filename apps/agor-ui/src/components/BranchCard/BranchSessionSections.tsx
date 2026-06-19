@@ -409,9 +409,18 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         }
       >
         {(hovered) => (
-          <div style={sessionRowStyle(session)} onClick={() => onSessionClick?.(session.session_id)}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}>
-              {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
+          <div
+            style={sessionRowStyle(session)}
+            onClick={() => onSessionClick?.(session.session_id)}
+          >
+            <div
+              style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}
+            >
+              {isActive ? (
+                <Spin size="small" />
+              ) : (
+                <ToolIcon tool={session.agentic_tool} size={20} />
+              )}
               <SessionRelationshipIcon session={session} size={10} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 {renderSessionTitle(session, { strong: true, query })}
@@ -489,7 +498,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
-              {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
+              {isActive ? (
+                <Spin size="small" />
+              ) : (
+                <ToolIcon tool={session.agentic_tool} size={20} />
+              )}
               <SessionRelationshipIcon session={session} size={10} />
               {renderSessionTitle(session, { strong: true })}
               <BranchBoardLocatorIcon
