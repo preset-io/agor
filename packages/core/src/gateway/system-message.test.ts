@@ -30,9 +30,9 @@ describe('formatGatewaySystemMessage', () => {
   it('formats Slack follow-up routing messages with a clickable session link', () => {
     const text = formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl);
 
-    expect(text).toBe(`Follow-up received — routing to [the Agor session](${sessionUrl})...`);
+    expect(text).toBe(`Follow-up received — routing to [Open session](${sessionUrl})...`);
     expect(formatGatewaySystemMessage('slack', text)).toBe(
-      `Agor: Follow-up received — routing to <${sessionUrl}|the Agor session>...`
+      `Agor: Follow-up received — routing to <${sessionUrl}|Open session>...`
     );
   });
 

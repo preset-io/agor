@@ -102,6 +102,7 @@ interface GatewayTodoItem {
 interface SlackStreamState {
   threadId: string;
   ts: string;
+  hasContent: boolean;
 }
 
 /**
@@ -683,29 +684,24 @@ export class GatewayService {
 
     try {
       if (event === 'streaming:start') {
-        if (this.slackStreamsByMessage.has(messageId)) return;
-        const ts = await streamConnector.startStream({
-          threadId: mapping.thread_id,
-          text: '',
-        });
-        this.slackStreamsByMessage.set(messageId, {
-          threadId: mapping.thread_id,
-          ts,
-        });
         return;
       }
 
       const existing = this.slackStreamsByMessage.get(messageId);
       if (!existing) {
         if (event !== 'streaming:chunk') return;
+        const chunk = typeof data.chunk === 'string' ? data.chunk : '';
+        if (!chunk) return;
         const ts = await streamConnector.startStream({
           threadId: mapping.thread_id,
-          text: '',
+          text: chunk,
         });
         this.slackStreamsByMessage.set(messageId, {
           threadId: mapping.thread_id,
           ts,
+          hasContent: true,
         });
+        return;
       }
 
       const stream = this.slackStreamsByMessage.get(messageId);
@@ -719,6 +715,7 @@ export class GatewayService {
           ts: stream.ts,
           text: chunk,
         });
+        stream.hasContent = true;
         return;
       }
 
@@ -728,7 +725,7 @@ export class GatewayService {
           ts: stream.ts,
         });
         this.slackStreamsByMessage.delete(messageId);
-        if (event === 'streaming:end') {
+        if (event === 'streaming:end' && stream.hasContent) {
           this.slackStreamedMessageIds.set(
             messageId,
             Date.now() + GatewayService.SLACK_STREAMED_MESSAGE_TTL_MS
@@ -1048,11 +1045,13 @@ export class GatewayService {
       }
 
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
-      this.sendDebugMessage(
-        channel,
-        data.thread_id,
-        formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl)
-      );
+      if (sessionUrl) {
+        this.sendDebugMessage(
+          channel,
+          data.thread_id,
+          formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl)
+        );
+      }
     } else {
       // New thread → create session via FeathersJS service
       const sessionsService = this.app.service('sessions') as unknown as {
