@@ -1,6 +1,6 @@
 import type { Session } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
-import { LinkOutlined, PhoneOutlined } from '@ant-design/icons';
+import { DisconnectOutlined, LinkOutlined } from '@ant-design/icons';
 import { Badge, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -90,7 +90,11 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
       }}
     >
       <Space size={6} wrap>
-        <PhoneOutlined style={{ color: iconColor }} />
+        {enabled ? (
+          <LinkOutlined style={{ color: iconColor }} />
+        ) : (
+          <DisconnectOutlined style={{ color: iconColor }} />
+        )}
         <Typography.Text strong style={{ color: iconColor }}>
           Callbacks {enabled ? 'ON' : 'OFF'}
         </Typography.Text>

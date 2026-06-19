@@ -4,12 +4,13 @@ import {
   isGatewaySession as isGatewaySessionCore,
 } from '@agor-live/client';
 import {
+  ArrowUpOutlined,
   ClockCircleOutlined,
   DisconnectOutlined,
   ExportOutlined,
   EyeOutlined,
+  LinkOutlined,
   MessageOutlined,
-  PhoneOutlined,
   PlusOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
@@ -86,8 +87,13 @@ const SessionItemWithActions: React.FC<{
   onSettings?: (sessionId: string, e: React.MouseEvent) => void;
   onTogglePeek?: (sessionId: string, e: React.MouseEvent) => void;
   onToggleCallback?: (sessionId: string, e: React.MouseEvent) => void;
+  onOpenRemoteParent?: (sessionId: string, e: React.MouseEvent) => void;
   callbackToggle?: {
     enabled: boolean;
+    disabled?: boolean;
+    tooltip: string;
+  };
+  remoteParentLink?: {
     disabled?: boolean;
     tooltip: string;
   };
@@ -100,7 +106,9 @@ const SessionItemWithActions: React.FC<{
   onSettings,
   onTogglePeek,
   onToggleCallback,
+  onOpenRemoteParent,
   callbackToggle,
+  remoteParentLink,
   children,
 }) => {
   const [hovered, setHovered] = useState(false);
@@ -167,13 +175,28 @@ const SessionItemWithActions: React.FC<{
             />
           </Tooltip>
         )}
+        {onOpenRemoteParent && remoteParentLink && (
+          <Tooltip title={remoteParentLink.tooltip}>
+            <Button
+              type="text"
+              size="small"
+              disabled={remoteParentLink.disabled}
+              icon={<ArrowUpOutlined />}
+              onClick={(e) => onOpenRemoteParent(sessionId, e)}
+              style={{
+                ...buttonStyle,
+                color: token.colorTextSecondary,
+              }}
+            />
+          </Tooltip>
+        )}
         {onToggleCallback && callbackToggle && (
           <Tooltip title={callbackToggle.tooltip}>
             <Button
               type="text"
               size="small"
               disabled={callbackToggle.disabled}
-              icon={callbackToggle.enabled ? <PhoneOutlined /> : <DisconnectOutlined />}
+              icon={callbackToggle.enabled ? <LinkOutlined /> : <DisconnectOutlined />}
               onClick={(e) => onToggleCallback(sessionId, e)}
               style={{
                 ...buttonStyle,
@@ -255,6 +278,13 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     );
   }, []);
 
+  const getRemoteParentId = useCallback((session: Session): string | undefined => {
+    if (session.remote_surrogate) return undefined;
+    return session.remote_relationships?.as_target?.find(
+      (relationship) => relationship.relationship_type === 'remote_create'
+    )?.source_session_id;
+  }, []);
+
   const getCallbackTargetId = useCallback(
     (session: Session): string | undefined => {
       const relationship = getCallbackRelationship(session);
@@ -320,6 +350,17 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       }
     },
     [client, getCallbackTargetId, getCallbackToggle, sessions, showError, showSuccess]
+  );
+
+  const handleOpenRemoteParent = useCallback(
+    (sessionId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      const session = sessions.find((candidate) => candidate.session_id === sessionId);
+      const remoteParentId = session ? getRemoteParentId(session) : undefined;
+      if (!remoteParentId) return;
+      onSessionClick?.(remoteParentId);
+    },
+    [getRemoteParentId, onSessionClick, sessions]
   );
 
   const handleForkSpawnConfirm = async (config: string | Partial<SpawnConfig>) => {
@@ -493,6 +534,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const renderFlatSessionRow = (session: Session, query = '') => {
     const isActive = session.status === 'running' || session.status === 'stopping';
     const callbackToggle = getCallbackToggle(session);
+    const remoteParentId = getRemoteParentId(session);
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
     const descriptionSnippet =
       query && session.title && session.description
@@ -513,6 +555,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         onArchive={handleArchiveSession}
         callbackToggle={callbackToggle ?? undefined}
         onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
+        remoteParentLink={
+          remoteParentId
+            ? { tooltip: 'Open remote parent session that created this session' }
+            : undefined
+        }
+        onOpenRemoteParent={remoteParentId ? handleOpenRemoteParent : undefined}
         onSettings={
           onOpenSessionSettings
             ? (id, e) => {
@@ -569,6 +617,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     const isActive = session.status === 'running' || session.status === 'stopping';
     const isRemoteSurrogate = node.relationshipType === 'remote';
     const callbackToggle = getCallbackToggle(session);
+    const remoteParentId = getRemoteParentId(session);
 
     return (
       <SessionItemWithActions
@@ -579,6 +628,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         onTogglePeek={onTogglePeekSession ? handleTogglePeekSession : undefined}
         callbackToggle={callbackToggle ?? undefined}
         onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
+        remoteParentLink={
+          remoteParentId
+            ? { tooltip: 'Open remote parent session that created this session' }
+            : undefined
+        }
+        onOpenRemoteParent={remoteParentId ? handleOpenRemoteParent : undefined}
         onSettings={
           onOpenSessionSettings
             ? (id, e) => {
@@ -697,6 +752,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       {scheduledSessions.map((session) => {
         const isActive = session.status === 'running' || session.status === 'stopping';
         const callbackToggle = getCallbackToggle(session);
+        const remoteParentId = getRemoteParentId(session);
         return (
           <SessionItemWithActions
             key={session.session_id}
@@ -707,6 +763,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             onTogglePeek={onTogglePeekSession ? handleTogglePeekSession : undefined}
             callbackToggle={callbackToggle ?? undefined}
             onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
+            remoteParentLink={
+              remoteParentId
+                ? { tooltip: 'Open remote parent session that created this session' }
+                : undefined
+            }
+            onOpenRemoteParent={remoteParentId ? handleOpenRemoteParent : undefined}
             onSettings={
               onOpenSessionSettings
                 ? (id, e) => {
@@ -763,6 +825,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         const gatewaySource = getGatewaySource(session);
         const isActive = session.status === 'running' || session.status === 'stopping';
         const callbackToggle = getCallbackToggle(session);
+        const remoteParentId = getRemoteParentId(session);
 
         return (
           <SessionItemWithActions
@@ -774,6 +837,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             onTogglePeek={onTogglePeekSession ? handleTogglePeekSession : undefined}
             callbackToggle={callbackToggle ?? undefined}
             onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
+            remoteParentLink={
+              remoteParentId
+                ? { tooltip: 'Open remote parent session that created this session' }
+                : undefined
+            }
+            onOpenRemoteParent={remoteParentId ? handleOpenRemoteParent : undefined}
             onSettings={
               onOpenSessionSettings
                 ? (id, e) => {

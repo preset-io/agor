@@ -1,6 +1,6 @@
 import type { Session } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
-import { PhoneOutlined } from '@ant-design/icons';
+import { LinkOutlined } from '@ant-design/icons';
 import { Badge, Button, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -85,7 +85,8 @@ export const CallbackToggleButton: React.FC<CallbackToggleButtonProps> = ({ sess
       ) : (
         <strong>{targetTitle}</strong>
       )}{' '}
-      {statusBadge} on completion. Click to disable. Also accessible in session settings.
+      {statusBadge} on completion. Click to unlink callbacks while keeping the relationship. Also
+      accessible in session settings.
     </span>
   );
 
@@ -94,9 +95,9 @@ export const CallbackToggleButton: React.FC<CallbackToggleButtonProps> = ({ sess
       <Button
         size="small"
         type="text"
-        icon={<PhoneOutlined style={{ color: token.colorPrimary }} />}
+        icon={<LinkOutlined style={{ color: token.colorPrimary }} />}
         onClick={handleDisable}
-        aria-label="Callbacks on — click to disable"
+        aria-label="Callbacks linked — click to unlink"
       />
     </Tooltip>
   );
