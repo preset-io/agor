@@ -6,6 +6,7 @@
  * since it orchestrates across multiple repositories and services.
  */
 
+import { PublicBaseUrlNotConfiguredError, requirePublicBaseUrl } from '@agor/core/config';
 import {
   type Database,
   GatewayChannelRepository,
@@ -41,6 +42,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
+import { getSessionUrl } from '@agor/core/utils/url';
 
 /**
  * Inbound message data (platform → session)
@@ -744,11 +746,24 @@ export class GatewayService {
     user: User
   ): Promise<string | null> {
     try {
+      const baseUrl = await requirePublicBaseUrl();
+      return getSessionUrl(sessionId, baseUrl);
+    } catch (error) {
+      if (!(error instanceof PublicBaseUrlNotConfiguredError)) {
+        console.warn('[gateway] Failed to build public session URL:', error);
+      }
+    }
+
+    try {
       const sessionsService = this.app.service('sessions') as {
         get: (id: string, params?: { user: User }) => Promise<Session & { url?: string | null }>;
       };
       const sessionWithUrl = await sessionsService.get(sessionId, { user });
-      return sessionWithUrl.url || null;
+      const sessionUrl = sessionWithUrl.url || null;
+      if (!sessionUrl) return null;
+      const hostname = new URL(sessionUrl).hostname;
+      if (hostname === '0.0.0.0') return null;
+      return sessionUrl;
     } catch (error) {
       console.warn('[gateway] Failed to fetch session URL:', error);
       return null;
@@ -1154,10 +1169,7 @@ export class GatewayService {
         metadata: data.metadata ?? null,
       });
 
-      // The create path already returns a Session from SessionRepository.create(),
-      // which populates url when the branch is attached to a board. Avoid an
-      // immediate get() round trip here; only follow-ups need to fetch.
-      const sessionUrl = session.url ?? null;
+      const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
 
       // Send debug message with session URL
       const message = formatGatewaySessionCreatedMessage(sessionId, sessionUrl);

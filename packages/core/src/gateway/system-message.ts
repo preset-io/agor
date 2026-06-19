@@ -17,8 +17,7 @@ export function formatGatewayMarkdownSessionReference(
   sessionId: SessionID | string,
   sessionUrl?: string | null
 ): string {
-  const label = `session ${shortId(sessionId)}`;
-  return sessionUrl ? `[${label}](${sessionUrl})` : label;
+  return sessionUrl ? `[the Agor session](${sessionUrl})` : `session ${shortId(sessionId)}`;
 }
 
 export function formatGatewaySessionCreatedMessage(
