@@ -345,11 +345,18 @@ export class GatewayService {
    * Send a debug/system message to the platform thread (fire-and-forget).
    * Useful for giving the user visibility into what's happening.
    */
-  private sendDebugMessage(channel: GatewayChannel, threadId: string, text: string): void {
-    // Skip debug messages for GitHub and Slack channels. GitHub has its
-    // editable Processing comment; Slack now uses native assistant status and
-    // stream chrome, so extra content rows make the thread noisy.
-    if (channel.channel_type === 'github' || channel.channel_type === 'slack') return;
+  private sendDebugMessage(
+    channel: GatewayChannel,
+    threadId: string,
+    text: string,
+    opts?: { forceSlack?: boolean }
+  ): void {
+    // Skip routine debug messages for GitHub and Slack channels. GitHub has
+    // its editable Processing comment; Slack now uses native assistant status
+    // and stream chrome, so extra lifecycle rows make the thread noisy.
+    // Slack rejection/config errors may opt in with forceSlack.
+    if (channel.channel_type === 'github') return;
+    if (channel.channel_type === 'slack' && !opts?.forceSlack) return;
 
     if (!hasConnector(channel.channel_type as ChannelType)) return;
     try {
@@ -864,6 +871,15 @@ export class GatewayService {
     if (!taskId) return;
     const stream = this.slackStreamsByTask.get(taskId);
     if (!stream) return;
+    if (!stream.hasContent && !stream.lastTodoSignature && connector.deleteMessage) {
+      await connector.deleteMessage({
+        threadId: stream.threadId,
+        messageId: stream.ts,
+      });
+      this.slackStreamsByTask.delete(taskId);
+      return;
+    }
+
     const streamConnector = connector as GatewayConnector & {
       stopStream?: (req: { threadId: string; ts: string; text?: string }) => Promise<void>;
     };
@@ -1312,7 +1328,7 @@ export class GatewayService {
         console.error(
           `[gateway] Channel "${channel.name}" has no agor_user_id and alignment is OFF. Cannot process message.`
         );
-        this.sendDebugMessage(channel, data.thread_id, errMsg);
+        this.sendDebugMessage(channel, data.thread_id, errMsg, { forceSlack: true });
         // For GitHub: edit the Processing comment with the error
         if (channel.channel_type === 'github' && data.metadata?.processing_comment_id) {
           try {
@@ -1351,7 +1367,8 @@ export class GatewayService {
           this.sendDebugMessage(
             channel,
             data.thread_id,
-            `User ${email} doesn't have an Agor account. Ask an admin to create an account with this email, or disable user alignment.`
+            `User ${email} doesn't have an Agor account. Ask an admin to create an account with this email, or disable user alignment.`,
+            { forceSlack: true }
           );
           return {
             success: false,
@@ -1369,7 +1386,8 @@ export class GatewayService {
         this.sendDebugMessage(
           channel,
           data.thread_id,
-          "Couldn't resolve your Slack identity. The bot may be missing the `users:read.email` scope, or your Slack profile has no email. Ask an admin to check the bot's scopes."
+          "Couldn't resolve your Slack identity. The bot may be missing the `users:read.email` scope, or your Slack profile has no email. Ask an admin to check the bot's scopes.",
+          { forceSlack: true }
         );
         return {
           success: false,
@@ -1740,7 +1758,9 @@ export class GatewayService {
       }
     } catch (error) {
       console.error('[gateway] Failed to send prompt to session:', error);
-      this.sendDebugMessage(channel, data.thread_id, `Error sending prompt: ${error}`);
+      this.sendDebugMessage(channel, data.thread_id, `Error sending prompt: ${error}`, {
+        forceSlack: true,
+      });
       void this.updateProgress({
         session_id: sessionId,
         state: 'failed',
