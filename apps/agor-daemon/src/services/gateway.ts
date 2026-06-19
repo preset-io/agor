@@ -799,10 +799,6 @@ export class GatewayService {
           await connector.setThreadStatus({
             threadId: mapping.thread_id,
             status: this.buildSlackAssistantStatus(data, metadataWithStart),
-            loadingMessages:
-              data.state === 'working' && (isNewTask || isRestartingAfterTerminal)
-                ? ['Reading context…', 'Using tools…', 'Writing the response…']
-                : undefined,
             iconEmoji: ':hourglass_flowing_sand:',
           });
 
@@ -898,7 +894,10 @@ export class GatewayService {
     if (!sessionId || !messageId) return;
 
     if (event === 'streaming:start') {
-      if (taskId) this.slackStreamTaskByMessage.set(messageId, taskId);
+      if (taskId) {
+        this.slackStreamTaskByMessage.set(messageId, taskId);
+        this.markTaskStreamedToSlack(taskId);
+      }
       return;
     }
 
