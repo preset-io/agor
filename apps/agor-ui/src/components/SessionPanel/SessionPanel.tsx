@@ -46,7 +46,6 @@ import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import { CallbackToggleButton, RemoteParentButton } from '../CallbackToggleButton';
 import { FileUpload, FileUploadButton } from '../FileUpload';
 import { MCPServerPill } from '../MCPServer';
 import type { ModelConfig } from '../ModelSelector';
@@ -940,8 +939,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           </Space>
           <Space size={4} wrap style={{ marginLeft: 'auto' }}>
             {isRunning && <Spin size="small" />}
-            <RemoteParentButton session={session} />
-            <CallbackToggleButton session={session} />
             <SessionRunSettingsPopover
               client={client}
               session={session}
