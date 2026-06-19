@@ -66,9 +66,11 @@ export const gatewayRouteHook = async (context: HookContext) => {
   let messageText = extractText(message.content);
   const latestToolUse = extractLatestToolUse(message.content);
 
-  // Tool-only rows should not be posted as normal chat messages, but they are
-  // valuable for the mutable Slack status row: current tool + TodoWrite plan.
-  if (!messageText && latestToolUse) {
+  // Tool calls are valuable for the mutable Slack status row: current tool +
+  // TodoWrite plan. Some agent SDKs include text and tool_use blocks in the
+  // same assistant message, so update progress whenever we see a tool call,
+  // not only for tool-only rows.
+  if (latestToolUse) {
     try {
       void gatewayService.updateProgress({
         session_id: message.session_id,
@@ -80,7 +82,10 @@ export const gatewayRouteHook = async (context: HookContext) => {
     } catch (error) {
       console.warn('[gateway-route] Failed to route tool progress:', error);
     }
-    return context;
+    // Tool-only rows should not be posted as normal chat messages.
+    if (!messageText) {
+      return context;
+    }
   }
 
   if (!messageText && message.role === 'assistant' && typeof message.content_preview === 'string') {

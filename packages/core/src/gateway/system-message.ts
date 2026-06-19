@@ -18,7 +18,7 @@ export function formatGatewayMarkdownSessionReference(
   sessionId: SessionID | string,
   sessionUrl?: string | null
 ): string {
-  return sessionUrl ? `[Open session](${sessionUrl})` : `session ${shortId(sessionId)}`;
+  return sessionUrl ? `[session](${sessionUrl})` : `session ${shortId(sessionId)}`;
 }
 
 export function formatGatewaySessionCreatedMessage(
@@ -34,7 +34,7 @@ export function formatGatewayFollowUpRoutingMessage(
   sessionId: SessionID | string,
   sessionUrl?: string | null
 ): string {
-  return `Follow-up received — routing to ${formatGatewayMarkdownSessionReference(sessionId, sessionUrl)}...`;
+  return `Follow-up received — routing to ${formatGatewayMarkdownSessionReference(sessionId, sessionUrl)}…`;
 }
 
 /**
