@@ -303,11 +303,12 @@ export class GatewayService {
   private githubMessageBuffer = new Map<string, string>();
 
   /**
-   * Slack status updates use chat.update; keep a small in-memory throttle so
-   * rapid tool events don't trip Slack rate limits or create distracting UI
-   * flicker. Terminal states always bypass this throttle.
+   * Slack status updates are serialized and lightly throttled so concurrent
+   * tool/message hooks do not race while deleting/reposting the transient row.
+   * Terminal states always bypass this throttle.
    */
   private slackProgressLastUpdate = new Map<string, number>();
+  private slackProgressQueues = new Map<string, Promise<void>>();
   private slackStreamsByMessage = new Map<string, SlackStreamState>();
   private static SLACK_PROGRESS_MIN_UPDATE_MS = 2500;
 
@@ -633,6 +634,20 @@ export class GatewayService {
    * transcript; Slack receives only a compact truncated preview.
    */
   async updateProgress(data: GatewayProgressData): Promise<void> {
+    const previous = this.slackProgressQueues.get(data.session_id) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(() => this.updateProgressNow(data));
+    this.slackProgressQueues.set(data.session_id, next);
+
+    try {
+      await next;
+    } finally {
+      if (this.slackProgressQueues.get(data.session_id) === next) {
+        this.slackProgressQueues.delete(data.session_id);
+      }
+    }
+  }
+
+  private async updateProgressNow(data: GatewayProgressData): Promise<void> {
     if (!this.hasActiveChannels) return;
 
     const mapping = await this.threadMapRepo.findBySession(data.session_id);
