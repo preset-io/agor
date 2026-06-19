@@ -750,7 +750,6 @@ describe('agor_sessions_create', () => {
     const result = await agor_sessions_create({
       branchId: 'wt-target',
       agenticTool: 'claude-code',
-      enableCallback: false,
     });
 
     const created = sessionCreates[0] as Record<string, any>;

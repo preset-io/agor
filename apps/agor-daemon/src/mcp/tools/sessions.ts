@@ -1093,6 +1093,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         // when delivery is muted. `enabled` / relationship.callback_enabled are
         // the switches; callback_session_id is needed for generic session
         // settings/update paths to re-enable callbacks later.
+        callbackConfig.enabled ??= Boolean(wantsCallback);
         callbackConfig.callback_session_id ??= effectiveCallbackSessionId;
         callbackConfig.callback_created_by ??= ctx.userId;
       }
