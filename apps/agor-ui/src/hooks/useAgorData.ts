@@ -292,10 +292,20 @@ function hasIdMatchingPrefix<T>(
 function preserveSessionRelationshipFields(session: Session, existing?: Session): Session {
   if (!existing) return session;
 
+  const remoteRelationships = session.remote_relationships ?? existing.remote_relationships;
+  const remoteSurrogate = session.remote_surrogate ?? existing.remote_surrogate;
+
+  if (
+    remoteRelationships === session.remote_relationships &&
+    remoteSurrogate === session.remote_surrogate
+  ) {
+    return session;
+  }
+
   return {
     ...session,
-    remote_relationships: session.remote_relationships ?? existing.remote_relationships,
-    remote_surrogate: session.remote_surrogate ?? existing.remote_surrogate,
+    ...(remoteRelationships !== undefined && { remote_relationships: remoteRelationships }),
+    ...(remoteSurrogate !== undefined && { remote_surrogate: remoteSurrogate }),
   };
 }
 
