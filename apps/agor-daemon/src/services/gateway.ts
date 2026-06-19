@@ -469,8 +469,7 @@ export class GatewayService {
 
   private buildSlackProgressText(
     data: GatewayProgressData,
-    existingMetadata: Record<string, unknown>,
-    sessionUrl?: string | null
+    existingMetadata: Record<string, unknown>
   ): string {
     const now = Date.now();
     const startedAt =
@@ -483,23 +482,19 @@ export class GatewayService {
         ? `${elapsedSeconds}s`
         : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
 
-    const sessionLabel = sessionUrl
-      ? `<${sessionUrl}|session ${shortId(data.session_id)}>`
-      : `session \`${shortId(data.session_id)}\``;
-
     if (data.state === 'queued') {
       const position =
         typeof data.queue_position === 'number' ? ` at position ${data.queue_position}` : '';
-      return `⏳ Agor queued your message${position} in ${sessionLabel}.`;
+      return `⏳ Queued your message${position}.`;
     }
 
     if (data.state === 'done') {
-      return `✅ Agor finished in ${sessionLabel}.`;
+      return `✅ Done.`;
     }
 
     if (data.state === 'failed') {
       const suffix = data.error_message ? `\n>${data.error_message}` : '';
-      return `⚠️ Agor stopped with an error in ${sessionLabel}.${suffix}`;
+      return `⚠️ Agor stopped with an error.${suffix}`;
     }
 
     const latestToolName =
@@ -517,7 +512,19 @@ export class GatewayService {
     const todos = this.parseGatewayTodos(existingMetadata.slack_status_todos);
     const plan = this.formatSlackTodoPlan(todos);
     const toolLine = `\nCurrent tool: ${latestToolSummary}`;
-    return `⏳ Agor is still working in ${sessionLabel} (${elapsed}).${toolLine}${plan}`;
+    return `⏳ Still working (${elapsed}).${toolLine}${plan}`;
+  }
+
+  private stripSlackProgressMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+    const {
+      slack_status_message_ts: _statusTs,
+      slack_status_started_at: _startedAt,
+      slack_status_tool_name: _toolName,
+      slack_status_tool_summary: _toolSummary,
+      slack_status_todos: _todos,
+      ...rest
+    } = metadata;
+    return rest;
   }
 
   /**
@@ -570,36 +577,39 @@ export class GatewayService {
       ...(toolTodos.length > 0 ? { slack_status_todos: toolTodos } : {}),
     };
 
-    const usersService = this.app.service('users') as {
-      get: (id: string) => Promise<User>;
-    };
-    const sessionsService = this.app.service('sessions') as {
-      get: (id: string, params?: { user: User }) => Promise<Session & { url?: string | null }>;
-    };
-
-    let sessionUrl: string | null = null;
-    try {
-      const session = await sessionsService.get(data.session_id);
-      const user = await usersService.get(session.created_by);
-      sessionUrl = (await sessionsService.get(data.session_id, { user })).url || null;
-    } catch {
-      // Best-effort only; the status message can still identify the short ID.
-    }
-
     const connector =
       this.activeListeners.get(channel.id) ??
       getConnector(channel.channel_type as ChannelType, channel.config);
-    const statusText = this.buildSlackProgressText(data, metadataWithStart, sessionUrl);
-    const { text, blocks } = normalizeOutbound(
-      connector.formatMessage ? connector.formatMessage(statusText) : statusText
-    );
-
     const existingTs =
       typeof metadata.slack_status_message_ts === 'string'
         ? metadata.slack_status_message_ts
         : undefined;
 
     try {
+      if (data.state === 'done' && existingTs && connector.deleteMessage) {
+        try {
+          await connector.deleteMessage({
+            threadId: mapping.thread_id,
+            messageId: existingTs,
+          });
+          await this.threadMapRepo.updateMetadata(
+            mapping.id,
+            this.stripSlackProgressMetadata(metadataWithStart)
+          );
+          return;
+        } catch (error) {
+          console.warn('[gateway] Failed to delete Slack progress status; marking done:', error);
+        }
+      }
+
+      if (data.state === 'done' && !existingTs) {
+        return;
+      }
+
+      const statusText = this.buildSlackProgressText(data, metadataWithStart);
+      const { text, blocks } = normalizeOutbound(
+        connector.formatMessage ? connector.formatMessage(statusText) : statusText
+      );
       const ts = await connector.sendMessage({
         threadId: mapping.thread_id,
         text,

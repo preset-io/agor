@@ -65,6 +65,14 @@ export interface GatewayConnector {
   }): Promise<string>;
 
   /**
+   * Delete a previously sent platform message when supported.
+   *
+   * Used for temporary UX affordances (for example, Slack progress rows) that
+   * should disappear once the durable assistant response has arrived.
+   */
+  deleteMessage?(req: { threadId: string; messageId: string }): Promise<void>;
+
+  /**
    * Start listening for inbound messages (e.g., via Socket Mode or webhooks)
    */
   startListening?(callback: (msg: InboundMessage) => void): Promise<void>;

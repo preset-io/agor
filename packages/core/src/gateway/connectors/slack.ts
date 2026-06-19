@@ -816,6 +816,17 @@ export class SlackConnector implements GatewayConnector {
     }
   }
 
+  async deleteMessage(req: { threadId: string; messageId: string }): Promise<void> {
+    const { channel } = parseThreadId(req.threadId);
+    const result = await this.web.chat.delete({
+      channel,
+      ts: req.messageId,
+    });
+    if (!result.ok) {
+      throw new Error(`Slack delete error: ${result.error ?? 'unknown error'}`);
+    }
+  }
+
   /**
    * Start listening for inbound messages via Socket Mode
    *

@@ -543,4 +543,29 @@ describe('SlackConnector.sendMessage', () => {
       },
     ]);
   });
+
+  it('deletes a previously sent Slack message', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      chat: {
+        delete: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      },
+    };
+
+    await connector.deleteMessage({
+      threadId: 'C123-1700000000.000000',
+      messageId: '1700000000.000003',
+    });
+
+    expect(calls).toEqual([
+      {
+        channel: 'C123',
+        ts: '1700000000.000003',
+      },
+    ]);
+  });
 });
