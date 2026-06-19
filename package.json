@@ -63,7 +63,7 @@
       "@google/genai": "^1.43.0",
       "@hono/node-server": ">=1.19.14 <2",
       "@isaacs/brace-expansion": ">=5.0.1 <6",
-      "@modelcontextprotocol/sdk": ">=1.27.1 <2",
+      "@modelcontextprotocol/sdk": ">=1.29.0 <2",
       "@xmldom/xmldom": ">=0.9.9 <1",
       "ajv": ">=8.18.0 <9",
       "axios": ">=1.15.0 <2",
