@@ -253,7 +253,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
       if (results.length > 1) {
         console.warn(
           `[users] Ambiguous case-insensitive email alignment for ${normalizedEmail}: ${results
-            .map((row) => {
+            .map((row: unknown) => {
               const userRow = row as UserRow;
               return `${shortId(userRow.user_id)}:${userRow.email}`;
             })
