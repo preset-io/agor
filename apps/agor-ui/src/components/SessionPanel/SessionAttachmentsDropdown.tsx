@@ -1,6 +1,6 @@
 import { GithubOutlined, GlobalOutlined, LinkOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Dropdown, Tooltip } from 'antd';
+import { Badge, Button, Dropdown, Tooltip, theme } from 'antd';
 import type React from 'react';
 
 export interface SessionAttachmentItem {
@@ -24,6 +24,8 @@ function getIcon(url: string): React.ReactNode {
 }
 
 export const SessionAttachmentsDropdown: React.FC<Props> = ({ items }) => {
+  const { token } = theme.useToken();
+
   if (items.length === 0) return null;
 
   const menuItems: MenuProps['items'] = items.map((item) => ({
@@ -50,8 +52,8 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({ items }) => {
   return (
     <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomRight">
       <Tooltip title="Attachments">
-        <Badge count={items.length} size="small" offset={[-4, 4]}>
-          <Button type="text" icon={<LinkOutlined />} />
+        <Badge count={items.length} color={token.colorPrimary} size="small" offset={[-4, 4]}>
+          <Button type="text" icon={<LinkOutlined style={{ color: token.colorPrimary }} />} />
         </Badge>
       </Tooltip>
     </Dropdown>
