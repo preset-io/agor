@@ -90,6 +90,24 @@ export type BranchParams = QueryParams<{
     _include_sessions?: boolean | 'true' | 'false';
   };
 
+type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
+
+interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
+  command: 'environment.lifecycle';
+  sessionToken: string;
+  daemonUrl: string;
+  env: Record<string, string>;
+  params: {
+    branchId: BranchID;
+    branchPath: string;
+    action: EnvironmentLifecycleAction;
+    startCommand?: string;
+    stopCommand?: string;
+    nukeCommand?: string;
+    appUrl?: string;
+  };
+}
+
 /**
  * Process tracking for environment management
  */
@@ -315,10 +333,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   private async createEnvironmentExecutorPayload(options: {
     branch: Branch;
-    action: 'start' | 'stop' | 'restart' | 'nuke';
+    action: EnvironmentLifecycleAction;
     params?: BranchParams;
   }): Promise<{
-    payload: Record<string, unknown>;
+    payload: EnvironmentLifecycleExecutorPayload;
     asUser?: string;
     env: Record<string, string>;
   }> {
@@ -363,7 +381,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   private async dispatchEnvironmentExecutor(options: {
     branch: Branch;
-    action: 'start' | 'stop' | 'restart' | 'nuke';
+    action: EnvironmentLifecycleAction;
     params?: BranchParams;
   }): Promise<void> {
     const { branch, action } = options;
@@ -381,7 +399,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   private async runEnvironmentExecutor(options: {
     branch: Branch;
-    action: 'start' | 'stop' | 'restart' | 'nuke';
+    action: EnvironmentLifecycleAction;
     params?: BranchParams;
   }): Promise<void> {
     const { branch, action } = options;
