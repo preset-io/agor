@@ -42,6 +42,7 @@ export const artifacts = schema.artifacts;
 export const artifactTrustGrants = schema.artifactTrustGrants;
 export const boardObjects = schema.boardObjects;
 export const sessionMcpServers = schema.sessionMcpServers;
+export const sessionRelationships = schema.sessionRelationships;
 export const sessionEnvSelections = schema.sessionEnvSelections;
 export const userMcpOauthTokens = schema.userMcpOauthTokens;
 export const boardComments = schema.boardComments;

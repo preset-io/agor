@@ -245,6 +245,48 @@ export const sessions = sqliteTable(
 );
 
 /**
+ * Session Relationships table
+ *
+ * Durable cross-session links that are not necessarily canonical genealogy.
+ * Used for cross-branch remote-create provenance while keeping
+ * sessions.genealogy.parent_session_id branch-local.
+ */
+export const sessionRelationships = sqliteTable(
+  'session_relationships',
+  {
+    relationship_id: text('relationship_id', { length: 36 }).primaryKey(),
+    source_session_id: text('source_session_id', { length: 36 })
+      .notNull()
+      .references(() => sessions.session_id, { onDelete: 'cascade' }),
+    target_session_id: text('target_session_id', { length: 36 })
+      .notNull()
+      .references(() => sessions.session_id, { onDelete: 'cascade' }),
+    relationship_type: text('relationship_type', { enum: ['remote_create'] }).notNull(),
+    created_by: text('created_by', { length: 36 }).notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+    callback_enabled: t.bool('callback_enabled').notNull().default(false),
+    callback_session_id: text('callback_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+    data: t.json<Record<string, unknown>>('data'),
+  },
+  (table) => ({
+    sourceIdx: index('session_relationships_source_idx').on(table.source_session_id),
+    targetIdx: index('session_relationships_target_idx').on(table.target_session_id),
+    callbackIdx: index('session_relationships_callback_idx').on(table.callback_session_id),
+    sourceTargetTypeUnique: uniqueIndex('session_relationships_source_target_type_unique').on(
+      table.source_session_id,
+      table.target_session_id,
+      table.relationship_type
+    ),
+  })
+);
+
+/**
  * Tasks table - Granular work units within sessions
  */
 export const tasks = sqliteTable(
@@ -2152,6 +2194,8 @@ export const kbGraphEdges = sqliteTable(
  */
 export type SessionRow = typeof sessions.$inferSelect;
 export type SessionInsert = typeof sessions.$inferInsert;
+export type SessionRelationshipRow = typeof sessionRelationships.$inferSelect;
+export type SessionRelationshipInsert = typeof sessionRelationships.$inferInsert;
 export type TaskRow = typeof tasks.$inferSelect;
 export type TaskInsert = typeof tasks.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
@@ -2221,7 +2265,7 @@ export type KBGraphEdgeInsert = typeof kbGraphEdges.$inferInsert;
  * These enable automatic JOINs using db.query.sessions.findFirst({ with: { branch: true } })
  */
 
-export const sessionsRelations = relations(sessions, ({ one }) => ({
+export const sessionsRelations = relations(sessions, ({ one, many }) => ({
   branch: one(branches, {
     fields: [sessions.branch_id],
     references: [branches.branch_id],
@@ -2229,6 +2273,25 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
   schedule: one(schedules, {
     fields: [sessions.schedule_id],
     references: [schedules.schedule_id],
+  }),
+  outboundRelationships: many(sessionRelationships, { relationName: 'relationshipSource' }),
+  inboundRelationships: many(sessionRelationships, { relationName: 'relationshipTarget' }),
+}));
+
+export const sessionRelationshipsRelations = relations(sessionRelationships, ({ one }) => ({
+  sourceSession: one(sessions, {
+    fields: [sessionRelationships.source_session_id],
+    references: [sessions.session_id],
+    relationName: 'relationshipSource',
+  }),
+  targetSession: one(sessions, {
+    fields: [sessionRelationships.target_session_id],
+    references: [sessions.session_id],
+    relationName: 'relationshipTarget',
+  }),
+  callbackSession: one(sessions, {
+    fields: [sessionRelationships.callback_session_id],
+    references: [sessions.session_id],
   }),
 }));
 

@@ -11,6 +11,7 @@ import {
   type Database,
   SessionEnvSelectionRepository,
   SessionMCPServerRepository,
+  SessionRelationshipRepository,
   SessionRepository,
   type SessionWithLastMessage,
   UsersRepository,
@@ -106,6 +107,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private sessionRepo: SessionRepository;
   private app: Application;
   private sessionMCPRepo: SessionMCPServerRepository;
+  private sessionRelationshipRepo: SessionRelationshipRepository;
   private sessionEnvSelectionRepo: SessionEnvSelectionRepository;
   private usersRepo: UsersRepository;
   private branchRepo: BranchRepository;
@@ -125,6 +127,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     this.sessionRepo = sessionRepo;
     this.app = app;
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
+    this.sessionRelationshipRepo = new SessionRelationshipRepository(db);
     this.sessionEnvSelectionRepo = new SessionEnvSelectionRepository(db);
     this.branchRepo = new BranchRepository(db);
     // Used by resolveChildIdentity to stamp unix_username on fork/spawn children
@@ -695,6 +698,35 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     this.emit?.('removed', session, params);
 
     return session;
+  }
+
+  /**
+   * Override patch to keep durable relationship callback state synchronized
+   * with the existing callback_config.enabled execution switch.
+   */
+  async patch(
+    id: import('@agor/core/types').NullableId,
+    data: Partial<Session>,
+    params?: SessionParams
+  ): Promise<Session | Session[]> {
+    const result = (await super.patch(id, data, params)) as Session | Session[];
+
+    const callbackEnabled = data.callback_config?.enabled;
+    if (
+      typeof callbackEnabled === 'boolean' &&
+      !(params as (SessionParams & { _skipRelationshipCallbackSync?: boolean }) | undefined)
+        ?._skipRelationshipCallbackSync
+    ) {
+      const sessionsToSync = Array.isArray(result) ? result : [result];
+      for (const session of sessionsToSync) {
+        await this.sessionRelationshipRepo.setCallbackEnabledForTargetSession(
+          session.session_id as SessionID,
+          callbackEnabled
+        );
+      }
+    }
+
+    return result;
   }
 
   /**

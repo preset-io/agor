@@ -29,6 +29,13 @@ vi.mock('../../utils/branch-authorization.js', () => ({
 
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class FakeBranchRepository {},
+  SessionRelationshipRepository: class FakeSessionRelationshipRepository {
+    create = vi.fn(async (data: Record<string, unknown>) => ({
+      relationship_id: 'rel-1',
+      ...data,
+      created_at: new Date(0).toISOString(),
+    }));
+  },
   UserApiKeysRepository: class FakeUserApiKeysRepository {},
   shortId: (id: string) => id,
 }));
@@ -328,7 +335,11 @@ describe('agor_sessions_create', () => {
             ...(data as Record<string, unknown>),
           };
         },
-        get: async (id: string) => ({ session_id: id, genealogy: { children: [] } }),
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
         patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': { create: async () => ({}) },
@@ -368,7 +379,11 @@ describe('agor_sessions_create', () => {
           sessionCreates.push(data);
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
-        get: async (id: string) => ({ session_id: id, genealogy: { children: [] } }),
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
         patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': { create: async () => ({}) },
@@ -405,7 +420,11 @@ describe('agor_sessions_create', () => {
           session_id: 'sess-new',
           ...(data as Record<string, unknown>),
         }),
-        get: async (id: string) => ({ session_id: id, genealogy: { children: [] } }),
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
         patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': {
@@ -443,7 +462,11 @@ describe('agor_sessions_create', () => {
       branches: { get: async () => baseBranch },
       sessions: {
         create: async () => ({ session_id: 'sess-new' }),
-        get: async (id: string) => ({ session_id: id, genealogy: { children: [] } }),
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
         patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': {
@@ -480,7 +503,11 @@ describe('agor_sessions_create', () => {
       branches: { get: async () => branchWithMcps },
       sessions: {
         create: async () => ({ session_id: 'sess-new' }),
-        get: async (id: string) => ({ session_id: id, genealogy: { children: [] } }),
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
         patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': {
@@ -518,6 +545,7 @@ describe('agor_sessions_create', () => {
         },
         get: async (id: string) => ({
           session_id: id,
+          branch_id: 'wt-1',
           genealogy: { children: ['existing-child'] },
         }),
         patch: async (id: unknown, data: unknown) => {
@@ -599,7 +627,11 @@ describe('agor_sessions_create', () => {
           sessionCreates.push(data);
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
-        get: async (id: string) => ({ session_id: id, genealogy: { children: [] } }),
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
         patch: async (id: unknown, data: unknown) => {
           patchCalls.push({ id, data });
           return {};
@@ -659,6 +691,89 @@ describe('agor_sessions_create', () => {
     expect(created.genealogy.parent_session_id).toBeUndefined();
     // No patch to update a parent's children list
     expect(patchCalls).toHaveLength(0);
+  });
+
+  it('does not auto-link to the calling session when creating in a different branch', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-caller',
+          genealogy: { children: ['existing-child'] },
+        }),
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.genealogy.parent_session_id).toBeUndefined();
+    expect(patchCalls).toHaveLength(0);
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.note).toContain('target branch differs');
+    expect(parsed.remoteRelationship).toMatchObject({
+      source_session_id: 'sess-caller',
+      target_session_id: 'sess-new',
+      relationship_type: 'remote_create',
+      callback_enabled: false,
+    });
+  });
+
+  it('rejects explicit parentSessionId from a different branch', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-other',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await expect(
+      agor_sessions_create({
+        branchId: 'wt-target',
+        agenticTool: 'claude-code',
+        parentSessionId: 'sess-explicit-parent',
+      })
+    ).rejects.toThrow(/target branch/i);
+    expect(sessionCreates).toHaveLength(0);
   });
 });
 
@@ -935,6 +1050,12 @@ describe('modelConfig schema (string shorthand coercion)', () => {
           sessionCreates.push(data);
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': { create: async () => ({}) },
     });

@@ -22,6 +22,7 @@ export * from './schedules';
 export * from './serialized-sessions';
 export * from './session-env-selections';
 export * from './session-mcp-servers';
+export * from './session-relationships';
 export * from './sessions';
 export * from './tasks';
 export * from './thread-session-map';
