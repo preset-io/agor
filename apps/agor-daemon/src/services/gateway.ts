@@ -794,7 +794,12 @@ export class GatewayService {
       getConnector(channel.channel_type as ChannelType, channel.config);
 
     const streamConnector = connector as GatewayConnector & {
-      startStream?: (req: { threadId: string; text?: string }) => Promise<string>;
+      startStream?: (req: {
+        threadId: string;
+        text?: string;
+        recipientUserId?: string;
+        recipientTeamId?: string;
+      }) => Promise<string>;
       appendStream?: (req: { threadId: string; ts: string; text: string }) => Promise<void>;
       stopStream?: (req: { threadId: string; ts: string; text?: string }) => Promise<void>;
     };
@@ -808,6 +813,15 @@ export class GatewayService {
     }
 
     try {
+      const metadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const recipientUserId =
+        typeof metadata.slack_user_id === 'string' ? metadata.slack_user_id : undefined;
+      const recipientTeamId =
+        typeof metadata.slack_team_id === 'string' ? metadata.slack_team_id : undefined;
+
       if (event === 'streaming:start') {
         return;
       }
@@ -820,6 +834,8 @@ export class GatewayService {
         const ts = await streamConnector.startStream({
           threadId: mapping.thread_id,
           text: chunk,
+          recipientUserId,
+          recipientTeamId,
         });
         this.slackStreamsByMessage.set(messageId, {
           threadId: mapping.thread_id,
@@ -1152,15 +1168,26 @@ export class GatewayService {
       // Touch timestamps
       await this.threadMapRepo.updateLastMessage(existingMapping.id);
 
-      // Update mapping metadata with new processing_comment_id if present.
-      // Each follow-up @mention creates a new "Processing..." comment, and
-      // the flush needs the latest comment ID to edit the right one.
-      if (data.metadata?.processing_comment_id) {
-        const updatedMetadata = {
-          ...((existingMapping.metadata as Record<string, unknown>) ?? {}),
-          processing_comment_id: data.metadata.processing_comment_id,
-        };
-        await this.threadMapRepo.updateMetadata(existingMapping.id, updatedMetadata);
+      // Update mapping metadata with fresh platform context. For GitHub, each
+      // follow-up @mention creates a new "Processing..." comment and the flush
+      // needs the latest comment ID. For Slack streaming, chat.startStream
+      // requires the recipient user/team IDs for channel threads.
+      if (data.metadata) {
+        const existingMetadata = ((existingMapping.metadata as Record<string, unknown>) ?? {}) as
+          | Record<string, unknown>
+          | undefined;
+        await this.threadMapRepo.updateMetadata(existingMapping.id, {
+          ...existingMetadata,
+          ...(data.metadata.processing_comment_id
+            ? { processing_comment_id: data.metadata.processing_comment_id }
+            : {}),
+          ...(typeof data.metadata.slack_user_id === 'string'
+            ? { slack_user_id: data.metadata.slack_user_id }
+            : {}),
+          ...(typeof data.metadata.slack_team_id === 'string'
+            ? { slack_team_id: data.metadata.slack_team_id }
+            : {}),
+        });
       }
 
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);

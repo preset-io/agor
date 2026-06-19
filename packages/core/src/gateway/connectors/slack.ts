@@ -808,7 +808,12 @@ export class SlackConnector implements GatewayConnector {
     return result.ts;
   }
 
-  async startStream(req: { threadId: string; text?: string }): Promise<string> {
+  async startStream(req: {
+    threadId: string;
+    text?: string;
+    recipientUserId?: string;
+    recipientTeamId?: string;
+  }): Promise<string> {
     const { channel, thread_ts } = parseThreadId(req.threadId);
     const chat = this.web.chat as unknown as {
       startStream: (
@@ -819,6 +824,8 @@ export class SlackConnector implements GatewayConnector {
       channel,
       thread_ts,
       markdown_text: req.text?.trim() ? req.text : ' ',
+      ...(req.recipientUserId ? { recipient_user_id: req.recipientUserId } : {}),
+      ...(req.recipientTeamId ? { recipient_team_id: req.recipientTeamId } : {}),
     });
     if (!result.ok || !result.ts) {
       throw new Error(`Slack stream start error: ${result.error ?? 'unknown error'}`);
@@ -950,6 +957,19 @@ export class SlackConnector implements GatewayConnector {
 
       await ack();
       const event = body.event;
+      const slackTeamId =
+        typeof event.team === 'string'
+          ? event.team
+          : typeof body.team_id === 'string'
+            ? body.team_id
+            : Array.isArray(body.authorizations) &&
+                typeof body.authorizations[0]?.team_id === 'string'
+              ? body.authorizations[0].team_id
+              : undefined;
+      console.log(
+        `[slack] Processing ${eventType} event - channel: ${event.channel}, channel_type: ${event.channel_type}`
+      );
+
       // Skip bot messages to avoid loops
       if (event.bot_id || event.subtype === 'bot_message') {
         return;
@@ -1123,6 +1143,8 @@ export class SlackConnector implements GatewayConnector {
         metadata: {
           channel: event.channel,
           channel_type: channelType,
+          ...(event.user ? { slack_user_id: event.user } : {}),
+          ...(slackTeamId ? { slack_team_id: slackTeamId } : {}),
           requires_mapping_verification: allowedViaThreadReplyException,
           ...(slackUserEmail ? { slack_user_email: slackUserEmail } : {}),
           ...(slackUserDisplayName ? { slack_user_name: slackUserDisplayName } : {}),

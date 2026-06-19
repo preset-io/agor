@@ -566,6 +566,36 @@ describe('SlackConnector.sendMessage', () => {
     ]);
   });
 
+  it('passes Slack stream recipient ids when provided', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      chat: {
+        startStream: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true, ts: '1700000000.000005' };
+        },
+      },
+    };
+
+    await connector.startStream({
+      threadId: 'C123-1700000000.000000',
+      text: 'hello',
+      recipientUserId: 'U123',
+      recipientTeamId: 'T123',
+    });
+
+    expect(calls).toEqual([
+      {
+        channel: 'C123',
+        thread_ts: '1700000000.000000',
+        markdown_text: 'hello',
+        recipient_user_id: 'U123',
+        recipient_team_id: 'T123',
+      },
+    ]);
+  });
+
   it('deletes a previously sent Slack message', async () => {
     const calls: unknown[] = [];
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });
