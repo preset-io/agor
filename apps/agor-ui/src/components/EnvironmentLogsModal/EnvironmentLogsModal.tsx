@@ -7,6 +7,8 @@ import { ErrorBoundary } from '../ErrorBoundary';
 
 const { Text } = Typography;
 
+const LOGS_AUTO_REFRESH_INTERVAL_MS = 10_000;
+
 interface EnvironmentLogsModalProps {
   open: boolean;
   onClose: () => void;
@@ -109,7 +111,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
     if (autoRefresh && open) {
       intervalRef.current = setInterval(() => {
         fetchLogs(true); // true = enable auto-scroll
-      }, 3000); // 3 seconds
+      }, LOGS_AUTO_REFRESH_INTERVAL_MS);
     }
 
     // Cleanup on unmount or when dependencies change
