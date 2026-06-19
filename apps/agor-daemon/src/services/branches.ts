@@ -313,11 +313,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return { asUser, env };
   }
 
-  private async dispatchEnvironmentExecutor(options: {
+  private async createEnvironmentExecutorPayload(options: {
     branch: Branch;
     action: 'start' | 'stop' | 'restart' | 'nuke';
     params?: BranchParams;
-  }): Promise<void> {
+  }): Promise<{
+    payload: Record<string, unknown>;
+    asUser?: string;
+    env: Record<string, string>;
+  }> {
     const { branch, action, params } = options;
     const userId =
       ((params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined) ??
@@ -336,8 +340,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch);
 
-    spawnExecutor(
-      {
+    return {
+      asUser,
+      env,
+      payload: {
         command: 'environment.lifecycle',
         sessionToken,
         daemonUrl: getDaemonUrl(),
@@ -352,15 +358,58 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           appUrl: branch.app_url,
         },
       },
-      {
-        logPrefix: `[Environment.${action} ${branch.name}]`,
-        asUser,
-        preparedEnv: env,
-        templateVariables: {
-          branch_id: branch.branch_id,
-        },
-      }
-    );
+    };
+  }
+
+  private async dispatchEnvironmentExecutor(options: {
+    branch: Branch;
+    action: 'start' | 'stop' | 'restart' | 'nuke';
+    params?: BranchParams;
+  }): Promise<void> {
+    const { branch, action } = options;
+    const { payload, asUser, env } = await this.createEnvironmentExecutorPayload(options);
+
+    spawnExecutor(payload, {
+      logPrefix: `[Environment.${action} ${branch.name}]`,
+      asUser,
+      preparedEnv: env,
+      templateVariables: {
+        branch_id: branch.branch_id,
+      },
+    });
+  }
+
+  private async runEnvironmentExecutor(options: {
+    branch: Branch;
+    action: 'start' | 'stop' | 'restart' | 'nuke';
+    params?: BranchParams;
+  }): Promise<void> {
+    const { branch, action } = options;
+    const { payload, asUser, env } = await this.createEnvironmentExecutorPayload(options);
+
+    const result = await runExecutorCommand(payload, {
+      logPrefix: `[Environment.${action} ${branch.name}]`,
+      asUser,
+      preparedEnv: env,
+      // Mixed webhook/shell restart needs the daemon to wait for shell stop
+      // before it invokes the daemon-owned webhook start. Keep this generous
+      // enough for docker compose down while still bounding the request.
+      timeoutMs: 10 * 60_000,
+      templateVariables: {
+        branch_id: branch.branch_id,
+      },
+    });
+
+    if (!result.success) {
+      const details = result.error?.details as { output?: string } | undefined;
+      const error = new Error(
+        result.error?.message || 'Executor environment command failed'
+      ) as Error & {
+        commandOutput?: string;
+      };
+      error.commandOutput = details?.output;
+      throw error;
+    }
   }
 
   private async fetchEnvironmentLogsViaExecutor(
@@ -1843,15 +1892,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const startExecution = await this.resolveEnvironmentCommand(branch.start_command, 'start');
 
-    if (startExecution.kind === 'webhook' || !branch.stop_command) {
+    const stopExecution = branch.stop_command
+      ? await this.resolveEnvironmentCommand(branch.stop_command, 'stop')
+      : undefined;
+
+    if (!branch.stop_command || stopExecution?.kind === 'webhook') {
       await this.stopEnvironment(id, params);
       return await this.startEnvironment(id, params);
     }
 
-    const stopExecution = await this.resolveEnvironmentCommand(branch.stop_command, 'stop');
-
-    if (stopExecution.kind === 'webhook') {
-      await this.stopEnvironment(id, params);
+    if (startExecution.kind === 'webhook') {
+      await this.updateEnvironment(id, { status: 'stopping' }, params);
+      await this.runEnvironmentExecutor({ branch, action: 'stop', params });
       return await this.startEnvironment(id, params);
     }
 

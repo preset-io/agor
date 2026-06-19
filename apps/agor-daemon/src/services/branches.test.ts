@@ -360,6 +360,77 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
+  it('waits for shell stop before webhook start during mixed-mode restart', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-restart-mixed' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-restart-mixed',
+      path: '/tmp/wt-restart-mixed',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      start_command: 'https://env.example/start',
+      stop_command: 'docker compose down',
+      app_url: 'http://localhost:3000',
+      environment_instance: { status: 'running' },
+    };
+
+    let currentEnvironment: Record<string, unknown> = { ...branch.environment_instance };
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    vi.spyOn(service, 'get').mockImplementation(async () => {
+      return { ...branch, environment_instance: currentEnvironment } as never;
+    });
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockImplementation(
+      async (command: string) =>
+        command.startsWith('https://')
+          ? ({ kind: 'webhook', url: command } as never)
+          : ({ kind: 'shell', command } as never)
+    );
+    vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+      env: { PATH: '/usr/bin:/bin' },
+      asUser: undefined,
+    } as never);
+    const executeWebhookSpy = vi
+      .spyOn(service as never, 'executeEnvironmentWebhook')
+      .mockResolvedValue({
+        body: 'ok',
+        truncated: false,
+        status: 200,
+      } as never);
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
+      currentEnvironment = {
+        ...currentEnvironment,
+        ...(update as Record<string, unknown>),
+      };
+      return { ...branch, environment_instance: currentEnvironment } as never;
+    });
+    mockedRunExecutorCommand.mockResolvedValue({
+      success: true,
+      data: { branchId: branch.branch_id, action: 'stop' },
+    });
+
+    await service.restartEnvironment(branch.branch_id);
+
+    expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'environment.lifecycle',
+        params: expect.objectContaining({
+          action: 'stop',
+          branchId: branch.branch_id,
+          stopCommand: branch.stop_command,
+        }),
+      }),
+      expect.objectContaining({ logPrefix: `[Environment.stop ${branch.name}]` })
+    );
+    expect(executeWebhookSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: branch.start_command,
+        commandType: 'start',
+      })
+    );
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  });
+
   it('uses a reusable branch-scoped token when fetching shell logs via executor', async () => {
     const { service } = createServiceHarness();
     const app = (service as unknown as { app: Application }).app as unknown as {
