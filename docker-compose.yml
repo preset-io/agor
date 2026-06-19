@@ -108,6 +108,8 @@ services:
       - UI_PORT=${UI_PORT:-5173}
       # UI connects to daemon via localhost (inside container)
       - VITE_DAEMON_PORT=${DAEMON_PORT:-3030}
+      # Public, browser-facing base URL used in Slack/GitHub/email links.
+      - AGOR_BASE_URL=${AGOR_BASE_URL:-}
 
       # Database configuration
       # AUTO-DETECT: If postgres container is running, use PostgreSQL; otherwise SQLite
