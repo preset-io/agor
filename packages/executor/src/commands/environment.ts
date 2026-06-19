@@ -58,6 +58,17 @@ function commandForAction(payload: EnvironmentLifecyclePayload): string {
   }
 }
 
+async function updateBranchEnvironment(
+  client: Awaited<ReturnType<typeof createExecutorClient>>,
+  branchId: string,
+  environmentUpdate: Record<string, unknown>
+): Promise<void> {
+  await client.service('branches').updateEnvironment({
+    branch_id: branchId,
+    environment_update: environmentUpdate,
+  });
+}
+
 async function runShellCommand(options: {
   command: string;
   cwd: string;
@@ -178,7 +189,7 @@ export async function handleEnvironmentLifecycle(
     const cwd = payload.params.branchPath || branch.path;
 
     if (payload.params.action === 'restart' && payload.params.stopCommand) {
-      await client.service('branches').updateEnvironment(branchId, {
+      await updateBranchEnvironment(client, branchId, {
         status: 'stopping',
       });
       await runShellCommand({
@@ -191,7 +202,7 @@ export async function handleEnvironmentLifecycle(
 
     if (payload.params.action === 'start' || payload.params.action === 'restart') {
       const startedAt = new Date().toISOString();
-      await client.service('branches').updateEnvironment(branchId, {
+      await updateBranchEnvironment(client, branchId, {
         status: 'starting',
         process: {
           ...(branch.environment_instance?.process ?? {}),
@@ -211,7 +222,7 @@ export async function handleEnvironmentLifecycle(
         commandType: 'start',
       });
 
-      await client.service('branches').updateEnvironment(branchId, {
+      await updateBranchEnvironment(client, branchId, {
         process: {
           ...(branch.environment_instance?.process ?? {}),
           pid: result.pid,
@@ -234,7 +245,7 @@ export async function handleEnvironmentLifecycle(
       commandType,
     });
 
-    await client.service('branches').updateEnvironment(branchId, {
+    await updateBranchEnvironment(client, branchId, {
       status: 'stopped',
       process: undefined,
       last_health_check: {
@@ -260,7 +271,7 @@ export async function handleEnvironmentLifecycle(
         payload.params.action === 'start' &&
         (currentStatus === 'stopping' || currentStatus === 'stopped');
       if (!staleStartFailure) {
-        await client.service('branches').updateEnvironment(branchId, {
+        await updateBranchEnvironment(client, branchId, {
           status: 'error',
           last_health_check: {
             timestamp: new Date().toISOString(),

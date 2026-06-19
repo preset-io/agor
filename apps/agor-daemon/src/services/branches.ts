@@ -1590,11 +1590,34 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Update environment status
    */
   async updateEnvironment(
-    id: BranchID,
-    environmentUpdate: Partial<Branch['environment_instance']>,
+    idOrData:
+      | BranchID
+      | {
+          branch_id?: BranchID;
+          branchId?: BranchID;
+          environment_update?: Partial<Branch['environment_instance']>;
+          environmentUpdate?: Partial<Branch['environment_instance']>;
+        },
+    environmentUpdateOrParams?: Partial<Branch['environment_instance']> | BranchParams,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
-    const existing = await this.get(id, params);
+    const isRpcEnvelope = typeof idOrData === 'object';
+    const id = isRpcEnvelope ? (idOrData.branch_id ?? idOrData.branchId) : idOrData;
+    const environmentUpdate = isRpcEnvelope
+      ? (idOrData.environment_update ?? idOrData.environmentUpdate)
+      : (environmentUpdateOrParams as Partial<Branch['environment_instance']> | undefined);
+    const resolvedParams = isRpcEnvelope
+      ? (environmentUpdateOrParams as BranchParams | undefined)
+      : params;
+
+    if (!id) {
+      throw new Error('Branch ID is required to update environment status');
+    }
+    if (!environmentUpdate) {
+      throw new Error('Environment update is required');
+    }
+
+    const existing = await this.get(id, resolvedParams);
 
     const updatedEnvironment = {
       ...existing.environment_instance,
@@ -1629,7 +1652,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         environment_instance: updatedEnvironment,
         updated_at: new Date().toISOString(),
       },
-      params
+      resolvedParams
     );
 
     return branch;

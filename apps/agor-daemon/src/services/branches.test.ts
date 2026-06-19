@@ -355,6 +355,42 @@ describe('BranchesService environment start async behavior', () => {
       })
     );
   });
+
+  it('accepts branch-scoped RPC envelope for updateEnvironment', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-rpc' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-rpc',
+      path: '/tmp/wt-env-rpc',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_instance: { status: 'stopping' },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+      return { ...branch, ...(data as object) } as never;
+    });
+
+    await service.updateEnvironment({
+      branch_id: branch.branch_id,
+      environment_update: {
+        status: 'stopped',
+        process: undefined,
+      },
+    });
+
+    expect(patchSpy).toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({
+        environment_instance: expect.objectContaining({
+          status: 'stopped',
+          process: undefined,
+        }),
+      }),
+      undefined
+    );
+  });
 });
 
 describe('BranchesService.patch primary assistant invariants', () => {

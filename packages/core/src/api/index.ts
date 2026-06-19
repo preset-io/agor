@@ -489,8 +489,15 @@ export interface BranchesService extends AgorService<Branch> {
    * Update environment status
    */
   updateEnvironment(
-    id: string,
-    environmentUpdate: Partial<Branch['environment_instance']>,
+    data:
+      | {
+          branch_id?: string;
+          branchId?: string;
+          environment_update?: Partial<Branch['environment_instance']>;
+          environmentUpdate?: Partial<Branch['environment_instance']>;
+        }
+      | string,
+    environmentUpdate?: Partial<Branch['environment_instance']>,
     params?: Params
   ): Promise<Branch>;
 
