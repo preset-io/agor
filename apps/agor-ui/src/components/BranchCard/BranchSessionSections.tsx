@@ -45,7 +45,6 @@ import {
 } from '../../utils/sessionSearch';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { ArchiveActionButton } from '../ArchiveButton';
-import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { HighlightMatch } from '../HighlightMatch';
 import { ChannelPill } from '../Pill';
@@ -621,7 +620,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 </Typography.Text>
               )}
             </div>
-            <BranchBoardLocatorIcon branch={branch} />
           </div>
         </div>
       </SessionItemWithActions>
@@ -678,7 +676,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
               <SessionRelationshipIcon session={session} size={10} />
             )}
             {renderSessionTitle(session)}
-            {!isRemoteSurrogate && <BranchBoardLocatorIcon branch={branch} />}
           </div>
         </div>
       </SessionItemWithActions>
