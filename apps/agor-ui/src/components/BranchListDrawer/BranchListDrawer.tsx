@@ -58,6 +58,139 @@ const getBadgeTone = (
   return tone === 'success' || tone === 'default' ? null : tone;
 };
 
+interface SessionListRowProps {
+  session: Session;
+  branch: Branch | undefined;
+  repo: Repo | undefined;
+  titleText: string;
+  descriptionSnippet: string | null;
+  toolMatches: boolean;
+  trimmedQuery: string;
+  onSessionClick: (sessionId: string) => void;
+  onAfterSessionClick?: () => void;
+}
+
+const SessionListRow: React.FC<SessionListRowProps> = ({
+  session,
+  branch,
+  repo,
+  titleText,
+  descriptionSnippet,
+  toolMatches,
+  trimmedQuery,
+  onSessionClick,
+  onAfterSessionClick,
+}) => {
+  const [hovered, setHovered] = useState(false);
+  const { token } = theme.useToken();
+
+  return (
+    <div
+      style={{
+        cursor: 'pointer',
+        padding: '10px 24px',
+        transition: 'background 0.2s',
+        background: hovered ? token.colorBgTextHover : 'transparent',
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={() => {
+        onSessionClick(session.session_id);
+        onAfterSessionClick?.();
+      }}
+    >
+      {/* Line 1: tool icon (with corner status badge) · title · genealogy */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
+        <span style={{ flexShrink: 0, display: 'inline-flex' }}>
+          {(() => {
+            const tone = getBadgeTone(session.status);
+            const icon = <ToolIcon tool={session.agentic_tool} size={18} />;
+            return tone ? (
+              <Badge dot status={tone} offset={[-3, 3]}>
+                {icon}
+              </Badge>
+            ) : (
+              icon
+            );
+          })()}
+        </span>
+        <Typography.Text ellipsis={{ tooltip: titleText }} style={{ flex: 1, minWidth: 0 }}>
+          <HighlightMatch text={titleText} query={trimmedQuery} />
+        </Typography.Text>
+        <SessionRelationshipIcon session={session} />
+        <BranchBoardLocatorIcon
+          branch={branch}
+          visible={hovered}
+          onSessionClick={() => {
+            onSessionClick(session.session_id);
+            onAfterSessionClick?.();
+          }}
+        />
+      </div>
+
+      {toolMatches && (
+        <Typography.Text
+          type="secondary"
+          style={{ display: 'block', fontSize: 11, marginTop: 3, marginLeft: 26 }}
+        >
+          Agent: <HighlightMatch text={session.agentic_tool} query={trimmedQuery} />
+        </Typography.Text>
+      )}
+
+      {descriptionSnippet && descriptionSnippet !== titleText && (
+        <Typography.Text
+          type="secondary"
+          style={{
+            fontSize: 11,
+            display: 'block',
+            marginTop: 3,
+            marginLeft: 26,
+            lineHeight: 1.4,
+            fontStyle: 'italic',
+          }}
+        >
+          <HighlightMatch text={descriptionSnippet} query={trimmedQuery} />
+        </Typography.Text>
+      )}
+
+      {/* Line 2: compact, non-interactive branch pill · relative timestamp */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          marginTop: 6,
+          marginLeft: 26,
+          minWidth: 0,
+        }}
+      >
+        <div style={{ minWidth: 0, overflow: 'hidden' }}>
+          {branch ? (
+            <BranchPill
+              branch={branch.name}
+              compact
+              title={repo ? `${repo.slug} / ${branch.name}` : branch.name}
+            />
+          ) : (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              No branch
+            </Typography.Text>
+          )}
+        </div>
+        <Tooltip title={formatTimestampWithRelative(session.last_updated)}>
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}
+          >
+            {formatRelativeTime(session.last_updated)}
+          </Typography.Text>
+        </Tooltip>
+      </div>
+    </div>
+  );
+};
+
 export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
   open,
   onClose,
@@ -197,9 +330,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
           displaySessions.map((session) => {
             const branch = session.branch_id ? branchById.get(session.branch_id) : undefined;
             const repo = branch ? repoById.get(branch.repo_id) : undefined;
-            const titleText = getSessionDisplayTitle(session, {
-              includeAgentFallback: true,
-            });
+            const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
             const descriptionSnippet =
               searchActive && session.title && session.description
                 ? getMatchSnippet(session.description, trimmedQuery)
@@ -207,121 +338,18 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
             const toolMatches = searchActive && sessionToolMatches(session, trimmedQuery);
 
             return (
-              <div
+              <SessionListRow
                 key={session.session_id}
-                style={{
-                  cursor: 'pointer',
-                  padding: '10px 24px',
-                  transition: 'background 0.2s',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = token.colorBgTextHover;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent';
-                }}
-                onClick={() => {
-                  onSessionClick(session.session_id);
-                  onAfterSessionClick?.();
-                }}
-              >
-                {/* Line 1: tool icon (with corner status badge) · title · genealogy */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 8,
-                    minWidth: 0,
-                  }}
-                >
-                  <span style={{ flexShrink: 0, display: 'inline-flex' }}>
-                    {(() => {
-                      const tone = getBadgeTone(session.status);
-                      const icon = <ToolIcon tool={session.agentic_tool} size={18} />;
-                      return tone ? (
-                        <Badge dot status={tone} offset={[-3, 3]}>
-                          {icon}
-                        </Badge>
-                      ) : (
-                        icon
-                      );
-                    })()}
-                  </span>
-                  <Typography.Text
-                    ellipsis={{ tooltip: titleText }}
-                    style={{ flex: 1, minWidth: 0 }}
-                  >
-                    <HighlightMatch text={titleText} query={trimmedQuery} />
-                  </Typography.Text>
-                  <SessionRelationshipIcon session={session} />
-                  <BranchBoardLocatorIcon branch={branch} />
-                </div>
-
-                {toolMatches && (
-                  <Typography.Text
-                    type="secondary"
-                    style={{
-                      display: 'block',
-                      fontSize: 11,
-                      marginTop: 3,
-                      marginLeft: 26,
-                    }}
-                  >
-                    Agent: <HighlightMatch text={session.agentic_tool} query={trimmedQuery} />
-                  </Typography.Text>
-                )}
-
-                {descriptionSnippet && descriptionSnippet !== titleText && (
-                  <Typography.Text
-                    type="secondary"
-                    style={{
-                      fontSize: 11,
-                      display: 'block',
-                      marginTop: 3,
-                      marginLeft: 26,
-                      lineHeight: 1.4,
-                      fontStyle: 'italic',
-                    }}
-                  >
-                    <HighlightMatch text={descriptionSnippet} query={trimmedQuery} />
-                  </Typography.Text>
-                )}
-
-                {/* Line 2: compact, non-interactive branch pill · relative timestamp */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    marginTop: 6,
-                    marginLeft: 26, // align under title (icon 18 + gap 8)
-                    minWidth: 0,
-                  }}
-                >
-                  <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                    {branch ? (
-                      <BranchPill
-                        branch={branch.name}
-                        compact
-                        title={repo ? `${repo.slug} / ${branch.name}` : branch.name}
-                      />
-                    ) : (
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        No branch
-                      </Typography.Text>
-                    )}
-                  </div>
-                  <Tooltip title={formatTimestampWithRelative(session.last_updated)}>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}
-                    >
-                      {formatRelativeTime(session.last_updated)}
-                    </Typography.Text>
-                  </Tooltip>
-                </div>
-              </div>
+                session={session}
+                branch={branch}
+                repo={repo}
+                titleText={titleText}
+                descriptionSnippet={descriptionSnippet}
+                toolMatches={toolMatches}
+                trimmedQuery={trimmedQuery}
+                onSessionClick={onSessionClick}
+                onAfterSessionClick={onAfterSessionClick}
+              />
             );
           })
         )}

@@ -1,4 +1,4 @@
-import type { Session } from '@agor-live/client';
+import type { Branch, Session } from '@agor-live/client';
 import { BranchesOutlined } from '@ant-design/icons';
 import { Badge, Collapse, ConfigProvider, Space, Spin, Tree, Typography, theme } from 'antd';
 import type React from 'react';
@@ -6,9 +6,63 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppLiveData } from '../../contexts/AppDataContext';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
+import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
 import { buildSessionTree, type SessionTreeNode } from '../BranchCard/buildSessionTree';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import { ToolIcon } from '../ToolIcon';
+
+const ChildSessionNode: React.FC<{
+  session: Session;
+  branchById: Map<string, Branch>;
+  onSessionClick?: ((sessionId: string) => void) | null;
+}> = ({ session: s, branchById, onSessionClick }) => {
+  const [hovered, setHovered] = useState(false);
+  const isActive = s.status === 'running' || s.status === 'stopping';
+  const title = getSessionDisplayTitle(s, { includeAgentFallback: true, includeIdFallback: true });
+  const branch = s.branch_id ? branchById.get(s.branch_id) : undefined;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '3px 0',
+        cursor: onSessionClick ? 'pointer' : 'default',
+        opacity: s.archived ? 0.55 : 1,
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={() => onSessionClick?.(s.session_id)}
+    >
+      {isActive ? <Spin size="small" /> : <ToolIcon tool={s.agentic_tool} size={16} />}
+      <SessionRelationshipIcon session={s} size={10} />
+      <Typography.Text
+        style={{
+          fontSize: 12,
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+        type={s.archived ? 'secondary' : undefined}
+      >
+        {title}
+        {s.archived && (
+          <Typography.Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
+            (archived)
+          </Typography.Text>
+        )}
+      </Typography.Text>
+      <BranchBoardLocatorIcon
+        branch={branch}
+        visible={hovered}
+        onSessionClick={onSessionClick ? () => onSessionClick(s.session_id) : undefined}
+      />
+    </div>
+  );
+};
 
 interface ChildSessionsSectionProps {
   session: Session;
@@ -22,7 +76,7 @@ interface ChildSessionsSectionProps {
 export const ChildSessionsSection: React.FC<ChildSessionsSectionProps> = ({ session }) => {
   const { token } = theme.useToken();
   const { onSessionClick } = useAppActions();
-  const { sessionById, sessionsByBranch } = useAppLiveData();
+  const { sessionById, sessionsByBranch, branchById } = useAppLiveData();
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
 
   const descendantSessions = useMemo(() => {
@@ -102,49 +156,13 @@ export const ChildSessionsSection: React.FC<ChildSessionsSectionProps> = ({ sess
 
   if (descendantSessions.length === 0) return null;
 
-  const renderSessionNode = (node: SessionTreeNode) => {
-    const s = node.session;
-    const isActive = s.status === 'running' || s.status === 'stopping';
-    const title = getSessionDisplayTitle(s, {
-      includeAgentFallback: true,
-      includeIdFallback: true,
-    });
-
-    return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '3px 0',
-          cursor: onSessionClick ? 'pointer' : 'default',
-          opacity: s.archived ? 0.55 : 1,
-        }}
-        onClick={() => onSessionClick?.(s.session_id)}
-      >
-        {isActive ? <Spin size="small" /> : <ToolIcon tool={s.agentic_tool} size={16} />}
-        <SessionRelationshipIcon session={s} size={10} />
-        <Typography.Text
-          style={{
-            fontSize: 12,
-            flex: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-          type={s.archived ? 'secondary' : undefined}
-        >
-          {title}
-          {s.archived && (
-            <Typography.Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
-              (archived)
-            </Typography.Text>
-          )}
-        </Typography.Text>
-      </div>
-    );
-  };
+  const renderSessionNode = (node: SessionTreeNode) => (
+    <ChildSessionNode
+      session={node.session}
+      branchById={branchById}
+      onSessionClick={onSessionClick}
+    />
+  );
 
   const header = (
     <Space size={4} align="center">

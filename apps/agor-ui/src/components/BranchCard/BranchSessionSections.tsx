@@ -82,7 +82,7 @@ const SessionItemWithActions: React.FC<{
   onArchive: (sessionId: string, e: React.MouseEvent) => void;
   onSettings?: (sessionId: string, e: React.MouseEvent) => void;
   onTogglePeek?: (sessionId: string, e: React.MouseEvent) => void;
-  children: React.ReactNode;
+  children: React.ReactNode | ((hovered: boolean) => React.ReactNode);
 }> = ({
   sessionId,
   isArchiving,
@@ -119,7 +119,7 @@ const SessionItemWithActions: React.FC<{
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {children}
+      {typeof children === 'function' ? children(hovered) : children}
       <div
         style={{
           position: 'absolute',
@@ -408,44 +408,61 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             : undefined
         }
       >
-        <div style={sessionRowStyle(session)} onClick={() => onSessionClick?.(session.session_id)}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}>
-            {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
-            <SessionRelationshipIcon session={session} size={10} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              {renderSessionTitle(session, { strong: true, query })}
-              {(sourceLabel || toolMatches) && (
-                <Typography.Text
-                  type="secondary"
-                  style={{ fontSize: 11, display: 'block', marginTop: 2 }}
-                >
-                  {sourceLabel}
-                  {sourceLabel && toolMatches ? ' · ' : ''}
-                  {toolMatches && (
-                    <>
-                      Agent: <HighlightMatch text={session.agentic_tool} query={query} />
-                    </>
-                  )}
-                </Typography.Text>
+        {(hovered) => (
+          <div
+            style={sessionRowStyle(session)}
+            onClick={() => onSessionClick?.(session.session_id)}
+          >
+            <div
+              style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}
+            >
+              {isActive ? (
+                <Spin size="small" />
+              ) : (
+                <ToolIcon tool={session.agentic_tool} size={20} />
               )}
-              {descriptionSnippet && descriptionSnippet !== titleText && (
-                <Typography.Text
-                  type="secondary"
-                  style={{
-                    fontSize: 11,
-                    fontStyle: 'italic',
-                    lineHeight: 1.4,
-                    display: 'block',
-                    marginTop: 2,
-                  }}
-                >
-                  <HighlightMatch text={descriptionSnippet} query={query} />
-                </Typography.Text>
-              )}
+              <SessionRelationshipIcon session={session} size={10} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {renderSessionTitle(session, { strong: true, query })}
+                {(sourceLabel || toolMatches) && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 11, display: 'block', marginTop: 2 }}
+                  >
+                    {sourceLabel}
+                    {sourceLabel && toolMatches ? ' · ' : ''}
+                    {toolMatches && (
+                      <>
+                        Agent: <HighlightMatch text={session.agentic_tool} query={query} />
+                      </>
+                    )}
+                  </Typography.Text>
+                )}
+                {descriptionSnippet && descriptionSnippet !== titleText && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{
+                      fontSize: 11,
+                      fontStyle: 'italic',
+                      lineHeight: 1.4,
+                      display: 'block',
+                      marginTop: 2,
+                    }}
+                  >
+                    <HighlightMatch text={descriptionSnippet} query={query} />
+                  </Typography.Text>
+                )}
+              </div>
+              <BranchBoardLocatorIcon
+                branch={branch}
+                visible={hovered}
+                onSessionClick={
+                  onSessionClick ? () => onSessionClick(session.session_id) : undefined
+                }
+              />
             </div>
-            <BranchBoardLocatorIcon branch={branch} />
           </div>
-        </div>
+        )}
       </SessionItemWithActions>
     );
   };
@@ -470,22 +487,34 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             : undefined
         }
       >
-        <div
-          style={sessionRowStyle(session)}
-          onClick={() => onSessionClick?.(session.session_id)}
-          onContextMenu={(e) => {
-            if (onForkSession || onSpawnSession) {
-              e.preventDefault();
-            }
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
-            {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
-            <SessionRelationshipIcon session={session} size={10} />
-            {renderSessionTitle(session, { strong: true })}
-            <BranchBoardLocatorIcon branch={branch} />
+        {(hovered) => (
+          <div
+            style={sessionRowStyle(session)}
+            onClick={() => onSessionClick?.(session.session_id)}
+            onContextMenu={(e) => {
+              if (onForkSession || onSpawnSession) {
+                e.preventDefault();
+              }
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
+              {isActive ? (
+                <Spin size="small" />
+              ) : (
+                <ToolIcon tool={session.agentic_tool} size={20} />
+              )}
+              <SessionRelationshipIcon session={session} size={10} />
+              {renderSessionTitle(session, { strong: true })}
+              <BranchBoardLocatorIcon
+                branch={branch}
+                visible={hovered}
+                onSessionClick={
+                  onSessionClick ? () => onSessionClick(session.session_id) : undefined
+                }
+              />
+            </div>
           </div>
-        </div>
+        )}
       </SessionItemWithActions>
     );
   };
