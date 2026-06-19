@@ -125,10 +125,6 @@ export const gatewayRouteHook = async (context: HookContext) => {
     return context; // No text to route (tool-only messages, etc.)
   }
 
-  if (message.message_id && gatewayService.wasSlackMessageStreamed(message.message_id)) {
-    return context;
-  }
-
   // Fire-and-forget: route message through gateway
   try {
     // Don't await — fire and forget

@@ -309,9 +309,7 @@ export class GatewayService {
    */
   private slackProgressLastUpdate = new Map<string, number>();
   private slackStreamsByMessage = new Map<string, SlackStreamState>();
-  private slackStreamedMessageIds = new Map<string, number>();
   private static SLACK_PROGRESS_MIN_UPDATE_MS = 2500;
-  private static SLACK_STREAMED_MESSAGE_TTL_MS = 5 * 60 * 1000;
 
   constructor(db: Database, app: Application) {
     this.channelRepo = new GatewayChannelRepository(db);
@@ -520,8 +518,7 @@ export class GatewayService {
 
     const todos = this.parseGatewayTodos(existingMetadata.slack_status_todos);
     const plan = this.formatSlackTodoPlan(todos);
-    const toolLine = `\nCurrent tool: ${latestToolSummary}`;
-    return `⏳ Still working (${elapsed}).${toolLine}${plan}`;
+    return `⏳ Still working (${elapsed}) · ${latestToolSummary}${plan}`;
   }
 
   private stripSlackProgressMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
@@ -681,18 +678,6 @@ export class GatewayService {
     }
   }
 
-  private cleanupSlackStreamedMessageIds(): void {
-    const now = Date.now();
-    for (const [messageId, expiresAt] of this.slackStreamedMessageIds) {
-      if (expiresAt <= now) this.slackStreamedMessageIds.delete(messageId);
-    }
-  }
-
-  wasSlackMessageStreamed(messageId: string): boolean {
-    this.cleanupSlackStreamedMessageIds();
-    return this.slackStreamedMessageIds.has(messageId);
-  }
-
   async handleMessageStreamingEvent(
     event: 'streaming:start' | 'streaming:chunk' | 'streaming:end' | 'streaming:error',
     data: Record<string, unknown>
@@ -770,12 +755,6 @@ export class GatewayService {
           ts: stream.ts,
         });
         this.slackStreamsByMessage.delete(messageId);
-        if (event === 'streaming:end' && stream.hasContent) {
-          this.slackStreamedMessageIds.set(
-            messageId,
-            Date.now() + GatewayService.SLACK_STREAMED_MESSAGE_TTL_MS
-          );
-        }
       }
     } catch (error) {
       this.slackStreamsByMessage.delete(messageId);
@@ -1215,10 +1194,13 @@ export class GatewayService {
 
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
 
-      // Send debug message with session URL
-      const message = formatGatewaySessionCreatedMessage(sessionId, sessionUrl);
-
-      this.sendDebugMessage(channel, data.thread_id, message);
+      if (sessionUrl) {
+        this.sendDebugMessage(
+          channel,
+          data.thread_id,
+          formatGatewaySessionCreatedMessage(sessionId, sessionUrl)
+        );
+      }
 
       // For GitHub channels: edit the "Processing..." comment to include the session link.
       // The processing_comment_id was stored in inbound metadata by the GitHub connector.
