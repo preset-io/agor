@@ -450,7 +450,7 @@ export class GatewayService {
     // --- Slack user alignment ---
     if (alignSlackUsers) {
       if (data.metadata?.slack_user_email && typeof data.metadata.slack_user_email === 'string') {
-        const email = data.metadata.slack_user_email.toLowerCase().trim();
+        const email = data.metadata.slack_user_email.trim();
         const matchedUser = await this.usersRepo.findByEmailForAlignment(email);
 
         if (matchedUser) {
@@ -503,7 +503,7 @@ export class GatewayService {
       // which can be stale since the connector holds config from construction time).
       const userMap = channelConfig.user_map as Record<string, string> | undefined;
       const mappedEmail =
-        githubLogin && userMap?.[githubLogin] ? userMap[githubLogin].toLowerCase().trim() : null;
+        githubLogin && userMap?.[githubLogin] ? userMap[githubLogin].trim() : null;
 
       if (mappedEmail) {
         const matchedUser = await this.usersRepo.findByEmailForAlignment(mappedEmail);
@@ -524,7 +524,7 @@ export class GatewayService {
       if (!resolved) {
         const githubEmail =
           data.metadata?.github_user_email && typeof data.metadata.github_user_email === 'string'
-            ? data.metadata.github_user_email.toLowerCase().trim()
+            ? data.metadata.github_user_email.trim()
             : null;
 
         if (githubEmail) {
