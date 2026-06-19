@@ -327,17 +327,10 @@ describe('markdownToSlackPayload', () => {
     expect(section.text.text).toContain('```');
   });
 
-  it('renders only the first table natively when a message contains multiple tables', () => {
+  it('uses Slack native markdown block when a message contains multiple tables', () => {
     const md = '| A | B |\n|---|---|\n| 1 | 2 |\n\nText\n\n| C | D |\n|---|---|\n| 3 | 4 |';
     const payload = markdownToSlackPayload(md);
-    const tables = payload.blocks!.filter((b) => (b as { type: string }).type === 'table');
-    expect(tables).toHaveLength(1);
-    // The second table is rendered as a monospace section
-    const sections = payload.blocks!.filter((b) => (b as { type: string }).type === 'section');
-    const monospaceSections = sections.filter((s) =>
-      ((s as { text: { text: string } }).text.text ?? '').includes('```')
-    );
-    expect(monospaceSections.length).toBeGreaterThan(0);
+    expect(payload.blocks).toEqual([{ type: 'markdown', text: md }]);
   });
 
   it('preserves intro/outro prose as section blocks around a table', () => {
@@ -351,6 +344,13 @@ describe('markdownToSlackPayload', () => {
       | { text: { text: string } }
       | undefined;
     expect(firstSection?.text.text).toContain('Before');
+  });
+
+  it('uses Slack native markdown block for a table with markdown inside cells', () => {
+    const md = '| Item | Notes |\n|---|---|\n| API cleanup | **Keep compatibility** |';
+    const payload = markdownToSlackPayload(md);
+    expect(payload.blocks).toEqual([{ type: 'markdown', text: md }]);
+    expect(payload.text).toContain('```');
   });
 
   it('handles empty input', () => {
@@ -369,19 +369,14 @@ describe('markdownToSlackPayload', () => {
     expect(payload.text).toContain('| Col1 | Col2 |');
   });
 
-  it('renders only the first of three tables natively (one-table-per-message)', () => {
+  it('uses Slack native markdown block for three tables', () => {
     const md = [
       '| A | B |\n|---|---|\n| 1 | 2 |',
       '| C | D |\n|---|---|\n| 3 | 4 |',
       '| E | F |\n|---|---|\n| 5 | 6 |',
     ].join('\n\nText\n\n');
     const payload = markdownToSlackPayload(md);
-    const tables = payload.blocks!.filter((b) => (b as { type: string }).type === 'table');
-    expect(tables).toHaveLength(1);
-    const monospaceSections = payload
-      .blocks!.filter((b) => (b as { type: string }).type === 'section')
-      .filter((s) => ((s as { text: { text: string } }).text.text ?? '').includes('```'));
-    expect(monospaceSections).toHaveLength(2);
+    expect(payload.blocks).toEqual([{ type: 'markdown', text: md }]);
   });
 
   it('drops blocks entirely (text-only) when an oversize table would not fit even monospace', () => {

@@ -37,6 +37,8 @@ const TABLE_MAX_COLS = 20;
 // either path. Beyond this we drop to monospace, then text-only.
 const TABLE_MAX_CELL_CHARS = 3000;
 const SECTION_MAX_CHARS = 3000;
+// Slack's native markdown block currently caps cumulative markdown text at 12k chars.
+const MARKDOWN_BLOCK_MAX_CHARS = 12000;
 // Slack rejects messages with more than one `table` block.
 const MAX_TABLES_PER_MESSAGE = 1;
 // Slack rejects `chat.postMessage` with more than 50 blocks; if we'd exceed
@@ -56,6 +58,11 @@ const FENCE_LINE_RE = /^(`{3,}|~{3,})/;
 const PIPE_LINE_RE = /^\s*\|/;
 const TABLE_SEPARATOR_LINE_RE = /^\s*\|[\s:]*-[\s:-]*\|/;
 const TABLE_SEPARATOR_BLOCK_RE = /^\|[\s:]*-[\s:-]*\|/m;
+
+interface SlackMarkdownBlock {
+  type: 'markdown';
+  text: string;
+}
 
 interface SlackConfig {
   bot_token: string;
@@ -368,10 +375,32 @@ function monospaceFallbackBlock(tableLines: string[]): SectionBlock | null {
   };
 }
 
+function buildMarkdownBlock(markdown: string): SlackMarkdownBlock | null {
+  const trimmed = markdown.trim();
+  if (trimmed.length === 0 || trimmed.length > MARKDOWN_BLOCK_MAX_CHARS) return null;
+  return { type: 'markdown', text: markdown };
+}
+
+function tableHasRichMarkdown(tableLines: string[]): boolean {
+  return tableLines.some((line) =>
+    /(\*\*|__|~~|`|\[[^\]]+\]\([^)]*\)|<br\s*\/?\s*>|_[^_|]+_|(^|\|)\s*[-*+]\s+)/i.test(line)
+  );
+}
+
+function shouldUseNativeMarkdownBlock(markdown: string, segments: Segment[]): boolean {
+  if (!buildMarkdownBlock(markdown)) return false;
+
+  const tableSegments = segments.filter((segment) => segment.kind === 'table');
+  if (tableSegments.length > 1) return true;
+  return tableSegments.some((segment) => tableHasRichMarkdown(segment.lines));
+}
+
 /**
  * Build a Slack outbound payload from GitHub-flavored markdown.
  *
- * If the message contains GFM tables, emits a `blocks` array that uses
+ * If the message contains rich or multiple GFM tables and fits Slack's native
+ * markdown block budget, emits a `markdown` block so Slack can preserve richer
+ * table Markdown. Otherwise emits a `blocks` array that uses
  * Block Kit's native `table` block (Aug 2025) for the first qualifying
  * table and falls back to a monospace code block for any table that
  * exceeds Slack's caps (>{@link TABLE_MAX_ROWS} rows, >{@link TABLE_MAX_COLS}
@@ -391,8 +420,16 @@ export function markdownToSlackPayload(markdown: string): OutboundPayload {
   const text = markdownToMrkdwn(markdown);
 
   const segments = segmentMarkdown(markdown);
-  if (!segments.some((s) => s.kind === 'table')) {
+  const hasTable = segments.some((s) => s.kind === 'table');
+  if (!hasTable) {
     return { text };
+  }
+
+  if (shouldUseNativeMarkdownBlock(markdown, segments)) {
+    const markdownBlock = buildMarkdownBlock(markdown);
+    if (markdownBlock) {
+      return { text, blocks: [markdownBlock] };
+    }
   }
 
   const blocks: KnownBlock[] = [];
@@ -1113,8 +1150,8 @@ export class SlackConnector implements GatewayConnector {
    *
    * Returns `{ text, blocks? }`. `text` is the mrkdwn fallback used for
    * notifications and clients that don't render Block Kit; `blocks` is set
-   * when the message contains a GFM table that we can emit as a native
-   * Block Kit `table` block (or a monospace section fallback alongside one).
+   * when the message contains tables that can benefit from Slack's native
+   * markdown/table blocks.
    */
   formatMessage(markdown: string): OutboundPayload {
     return markdownToSlackPayload(markdown);

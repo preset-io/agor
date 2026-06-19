@@ -514,6 +514,51 @@ export class GatewayService {
     return [`*Plan*`, ...lines].join('\n');
   }
 
+  private buildSlackPlanBlock(todos: GatewayTodoItem[]): unknown {
+    const statusForSlack = (status: GatewayTodoItem['status']) => {
+      switch (status) {
+        case 'completed':
+          return 'complete';
+        case 'in_progress':
+          return 'in_progress';
+        case 'stopped':
+        case 'unknown':
+          return 'error';
+        default:
+          return 'pending';
+      }
+    };
+
+    const richText = (text: string) => ({
+      type: 'rich_text',
+      elements: [
+        {
+          type: 'rich_text_section',
+          elements: [{ type: 'text', text }],
+        },
+      ],
+    });
+
+    return {
+      type: 'plan',
+      title: { type: 'plain_text', text: 'Plan' },
+      tasks: todos.slice(0, 12).map((todo, index) => {
+        const activeForm =
+          todo.status === 'in_progress' &&
+          todo.activeForm &&
+          todo.activeForm.trim() !== todo.content.trim()
+            ? this.truncateSlackInline(todo.activeForm, 120)
+            : undefined;
+        return {
+          task_id: `todo_${index + 1}`,
+          title: this.truncateSlackInline(todo.content, 140),
+          status: statusForSlack(todo.status),
+          ...(activeForm ? { details: richText(activeForm) } : {}),
+        };
+      }),
+    };
+  }
+
   private buildSlackProgressText(
     data: GatewayProgressData,
     existingMetadata: Record<string, unknown>
@@ -585,9 +630,12 @@ export class GatewayService {
     const lastLine = lines.at(-1)?.trim();
     const progressLine = lastLine?.startsWith('⏳') ? lines.pop() : undefined;
     const detailText = lines.join('\n').trim();
+    const todos = this.parseGatewayTodos(metadata.slack_status_todos);
     const blocks: unknown[] = [];
 
-    if (detailText) {
+    if (todos.length > 0) {
+      blocks.push(this.buildSlackPlanBlock(todos));
+    } else if (detailText) {
       blocks.push({
         type: 'section',
         text: {
