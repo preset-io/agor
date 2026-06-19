@@ -862,12 +862,21 @@ export const App: React.FC<AppProps> = ({
   const selectedSessionBranch = selectedSession ? branchById.get(selectedSession.branch_id) : null;
 
   // Sync the actual state when a session disappears (for URL, localStorage, etc.).
-  // The rendering already uses effectiveSelectedSessionId so this is cosmetic.
+  // The rendering already uses effectiveSelectedSessionId so this is mostly
+  // cosmetic, but URL cleanup is load-bearing: if the address bar remains on
+  // `/s/<id>/` after archiving the selected branch/session, the direct
+  // archived-session fallback treats that stale URL like an explicit deep link
+  // and can rehydrate the archived session into local state. Replace the route
+  // with the current board before clearing selection so archive/delete closes
+  // the drawer and does not resurrect the card.
   useEffect(() => {
     if (selectedSessionId && !sessionById.has(selectedSessionId)) {
+      if (routeParams.sessionShortId && currentBoardId) {
+        navigation.goToBoard(currentBoardId, { replace: true });
+      }
       setSelectedSessionId(null);
     }
-  }, [selectedSessionId, sessionById]);
+  }, [currentBoardId, navigation, routeParams.sessionShortId, selectedSessionId, sessionById]);
 
   const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
   const primaryAssistantId = currentBoard?.primary_assistant_id ?? null;

@@ -20,7 +20,7 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
-import { PAGINATION } from '@agor-live/client';
+import { findByShortIdPrefix, PAGINATION } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { shallowEqualEntity } from '../utils/shallowEqual';
@@ -262,6 +262,19 @@ function removeBoardObjectFromMaps(prev: DataMaps, boardObject: BoardEntityObjec
     boardObjectByBranchId,
     boardObjectByCardId,
   };
+}
+
+function hasIdMatchingPrefix<T>(
+  prefix: string,
+  entries: Iterable<T>,
+  getId: (entry: T) => string
+): boolean {
+  return (
+    findByShortIdPrefix(
+      prefix,
+      Array.from(entries, (entry) => ({ id: getId(entry) }))
+    ).length > 0
+  );
 }
 
 /**
@@ -512,10 +525,12 @@ export function useAgorData(
 
         // Direct /s/<id>/ opens should work for archived sessions without broadening
         // the default active-session list. If the active query missed the URL target,
-        // fetch just that session (and its branch if necessary) by ID/short ID.
+        // fetch just that session by ID/short ID. Its branch is only hydrated when
+        // it is still active; adding archived branches to `branchById` would make
+        // board-object joins render archived cards back onto active boards.
         if (
           directSessionId &&
-          !sessionsList.some((s) => s.session_id.startsWith(directSessionId))
+          !hasIdMatchingPrefix(directSessionId, sessionsList, (s) => s.session_id)
         ) {
           try {
             const directSession = (await client
@@ -525,6 +540,7 @@ export function useAgorData(
               sessionsList.push(directSession);
             }
             if (
+              !directSession.archived &&
               directSession.branch_id &&
               !branchesList.some((branch) => branch.branch_id === directSession.branch_id)
             ) {
@@ -532,7 +548,9 @@ export function useAgorData(
                 const directBranch = (await client
                   .service('branches')
                   .get(directSession.branch_id)) as Branch;
-                branchesList.push(directBranch);
+                if (!directBranch.archived) {
+                  branchesList.push(directBranch);
+                }
               } catch {
                 // The session can still open; it just won't be able to switch/recenter
                 // if the branch is inaccessible or gone.
@@ -570,7 +588,11 @@ export function useAgorData(
           // sessionById: O(1) ID lookups
           sessionsById.set(session.session_id, session);
 
-          // sessionsByBranch: O(1) branch-scoped filtering
+          // sessionsByBranch: O(1) branch-scoped filtering. Keep this as the
+          // active board/session list: a direct archived-session URL may add
+          // the archived session to sessionById so the drawer can open, but it
+          // must not reappear in branch cards or board assistants.
+          if (session.archived) continue;
           const branchId = session.branch_id;
           if (!sessionsByBranchId.has(branchId)) {
             sessionsByBranchId.set(branchId, []);
@@ -741,7 +763,7 @@ export function useAgorData(
   useEffect(() => {
     if (!client || !enabled || !hasInitiallyFetched || !directSessionId) return;
     if (maps.sessionById.has(directSessionId)) return;
-    if ([...maps.sessionById.values()].some((s) => s.session_id.startsWith(directSessionId))) {
+    if (hasIdMatchingPrefix(directSessionId, maps.sessionById.values(), (s) => s.session_id)) {
       return;
     }
 
@@ -757,21 +779,28 @@ export function useAgorData(
           next.set(directSession.session_id, directSession);
           return next;
         });
-        setSessionsByBranch((prev) => {
-          const branchSessions = prev.get(directSession.branch_id) || [];
-          if (branchSessions.some((s) => s.session_id === directSession.session_id)) return prev;
-          const next = new Map(prev);
-          next.set(directSession.branch_id, [...branchSessions, directSession]);
-          return next;
-        });
+        if (!directSession.archived) {
+          setSessionsByBranch((prev) => {
+            const branchSessions = prev.get(directSession.branch_id) || [];
+            if (branchSessions.some((s) => s.session_id === directSession.session_id)) return prev;
+            const next = new Map(prev);
+            next.set(directSession.branch_id, [...branchSessions, directSession]);
+            return next;
+          });
+        }
 
-        if (directSession.branch_id && !maps.branchById.has(directSession.branch_id)) {
+        if (
+          !directSession.archived &&
+          directSession.branch_id &&
+          !maps.branchById.has(directSession.branch_id)
+        ) {
           try {
             const directBranch = (await client
               .service('branches')
               .get(directSession.branch_id)) as Branch;
             if (cancelled) return;
             setBranchById((prev) => {
+              if (directBranch.archived) return prev;
               if (prev.has(directBranch.branch_id)) return prev;
               const next = new Map(prev);
               next.set(directBranch.branch_id, directBranch);

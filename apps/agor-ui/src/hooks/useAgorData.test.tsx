@@ -130,7 +130,7 @@ async function waitForInitialLoad(result: { current: ReturnType<typeof useAgorDa
 }
 
 describe('useAgorData — socket-event bailouts', () => {
-  it('hydrates a direct archived session and its archived branch by id without broadening active lists', async () => {
+  it('hydrates a direct archived session by id without broadening active board lists', async () => {
     const archivedSession = makeSession({
       session_id: 's-archived-full',
       branch_id: 'b-archived',
@@ -157,13 +157,8 @@ describe('useAgorData — socket-event bailouts', () => {
       archived: true,
       branch_id: 'b-archived',
     });
-    expect(result.current.sessionsByBranch.get('b-archived')?.map((s) => s.session_id)).toEqual([
-      's-archived-full',
-    ]);
-    expect(result.current.branchById.get('b-archived')).toMatchObject({
-      archived: true,
-      board_id: 'board-archived',
-    });
+    expect(result.current.sessionsByBranch.has('b-archived')).toBe(false);
+    expect(result.current.branchById.has('b-archived')).toBe(false);
   });
 
   it('drops a duplicate `sessions.patched` (content-equal) without changing byId references', async () => {

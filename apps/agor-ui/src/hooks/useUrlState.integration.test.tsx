@@ -138,6 +138,26 @@ describe('useUrlState — deferred session resolution', () => {
     expect(pathRef.current).toBe(`/s/${SESSION_SHORT}/`);
   });
 
+  it('opens a direct session URL even when the session branch is not in active branchById', () => {
+    const onSessionChange = vi.fn();
+    const onBoardChange = vi.fn();
+    const session = { session_id: SESSION_ID, branch_id: BRANCH_ID, archived: true } as Session;
+
+    const { pathRef } = renderAt(
+      `/s/${SESSION_SHORT}/`,
+      baseOptions({
+        sessionById: new Map([[session.session_id, session]]),
+        branchById: new Map(),
+        onSessionChange,
+        onBoardChange,
+      })
+    );
+
+    expect(onSessionChange).toHaveBeenCalledWith(SESSION_ID);
+    expect(onBoardChange).not.toHaveBeenCalled();
+    expect(pathRef.current).toBe(`/s/${SESSION_SHORT}/`);
+  });
+
   it('explicit session URLs win over an already-selected/restored session', () => {
     const onSessionChange = vi.fn();
     const onBoardChange = vi.fn();

@@ -317,7 +317,12 @@ export function useUrlState(options: UseUrlStateOptions) {
 
     // Wait for required data to load before resolving
     if (urlBoardParam && boardById.size === 0) return;
-    if (urlSessionShortId && (sessionById.size === 0 || branchById.size === 0)) return;
+    // Session URLs only require the session itself to resolve. The branch is
+    // best-effort metadata for board switching/recentering; direct links to
+    // archived sessions intentionally do not hydrate archived branches into
+    // the active `branchById` map, otherwise archived cards would reappear on
+    // boards via board-object joins.
+    if (urlSessionShortId && sessionById.size === 0) return;
     if (urlBranchShortId && branchById.size === 0) return;
     if (urlArtifactShortId && artifactById.size === 0) return;
 
@@ -331,6 +336,8 @@ export function useUrlState(options: UseUrlStateOptions) {
     if (urlBoardParam) {
       resolvedBoardId = resolveBoardFromUrl(urlBoardParam);
       if (resolvedBoardId) urlParamsResolvedRef.current.board = true;
+    } else {
+      urlParamsResolvedRef.current.board = true;
     }
 
     if (urlSessionShortId) {
