@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LoginPage } from './LoginPage';
 
 vi.mock('./ParticleBackground', () => ({
@@ -7,6 +7,9 @@ vi.mock('./ParticleBackground', () => ({
 }));
 
 describe('LoginPage external launch redirect', () => {
+  afterEach(() => {
+    window.history.replaceState({}, '', '/');
+  });
   it('keeps the local login form as the default when no redirect is configured', () => {
     render(<LoginPage onLogin={vi.fn()} />);
 
@@ -24,7 +27,10 @@ describe('LoginPage external launch redirect', () => {
     );
 
     const returnLink = screen.getByRole('link', { name: 'Return to workspace' });
-    expect(returnLink).toHaveAttribute('href', 'https://workspace.example.com/open');
+    expect(returnLink).toHaveAttribute(
+      'href',
+      `https://workspace.example.com/open?return_to=${encodeURIComponent(window.location.href)}`
+    );
     expect(screen.queryByPlaceholderText('Email address')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sign In' })).not.toBeInTheDocument();
   });
@@ -34,6 +40,25 @@ describe('LoginPage external launch redirect', () => {
 
     expect(screen.queryByText(/First-time server setup/)).not.toBeInTheDocument();
     expect(screen.queryByText('agor user create-admin')).not.toBeInTheDocument();
+  });
+
+  it('passes the current deep link to the external launcher as return_to', () => {
+    window.history.replaceState({}, '', '/ui/s/session123/?panel=right#msg-1');
+
+    render(
+      <LoginPage
+        onLogin={vi.fn()}
+        externalLaunchLoginRedirectUrl="https://workspace.example.com/open?source=agor"
+      />
+    );
+
+    const returnLink = screen.getByRole('link', { name: 'Return to workspace' });
+    const href = returnLink.getAttribute('href');
+    expect(href).toBe(
+      `https://workspace.example.com/open?source=agor&return_to=${encodeURIComponent(
+        window.location.href
+      )}`
+    );
   });
 
   it('offers local login as a secondary fallback for configured deployments', () => {
@@ -62,7 +87,7 @@ describe('LoginPage external launch redirect', () => {
     expect(screen.getByText('Launch sign-in failed')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Return to workspace' })).toHaveAttribute(
       'href',
-      'https://workspace.example.com/open'
+      `https://workspace.example.com/open?return_to=${encodeURIComponent(window.location.href)}`
     );
   });
 

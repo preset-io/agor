@@ -6,12 +6,24 @@
 
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Divider, Form, Input, Space, Typography, theme } from 'antd';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { BrandLogo } from '../BrandLogo';
 import { ParticleBackground } from './ParticleBackground';
 
 const { Text } = Typography;
+
+function addReturnToParam(loginRedirectUrl: string): string {
+  if (typeof window === 'undefined') return loginRedirectUrl;
+
+  try {
+    const url = new URL(loginRedirectUrl);
+    url.searchParams.set('return_to', window.location.href);
+    return url.toString();
+  } catch {
+    return loginRedirectUrl;
+  }
+}
 
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<boolean>;
@@ -31,6 +43,11 @@ export function LoginPage({
   const [showLocalLogin, setShowLocalLogin] = useState(false);
   const { token } = theme.useToken();
   const useExternalLaunch = !!externalLaunchLoginRedirectUrl;
+  const externalLaunchHref = useMemo(
+    () =>
+      externalLaunchLoginRedirectUrl ? addReturnToParam(externalLaunchLoginRedirectUrl) : undefined,
+    [externalLaunchLoginRedirectUrl]
+  );
   const showLoginForm = !useExternalLaunch || showLocalLogin;
   const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;
 
@@ -147,7 +164,7 @@ export function LoginPage({
             )}
             <Button
               type="primary"
-              href={externalLaunchLoginRedirectUrl}
+              href={externalLaunchHref}
               block
               data-testid="external-launch-return"
             >
