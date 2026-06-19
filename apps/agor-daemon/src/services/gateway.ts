@@ -691,8 +691,10 @@ export class GatewayService {
       data.tool_name || data.tool_input
         ? this.formatSlackToolSummary(data.tool_name, data.tool_input)
         : undefined;
+    const baseMetadata =
+      isNewTask || isRestartingAfterTerminal ? this.stripSlackProgressMetadata(metadata) : metadata;
     const metadataWithStart = {
-      ...metadata,
+      ...baseMetadata,
       slack_status_started_at: statusStartedAt,
       slack_status_state: data.state,
       ...(data.task_id ? { slack_status_task_id: data.task_id } : {}),
@@ -708,8 +710,23 @@ export class GatewayService {
       typeof metadata.slack_status_message_ts === 'string'
         ? metadata.slack_status_message_ts
         : undefined;
+    let updateTs = existingTs;
 
     try {
+      if (!isTerminal && isNewTask && existingTs) {
+        if (connector.deleteMessage) {
+          try {
+            await connector.deleteMessage({
+              threadId: mapping.thread_id,
+              messageId: existingTs,
+            });
+          } catch (error) {
+            console.warn('[gateway] Failed to delete stale Slack progress status:', error);
+          }
+        }
+        updateTs = undefined;
+      }
+
       if (data.state === 'done' && existingTs && connector.deleteMessage) {
         try {
           await connector.deleteMessage({
@@ -735,7 +752,7 @@ export class GatewayService {
         threadId: mapping.thread_id,
         text,
         blocks,
-        metadata: existingTs ? { slack_update_ts: existingTs } : undefined,
+        metadata: updateTs ? { slack_update_ts: updateTs } : undefined,
       });
 
       if (
