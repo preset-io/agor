@@ -380,7 +380,7 @@
     "@feathersjs/typebox": "^5.0.45",
     "@google/gemini-cli-core": "^0.31.0",
     "@google/genai": "^1.43.0",
-    "@libsql/client": "^0.17.3",
+    "@libsql/client": "^0.17.4",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
     "@openai/codex-sdk": "^0.141.0",
