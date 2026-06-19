@@ -637,6 +637,7 @@ describe('agor_sessions_create', () => {
 
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.genealogy.parent_session_id).toBeUndefined();
+    expect(created.callback_config).toBeUndefined();
     expect(patchCalls).toHaveLength(0);
   });
 
@@ -749,10 +750,16 @@ describe('agor_sessions_create', () => {
     const result = await agor_sessions_create({
       branchId: 'wt-target',
       agenticTool: 'claude-code',
+      enableCallback: false,
     });
 
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.genealogy.parent_session_id).toBeUndefined();
+    expect(created.callback_config).toMatchObject({
+      enabled: false,
+      callback_session_id: 'sess-caller',
+      callback_created_by: 'user-1',
+    });
     expect(patchCalls).toHaveLength(0);
 
     const parsed = JSON.parse(result.content[0].text);
