@@ -49,6 +49,24 @@ function extractLatestToolUse(content: Message['content']): GatewayToolUse | nul
   return null;
 }
 
+function extractLatestToolUseFromMessage(message: Message): GatewayToolUse | null {
+  const fromContent = extractLatestToolUse(message.content);
+  if (fromContent) return fromContent;
+
+  const toolUses = message.tool_uses;
+  if (!Array.isArray(toolUses) || toolUses.length === 0) return null;
+
+  const latest = toolUses[toolUses.length - 1];
+  if (!latest || typeof latest.name !== 'string') return null;
+  return {
+    name: latest.name,
+    input:
+      latest.input && typeof latest.input === 'object' && !Array.isArray(latest.input)
+        ? latest.input
+        : {},
+  };
+}
+
 /**
  * After hook that routes messages through the gateway.
  * Routes:
@@ -64,7 +82,7 @@ export const gatewayRouteHook = async (context: HookContext) => {
   // Determine if message should be routed to gateway
   let shouldRoute = false;
   let messageText = extractText(message.content);
-  const latestToolUse = extractLatestToolUse(message.content);
+  const latestToolUse = extractLatestToolUseFromMessage(message);
 
   // Tool calls are valuable for the mutable Slack status row: current tool +
   // TodoWrite plan. Some agent SDKs include text and tool_use blocks in the

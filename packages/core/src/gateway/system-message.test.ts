@@ -31,9 +31,9 @@ describe('formatGatewaySystemMessage', () => {
   it('formats Slack follow-up routing messages with a clickable session link', () => {
     const text = formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl);
 
-    expect(text).toBe(`Follow-up received — routing to [session](${sessionUrl})…`);
+    expect(text).toBe(`Follow-up received — routing to [session](${sessionUrl}) ...`);
     expect(formatGatewaySystemMessage('slack', text)).toBe(
-      `Agor: Follow-up received — routing to <${sessionUrl}|session>…`
+      `Agor: Follow-up received — routing to <${sessionUrl}|session> ...`
     );
   });
 
@@ -54,7 +54,7 @@ describe('formatGatewaySystemMessage', () => {
       `session ${sessionShortId}`
     );
     expect(formatGatewayFollowUpRoutingMessage(sessionId, null)).toBe(
-      `Follow-up received — routing to session ${sessionShortId}…`
+      `Follow-up received — routing to session ${sessionShortId} ...`
     );
   });
 

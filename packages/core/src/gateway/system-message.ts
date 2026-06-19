@@ -34,7 +34,7 @@ export function formatGatewayFollowUpRoutingMessage(
   sessionId: SessionID | string,
   sessionUrl?: string | null
 ): string {
-  return `Follow-up received — routing to ${formatGatewayMarkdownSessionReference(sessionId, sessionUrl)}…`;
+  return `Follow-up received — routing to ${formatGatewayMarkdownSessionReference(sessionId, sessionUrl)} ...`;
 }
 
 /**
