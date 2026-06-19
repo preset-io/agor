@@ -278,12 +278,31 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     );
   }, []);
 
-  const getRemoteParentId = useCallback((session: Session): string | undefined => {
-    if (session.remote_surrogate) return undefined;
-    return session.remote_relationships?.as_target?.find(
-      (relationship) => relationship.relationship_type === 'remote_create'
-    )?.source_session_id;
-  }, []);
+  const getRemoteParentId = useCallback(
+    (session: Session): string | undefined => {
+      if (session.remote_surrogate) return undefined;
+
+      const relationshipParentId = session.remote_relationships?.as_target?.find(
+        (relationship) => relationship.relationship_type === 'remote_create'
+      )?.source_session_id;
+      if (relationshipParentId) return relationshipParentId;
+
+      // Defensive fallback for live-patched session rows that may temporarily
+      // lack enriched remote_relationships. A cross-branch callback target is
+      // still local to the already-loaded Agor session store and points at the
+      // same creator/remote-parent session for remote-created children.
+      const callbackTargetId = session.callback_config?.callback_session_id;
+      const callbackTarget = callbackTargetId
+        ? sessions.find((candidate) => candidate.session_id === callbackTargetId)
+        : undefined;
+      if (callbackTarget && callbackTarget.branch_id !== session.branch_id) {
+        return callbackTargetId;
+      }
+
+      return undefined;
+    },
+    [sessions]
+  );
 
   const getCallbackTargetId = useCallback(
     (session: Session): string | undefined => {
