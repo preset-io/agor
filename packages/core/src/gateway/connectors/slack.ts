@@ -49,7 +49,10 @@ const MAX_BLOCKS_PER_MESSAGE = 50;
 const BLOCK_PAYLOAD_ERRORS = new Set([
   'invalid_blocks',
   'invalid_blocks_format',
+  'invalid_block_type',
   'message_blocks_too_long',
+  'unknown_block_type',
+  'unsupported_block_type',
 ]);
 
 // GFM scanner regexes — hoisted so both `segmentMarkdown` and helpers share

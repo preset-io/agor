@@ -484,6 +484,33 @@ describe('SlackConnector.sendMessage', () => {
     ]);
   });
 
+  it('falls back to text when Slack rejects newer block types', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      chat: {
+        postMessage: async (args: unknown) => {
+          calls.push(args);
+          if ((args as { blocks?: unknown[] }).blocks) {
+            return { ok: false, error: 'unsupported_block_type' };
+          }
+          return { ok: true, ts: '1700000000.000004' };
+        },
+      },
+    };
+
+    const ts = await connector.sendMessage({
+      threadId: 'C123-1700000000.000000',
+      text: '*Plan*\n○ Test\n⏳ Still working',
+      blocks: [{ type: 'plan', tasks: [] }],
+    });
+
+    expect(ts).toBe('1700000000.000004');
+    expect(calls).toHaveLength(2);
+    expect((calls[0] as { blocks?: unknown[] }).blocks).toBeDefined();
+    expect((calls[1] as { blocks?: unknown[] }).blocks).toBeUndefined();
+  });
+
   it('mirrors message streams with Slack chat stream methods', async () => {
     const calls: Array<{ method: string; args: unknown }> = [];
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });
