@@ -15,7 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { toAgenticToolsStatus } from '@agor/core/types';
-import { eq, like } from 'drizzle-orm';
+import { eq, like, sql } from 'drizzle-orm';
 import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-vars';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -225,6 +225,45 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
     }
 
     return this.rowToUser(result as UserRow);
+  }
+
+  /**
+   * Find user by email for external identity providers.
+   *
+   * Agor intentionally keeps exact/case-sensitive email lookup semantics for
+   * auth paths because the schema historically allowed case-distinct emails.
+   * External providers such as Slack and GitHub treat email addresses as a
+   * canonical identity hint, so their alignment path needs a case-insensitive
+   * match. Prefer an exact match when present; otherwise return a
+   * case-insensitive match only when it is unambiguous.
+   */
+  async findByEmailForAlignment(email: string): Promise<User | null> {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) return null;
+
+    const exact = await this.findByEmail(normalizedEmail);
+    if (exact) return exact;
+
+    const results = await select(this.db)
+      .from(users)
+      .where(sql`LOWER(${users.email}) = ${normalizedEmail}`)
+      .all();
+
+    if (results.length !== 1) {
+      if (results.length > 1) {
+        console.warn(
+          `[users] Ambiguous case-insensitive email alignment for ${normalizedEmail}: ${results
+            .map((row: unknown) => {
+              const userRow = row as UserRow;
+              return `${shortId(userRow.user_id)}:${userRow.email}`;
+            })
+            .join(', ')}`
+        );
+      }
+      return null;
+    }
+
+    return this.rowToUser(results[0] as UserRow);
   }
 
   /**

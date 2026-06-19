@@ -451,7 +451,7 @@ export class GatewayService {
     if (alignSlackUsers) {
       if (data.metadata?.slack_user_email && typeof data.metadata.slack_user_email === 'string') {
         const email = data.metadata.slack_user_email.toLowerCase().trim();
-        const matchedUser = await this.usersRepo.findByEmail(email);
+        const matchedUser = await this.usersRepo.findByEmailForAlignment(email);
 
         if (matchedUser) {
           console.log(
@@ -506,7 +506,7 @@ export class GatewayService {
         githubLogin && userMap?.[githubLogin] ? userMap[githubLogin].toLowerCase().trim() : null;
 
       if (mappedEmail) {
-        const matchedUser = await this.usersRepo.findByEmail(mappedEmail);
+        const matchedUser = await this.usersRepo.findByEmailForAlignment(mappedEmail);
         if (matchedUser) {
           console.log(
             `[gateway] GitHub user aligned via user_map: ${githubLogin} → ${mappedEmail} → Agor user ${shortId(matchedUser.user_id)}`
@@ -528,7 +528,7 @@ export class GatewayService {
             : null;
 
         if (githubEmail) {
-          const matchedUser = await this.usersRepo.findByEmail(githubEmail);
+          const matchedUser = await this.usersRepo.findByEmailForAlignment(githubEmail);
           if (matchedUser) {
             console.log(
               `[gateway] GitHub user aligned via email: ${githubLogin} (${githubEmail}) → Agor user ${shortId(matchedUser.user_id)}`

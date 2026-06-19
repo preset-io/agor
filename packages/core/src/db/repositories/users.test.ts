@@ -38,6 +38,55 @@ async function makeUser(repo: UsersRepository): Promise<UserID> {
   return u.user_id as UserID;
 }
 
+describe('UsersRepository.findByEmailForAlignment', () => {
+  dbTest('matches external-provider emails case-insensitively', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const suffix = `${Date.now()}-${Math.random()}`;
+    const created = await repo.create({
+      email: `Mixed.Case-${suffix}@Example.com`,
+      name: 'Mixed Case User',
+    });
+
+    const found = await repo.findByEmailForAlignment(`mixed.case-${suffix}@example.com`);
+
+    expect(found?.user_id).toBe(created.user_id);
+  });
+
+  dbTest('prefers exact lowercase match when case variants exist', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const suffix = `${Date.now()}-${Math.random()}`;
+    const lower = await repo.create({
+      email: `case-pref-${suffix}@example.com`,
+      name: 'Lowercase User',
+    });
+    await repo.create({
+      email: `CASE-PREF-${suffix}@example.com`,
+      name: 'Uppercase User',
+    });
+
+    const found = await repo.findByEmailForAlignment(`case-pref-${suffix}@example.com`);
+
+    expect(found?.user_id).toBe(lower.user_id);
+  });
+
+  dbTest('does not guess when only ambiguous case variants exist', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const suffix = `${Date.now()}-${Math.random()}`;
+    await repo.create({
+      email: `Ambiguous-${suffix}@example.com`,
+      name: 'Ambiguous User 1',
+    });
+    await repo.create({
+      email: `AMBIGUOUS-${suffix}@example.com`,
+      name: 'Ambiguous User 2',
+    });
+
+    const found = await repo.findByEmailForAlignment(`ambiguous-${suffix}@example.com`);
+
+    expect(found).toBeNull();
+  });
+});
+
 describe('UsersRepository.setToolConfigField + getToolConfigField', () => {
   dbTest('persists and decrypts a single field', async ({ db }) => {
     const repo = new UsersRepository(db);
