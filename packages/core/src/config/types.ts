@@ -166,6 +166,15 @@ export interface AgorDaemonSettings {
  * UI settings
  */
 export interface AgorUISettings {
+  /**
+   * Public user-facing base URL for the UI.
+   *
+   * Legacy/compatibility alias for daemon.base_url in older configs. New
+   * installs should prefer daemon.base_url so all external link builders share
+   * one setting.
+   */
+  base_url?: string;
+
   /** UI dev server port (default: 5173) */
   port?: number;
 

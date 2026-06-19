@@ -83,6 +83,10 @@ export const gatewayRouteHook = async (context: HookContext) => {
     return context;
   }
 
+  if (!messageText && message.role === 'assistant' && typeof message.content_preview === 'string') {
+    messageText = message.content_preview;
+  }
+
   if (message.role === 'assistant') {
     // Always route assistant messages
     shouldRoute = true;

@@ -562,7 +562,12 @@ export async function getBaseUrl(): Promise<string> {
     return validateBaseUrl(config.daemon.base_url);
   }
 
-  // 3. Default: construct from daemon port (no validation needed for default)
+  // 3. Backward-compatible UI public URL used by older configs.
+  if (config.ui?.base_url) {
+    return validateBaseUrl(config.ui.base_url);
+  }
+
+  // 4. Default: construct from daemon port (no validation needed for default)
   const defaults = getDefaultConfig();
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
   const port = envPort || config.daemon?.port || defaults.daemon?.port || DAEMON.DEFAULT_PORT;
@@ -617,9 +622,14 @@ export async function requirePublicBaseUrl(): Promise<string> {
     return validateBaseUrl(config.daemon.base_url);
   }
 
+  if (config.ui?.base_url) {
+    return validateBaseUrl(config.ui.base_url);
+  }
+
   throw new PublicBaseUrlNotConfiguredError(
     'No public base URL configured. Set the AGOR_BASE_URL environment variable ' +
-      "or `daemon.base_url` in ~/.agor/config.yaml to the daemon's " +
+      'or `daemon.base_url` (preferred) / `ui.base_url` (legacy) in ~/.agor/config.yaml ' +
+      "to the daemon's " +
       'browser-reachable URL (e.g. https://agor.example.com). This is required ' +
       'so OAuth providers can redirect users back to a URL their browser can reach — ' +
       'the localhost fallback only works for browsers on the daemon machine.'

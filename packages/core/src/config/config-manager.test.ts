@@ -439,6 +439,18 @@ describe('requirePublicBaseUrl', () => {
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
   });
 
+  it('returns ui.base_url from legacy config when daemon.base_url is unset', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ ui: { base_url: 'https://agor-ui.sandbox.example.com' } }),
+      'utf-8'
+    );
+
+    await expect(requirePublicBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
+  });
+
   it('throws PublicBaseUrlNotConfiguredError when neither env nor config is set', async () => {
     await expect(requirePublicBaseUrl()).rejects.toBeInstanceOf(PublicBaseUrlNotConfiguredError);
   });
