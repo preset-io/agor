@@ -708,10 +708,9 @@ export class GatewayService {
       typeof metadata.slack_status_message_ts === 'string'
         ? metadata.slack_status_message_ts
         : undefined;
-    const hasTodoPlan = this.parseGatewayTodos(metadataWithStart.slack_status_todos).length > 0;
 
     try {
-      if (data.state === 'done' && existingTs && connector.deleteMessage && !hasTodoPlan) {
+      if (data.state === 'done' && existingTs && connector.deleteMessage) {
         try {
           await connector.deleteMessage({
             threadId: mapping.thread_id,
@@ -732,30 +731,11 @@ export class GatewayService {
       }
 
       const { text, blocks } = this.buildSlackProgressOutbound(data, metadataWithStart, connector);
-      let updateTs = existingTs;
-
-      // Slack `chat.update` edits in place; it does not move the message to the
-      // bottom of the thread. For in-flight progress, keep the visible status
-      // as the last reply by deleting the previous transient row and posting a
-      // replacement. Terminal states can update/delete in place because they
-      // are no longer trying to indicate "currently running".
-      if (!isTerminal && existingTs && connector.deleteMessage) {
-        try {
-          await connector.deleteMessage({
-            threadId: mapping.thread_id,
-            messageId: existingTs,
-          });
-          updateTs = undefined;
-        } catch (error) {
-          console.warn('[gateway] Failed to bump Slack progress status; updating in place:', error);
-        }
-      }
-
       const ts = await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
         blocks,
-        metadata: updateTs ? { slack_update_ts: updateTs } : undefined,
+        metadata: existingTs ? { slack_update_ts: existingTs } : undefined,
       });
 
       if (
