@@ -2392,9 +2392,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               try {
                 const gatewayService = context.app.service('gateway') as unknown as GatewayService;
                 await gatewayService.flushGitHubBuffer(session.session_id);
+                await gatewayService.updateProgress({
+                  session_id: session.session_id,
+                  state: 'done',
+                });
               } catch (error) {
                 console.warn(
-                  `[gateway] Failed to flush GitHub buffer for session ${shortId(session.session_id)}:`,
+                  `[gateway] Failed to flush gateway buffers/status for session ${shortId(session.session_id)}:`,
                   error
                 );
               }

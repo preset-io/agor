@@ -79,6 +79,29 @@ interface RouteMessageResult {
   channelType?: string;
 }
 
+export type GatewayProgressState = 'queued' | 'working' | 'done' | 'failed';
+
+export interface GatewayProgressData {
+  session_id: string;
+  state: GatewayProgressState;
+  task_id?: string;
+  tool_name?: string;
+  tool_input?: Record<string, unknown>;
+  queue_position?: number;
+  error_message?: string;
+}
+
+interface GatewayTodoItem {
+  content: string;
+  activeForm?: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'stopped' | 'unknown';
+}
+
+interface SlackStreamState {
+  threadId: string;
+  ts: string;
+}
+
 /**
  * Check if a channel has the required config for its connector to listen.
  * Slack requires `app_token` (Socket Mode); GitHub requires `app_id` + `private_key` + `installation_id` (polling).
@@ -270,6 +293,17 @@ export class GatewayService {
    */
   private githubMessageBuffer = new Map<string, string>();
 
+  /**
+   * Slack status updates use chat.update; keep a small in-memory throttle so
+   * rapid tool events don't trip Slack rate limits or create distracting UI
+   * flicker. Terminal states always bypass this throttle.
+   */
+  private slackProgressLastUpdate = new Map<string, number>();
+  private slackStreamsByMessage = new Map<string, SlackStreamState>();
+  private slackStreamedMessageIds = new Map<string, number>();
+  private static SLACK_PROGRESS_MIN_UPDATE_MS = 2500;
+  private static SLACK_STREAMED_MESSAGE_TTL_MS = 5 * 60 * 1000;
+
   constructor(db: Database, app: Application) {
     this.channelRepo = new GatewayChannelRepository(db);
     this.threadMapRepo = new ThreadSessionMapRepository(db);
@@ -318,6 +352,380 @@ export class GatewayService {
         .catch((err) => console.warn('[gateway] Debug message failed:', err));
     } catch {
       // Ignore — debug messages are best-effort
+    }
+  }
+
+  private truncateSlackInline(value: string, maxChars = 160): string {
+    const singleLine = value.replace(/\s+/g, ' ').trim();
+    if (singleLine.length <= maxChars) return singleLine;
+    return `${singleLine.slice(0, Math.max(0, maxChars - 1))}…`;
+  }
+
+  private parseGatewayTodos(raw: unknown): GatewayTodoItem[] {
+    const candidate =
+      typeof raw === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return null;
+            }
+          })()
+        : raw;
+
+    if (!Array.isArray(candidate)) return [];
+
+    return candidate
+      .map((item): GatewayTodoItem | null => {
+        if (!item || typeof item !== 'object') return null;
+        const record = item as Record<string, unknown>;
+        const content =
+          typeof record.content === 'string'
+            ? record.content
+            : typeof record.activeForm === 'string'
+              ? record.activeForm
+              : null;
+        if (!content) return null;
+        const status = record.status;
+        if (
+          status !== 'pending' &&
+          status !== 'in_progress' &&
+          status !== 'completed' &&
+          status !== 'stopped' &&
+          status !== 'unknown'
+        ) {
+          return { content, status: 'pending' };
+        }
+        return {
+          content,
+          ...(typeof record.activeForm === 'string' ? { activeForm: record.activeForm } : {}),
+          status,
+        };
+      })
+      .filter((item): item is GatewayTodoItem => item !== null);
+  }
+
+  private formatSlackToolSummary(toolName?: string, input?: Record<string, unknown>): string {
+    if (!toolName) return 'Waiting for the agent...';
+
+    // Keep this deliberately generic: always show the latest tool, but only
+    // append a short one-line hint when a common scalar preview exists.
+    const previewKeys = [
+      'description',
+      'command',
+      'file_path',
+      'path',
+      'query',
+      'url',
+      'pattern',
+      'name',
+    ];
+    const previewValue = previewKeys
+      .map((key) => input?.[key])
+      .find((value) => typeof value === 'string' && value.trim().length > 0);
+
+    if (typeof previewValue === 'string') {
+      return `\`${toolName}\`: ${this.truncateSlackInline(previewValue)}`;
+    }
+
+    const changes = input?.changes;
+    if (Array.isArray(changes) && changes.length > 0) {
+      return `\`${toolName}\`: ${changes.length} file change${changes.length === 1 ? '' : 's'}`;
+    }
+
+    return `\`${toolName}\``;
+  }
+
+  private formatSlackTodoPlan(todos: GatewayTodoItem[]): string {
+    if (todos.length === 0) return '';
+
+    const iconForStatus = (status: GatewayTodoItem['status']) => {
+      switch (status) {
+        case 'completed':
+          return '✓';
+        case 'in_progress':
+          return '◌';
+        case 'stopped':
+          return '■';
+        case 'unknown':
+          return '?';
+        default:
+          return '○';
+      }
+    };
+
+    const lines = todos.slice(0, 12).map((todo) => {
+      const label =
+        todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content;
+      return `${iconForStatus(todo.status)} ${this.truncateSlackInline(label, 120)}`;
+    });
+
+    if (todos.length > lines.length) {
+      lines.push(`… ${todos.length - lines.length} more`);
+    }
+
+    return [``, `*Plan*`, ...lines].join('\n');
+  }
+
+  private buildSlackProgressText(
+    data: GatewayProgressData,
+    existingMetadata: Record<string, unknown>,
+    sessionUrl?: string | null
+  ): string {
+    const now = Date.now();
+    const startedAt =
+      typeof existingMetadata.slack_status_started_at === 'string'
+        ? Date.parse(existingMetadata.slack_status_started_at)
+        : now;
+    const elapsedSeconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+    const elapsed =
+      elapsedSeconds < 60
+        ? `${elapsedSeconds}s`
+        : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
+
+    const sessionLabel = sessionUrl
+      ? `<${sessionUrl}|session ${shortId(data.session_id)}>`
+      : `session \`${shortId(data.session_id)}\``;
+
+    if (data.state === 'queued') {
+      const position =
+        typeof data.queue_position === 'number' ? ` at position ${data.queue_position}` : '';
+      return `⏳ Agor queued your message${position} in ${sessionLabel}.`;
+    }
+
+    if (data.state === 'done') {
+      return `✅ Agor finished in ${sessionLabel}.`;
+    }
+
+    if (data.state === 'failed') {
+      const suffix = data.error_message ? `\n>${data.error_message}` : '';
+      return `⚠️ Agor stopped with an error in ${sessionLabel}.${suffix}`;
+    }
+
+    const latestToolName =
+      data.tool_name ??
+      (typeof existingMetadata.slack_status_tool_name === 'string'
+        ? existingMetadata.slack_status_tool_name
+        : undefined);
+    const latestToolSummary =
+      data.tool_name || data.tool_input
+        ? this.formatSlackToolSummary(data.tool_name, data.tool_input)
+        : typeof existingMetadata.slack_status_tool_summary === 'string'
+          ? existingMetadata.slack_status_tool_summary
+          : this.formatSlackToolSummary(latestToolName);
+
+    const todos = this.parseGatewayTodos(existingMetadata.slack_status_todos);
+    const plan = this.formatSlackTodoPlan(todos);
+    const toolLine = `\nCurrent tool: ${latestToolSummary}`;
+    return `⏳ Agor is still working in ${sessionLabel} (${elapsed}).${toolLine}${plan}`;
+  }
+
+  /**
+   * Create or update a single mutable Slack status row in the gateway thread.
+   *
+   * We expose a short, Slack-safe tool summary and TodoWrite plan state, never
+   * raw JSON args/results. Raw tool inputs are already persisted in Agor's
+   * transcript; Slack receives only a compact truncated preview.
+   */
+  async updateProgress(data: GatewayProgressData): Promise<void> {
+    if (!this.hasActiveChannels) return;
+
+    const mapping = await this.threadMapRepo.findBySession(data.session_id);
+    if (!mapping) return;
+
+    const channel = await this.channelRepo.findById(mapping.channel_id);
+    if (!channel?.enabled || channel.channel_type !== 'slack') return;
+
+    const now = Date.now();
+    const isTerminal = data.state === 'done' || data.state === 'failed';
+    const lastUpdate = this.slackProgressLastUpdate.get(data.session_id) ?? 0;
+    if (
+      !isTerminal &&
+      !data.tool_name &&
+      now - lastUpdate < GatewayService.SLACK_PROGRESS_MIN_UPDATE_MS
+    ) {
+      return;
+    }
+    this.slackProgressLastUpdate.set(data.session_id, now);
+
+    const metadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const statusStartedAt =
+      typeof metadata.slack_status_started_at === 'string'
+        ? metadata.slack_status_started_at
+        : new Date(now).toISOString();
+    const toolTodos =
+      data.tool_name === 'TodoWrite' ? this.parseGatewayTodos(data.tool_input?.todos) : [];
+    const toolSummary =
+      data.tool_name || data.tool_input
+        ? this.formatSlackToolSummary(data.tool_name, data.tool_input)
+        : undefined;
+    const metadataWithStart = {
+      ...metadata,
+      slack_status_started_at: statusStartedAt,
+      ...(data.tool_name ? { slack_status_tool_name: data.tool_name } : {}),
+      ...(toolSummary ? { slack_status_tool_summary: toolSummary } : {}),
+      ...(toolTodos.length > 0 ? { slack_status_todos: toolTodos } : {}),
+    };
+
+    const usersService = this.app.service('users') as {
+      get: (id: string) => Promise<User>;
+    };
+    const sessionsService = this.app.service('sessions') as {
+      get: (id: string, params?: { user: User }) => Promise<Session & { url?: string | null }>;
+    };
+
+    let sessionUrl: string | null = null;
+    try {
+      const session = await sessionsService.get(data.session_id);
+      const user = await usersService.get(session.created_by);
+      sessionUrl = (await sessionsService.get(data.session_id, { user })).url || null;
+    } catch {
+      // Best-effort only; the status message can still identify the short ID.
+    }
+
+    const connector =
+      this.activeListeners.get(channel.id) ??
+      getConnector(channel.channel_type as ChannelType, channel.config);
+    const statusText = this.buildSlackProgressText(data, metadataWithStart, sessionUrl);
+    const { text, blocks } = normalizeOutbound(
+      connector.formatMessage ? connector.formatMessage(statusText) : statusText
+    );
+
+    const existingTs =
+      typeof metadata.slack_status_message_ts === 'string'
+        ? metadata.slack_status_message_ts
+        : undefined;
+
+    try {
+      const ts = await connector.sendMessage({
+        threadId: mapping.thread_id,
+        text,
+        blocks,
+        metadata: existingTs ? { slack_update_ts: existingTs } : undefined,
+      });
+
+      if (
+        !existingTs ||
+        metadataWithStart.slack_status_started_at !== metadata.slack_status_started_at ||
+        data.tool_name ||
+        data.tool_input
+      ) {
+        await this.threadMapRepo.updateMetadata(mapping.id, {
+          ...metadataWithStart,
+          slack_status_message_ts: ts,
+        });
+      }
+    } catch (error) {
+      console.warn('[gateway] Failed to update Slack progress status:', error);
+    }
+  }
+
+  private cleanupSlackStreamedMessageIds(): void {
+    const now = Date.now();
+    for (const [messageId, expiresAt] of this.slackStreamedMessageIds) {
+      if (expiresAt <= now) this.slackStreamedMessageIds.delete(messageId);
+    }
+  }
+
+  wasSlackMessageStreamed(messageId: string): boolean {
+    this.cleanupSlackStreamedMessageIds();
+    return this.slackStreamedMessageIds.has(messageId);
+  }
+
+  async handleMessageStreamingEvent(
+    event: 'streaming:start' | 'streaming:chunk' | 'streaming:end' | 'streaming:error',
+    data: Record<string, unknown>
+  ): Promise<void> {
+    if (!this.hasActiveChannels) return;
+
+    const sessionId = typeof data.session_id === 'string' ? data.session_id : undefined;
+    const messageId = typeof data.message_id === 'string' ? data.message_id : undefined;
+    if (!sessionId || !messageId) return;
+
+    const mapping = await this.threadMapRepo.findBySession(sessionId);
+    if (!mapping) return;
+
+    const channel = await this.channelRepo.findById(mapping.channel_id);
+    if (!channel?.enabled || channel.channel_type !== 'slack') return;
+
+    const connector =
+      this.activeListeners.get(channel.id) ??
+      getConnector(channel.channel_type as ChannelType, channel.config);
+
+    const streamConnector = connector as GatewayConnector & {
+      startStream?: (req: { threadId: string; text?: string }) => Promise<string>;
+      appendStream?: (req: { threadId: string; ts: string; text: string }) => Promise<void>;
+      stopStream?: (req: { threadId: string; ts: string; text?: string }) => Promise<void>;
+    };
+
+    if (
+      !streamConnector.startStream ||
+      !streamConnector.appendStream ||
+      !streamConnector.stopStream
+    ) {
+      return;
+    }
+
+    try {
+      if (event === 'streaming:start') {
+        if (this.slackStreamsByMessage.has(messageId)) return;
+        const ts = await streamConnector.startStream({
+          threadId: mapping.thread_id,
+          text: '',
+        });
+        this.slackStreamsByMessage.set(messageId, {
+          threadId: mapping.thread_id,
+          ts,
+        });
+        return;
+      }
+
+      const existing = this.slackStreamsByMessage.get(messageId);
+      if (!existing) {
+        if (event !== 'streaming:chunk') return;
+        const ts = await streamConnector.startStream({
+          threadId: mapping.thread_id,
+          text: '',
+        });
+        this.slackStreamsByMessage.set(messageId, {
+          threadId: mapping.thread_id,
+          ts,
+        });
+      }
+
+      const stream = this.slackStreamsByMessage.get(messageId);
+      if (!stream) return;
+
+      if (event === 'streaming:chunk') {
+        const chunk = typeof data.chunk === 'string' ? data.chunk : '';
+        if (!chunk) return;
+        await streamConnector.appendStream({
+          threadId: stream.threadId,
+          ts: stream.ts,
+          text: chunk,
+        });
+        return;
+      }
+
+      if (event === 'streaming:end' || event === 'streaming:error') {
+        await streamConnector.stopStream({
+          threadId: stream.threadId,
+          ts: stream.ts,
+        });
+        this.slackStreamsByMessage.delete(messageId);
+        if (event === 'streaming:end') {
+          this.slackStreamedMessageIds.set(
+            messageId,
+            Date.now() + GatewayService.SLACK_STREAMED_MESSAGE_TTL_MS
+          );
+        }
+      }
+    } catch (error) {
+      this.slackStreamsByMessage.delete(messageId);
+      console.warn('[gateway] Failed to mirror message stream to Slack:', error);
     }
   }
 
@@ -821,14 +1229,30 @@ export class GatewayService {
           data.thread_id,
           `Session is busy, message queued at position ${task.queue_position}`
         );
+        void this.updateProgress({
+          session_id: sessionId,
+          state: 'queued',
+          task_id: task.task_id,
+          queue_position: task.queue_position,
+        });
       } else {
         console.log(
           `[gateway] Prompt sent to session ${shortId(sessionId)} via /sessions/:id/prompt`
         );
+        void this.updateProgress({
+          session_id: sessionId,
+          state: 'working',
+          task_id: task.task_id,
+        });
       }
     } catch (error) {
       console.error('[gateway] Failed to send prompt to session:', error);
       this.sendDebugMessage(channel, data.thread_id, `Error sending prompt: ${error}`);
+      void this.updateProgress({
+        session_id: sessionId,
+        state: 'failed',
+        error_message: error instanceof Error ? error.message : String(error),
+      });
     }
 
     return {

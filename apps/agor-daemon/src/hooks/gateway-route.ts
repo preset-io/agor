@@ -9,6 +9,11 @@
 import type { ContentBlock, HookContext, Message } from '@agor/core/types';
 import type { GatewayService } from '../services/gateway';
 
+interface GatewayToolUse {
+  name: string;
+  input: Record<string, unknown>;
+}
+
 /**
  * Extract readable text from message content.
  * Handles string content, ContentBlock[] arrays, and other shapes gracefully.
@@ -27,6 +32,23 @@ function extractText(content: Message['content']): string {
   return '';
 }
 
+function extractLatestToolUse(content: Message['content']): GatewayToolUse | null {
+  if (!Array.isArray(content)) return null;
+
+  for (let i = content.length - 1; i >= 0; i--) {
+    const block = content[i] as Record<string, unknown>;
+    if (block.type !== 'tool_use') continue;
+    if (typeof block.name !== 'string') continue;
+    const input =
+      block.input && typeof block.input === 'object' && !Array.isArray(block.input)
+        ? (block.input as Record<string, unknown>)
+        : {};
+    return { name: block.name, input };
+  }
+
+  return null;
+}
+
 /**
  * After hook that routes messages through the gateway.
  * Routes:
@@ -37,10 +59,29 @@ function extractText(content: Message['content']): string {
  */
 export const gatewayRouteHook = async (context: HookContext) => {
   const message = context.result as Message;
+  const gatewayService = context.app.service('gateway') as unknown as GatewayService;
 
   // Determine if message should be routed to gateway
   let shouldRoute = false;
   let messageText = extractText(message.content);
+  const latestToolUse = extractLatestToolUse(message.content);
+
+  // Tool-only rows should not be posted as normal chat messages, but they are
+  // valuable for the mutable Slack status row: current tool + TodoWrite plan.
+  if (!messageText && latestToolUse) {
+    try {
+      void gatewayService.updateProgress({
+        session_id: message.session_id,
+        state: 'working',
+        task_id: message.task_id,
+        tool_name: latestToolUse.name,
+        tool_input: latestToolUse.input,
+      });
+    } catch (error) {
+      console.warn('[gateway-route] Failed to route tool progress:', error);
+    }
+    return context;
+  }
 
   if (message.role === 'assistant') {
     // Always route assistant messages
@@ -84,10 +125,12 @@ export const gatewayRouteHook = async (context: HookContext) => {
     return context; // No text to route (tool-only messages, etc.)
   }
 
+  if (message.message_id && gatewayService.wasSlackMessageStreamed(message.message_id)) {
+    return context;
+  }
+
   // Fire-and-forget: route message through gateway
   try {
-    const gatewayService = context.app.service('gateway') as unknown as GatewayService;
-
     // Don't await — fire and forget
     gatewayService
       .routeMessage({

@@ -713,25 +713,39 @@ export class SlackConnector implements GatewayConnector {
   }): Promise<string> {
     const { channel, thread_ts } = parseThreadId(req.threadId);
     const blocks = req.blocks && req.blocks.length > 0 ? (req.blocks as KnownBlock[]) : undefined;
+    const updateTs =
+      typeof req.metadata?.slack_update_ts === 'string' ? req.metadata.slack_update_ts : undefined;
 
-    const post = (withBlocks: boolean) =>
-      this.web.chat.postMessage({
+    const send = (withBlocks: boolean) => {
+      const base = {
         channel,
-        thread_ts,
         text: req.text,
         ...(withBlocks && blocks ? { blocks } : {}),
         unfurl_links: false,
         unfurl_media: false,
-      });
+      };
 
-    let result: Awaited<ReturnType<typeof post>>;
+      if (updateTs) {
+        return this.web.chat.update({
+          ...base,
+          ts: updateTs,
+        });
+      }
+
+      return this.web.chat.postMessage({
+        ...base,
+        thread_ts,
+      });
+    };
+
+    let result: Awaited<ReturnType<typeof send>>;
     try {
-      result = await post(true);
+      result = await send(true);
     } catch (err) {
       const code = extractSlackErrorCode(err);
       if (blocks && code && BLOCK_PAYLOAD_ERRORS.has(code)) {
         console.warn(`[slack] Block payload rejected (${code}); retrying as text-only`);
-        result = await post(false);
+        result = await send(false);
       } else {
         throw err;
       }
@@ -741,7 +755,7 @@ export class SlackConnector implements GatewayConnector {
       const code = extractSlackErrorCode(result);
       if (blocks && code && BLOCK_PAYLOAD_ERRORS.has(code)) {
         console.warn(`[slack] Block payload rejected (${code}); retrying as text-only`);
-        const retry = await post(false);
+        const retry = await send(false);
         if (!retry.ok || !retry.ts) {
           throw new Error(`Slack API error: ${retry.error ?? 'unknown error'}`);
         }
@@ -752,6 +766,54 @@ export class SlackConnector implements GatewayConnector {
     }
 
     return result.ts;
+  }
+
+  async startStream(req: { threadId: string; text?: string }): Promise<string> {
+    const { channel, thread_ts } = parseThreadId(req.threadId);
+    const chat = this.web.chat as unknown as {
+      startStream: (
+        args: Record<string, unknown>
+      ) => Promise<{ ok?: boolean; ts?: string; error?: string }>;
+    };
+    const result = await chat.startStream({
+      channel,
+      thread_ts,
+      markdown_text: req.text?.trim() ? req.text : ' ',
+    });
+    if (!result.ok || !result.ts) {
+      throw new Error(`Slack stream start error: ${result.error ?? 'unknown error'}`);
+    }
+    return result.ts;
+  }
+
+  async appendStream(req: { threadId: string; ts: string; text: string }): Promise<void> {
+    const { channel } = parseThreadId(req.threadId);
+    const chat = this.web.chat as unknown as {
+      appendStream: (args: Record<string, unknown>) => Promise<{ ok?: boolean; error?: string }>;
+    };
+    const result = await chat.appendStream({
+      channel,
+      ts: req.ts,
+      markdown_text: req.text,
+    });
+    if (!result.ok) {
+      throw new Error(`Slack stream append error: ${result.error ?? 'unknown error'}`);
+    }
+  }
+
+  async stopStream(req: { threadId: string; ts: string; text?: string }): Promise<void> {
+    const { channel } = parseThreadId(req.threadId);
+    const chat = this.web.chat as unknown as {
+      stopStream: (args: Record<string, unknown>) => Promise<{ ok?: boolean; error?: string }>;
+    };
+    const result = await chat.stopStream({
+      channel,
+      ts: req.ts,
+      ...(req.text ? { markdown_text: req.text } : {}),
+    });
+    if (!result.ok) {
+      throw new Error(`Slack stream stop error: ${result.error ?? 'unknown error'}`);
+    }
   }
 
   /**

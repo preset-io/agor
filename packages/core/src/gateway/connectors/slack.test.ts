@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { markdownToMrkdwn, markdownToSlackPayload, wrapTablesInCodeBlocks } from './slack';
+import {
+  markdownToMrkdwn,
+  markdownToSlackPayload,
+  SlackConnector,
+  wrapTablesInCodeBlocks,
+} from './slack';
 
 /**
  * slackify-markdown uses zero-width spaces (\u200B) around inline formatting
@@ -449,3 +454,93 @@ describe('markdownToSlackPayload', () => {
 // Mirrors SECTION_MAX_CHARS in slack.ts; kept in the test as a lower-bound
 // sanity check (we expect the legacy mrkdwn fallback to carry more than this).
 const SECTION_MAX_CHARS_TEST = 3000;
+
+describe('SlackConnector.sendMessage', () => {
+  it('updates an existing Slack message when slack_update_ts metadata is present', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      chat: {
+        update: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true, ts: '1700000000.000001' };
+        },
+        postMessage: async () => {
+          throw new Error('postMessage should not be called for status updates');
+        },
+      },
+    };
+
+    const ts = await connector.sendMessage({
+      threadId: 'C123-1700000000.000000',
+      text: 'still working',
+      metadata: { slack_update_ts: '1700000000.000001' },
+    });
+
+    expect(ts).toBe('1700000000.000001');
+    expect(calls).toEqual([
+      {
+        channel: 'C123',
+        ts: '1700000000.000001',
+        text: 'still working',
+        unfurl_links: false,
+        unfurl_media: false,
+      },
+    ]);
+  });
+
+  it('mirrors message streams with Slack chat stream methods', async () => {
+    const calls: Array<{ method: string; args: unknown }> = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      chat: {
+        startStream: async (args: unknown) => {
+          calls.push({ method: 'startStream', args });
+          return { ok: true, ts: '1700000000.000002' };
+        },
+        appendStream: async (args: unknown) => {
+          calls.push({ method: 'appendStream', args });
+          return { ok: true };
+        },
+        stopStream: async (args: unknown) => {
+          calls.push({ method: 'stopStream', args });
+          return { ok: true };
+        },
+      },
+    };
+
+    const ts = await connector.startStream({ threadId: 'C123-1700000000.000000' });
+    await connector.appendStream({
+      threadId: 'C123-1700000000.000000',
+      ts,
+      text: 'hello',
+    });
+    await connector.stopStream({ threadId: 'C123-1700000000.000000', ts });
+
+    expect(calls).toEqual([
+      {
+        method: 'startStream',
+        args: {
+          channel: 'C123',
+          thread_ts: '1700000000.000000',
+          markdown_text: ' ',
+        },
+      },
+      {
+        method: 'appendStream',
+        args: {
+          channel: 'C123',
+          ts: '1700000000.000002',
+          markdown_text: 'hello',
+        },
+      },
+      {
+        method: 'stopStream',
+        args: {
+          channel: 'C123',
+          ts: '1700000000.000002',
+        },
+      },
+    ]);
+  });
+});

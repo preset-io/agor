@@ -84,6 +84,7 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
+import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -652,6 +653,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         params: RouteParams
       ) {
         app.service('messages').emit(data.event, data.data);
+        if (
+          data.event === 'streaming:start' ||
+          data.event === 'streaming:chunk' ||
+          data.event === 'streaming:end' ||
+          data.event === 'streaming:error'
+        ) {
+          void (app.service('gateway') as unknown as GatewayService).handleMessageStreamingEvent(
+            data.event,
+            data.data
+          );
+        }
         return { success: true };
       },
     },
@@ -674,6 +686,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) {
         const _ = params;
         app.service('tasks').emit(data.event, data.data);
+        if (data.event === 'tool:start') {
+          const sessionId =
+            typeof data.data.session_id === 'string' ? data.data.session_id : undefined;
+          const toolName =
+            typeof data.data.tool_name === 'string' ? data.data.tool_name : undefined;
+          if (sessionId) {
+            void (app.service('gateway') as unknown as GatewayService).updateProgress({
+              session_id: sessionId,
+              state: 'working',
+              task_id: typeof data.data.task_id === 'string' ? data.data.task_id : undefined,
+              tool_name: toolName,
+            });
+          }
+        }
         return { success: true };
       },
     },
