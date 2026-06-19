@@ -63,6 +63,7 @@ import {
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import type { AgenticToolOption } from '../../types';
+import { REACT_FLOW_DRAG_HANDLE_SELECTOR } from '../../utils/reactFlowDragClasses';
 import { sanitizeBoardCss } from '../../utils/sanitizeCss';
 import { isDarkTheme } from '../../utils/theme';
 import { AutocompleteTextarea } from '../AutocompleteTextarea/AutocompleteTextarea';
@@ -726,7 +727,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         nodes.push({
           id: branch.branch_id,
           type: 'branchNode',
-          dragHandle: '.drag-handle',
+          dragHandle: REACT_FLOW_DRAG_HANDLE_SELECTOR,
           position, // When pinned (parentId set), this is relative to zone; otherwise absolute
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 500, // Above zones, below comments
@@ -868,7 +869,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         nodes.push({
           id: `card-${cardId}`,
           type: 'cardNode',
-          dragHandle: '.drag-handle',
+          dragHandle: REACT_FLOW_DRAG_HANDLE_SELECTOR,
           position,
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
           zIndex: 500, // Same level as branches

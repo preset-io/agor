@@ -13,6 +13,10 @@ import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import {
+  REACT_FLOW_DRAG_HANDLE_CLASS,
+  REACT_FLOW_NO_DRAG_CLASS,
+} from '../../utils/reactFlowDragClasses';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
@@ -320,13 +324,14 @@ const BranchCardComponent = ({
     >
       {/* Branch header */}
       <div
-        className={!inPopover && !panelMode ? 'drag-handle' : undefined}
+        className={!inPopover && !panelMode ? REACT_FLOW_DRAG_HANDLE_CLASS : undefined}
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           marginBottom: 12,
           gap: 8,
+          cursor: !inPopover && !panelMode ? 'grab' : undefined,
         }}
       >
         <div
@@ -340,7 +345,7 @@ const BranchCardComponent = ({
         >
           {!inPopover && (
             <div
-              className="drag-handle"
+              className={REACT_FLOW_DRAG_HANDLE_CLASS}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -380,7 +385,6 @@ const BranchCardComponent = ({
               // available in the branch settings modal for power users.
               <Typography.Title
                 level={4}
-                className="nodrag"
                 style={{ margin: 0, fontWeight: 600 }}
                 ellipsis={{ tooltip: assistantConfig?.displayName ?? branch.name }}
               >
@@ -388,7 +392,7 @@ const BranchCardComponent = ({
               </Typography.Title>
             ) : (
               <>
-                <Typography.Text strong className="nodrag" ellipsis={{ tooltip: branch.name }}>
+                <Typography.Text strong ellipsis={{ tooltip: branch.name }}>
                   {branch.name}
                 </Typography.Text>
                 <Typography.Text
@@ -420,7 +424,7 @@ const BranchCardComponent = ({
                   e.stopPropagation();
                   onUnpin?.(branch.branch_id);
                 }}
-                className="nodrag"
+                className={REACT_FLOW_NO_DRAG_CLASS}
               />
             </Tooltip>
           )}
@@ -428,12 +432,12 @@ const BranchCardComponent = ({
             <Button
               type="text"
               icon={<DragOutlined style={{ fontSize: 16 }} />}
-              className="drag-handle"
+              className={REACT_FLOW_DRAG_HANDLE_CLASS}
               title="Drag to reposition"
               style={{ cursor: 'grab', padding: '4px 8px' }}
             />
           )}
-          <div className="nodrag">
+          <div className={REACT_FLOW_NO_DRAG_CLASS}>
             {onOpenTerminal && (
               <Button
                 type="text"
@@ -478,7 +482,7 @@ const BranchCardComponent = ({
       </div>
 
       {/* Branch metadata - all pills on one row with wrapping */}
-      <div className="nodrag" style={{ marginBottom: 8 }}>
+      <div className={REACT_FLOW_NO_DRAG_CLASS} style={{ marginBottom: 8 }}>
         <Space size={4} wrap>
           {branch.created_by && (
             <CreatedByTag
@@ -508,7 +512,7 @@ const BranchCardComponent = ({
 
       {/* Notes */}
       {branch.notes && (
-        <div className="nodrag" style={{ marginBottom: 8 }}>
+        <div className={REACT_FLOW_NO_DRAG_CLASS} style={{ marginBottom: 8 }}>
           <div
             className="markdown-compact"
             style={{
@@ -546,7 +550,7 @@ const BranchCardComponent = ({
       )}
 
       {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
-      <div className="nodrag">
+      <div className={REACT_FLOW_NO_DRAG_CLASS}>
         <BranchSessionSections
           branch={branch}
           sessions={sessions}

@@ -13,6 +13,10 @@ import {
 import { App, Button, Card, Collapse, Space, Typography } from 'antd';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { parseGitStateSha } from '../../utils/gitState';
+import {
+  REACT_FLOW_DRAG_HANDLE_CLASS,
+  REACT_FLOW_NO_DRAG_CLASS,
+} from '../../utils/reactFlowDragClasses';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { CreatedByTag } from '../metadata';
 import { Tag } from '../Tag';
@@ -134,7 +138,7 @@ const SessionCard = ({
     >
       {/* Session header — full-width drag handle */}
       <div
-        className="drag-handle"
+        className={REACT_FLOW_DRAG_HANDLE_CLASS}
         style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -143,17 +147,18 @@ const SessionCard = ({
         }}
       >
         <Space size={8} align="center">
-          <div className="drag-handle" style={{ display: 'flex', alignItems: 'center' }}>
+          <div
+            className={REACT_FLOW_DRAG_HANDLE_CLASS}
+            style={{ display: 'flex', alignItems: 'center' }}
+          >
             <ToolIcon tool={session.agentic_tool} size={32} />
           </div>
-          <Typography.Text strong className="nodrag">
-            {session.agentic_tool}
-          </Typography.Text>
+          <Typography.Text strong>{session.agentic_tool}</Typography.Text>
           <TaskStatusIcon status={session.status} size={16} />
         </Space>
 
         <Space size={4}>
-          <div className="nodrag">
+          <div className={REACT_FLOW_NO_DRAG_CLASS}>
             {isForked && session.fork_origin === 'btw' ? (
               <Tag icon={<ForkOutlined />} color="orange">
                 BTW
@@ -186,11 +191,11 @@ const SessionCard = ({
           <Button
             type="text"
             icon={<DragOutlined style={{ fontSize: 16 }} />}
-            className="drag-handle"
+            className={REACT_FLOW_DRAG_HANDLE_CLASS}
             title="Drag to reposition"
             style={{ cursor: 'grab', padding: '4px 8px' }}
           />
-          <div className="nodrag">
+          <div className={REACT_FLOW_NO_DRAG_CLASS}>
             {onSessionClick && (
               <Button
                 type="text"
@@ -234,7 +239,7 @@ const SessionCard = ({
       </div>
 
       {/* Session metadata */}
-      <div className="nodrag">
+      <div className={REACT_FLOW_NO_DRAG_CLASS}>
         {/* Title/Description */}
         {(session.title || session.description) && (
           <Typography.Text
@@ -291,7 +296,7 @@ const SessionCard = ({
       </div>
 
       {/* Tasks - collapsible */}
-      <div className="nodrag">
+      <div className={REACT_FLOW_NO_DRAG_CLASS}>
         <Collapse
           defaultActiveKey={defaultExpanded ? ['tasks'] : []}
           items={[

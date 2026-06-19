@@ -24,6 +24,10 @@ function isSafeUrl(url: string): boolean {
 }
 
 import React, { useMemo, useState } from 'react';
+import {
+  REACT_FLOW_DRAG_HANDLE_CLASS,
+  REACT_FLOW_NO_DRAG_CLASS,
+} from '../../utils/reactFlowDragClasses';
 import { ensureColorVisible } from '../../utils/theme';
 
 const DESCRIPTION_MAX_CHARS = 100;
@@ -83,11 +87,13 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
     >
       {/* Header: emoji + title + link + pin + drag */}
       <div
+        className={REACT_FLOW_DRAG_HANDLE_CLASS}
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 8,
           padding: '10px 12px',
+          cursor: 'grab',
           borderBottom:
             card.description || card.note ? `1px solid ${token.colorBorderSecondary}` : 'none',
         }}
@@ -114,7 +120,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="nodrag"
+            className={REACT_FLOW_NO_DRAG_CLASS}
             style={{ color: token.colorTextSecondary, flexShrink: 0 }}
           >
             <LinkOutlined style={{ fontSize: 12 }} />
@@ -134,7 +140,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
                 e.stopPropagation();
                 onUnpin?.(card.card_id);
               }}
-              className="nodrag"
+              className={REACT_FLOW_NO_DRAG_CLASS}
               style={{ flexShrink: 0, width: 24, height: 24, padding: 0 }}
             />
           </Tooltip>
@@ -143,7 +149,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
           type="text"
           size="small"
           icon={<DragOutlined />}
-          className="drag-handle"
+          className={REACT_FLOW_DRAG_HANDLE_CLASS}
           style={{ cursor: 'grab', flexShrink: 0, width: 24, height: 24, padding: 0 }}
         />
       </div>
@@ -151,7 +157,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
       {/* Description (collapsed) */}
       {card.description && (
         <div
-          className="nodrag"
+          className={REACT_FLOW_NO_DRAG_CLASS}
           style={{
             padding: '8px 12px',
             borderBottom: card.note ? `1px solid ${token.colorBorderSecondary}` : 'none',
