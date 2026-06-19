@@ -29,15 +29,6 @@ import { slackifyMarkdown } from 'slackify-markdown';
 import type { ChannelType } from '../../types/gateway';
 import type { GatewayConnector, InboundMessage, OutboundPayload } from '../connector';
 
-const DEBUG_SLACK_GATEWAY =
-  process.env.AGOR_DEBUG_SLACK_GATEWAY === '1' || process.env.DEBUG?.includes('slack-gateway');
-
-function slackDebug(...args: unknown[]): void {
-  if (DEBUG_SLACK_GATEWAY) {
-    console.debug(...args);
-  }
-}
-
 // Block Kit table block limits (Slack docs, native block introduced Aug 2025).
 const TABLE_MAX_ROWS = 100;
 const TABLE_MAX_COLS = 20;
@@ -543,11 +534,7 @@ export class SlackConnector implements GatewayConnector {
         expiresAt: now + SlackConnector.USER_CACHE_TTL_MS,
       });
 
-      if (email) {
-        slackDebug(
-          `[slack] Resolved user ${slackUserId} → ${displayName ?? '(no name)'} <${email}>`
-        );
-      } else {
+      if (!email) {
         console.log(
           `[slack] User ${slackUserId} has no email (missing users:read.email scope or restricted account)`
         );
@@ -663,7 +650,6 @@ export class SlackConnector implements GatewayConnector {
         } else {
           resolvedType = 'channel';
         }
-        slackDebug(`[slack] conversations.info resolved channel ${channelId} → ${resolvedType}`);
         this.cacheChannelType(channelId, resolvedType);
 
         // Also cache channel name to avoid a second conversations.info call
@@ -780,14 +766,11 @@ export class SlackConnector implements GatewayConnector {
    * - Channel whitelist (if allowed_channel_ids is set)
    */
   async startListening(callback: (msg: InboundMessage) => void): Promise<void> {
-    slackDebug('[slack] startListening called');
-
     if (!this.config.app_token) {
       console.error('[slack] ERROR: app_token is missing from config');
       throw new Error('Slack Socket Mode requires app_token in config');
     }
 
-    slackDebug('[slack] Creating SocketModeClient...');
     this.socketMode = new SocketModeClient({
       appToken: this.config.app_token,
     });
@@ -795,21 +778,12 @@ export class SlackConnector implements GatewayConnector {
     // Fetch bot user ID for mention detection
     let botMentionPattern: RegExp | null = null;
     let botMentionReplacePattern: RegExp | null = null;
-    let authTeam: string | undefined;
-    let authUser: string | undefined;
     try {
-      slackDebug('[slack] Testing bot token with auth.test()...');
       const authTest = await this.web.auth.test();
       this.botUserId = authTest.user_id as string;
-      authTeam = authTest.team as string | undefined;
-      authUser = authTest.user as string | undefined;
       // Precompile regex patterns for performance
       botMentionPattern = new RegExp(`<@${this.botUserId}>`);
       botMentionReplacePattern = new RegExp(`<@${this.botUserId}>\\s*`, 'g');
-      slackDebug(`[slack] Bot user ID: ${this.botUserId}`);
-      slackDebug(
-        `[slack] Bot auth test successful - team: ${authTest.team}, user: ${authTest.user}`
-      );
     } catch (error) {
       console.error('[slack] Failed to fetch bot user ID:', error);
       console.error('[slack] This usually means the bot_token is invalid or expired');
@@ -845,13 +819,6 @@ export class SlackConnector implements GatewayConnector {
       }
     }
 
-    slackDebug(
-      `[slack] Socket Mode listener configured: team=${authTeam ?? 'unknown'} user=${authUser ?? 'unknown'} ` +
-        `channels=${enableChannels ? 'on' : 'off'} groups=${enableGroups ? 'on' : 'off'} ` +
-        `mpim=${enableMpim ? 'on' : 'off'} require_mention=${requireMention ? 'on' : 'off'} ` +
-        `allowlist=${allowedChannelIds?.length ?? 0}`
-    );
-
     // Handle incoming Slack events
     this.socketMode.on('slack_event', async ({ type, body, ack }) => {
       // Event received - process based on type
@@ -870,13 +837,8 @@ export class SlackConnector implements GatewayConnector {
 
       await ack();
       const event = body.event;
-      slackDebug(
-        `[slack] Processing ${eventType} event - channel: ${event.channel}, channel_type: ${event.channel_type}`
-      );
-
       // Skip bot messages to avoid loops
       if (event.bot_id || event.subtype === 'bot_message') {
-        slackDebug('[slack] Skipping bot message');
         return;
       }
 
@@ -914,16 +876,10 @@ export class SlackConnector implements GatewayConnector {
       if (isChannelMessage && !botMentionPattern) {
         if (eventType === 'message' && requireMention) {
           // Can't detect mentions - let app_mention handle (which Slack guarantees is a mention)
-          slackDebug(
-            '[slack] Bot ID unavailable, require_mention=true - skipping message event (will use app_mention)'
-          );
           return;
         }
         if (eventType === 'app_mention' && !requireMention) {
           // Avoid duplicates - prefer message events when mentions not required
-          slackDebug(
-            '[slack] Bot ID unavailable, require_mention=false - skipping app_mention (will use message)'
-          );
           return;
         }
       }
@@ -1066,9 +1022,7 @@ export class SlackConnector implements GatewayConnector {
       });
     });
 
-    slackDebug('[slack] Starting Socket Mode client...');
     await this.socketMode.start();
-    slackDebug('[slack] Socket Mode client connected successfully!');
   }
 
   /**

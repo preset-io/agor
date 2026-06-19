@@ -37,24 +37,6 @@ import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 
-/**
- * Summarize MCP config for logging without exposing sensitive env values.
- * Returns a safe object showing server names and transport types only.
- */
-function summarizeMcpConfig(
-  config: unknown
-): Record<string, { type: string; hasEnv: boolean }> | undefined {
-  if (!config || typeof config !== 'object') return undefined;
-  const summary: Record<string, { type: string; hasEnv: boolean }> = {};
-  for (const [name, server] of Object.entries(config as MCPServersConfig)) {
-    summary[name] = {
-      type: server.type || 'stdio',
-      hasEnv: !!(server.env && Object.keys(server.env).length > 0),
-    };
-  }
-  return summary;
-}
-
 function summarizeMcpConfigCounts(config: unknown): string {
   if (!config || typeof config !== 'object') return 'none';
 
@@ -65,7 +47,8 @@ function summarizeMcpConfigCounts(config: unknown): string {
 
   for (const server of Object.values(config as MCPServersConfig)) {
     total += 1;
-    if (server.type === 'stdio') {
+    const type = server.type || 'stdio';
+    if (type === 'stdio') {
       stdio += 1;
     } else {
       remote += 1;
@@ -76,15 +59,6 @@ function summarizeMcpConfigCounts(config: unknown): string {
   }
 
   return `total=${total} remote=${remote} stdio=${stdio} with_env=${withEnv}`;
-}
-
-const DEBUG_MCP_AUTH =
-  process.env.AGOR_DEBUG_MCP_AUTH === '1' || process.env.DEBUG?.includes('mcp-auth');
-
-function mcpAuthDebug(...args: unknown[]): void {
-  if (DEBUG_MCP_AUTH) {
-    console.debug(...args);
-  }
 }
 
 export function formatListForLog(items: string[], maxItems = 5): string {
@@ -630,9 +604,6 @@ export async function setupQuery(
             if (headers && transport !== 'stdio') {
               serverConfig.headers = headers;
               serversWithHeaders += 1;
-              mcpAuthDebug(
-                `     🔐 Added ${Object.keys(headers).length} HTTP header(s) for ${server.name}`
-              );
             } else if (server.auth?.type === 'oauth' && transport !== 'stdio') {
               // OAuth server but no token. Track for one concise per-query summary below.
               missingOAuthServers.push(server.name);
@@ -663,10 +634,6 @@ export async function setupQuery(
             `stdio=${stdioServerCount} headers=${serversWithHeaders} missing_oauth=${missingOAuthServers.length} ` +
             `auth_errors=${unresolvedAuthServers.length}`
         );
-        mcpAuthDebug(
-          `   🔧 MCP server details:`,
-          JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers), null, 2)
-        );
         if (missingOAuthServers.length > 0) {
           console.warn(
             `   ⚠️  ${missingOAuthServers.length} OAuth MCP server(s) have no valid token: ` +
@@ -693,12 +660,8 @@ export async function setupQuery(
   console.log('📤 Calling query() with:');
   console.log(`   prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
   console.log(`   queryOptions keys: ${Object.keys(queryOptions).join(', ')}`);
-  // Log safe MCP counts only. Names/details are debug-only because this runs on every query.
+  // Log safe MCP counts only. Per-server names/details are intentionally omitted from this per-query log.
   console.log(`   MCP servers: ${summarizeMcpConfigCounts(queryOptions.mcpServers)}`);
-  mcpAuthDebug(
-    `   MCP server details:`,
-    queryOptions.mcpServers ? JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers)) : 'none'
-  );
 
   // Wrap the string prompt in an AsyncIterable so the SDK treats this as a
   // streaming-input query.  When a plain string is passed, the SDK sets

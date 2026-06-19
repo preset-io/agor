@@ -140,16 +140,6 @@ function mcpTokenDebug(...args: unknown[]): void {
   }
 }
 
-const DEBUG_BRANCH_GIT_STATE =
-  process.env.AGOR_DEBUG_BRANCH_GIT_STATE === '1' ||
-  process.env.DEBUG?.includes('branch-git-state');
-
-function branchGitStateDebug(...args: unknown[]): void {
-  if (DEBUG_BRANCH_GIT_STATE) {
-    console.debug(...args);
-  }
-}
-
 const BRANCH_ENV_FIELDS = [
   'start_command',
   'stop_command',
@@ -1258,18 +1248,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       | string
       | undefined;
     const userId = context.params?.user?.user_id || queryForUserId;
-    const source = context.params?.user?.user_id
-      ? 'socket-auth'
-      : queryForUserId
-        ? 'query-param'
-        : 'none';
-    mcpTokenDebug(
-      `[MCP OAuth] injectPerUserOAuthTokens called - userId: ${userId || 'NONE'}, ` +
-        `source: ${source}, provider: ${context.params?.provider || 'internal'}, ` +
-        `method: ${context.method}, resultCount: ${Array.isArray(context.result) ? context.result.length : 1}`
-    );
     if (!userId) {
-      mcpTokenDebug('[MCP OAuth] No user ID - skipping token injection');
       return context;
     }
 
@@ -1290,9 +1269,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         const row = await userTokenRepo.getToken(tokenUserId, server.mcp_server_id);
 
         if (!row) {
-          mcpTokenDebug(
-            `[MCP OAuth] No token row for user=${tokenUserId ?? '<shared>'} server=${server.name}`
-          );
           return server;
         }
 
@@ -2128,7 +2104,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   } catch (gitError) {
                     const message = gitError instanceof Error ? gitError.message : String(gitError);
                     console.warn(`Failed to auto-populate git_state from branch: ${message}`);
-                    branchGitStateDebug('Failed to auto-populate git_state stack:', gitError);
                   }
                 }
               }
