@@ -111,6 +111,9 @@ export const gatewayRouteHook = async (context: HookContext) => {
   }
 
   if (message.role === 'assistant') {
+    if (gatewayService.wasMessageStreamedToSlack?.(message.message_id)) {
+      return context;
+    }
     // Always route assistant messages
     shouldRoute = true;
   } else if (message.role === 'user') {

@@ -310,7 +310,9 @@ export class GatewayService {
   private slackProgressLastUpdate = new Map<string, number>();
   private slackProgressQueues = new Map<string, Promise<void>>();
   private slackStreamsByMessage = new Map<string, SlackStreamState>();
+  private slackStreamedMessageIds = new Set<string>();
   private static SLACK_PROGRESS_MIN_UPDATE_MS = 2500;
+  private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
   constructor(db: Database, app: Application) {
     this.channelRepo = new GatewayChannelRepository(db);
@@ -669,6 +671,18 @@ export class GatewayService {
     }
   }
 
+  wasMessageStreamedToSlack(messageId: string): boolean {
+    return this.slackStreamedMessageIds.has(messageId);
+  }
+
+  private markMessageStreamedToSlack(messageId: string): void {
+    this.slackStreamedMessageIds.add(messageId);
+    if (this.slackStreamedMessageIds.size > GatewayService.SLACK_STREAMED_MESSAGE_CACHE_MAX) {
+      const oldest = this.slackStreamedMessageIds.values().next().value;
+      if (oldest) this.slackStreamedMessageIds.delete(oldest);
+    }
+  }
+
   private async updateProgressNow(data: GatewayProgressData): Promise<void> {
     if (!this.hasActiveChannels) return;
 
@@ -919,6 +933,9 @@ export class GatewayService {
           threadId: stream.threadId,
           ts: stream.ts,
         });
+        if (event === 'streaming:end' && stream.hasContent) {
+          this.markMessageStreamedToSlack(messageId);
+        }
         this.slackStreamsByMessage.delete(messageId);
       }
     } catch (error) {
