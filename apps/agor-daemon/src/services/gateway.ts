@@ -110,6 +110,7 @@ interface SlackStreamState {
   ts: string;
   hasContent: boolean;
   taskId?: string;
+  lastMessageId?: string;
 }
 
 /**
@@ -310,7 +311,7 @@ export class GatewayService {
    */
   private slackProgressLastUpdate = new Map<string, number>();
   private slackProgressQueues = new Map<string, Promise<void>>();
-  private slackStreamsByMessage = new Map<string, SlackStreamState>();
+  private slackStreamsByTask = new Map<string, SlackStreamState>();
   private slackStreamedMessageIds = new Set<string>();
   private slackStreamedTaskIds = new Set<string>();
   private slackStreamTaskByMessage = new Map<string, string>();
@@ -699,6 +700,24 @@ export class GatewayService {
     }
   }
 
+  private async stopSlackTaskStream(
+    taskId: string | undefined,
+    connector: GatewayConnector
+  ): Promise<void> {
+    if (!taskId) return;
+    const stream = this.slackStreamsByTask.get(taskId);
+    if (!stream) return;
+    const streamConnector = connector as GatewayConnector & {
+      stopStream?: (req: { threadId: string; ts: string; text?: string }) => Promise<void>;
+    };
+    if (!streamConnector.stopStream) return;
+    await streamConnector.stopStream({
+      threadId: stream.threadId,
+      ts: stream.ts,
+    });
+    this.slackStreamsByTask.delete(taskId);
+  }
+
   private async updateProgressNow(data: GatewayProgressData): Promise<void> {
     if (!this.hasActiveChannels) return;
 
@@ -763,8 +782,18 @@ export class GatewayService {
         ? metadata.slack_status_message_ts
         : undefined;
     let updateTs = existingTs;
+    const activeTaskId =
+      typeof metadata.slack_status_task_id === 'string' ? metadata.slack_status_task_id : undefined;
 
     try {
+      if (isTerminal) {
+        try {
+          await this.stopSlackTaskStream(activeTaskId, connector);
+        } catch (error) {
+          console.warn('[gateway] Failed to stop Slack task stream:', error);
+        }
+      }
+
       if (connector.setThreadStatus) {
         try {
           await connector.setThreadStatus({
@@ -868,6 +897,13 @@ export class GatewayService {
     const taskId = typeof data.task_id === 'string' ? data.task_id : undefined;
     if (!sessionId || !messageId) return;
 
+    if (event === 'streaming:start') {
+      if (taskId) this.slackStreamTaskByMessage.set(messageId, taskId);
+      return;
+    }
+
+    const taskKey = taskId ?? this.slackStreamTaskByMessage.get(messageId) ?? messageId;
+
     const mapping = await this.threadMapRepo.findBySession(sessionId);
     if (!mapping) return;
 
@@ -889,11 +925,7 @@ export class GatewayService {
       stopStream?: (req: { threadId: string; ts: string; text?: string }) => Promise<void>;
     };
 
-    if (
-      !streamConnector.startStream ||
-      !streamConnector.appendStream ||
-      !streamConnector.stopStream
-    ) {
+    if (!streamConnector.startStream || !streamConnector.appendStream) {
       return;
     }
 
@@ -907,63 +939,61 @@ export class GatewayService {
       const recipientTeamId =
         typeof metadata.slack_team_id === 'string' ? metadata.slack_team_id : undefined;
 
-      if (event === 'streaming:start') {
-        if (taskId) this.slackStreamTaskByMessage.set(messageId, taskId);
-        return;
-      }
-
-      const existing = this.slackStreamsByMessage.get(messageId);
-      if (!existing) {
-        if (event !== 'streaming:chunk') return;
-        const chunk = typeof data.chunk === 'string' ? data.chunk : '';
-        if (!chunk) return;
-        const ts = await streamConnector.startStream({
-          threadId: mapping.thread_id,
-          text: chunk,
-          recipientUserId,
-          recipientTeamId,
-        });
-        this.slackStreamsByMessage.set(messageId, {
-          threadId: mapping.thread_id,
-          ts,
-          hasContent: true,
-          taskId: taskId ?? this.slackStreamTaskByMessage.get(messageId),
-        });
-        this.markTaskStreamedToSlack(taskId ?? this.slackStreamTaskByMessage.get(messageId));
-        return;
-      }
-
-      const stream = this.slackStreamsByMessage.get(messageId);
-      if (!stream) return;
-
       if (event === 'streaming:chunk') {
         const chunk = typeof data.chunk === 'string' ? data.chunk : '';
         if (!chunk) return;
+
+        const existing = this.slackStreamsByTask.get(taskKey);
+        if (!existing) {
+          const ts = await streamConnector.startStream({
+            threadId: mapping.thread_id,
+            text: chunk,
+            recipientUserId,
+            recipientTeamId,
+          });
+          this.slackStreamsByTask.set(taskKey, {
+            threadId: mapping.thread_id,
+            ts,
+            hasContent: true,
+            taskId: taskKey,
+            lastMessageId: messageId,
+          });
+          this.markMessageStreamedToSlack(messageId);
+          this.markTaskStreamedToSlack(taskKey);
+          return;
+        }
+
+        const text =
+          existing.hasContent && existing.lastMessageId && existing.lastMessageId !== messageId
+            ? `\n\n${chunk}`
+            : chunk;
         await streamConnector.appendStream({
-          threadId: stream.threadId,
-          ts: stream.ts,
-          text: chunk,
+          threadId: existing.threadId,
+          ts: existing.ts,
+          text,
         });
-        stream.hasContent = true;
+        existing.hasContent = true;
+        existing.lastMessageId = messageId;
+        this.markMessageStreamedToSlack(messageId);
+        this.markTaskStreamedToSlack(taskKey);
         return;
       }
 
-      if (event === 'streaming:end' || event === 'streaming:error') {
-        await streamConnector.stopStream({
-          threadId: stream.threadId,
-          ts: stream.ts,
-        });
-        if (event === 'streaming:end' && stream.hasContent) {
+      if (event === 'streaming:end') {
+        const existing = this.slackStreamsByTask.get(taskKey);
+        if (existing?.hasContent) {
           this.markMessageStreamedToSlack(messageId);
-          this.markTaskStreamedToSlack(
-            stream.taskId ?? this.slackStreamTaskByMessage.get(messageId)
-          );
+          this.markTaskStreamedToSlack(taskKey);
         }
-        this.slackStreamsByMessage.delete(messageId);
+        this.slackStreamTaskByMessage.delete(messageId);
+        return;
+      }
+
+      if (event === 'streaming:error') {
         this.slackStreamTaskByMessage.delete(messageId);
       }
     } catch (error) {
-      this.slackStreamsByMessage.delete(messageId);
+      this.slackStreamsByTask.delete(taskKey);
       this.slackStreamTaskByMessage.delete(messageId);
       console.warn('[gateway] Failed to mirror message stream to Slack:', error);
     }
