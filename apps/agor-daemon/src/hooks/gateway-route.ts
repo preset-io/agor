@@ -32,6 +32,10 @@ function extractText(content: Message['content']): string {
   return '';
 }
 
+function isGatewayThinkingPlaceholder(text: string): boolean {
+  return /^thinking\s*\.{3}$/i.test(text.trim());
+}
+
 function extractLatestToolUse(content: Message['content']): GatewayToolUse | null {
   if (!Array.isArray(content)) return null;
 
@@ -84,8 +88,8 @@ export const gatewayRouteHook = async (context: HookContext) => {
   let messageText = extractText(message.content);
   const latestToolUse = extractLatestToolUseFromMessage(message);
 
-  // Tool calls are valuable for the mutable Slack status row: current tool +
-  // TodoWrite plan. Some agent SDKs include text and tool_use blocks in the
+  // Tool calls are valuable for Slack's native assistant status/stream: current
+  // tool + TodoWrite plan. Some agent SDKs include text and tool_use blocks in the
   // same assistant message, so update progress whenever we see a tool call,
   // not only for tool-only rows.
   if (latestToolUse) {
@@ -108,6 +112,10 @@ export const gatewayRouteHook = async (context: HookContext) => {
 
   if (!messageText && message.role === 'assistant' && typeof message.content_preview === 'string') {
     messageText = message.content_preview;
+  }
+
+  if (message.role === 'assistant' && messageText && isGatewayThinkingPlaceholder(messageText)) {
+    return context;
   }
 
   if (message.role === 'assistant') {

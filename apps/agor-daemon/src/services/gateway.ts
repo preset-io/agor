@@ -17,12 +17,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type {
-  GatewayConnector,
-  GatewayContext,
-  InboundMessage,
-  OutboundPayload,
-} from '@agor/core/gateway';
+import type { GatewayConnector, GatewayContext, InboundMessage } from '@agor/core/gateway';
 import {
   formatGatewayContext,
   formatGatewayFollowUpRoutingMessage,
@@ -30,7 +25,6 @@ import {
   formatGatewaySystemPayload,
   getConnector,
   hasConnector,
-  markdownToMrkdwn,
   normalizeOutbound,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
@@ -111,7 +105,6 @@ interface SlackStreamState {
   hasContent: boolean;
   taskId?: string;
   lastMessageId?: string;
-  lastTodoSignature?: string;
 }
 
 /**
@@ -135,6 +128,10 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
     default:
       return false;
   }
+}
+
+function isSlackThinkingPlaceholder(text: string): boolean {
+  return /^thinking\s*\.{3}$/i.test(text.trim());
 }
 
 /**
@@ -313,10 +310,12 @@ export class GatewayService {
   private slackProgressLastUpdate = new Map<string, number>();
   private slackProgressQueues = new Map<string, Promise<void>>();
   private slackStreamsByTask = new Map<string, SlackStreamState>();
+  private slackStreamStatusRefreshLast = new Map<string, number>();
   private slackStreamedMessageIds = new Set<string>();
   private slackStreamedTaskIds = new Set<string>();
   private slackStreamTaskByMessage = new Map<string, string>();
   private static SLACK_PROGRESS_MIN_UPDATE_MS = 2500;
+  private static SLACK_STREAM_STATUS_REFRESH_MS = 1000;
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
   constructor(db: Database, app: Application) {
@@ -342,21 +341,20 @@ export class GatewayService {
   }
 
   /**
-   * Send a debug/system message to the platform thread (fire-and-forget).
+   * Send a system message to the platform thread (fire-and-forget).
    * Useful for giving the user visibility into what's happening.
    */
-  private sendDebugMessage(
+  private sendSystemMessage(
     channel: GatewayChannel,
     threadId: string,
     text: string,
-    opts?: { forceSlack?: boolean }
+    opts?: { suppressSlack?: boolean }
   ): void {
-    // Skip routine debug messages for GitHub and Slack channels. GitHub has
-    // its editable Processing comment; Slack now uses native assistant status
-    // and stream chrome, so extra lifecycle rows make the thread noisy.
-    // Slack rejection/config errors may opt in with forceSlack.
+    // GitHub has its editable Processing comment. Slack keeps durable routing
+    // messages (session links/errors) but suppresses transient lifecycle noise
+    // like "creating session" and queued/status rows via suppressSlack.
     if (channel.channel_type === 'github') return;
-    if (channel.channel_type === 'slack' && !opts?.forceSlack) return;
+    if (channel.channel_type === 'slack' && opts?.suppressSlack) return;
 
     if (!hasConnector(channel.channel_type as ChannelType)) return;
     try {
@@ -493,81 +491,6 @@ export class GatewayService {
     return `\`${toolName}\``;
   }
 
-  private formatSlackTodoPlan(todos: GatewayTodoItem[]): string {
-    if (todos.length === 0) return '';
-
-    const iconForStatus = (status: GatewayTodoItem['status']) => {
-      switch (status) {
-        case 'completed':
-          return '✓';
-        case 'in_progress':
-          return '◌';
-        case 'stopped':
-          return '■';
-        case 'unknown':
-          return '?';
-        default:
-          return '○';
-      }
-    };
-
-    const lines = todos.slice(0, 12).map((todo) => {
-      const content = this.truncateSlackInline(todo.content, 90);
-      const activeForm =
-        todo.status === 'in_progress' &&
-        todo.activeForm &&
-        todo.activeForm.trim() !== todo.content.trim()
-          ? ` — ${this.truncateSlackInline(todo.activeForm, 50)}`
-          : '';
-      return `${iconForStatus(todo.status)} ${content}${activeForm}`;
-    });
-
-    if (todos.length > lines.length) {
-      lines.push(`… ${todos.length - lines.length} more`);
-    }
-
-    return [`*Plan*`, ...lines].join('\n');
-  }
-
-  private buildSlackProgressText(
-    data: GatewayProgressData,
-    existingMetadata: Record<string, unknown>
-  ): string {
-    if (data.state === 'queued') {
-      const position =
-        typeof data.queue_position === 'number' ? ` at position ${data.queue_position}` : '';
-      return `⏳ Queued your message${position}.`;
-    }
-
-    if (data.state === 'done') {
-      const todos = this.parseGatewayTodos(existingMetadata.slack_status_todos);
-      const plan = this.formatSlackTodoPlan(todos);
-      return plan;
-    }
-
-    if (data.state === 'failed') {
-      const suffix = data.error_message ? `\n>${data.error_message}` : '';
-      return `⚠️ Agor stopped with an error.${suffix}`;
-    }
-
-    const latestToolName =
-      data.tool_name ??
-      (typeof existingMetadata.slack_status_tool_name === 'string'
-        ? existingMetadata.slack_status_tool_name
-        : undefined);
-    const latestToolSummary =
-      data.tool_name || data.tool_input
-        ? this.formatSlackToolSummary(data.tool_name, data.tool_input)
-        : typeof existingMetadata.slack_status_tool_summary === 'string'
-          ? existingMetadata.slack_status_tool_summary
-          : this.formatSlackToolSummary(latestToolName);
-
-    const todos = this.parseGatewayTodos(existingMetadata.slack_status_todos);
-    const plan = this.formatSlackTodoPlan(todos);
-    const progress = `⏳ Still working · ${latestToolSummary}`;
-    return plan ? `${plan}\n${progress}` : progress;
-  }
-
   private buildSlackAssistantStatus(
     data: GatewayProgressData,
     existingMetadata: Record<string, unknown>
@@ -643,56 +566,6 @@ export class GatewayService {
     return rest;
   }
 
-  private slackTodoStatus(
-    status: GatewayTodoItem['status']
-  ): 'pending' | 'in_progress' | 'completed' | 'error' {
-    if (status === 'completed') return 'completed';
-    if (status === 'in_progress') return 'in_progress';
-    if (status === 'stopped') return 'error';
-    return 'pending';
-  }
-
-  private buildSlackTodoTaskUpdates(todos: GatewayTodoItem[]): unknown[] {
-    return todos.slice(0, 12).map((todo, index) => ({
-      type: 'task_update',
-      task: {
-        task_id: `agor_todo_${index + 1}`,
-        title: this.truncateSlackInline(todo.content, 90),
-        status: this.slackTodoStatus(todo.status),
-      },
-    }));
-  }
-
-  private async appendSlackTodoPlanToStream(
-    taskId: string | undefined,
-    connector: GatewayConnector,
-    todos: GatewayTodoItem[]
-  ): Promise<void> {
-    if (!taskId || todos.length === 0) return;
-    const stream = this.slackStreamsByTask.get(taskId);
-    if (!stream) return;
-    const signature = JSON.stringify(
-      todos.map((todo) => [todo.content, todo.activeForm ?? '', todo.status])
-    );
-    if (stream.lastTodoSignature === signature) return;
-
-    const streamConnector = connector as GatewayConnector & {
-      appendStreamPayload?: (req: {
-        threadId: string;
-        ts: string;
-        chunks: unknown[];
-      }) => Promise<void>;
-    };
-    if (!streamConnector.appendStreamPayload) return;
-
-    await streamConnector.appendStreamPayload({
-      threadId: stream.threadId,
-      ts: stream.ts,
-      chunks: this.buildSlackTodoTaskUpdates(todos),
-    });
-    stream.lastTodoSignature = signature;
-  }
-
   private async refreshSlackAssistantStatusAfterStreamStart(
     threadId: string,
     connector: GatewayConnector,
@@ -714,68 +587,34 @@ export class GatewayService {
       loadingMessages: [loadingMessage],
       iconEmoji: ':hourglass_flowing_sand:',
     });
+    if (taskId) {
+      this.slackStreamStatusRefreshLast.set(taskId, Date.now());
+    }
   }
 
-  private buildSlackProgressOutbound(
-    data: GatewayProgressData,
-    metadata: Record<string, unknown>,
-    connector: GatewayConnector
-  ): OutboundPayload {
-    const statusText = this.buildSlackProgressText(data, metadata);
-
-    // Failures should remain visually prominent. Transient progress/queued
-    // state is UI chrome, so render it in Slack's smaller context style.
-    if (data.state === 'failed') {
-      return normalizeOutbound(
-        connector.formatMessage ? connector.formatMessage(statusText) : statusText
-      );
-    }
-
-    const lines = statusText.split('\n');
-    const lastLine = lines.at(-1)?.trim();
-    const progressLine = lastLine?.startsWith('⏳') ? lines.pop() : undefined;
-    const detailText = lines.join('\n').trim();
-    const blocks: unknown[] = [];
-
-    if (detailText) {
-      blocks.push({
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: markdownToMrkdwn(detailText),
-        },
-      });
-    }
-
-    if (progressLine) {
-      blocks.push({
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: markdownToMrkdwn(progressLine),
-          },
-        ],
-      });
-    }
-
-    if (blocks.length === 0) {
-      blocks.push({
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: markdownToMrkdwn(statusText || 'Done.'),
-          },
-        ],
-      });
-    }
-
-    return { text: statusText, blocks };
+  private async refreshSlackAssistantStatusAfterStreamAppend(
+    threadId: string,
+    connector: GatewayConnector,
+    sessionId: string,
+    taskId: string | undefined,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    if (!taskId) return;
+    const now = Date.now();
+    const lastRefresh = this.slackStreamStatusRefreshLast.get(taskId) ?? 0;
+    if (now - lastRefresh < GatewayService.SLACK_STREAM_STATUS_REFRESH_MS) return;
+    this.slackStreamStatusRefreshLast.set(taskId, now);
+    await this.refreshSlackAssistantStatusAfterStreamStart(
+      threadId,
+      connector,
+      sessionId,
+      taskId,
+      metadata
+    );
   }
 
   /**
-   * Create or update a single mutable Slack status row in the gateway thread.
+   * Update Slack's native assistant status/stream chrome for a gateway thread.
    *
    * We expose a short, Slack-safe tool summary and TodoWrite plan state, never
    * raw JSON args/results. Raw tool inputs are already persisted in Agor's
@@ -834,7 +673,6 @@ export class GatewayService {
         text?: string;
         recipientUserId?: string;
         recipientTeamId?: string;
-        taskDisplayMode?: 'plan' | 'timeline' | 'dense';
       }) => Promise<string>;
     };
     if (!streamConnector.startStream) return;
@@ -849,7 +687,6 @@ export class GatewayService {
       text: ' ',
       recipientUserId,
       recipientTeamId,
-      taskDisplayMode: 'plan',
     });
     this.slackStreamsByTask.set(req.taskId, {
       threadId: req.threadId,
@@ -857,11 +694,6 @@ export class GatewayService {
       hasContent: false,
       taskId: req.taskId,
     });
-
-    const todos = this.parseGatewayTodos(req.metadata.slack_status_todos);
-    if (todos.length > 0) {
-      await this.appendSlackTodoPlanToStream(req.taskId, req.connector, todos);
-    }
   }
 
   private async stopSlackTaskStream(
@@ -871,12 +703,13 @@ export class GatewayService {
     if (!taskId) return;
     const stream = this.slackStreamsByTask.get(taskId);
     if (!stream) return;
-    if (!stream.hasContent && !stream.lastTodoSignature && connector.deleteMessage) {
+    if (!stream.hasContent && connector.deleteMessage) {
       await connector.deleteMessage({
         threadId: stream.threadId,
         messageId: stream.ts,
       });
       this.slackStreamsByTask.delete(taskId);
+      this.slackStreamStatusRefreshLast.delete(taskId);
       return;
     }
 
@@ -889,6 +722,7 @@ export class GatewayService {
       ts: stream.ts,
     });
     this.slackStreamsByTask.delete(taskId);
+    this.slackStreamStatusRefreshLast.delete(taskId);
   }
 
   private async updateProgressNow(data: GatewayProgressData): Promise<void> {
@@ -929,6 +763,8 @@ export class GatewayService {
         : typeof metadata.slack_status_started_at === 'string'
           ? metadata.slack_status_started_at
           : new Date(now).toISOString();
+    // Keep TodoWrite parsing for compact status text. Slack task_update/plan
+    // rendering is intentionally deferred until a follow-up PR verifies it.
     const toolTodos =
       data.tool_name === 'TodoWrite' ? this.parseGatewayTodos(data.tool_input?.todos) : [];
     const toolSummary =
@@ -950,11 +786,6 @@ export class GatewayService {
     const connector =
       this.activeListeners.get(channel.id) ??
       getConnector(channel.channel_type as ChannelType, channel.config);
-    const existingTs =
-      typeof metadata.slack_status_message_ts === 'string'
-        ? metadata.slack_status_message_ts
-        : undefined;
-    let updateTs = existingTs;
     const activeTaskId =
       typeof metadata.slack_status_task_id === 'string' ? metadata.slack_status_task_id : undefined;
 
@@ -967,113 +798,38 @@ export class GatewayService {
         }
       }
 
-      if (connector.setThreadStatus) {
-        try {
-          if (!isTerminal && data.state === 'working') {
-            try {
-              await this.ensureSlackTaskStream({
-                taskId: data.task_id,
-                threadId: mapping.thread_id,
-                connector,
-                metadata: metadataWithStart,
-              });
-            } catch (error) {
-              console.warn('[gateway] Failed to start Slack task stream:', error);
-            }
-          }
+      if (!connector.setThreadStatus) return;
 
-          const loadingMessage = this.buildSlackAssistantLoadingMessage(data, metadataWithStart);
-          await connector.setThreadStatus({
-            threadId: mapping.thread_id,
-            status: this.buildSlackAssistantStatus(data, metadataWithStart),
-            loadingMessages: loadingMessage ? [loadingMessage] : undefined,
-            iconEmoji: ':hourglass_flowing_sand:',
-          });
-
-          if (existingTs && connector.deleteMessage) {
-            await connector.deleteMessage({
-              threadId: mapping.thread_id,
-              messageId: existingTs,
-            });
-          }
-
-          if (!isTerminal && toolTodos.length > 0) {
-            try {
-              await this.appendSlackTodoPlanToStream(data.task_id, connector, toolTodos);
-            } catch (error) {
-              console.warn('[gateway] Failed to append Slack todo plan to stream:', error);
-            }
-          }
-
-          await this.threadMapRepo.updateMetadata(
-            mapping.id,
-            isTerminal
-              ? this.stripSlackProgressMetadata(metadataWithStart)
-              : this.stripSlackProgressMessageMetadata(metadataWithStart)
-          );
-          return;
-        } catch (error) {
-          console.warn(
-            '[gateway] Failed to set Slack assistant status; falling back to status row:',
-            error
-          );
-        }
-      }
-
-      if (!isTerminal && isNewTask && existingTs) {
-        if (connector.deleteMessage) {
+      try {
+        if (!isTerminal && data.state === 'working') {
           try {
-            await connector.deleteMessage({
+            await this.ensureSlackTaskStream({
+              taskId: data.task_id,
               threadId: mapping.thread_id,
-              messageId: existingTs,
+              connector,
+              metadata: metadataWithStart,
             });
           } catch (error) {
-            console.warn('[gateway] Failed to delete stale Slack progress status:', error);
+            console.warn('[gateway] Failed to start Slack task stream:', error);
           }
         }
-        updateTs = undefined;
-      }
 
-      if (data.state === 'done' && existingTs && connector.deleteMessage) {
-        try {
-          await connector.deleteMessage({
-            threadId: mapping.thread_id,
-            messageId: existingTs,
-          });
-          await this.threadMapRepo.updateMetadata(
-            mapping.id,
-            this.stripSlackProgressMetadata(metadataWithStart)
-          );
-          return;
-        } catch (error) {
-          console.warn('[gateway] Failed to delete Slack progress status; marking done:', error);
-        }
-      }
-
-      if (data.state === 'done' && !existingTs) {
-        return;
-      }
-
-      const { text, blocks } = this.buildSlackProgressOutbound(data, metadataWithStart, connector);
-      const ts = await connector.sendMessage({
-        threadId: mapping.thread_id,
-        text,
-        blocks,
-        metadata: updateTs ? { slack_update_ts: updateTs } : undefined,
-      });
-
-      if (
-        !existingTs ||
-        metadataWithStart.slack_status_started_at !== metadata.slack_status_started_at ||
-        metadataWithStart.slack_status_task_id !== metadata.slack_status_task_id ||
-        isTerminal ||
-        data.tool_name ||
-        data.tool_input
-      ) {
-        await this.threadMapRepo.updateMetadata(mapping.id, {
-          ...metadataWithStart,
-          slack_status_message_ts: ts,
+        const loadingMessage = this.buildSlackAssistantLoadingMessage(data, metadataWithStart);
+        await connector.setThreadStatus({
+          threadId: mapping.thread_id,
+          status: this.buildSlackAssistantStatus(data, metadataWithStart),
+          loadingMessages: loadingMessage ? [loadingMessage] : undefined,
+          iconEmoji: ':hourglass_flowing_sand:',
         });
+
+        await this.threadMapRepo.updateMetadata(
+          mapping.id,
+          isTerminal
+            ? this.stripSlackProgressMetadata(metadataWithStart)
+            : this.stripSlackProgressMessageMetadata(metadataWithStart)
+        );
+      } catch (error) {
+        console.warn('[gateway] Failed to set Slack assistant status:', error);
       }
     } catch (error) {
       console.warn('[gateway] Failed to update Slack progress status:', error);
@@ -1116,7 +872,6 @@ export class GatewayService {
         text?: string;
         recipientUserId?: string;
         recipientTeamId?: string;
-        taskDisplayMode?: 'plan' | 'timeline' | 'dense';
       }) => Promise<string>;
       appendStream?: (req: { threadId: string; ts: string; text: string }) => Promise<void>;
       stopStream?: (req: { threadId: string; ts: string; text?: string }) => Promise<void>;
@@ -1139,16 +894,17 @@ export class GatewayService {
       if (event === 'streaming:chunk') {
         const chunk = typeof data.chunk === 'string' ? data.chunk : '';
         if (!chunk) return;
+        if (isSlackThinkingPlaceholder(chunk)) {
+          return;
+        }
 
         const existing = this.slackStreamsByTask.get(taskKey);
         if (!existing) {
-          const todos = this.parseGatewayTodos(metadata.slack_status_todos);
           const ts = await streamConnector.startStream({
             threadId: mapping.thread_id,
             text: chunk,
             recipientUserId,
             recipientTeamId,
-            taskDisplayMode: 'plan',
           });
           this.slackStreamsByTask.set(taskKey, {
             threadId: mapping.thread_id,
@@ -1157,9 +913,6 @@ export class GatewayService {
             taskId: taskKey,
             lastMessageId: messageId,
           });
-          if (todos.length > 0) {
-            await this.appendSlackTodoPlanToStream(taskKey, connector, todos);
-          }
           try {
             await this.refreshSlackAssistantStatusAfterStreamStart(
               mapping.thread_id,
@@ -1185,6 +938,17 @@ export class GatewayService {
           ts: existing.ts,
           text,
         });
+        try {
+          await this.refreshSlackAssistantStatusAfterStreamAppend(
+            mapping.thread_id,
+            connector,
+            sessionId,
+            taskKey,
+            metadata
+          );
+        } catch (error) {
+          console.warn('[gateway] Failed to refresh Slack status after stream append:', error);
+        }
         existing.hasContent = true;
         existing.lastMessageId = messageId;
         this.markMessageStreamedToSlack(messageId);
@@ -1264,7 +1028,7 @@ export class GatewayService {
       data.thread_id
     );
 
-    // 3. Cross-channel ownership check (MUST happen before any sendDebugMessage calls).
+    // 3. Cross-channel ownership check (MUST happen before any sendSystemMessage calls).
     // If this thread is owned by a DIFFERENT gateway channel on the same daemon,
     // silently drop the message — we must not interfere with another gateway's thread.
     // This covers all rejection paths: unmapped thread replies, user alignment failures, etc.
@@ -1328,7 +1092,7 @@ export class GatewayService {
         console.error(
           `[gateway] Channel "${channel.name}" has no agor_user_id and alignment is OFF. Cannot process message.`
         );
-        this.sendDebugMessage(channel, data.thread_id, errMsg, { forceSlack: true });
+        this.sendSystemMessage(channel, data.thread_id, errMsg);
         // For GitHub: edit the Processing comment with the error
         if (channel.channel_type === 'github' && data.metadata?.processing_comment_id) {
           try {
@@ -1364,11 +1128,10 @@ export class GatewayService {
           user = await usersService.get(matchedUser.user_id);
         } else {
           console.log(`[gateway] Slack user alignment failed: no Agor user with email ${email}`);
-          this.sendDebugMessage(
+          this.sendSystemMessage(
             channel,
             data.thread_id,
-            `User ${email} doesn't have an Agor account. Ask an admin to create an account with this email, or disable user alignment.`,
-            { forceSlack: true }
+            `User ${email} doesn't have an Agor account. Ask an admin to create an account with this email, or disable user alignment.`
           );
           return {
             success: false,
@@ -1383,11 +1146,10 @@ export class GatewayService {
         console.log(
           `[gateway] Slack user alignment failed: could not resolve email for Slack user ${data.user_name ?? 'unknown'} (thread=${data.thread_id})`
         );
-        this.sendDebugMessage(
+        this.sendSystemMessage(
           channel,
           data.thread_id,
-          "Couldn't resolve your Slack identity. The bot may be missing the `users:read.email` scope, or your Slack profile has no email. Ask an admin to check the bot's scopes.",
-          { forceSlack: true }
+          "Couldn't resolve your Slack identity. The bot may be missing the `users:read.email` scope, or your Slack profile has no email. Ask an admin to check the bot's scopes."
         );
         return {
           success: false,
@@ -1533,7 +1295,7 @@ export class GatewayService {
 
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
       if (sessionUrl) {
-        this.sendDebugMessage(
+        this.sendSystemMessage(
           channel,
           data.thread_id,
           formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl)
@@ -1546,10 +1308,11 @@ export class GatewayService {
         setMCPServers: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
       };
 
-      this.sendDebugMessage(
+      this.sendSystemMessage(
         channel,
         data.thread_id,
-        `Creating new ${agenticTool} session (${permissionMode} mode)...`
+        `Creating new ${agenticTool} session (${permissionMode} mode)...`,
+        { suppressSlack: true }
       );
 
       // Build custom_context with gateway metadata + platform-specific fields
@@ -1658,7 +1421,7 @@ export class GatewayService {
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
 
       if (sessionUrl) {
-        this.sendDebugMessage(
+        this.sendSystemMessage(
           channel,
           data.thread_id,
           formatGatewaySessionCreatedMessage(sessionId, sessionUrl)
@@ -1735,10 +1498,11 @@ export class GatewayService {
         console.log(
           `[gateway] Message queued for session ${shortId(sessionId)} at position ${task.queue_position}`
         );
-        this.sendDebugMessage(
+        this.sendSystemMessage(
           channel,
           data.thread_id,
-          `Session is busy, message queued at position ${task.queue_position}`
+          `Session is busy, message queued at position ${task.queue_position}`,
+          { suppressSlack: true }
         );
         void this.updateProgress({
           session_id: sessionId,
@@ -1758,9 +1522,7 @@ export class GatewayService {
       }
     } catch (error) {
       console.error('[gateway] Failed to send prompt to session:', error);
-      this.sendDebugMessage(channel, data.thread_id, `Error sending prompt: ${error}`, {
-        forceSlack: true,
-      });
+      this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${error}`);
       void this.updateProgress({
         session_id: sessionId,
         state: 'failed',

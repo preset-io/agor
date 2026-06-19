@@ -566,64 +566,6 @@ describe('SlackConnector.sendMessage', () => {
     ]);
   });
 
-  it('supports Slack stream plan mode and task update chunks', async () => {
-    const calls: Array<{ method: string; args: unknown }> = [];
-    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
-    (connector as unknown as { web: unknown }).web = {
-      chat: {
-        startStream: async (args: unknown) => {
-          calls.push({ method: 'startStream', args });
-          return { ok: true, ts: '1700000000.000006' };
-        },
-        appendStream: async (args: unknown) => {
-          calls.push({ method: 'appendStream', args });
-          return { ok: true };
-        },
-      },
-    };
-
-    const ts = await connector.startStream({
-      threadId: 'C123-1700000000.000000',
-      text: 'hello',
-      taskDisplayMode: 'plan',
-    });
-    await connector.appendStreamPayload({
-      threadId: 'C123-1700000000.000000',
-      ts,
-      chunks: [
-        {
-          type: 'task_update',
-          task: { task_id: 'agor_todo_1', title: 'Read context', status: 'completed' },
-        },
-      ],
-    });
-
-    expect(calls).toEqual([
-      {
-        method: 'startStream',
-        args: {
-          channel: 'C123',
-          thread_ts: '1700000000.000000',
-          markdown_text: 'hello',
-          task_display_mode: 'plan',
-        },
-      },
-      {
-        method: 'appendStream',
-        args: {
-          channel: 'C123',
-          ts: '1700000000.000006',
-          chunks: [
-            {
-              type: 'task_update',
-              task: { task_id: 'agor_todo_1', title: 'Read context', status: 'completed' },
-            },
-          ],
-        },
-      },
-    ]);
-  });
-
   it('passes Slack stream recipient ids when provided', async () => {
     const calls: unknown[] = [];
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });
