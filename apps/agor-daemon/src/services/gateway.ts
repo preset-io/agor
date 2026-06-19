@@ -798,22 +798,29 @@ export class GatewayService {
         }
       }
 
+      if (!isTerminal && data.state === 'working') {
+        try {
+          await this.ensureSlackTaskStream({
+            taskId: data.task_id,
+            threadId: mapping.thread_id,
+            connector,
+            metadata: metadataWithStart,
+          });
+        } catch (error) {
+          console.warn('[gateway] Failed to start Slack task stream:', error);
+        }
+      }
+
+      await this.threadMapRepo.updateMetadata(
+        mapping.id,
+        isTerminal
+          ? this.stripSlackProgressMetadata(metadataWithStart)
+          : this.stripSlackProgressMessageMetadata(metadataWithStart)
+      );
+
       if (!connector.setThreadStatus) return;
 
       try {
-        if (!isTerminal && data.state === 'working') {
-          try {
-            await this.ensureSlackTaskStream({
-              taskId: data.task_id,
-              threadId: mapping.thread_id,
-              connector,
-              metadata: metadataWithStart,
-            });
-          } catch (error) {
-            console.warn('[gateway] Failed to start Slack task stream:', error);
-          }
-        }
-
         const loadingMessage = this.buildSlackAssistantLoadingMessage(data, metadataWithStart);
         await connector.setThreadStatus({
           threadId: mapping.thread_id,
@@ -821,13 +828,6 @@ export class GatewayService {
           loadingMessages: loadingMessage ? [loadingMessage] : undefined,
           iconEmoji: ':hourglass_flowing_sand:',
         });
-
-        await this.threadMapRepo.updateMetadata(
-          mapping.id,
-          isTerminal
-            ? this.stripSlackProgressMetadata(metadataWithStart)
-            : this.stripSlackProgressMessageMetadata(metadataWithStart)
-        );
       } catch (error) {
         console.warn('[gateway] Failed to set Slack assistant status:', error);
       }
