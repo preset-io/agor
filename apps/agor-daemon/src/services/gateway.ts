@@ -17,7 +17,12 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { GatewayConnector, GatewayContext, InboundMessage } from '@agor/core/gateway';
+import type {
+  GatewayConnector,
+  GatewayContext,
+  InboundMessage,
+  OutboundPayload,
+} from '@agor/core/gateway';
 import {
   formatGatewayContext,
   formatGatewayFollowUpRoutingMessage,
@@ -25,6 +30,7 @@ import {
   formatGatewaySystemMessage,
   getConnector,
   hasConnector,
+  markdownToMrkdwn,
   normalizeOutbound,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
@@ -530,6 +536,48 @@ export class GatewayService {
     return rest;
   }
 
+  private buildSlackProgressOutbound(
+    data: GatewayProgressData,
+    metadata: Record<string, unknown>,
+    connector: GatewayConnector
+  ): OutboundPayload {
+    const statusText = this.buildSlackProgressText(data, metadata);
+
+    // Failures should remain visually prominent. Transient progress/queued
+    // state is UI chrome, so render it in Slack's smaller context style.
+    if (data.state === 'failed') {
+      return normalizeOutbound(
+        connector.formatMessage ? connector.formatMessage(statusText) : statusText
+      );
+    }
+
+    const [headline, ...details] = statusText.split('\n');
+    const detailText = details.join('\n').trim();
+    const blocks: unknown[] = [
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: markdownToMrkdwn(headline),
+          },
+        ],
+      },
+    ];
+
+    if (detailText) {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: markdownToMrkdwn(detailText),
+        },
+      });
+    }
+
+    return { text: statusText, blocks };
+  }
+
   /**
    * Create or update a single mutable Slack status row in the gateway thread.
    *
@@ -609,10 +657,7 @@ export class GatewayService {
         return;
       }
 
-      const statusText = this.buildSlackProgressText(data, metadataWithStart);
-      const { text, blocks } = normalizeOutbound(
-        connector.formatMessage ? connector.formatMessage(statusText) : statusText
-      );
+      const { text, blocks } = this.buildSlackProgressOutbound(data, metadataWithStart, connector);
       const ts = await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
