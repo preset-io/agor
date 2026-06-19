@@ -44,7 +44,7 @@ export default class BranchEnvStop extends BaseCommand {
       // Call custom stopEnvironment method
       await branchesService.stopEnvironment(branch.branch_id);
 
-      this.log(`${chalk.green('✓')} Environment stopped`);
+      this.log(`${chalk.green('✓')} Environment stop requested`);
       this.log('');
 
       // Cleanup

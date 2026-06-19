@@ -222,6 +222,11 @@ export interface MessagesServiceImpl extends Service<Message, Partial<Message>, 
  * Branches service with custom methods (server-side implementation)
  */
 export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, FeathersParams> {
+  updateEnvironment(
+    id: BranchID,
+    environmentUpdate: Partial<Branch['environment_instance']>,
+    params?: FeathersParams
+  ): Promise<Branch>;
   startEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   stopEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   restartEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;

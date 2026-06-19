@@ -1177,7 +1177,7 @@ function AppContent() {
     try {
       showLoading('Stopping environment...', { key: 'stop-env' });
       await client.service(`branches/${branchId}/stop`).create({});
-      showSuccess('Environment stopped successfully!', { key: 'stop-env' });
+      showSuccess('Environment stop requested', { key: 'stop-env' });
     } catch (error) {
       showError(
         `Failed to stop environment: ${error instanceof Error ? error.message : String(error)}`,
@@ -1191,7 +1191,7 @@ function AppContent() {
     try {
       showLoading('Nuking environment...', { key: 'nuke-env' });
       await client.service(`branches/${branchId}/nuke`).create({});
-      showSuccess('Environment nuked successfully!', { key: 'nuke-env' });
+      showSuccess('Environment nuke requested', { key: 'nuke-env' });
     } catch (error) {
       showError(
         `Failed to nuke environment: ${error instanceof Error ? error.message : String(error)}`,

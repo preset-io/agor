@@ -1,5 +1,3 @@
-import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
 import {
   BoardRepository,
   BranchRepository,
@@ -10,16 +8,17 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
-import { spawnEnvironmentCommand } from '@agor/core/unix';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
-vi.mock('@agor/core/unix', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@agor/core/unix')>();
+vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/spawn-executor.js')>();
   return {
     ...actual,
-    spawnEnvironmentCommand: vi.fn(),
+    spawnExecutor: vi.fn(),
+    getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   };
 });
 
@@ -40,6 +39,9 @@ function createRenderEnvHarness(opts: {
     },
   }));
   const app = {
+    sessionTokenService: {
+      generateToken: vi.fn(async () => 'executor-token'),
+    },
     service(path: string) {
       if (path === 'repos') return { get: reposGet };
       throw new Error(`Unknown service: ${path}`);
@@ -83,6 +85,9 @@ function createPatchHarness(opts: {
     find: vi.fn(async () => []),
   };
   const app = {
+    sessionTokenService: {
+      generateToken: vi.fn(async () => 'executor-token'),
+    },
     service(path: string) {
       if (path === 'board-objects') return boardObjectsService;
       if (path === 'boards') return boardsService;
@@ -149,6 +154,9 @@ function createServiceHarness() {
   };
 
   const app = {
+    sessionTokenService: {
+      generateToken: vi.fn(async () => 'executor-token'),
+    },
     service(path: string) {
       if (path === 'board-objects') return boardObjectsService;
       if (path === 'sessions') return sessionsService;
@@ -163,22 +171,10 @@ function createServiceHarness() {
   return { service, boardObjectsService, sessionsService };
 }
 
-function createFakeChildProcess(pid = 1234) {
-  const child = new EventEmitter() as EventEmitter & {
-    pid: number;
-    stdout: PassThrough;
-    stderr: PassThrough;
-  };
-  child.pid = pid;
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  return child;
-}
-
-const mockedSpawnEnvironmentCommand = vi.mocked(spawnEnvironmentCommand);
+const mockedSpawnExecutor = vi.mocked(spawnExecutor);
 
 beforeEach(() => {
-  mockedSpawnEnvironmentCommand.mockReset();
+  mockedSpawnExecutor.mockReset();
 });
 
 function createFindHarness(opts: {
@@ -239,6 +235,10 @@ describe('BranchesService environment start async behavior', () => {
       kind: 'shell',
       command: branch.start_command,
     } as never);
+    vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+      env: { PATH: '/usr/bin:/bin' },
+      asUser: undefined,
+    } as never);
 
     const environmentUpdates: Array<Record<string, unknown>> = [];
     vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
@@ -256,9 +256,7 @@ describe('BranchesService environment start async behavior', () => {
     return { service, branch, environmentUpdates };
   }
 
-  it('returns after spawning the start command instead of waiting for command exit', async () => {
-    const child = createFakeChildProcess(4242);
-    mockedSpawnEnvironmentCommand.mockResolvedValue(child as never);
+  it('returns after dispatching shell start commands to the executor', async () => {
     const { service, branch, environmentUpdates } = createStartHarness();
 
     const result = await Promise.race([
@@ -267,44 +265,31 @@ describe('BranchesService environment start async behavior', () => {
     ]);
 
     expect(result).not.toBe('timed-out');
-    expect(mockedSpawnEnvironmentCommand).toHaveBeenCalledWith(
+    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
-        command: branch.start_command,
-        commandType: 'start',
-        stdio: 'pipe',
+        command: 'environment.lifecycle',
+        sessionToken: 'executor-token',
+        daemonUrl: 'http://daemon.test',
+        env: { PATH: '/usr/bin:/bin' },
+        params: expect.objectContaining({
+          action: 'start',
+          branchId: branch.branch_id,
+          branchPath: branch.path,
+          startCommand: branch.start_command,
+          appUrl: branch.app_url,
+        }),
+      }),
+      expect.objectContaining({
+        logPrefix: `[Environment.start ${branch.name}]`,
+        preparedEnv: { PATH: '/usr/bin:/bin' },
       })
     );
     expect(environmentUpdates).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: 'starting', last_error: undefined }),
         expect.objectContaining({
-          process: expect.objectContaining({ pid: 4242 }),
+          status: 'starting',
+          last_error: undefined,
           access_urls: [{ name: 'App', url: 'http://localhost:3000' }],
-        }),
-      ])
-    );
-  });
-
-  it('transitions the environment to error if the background start command fails', async () => {
-    const child = createFakeChildProcess(4243);
-    mockedSpawnEnvironmentCommand.mockResolvedValue(child as never);
-    const { service, branch, environmentUpdates } = createStartHarness();
-
-    await service.startEnvironment(branch.branch_id);
-
-    child.stderr.write('build failed\n');
-    child.emit('exit', 17);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    expect(environmentUpdates).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          status: 'error',
-          last_health_check: expect.objectContaining({
-            status: 'unhealthy',
-            message: 'Start command exited with code 17',
-          }),
-          last_error: 'build failed',
         }),
       ])
     );

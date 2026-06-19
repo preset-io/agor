@@ -237,7 +237,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsStopping(true);
     try {
       await client.service(`branches/${branch.branch_id}/stop`).create({});
-      showSuccess('Environment stopped successfully');
+      showSuccess('Environment stop requested');
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to stop environment');
     } finally {
@@ -262,7 +262,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       setIsNuking(true);
       try {
         await client.service(`branches/${branch.branch_id}/nuke`).create({});
-        showSuccess('Environment nuked successfully');
+        showSuccess('Environment nuke requested');
       } catch (error) {
         showError(error instanceof Error ? error.message : 'Failed to nuke environment');
       } finally {

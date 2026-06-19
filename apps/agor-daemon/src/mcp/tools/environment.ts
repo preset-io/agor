@@ -67,7 +67,12 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
           branchId as BranchID,
           ctx.baseServiceParams
         );
-        return textResult({ success: true, branch });
+        return textResult({
+          success: true,
+          branch,
+          message:
+            'Environment stop requested. Poll agor_environment_health for final status and agor_environment_logs for command output.',
+        });
       } catch (error) {
         return textResult({
           success: false,
@@ -304,7 +309,8 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         return textResult({
           success: true,
           branch,
-          message: 'Environment nuked successfully - all data and volumes destroyed',
+          message:
+            'Environment nuke requested. Poll agor_environment_health for final status and agor_environment_logs for command output.',
         });
       } catch (error) {
         return textResult({
