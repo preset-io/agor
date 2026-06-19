@@ -29,13 +29,11 @@ describe('LoginPage external launch redirect', () => {
     expect(screen.queryByRole('button', { name: 'Sign In' })).not.toBeInTheDocument();
   });
 
-  it('shows concise first-time admin setup guidance on the local login form', () => {
+  it('does not show first-time admin setup guidance on the local login form', () => {
     render(<LoginPage onLogin={vi.fn()} />);
 
-    expect(screen.getByText(/First-time server setup/)).toBeInTheDocument();
-    expect(screen.getByText('agor user create-admin')).toBeInTheDocument();
-    expect(screen.queryByText(/New user/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/💡/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/First-time server setup/)).not.toBeInTheDocument();
+    expect(screen.queryByText('agor user create-admin')).not.toBeInTheDocument();
   });
 
   it('offers local login as a secondary fallback for configured deployments', () => {
@@ -79,7 +77,7 @@ describe('LoginPage external launch redirect', () => {
 
     expect(screen.getByText('Login Failed')).toBeInTheDocument();
     expect(screen.queryByText('Launch sign-in failed')).not.toBeInTheDocument();
-    expect(screen.getByText(/First-time server setup/)).toBeInTheDocument();
-    expect(screen.getByText('agor user create-admin')).toBeInTheDocument();
+    expect(screen.queryByText(/First-time server setup/)).not.toBeInTheDocument();
+    expect(screen.queryByText('agor user create-admin')).not.toBeInTheDocument();
   });
 });

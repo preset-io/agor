@@ -45,6 +45,28 @@ interface UseAuthReturn extends AuthState {
   reAuthenticate: () => Promise<void>;
 }
 
+const UNEXPECTED_LOGIN_RESPONSE_MESSAGE =
+  'The Agor server returned an unexpected response while signing in. Check that the daemon URL is correct and the server is reachable, then try again.';
+
+function isJsonParseFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message =
+    error instanceof Error ? error.message : String((error as { message?: unknown }).message ?? '');
+  return /json parsing error/i.test(message) || /unexpected token.*json/i.test(message);
+}
+
+function loginErrorMessage(error: unknown): string {
+  if (isJsonParseFailure(error)) {
+    return UNEXPECTED_LOGIN_RESPONSE_MESSAGE;
+  }
+
+  if (isTransientConnectionError(error)) {
+    return 'Unable to reach the Agor server. Check your connection and try again.';
+  }
+
+  return error instanceof Error ? error.message : 'Login failed';
+}
+
 /**
  * Authentication hook
  */
@@ -437,12 +459,13 @@ export function useAuth(): UseAuthReturn {
       return true;
     } catch (error) {
       console.error('❌ Login failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Login failed';
-      console.error('❌ Error message:', errorMessage);
+      const userFacingMessage = loginErrorMessage(error);
+      const rawMessage = error instanceof Error ? error.message : 'Login failed';
+      console.error('❌ Error message:', rawMessage);
       setState((prev) => ({
         ...prev,
         loading: false,
-        error: errorMessage,
+        error: userFacingMessage,
       }));
       return false;
     }

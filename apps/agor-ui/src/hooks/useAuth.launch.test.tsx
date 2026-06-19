@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../utils/tokenRefresh';
 import { useAuth } from './useAuth';
@@ -26,6 +26,7 @@ describe('useAuth launch-code fallback', () => {
     authenticate.mockReset();
     launchCreate.mockReset();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     window.history.replaceState({}, '', '/ui/?launch_code=stale-code');
   });
 
@@ -66,5 +67,23 @@ describe('useAuth launch-code fallback', () => {
     expect(result.current.authenticated).toBe(false);
     expect(result.current.error).toContain('Launch sign-in failed');
     expect(window.location.search).toBe('');
+  });
+
+  it('replaces REST JSON parse failures during local login with a helpful message', async () => {
+    authenticate.mockRejectedValue(new Error('JSON parsing error'));
+
+    const { result } = renderHook(() => useAuth());
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let ok = true;
+    await act(async () => {
+      ok = await result.current.login('person@example.test', 'password-123');
+    });
+
+    expect(ok).toBe(false);
+    expect(result.current.error).toContain('unexpected response');
+    expect(result.current.error).toContain('daemon URL');
+    expect(result.current.error).not.toContain('JSON parsing error');
   });
 });
