@@ -929,6 +929,7 @@ export class GatewayService {
           hasContent: true,
           taskId: taskId ?? this.slackStreamTaskByMessage.get(messageId),
         });
+        this.markTaskStreamedToSlack(taskId ?? this.slackStreamTaskByMessage.get(messageId));
         return;
       }
 
