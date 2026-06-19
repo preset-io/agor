@@ -362,7 +362,7 @@ export class GatewayService {
     }
   }
 
-  private truncateSlackInline(value: string, maxChars = 160): string {
+  private truncateSlackInline(value: string, maxChars = 70): string {
     const singleLine = value.replace(/\s+/g, ' ').trim();
     if (singleLine.length <= maxChars) return singleLine;
     return `${singleLine.slice(0, Math.max(0, maxChars - 1))}…`;
@@ -415,29 +415,64 @@ export class GatewayService {
   private formatSlackToolSummary(toolName?: string, input?: Record<string, unknown>): string {
     if (!toolName) return 'Waiting for the agent...';
 
-    // Keep this deliberately generic: always show the latest tool, but only
-    // append a short one-line hint when a common scalar preview exists.
-    const previewKeys = [
-      'description',
-      'command',
-      'file_path',
-      'path',
-      'query',
-      'url',
-      'pattern',
-      'name',
-    ];
-    const previewValue = previewKeys
-      .map((key) => input?.[key])
-      .find((value) => typeof value === 'string' && value.trim().length > 0);
+    const str = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+    const preview = (value: unknown, maxChars = 70): string | undefined => {
+      const text = str(value);
+      return text ? this.truncateSlackInline(text, maxChars) : undefined;
+    };
+    const withPreview = (value?: string): string =>
+      value ? `\`${toolName}\` ${value}` : `\`${toolName}\``;
 
-    if (typeof previewValue === 'string') {
-      return `\`${toolName}\`: ${this.truncateSlackInline(previewValue)}`;
+    if (toolName === 'TodoWrite') {
+      const todos = this.parseGatewayTodos(input?.todos);
+      if (todos.length > 0) {
+        const completed = todos.filter((todo) => todo.status === 'completed').length;
+        const inProgress = todos.filter((todo) => todo.status === 'in_progress').length;
+        const parts = [`${completed}/${todos.length} done`];
+        if (inProgress > 0) parts.push(`${inProgress} in progress`);
+        return withPreview(parts.join(', '));
+      }
     }
 
-    const changes = input?.changes;
-    if (Array.isArray(changes) && changes.length > 0) {
-      return `\`${toolName}\`: ${changes.length} file change${changes.length === 1 ? '' : 's'}`;
+    switch (toolName) {
+      case 'Read':
+      case 'Write':
+      case 'Edit':
+      case 'NotebookEdit':
+        return withPreview(preview(input?.file_path));
+      case 'Bash':
+      case 'exec_command':
+        return withPreview(preview(input?.description) ?? preview(input?.command));
+      case 'Grep':
+      case 'Glob':
+        return withPreview(preview(input?.pattern));
+      case 'ToolSearch':
+      case 'WebSearch':
+      case 'web_search':
+        return withPreview(preview(input?.query));
+      case 'WebFetch':
+        return withPreview(preview(input?.url));
+      case 'Agent':
+        return withPreview(preview(input?.description));
+      case 'Skill':
+      case 'SlashCommand':
+        return withPreview(preview(input?.skill) ?? preview(input?.name));
+      case 'Task':
+        return withPreview(preview(str(input?.prompt)?.split('\n')[0], 100));
+      case 'edit_files': {
+        const changes = input?.changes;
+        if (Array.isArray(changes) && changes.length > 0) {
+          if (changes.length === 1) {
+            const change = changes[0] as Record<string, unknown>;
+            const kind = str(change.kind) ?? 'update';
+            const path = str(change.path) ?? '';
+            return withPreview(this.truncateSlackInline(`${kind} ${path}`.trim(), 70));
+          }
+          return withPreview(`${changes.length} files`);
+        }
+        break;
+      }
     }
 
     return `\`${toolName}\``;
@@ -496,7 +531,9 @@ export class GatewayService {
     }
 
     if (data.state === 'done') {
-      return `✅ Done.`;
+      const todos = this.parseGatewayTodos(existingMetadata.slack_status_todos);
+      const plan = this.formatSlackTodoPlan(todos);
+      return `✅ Done.${plan}`;
     }
 
     if (data.state === 'failed') {
@@ -528,6 +565,7 @@ export class GatewayService {
       slack_status_tool_name: _toolName,
       slack_status_tool_summary: _toolSummary,
       slack_status_todos: _todos,
+      slack_status_state: _state,
       ...rest
     } = metadata;
     return rest;
@@ -608,9 +646,12 @@ export class GatewayService {
       unknown
     >;
     const statusStartedAt =
-      typeof metadata.slack_status_started_at === 'string'
-        ? metadata.slack_status_started_at
-        : new Date(now).toISOString();
+      (data.state === 'queued' || data.state === 'working') &&
+      (metadata.slack_status_state === 'done' || metadata.slack_status_state === 'failed')
+        ? new Date(now).toISOString()
+        : typeof metadata.slack_status_started_at === 'string'
+          ? metadata.slack_status_started_at
+          : new Date(now).toISOString();
     const toolTodos =
       data.tool_name === 'TodoWrite' ? this.parseGatewayTodos(data.tool_input?.todos) : [];
     const toolSummary =
@@ -620,6 +661,7 @@ export class GatewayService {
     const metadataWithStart = {
       ...metadata,
       slack_status_started_at: statusStartedAt,
+      slack_status_state: data.state,
       ...(data.tool_name ? { slack_status_tool_name: data.tool_name } : {}),
       ...(toolSummary ? { slack_status_tool_summary: toolSummary } : {}),
       ...(toolTodos.length > 0 ? { slack_status_todos: toolTodos } : {}),
@@ -632,9 +674,10 @@ export class GatewayService {
       typeof metadata.slack_status_message_ts === 'string'
         ? metadata.slack_status_message_ts
         : undefined;
+    const hasTodoPlan = this.parseGatewayTodos(metadataWithStart.slack_status_todos).length > 0;
 
     try {
-      if (data.state === 'done' && existingTs && connector.deleteMessage) {
+      if (data.state === 'done' && existingTs && connector.deleteMessage && !hasTodoPlan) {
         try {
           await connector.deleteMessage({
             threadId: mapping.thread_id,
@@ -665,6 +708,7 @@ export class GatewayService {
       if (
         !existingTs ||
         metadataWithStart.slack_status_started_at !== metadata.slack_status_started_at ||
+        isTerminal ||
         data.tool_name ||
         data.tool_input
       ) {
