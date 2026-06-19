@@ -136,6 +136,36 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     this.usersRepo = new UsersRepository(db);
   }
 
+  private async enrichRemoteRelationships(sessionList: Session[]): Promise<Session[]> {
+    const sessionIds = sessionList.map((session) => session.session_id);
+    if (sessionIds.length === 0) return sessionList;
+
+    const relationships = await this.sessionRelationshipRepo.findForSessions(sessionIds);
+    if (relationships.length === 0) return sessionList;
+
+    const bySessionId = new Map<SessionID, NonNullable<Session['remote_relationships']>>();
+
+    for (const relationship of relationships) {
+      const sourceBucket =
+        bySessionId.get(relationship.source_session_id) ??
+        ({ as_source: [], as_target: [] } satisfies NonNullable<Session['remote_relationships']>);
+      sourceBucket.as_source?.push(relationship);
+      bySessionId.set(relationship.source_session_id, sourceBucket);
+
+      const targetBucket =
+        bySessionId.get(relationship.target_session_id) ??
+        ({ as_source: [], as_target: [] } satisfies NonNullable<Session['remote_relationships']>);
+      targetBucket.as_target?.push(relationship);
+      bySessionId.set(relationship.target_session_id, targetBucket);
+    }
+
+    return sessionList.map((session) => {
+      const remoteRelationships = bySessionId.get(session.session_id);
+      if (!remoteRelationships) return session;
+      return { ...session, remote_relationships: remoteRelationships };
+    });
+  }
+
   /**
    * Attach explicit MCP server IDs to a session.
    * Emits WebSocket events so the UI updates in real-time.
@@ -741,6 +771,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const includeLastMessage = includeLastMessageRoot ?? includeLastMessageQuery;
 
     const session = await super.get(id, params);
+    const [enrichedSession] = await this.enrichRemoteRelationships([session]);
+    const sessionWithRelationships = enrichedSession ?? session;
 
     // Only enrich with last message if explicitly requested
     if (includeLastMessage === true || includeLastMessage === 'true') {
@@ -750,23 +782,30 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         truncationLengthRoot ?? truncationLengthQuery
       );
       const result = await this.sessionRepo.enrichWithLastMessage(
-        session as Session,
+        sessionWithRelationships as Session,
         truncationLength
       );
       return result;
     }
 
-    return session as SessionWithLastMessage;
+    return sessionWithRelationships as SessionWithLastMessage;
   }
 
   /**
-   * Override find - no custom logic, just use default find
-   *
-   * Note: Last message is NOT included in list operations - only on single GET
+   * Override find to include durable remote relationships in list results.
+   * Note: Last message is NOT included in list operations - only on single GET.
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
-    // Use default find to ensure all hooks and scoping are applied
-    return super.find(params);
+    const result = await super.find(params);
+
+    if (Array.isArray(result)) {
+      return this.enrichRemoteRelationships(result);
+    }
+
+    return {
+      ...result,
+      data: await this.enrichRemoteRelationships(result.data),
+    };
   }
 }
 

@@ -11,7 +11,7 @@ import type {
   SessionRelationshipType,
   UserID,
 } from '@agor/core/types';
-import { and, eq, or } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { insert, select, update } from '../database-wrapper';
@@ -84,6 +84,28 @@ export class SessionRelationshipRepository {
           or(
             eq(sessionRelationships.source_session_id, sessionId),
             eq(sessionRelationships.target_session_id, sessionId)
+          )
+        )
+        .all();
+      return rows.map((row: SessionRelationshipRow) => this.rowToRelationship(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to list session relationships: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  async findForSessions(sessionIds: SessionID[]): Promise<SessionRelationship[]> {
+    if (sessionIds.length === 0) return [];
+
+    try {
+      const rows = await select(this.db)
+        .from(sessionRelationships)
+        .where(
+          or(
+            inArray(sessionRelationships.source_session_id, sessionIds),
+            inArray(sessionRelationships.target_session_id, sessionIds)
           )
         )
         .all();

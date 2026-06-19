@@ -481,6 +481,31 @@ export interface Session {
    * - 'btw_completed': Ephemeral btw fork auto-archived after task completion
    */
   archived_reason?: 'branch_archived' | 'manual' | 'btw_completed';
+
+  /**
+   * Durable non-genealogy relationships involving this session.
+   *
+   * These are separate from genealogy.parent_session_id/forked_from_session_id.
+   * For example, a session in branch A can create a remote session in branch B;
+   * branch B keeps its own genealogy shape, while branch A can still render a
+   * muted/surrogate child card for track-record and navigation purposes.
+   */
+  remote_relationships?: {
+    as_source?: SessionRelationship[];
+    as_target?: SessionRelationship[];
+  };
+
+  /**
+   * UI-only marker for a remote-created session rendered as a surrogate in the
+   * source branch tree. The canonical session still lives in `target_branch_id`;
+   * clicking the surrogate should navigate to/open that real session.
+   */
+  remote_surrogate?: {
+    relationship: SessionRelationship;
+    source_session_id: SessionID;
+    source_branch_id: BranchID;
+    target_branch_id: BranchID;
+  };
 }
 
 export type SessionRelationshipType = 'remote_create';

@@ -600,6 +600,54 @@ export function useAgorData(
           sessionsByBranchId.get(branchId)!.push(session);
         }
 
+        // Cross-branch remote-created sessions are canonical in their target
+        // branch, but should also appear as muted/surrogate children under
+        // the creating session's branch for track-record and navigation.
+        //
+        // Keep this as a UI projection only: the cloned session preserves the
+        // real session_id (so clicks open the real remote session) while using
+        // the source branch + source session as its local tree placement.
+        for (const sourceSession of sessionsList) {
+          if (sourceSession.archived) continue;
+
+          for (const relationship of sourceSession.remote_relationships?.as_source ?? []) {
+            if (relationship.relationship_type !== 'remote_create') continue;
+
+            const targetSession = sessionsById.get(relationship.target_session_id);
+            if (!targetSession || targetSession.archived) continue;
+            if (targetSession.branch_id === sourceSession.branch_id) continue;
+
+            const sourceBranchSessions = sessionsByBranchId.get(sourceSession.branch_id) ?? [];
+            if (
+              sourceBranchSessions.some(
+                (session) => session.session_id === targetSession.session_id
+              )
+            ) {
+              continue;
+            }
+
+            const remoteSurrogate: Session = {
+              ...targetSession,
+              branch_id: sourceSession.branch_id,
+              genealogy: {
+                ...(targetSession.genealogy ?? {}),
+                parent_session_id: sourceSession.session_id,
+              },
+              remote_surrogate: {
+                relationship,
+                source_session_id: sourceSession.session_id,
+                source_branch_id: sourceSession.branch_id,
+                target_branch_id: targetSession.branch_id,
+              },
+            };
+
+            sessionsByBranchId.set(sourceSession.branch_id, [
+              ...sourceBranchSessions,
+              remoteSurrogate,
+            ]);
+          }
+        }
+
         // Build board Map for efficient lookups
         const boardsMap = new Map<string, Board>();
         for (const board of boardsList) {

@@ -5,6 +5,7 @@ import {
 } from '@agor-live/client';
 import {
   ClockCircleOutlined,
+  ExportOutlined,
   EyeOutlined,
   MessageOutlined,
   PlusOutlined,
@@ -339,17 +340,25 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   const sessionRowStyle = (session: Session): React.CSSProperties => {
     const isSessionSelected = session.session_id === selectedSessionId;
+    const isRemoteSurrogate = Boolean(session.remote_surrogate);
     return {
       border: session.ready_for_prompt
         ? `1px solid ${token.colorPrimary}`
-        : `1px solid ${isPanel ? token.colorBorderSecondary : 'rgba(255, 255, 255, 0.1)'}`,
+        : isRemoteSurrogate
+          ? `1px dashed ${token.colorBorderSecondary}`
+          : `1px solid ${isPanel ? token.colorBorderSecondary : 'rgba(255, 255, 255, 0.1)'}`,
       borderRadius: isPanel ? 6 : 4,
       padding: isPanel ? 10 : 8,
-      background: isPanel ? token.colorBgContainer : 'transparent',
+      background: isRemoteSurrogate
+        ? token.colorFillQuaternary
+        : isPanel
+          ? token.colorBgContainer
+          : 'transparent',
       display: 'flex',
       alignItems: 'center',
       cursor: 'pointer',
       marginBottom: 4,
+      opacity: isRemoteSurrogate ? 0.78 : undefined,
       boxShadow: session.ready_for_prompt ? `0 0 12px ${token.colorPrimary}30` : undefined,
       ...(isSessionSelected
         ? { outline: `1px dashed ${token.colorTextBase}`, outlineOffset: -2 }
@@ -453,6 +462,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const renderSessionNode = (node: SessionTreeNode) => {
     const session = node.session;
     const isActive = session.status === 'running' || session.status === 'stopping';
+    const isRemoteSurrogate = node.relationshipType === 'remote';
 
     return (
       <SessionItemWithActions
@@ -481,9 +491,15 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
-            <SessionRelationshipIcon session={session} size={10} />
+            {isRemoteSurrogate ? (
+              <Tooltip title="Remote session created from this session. Click to open it in its own branch.">
+                <ExportOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
+              </Tooltip>
+            ) : (
+              <SessionRelationshipIcon session={session} size={10} />
+            )}
             {renderSessionTitle(session)}
-            <BranchBoardLocatorIcon branch={branch} />
+            {!isRemoteSurrogate && <BranchBoardLocatorIcon branch={branch} />}
           </div>
         </div>
       </SessionItemWithActions>

@@ -1127,6 +1127,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           })
         : null;
 
+      if (remoteRelationship && remoteRelationshipSourceSessionId) {
+        const sourceSession = await ctx.app
+          .service('sessions')
+          .get(remoteRelationshipSourceSessionId, ctx.baseServiceParams);
+        ctx.app.service('sessions').emit?.('patched', sourceSession, ctx.baseServiceParams);
+      }
+
       // Update the parent session's children list to include the new session.
       if (resolvedParentSessionId && parentSessionForPatch) {
         await ctx.app.service('sessions').patch(
