@@ -561,6 +561,7 @@ export class GatewayService {
       slack_status_tool_summary: _toolSummary,
       slack_status_todos: _todos,
       slack_status_state: _state,
+      slack_status_task_id: _taskId,
       ...rest
     } = metadata;
     return rest;
@@ -642,23 +643,29 @@ export class GatewayService {
 
     const now = Date.now();
     const isTerminal = data.state === 'done' || data.state === 'failed';
+    const metadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const isNewTask =
+      typeof data.task_id === 'string' && data.task_id !== metadata.slack_status_task_id;
+    const isRestartingAfterTerminal =
+      (data.state === 'queued' || data.state === 'working') &&
+      (metadata.slack_status_state === 'done' || metadata.slack_status_state === 'failed');
     const lastUpdate = this.slackProgressLastUpdate.get(data.session_id) ?? 0;
     if (
       !isTerminal &&
       !data.tool_name &&
+      !isNewTask &&
+      !isRestartingAfterTerminal &&
       now - lastUpdate < GatewayService.SLACK_PROGRESS_MIN_UPDATE_MS
     ) {
       return;
     }
     this.slackProgressLastUpdate.set(data.session_id, now);
 
-    const metadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
-      string,
-      unknown
-    >;
     const statusStartedAt =
-      (data.state === 'queued' || data.state === 'working') &&
-      (metadata.slack_status_state === 'done' || metadata.slack_status_state === 'failed')
+      isNewTask || isRestartingAfterTerminal
         ? new Date(now).toISOString()
         : typeof metadata.slack_status_started_at === 'string'
           ? metadata.slack_status_started_at
@@ -673,6 +680,7 @@ export class GatewayService {
       ...metadata,
       slack_status_started_at: statusStartedAt,
       slack_status_state: data.state,
+      ...(data.task_id ? { slack_status_task_id: data.task_id } : {}),
       ...(data.tool_name ? { slack_status_tool_name: data.tool_name } : {}),
       ...(toolSummary ? { slack_status_tool_summary: toolSummary } : {}),
       ...(toolTodos.length > 0 ? { slack_status_todos: toolTodos } : {}),
@@ -719,6 +727,7 @@ export class GatewayService {
       if (
         !existingTs ||
         metadataWithStart.slack_status_started_at !== metadata.slack_status_started_at ||
+        metadataWithStart.slack_status_task_id !== metadata.slack_status_task_id ||
         isTerminal ||
         data.tool_name ||
         data.tool_input
