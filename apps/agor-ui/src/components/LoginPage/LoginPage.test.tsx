@@ -7,6 +7,9 @@ vi.mock('./ParticleBackground', () => ({
 }));
 
 describe('LoginPage external launch redirect', () => {
+  const currentPath = () =>
+    `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
   afterEach(() => {
     window.history.replaceState({}, '', '/');
   });
@@ -29,7 +32,7 @@ describe('LoginPage external launch redirect', () => {
     const returnLink = screen.getByRole('link', { name: 'Return to workspace' });
     expect(returnLink).toHaveAttribute(
       'href',
-      `https://workspace.example.com/open?return_to=${encodeURIComponent(window.location.href)}`
+      `https://workspace.example.com/open?return_to=${encodeURIComponent(currentPath())}`
     );
     expect(screen.queryByPlaceholderText('Email address')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sign In' })).not.toBeInTheDocument();
@@ -55,9 +58,7 @@ describe('LoginPage external launch redirect', () => {
     const returnLink = screen.getByRole('link', { name: 'Return to workspace' });
     const href = returnLink.getAttribute('href');
     expect(href).toBe(
-      `https://workspace.example.com/open?source=agor&return_to=${encodeURIComponent(
-        window.location.href
-      )}`
+      `https://workspace.example.com/open?source=agor&return_to=${encodeURIComponent(currentPath())}`
     );
   });
 
@@ -87,7 +88,7 @@ describe('LoginPage external launch redirect', () => {
     expect(screen.getByText('Launch sign-in failed')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Return to workspace' })).toHaveAttribute(
       'href',
-      `https://workspace.example.com/open?return_to=${encodeURIComponent(window.location.href)}`
+      `https://workspace.example.com/open?return_to=${encodeURIComponent(currentPath())}`
     );
   });
 

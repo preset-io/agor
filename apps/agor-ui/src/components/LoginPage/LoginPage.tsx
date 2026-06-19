@@ -13,12 +13,23 @@ import { ParticleBackground } from './ParticleBackground';
 
 const { Text } = Typography;
 
+function currentReturnToPath(): string | null {
+  if (typeof window === 'undefined') return null;
+
+  // Send only a relative Agor route to the external launcher. Avoiding an
+  // absolute URL keeps this from becoming an open-redirect primitive if the
+  // launcher blindly follows `return_to`.
+  const pathname = window.location.pathname.startsWith('//') ? '/' : window.location.pathname;
+  return `${pathname}${window.location.search}${window.location.hash}`;
+}
+
 function addReturnToParam(loginRedirectUrl: string): string {
-  if (typeof window === 'undefined') return loginRedirectUrl;
+  const returnTo = currentReturnToPath();
+  if (!returnTo) return loginRedirectUrl;
 
   try {
     const url = new URL(loginRedirectUrl);
-    url.searchParams.set('return_to', window.location.href);
+    url.searchParams.set('return_to', returnTo);
     return url.toString();
   } catch {
     return loginRedirectUrl;
