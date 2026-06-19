@@ -55,6 +55,29 @@ function summarizeMcpConfig(
   return summary;
 }
 
+function summarizeMcpConfigCounts(config: unknown): string {
+  if (!config || typeof config !== 'object') return 'none';
+
+  let total = 0;
+  let remote = 0;
+  let stdio = 0;
+  let withEnv = 0;
+
+  for (const server of Object.values(config as MCPServersConfig)) {
+    total += 1;
+    if (server.type === 'stdio') {
+      stdio += 1;
+    } else {
+      remote += 1;
+    }
+    if (server.env && Object.keys(server.env).length > 0) {
+      withEnv += 1;
+    }
+  }
+
+  return `total=${total} remote=${remote} stdio=${stdio} with_env=${withEnv}`;
+}
+
 const DEBUG_MCP_AUTH =
   process.env.AGOR_DEBUG_MCP_AUTH === '1' || process.env.DEBUG?.includes('mcp-auth');
 
@@ -670,9 +693,10 @@ export async function setupQuery(
   console.log('📤 Calling query() with:');
   console.log(`   prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
   console.log(`   queryOptions keys: ${Object.keys(queryOptions).join(', ')}`);
-  // Log MCP summary only (env values may contain secrets)
-  console.log(
-    `   MCP servers:`,
+  // Log safe MCP counts only. Names/details are debug-only because this runs on every query.
+  console.log(`   MCP servers: ${summarizeMcpConfigCounts(queryOptions.mcpServers)}`);
+  mcpAuthDebug(
+    `   MCP server details:`,
     queryOptions.mcpServers ? JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers)) : 'none'
   );
 
