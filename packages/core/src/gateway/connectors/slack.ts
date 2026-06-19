@@ -492,11 +492,13 @@ export class SlackConnector implements GatewayConnector {
     string,
     { email: string | null; displayName: string | null; expiresAt: number }
   >();
+  private inboundEventDedup = new Map<string, number>();
 
   /** Cache: Slack channel ID → channel name */
   private channelNameCache = new Map<string, { name: string | null; expiresAt: number }>();
   private static USER_CACHE_TTL_MS = 15 * 60 * 1000; // 15 min for successful lookups
   private static USER_CACHE_ERROR_TTL_MS = 60 * 1000; // 1 min for errors (transient recovery)
+  private static INBOUND_EVENT_DEDUP_TTL_MS = 5 * 60 * 1000; // Slack may send message + app_mention for one user action
 
   /**
    * Cache: Slack channel ID → channel type string (channel/group/mpim/im).
@@ -631,6 +633,75 @@ export class SlackConnector implements GatewayConnector {
       });
       return null;
     }
+  }
+
+  private async lookupLatestThreadReply(
+    event: Record<string, unknown>
+  ): Promise<Record<string, unknown> | null> {
+    const channel = typeof event.channel === 'string' ? event.channel : undefined;
+    const message =
+      typeof event.message === 'object' && event.message !== null
+        ? (event.message as Record<string, unknown>)
+        : undefined;
+    const threadTs =
+      (typeof message?.thread_ts === 'string' ? message.thread_ts : undefined) ??
+      (typeof message?.ts === 'string' ? message.ts : undefined) ??
+      (typeof event.thread_ts === 'string' ? event.thread_ts : undefined);
+    const replies = Array.isArray(message?.replies)
+      ? message.replies.filter((reply): reply is Record<string, unknown> => {
+          return typeof reply === 'object' && reply !== null;
+        })
+      : [];
+    const latestReplyTs =
+      (typeof message?.latest_reply === 'string' ? message.latest_reply : undefined) ??
+      (typeof event.latest_reply === 'string' ? event.latest_reply : undefined) ??
+      [...replies]
+        .reverse()
+        .map((reply) => (typeof reply.ts === 'string' ? reply.ts : undefined))
+        .find(Boolean);
+
+    if (!channel || !threadTs || !latestReplyTs) return null;
+
+    try {
+      const result = await this.web.conversations.replies({
+        channel,
+        ts: threadTs,
+        oldest: latestReplyTs,
+        inclusive: true,
+        limit: 1,
+      });
+      const reply =
+        result.messages?.find((candidate) => candidate.ts === latestReplyTs) ??
+        result.messages?.[0] ??
+        null;
+      if (!reply) return null;
+      return {
+        ...reply,
+        channel,
+        thread_ts: typeof reply.thread_ts === 'string' ? reply.thread_ts : threadTs,
+        team: event.team,
+      };
+    } catch (error) {
+      console.warn('[slack] Failed to fetch latest thread reply for message_replied event:', error);
+      return null;
+    }
+  }
+
+  private shouldProcessInboundEventOnce(
+    channel: string | undefined,
+    ts: string | undefined
+  ): boolean {
+    if (!channel || !ts) return true;
+
+    const now = Date.now();
+    for (const [key, expiresAt] of this.inboundEventDedup) {
+      if (expiresAt <= now) this.inboundEventDedup.delete(key);
+    }
+
+    const key = `${channel}:${ts}`;
+    if (this.inboundEventDedup.has(key)) return false;
+    this.inboundEventDedup.set(key, now + SlackConnector.INBOUND_EVENT_DEDUP_TTL_MS);
+    return true;
   }
 
   /**
@@ -989,7 +1060,7 @@ export class SlackConnector implements GatewayConnector {
       }
 
       await ack();
-      const event = body.event;
+      let event = body.event;
       const slackTeamId =
         typeof event.team === 'string'
           ? event.team
@@ -1011,6 +1082,35 @@ export class SlackConnector implements GatewayConnector {
       // Skip message edits, deletes, and other subtypes — only handle new messages
       // Note: app_mention events don't have subtypes
       if (eventType === 'message' && event.subtype) {
+        if (event.subtype === 'message_replied') {
+          const replyEvent = await this.lookupLatestThreadReply(event);
+          if (!replyEvent) {
+            console.log(
+              `[slack] Skipping message_replied event without fetchable latest reply channel=${event.channel ?? '(none)'} ts=${event.ts ?? '(none)'}`
+            );
+            return;
+          }
+          event = {
+            ...replyEvent,
+            type: 'message',
+            channel_type: event.channel_type,
+          };
+          console.log(
+            `[slack] Resolved message_replied event to latest reply thread_ts=${event.thread_ts ?? '(none)'} ts=${event.ts ?? '(none)'}`
+          );
+        } else {
+          console.debug(
+            `[slack] Skipping message subtype=${event.subtype} user=${event.user ?? '(none)'} thread_ts=${event.thread_ts ?? '(none)'} ts=${event.ts ?? '(none)'}`
+          );
+          return;
+        }
+      }
+
+      // Skip bot replies resolved from message_replied events to avoid loops.
+      if (event.bot_id || event.subtype === 'bot_message') {
+        console.debug(
+          `[slack] Skipping resolved bot message subtype=${event.subtype ?? '(none)'} thread_ts=${event.thread_ts ?? '(none)'} ts=${event.ts ?? '(none)'}`
+        );
         return;
       }
 
@@ -1027,11 +1127,13 @@ export class SlackConnector implements GatewayConnector {
       // This happens for top-level messages AND thread replies.
       //
       // Strategy:
-      // - Use 'app_mention' for active mentions outside code blocks
-      // - Use 'message' for DMs, non-mention messages, and code-block-only mentions
-      // - Skip 'message' events that have active mentions (to avoid duplicates)
-      // - Skip 'app_mention' events where the mention is only inside code blocks
-      //   (those are not "real" mentions and should be handled as plain messages)
+      // - Process whichever event arrives first for an active mention (`message`
+      //   or `app_mention`) and dedupe by channel+ts. Relying only on
+      //   `app_mention` makes Socket Mode multi-connection/lost-event behavior
+      //   look like missed prompts.
+      // - Use `message` for DMs, non-mention messages, and code-block-only mentions.
+      // - Skip `app_mention` events where the mention is only inside code blocks
+      //   (those are not "real" mentions and should be handled as plain messages).
       const isThreadReply = !!event.thread_ts;
       const isChannelMessage = channelType === 'channel' || channelType === 'group';
 
@@ -1052,12 +1154,6 @@ export class SlackConnector implements GatewayConnector {
 
       if (isChannelMessage && botMentionPattern) {
         const mentionOutsideCodeBlock = hasActiveMention(event.text ?? '', botMentionPattern);
-
-        if (eventType === 'message' && mentionOutsideCodeBlock) {
-          // Active (non-code-block) mention detected in a message event.
-          // Skip — the parallel app_mention event will handle it.
-          return;
-        }
 
         if (eventType === 'app_mention' && !mentionOutsideCodeBlock) {
           // app_mention fired but the mention is only inside a code block.
@@ -1141,6 +1237,13 @@ export class SlackConnector implements GatewayConnector {
             messageText = messageText.replace(botMentionReplacePattern, '').trim();
           }
         }
+      }
+
+      if (!this.shouldProcessInboundEventOnce(event.channel, event.ts)) {
+        console.log(
+          `[slack] Skipping duplicate inbound event type=${eventType} channel=${event.channel} ts=${event.ts}`
+        );
+        return;
       }
 
       const threadId = event.thread_ts
