@@ -122,7 +122,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
     'agor_environment_logs',
     {
       description:
-        'Fetch recent logs from a branch environment (non-streaming, last ~100 lines; shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
+        'Fetch recent logs from a branch environment (non-streaming, last ~500 lines; shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch'),

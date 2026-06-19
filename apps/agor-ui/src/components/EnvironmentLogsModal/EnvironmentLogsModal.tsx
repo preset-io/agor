@@ -34,10 +34,12 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const logsRef = useRef<LogsResponse | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fetchInFlightRef = useRef(false);
 
   const fetchLogs = useCallback(
     async (shouldAutoScroll = false, isManualRefresh = false) => {
-      if (!client) return;
+      if (!client || fetchInFlightRef.current) return;
+      fetchInFlightRef.current = true;
 
       // Check if user is scrolled to bottom before fetching
       const container = logsContainerRef.current;
@@ -76,6 +78,7 @@ export const EnvironmentLogsModal: React.FC<EnvironmentLogsModalProps> = ({
         setLogs(errorData);
         logsRef.current = errorData;
       } finally {
+        fetchInFlightRef.current = false;
         if (isManualRefresh) {
           setLoading(false);
         }

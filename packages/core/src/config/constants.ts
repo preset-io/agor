@@ -56,7 +56,7 @@ export const ENVIRONMENT = {
    * Logs command timeout in milliseconds
    * How long to wait for logs command to complete
    */
-  LOGS_TIMEOUT_MS: 10_000, // 10 seconds
+  LOGS_TIMEOUT_MS: 30_000, // 30 seconds
 
   /**
    * Maximum number of log lines to return from logs command
