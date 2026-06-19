@@ -582,6 +582,38 @@ export class GatewayService {
       : 'is working on your request.';
   }
 
+  private buildSlackAssistantLoadingMessage(
+    data: GatewayProgressData,
+    existingMetadata: Record<string, unknown>
+  ): string | undefined {
+    if (data.state === 'done') return undefined;
+    if (data.state === 'failed') return 'Agor ran into an error.';
+    if (data.state === 'queued') return 'Queued in Agor…';
+
+    const latestToolSummary =
+      data.tool_name || data.tool_input
+        ? this.formatSlackToolSummary(data.tool_name, data.tool_input)
+        : typeof existingMetadata.slack_status_tool_summary === 'string'
+          ? existingMetadata.slack_status_tool_summary
+          : undefined;
+
+    if (latestToolSummary) {
+      return `Using ${this.truncateSlackInline(latestToolSummary.replace(/`/g, ''), 80)}…`;
+    }
+
+    const latestToolName =
+      data.tool_name ??
+      (typeof existingMetadata.slack_status_tool_name === 'string'
+        ? existingMetadata.slack_status_tool_name
+        : undefined);
+
+    if (latestToolName) {
+      return `Using ${this.truncateSlackInline(latestToolName, 60)}…`;
+    }
+
+    return 'Working in Agor…';
+  }
+
   private stripSlackProgressMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
     const {
       slack_status_message_ts: _statusTs,
@@ -796,9 +828,11 @@ export class GatewayService {
 
       if (connector.setThreadStatus) {
         try {
+          const loadingMessage = this.buildSlackAssistantLoadingMessage(data, metadataWithStart);
           await connector.setThreadStatus({
             threadId: mapping.thread_id,
             status: this.buildSlackAssistantStatus(data, metadataWithStart),
+            loadingMessages: loadingMessage ? [loadingMessage] : undefined,
             iconEmoji: ':hourglass_flowing_sand:',
           });
 
