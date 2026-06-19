@@ -754,7 +754,7 @@ export class SDKMessageProcessor {
       ('subtype' in msg ? (msg as { subtype?: string }).subtype : undefined) || 'unknown';
 
     if (shouldSuppressClaudeSystemEvent(msg as { subtype?: string; [key: string]: unknown })) {
-      console.debug(`🔇 Suppressed system subtype: ${subtype}`);
+      claudeMessageDebug(`🔇 Suppressed system subtype: ${subtype}`);
       return [];
     }
 

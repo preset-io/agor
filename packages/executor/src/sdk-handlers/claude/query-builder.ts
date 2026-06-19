@@ -55,6 +55,22 @@ function summarizeMcpConfig(
   return summary;
 }
 
+const DEBUG_MCP_AUTH =
+  process.env.AGOR_DEBUG_MCP_AUTH === '1' || process.env.DEBUG?.includes('mcp-auth');
+
+function mcpAuthDebug(...args: unknown[]): void {
+  if (DEBUG_MCP_AUTH) {
+    console.debug(...args);
+  }
+}
+
+export function formatListForLog(items: string[], maxItems = 5): string {
+  if (items.length <= maxItems) {
+    return items.join(', ');
+  }
+  return `${items.slice(0, maxItems).join(', ')} +${items.length - maxItems} more`;
+}
+
 /**
  * Get path to Claude Code executable
  * Uses `which claude` to find it in PATH
@@ -554,10 +570,20 @@ export async function setupQuery(
         // Convert to SDK format
         const mcpConfig: MCPServersConfig = {};
         const allowedTools: string[] = [];
+        let remoteServerCount = 0;
+        let stdioServerCount = 0;
+        let serversWithHeaders = 0;
+        const missingOAuthServers: string[] = [];
+        const unresolvedAuthServers: string[] = [];
 
         for (const { server } of serversWithSource) {
           // Infer transport if missing (backwards compatibility)
           const transport = server.transport || (server.url ? 'sse' : 'stdio');
+          if (transport === 'stdio') {
+            stdioServerCount += 1;
+          } else {
+            remoteServerCount += 1;
+          }
 
           // Build server config (convert 'transport' field to 'type' for Claude Code)
           const serverConfig: Record<string, unknown> = {
@@ -580,23 +606,17 @@ export async function setupQuery(
             const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (headers && transport !== 'stdio') {
               serverConfig.headers = headers;
-              console.log(
+              serversWithHeaders += 1;
+              mcpAuthDebug(
                 `     🔐 Added ${Object.keys(headers).length} HTTP header(s) for ${server.name}`
               );
             } else if (server.auth?.type === 'oauth' && transport !== 'stdio') {
-              // OAuth server but no token - track for notification
-              console.warn(
-                `   ⚠️  MCP server "${server.name}" requires OAuth authentication but no valid token found`
-              );
-              console.warn(
-                `      💡 Go to Settings → MCP Servers → ${server.name} → Start OAuth Flow to authenticate`
-              );
+              // OAuth server but no token. Track for one concise per-query summary below.
+              missingOAuthServers.push(server.name);
             }
           } catch (error) {
-            console.warn(
-              `   ⚠️  Failed to resolve MCP auth headers for ${server.name}:`,
-              error instanceof Error ? error.message : String(error)
-            );
+            const message = error instanceof Error ? error.message : String(error);
+            unresolvedAuthServers.push(`${server.name}: ${message}`);
           }
 
           mcpConfig[server.name] = serverConfig;
@@ -614,14 +634,31 @@ export async function setupQuery(
           ...(queryOptions.mcpServers || {}),
           ...mcpConfig,
         };
-        // Log summary only (env values may contain secrets after template resolution)
+        // Log one safe summary line. Env/header values may contain secrets after template resolution.
         console.log(
-          `   🔧 MCP servers configured:`,
+          `   🔧 MCP servers configured: total=${serversWithSource.length} remote=${remoteServerCount} ` +
+            `stdio=${stdioServerCount} headers=${serversWithHeaders} missing_oauth=${missingOAuthServers.length} ` +
+            `auth_errors=${unresolvedAuthServers.length}`
+        );
+        mcpAuthDebug(
+          `   🔧 MCP server details:`,
           JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers), null, 2)
         );
+        if (missingOAuthServers.length > 0) {
+          console.warn(
+            `   ⚠️  ${missingOAuthServers.length} OAuth MCP server(s) have no valid token: ` +
+              `${formatListForLog(missingOAuthServers)}. Authenticate in Settings → MCP Servers.`
+          );
+        }
+        if (unresolvedAuthServers.length > 0) {
+          console.warn(
+            `   ⚠️  Failed to resolve MCP auth for ${unresolvedAuthServers.length} server(s): ` +
+              formatListForLog(unresolvedAuthServers, 3)
+          );
+        }
         if (allowedTools.length > 0) {
           queryOptions.allowedTools = allowedTools;
-          console.log(`   🔧 Allowing ${allowedTools.length} MCP tools`);
+          console.log(`   🔧 MCP tools allowlist: ${allowedTools.length} tool(s)`);
         }
       }
     } catch (error) {

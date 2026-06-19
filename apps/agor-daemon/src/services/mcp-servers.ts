@@ -20,6 +20,15 @@ import type {
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
+const DEBUG_MCP_SERVERS =
+  process.env.AGOR_DEBUG_MCP_SERVERS === '1' || process.env.DEBUG?.includes('mcp-servers');
+
+function mcpServersDebug(...args: unknown[]): void {
+  if (DEBUG_MCP_SERVERS) {
+    console.debug(...args);
+  }
+}
+
 /**
  * MCP Server service params
  */
@@ -59,11 +68,11 @@ export class MCPServersService extends DrizzleService<
    * Override find to support filter params
    */
   async find(params?: MCPServerParams) {
-    // Debug logging to trace auth context
+    // Verbose auth-context trace; useful when debugging MCP scoping, but too noisy for normal operation.
     const paramsRecord = params as Record<string, unknown> | undefined;
     const userRecord = paramsRecord?.user as Record<string, unknown> | undefined;
     const userId = userRecord?.user_id as string | undefined;
-    console.log(
+    mcpServersDebug(
       `[MCPServersService.find] Called with userId: ${userId || 'NONE'}, ` +
         `provider: ${params?.provider || 'internal'}, ` +
         `hasConnection: ${!!paramsRecord?.connection}`

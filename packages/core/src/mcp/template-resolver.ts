@@ -53,6 +53,15 @@ import { AGOR_USER_ENV_KEYS_VAR } from '../config/env-resolver';
 import { renderTemplate } from '../templates/handlebars-helpers';
 import type { MCPAuth, MCPServer } from '../types';
 
+const DEBUG_MCP_TEMPLATES =
+  process.env.AGOR_DEBUG_MCP_TEMPLATES === '1' || process.env.DEBUG?.includes('mcp-templates');
+
+function mcpTemplateDebug(...args: unknown[]): void {
+  if (DEBUG_MCP_TEMPLATES) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Template context available for MCP configuration resolution.
  * Intentionally minimal - only user environment variables are exposed.
@@ -107,7 +116,7 @@ export function buildMCPTemplateContextFromEnv(
   }
 
   if (allowedKeys.size > 0) {
-    console.log(
+    mcpTemplateDebug(
       `   🔐 MCP template context: ${allowedKeys.size} user env var(s) available for templates`
     );
   }

@@ -391,11 +391,15 @@ export class SchedulerService {
           }
           return;
         }
-        console.log(`   ✅ ${schedule.name}: Schedule is due, spawning session...`);
+        console.log(
+          `   🕒 Scheduler due: "${schedule.name}" scheduled_at=${new Date(scheduledRunAt).toISOString()} — spawning session`
+        );
         await this.spawnScheduledSession(schedule, scheduledRunAt, now, { source: 'cron' });
       });
     } else {
-      console.log(`   ✅ ${schedule.name}: Schedule is due, spawning session...`);
+      console.log(
+        `   🕒 Scheduler due: "${schedule.name}" scheduled_at=${new Date(scheduledRunAt).toISOString()} — spawning session`
+      );
       await this.spawnScheduledSession(schedule, scheduledRunAt, now, { source: 'cron' });
     }
   }

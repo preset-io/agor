@@ -11,14 +11,44 @@ vi.mock('@agor/core/sdk', () => ({ Claude: { query: vi.fn() } }));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
 }));
+vi.mock('@agor/core/tools/mcp/http-headers', () => ({
+  mergeMCPRemoteHeaders: vi.fn(({ custom, auth }) => ({ ...(custom || {}), ...(auth || {}) })),
+}));
+vi.mock('@agor/core/tools/mcp/jwt-auth', () => ({
+  resolveMCPAuthHeaders: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('../../config.js', () => ({
   getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
   resolveUserEnvironment: vi.fn().mockReturnValue({ env: {} }),
 }));
+vi.mock('../base/mcp-scoping.js', () => ({
+  getMcpServersForSession: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('./models.js', () => ({
+  DEFAULT_CLAUDE_MODEL: 'claude-sonnet-4-6',
+}));
+vi.mock('./model-utils.js', () => ({
+  parseModelWithBetas: vi.fn((model: string) => ({
+    model: model.replace('[1m]', ''),
+    betas: model.includes('[1m]') ? ['context-1m-2025-08-07'] : [],
+  })),
+}));
+vi.mock('./permissions/permission-hooks.js', () => ({
+  createCanUseToolCallback: vi.fn(
+    () => () => Promise.resolve({ behavior: 'allow', updatedInput: {} })
+  ),
+}));
 
 import { Claude } from '@agor/core/sdk';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
-import { type QuerySetupDeps, setupQuery } from './query-builder.js';
+import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
+
+describe('MCP logging helpers', () => {
+  it('formats long server lists without dumping every entry', () => {
+    expect(formatListForLog(['a', 'b', 'c'], 5)).toBe('a, b, c');
+    expect(formatListForLog(['a', 'b', 'c', 'd'], 2)).toBe('a, b +2 more');
+  });
+});
 
 describe('setupQuery - Local Settings Support', () => {
   beforeEach(() => {

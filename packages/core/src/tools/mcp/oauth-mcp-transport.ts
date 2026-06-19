@@ -27,6 +27,15 @@ interface CachedAuthCodeToken {
 // Key is the resource metadata URL to avoid cross-tenant leakage
 const authCodeTokenCache = new Map<string, CachedAuthCodeToken>();
 
+const DEBUG_MCP_AUTH =
+  process.env.AGOR_DEBUG_MCP_AUTH === '1' || process.env.DEBUG?.includes('mcp-auth');
+
+function mcpAuthDebug(...args: unknown[]): void {
+  if (DEBUG_MCP_AUTH) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Test-only hook: seed the auth-code token cache so tests can verify
  * clearing behavior without performing a real OAuth flow.
@@ -983,46 +992,46 @@ export function isOAuthRequired(status: number, headers: Headers): boolean {
 export function getCachedOAuth21Token(mcpUrl: string): string | undefined {
   const now = Date.now();
 
-  console.log('[OAuth 2.1 Cache] Looking for token for MCP URL:', mcpUrl);
-  console.log('[OAuth 2.1 Cache] Cache size:', authCodeTokenCache.size);
+  mcpAuthDebug('[OAuth 2.1 Cache] Looking for token for MCP URL:', mcpUrl);
+  mcpAuthDebug('[OAuth 2.1 Cache] Cache size:', authCodeTokenCache.size);
 
   let mcpOrigin: string;
   try {
     mcpOrigin = new URL(mcpUrl).origin;
-    console.log('[OAuth 2.1 Cache] MCP origin:', mcpOrigin);
+    mcpAuthDebug('[OAuth 2.1 Cache] MCP origin:', mcpOrigin);
   } catch (e) {
-    console.log('[OAuth 2.1 Cache] Invalid MCP URL:', e);
+    mcpAuthDebug('[OAuth 2.1 Cache] Invalid MCP URL:', e);
     return undefined;
   }
 
   // Check all cached tokens for a match
   for (const [metadataUrl, cached] of authCodeTokenCache.entries()) {
-    console.log('[OAuth 2.1 Cache] Checking cache entry:', metadataUrl);
-    console.log('[OAuth 2.1 Cache] Token expires at:', new Date(cached.expiresAt).toISOString());
-    console.log('[OAuth 2.1 Cache] Current time:', new Date(now).toISOString());
+    mcpAuthDebug('[OAuth 2.1 Cache] Checking cache entry:', metadataUrl);
+    mcpAuthDebug('[OAuth 2.1 Cache] Token expires at:', new Date(cached.expiresAt).toISOString());
+    mcpAuthDebug('[OAuth 2.1 Cache] Current time:', new Date(now).toISOString());
 
     // Check if token is still valid
     if (cached.expiresAt <= now) {
-      console.log('[OAuth 2.1 Cache] Token expired, skipping');
+      mcpAuthDebug('[OAuth 2.1 Cache] Token expired, skipping');
       continue;
     }
 
     // Check if the metadata URL is from the same origin as the MCP URL
     try {
       const metadataOrigin = new URL(metadataUrl).origin;
-      console.log('[OAuth 2.1 Cache] Metadata origin:', metadataOrigin);
-      console.log('[OAuth 2.1 Cache] Origins match:', metadataOrigin === mcpOrigin);
+      mcpAuthDebug('[OAuth 2.1 Cache] Metadata origin:', metadataOrigin);
+      mcpAuthDebug('[OAuth 2.1 Cache] Origins match:', metadataOrigin === mcpOrigin);
 
       if (metadataOrigin === mcpOrigin || metadataUrl.includes(mcpOrigin)) {
-        console.log('[OAuth 2.1 Cache] ✅ Found cached token for:', mcpOrigin);
+        mcpAuthDebug('[OAuth 2.1 Cache] ✅ Found cached token for:', mcpOrigin);
         return cached.token;
       }
     } catch (e) {
-      console.log('[OAuth 2.1 Cache] Invalid metadata URL:', e);
+      mcpAuthDebug('[OAuth 2.1 Cache] Invalid metadata URL:', e);
     }
   }
 
-  console.log('[OAuth 2.1 Cache] ❌ No matching token found');
+  mcpAuthDebug('[OAuth 2.1 Cache] No matching token found');
   return undefined;
 }
 

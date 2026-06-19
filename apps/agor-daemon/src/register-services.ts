@@ -119,6 +119,16 @@ import {
 import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
 
+const DEBUG_EXECUTOR_IMPERSONATION =
+  process.env.AGOR_DEBUG_EXECUTOR_IMPERSONATION === '1' ||
+  process.env.DEBUG?.includes('executor-impersonation');
+
+function executorImpersonationDebug(...args: unknown[]): void {
+  if (DEBUG_EXECUTOR_IMPERSONATION) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Interface for dependencies needed by service registration.
  */
@@ -723,7 +733,7 @@ function createExecuteHandler(
     const configExecutorUser = config.execution?.executor_unix_user;
     const sessionUnixUser = session.unix_username;
 
-    console.log('[Daemon] Determining executor Unix user:', {
+    executorImpersonationDebug('[Daemon] Determining executor Unix user:', {
       sessionId: shortId(session.session_id),
       unixUserMode,
       sessionUnixUser,
@@ -737,7 +747,7 @@ function createExecuteHandler(
     });
 
     const executorUnixUser = impersonationResult.unixUser;
-    console.log(`[Daemon] Executor impersonation: ${impersonationResult.reason}`);
+    executorImpersonationDebug(`[Daemon] Executor impersonation: ${impersonationResult.reason}`);
 
     const effectivePermissionMode =
       data.permissionMode || session.permission_config?.mode || undefined;

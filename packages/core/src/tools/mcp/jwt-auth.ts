@@ -27,6 +27,15 @@ const tokenCache = new Map<string, CachedToken>();
 // Token validity duration: 15 minutes (in milliseconds)
 const TOKEN_TTL_MS = 15 * 60 * 1000;
 
+const DEBUG_MCP_AUTH =
+  process.env.AGOR_DEBUG_MCP_AUTH === '1' || process.env.DEBUG?.includes('mcp-auth');
+
+function mcpAuthDebug(...args: unknown[]): void {
+  if (DEBUG_MCP_AUTH) {
+    console.debug(...args);
+  }
+}
+
 function getCacheKey(config: JWTConfig): string {
   return `${config.api_url}::${config.api_token}::${config.api_secret}`;
 }
@@ -184,9 +193,9 @@ export async function resolveMCPAuthHeaders(
     if (auth.oauth_access_token) {
       // Check if token is expired
       if (auth.oauth_token_expires_at && auth.oauth_token_expires_at <= Date.now()) {
-        console.log('[OAuth 2.1] Database token expired, will try other methods');
+        mcpAuthDebug('[OAuth 2.1] Database token expired, will try other methods');
       } else {
-        console.log('[OAuth 2.1] Using database-stored token');
+        mcpAuthDebug('[OAuth 2.1] Using database-stored token');
         return {
           Authorization: `Bearer ${auth.oauth_access_token}`,
         };
@@ -198,14 +207,13 @@ export async function resolveMCPAuthHeaders(
       if (mcpUrl) {
         const cachedToken = getCachedOAuth21Token(mcpUrl);
         if (cachedToken) {
-          console.log('[OAuth 2.1] Using in-memory cached token from browser flow');
+          mcpAuthDebug('[OAuth 2.1] Using in-memory cached token from browser flow');
           return {
             Authorization: `Bearer ${cachedToken}`,
           };
         }
       }
-      console.log('[OAuth] No credentials and no cached token - authentication may fail');
-      console.log('[OAuth] Use "Start OAuth Flow" button to authenticate via browser first');
+      mcpAuthDebug('[OAuth] No credentials and no cached token for OAuth MCP server');
       return undefined;
     }
 
