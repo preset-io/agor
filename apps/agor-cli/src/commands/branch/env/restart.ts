@@ -44,7 +44,7 @@ export default class BranchEnvRestart extends BaseCommand {
       // Call custom restartEnvironment method
       const updated = await branchesService.restartEnvironment(branch.branch_id);
 
-      this.log(`${chalk.green('✓')} Environment restarted`);
+      this.log(`${chalk.green('✓')} Environment restart requested`);
 
       if (updated.environment_instance?.access_urls) {
         this.log('');

@@ -1550,6 +1550,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
       await mkdir(dirname(logPath), { recursive: true });
 
+      // Use static app_url (initialized from template at branch creation)
+      let access_urls: Array<{ name: string; url: string }> | undefined;
+      if (branch.app_url) {
+        access_urls = [{ name: 'App', url: branch.app_url }];
+      }
+
       if (execution.kind === 'webhook') {
         await this.executeEnvironmentWebhook({
           url: execution.url,
@@ -1560,7 +1566,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         });
         console.log(`✅ Start webhook completed successfully for ${branch.name}`);
       } else {
-        // Execute command and wait for it to complete
+        // Execute the start command in the background. Docker Compose with
+        // `up -d --build` is logically async, but its build phase can take
+        // several minutes before the command exits. Blocking the API/MCP call
+        // for that entire build can exceed SDK idle timeouts, so return once
+        // the process is spawned and let WebSocket/health/log polling report
+        // progress and failure transitions.
         // Use stdio: 'pipe' to capture output for error reporting
         const childProcess = await spawnEnvironmentCommand({
           command: execution.command,
@@ -1591,36 +1602,78 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         collectOutput(childProcess.stdout);
         collectOutput(childProcess.stderr, 'stderr');
 
-        await new Promise<void>((resolve, reject) => {
-          childProcess.on('exit', (code: number | null) => {
-            if (code === 0) {
-              console.log(`✅ Start command completed successfully for ${branch.name}`);
-              resolve();
-            } else {
-              // Combine collected output and truncate to last ~100 lines
-              const fullOutput = outputChunks.join('');
-              const lines = fullOutput.split('\n');
-              const truncated =
-                lines.length > MAX_OUTPUT_LINES
-                  ? `... (truncated ${lines.length - MAX_OUTPUT_LINES} lines)\n${lines.slice(-MAX_OUTPUT_LINES).join('\n')}`
-                  : fullOutput;
-              const output = truncated.trim();
-              const err = new Error(`Start command exited with code ${code}`) as Error & {
-                commandOutput?: string;
-              };
-              err.commandOutput = output || undefined;
-              reject(err);
-            }
+        const commandFailed = async (errorMessage: string) => {
+          const current = await this.get(id, params);
+          const currentStatus = current.environment_instance?.status;
+          if (currentStatus === 'stopping' || currentStatus === 'stopped') {
+            console.log(
+              `Ignoring start command failure for ${branch.name} because environment is ${currentStatus}`
+            );
+            return;
+          }
+
+          // Combine collected output and truncate to last ~100 lines
+          const fullOutput = outputChunks.join('');
+          const lines = fullOutput.split('\n');
+          const truncated =
+            lines.length > MAX_OUTPUT_LINES
+              ? `... (truncated ${lines.length - MAX_OUTPUT_LINES} lines)\n${lines
+                  .slice(-MAX_OUTPUT_LINES)
+                  .join('\n')}`
+              : fullOutput;
+          const output = truncated.trim();
+
+          await this.updateEnvironment(
+            id,
+            {
+              status: 'error',
+              last_health_check: {
+                timestamp: new Date().toISOString(),
+                status: 'unhealthy',
+                message: errorMessage,
+              },
+              last_error: output || errorMessage,
+            },
+            params
+          );
+        };
+
+        childProcess.on('exit', (code: number | null) => {
+          if (code === 0) {
+            console.log(`✅ Start command completed successfully for ${branch.name}`);
+            return;
+          }
+
+          const message =
+            code === null
+              ? 'Start command exited without a code'
+              : `Start command exited with code ${code}`;
+          void commandFailed(message).catch((updateError) => {
+            console.error(`Failed to update start failure status for ${branch.name}:`, updateError);
           });
-
-          childProcess.on('error', (error: Error) => reject(error));
         });
-      }
 
-      // Use static app_url (initialized from template at branch creation)
-      let access_urls: Array<{ name: string; url: string }> | undefined;
-      if (branch.app_url) {
-        access_urls = [{ name: 'App', url: branch.app_url }];
+        childProcess.on('error', (error: Error) => {
+          void commandFailed(error.message).catch((updateError) => {
+            console.error(`Failed to update start error status for ${branch.name}:`, updateError);
+          });
+        });
+
+        // Persist the shell PID for visibility and for the legacy "no stop
+        // command" fallback. For detached commands this is the build/up shell;
+        // for foreground commands it is the long-running process wrapper.
+        return await this.updateEnvironment(
+          id,
+          {
+            process: {
+              ...branch.environment_instance?.process,
+              pid: childProcess.pid,
+              started_at: new Date().toISOString(),
+            },
+            access_urls,
+          },
+          params
+        );
       }
 
       // Keep status as 'starting' - let health checks transition to 'running'

@@ -210,7 +210,7 @@ describe('agor_environment_set', () => {
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
-    expect(parsed.message).toMatch(/set to "e2e" and started/);
+    expect(parsed.message).toMatch(/set to "e2e" and start requested/);
     expect(renderCalls).toHaveLength(1);
     expect(startCalls).toHaveLength(1);
   });

@@ -225,7 +225,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsStarting(true);
     try {
       await client.service(`branches/${branch.branch_id}/start`).create({});
-      showSuccess('Environment started successfully');
+      showSuccess('Environment start requested');
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to start environment');
     } finally {
@@ -249,7 +249,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setIsRestarting(true);
     try {
       await client.service(`branches/${branch.branch_id}/restart`).create({});
-      showSuccess('Environment restarted successfully');
+      showSuccess('Environment restart requested');
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to restart environment');
     } finally {

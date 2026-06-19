@@ -27,7 +27,12 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
           branchId as BranchID,
           ctx.baseServiceParams
         );
-        return textResult({ success: true, branch });
+        return textResult({
+          success: true,
+          branch,
+          message:
+            'Environment start requested. Poll agor_environment_health and agor_environment_logs for readiness, progress, or failures.',
+        });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         const commandOutput =
@@ -244,7 +249,9 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
           return textResult({
             success: true,
             branch: started,
-            message: `Environment variant set to "${updated.environment_variant}" and started.`,
+            message:
+              `Environment variant set to "${updated.environment_variant}" and start requested. ` +
+              'Poll agor_environment_health and agor_environment_logs for readiness, progress, or failures.',
           });
         } catch (startError) {
           const startMessage = startError instanceof Error ? startError.message : 'Unknown error';

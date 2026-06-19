@@ -45,7 +45,7 @@ export default class BranchEnvStart extends BaseCommand {
       // Call custom startEnvironment method
       const updated = await branchesService.startEnvironment(branch.branch_id);
 
-      this.log(`${chalk.green('✓')} Environment started`);
+      this.log(`${chalk.green('✓')} Environment start requested`);
 
       if (updated.environment_instance?.access_urls) {
         this.log('');

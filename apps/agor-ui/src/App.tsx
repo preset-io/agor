@@ -1163,7 +1163,7 @@ function AppContent() {
     try {
       showLoading('Starting environment...', { key: 'start-env' });
       await client.service(`branches/${branchId}/start`).create({});
-      showSuccess('Environment started successfully!', { key: 'start-env' });
+      showSuccess('Environment start requested', { key: 'start-env' });
     } catch (error) {
       showError(
         `Failed to start environment: ${error instanceof Error ? error.message : String(error)}`,
