@@ -111,6 +111,7 @@ interface SlackStreamState {
   hasContent: boolean;
   taskId?: string;
   lastMessageId?: string;
+  lastTodoSignature?: string;
 }
 
 /**
@@ -628,6 +629,86 @@ export class GatewayService {
     return rest;
   }
 
+  private stripSlackProgressMessageMetadata(
+    metadata: Record<string, unknown>
+  ): Record<string, unknown> {
+    const { slack_status_message_ts: _statusTs, ...rest } = metadata;
+    return rest;
+  }
+
+  private slackTodoStatus(
+    status: GatewayTodoItem['status']
+  ): 'pending' | 'in_progress' | 'completed' | 'error' {
+    if (status === 'completed') return 'completed';
+    if (status === 'in_progress') return 'in_progress';
+    if (status === 'stopped') return 'error';
+    return 'pending';
+  }
+
+  private buildSlackTodoTaskUpdates(todos: GatewayTodoItem[]): unknown[] {
+    return todos.slice(0, 12).map((todo, index) => ({
+      type: 'task_update',
+      task: {
+        task_id: `agor_todo_${index + 1}`,
+        title: this.truncateSlackInline(todo.content, 90),
+        status: this.slackTodoStatus(todo.status),
+      },
+    }));
+  }
+
+  private async appendSlackTodoPlanToStream(
+    taskId: string | undefined,
+    connector: GatewayConnector,
+    todos: GatewayTodoItem[]
+  ): Promise<void> {
+    if (!taskId || todos.length === 0) return;
+    const stream = this.slackStreamsByTask.get(taskId);
+    if (!stream) return;
+    const signature = JSON.stringify(
+      todos.map((todo) => [todo.content, todo.activeForm ?? '', todo.status])
+    );
+    if (stream.lastTodoSignature === signature) return;
+
+    const streamConnector = connector as GatewayConnector & {
+      appendStreamPayload?: (req: {
+        threadId: string;
+        ts: string;
+        chunks: unknown[];
+      }) => Promise<void>;
+    };
+    if (!streamConnector.appendStreamPayload) return;
+
+    await streamConnector.appendStreamPayload({
+      threadId: stream.threadId,
+      ts: stream.ts,
+      chunks: this.buildSlackTodoTaskUpdates(todos),
+    });
+    stream.lastTodoSignature = signature;
+  }
+
+  private async refreshSlackAssistantStatusAfterStreamStart(
+    threadId: string,
+    connector: GatewayConnector,
+    sessionId: string,
+    taskId: string | undefined,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    if (!connector.setThreadStatus) return;
+    const progress: GatewayProgressData = {
+      session_id: sessionId,
+      state: 'working',
+      ...(taskId ? { task_id: taskId } : {}),
+    };
+    const loadingMessage =
+      this.buildSlackAssistantLoadingMessage(progress, metadata) ?? 'Writing response…';
+    await connector.setThreadStatus({
+      threadId,
+      status: this.buildSlackAssistantStatus(progress, metadata),
+      loadingMessages: [loadingMessage],
+      iconEmoji: ':hourglass_flowing_sand:',
+    });
+  }
+
   private buildSlackProgressOutbound(
     data: GatewayProgressData,
     metadata: Record<string, unknown>,
@@ -843,9 +924,19 @@ export class GatewayService {
             });
           }
 
+          if (!isTerminal && toolTodos.length > 0) {
+            try {
+              await this.appendSlackTodoPlanToStream(data.task_id, connector, toolTodos);
+            } catch (error) {
+              console.warn('[gateway] Failed to append Slack todo plan to stream:', error);
+            }
+          }
+
           await this.threadMapRepo.updateMetadata(
             mapping.id,
-            this.stripSlackProgressMetadata(metadataWithStart)
+            isTerminal
+              ? this.stripSlackProgressMetadata(metadataWithStart)
+              : this.stripSlackProgressMessageMetadata(metadataWithStart)
           );
           return;
         } catch (error) {
@@ -953,6 +1044,7 @@ export class GatewayService {
         text?: string;
         recipientUserId?: string;
         recipientTeamId?: string;
+        taskDisplayMode?: 'plan' | 'timeline' | 'dense';
       }) => Promise<string>;
       appendStream?: (req: { threadId: string; ts: string; text: string }) => Promise<void>;
       stopStream?: (req: { threadId: string; ts: string; text?: string }) => Promise<void>;
@@ -978,11 +1070,13 @@ export class GatewayService {
 
         const existing = this.slackStreamsByTask.get(taskKey);
         if (!existing) {
+          const todos = this.parseGatewayTodos(metadata.slack_status_todos);
           const ts = await streamConnector.startStream({
             threadId: mapping.thread_id,
             text: chunk,
             recipientUserId,
             recipientTeamId,
+            ...(todos.length > 0 ? { taskDisplayMode: 'plan' as const } : {}),
           });
           this.slackStreamsByTask.set(taskKey, {
             threadId: mapping.thread_id,
@@ -991,6 +1085,20 @@ export class GatewayService {
             taskId: taskKey,
             lastMessageId: messageId,
           });
+          if (todos.length > 0) {
+            await this.appendSlackTodoPlanToStream(taskKey, connector, todos);
+          }
+          try {
+            await this.refreshSlackAssistantStatusAfterStreamStart(
+              mapping.thread_id,
+              connector,
+              sessionId,
+              taskKey,
+              metadata
+            );
+          } catch (error) {
+            console.warn('[gateway] Failed to refresh Slack status after stream start:', error);
+          }
           this.markMessageStreamedToSlack(messageId);
           this.markTaskStreamedToSlack(taskKey);
           return;

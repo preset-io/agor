@@ -813,6 +813,7 @@ export class SlackConnector implements GatewayConnector {
     text?: string;
     recipientUserId?: string;
     recipientTeamId?: string;
+    taskDisplayMode?: 'plan' | 'timeline' | 'dense';
   }): Promise<string> {
     const { channel, thread_ts } = parseThreadId(req.threadId);
     const chat = this.web.chat as unknown as {
@@ -824,6 +825,7 @@ export class SlackConnector implements GatewayConnector {
       channel,
       thread_ts,
       markdown_text: req.text?.trim() ? req.text : ' ',
+      ...(req.taskDisplayMode ? { task_display_mode: req.taskDisplayMode } : {}),
       ...(req.recipientUserId ? { recipient_user_id: req.recipientUserId } : {}),
       ...(req.recipientTeamId ? { recipient_team_id: req.recipientTeamId } : {}),
     });
@@ -834,6 +836,19 @@ export class SlackConnector implements GatewayConnector {
   }
 
   async appendStream(req: { threadId: string; ts: string; text: string }): Promise<void> {
+    await this.appendStreamPayload({
+      threadId: req.threadId,
+      ts: req.ts,
+      markdownText: req.text,
+    });
+  }
+
+  async appendStreamPayload(req: {
+    threadId: string;
+    ts: string;
+    markdownText?: string;
+    chunks?: unknown[];
+  }): Promise<void> {
     const { channel } = parseThreadId(req.threadId);
     const chat = this.web.chat as unknown as {
       appendStream: (args: Record<string, unknown>) => Promise<{ ok?: boolean; error?: string }>;
@@ -841,7 +856,8 @@ export class SlackConnector implements GatewayConnector {
     const result = await chat.appendStream({
       channel,
       ts: req.ts,
-      markdown_text: req.text,
+      ...(req.markdownText !== undefined ? { markdown_text: req.markdownText } : {}),
+      ...(req.chunks ? { chunks: req.chunks } : {}),
     });
     if (!result.ok) {
       throw new Error(`Slack stream append error: ${result.error ?? 'unknown error'}`);
