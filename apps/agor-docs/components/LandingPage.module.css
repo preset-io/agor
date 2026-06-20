@@ -1,0 +1,668 @@
+.landingShell {
+  --landing-ink: #111827;
+  --landing-muted: #5d6878;
+  --landing-line: rgba(17, 24, 39, 0.1);
+  --landing-teal: #2e9a92;
+  --landing-blue: #2388f2;
+  --landing-mint: #d9fb89;
+  --landing-pink: #ffc3df;
+  --landing-sky: #9bdcff;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  margin-top: -4rem;
+  color: var(--landing-ink);
+  background:
+    radial-gradient(circle at 80% 8%, rgba(127, 232, 223, 0.2), transparent 34rem),
+    linear-gradient(180deg, #fbfaf6 0%, #ffffff 28%, #f7fbff 62%, #ffffff 100%);
+  overflow: hidden;
+}
+
+.heroSection,
+.problemSection,
+.workspaceSection,
+.useCaseSection,
+.controlSection,
+.finalCta {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 88px 28px;
+}
+
+.heroSection {
+  padding-top: 112px;
+}
+
+.navAnnouncement {
+  width: fit-content;
+  margin: 0 auto 56px;
+  padding: 9px 16px;
+  border: 1px solid var(--landing-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  color: var(--landing-muted);
+  font-size: 0.86rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(14px);
+}
+
+.heroGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.98fr) minmax(430px, 1.02fr);
+  gap: 42px;
+  align-items: center;
+}
+
+.heroCopy {
+  max-width: 610px;
+}
+
+.brandMark {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+  color: var(--landing-ink);
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.brandMark img {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  box-shadow: 0 10px 24px rgba(46, 154, 146, 0.22);
+}
+
+.kicker,
+.eyebrow {
+  margin: 0 0 16px;
+  color: var(--landing-teal);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.heroCopy h1,
+.sectionHeader h2,
+.workspaceCopy h2,
+.useCaseSection h2,
+.controlSection h2,
+.finalCta h2 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-weight: 820;
+  letter-spacing: -0.055em;
+  line-height: 0.95;
+}
+
+.heroCopy h1 {
+  max-width: 720px;
+  font-size: clamp(3.7rem, 7.4vw, 6.25rem);
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+
+.heroDescription {
+  max-width: 590px;
+  margin: 28px 0 0;
+  color: var(--landing-muted);
+  font-size: 1.16rem;
+  line-height: 1.68;
+}
+
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  margin-top: 34px;
+}
+
+.primaryButton,
+.secondaryButton,
+.textButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 20px;
+  border-radius: 999px;
+  font-weight: 750;
+  text-decoration: none;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.landingShell .primaryButton {
+  color: white;
+  background: #168bff;
+  box-shadow: 0 16px 34px rgba(35, 136, 242, 0.24);
+}
+
+.primaryButton:hover,
+.secondaryButton:hover,
+.textButton:hover {
+  transform: translateY(-2px);
+}
+
+.landingShell .primaryButton:hover {
+  color: white;
+  box-shadow: 0 20px 44px rgba(35, 136, 242, 0.32);
+}
+
+.landingShell .secondaryButton {
+  border: 1px solid var(--landing-line);
+  color: var(--landing-ink);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.landingShell .secondaryButton:hover {
+  border-color: rgba(35, 136, 242, 0.35);
+  color: var(--landing-ink);
+}
+
+.landingShell .textButton {
+  border: 0;
+  color: var(--landing-muted);
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.mockup {
+  position: relative;
+  min-height: 560px;
+  padding: 58px 28px 30px;
+  border: 1px solid rgba(17, 24, 39, 0.1);
+  border-radius: 34px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.72)),
+    radial-gradient(circle at 50% 0%, rgba(35, 136, 242, 0.17), transparent 24rem);
+  box-shadow: 0 36px 90px rgba(15, 23, 42, 0.14);
+  overflow: hidden;
+}
+
+.mockup::before {
+  position: absolute;
+  inset: 82px -80px -80px;
+  content: "";
+  background-image:
+    linear-gradient(rgba(17, 24, 39, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 24, 39, 0.06) 1px, transparent 1px);
+  background-size: 40px 40px;
+  transform: perspective(520px) rotateX(58deg) rotateZ(-10deg);
+  transform-origin: top center;
+}
+
+.mockupTopbar {
+  position: absolute;
+  top: 20px;
+  left: 24px;
+  display: flex;
+  gap: 8px;
+}
+
+.mockupTopbar span {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.18);
+}
+
+.boardGrid {
+  position: relative;
+  height: 420px;
+}
+
+.zone {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 18px;
+  min-width: 235px;
+  min-height: 156px;
+  padding: 18px;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  border-radius: 28px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+  transform: rotate(-8deg) skewY(-4deg);
+}
+
+.zone > span {
+  color: rgba(17, 24, 39, 0.58);
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.zoneA {
+  top: 118px;
+  left: 22px;
+  background: var(--landing-sky);
+}
+
+.zoneB {
+  top: 54px;
+  right: 48px;
+  background: var(--landing-mint);
+}
+
+.zoneC {
+  right: -4px;
+  bottom: 22px;
+  background: var(--landing-pink);
+}
+
+.branchCard {
+  padding: 14px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.1);
+  transform: skewY(4deg);
+}
+
+.branchCard strong,
+.branchCard small {
+  display: block;
+}
+
+.branchCard strong {
+  color: var(--landing-ink);
+  font-size: 0.98rem;
+}
+
+.branchCard small {
+  margin-top: 4px;
+  color: var(--landing-muted);
+}
+
+.agentBubble,
+.commandCard {
+  position: absolute;
+  z-index: 2;
+  border: 1px solid rgba(17, 24, 39, 0.1);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(16px);
+}
+
+.agentBubble {
+  top: 86px;
+  left: 72px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px;
+  width: min(400px, calc(100% - 92px));
+  padding: 16px;
+  border-radius: 24px;
+}
+
+.agentBubble p {
+  margin: 0;
+  color: var(--landing-muted);
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.agentBubble strong {
+  color: var(--landing-ink);
+}
+
+.avatarStack {
+  display: flex;
+  align-items: center;
+}
+
+.avatarStack span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-left: -8px;
+  border: 2px solid white;
+  border-radius: 999px;
+  color: #0b3b38;
+  background: #7fe8df;
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.avatarStack span:first-child {
+  margin-left: 0;
+}
+
+.commandCard {
+  right: 38px;
+  bottom: 78px;
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  padding: 13px 16px;
+  border-radius: 999px;
+  color: var(--landing-ink);
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.statusDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #2e9a92;
+  box-shadow: 0 0 0 6px rgba(46, 154, 146, 0.16);
+}
+
+.assistantStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px;
+  border-top: 1px solid var(--landing-line);
+  border-bottom: 1px solid var(--landing-line);
+  color: var(--landing-muted);
+}
+
+.assistantStrip > span {
+  font-weight: 750;
+}
+
+.assistantStrip div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.assistantStrip strong {
+  padding: 8px 13px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 999px;
+  color: var(--landing-ink);
+  background: white;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+}
+
+.sectionHeader {
+  max-width: 760px;
+}
+
+.sectionHeader h2,
+.workspaceCopy h2,
+.useCaseSection h2,
+.controlSection h2,
+.finalCta h2 {
+  font-size: clamp(2.8rem, 5vw, 5rem);
+}
+
+.problemGrid,
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 48px;
+}
+
+.problemCard,
+.featureCard {
+  min-height: 220px;
+  padding: 28px;
+  border: 1px solid var(--landing-line);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.74);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.06);
+}
+
+.problemCard h3,
+.featureCard h3 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+
+.problemCard p,
+.featureCard p,
+.workspaceCopy p,
+.controlSection p,
+.finalCta p {
+  margin: 16px 0 0;
+  color: var(--landing-muted);
+  line-height: 1.7;
+}
+
+.workspaceSection {
+  display: grid;
+  grid-template-columns: 0.82fr 1.18fr;
+  gap: 52px;
+  align-items: start;
+}
+
+.workspaceCopy {
+  position: sticky;
+  top: 92px;
+}
+
+.featureGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0;
+}
+
+.featureCard span {
+  display: inline-flex;
+  margin-bottom: 42px;
+  color: var(--landing-blue);
+  font-weight: 850;
+}
+
+.useCaseSection {
+  text-align: center;
+}
+
+.useCaseGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  max-width: 900px;
+  margin: 38px auto 0;
+}
+
+.useCaseGrid span {
+  padding: 12px 16px;
+  border: 1px solid var(--landing-line);
+  border-radius: 999px;
+  color: var(--landing-muted);
+  background: white;
+  font-weight: 720;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+}
+
+.controlSection {
+  display: grid;
+  grid-template-columns: 1fr 0.8fr;
+  gap: 42px;
+  align-items: center;
+  margin-top: 40px;
+  padding: 66px 28px;
+  border-radius: 36px;
+  background: #07111f;
+}
+
+.controlSection h2,
+.controlSection p {
+  color: white;
+}
+
+.controlSection p {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.trustList {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trustList li {
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 720;
+}
+
+.finalCta {
+  text-align: center;
+}
+
+.finalCta p {
+  max-width: 640px;
+  margin: 20px auto 0;
+}
+
+.finalCta .heroActions {
+  justify-content: center;
+}
+
+:global(.dark) .landingShell {
+  background:
+    radial-gradient(circle at 80% 8%, rgba(46, 154, 146, 0.24), transparent 34rem),
+    linear-gradient(180deg, #f8faf8 0%, #ffffff 30%, #f7fbff 68%, #ffffff 100%);
+}
+
+@media (max-width: 980px) {
+  .heroGrid,
+  .workspaceSection,
+  .controlSection {
+    grid-template-columns: 1fr;
+  }
+
+  .heroGrid {
+    gap: 44px;
+  }
+
+  .mockup {
+    min-height: 500px;
+  }
+
+  .workspaceCopy {
+    position: static;
+  }
+
+  .problemGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .landingShell {
+    margin-top: -2rem;
+  }
+
+  .heroSection,
+  .problemSection,
+  .workspaceSection,
+  .useCaseSection,
+  .finalCta {
+    padding: 64px 18px;
+  }
+
+  .heroSection {
+    padding-top: 104px;
+  }
+
+  .navAnnouncement {
+    margin-bottom: 44px;
+  }
+
+  .heroCopy h1 {
+    font-size: clamp(3.4rem, 16vw, 5.4rem);
+  }
+
+  .heroDescription {
+    font-size: 1.04rem;
+  }
+
+  .heroActions,
+  .assistantStrip,
+  .assistantStrip div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .primaryButton,
+  .secondaryButton,
+  .textButton {
+    width: 100%;
+  }
+
+  .mockup {
+    min-height: 480px;
+    padding-inline: 16px;
+    border-radius: 26px;
+  }
+
+  .zone {
+    min-width: 205px;
+  }
+
+  .zoneA {
+    left: 0;
+  }
+
+  .zoneB {
+    right: 0;
+  }
+
+  .zoneC {
+    right: -24px;
+  }
+
+  .agentBubble {
+    top: 58px;
+    left: 18px;
+    width: calc(100% - 36px);
+  }
+
+  .commandCard {
+    right: 16px;
+    bottom: 38px;
+  }
+
+  .featureGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sectionHeader h2,
+  .workspaceCopy h2,
+  .useCaseSection h2,
+  .controlSection h2,
+  .finalCta h2 {
+    font-size: clamp(2.4rem, 12vw, 4rem);
+  }
+
+  .controlSection {
+    margin-inline: 18px;
+    padding: 48px 22px;
+  }
+}
