@@ -2,7 +2,7 @@
 
 Exploratory, non-production logo/mascot directions for Agor / agor.live.
 
-Open `index.html` in a browser to review the panel. The marks are generated as inline SVG from small pixel-grid arrays, so the source is reproducible and easy to convert into standalone SVG/CSS pixel art later. `index.js` is a no-op Sandpack entrypoint so the Agor artifact renderer does not fall back to its default vanilla-template script.
+Open `index.html` in a browser to review the panel. The marks are generated as inline SVG from small pixel-grid arrays, so the source is reproducible and easy to convert into standalone SVG/CSS pixel art later. `index.js` is the Sandpack/direct-browser entrypoint that mounts the board and draws the generated SVG monsters; `styles.css` contains the panel styling.
 
 ## Brand inputs inspected
 
