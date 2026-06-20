@@ -123,11 +123,6 @@ function ProductMockup() {
           alt="Agor branch card with scheduled assistant runs"
         />
       </div>
-
-      <div className={styles.screenshotBadge}>
-        <span className={styles.statusDot} />
-        <span>A living board for assistants, branches, sessions, and teammates</span>
-      </div>
     </div>
   );
 }
