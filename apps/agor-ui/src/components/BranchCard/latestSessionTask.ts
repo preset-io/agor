@@ -1,13 +1,6 @@
+import { isTaskExecuting } from '@agor/core/types';
 import type { Task } from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
-
-const ACTIVE_TASK_STATUSES = new Set<Task['status']>([
-  TaskStatus.CREATED,
-  TaskStatus.RUNNING,
-  TaskStatus.STOPPING,
-  TaskStatus.AWAITING_PERMISSION,
-  TaskStatus.AWAITING_INPUT,
-]);
 
 function timestamp(value: string | undefined): number {
   if (!value) return 0;
@@ -27,8 +20,8 @@ function taskActivityTimestamp(task: Task): number {
 }
 
 function compareLatestTasks(a: Task, b: Task): number {
-  const aActive = ACTIVE_TASK_STATUSES.has(a.status);
-  const bActive = ACTIVE_TASK_STATUSES.has(b.status);
+  const aActive = a.status === TaskStatus.CREATED || isTaskExecuting(a);
+  const bActive = b.status === TaskStatus.CREATED || isTaskExecuting(b);
   if (aActive !== bActive) return aActive ? 1 : -1;
 
   const aQueued = a.status === TaskStatus.QUEUED;

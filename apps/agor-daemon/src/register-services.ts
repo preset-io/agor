@@ -37,7 +37,13 @@ import type {
   SessionID,
   UserID,
 } from '@agor/core/types';
-import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  AGENTIC_TOOL_CAPABILITIES,
+  isSessionExecuting,
+  isTaskExecuting,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -899,22 +905,12 @@ function createExecuteHandler(
               `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
             );
           } else if (
-            currentSession.status === SessionStatus.RUNNING ||
-            currentSession.status === SessionStatus.AWAITING_PERMISSION ||
-            currentSession.status === SessionStatus.AWAITING_INPUT ||
-            currentSession.status === SessionStatus.STOPPING ||
+            isSessionExecuting(currentSession) ||
             currentSession.status === SessionStatus.TIMED_OUT
           ) {
             try {
               const currentTask = await app.service('tasks').get(taskId, params);
-              const isTaskStillActive =
-                currentTask.status === TaskStatus.RUNNING ||
-                currentTask.status === 'awaiting_permission' ||
-                currentTask.status === 'awaiting_input' ||
-                currentTask.status === 'stopping' ||
-                currentTask.status === 'timed_out';
-
-              if (isTaskStillActive) {
+              if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
                 await app.service('tasks').patch(
                   taskId,
                   {

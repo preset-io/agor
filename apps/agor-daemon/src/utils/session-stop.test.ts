@@ -122,4 +122,67 @@ describe('stopSessionPreserveQueue', () => {
       expect.objectContaining({ suppressTerminalQueueProcessing: true })
     );
   });
+
+  it('stops an awaiting_input task when the session is awaiting input', async () => {
+    const sessionId = 'session-awaiting-input';
+    const awaitingInputTask = {
+      task_id: 'task-awaiting-input',
+      session_id: sessionId,
+      status: 'awaiting_input',
+      created_at: '2026-01-01T00:00:00.000Z',
+      started_at: '2026-01-01T00:00:00.000Z',
+    };
+    const sessionsService = {
+      get: vi.fn(async () => ({
+        session_id: sessionId,
+        status: 'awaiting_input',
+        ready_for_prompt: false,
+        tasks: [awaitingInputTask.task_id],
+      })),
+      patch: vi.fn(async (_id, data) => data),
+    };
+    const tasksService = {
+      patch: vi.fn(async (id, data) => ({ task_id: id, ...data })),
+    };
+    const taskRepo = {
+      findQueued: vi.fn(async () => []),
+    };
+    const app = {
+      service: (name: string) => {
+        if (name === 'tasks') {
+          return {
+            find: vi.fn(async () => ({ data: [awaitingInputTask] })),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    };
+    const killExecutorProcess = vi.fn(() => true);
+
+    const result = await stopSessionPreserveQueue(
+      {
+        app: app as never,
+        taskRepo: taskRepo as never,
+        sessionsService: sessionsService as never,
+        tasksService: tasksService as never,
+        killExecutorProcess,
+      },
+      sessionId as never,
+      {},
+      { reason: 'user requested' }
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      status: 'idle',
+      stoppedTaskId: awaitingInputTask.task_id,
+      queuedTasksPreserved: 0,
+    });
+    expect(killExecutorProcess).toHaveBeenCalledWith(sessionId);
+    expect(tasksService.patch).toHaveBeenCalledWith(
+      awaitingInputTask.task_id,
+      expect.objectContaining({ status: 'stopped' }),
+      expect.objectContaining({ suppressCompletionCallbacks: true })
+    );
+  });
 });

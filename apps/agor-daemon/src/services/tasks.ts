@@ -70,10 +70,16 @@ export type TaskParams = QueryParams<{
    */
   suppressTerminalQueueProcessing?: boolean;
   /**
-   * Internal-only: skip callbacks and other completion side effects for
-   * terminal transitions that are administrative cancellation, not agent output.
+   * Internal-only: skip parent callback dispatch for terminal transitions that
+   * are administrative cancellation, not agent output. Does not disable BTW
+   * fork archival; those ephemeral sessions should still be cleaned up.
    */
   suppressCompletionCallbacks?: boolean;
+  /**
+   * Internal-only escape hatch for preserving an ephemeral BTW fork after
+   * terminal transition. Most callers should leave this unset.
+   */
+  suppressBtwCleanup?: boolean;
 };
 
 interface CompletionCallbackDispatchResult {
@@ -478,6 +484,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           const latestTaskId = session.tasks?.[session.tasks.length - 1];
 
           const suppressCompletionCallbacks = params?.suppressCompletionCallbacks === true;
+          const suppressBtwCleanup = params?.suppressBtwCleanup === true;
 
           if (latestTaskId && latestTaskId !== task.task_id) {
             console.log(
@@ -530,23 +537,29 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
           // "btw" fork origin: auto-archive the ephemeral fork after task completion.
           // Runs regardless of callback success — btw forks should always be cleaned up.
-          if (!suppressCompletionCallbacks && session.fork_origin === 'btw') {
-            try {
-              await this.app.service('sessions').patch(session.session_id, {
-                archived: true,
-                archived_reason: 'btw_completed',
-              });
-              console.log(
-                `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
-              );
-            } catch (error) {
-              console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
+          // Administrative terminal patches may suppress parent callbacks/result injection,
+          // but still archive the ephemeral session unless explicitly told not to.
+          if (session.fork_origin === 'btw') {
+            if (!suppressBtwCleanup) {
+              try {
+                await this.app.service('sessions').patch(session.session_id, {
+                  archived: true,
+                  archived_reason: 'btw_completed',
+                });
+                console.log(
+                  `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
+                );
+              } catch (error) {
+                console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
+              }
             }
 
-            // Inject a result message into the parent session's conversation.
-            // This is a non-prompt system message — it shows up in the UI but doesn't
-            // trigger a new prompt cycle. The parent's agent never sees it.
-            await this.injectBtwResultMessage(task, session, params);
+            if (!suppressCompletionCallbacks) {
+              // Inject a result message into the parent session's conversation.
+              // This is a non-prompt system message — it shows up in the UI but doesn't
+              // trigger a new prompt cycle. The parent's agent never sees it.
+              await this.injectBtwResultMessage(task, session, params);
+            }
           }
 
           // IMPORTANT: Now that the terminal task made the session promptable, process any queued tasks
