@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { CSSProperties } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { BRAND_NAME, LOGO_PATH } from '../lib/siteMetadata';
@@ -66,6 +67,9 @@ const trustItems = [
   'Claude Code · Codex · Gemini',
   'Unix-level isolation when you need it',
 ];
+
+const revealDelay = (index: number): CSSProperties =>
+  ({ '--reveal-delay': `${index * 70}ms` }) as CSSProperties;
 
 function ProductMockup() {
   return (
@@ -136,11 +140,48 @@ export function LandingPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const landing = landingRef.current;
+    if (!landing) {
+      return;
+    }
+
+    const revealItems = Array.from(landing.querySelectorAll<HTMLElement>('[data-reveal]'));
+    if (!revealItems.length) {
+      return;
+    }
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      revealItems.forEach((item) => {
+        item.classList.add(styles.isVisible);
+      });
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add(styles.isVisible);
+            observer.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: '0px 0px -12% 0px', threshold: 0.14 }
+    );
+
+    revealItems.forEach((item) => {
+      observer.observe(item);
+    });
+
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div ref={landingRef} className={styles.landingShell}>
       <section className={styles.heroSection}>
         <div className={styles.heroGrid}>
-          <div className={styles.heroCopy}>
+          <div className={styles.heroCopy} data-reveal>
             <div className={styles.brandMark}>
               {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
               <img src={LOGO_PATH} alt={`${BRAND_NAME} logo`} />
@@ -174,11 +215,13 @@ export function LandingPage() {
               </Link>
             </div>
           </div>
-          <ProductMockup />
+          <div data-reveal style={revealDelay(1)}>
+            <ProductMockup />
+          </div>
         </div>
       </section>
 
-      <section className={styles.assistantStrip} aria-label="Example assistants">
+      <section className={styles.assistantStrip} aria-label="Example assistants" data-reveal>
         <span>What works for one person finally reaches everyone</span>
         <div>
           {assistants.map((assistant) => (
@@ -187,14 +230,19 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.problemSection}>
+      <section className={styles.problemSection} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Why teams need a home for AI work</span>
           <h2>Everyone’s cranking with AI. Now make it compound.</h2>
         </div>
         <div className={styles.problemGrid}>
           {problemCards.map((card) => (
-            <article className={styles.problemCard} key={card.title}>
+            <article
+              className={styles.problemCard}
+              key={card.title}
+              data-reveal
+              style={revealDelay(problemCards.indexOf(card))}
+            >
               <h3>{card.title}</h3>
               <p>{card.body}</p>
             </article>
@@ -202,7 +250,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.workspaceSection}>
+      <section className={styles.workspaceSection} data-reveal>
         <div className={styles.workspaceCopy}>
           <span className={styles.eyebrow}>The shared workspace</span>
           <h2>Raise real assistants, not throwaway agents.</h2>
@@ -213,7 +261,12 @@ export function LandingPage() {
         </div>
         <div className={styles.featureGrid}>
           {featureCards.map((feature) => (
-            <article className={styles.featureCard} key={feature.title}>
+            <article
+              className={styles.featureCard}
+              key={feature.title}
+              data-reveal
+              style={revealDelay(featureCards.indexOf(feature))}
+            >
               <span>{feature.eyebrow}</span>
               <h3>{feature.title}</h3>
               <p>{feature.body}</p>
@@ -222,7 +275,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.useCaseSection}>
+      <section className={styles.useCaseSection} data-reveal>
         <span className={styles.eyebrow}>What teams run</span>
         <h2>From code reviews to customer digests.</h2>
         <div className={styles.useCaseGrid}>
@@ -232,7 +285,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.controlSection}>
+      <section className={styles.controlSection} data-reveal>
         <div>
           <span className={styles.eyebrow}>Built for real teams</span>
           <h2>Your work, your data, your assistants.</h2>
@@ -249,7 +302,7 @@ export function LandingPage() {
         </ul>
       </section>
 
-      <section className={styles.finalCta}>
+      <section className={styles.finalCta} data-reveal>
         <h2>Give your team’s AI work a place to live.</h2>
         <p>
           Start with the guide, join the community, or reach out if you’re rolling Agor out for a
