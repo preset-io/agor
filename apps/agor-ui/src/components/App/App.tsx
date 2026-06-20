@@ -205,8 +205,8 @@ const EMPTY_BOARD_OBJECTS: BoardEntityObject[] = Object.freeze(
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
 const LEFT_PANEL_MIN_WIDTH_PX = 320;
 const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
-const LEFT_PANEL_TOGGLE_HIT_SIZE_PX = 36;
-const LEFT_PANEL_TOGGLE_KNOB_SIZE_PX = 20;
+const LEFT_PANEL_TOGGLE_HIT_SIZE_PX = 44;
+const LEFT_PANEL_TOGGLE_KNOB_SIZE_PX = 30;
 
 const getLeftPanelMinSizePercent = (viewportWidth: number) =>
   Math.min(LEFT_PANEL_MAX_SIZE_PERCENT, (LEFT_PANEL_MIN_WIDTH_PX / viewportWidth) * 100);
@@ -1393,9 +1393,9 @@ export const App: React.FC<AppProps> = ({
                       }}
                     >
                       {leftPanelCollapsed ? (
-                        <RightOutlined style={{ fontSize: 10 }} />
+                        <RightOutlined style={{ fontSize: 12 }} />
                       ) : (
-                        <LeftOutlined style={{ fontSize: 10 }} />
+                        <LeftOutlined style={{ fontSize: 12 }} />
                       )}
                     </span>
                   </button>
