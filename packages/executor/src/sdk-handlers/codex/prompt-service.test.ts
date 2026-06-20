@@ -3,11 +3,12 @@
  *
  * Focused test: Verify SDK instance caching to prevent memory leak (issue #133)
  *
- * KNOWN GAP: the `MockCodexClient` below only captures `apiKey` + `baseUrl`,
- * not `config` (model_instructions_file, mcp_servers) or `env` (subscription-
- * mode scrubbing). The streaming tests stub out `ensureCodexInstructionsFile`,
- * `buildMcpServersConfig`, and `ensureCodexClient` outright. So the
- * load-bearing behaviors of the per-session-CODEX_HOME removal —
+ * KNOWN GAP: the `MockCodexClient` below captures `apiKey`, `baseUrl`, and
+ * `config` only shallowly; it still does not emulate Codex CLI process
+ * behavior or subscription-mode env scrubbing. Some streaming tests stub out
+ * `ensureCodexInstructionsFile`, `buildMcpServersConfig`, and
+ * `ensureCodexClient`. So the load-bearing behaviors of the
+ * per-session-CODEX_HOME removal —
  * `model_instructions_file` injection, MCP server flattening, subscription-
  * mode env scrubbing, fingerprint-based cache invalidation on token rotation
  * — are NOT exercised here. End-to-end coverage for those lives in the
@@ -37,9 +38,12 @@ import { CodexPromptService } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
-// Track the baseUrl each constructed instance saw, in creation order. Lets
-// tests assert that custom OPENAI_BASE_URL values flow into Codex.Codex().
+// Track options each constructed instance saw, in creation order. Lets
+// tests assert that custom OPENAI_BASE_URL values and session config flow into
+// Codex.Codex().
 let mockInstanceBaseUrls: Array<string | undefined> = [];
+let mockInstanceConfigs: Array<unknown> = [];
+let mockClosedInstanceIds: number[] = [];
 let mockStreamEvents: Array<Record<string, unknown>> = [];
 
 async function* streamMockEvents() {
@@ -60,11 +64,16 @@ vi.mock('@agor/core/sdk', () => {
     baseUrl: string | undefined;
     instanceId: number;
 
-    constructor(options: { apiKey?: string; baseUrl?: string }) {
+    constructor(options: { apiKey?: string; baseUrl?: string; config?: unknown }) {
       this.apiKey = options.apiKey || '';
       this.baseUrl = options.baseUrl;
       this.instanceId = ++mockInstanceCount;
       mockInstanceBaseUrls.push(options.baseUrl);
+      mockInstanceConfigs.push(options.config);
+    }
+
+    close() {
+      mockClosedInstanceIds.push(this.instanceId);
     }
 
     startThread() {
@@ -109,13 +118,15 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
   beforeEach(() => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
+    mockInstanceConfigs = [];
+    mockClosedInstanceIds = [];
     mockStreamEvents = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
   });
 
-  it('should create exactly one Codex instance on initialization', () => {
+  it('does not create a Codex instance on initialization before session MCP config is known', () => {
     const initialCount = mockInstanceCount;
 
     new CodexPromptService(
@@ -128,10 +139,10 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
       mockDb
     );
 
-    expect(mockInstanceCount).toBe(initialCount + 1);
+    expect(mockInstanceCount).toBe(initialCount);
   });
 
-  it('should reuse the same Codex instance when API key has not changed', () => {
+  it('should reuse the same Codex instance when API key and session config have not changed', () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -144,15 +155,18 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
 
     const countAfterInit = mockInstanceCount;
 
-    // Simulate multiple calls to refreshClient with the same API key
-    // Access private method via type assertion for testing
+    // Simulate multiple calls with the same API key and same per-session config
+    // Access private methods via type assertion for testing
     const serviceWithPrivate = service as any;
     serviceWithPrivate.refreshClient('test-api-key');
+    serviceWithPrivate.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
     serviceWithPrivate.refreshClient('test-api-key');
+    serviceWithPrivate.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
     serviceWithPrivate.refreshClient('test-api-key');
+    serviceWithPrivate.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
 
-    // Should NOT create new instances - still same count
-    expect(mockInstanceCount).toBe(countAfterInit);
+    // Should create only the lazily-initialized configured instance
+    expect(mockInstanceCount).toBe(countAfterInit + 1);
   });
 
   it('should create a new Codex instance only when API key changes', () => {
@@ -168,18 +182,25 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
 
     const countAfterInit = mockInstanceCount;
 
-    // Call with same API key - should NOT create new instance
     const serviceWithPrivate = service as any;
-    serviceWithPrivate.refreshClient('initial-key');
-    expect(mockInstanceCount).toBe(countAfterInit);
-
-    // Call with different API key - SHOULD create new instance
-    serviceWithPrivate.refreshClient('new-api-key');
+    serviceWithPrivate.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
     expect(mockInstanceCount).toBe(countAfterInit + 1);
+
+    // Call with same API key - should NOT create new instance
+    serviceWithPrivate.refreshClient('initial-key');
+    serviceWithPrivate.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
+    expect(mockInstanceCount).toBe(countAfterInit + 1);
+
+    // Call with different API key - next configured ensure SHOULD create new instance
+    serviceWithPrivate.refreshClient('new-api-key');
+    serviceWithPrivate.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
+    expect(mockInstanceCount).toBe(countAfterInit + 2);
+    expect(mockClosedInstanceIds).toContain(1);
 
     // Call with same new key again - should NOT create another instance
     serviceWithPrivate.refreshClient('new-api-key');
-    expect(mockInstanceCount).toBe(countAfterInit + 1);
+    serviceWithPrivate.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
+    expect(mockInstanceCount).toBe(countAfterInit + 2);
   });
 
   it('should handle empty/undefined API keys correctly', () => {
@@ -195,14 +216,19 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
 
     const countAfterInit = mockInstanceCount;
 
-    // Call with empty string - should not recreate if already empty
+    // Call with empty string - should not instantiate if already empty and no
+    // session config has been ensured yet.
     const serviceWithPrivate = service as any;
     serviceWithPrivate.refreshClient('');
     expect(mockInstanceCount).toBe(countAfterInit);
 
-    // Call with actual key - should create new instance
-    serviceWithPrivate.refreshClient('new-key');
+    serviceWithPrivate.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
     expect(mockInstanceCount).toBe(countAfterInit + 1);
+
+    // Call with actual key - should create new instance on next ensure
+    serviceWithPrivate.refreshClient('new-key');
+    serviceWithPrivate.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
+    expect(mockInstanceCount).toBe(countAfterInit + 2);
   });
 });
 
@@ -214,6 +240,8 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
   beforeEach(() => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
+    mockInstanceConfigs = [];
+    mockClosedInstanceIds = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
   });
@@ -229,41 +257,49 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
       mockDb
     );
 
-  it('passes OPENAI_BASE_URL into Codex.Codex on construction', () => {
+  it('passes OPENAI_BASE_URL into Codex.Codex when session config is ensured', () => {
     process.env.OPENAI_BASE_URL = 'https://gateway.example.com/v1';
-    makeService('test-api-key');
+    const service = makeService('test-api-key') as any;
+    service.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
     expect(mockInstanceBaseUrls).toEqual(['https://gateway.example.com/v1']);
   });
 
   it('omits baseUrl when OPENAI_BASE_URL is unset', () => {
-    makeService('test-api-key');
+    const service = makeService('test-api-key') as any;
+    service.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
     expect(mockInstanceBaseUrls).toEqual([undefined]);
   });
 
   it('trims whitespace and treats whitespace-only as unset', () => {
     process.env.OPENAI_BASE_URL = '   ';
-    makeService('test-api-key');
+    const service = makeService('test-api-key') as any;
+    service.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
     expect(mockInstanceBaseUrls).toEqual([undefined]);
   });
 
   it('reinitializes Codex when OPENAI_BASE_URL changes between refreshes', () => {
-    const service = makeService('stable-key');
+    const service = makeService('stable-key') as any;
     const countAfterInit = mockInstanceCount;
-
-    // Same key, base URL appears -> must recreate.
-    process.env.OPENAI_BASE_URL = 'https://gateway.example.com/v1';
-    (service as any).refreshClient('stable-key');
+    service.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
     expect(mockInstanceCount).toBe(countAfterInit + 1);
+
+    // Same key, base URL appears -> next ensure must recreate.
+    process.env.OPENAI_BASE_URL = 'https://gateway.example.com/v1';
+    service.refreshClient('stable-key');
+    service.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
+    expect(mockInstanceCount).toBe(countAfterInit + 2);
     expect(mockInstanceBaseUrls.at(-1)).toBe('https://gateway.example.com/v1');
 
     // Same key, same URL -> must NOT recreate (issue #133 protection).
-    (service as any).refreshClient('stable-key');
-    expect(mockInstanceCount).toBe(countAfterInit + 1);
+    service.refreshClient('stable-key');
+    service.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
+    expect(mockInstanceCount).toBe(countAfterInit + 2);
 
     // Same key, URL cleared -> must recreate without baseUrl.
     delete process.env.OPENAI_BASE_URL;
-    (service as any).refreshClient('stable-key');
-    expect(mockInstanceCount).toBe(countAfterInit + 2);
+    service.refreshClient('stable-key');
+    service.ensureCodexClient({ model_instructions_file: '/tmp/a.md' });
+    expect(mockInstanceCount).toBe(countAfterInit + 3);
     expect(mockInstanceBaseUrls.at(-1)).toBeUndefined();
   });
 });
@@ -272,6 +308,8 @@ describe('CodexPromptService - forked sessions', () => {
   beforeEach(() => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
+    mockInstanceConfigs = [];
+    mockClosedInstanceIds = [];
     mockStreamEvents = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
@@ -296,6 +334,9 @@ describe('CodexPromptService - forked sessions', () => {
     serviceWithPrivates.buildMcpServersConfig = vi
       .fn()
       .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
     serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 
@@ -448,6 +489,9 @@ describe('CodexPromptService - Todo normalization', () => {
     serviceWithPrivates.buildMcpServersConfig = vi
       .fn()
       .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
     serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 
@@ -524,6 +568,9 @@ describe('CodexPromptService - tool payload mapping', () => {
     serviceWithPrivates.buildMcpServersConfig = vi
       .fn()
       .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
     serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 
@@ -739,6 +786,9 @@ describe('CodexPromptService - tool payload mapping', () => {
     serviceWithPrivates.buildMcpServersConfig = vi
       .fn()
       .mockResolvedValue({ servers: {}, total: 0 });
+    serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
     serviceWithPrivates.ensureCodexClient = vi.fn();
     serviceWithPrivates.refreshClient = vi.fn();
 

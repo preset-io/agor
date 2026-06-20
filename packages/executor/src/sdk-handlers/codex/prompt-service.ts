@@ -182,7 +182,7 @@ export type CodexStreamEvent =
     };
 
 export class CodexPromptService {
-  private codex: InstanceType<typeof Codex.Codex>;
+  private codex?: InstanceType<typeof Codex.Codex>;
   private lastApiKey: string | null = null;
   private lastBaseUrl: string | null = null;
   private lastClientFingerprint: string | null = null;
@@ -243,10 +243,11 @@ export class CodexPromptService {
       codexDebug(`🔗 [Codex] Using custom OPENAI_BASE_URL`);
     }
 
-    // Bootstrap Codex SDK without per-session config (rebuilt lazily in
-    // promptSessionStreaming once we know the session's instructions file +
-    // MCP servers).
-    this.codex = new Codex.Codex(this.buildCodexOptions(this.apiKey, baseUrl, undefined));
+    // Do not construct the Codex SDK client until promptSessionStreaming has
+    // resolved the session-scoped config (instructions file + MCP servers).
+    // Constructing here with no MCP config and then replacing it moments later
+    // makes the SDK/app-server briefly start with the wrong lifecycle, which is
+    // visible as MCP disconnect/reconnect waves in gateway-driven turns.
     this.lastClientFingerprint = null;
 
     // Best-effort sweep of orphaned per-session instructions files in
@@ -362,16 +363,13 @@ export class CodexPromptService {
     const baseUrlChanged = (this.lastBaseUrl ?? null) !== (currentBaseUrl ?? null);
     if (this.lastApiKey !== currentApiKey || baseUrlChanged) {
       console.log(
-        `🔄 [Codex] ${this.lastApiKey !== currentApiKey ? 'API key' : 'Base URL'} changed, reinitializing SDK...`
-      );
-      this.codex = new Codex.Codex(
-        this.buildCodexOptions(currentApiKey, currentBaseUrl, undefined)
+        `🔄 [Codex] ${this.lastApiKey !== currentApiKey ? 'API key' : 'Base URL'} changed, invalidating SDK client...`
       );
       this.apiKey = currentApiKey;
       this.lastApiKey = currentApiKey;
       this.lastBaseUrl = currentBaseUrl ?? null;
       this.lastClientFingerprint = null;
-      console.log('✅ [Codex] SDK reinitialized');
+      console.log('✅ [Codex] SDK configuration invalidated');
     }
   }
 
@@ -423,10 +421,48 @@ export class CodexPromptService {
     codexDebug(
       `🔄 [Codex] Per-session config changed, reinitializing SDK (apiKey=${this.apiKey ? 'set' : 'unset'}, useNativeAuth=${this.useNativeAuth})`
     );
-    this.codex = new Codex.Codex(this.buildCodexOptions(this.apiKey, baseUrl, config));
+    this.replaceCodexClient(this.buildCodexOptions(this.apiKey, baseUrl, config));
     this.lastApiKey = this.apiKey || null;
     this.lastBaseUrl = baseUrl ?? null;
     this.lastClientFingerprint = fingerprint;
+  }
+
+  /**
+   * Best-effort close for SDK clients that expose a lifecycle method. The
+   * current Codex SDK API has changed over time, so probe common method names
+   * rather than depending on one concrete type. Closing before replacement keeps
+   * abandoned app-server/MCP transports from flapping alongside the new client.
+   */
+  private closeCodexClient(client: InstanceType<typeof Codex.Codex> | undefined): void {
+    if (!client) return;
+    const candidate = client as unknown as {
+      close?: () => void | Promise<void>;
+      dispose?: () => void | Promise<void>;
+      shutdown?: () => void | Promise<void>;
+    };
+    const close = candidate.close ?? candidate.dispose ?? candidate.shutdown;
+    if (!close) return;
+
+    try {
+      void Promise.resolve(close.call(candidate)).catch((error) => {
+        console.warn('⚠️  [Codex] Failed to close previous SDK client:', error);
+      });
+    } catch (error) {
+      console.warn('⚠️  [Codex] Failed to close previous SDK client:', error);
+    }
+  }
+
+  private replaceCodexClient(options: ConstructorParameters<typeof Codex.Codex>[0]): void {
+    const previous = this.codex;
+    this.codex = new Codex.Codex(options);
+    this.closeCodexClient(previous);
+  }
+
+  private getCodexClient(): InstanceType<typeof Codex.Codex> {
+    if (!this.codex) {
+      throw new Error('Codex SDK client was not initialized before use');
+    }
+    return this.codex;
   }
 
   /**
@@ -1024,7 +1060,7 @@ export class CodexPromptService {
     if (session.sdk_session_id) {
       codexDebug(`🔄 [Codex] Resuming thread: ${session.sdk_session_id}`);
 
-      thread = this.codex.resumeThread(session.sdk_session_id, threadOptions);
+      thread = this.getCodexClient().resumeThread(session.sdk_session_id, threadOptions);
 
       // If approval policy changed, send slash command to update thread settings
       if (approvalPolicyChanged) {
@@ -1054,7 +1090,7 @@ export class CodexPromptService {
           `✅ [Codex MCP] New thread will have ${mcpServerCount} MCP server(s) available via --config flags`
         );
       }
-      thread = this.codex.startThread(threadOptions);
+      thread = this.getCodexClient().startThread(threadOptions);
     }
 
     try {
