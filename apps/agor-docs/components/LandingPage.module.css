@@ -102,10 +102,20 @@
 
 .heroCopy h1 {
   max-width: 720px;
-  font-size: clamp(3.45rem, 6.5vw, 5.75rem);
+  font-size: clamp(3.15rem, 5.1vw, 4.85rem);
   overflow-wrap: normal;
   word-break: normal;
   hyphens: none;
+}
+
+.heroProvocation {
+  max-width: 560px;
+  margin: 24px 0 0;
+  color: var(--landing-ink);
+  font-size: clamp(1.18rem, 1.8vw, 1.55rem);
+  font-weight: 760;
+  line-height: 1.34;
+  letter-spacing: -0.025em;
 }
 
 .heroDescription {
@@ -698,6 +708,10 @@
 
   .heroCopy h1 {
     font-size: clamp(3.05rem, 14vw, 4.75rem);
+  }
+
+  .heroProvocation {
+    font-size: 1.16rem;
   }
 
   .heroDescription {

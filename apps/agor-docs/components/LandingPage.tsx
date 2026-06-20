@@ -18,8 +18,8 @@ const problemCards = [
     body: 'Teammates find great ways to use AI, but prompts and patterns get reinvented in private.',
   },
   {
-    title: 'Our AI adoption isn’t going anywhere',
-    body: 'Tools were handed out, but there’s no shared place to build assistants together and make them stick.',
+    title: 'AI adoption isn’t stalled',
+    body: 'It’s unevenly distributed: the best agent runs stay hidden on laptops instead of becoming team muscle.',
   },
   {
     title: 'The bots live on someone’s laptop',
@@ -198,14 +198,21 @@ export function LandingPage() {
               <img src={LOGO_PATH} alt={`${BRAND_NAME} logo`} />
               <span>agor</span>
             </div>
-            <p className={styles.kicker}>Team command center for all things agentic.</p>
-            <h1>Meet your team of AI assistants.</h1>
-            <p className={styles.heroDescription}>
+            <h1>
               Everyone’s cranking with AI.
               <br />
-              But it’s chaos: scattered sessions, ephemeral context, nothing that compounds. Agor is
-              where your team raises real assistants, wires them into the systems you live in, and
-              watches the work happen in one shared place.
+              Now make it compound.
+            </h1>
+            <p className={styles.heroProvocation}>
+              Break out of the terminal.
+              <br />
+              Bring the team and agents together.
+            </p>
+            <p className={styles.heroDescription}>
+              AI adoption isn’t stalled — it’s unevenly distributed. Agent workflows are trapped
+              behind local-environment curtains, so teammates can’t see what worked, reuse prompts,
+              share workflows, or learn from each other. Agor pulls that work onto a shared canvas
+              where agents, branches, dev environments, and the team all meet.
             </p>
             <div className={styles.heroActions}>
               <Link href="/guide" className={styles.primaryButton}>
