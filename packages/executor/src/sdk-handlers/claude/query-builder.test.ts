@@ -206,6 +206,45 @@ describe('setupQuery - Local Settings Support', () => {
     expect(mcpServers.oauthRemote.alwaysLoad).toBeUndefined();
   });
 
+  it('does not block gateway startup on remote Bearer or JWT servers without resolved auth', async () => {
+    const deps = createMockDeps();
+    vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+      session_id: 'test-session' as SessionID,
+      branch_id: 'test-branch' as BranchID,
+      mcp_token: 'test-token',
+      custom_context: { gateway_source: { channel_id: 'channel-1' } },
+    } as any);
+    deps.sessionMCPRepo = {} as any;
+    deps.mcpServerRepo = {} as any;
+    vi.mocked(resolveMCPAuthHeaders).mockResolvedValue(undefined);
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      {
+        server: {
+          name: 'bearerRemote',
+          transport: 'http',
+          url: 'https://bearer.example.com/mcp',
+          auth: { type: 'bearer' },
+        },
+      } as any,
+      {
+        server: {
+          name: 'jwtRemote',
+          transport: 'http',
+          url: 'https://jwt.example.com/mcp',
+          auth: { type: 'jwt' },
+        },
+      } as any,
+    ]);
+
+    await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
+    expect(mcpServers.agor).toMatchObject({ alwaysLoad: true });
+    expect(mcpServers.bearerRemote.alwaysLoad).toBeUndefined();
+    expect(mcpServers.jwtRemote.alwaysLoad).toBeUndefined();
+  });
+
   it('passes session advisorModel through the --advisor CLI flag, NOT settings', async () => {
     const deps = createMockDeps();
     vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({

@@ -670,6 +670,7 @@ export class CodexPromptService {
         const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
         const authHeader = headers?.Authorization;
+        const missingRequiredAuth = !!server.auth && server.auth.type !== 'none' && !authHeader;
         const customHeaders = headers ? { ...headers } : undefined;
         if (customHeaders) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
@@ -689,14 +690,16 @@ export class CodexPromptService {
               `      ⚠️  auth: resolved Authorization header for "${server.name}" is not a Bearer scheme (Codex CLI only supports bearer); skipping injection`
             );
           }
-        } else if (server.auth?.type === 'oauth') {
+        } else if (missingRequiredAuth) {
           canRequireServer = false;
           console.warn(
-            `   ⚠️  [Codex MCP] Server "${server.name}" requires OAuth but no valid token found.`
+            `   ⚠️  [Codex MCP] Server "${server.name}" has configured auth but no valid token found.`
           );
-          console.warn(
-            `      💡 Go to Settings → MCP Servers → ${server.name} → Start OAuth Flow to authenticate.`
-          );
+          const action =
+            server.auth?.type === 'oauth'
+              ? `Start OAuth Flow for ${server.name}`
+              : `check credentials for ${server.name}`;
+          console.warn(`      💡 Go to Settings → MCP Servers → ${action}.`);
         }
       } catch (error) {
         console.warn(

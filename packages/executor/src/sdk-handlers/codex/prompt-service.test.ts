@@ -1183,4 +1183,43 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     expect(servers.oauthremote.required).toBeUndefined();
     expect(servers.oauthremote.startup_timeout_ms).toBeUndefined();
   });
+
+  it('does not require remote Bearer or JWT MCP servers without resolved auth', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'bearerRemote',
+          transport: 'http',
+          url: 'https://bearer.example.com/mcp',
+          auth: { type: 'bearer' },
+        },
+      },
+      {
+        server: {
+          name: 'jwtRemote',
+          transport: 'http',
+          url: 'https://jwt.example.com/mcp',
+          auth: { type: 'jwt' },
+        },
+      },
+    ]);
+    mcpAuthMocks.resolveMCPAuthHeaders.mockResolvedValue(null);
+
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      undefined,
+      true
+    );
+
+    expect(total).toBe(2);
+    for (const name of ['bearerremote', 'jwtremote']) {
+      expect(servers[name], `server "${name}" should remain optional`).toMatchObject({
+        default_tools_approval_mode: 'approve',
+      });
+      expect(servers[name].required).toBeUndefined();
+      expect(servers[name].startup_timeout_ms).toBeUndefined();
+    }
+  });
 });

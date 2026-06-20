@@ -573,7 +573,7 @@ export async function setupQuery(
         let remoteServerCount = 0;
         let stdioServerCount = 0;
         let serversWithHeaders = 0;
-        const missingOAuthServers: string[] = [];
+        const missingAuthServers: string[] = [];
         const unresolvedAuthServers: string[] = [];
 
         for (const { server } of serversWithSource) {
@@ -604,16 +604,19 @@ export async function setupQuery(
           try {
             // Pass mcpUrl for OAuth token cache lookup
             const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
-            const missingOAuthAuth =
-              server.auth?.type === 'oauth' && transport !== 'stdio' && !authHeaders?.Authorization;
+            const missingRequiredAuth =
+              !!server.auth &&
+              server.auth.type !== 'none' &&
+              transport !== 'stdio' &&
+              !authHeaders?.Authorization;
             const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (headers && transport !== 'stdio') {
               serverConfig.headers = headers;
               serversWithHeaders += 1;
             }
-            if (missingOAuthAuth) {
-              // OAuth server but no token. Track for one concise per-query summary below.
-              missingOAuthServers.push(server.name);
+            if (missingRequiredAuth) {
+              // Auth-backed remote server but no usable token. Track one concise summary below.
+              missingAuthServers.push(server.name);
               canAlwaysLoad = false;
             }
           } catch (error) {
@@ -644,13 +647,13 @@ export async function setupQuery(
         // Log one safe summary line. Env/header values may contain secrets after template resolution.
         console.log(
           `   🔧 MCP servers configured: total=${serversWithSource.length} remote=${remoteServerCount} ` +
-            `stdio=${stdioServerCount} headers=${serversWithHeaders} missing_oauth=${missingOAuthServers.length} ` +
+            `stdio=${stdioServerCount} headers=${serversWithHeaders} missing_auth=${missingAuthServers.length} ` +
             `auth_errors=${unresolvedAuthServers.length}`
         );
-        if (missingOAuthServers.length > 0) {
+        if (missingAuthServers.length > 0) {
           console.warn(
-            `   ⚠️  ${missingOAuthServers.length} OAuth MCP server(s) have no valid token: ` +
-              `${formatListForLog(missingOAuthServers)}. Authenticate in Settings → MCP Servers.`
+            `   ⚠️  ${missingAuthServers.length} MCP server(s) have configured auth but no valid token: ` +
+              `${formatListForLog(missingAuthServers)}. Check Settings → MCP Servers.`
           );
         }
         if (unresolvedAuthServers.length > 0) {
