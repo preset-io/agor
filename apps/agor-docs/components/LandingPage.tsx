@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { BRAND_NAME, LOGO_PATH } from '../lib/siteMetadata';
 import { HubSpotFormModal } from './HubSpotFormModal';
@@ -9,39 +9,43 @@ const assistants = ['ReviewBot', 'LaunchOps', 'Scout', 'Standup', 'Docs'];
 
 const problemCards = [
   {
-    title: 'Your agents are everywhere',
-    body: 'More models, more tabs, more terminals. Keeping the work straight becomes its own job.',
+    title: 'My agents are everywhere',
+    body: 'More agents, more models, more tabs. Keeping them straight has become its own job.',
   },
   {
-    title: 'Learning stays private',
-    body: 'Great prompts and workflows disappear behind individual screens instead of compounding for the team.',
+    title: 'I can’t see what anyone else is doing',
+    body: 'Teammates find great ways to use AI, but prompts and patterns get reinvented in private.',
   },
   {
-    title: 'Useful bots live on laptops',
-    body: 'PR reviewers, legal helpers, and report writers need ownership, memory, schedules, and visibility.',
+    title: 'Our AI adoption isn’t going anywhere',
+    body: 'Tools were handed out, but there’s no shared place to build assistants together and make them stick.',
+  },
+  {
+    title: 'The bots live on someone’s laptop',
+    body: 'Team-critical helpers need ownership, governance, schedules, and observability in one shared place.',
   },
 ];
 
 const featureCards = [
   {
     eyebrow: '01',
-    title: 'Raise assistants together',
-    body: 'Give each assistant a purpose, memory, skills, and access to the systems your team already uses.',
+    title: 'Give each assistant a real job',
+    body: 'Define what it’s for, give it memory, and wire it into the systems your team already uses.',
   },
   {
     eyebrow: '02',
-    title: 'Work on a shared canvas',
-    body: 'See teammates, branches, live environments, prompts, sessions, and progress in one multiplayer space.',
+    title: 'Make the learning visible',
+    body: 'The whole team can see what each assistant is doing and lift the prompts that work.',
   },
   {
     eyebrow: '03',
     title: 'Let work happen on schedule',
-    body: 'Run audits, standups, grooming, digests, reviews, and reports without waiting for someone to ask.',
+    body: 'Run audits, standups, grooming, digests, reviews, and reports instead of waiting to be asked.',
   },
   {
     eyebrow: '04',
-    title: 'Keep the receipts',
-    body: 'Every prompt, tool call, decision, cost, and handoff stays observable and attached to the work.',
+    title: 'Keep ownership and control',
+    body: 'Model assistants like team members: scoped on purpose, governed, observable, and owned together.',
   },
 ];
 
@@ -99,9 +103,41 @@ function ProductMockup() {
 
 export function LandingPage() {
   const [isContactOpen, setIsContactOpen] = useState(false);
+  const landingRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const landing = landingRef.current;
+    if (!landing || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return;
+    }
+
+    let frame = 0;
+    const updateParallax = () => {
+      frame = 0;
+      const progress = Math.min(window.scrollY / 520, 1).toFixed(3);
+      landing.style.setProperty('--hero-scroll', progress);
+    };
+
+    const onScroll = () => {
+      if (frame) {
+        return;
+      }
+      frame = window.requestAnimationFrame(updateParallax);
+    };
+
+    updateParallax();
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+    };
+  }, []);
 
   return (
-    <div className={styles.landingShell}>
+    <div ref={landingRef} className={styles.landingShell}>
       <section className={styles.heroSection}>
         <div className={styles.navAnnouncement}>
           Shared canvas for assistants, schedules, and live work
@@ -146,7 +182,7 @@ export function LandingPage() {
       </section>
 
       <section className={styles.assistantStrip} aria-label="Example assistants">
-        <span>Assistants your team can actually share</span>
+        <span>What works for one person finally reaches everyone</span>
         <div>
           {assistants.map((assistant) => (
             <strong key={assistant}>@{assistant}</strong>
@@ -157,7 +193,7 @@ export function LandingPage() {
       <section className={styles.problemSection}>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Why teams need a home for AI work</span>
-          <h2>One agent in a terminal is fine. Five across a team is chaos.</h2>
+          <h2>Everyone’s cranking with AI. Now make it compound.</h2>
         </div>
         <div className={styles.problemGrid}>
           {problemCards.map((card) => (
@@ -172,7 +208,7 @@ export function LandingPage() {
       <section className={styles.workspaceSection}>
         <div className={styles.workspaceCopy}>
           <span className={styles.eyebrow}>The shared workspace</span>
-          <h2>Build assistants that stick around.</h2>
+          <h2>Raise real assistants, not throwaway agents.</h2>
           <p>
             Agor gives your team one place to launch assistants, teach them the workflows that
             matter, coordinate live work, and turn the patterns that work into shared muscle.
@@ -204,8 +240,9 @@ export function LandingPage() {
           <span className={styles.eyebrow}>Built for real teams</span>
           <h2>Your work, your data, your assistants.</h2>
           <p>
-            Self-host Agor, connect the runtimes you already trust, and turn on stronger isolation
-            as the stakes grow. Agents can use Agor over MCP, so the system can help operate itself.
+            Self-host Agor, connect the best models and harnesses, and keep your data yours. As the
+            stakes grow, add governance, observability, and isolation without locking into one
+            vendor.
           </p>
         </div>
         <ul className={styles.trustList}>
