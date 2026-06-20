@@ -309,6 +309,42 @@ function preserveSessionRelationshipFields(session: Session, existing?: Session)
   };
 }
 
+function createRemoteSurrogateSession(
+  sourceSession: Session,
+  targetSession: Session,
+  relationship: NonNullable<NonNullable<Session['remote_relationships']>['as_source']>[number]
+): Session | null {
+  if (relationship.relationship_type !== 'remote_create') return null;
+  if (targetSession.archived) return null;
+  if (targetSession.branch_id === sourceSession.branch_id) return null;
+
+  return {
+    ...targetSession,
+    branch_id: sourceSession.branch_id,
+    genealogy: {
+      ...(targetSession.genealogy ?? {}),
+      parent_session_id: sourceSession.session_id,
+    },
+    remote_surrogate: {
+      relationship,
+      source_session_id: sourceSession.session_id,
+      source_branch_id: sourceSession.branch_id,
+      target_branch_id: targetSession.branch_id,
+    },
+  };
+}
+
+function findSessionInBranchBuckets(
+  sessionsByBranchId: Map<string, Session[]>,
+  sessionId: string
+): Session | undefined {
+  for (const bucket of sessionsByBranchId.values()) {
+    const session = bucket.find((candidate) => candidate.session_id === sessionId);
+    if (session && !session.remote_surrogate) return session;
+  }
+  return undefined;
+}
+
 export function useAgorData(
   client: AgorClient | null,
   options?: { enabled?: boolean; directSessionId?: string | null }
@@ -635,8 +671,7 @@ export function useAgorData(
             if (relationship.relationship_type !== 'remote_create') continue;
 
             const targetSession = sessionsById.get(relationship.target_session_id);
-            if (!targetSession || targetSession.archived) continue;
-            if (targetSession.branch_id === sourceSession.branch_id) continue;
+            if (!targetSession) continue;
 
             const sourceBranchSessions = sessionsByBranchId.get(sourceSession.branch_id) ?? [];
             if (
@@ -647,20 +682,12 @@ export function useAgorData(
               continue;
             }
 
-            const remoteSurrogate: Session = {
-              ...targetSession,
-              branch_id: sourceSession.branch_id,
-              genealogy: {
-                ...(targetSession.genealogy ?? {}),
-                parent_session_id: sourceSession.session_id,
-              },
-              remote_surrogate: {
-                relationship,
-                source_session_id: sourceSession.session_id,
-                source_branch_id: sourceSession.branch_id,
-                target_branch_id: targetSession.branch_id,
-              },
-            };
+            const remoteSurrogate = createRemoteSurrogateSession(
+              sourceSession,
+              targetSession,
+              relationship
+            );
+            if (!remoteSurrogate) continue;
 
             sessionsByBranchId.set(sourceSession.branch_id, [
               ...sourceBranchSessions,
@@ -1053,6 +1080,36 @@ export function useAgorData(
           if (bucketChanged) {
             next.set(branchId, refreshedBucket);
           }
+        }
+
+        // Remote relationships are created after the canonical target session
+        // row. The daemon then emits a patched source session with
+        // remote_relationships.as_source populated. Project that single source
+        // row into muted remote-surrogate children now, instead of doing any
+        // expensive relationship work during render.
+        for (const relationship of mergedSession.remote_relationships?.as_source ?? []) {
+          if (relationship.relationship_type !== 'remote_create') continue;
+
+          const targetSession = findSessionInBranchBuckets(next, relationship.target_session_id);
+          if (!targetSession) continue;
+
+          const sourceBranchSessions = next.get(mergedSession.branch_id) ?? [];
+          if (
+            sourceBranchSessions.some(
+              (candidate) => candidate.session_id === targetSession.session_id
+            )
+          ) {
+            continue;
+          }
+
+          const remoteSurrogate = createRemoteSurrogateSession(
+            mergedSession,
+            targetSession,
+            relationship
+          );
+          if (!remoteSurrogate) continue;
+
+          next.set(mergedSession.branch_id, [...sourceBranchSessions, remoteSurrogate]);
         }
 
         return next;

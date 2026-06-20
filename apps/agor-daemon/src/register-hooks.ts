@@ -71,6 +71,7 @@ import type { ArtifactsService } from './services/artifacts.js';
 import { normalizeBoardObjectFindQuery } from './services/board-objects.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
+import type { SessionParams } from './services/sessions.js';
 import { isLocalAuthenticationLookup } from './services/users.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import { applySessionConfigDefaults } from './utils/apply-session-config-defaults.js';
@@ -2209,6 +2210,31 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
     after: {
+      find: [
+        async (context) => {
+          // In RBAC mode, scopeSessionQuery() resolves the paginated result in
+          // before.find for SQL-efficient access control. That intentionally
+          // short-circuits SessionsService.find(), so enrich list payloads here
+          // as a single batched query over the final page.
+          const params = context.params as SessionParams | undefined;
+          if (params?._remote_relationships_enriched) return context;
+
+          const result = context.result as Paginated<Session> | Session[];
+          if (Array.isArray(result)) {
+            context.result = await sessionsService.enrichRemoteRelationships(result);
+            return context;
+          }
+
+          if (result?.data) {
+            context.result = {
+              ...result,
+              data: await sessionsService.enrichRemoteRelationships(result.data),
+            };
+          }
+
+          return context;
+        },
+      ],
       get: [
         async (context) => {
           // Attach an MCP token for fetched session (cached/reused when still valid).

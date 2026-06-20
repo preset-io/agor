@@ -59,6 +59,9 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
     ancestors: import('@agor/core/types').Session[];
     children: import('@agor/core/types').Session[];
   }>;
+  enrichRemoteRelationships(
+    sessionList: import('@agor/core/types').Session[]
+  ): Promise<import('@agor/core/types').Session[]>;
   // Callback queue processing
   setQueueProcessor(
     processor: (

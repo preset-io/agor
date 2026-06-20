@@ -86,6 +86,8 @@ export type SessionParams = QueryParams<{
   InternalEnrichmentParams & {
     /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
     _include_last_message?: boolean | 'true' | 'false';
+    /** Internal marker to avoid enriching the same find result twice in hooks. */
+    _remote_relationships_enriched?: boolean;
   };
 
 /**
@@ -136,7 +138,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     this.usersRepo = new UsersRepository(db);
   }
 
-  private async enrichRemoteRelationships(sessionList: Session[]): Promise<Session[]> {
+  async enrichRemoteRelationships(sessionList: Session[]): Promise<Session[]> {
     const sessionIds = sessionList.map((session) => session.session_id);
     if (sessionIds.length === 0) return sessionList;
 
@@ -799,12 +801,16 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const result = await super.find(params);
 
     if (Array.isArray(result)) {
-      return this.enrichRemoteRelationships(result);
+      const enriched = await this.enrichRemoteRelationships(result);
+      if (params) params._remote_relationships_enriched = true;
+      return enriched;
     }
 
+    const enrichedData = await this.enrichRemoteRelationships(result.data);
+    if (params) params._remote_relationships_enriched = true;
     return {
       ...result,
-      data: await this.enrichRemoteRelationships(result.data),
+      data: enrichedData,
     };
   }
 }
