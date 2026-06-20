@@ -102,7 +102,7 @@
 
 .heroCopy h1 {
   max-width: 720px;
-  font-size: clamp(3.25rem, 5.75vw, 5.25rem);
+  font-size: clamp(3.45rem, 6.5vw, 5.75rem);
   overflow-wrap: normal;
   word-break: normal;
   hyphens: none;
