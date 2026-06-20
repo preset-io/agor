@@ -32,23 +32,7 @@
 }
 
 .heroSection {
-  padding-top: 112px;
-}
-
-.navAnnouncement {
-  width: fit-content;
-  margin: 0 auto 56px;
-  padding: 9px 16px;
-  border: 1px solid var(--landing-line);
-  border-radius: 999px;
-  background: rgba(10, 18, 31, 0.72);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.24);
-  color: var(--landing-muted);
-  font-size: 0.86rem;
-  font-weight: 650;
-  letter-spacing: 0.01em;
-  backdrop-filter: blur(14px);
-  transform: translateY(calc(var(--hero-scroll) * 30px));
+  padding-top: 128px;
 }
 
 .heroGrid {
@@ -66,15 +50,15 @@
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 28px;
+  margin-bottom: 34px;
   color: var(--landing-ink);
-  font-size: 1.1rem;
+  font-size: 1.42rem;
   font-weight: 800;
 }
 
 .brandMark img {
-  width: 44px;
-  height: 44px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
   box-shadow: 0 0 34px rgba(127, 232, 223, 0.2);
 }
@@ -477,7 +461,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .navAnnouncement,
   .screenshotCollage,
   .screenshotBadge {
     transform: none;
@@ -535,11 +518,7 @@
   }
 
   .heroSection {
-    padding-top: 104px;
-  }
-
-  .navAnnouncement {
-    margin-bottom: 44px;
+    padding-top: 96px;
   }
 
   .heroCopy h1 {
