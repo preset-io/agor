@@ -43,7 +43,7 @@ export interface ThemedSyntaxHighlighterProps {
    * Use 'span' only for truly inline single-line snippets.
    * @default 'pre'
    */
-  PreTag?: keyof JSX.IntrinsicElements;
+  PreTag?: keyof React.JSX.IntrinsicElements;
   /**
    * Props forwarded to the inner <code> element. Use this to override the
    * Prism theme's white-space/overflow rules (e.g. to enable wrapping for

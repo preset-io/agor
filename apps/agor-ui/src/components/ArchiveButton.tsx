@@ -12,7 +12,8 @@ type ArchiveButtonBaseProps = Omit<ButtonProps, 'icon'> & {
   stopPropagation?: boolean;
 };
 
-interface ArchiveToggleButtonProps extends Omit<ArchiveButtonBaseProps, 'children' | 'onClick'> {
+interface ArchiveToggleButtonProps
+  extends Omit<ArchiveButtonBaseProps, 'children' | 'onClick' | 'onToggle'> {
   archived: boolean;
   onToggle: (nextArchived: boolean) => void;
 }
