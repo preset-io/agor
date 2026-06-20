@@ -139,9 +139,6 @@ export function LandingPage() {
   return (
     <div ref={landingRef} className={styles.landingShell}>
       <section className={styles.heroSection}>
-        <div className={styles.navAnnouncement}>
-          Shared canvas for assistants, schedules, and live work
-        </div>
         <div className={styles.heroGrid}>
           <div className={styles.heroCopy}>
             <div className={styles.brandMark}>
