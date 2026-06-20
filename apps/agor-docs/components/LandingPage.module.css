@@ -355,6 +355,19 @@
   line-height: 1.7;
 }
 
+.cardLink {
+  display: inline-flex;
+  margin-top: 22px;
+  color: var(--landing-teal);
+  font-size: 0.92rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.cardLink:hover {
+  color: #a8f5ed;
+}
+
 .workspaceSection {
   display: grid;
   grid-template-columns: 0.82fr 1.18fr;
@@ -392,7 +405,7 @@
   margin: 38px auto 0;
 }
 
-.useCaseGrid span {
+.useCaseGrid a {
   padding: 12px 16px;
   border: 1px solid var(--landing-line);
   border-radius: 999px;
@@ -400,6 +413,13 @@
   background: rgba(255, 255, 255, 0.06);
   font-weight: 720;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+  text-decoration: none;
+}
+
+.useCaseGrid a:hover {
+  border-color: rgba(127, 232, 223, 0.34);
+  color: var(--landing-ink);
+  background: rgba(127, 232, 223, 0.1);
 }
 
 .controlSection {
@@ -438,6 +458,18 @@
   color: rgba(255, 255, 255, 0.86);
   background: rgba(255, 255, 255, 0.06);
   font-weight: 720;
+}
+
+.trustList a {
+  display: flex;
+  justify-content: space-between;
+  color: rgba(255, 255, 255, 0.86);
+  text-decoration: none;
+}
+
+.trustList li:hover {
+  border-color: rgba(127, 232, 223, 0.28);
+  background: rgba(127, 232, 223, 0.08);
 }
 
 .finalCta {

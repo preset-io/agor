@@ -32,40 +32,48 @@ const featureCards = [
     eyebrow: '01',
     title: 'Give each assistant a real job',
     body: 'Define what it’s for, give it memory, and wire it into the systems your team already uses.',
+    href: '/guide/assistants',
+    linkLabel: 'Read about Assistants',
   },
   {
     eyebrow: '02',
     title: 'Make the learning visible',
     body: 'The whole team can see what each assistant is doing and lift the prompts that work.',
+    href: '/guide/multiplayer-social',
+    linkLabel: 'See multiplayer',
   },
   {
     eyebrow: '03',
     title: 'Let work happen on schedule',
     body: 'Run audits, standups, grooming, digests, reviews, and reports instead of waiting to be asked.',
+    href: '/guide/scheduler',
+    linkLabel: 'Explore Scheduler',
   },
   {
     eyebrow: '04',
     title: 'Keep ownership and control',
     body: 'Model assistants like team members: scoped on purpose, governed, observable, and owned together.',
+    href: '/blog/agent-modeling-101',
+    linkLabel: 'Agent modeling 101',
   },
 ];
 
 const useCases = [
-  'multi-agent code review',
-  'release audits',
-  'backlog grooming',
-  'security sweeps',
-  'competitive intel',
-  'customer digests',
-  'weekly reports',
-  'standups',
+  { label: 'multi-agent code review', href: '/guide/sessions' },
+  { label: 'release audits', href: '/guide/scheduler' },
+  { label: 'backlog grooming', href: '/blog/raise-team-helper-agent' },
+  { label: 'security sweeps', href: '/guide/multiplayer-unix-isolation' },
+  { label: 'competitive intel', href: '/guide/assistants' },
+  { label: 'customer digests', href: '/guide/message-gateway' },
+  { label: 'weekly reports', href: '/guide/scheduler' },
+  { label: 'standups', href: '/blog/raise-team-helper-agent' },
 ];
 
 const trustItems = [
-  'Self-hosted first',
-  'MCP-native',
-  'Claude Code · Codex · Gemini',
-  'Unix-level isolation when you need it',
+  { label: 'Self-hosted first', href: '/guide/getting-started' },
+  { label: 'MCP-native', href: '/guide/internal-mcp' },
+  { label: 'Claude Code · Codex · Gemini', href: '/guide/sdk-comparison' },
+  { label: 'Unix-level isolation when you need it', href: '/guide/multiplayer-unix-isolation' },
 ];
 
 const revealDelay = (index: number): CSSProperties =>
@@ -270,6 +278,9 @@ export function LandingPage() {
               <span>{feature.eyebrow}</span>
               <h3>{feature.title}</h3>
               <p>{feature.body}</p>
+              <Link href={feature.href} className={styles.cardLink}>
+                {feature.linkLabel} →
+              </Link>
             </article>
           ))}
         </div>
@@ -280,7 +291,9 @@ export function LandingPage() {
         <h2>From code reviews to customer digests.</h2>
         <div className={styles.useCaseGrid}>
           {useCases.map((useCase) => (
-            <span key={useCase}>{useCase}</span>
+            <Link href={useCase.href} key={useCase.label}>
+              {useCase.label}
+            </Link>
           ))}
         </div>
       </section>
@@ -297,7 +310,9 @@ export function LandingPage() {
         </div>
         <ul className={styles.trustList}>
           {trustItems.map((item) => (
-            <li key={item}>{item}</li>
+            <li key={item.label}>
+              <Link href={item.href}>{item.label} →</Link>
+            </li>
           ))}
         </ul>
       </section>
@@ -311,6 +326,9 @@ export function LandingPage() {
         <div className={styles.heroActions}>
           <Link href="/guide" className={styles.primaryButton}>
             Read the docs
+          </Link>
+          <Link href="/guide/features-overview" className={styles.secondaryButton}>
+            Feature map
           </Link>
           <Link
             href={DISCORD_INVITE_URL}
