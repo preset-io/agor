@@ -37,11 +37,15 @@ export class AgentProgressWatchdog {
   private readonly nowMs: () => number;
   private timer?: TimerHandle;
   private startedAtMs?: number;
-  private lastProgressAtMs?: number;
-  private lastProgressLabel?: string;
+  private lastActivityAtMs?: number;
+  private lastActivityLabel?: string;
+  private lastAgentProgressAtMs?: number;
+  private lastAgentProgressLabel?: string;
   private checkInFlight = false;
   private stalled = false;
   private stallReason?: string;
+  private stalledAtMs?: number;
+  private stalledTimeoutMs?: number;
 
   constructor(private readonly options: AgentProgressWatchdogOptions) {
     this.firstProgressTimeoutMs =
@@ -73,11 +77,21 @@ export class AgentProgressWatchdog {
     this.timer = undefined;
   }
 
-  markProgress(label: string): void {
+  markActivity(label: string): void {
     if (this.stalled) return;
 
-    this.lastProgressAtMs = this.nowMs();
-    this.lastProgressLabel = label;
+    this.lastActivityAtMs = this.nowMs();
+    this.lastActivityLabel = label;
+  }
+
+  markAgentProgress(label: string): void {
+    if (this.stalled) return;
+
+    const now = this.nowMs();
+    this.lastActivityAtMs = now;
+    this.lastActivityLabel = label;
+    this.lastAgentProgressAtMs = now;
+    this.lastAgentProgressLabel = label;
   }
 
   hasStalled(): boolean {
@@ -88,20 +102,45 @@ export class AgentProgressWatchdog {
     return this.stallReason;
   }
 
+  getDiagnosticMetadata(nowMs = this.stalledAtMs ?? this.nowMs()): TaskMetadata | undefined {
+    if (!this.startedAtMs || !this.stallReason || !this.stalledAtMs || !this.stalledTimeoutMs) {
+      return undefined;
+    }
+
+    return {
+      agent_progress_watchdog: {
+        status: 'stalled',
+        tool: this.options.toolName,
+        reason: this.stallReason,
+        started_at: toIso(this.startedAtMs),
+        stalled_at: toIso(this.stalledAtMs),
+        first_progress_seen: this.lastAgentProgressAtMs !== undefined,
+        last_progress_at: this.lastAgentProgressAtMs
+          ? toIso(this.lastAgentProgressAtMs)
+          : undefined,
+        last_progress_label: this.lastAgentProgressLabel,
+        last_activity_at: this.lastActivityAtMs ? toIso(this.lastActivityAtMs) : undefined,
+        last_activity_label: this.lastActivityLabel,
+        timeout_ms: this.stalledTimeoutMs,
+        elapsed_ms: nowMs - (this.lastAgentProgressAtMs ?? this.startedAtMs),
+      },
+    };
+  }
+
   private async check(): Promise<void> {
     if (this.checkInFlight || this.stalled || !this.startedAtMs) return;
 
     const now = this.nowMs();
-    const hasProgress = this.lastProgressAtMs !== undefined;
-    const referenceAtMs = this.lastProgressAtMs ?? this.startedAtMs;
-    const timeoutMs = hasProgress ? this.idleProgressTimeoutMs : this.firstProgressTimeoutMs;
+    const hasAgentProgress = this.lastAgentProgressAtMs !== undefined;
+    const referenceAtMs = this.lastAgentProgressAtMs ?? this.startedAtMs;
+    const timeoutMs = hasAgentProgress ? this.idleProgressTimeoutMs : this.firstProgressTimeoutMs;
     const elapsedMs = now - referenceAtMs;
 
     if (elapsedMs < timeoutMs) return;
 
     this.checkInFlight = true;
     try {
-      await this.markStalled(now, timeoutMs, hasProgress);
+      await this.markStalled(now, timeoutMs, hasAgentProgress);
     } finally {
       this.checkInFlight = false;
     }
@@ -114,24 +153,12 @@ export class AgentProgressWatchdog {
     this.stop();
 
     const reason = hadProgress
-      ? `${this.options.toolName} task stalled: no agent progress for ${timeoutMs}ms after ${this.lastProgressLabel ?? 'last progress'}.`
+      ? `${this.options.toolName} task stalled: no agent progress for ${timeoutMs}ms after ${this.lastAgentProgressLabel ?? 'last progress'}.`
       : `${this.options.toolName} task stalled: no agent progress within ${timeoutMs}ms after executor start.`;
     this.stallReason = reason;
-
-    const metadata = {
-      agent_progress_watchdog: {
-        status: 'stalled',
-        tool: this.options.toolName,
-        reason,
-        started_at: toIso(this.startedAtMs),
-        stalled_at: toIso(now),
-        first_progress_seen: hadProgress,
-        last_progress_at: this.lastProgressAtMs ? toIso(this.lastProgressAtMs) : undefined,
-        last_progress_label: this.lastProgressLabel,
-        timeout_ms: timeoutMs,
-        elapsed_ms: now - (this.lastProgressAtMs ?? this.startedAtMs),
-      },
-    } as unknown as TaskMetadata;
+    this.stalledAtMs = now;
+    this.stalledTimeoutMs = timeoutMs;
+    const metadata = this.getDiagnosticMetadata(now);
 
     try {
       await this.options.client.service('tasks').patch(this.options.taskId, {

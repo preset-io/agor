@@ -1,6 +1,11 @@
 import { resolveApiKey } from '@agor/core/config';
+import { MessageRole } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolveApiKeyForTask } from './base-executor.js';
+import {
+  attachRepositoryProgressReporting,
+  resolveApiKeyForTask,
+  withProgressCallbacks,
+} from './base-executor.js';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
@@ -101,5 +106,101 @@ describe('resolveApiKeyForTask', () => {
     ).resolves.toMatchObject({ apiKey: 'local-key', source: 'env' });
 
     expect(resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {});
+  });
+});
+
+describe('SDK executor progress reporting', () => {
+  function makeProgressReporter() {
+    return {
+      markActivity: vi.fn(),
+      markAgentProgress: vi.fn(),
+    };
+  }
+
+  it('does not treat local user-message creation as agent progress', async () => {
+    const progress = makeProgressReporter();
+    const repos = {
+      messages: {
+        create: vi.fn(async (message) => message),
+      },
+      messagesService: {
+        create: vi.fn(async (message) => message),
+      },
+      tasksStreamingService: {
+        create: vi.fn(async (event) => event),
+      },
+    };
+
+    attachRepositoryProgressReporting(repos as never, progress);
+
+    await repos.messagesService.create({
+      role: MessageRole.USER,
+      type: 'user',
+      content: 'hello',
+    });
+
+    expect(progress.markActivity).toHaveBeenCalledWith('message-service:create:user');
+    expect(progress.markAgentProgress).not.toHaveBeenCalled();
+  });
+
+  it('treats assistant message creation as agent progress for non-streaming paths', async () => {
+    const progress = makeProgressReporter();
+    const repos = {
+      messages: {
+        create: vi.fn(async (message) => message),
+      },
+      messagesService: {
+        create: vi.fn(async (message) => message),
+      },
+      tasksStreamingService: {
+        create: vi.fn(async (event) => event),
+      },
+    };
+
+    attachRepositoryProgressReporting(repos as never, progress);
+
+    await repos.messages.create({
+      role: MessageRole.ASSISTANT,
+      type: 'assistant',
+      content: 'done',
+    });
+
+    expect(progress.markAgentProgress).toHaveBeenCalledWith('message:create:assistant');
+  });
+
+  it('treats task-stream and streaming callback events as agent progress', async () => {
+    const progress = makeProgressReporter();
+    const repos = {
+      messages: {
+        create: vi.fn(async (message) => message),
+      },
+      messagesService: {
+        create: vi.fn(async (message) => message),
+      },
+      tasksStreamingService: {
+        create: vi.fn(async (event) => event),
+      },
+    };
+
+    attachRepositoryProgressReporting(repos as never, progress);
+    await repos.tasksStreamingService.create({ event: 'tool:start', data: {} });
+
+    const callbacks = withProgressCallbacks(
+      {
+        onStreamStart: vi.fn(async () => {}),
+        onStreamChunk: vi.fn(async () => {}),
+        onStreamEnd: vi.fn(async () => {}),
+        onStreamError: vi.fn(async () => {}),
+      },
+      progress
+    );
+    await callbacks.onStreamStart('message-1' as never, {
+      session_id: 'session-1' as never,
+      role: MessageRole.ASSISTANT,
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(progress.markAgentProgress).toHaveBeenCalledWith('task-stream:tool:start');
+    expect(progress.markAgentProgress).toHaveBeenCalledWith('stream:start');
   });
 });

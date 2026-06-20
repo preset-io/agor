@@ -78,6 +78,8 @@ export interface TaskMetadata {
     first_progress_seen: boolean;
     last_progress_at?: string;
     last_progress_label?: string;
+    last_activity_at?: string;
+    last_activity_label?: string;
     timeout_ms: number;
     elapsed_ms: number;
   };

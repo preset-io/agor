@@ -78,7 +78,7 @@ describe('AgentProgressWatchdog', () => {
     });
 
     watchdog.start();
-    watchdog.markProgress('message:create');
+    watchdog.markAgentProgress('task-stream:tool:start');
 
     await vi.advanceTimersByTimeAsync(1400);
     expect(patch).not.toHaveBeenCalled();
@@ -88,11 +88,11 @@ describe('AgentProgressWatchdog', () => {
     expect(patch).toHaveBeenCalledWith(
       'task-1',
       expect.objectContaining({
-        error_message: expect.stringContaining('after message:create'),
+        error_message: expect.stringContaining('after task-stream:tool:start'),
         metadata: {
           agent_progress_watchdog: expect.objectContaining({
             first_progress_seen: true,
-            last_progress_label: 'message:create',
+            last_progress_label: 'task-stream:tool:start',
             timeout_ms: 1500,
           }),
         },
@@ -107,15 +107,41 @@ describe('AgentProgressWatchdog', () => {
     });
 
     watchdog.start();
-    watchdog.markProgress('stream:start');
+    watchdog.markAgentProgress('stream:start');
 
     await vi.advanceTimersByTimeAsync(900);
-    watchdog.markProgress('stream:chunk');
+    watchdog.markAgentProgress('stream:chunk');
     await vi.advanceTimersByTimeAsync(900);
 
     expect(watchdog.hasStalled()).toBe(false);
     expect(patch).not.toHaveBeenCalled();
 
     watchdog.stop();
+  });
+
+  it('does not treat local activity as first agent progress', async () => {
+    const { watchdog, patch, abortController } = createWatchdog({
+      firstProgressTimeoutMs: 1000,
+      idleProgressTimeoutMs: 5000,
+    });
+
+    watchdog.start();
+    watchdog.markActivity('message-service:create:user');
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(abortController.signal.aborted).toBe(true);
+    expect(patch).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({
+        error_message: expect.stringContaining('no agent progress within 1000ms'),
+        metadata: {
+          agent_progress_watchdog: expect.objectContaining({
+            first_progress_seen: false,
+            last_activity_label: 'message-service:create:user',
+          }),
+        },
+      })
+    );
   });
 });

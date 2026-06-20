@@ -226,52 +226,69 @@ export function createExecutionContext(
   };
 }
 
-type ProgressReporter = (label: string) => void;
+export interface ProgressReporter {
+  markActivity(label: string): void;
+  markAgentProgress(label: string): void;
+}
 
-function withProgressCallbacks(
+export function withProgressCallbacks(
   callbacks: StreamingCallbacks,
-  markProgress: ProgressReporter
+  progress: ProgressReporter
 ): StreamingCallbacks {
   return {
     ...callbacks,
     onStreamStart: async (...args) => {
-      markProgress('stream:start');
+      progress.markAgentProgress('stream:start');
       await callbacks.onStreamStart(...args);
     },
     onStreamChunk: async (...args) => {
-      markProgress('stream:chunk');
+      progress.markAgentProgress('stream:chunk');
       await callbacks.onStreamChunk(...args);
     },
     onStreamEnd: async (...args) => {
-      markProgress('stream:end');
+      progress.markAgentProgress('stream:end');
       await callbacks.onStreamEnd(...args);
     },
     onStreamError: async (...args) => {
-      markProgress('stream:error');
+      progress.markAgentProgress('stream:error');
       await callbacks.onStreamError(...args);
     },
     onThinkingStart: async (...args) => {
-      markProgress('thinking:start');
+      progress.markAgentProgress('thinking:start');
       await callbacks.onThinkingStart?.(...args);
     },
     onThinkingChunk: async (...args) => {
-      markProgress('thinking:chunk');
+      progress.markAgentProgress('thinking:chunk');
       await callbacks.onThinkingChunk?.(...args);
     },
     onThinkingEnd: async (...args) => {
-      markProgress('thinking:end');
+      progress.markAgentProgress('thinking:end');
       await callbacks.onThinkingEnd?.(...args);
     },
   };
 }
 
-function attachRepositoryProgressReporting(
+function markMessageCreateProgress(
+  progress: ProgressReporter,
+  label: string,
+  message: unknown
+): void {
+  const role = (message as { role?: string; type?: string } | undefined)?.role;
+  const type = (message as { role?: string; type?: string } | undefined)?.type;
+  if (role === MessageRole.ASSISTANT || type === 'assistant') {
+    progress.markAgentProgress(`${label}:assistant`);
+  } else {
+    progress.markActivity(`${label}:${role ?? type ?? 'unknown'}`);
+  }
+}
+
+export function attachRepositoryProgressReporting(
   repos: ReturnType<typeof createFeathersBackedRepositories>,
-  markProgress: ProgressReporter
+  progress: ProgressReporter
 ): void {
   const originalMessageRepositoryCreate = repos.messages.create.bind(repos.messages);
   repos.messages.create = (async (...args: Parameters<typeof repos.messages.create>) => {
-    markProgress('message:create');
+    markMessageCreateProgress(progress, 'message:create', args[0]);
     return originalMessageRepositoryCreate(...args);
   }) as typeof repos.messages.create;
 
@@ -279,7 +296,7 @@ function attachRepositoryProgressReporting(
   repos.messagesService.create = (async (
     ...args: Parameters<typeof repos.messagesService.create>
   ) => {
-    markProgress('message-service:create');
+    markMessageCreateProgress(progress, 'message-service:create', args[0]);
     return originalMessagesServiceCreate(...args);
   }) as typeof repos.messagesService.create;
 
@@ -290,7 +307,7 @@ function attachRepositoryProgressReporting(
     ...args: Parameters<typeof repos.tasksStreamingService.create>
   ) => {
     const eventName = (args[0] as { event?: string } | undefined)?.event ?? 'create';
-    markProgress(`task-stream:${eventName}`);
+    progress.markAgentProgress(`task-stream:${eventName}`);
     return originalTasksStreamingCreate(...args);
   }) as typeof repos.tasksStreamingService.create;
 }
@@ -515,9 +532,12 @@ export async function executeToolTask(params: {
     toolName,
     abortController: params.abortController,
   });
-  const markProgress = watchdog.markProgress.bind(watchdog);
-  ctx.callbacks = withProgressCallbacks(ctx.callbacks, markProgress);
-  attachRepositoryProgressReporting(ctx.repos, markProgress);
+  const progress = {
+    markActivity: watchdog.markActivity.bind(watchdog),
+    markAgentProgress: watchdog.markAgentProgress.bind(watchdog),
+  };
+  ctx.callbacks = withProgressCallbacks(ctx.callbacks, progress);
+  attachRepositoryProgressReporting(ctx.repos, progress);
 
   // Create tool instance using factory function
   // Pass the resolved key (or empty string) and useNativeAuth flag
@@ -687,6 +707,10 @@ export async function executeToolTask(params: {
       // instead of the task silently flipping to FAILED with no context.
       error_message: err.message || String(err),
     };
+    const watchdogMetadata = watchdog.getDiagnosticMetadata();
+    if (watchdogMetadata) {
+      patchData.metadata = watchdogMetadata;
+    }
 
     // Add git_state if we captured a SHA
     // Note: This will be deep-merged with existing git_state by the repository layer
