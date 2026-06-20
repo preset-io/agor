@@ -1187,6 +1187,7 @@ export const App: React.FC<AppProps> = ({
                       <button
                         type="button"
                         aria-label={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
+                        onPointerDown={(event) => event.stopPropagation()}
                         onClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
                         style={{
                           position: 'absolute',
@@ -1216,6 +1217,7 @@ export const App: React.FC<AppProps> = ({
                             background: 'var(--ant-color-bg-container)',
                             boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
                             color: 'var(--ant-color-text)',
+                            cursor: 'pointer',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
