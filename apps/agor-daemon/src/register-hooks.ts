@@ -296,6 +296,17 @@ export function shouldRunSessionPostTurnHooks(
   return sessionCanStartTask(session.status, session.ready_for_prompt);
 }
 
+export function shouldDrainQueueAfterSessionPostTurnPatch(
+  session: Pick<Session, 'status' | 'ready_for_prompt'>,
+  params?: Params
+): boolean {
+  return (
+    shouldRunSessionPostTurnHooks(session) &&
+    session.ready_for_prompt === true &&
+    params?.suppressTerminalQueueProcessing !== true
+  );
+}
+
 /**
  * Extended Params with route ID parameter (needed by artifact routes in hooks).
  */
@@ -2413,7 +2424,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               }
             });
 
-            if (session.ready_for_prompt) {
+            if (shouldDrainQueueAfterSessionPostTurnPatch(session, context.params)) {
               // Use setImmediate to avoid blocking the patch response
               setImmediate(async () => {
                 try {

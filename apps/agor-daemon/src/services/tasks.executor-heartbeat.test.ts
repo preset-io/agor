@@ -74,6 +74,7 @@ describe('TasksService executor heartbeat helpers', () => {
       { status: 'failed', ready_for_prompt: true },
       expect.objectContaining({
         user: { user_id: '018f0000-0000-7000-8000-000000000009' },
+        suppressTerminalQueueProcessing: true,
       })
     );
     expect(triggerQueueProcessing).not.toHaveBeenCalled();

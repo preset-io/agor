@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
 } from './register-hooks';
@@ -55,6 +56,32 @@ describe('shouldRunSessionPostTurnHooks', () => {
     expect(shouldRunSessionPostTurnHooks({ status: 'running', ready_for_prompt: false })).toBe(
       false
     );
+  });
+});
+
+describe('shouldDrainQueueAfterSessionPostTurnPatch', () => {
+  it('drains for promptable ready sessions by default', () => {
+    expect(
+      shouldDrainQueueAfterSessionPostTurnPatch({ status: 'failed', ready_for_prompt: true })
+    ).toBe(true);
+    expect(
+      shouldDrainQueueAfterSessionPostTurnPatch({ status: 'idle', ready_for_prompt: true })
+    ).toBe(true);
+  });
+
+  it('does not drain when terminal queue processing is explicitly suppressed', () => {
+    expect(
+      shouldDrainQueueAfterSessionPostTurnPatch(
+        { status: 'failed', ready_for_prompt: true },
+        { suppressTerminalQueueProcessing: true }
+      )
+    ).toBe(false);
+  });
+
+  it('does not drain for promptable-but-not-ready acknowledgement states', () => {
+    expect(
+      shouldDrainQueueAfterSessionPostTurnPatch({ status: 'idle', ready_for_prompt: false })
+    ).toBe(false);
   });
 });
 

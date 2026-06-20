@@ -62,7 +62,7 @@ export type TaskParams = QueryParams<{
    * Internal-only: terminal task patches normally transition the owning session
    * back to a promptable terminal state. Heartbeat-loss handling marks the session failed instead.
    */
-  suppressTerminalSessionIdle?: boolean;
+  suppressTerminalSessionStateUpdate?: boolean;
   /**
    * Internal-only: terminal task patches normally drain queued work for the
    * owning session. Heartbeat-loss handling must not auto-start queued prompts.
@@ -270,7 +270,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       },
       {
         ...params,
-        suppressTerminalSessionIdle: true,
+        suppressTerminalSessionStateUpdate: true,
         suppressTerminalQueueProcessing: true,
       }
     );
@@ -294,7 +294,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           status: SessionStatus.FAILED,
           ready_for_prompt: true,
         },
-        params
+        {
+          ...params,
+          suppressTerminalQueueProcessing: true,
+        }
       )
       .catch((error: unknown) => {
         console.warn(
@@ -479,7 +482,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           }
 
           // For STOPPED tasks: The stop endpoint directly patches session → IDLE with
-          // ready_for_prompt=false. Skip the session update here to avoid racing with it.
+          // ready_for_prompt=true and triggers queue processing after that patch.
+          // Skip the session update here to avoid racing with it.
           //
           // For other terminal tasks: Normal completion - set ready_for_prompt=true
           // to allow auto-queue-processing of any pending messages.
@@ -489,7 +493,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             console.log(
               `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — stop endpoint handles session state`
             );
-          } else if (params?.suppressTerminalSessionIdle) {
+          } else if (params?.suppressTerminalSessionStateUpdate) {
             console.log(
               `⏭️ [TasksService] Skipping session terminal-state update for task ${shortId(task.task_id)} (${data.status}) due to internal patch params`
             );
