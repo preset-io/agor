@@ -48,7 +48,7 @@
   font-weight: 650;
   letter-spacing: 0.01em;
   backdrop-filter: blur(14px);
-  transform: translateY(calc(var(--hero-scroll) * 14px));
+  transform: translateY(calc(var(--hero-scroll) * 30px));
 }
 
 .heroGrid {
@@ -187,8 +187,7 @@
   position: relative;
   min-height: 560px;
   perspective: 1200px;
-  transform: translateY(calc(var(--hero-scroll) * -24px));
-  transition: transform 120ms linear;
+  transform: translateY(calc(var(--hero-scroll) * -80px));
 }
 
 .mainScreenshotFrame,
@@ -251,7 +250,7 @@
   bottom: 28px;
   width: min(390px, 58%);
   height: 228px;
-  transform: rotate(2deg) translateY(calc(var(--hero-scroll) * 18px));
+  transform: rotate(2deg) translateY(calc(var(--hero-scroll) * 44px));
 }
 
 .floatingSessions {
@@ -259,7 +258,7 @@
   top: 0;
   width: min(295px, 46%);
   height: 292px;
-  transform: rotate(-4deg) translateY(calc(var(--hero-scroll) * -28px));
+  transform: rotate(-4deg) translateY(calc(var(--hero-scroll) * -64px));
 }
 
 .screenshotBadge {
@@ -276,7 +275,7 @@
   color: var(--landing-ink);
   font-size: 0.9rem;
   font-weight: 750;
-  transform: translateY(calc(var(--hero-scroll) * -12px));
+  transform: translateY(calc(var(--hero-scroll) * -38px));
 }
 
 .statusDot {
