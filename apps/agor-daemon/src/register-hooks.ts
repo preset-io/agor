@@ -125,7 +125,10 @@ import {
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
-import { sessionCanStartTask } from './utils/session-task-state.js';
+import {
+  isTerminalQueueProcessingSuppressed,
+  sessionCanStartTask,
+} from './utils/session-task-state.js';
 import {
   createServiceToken,
   getDaemonUrl,
@@ -303,7 +306,7 @@ export function shouldDrainQueueAfterSessionPostTurnPatch(
   return (
     shouldRunSessionPostTurnHooks(session) &&
     session.ready_for_prompt === true &&
-    params?.suppressTerminalQueueProcessing !== true
+    !isTerminalQueueProcessingSuppressed(params)
   );
 }
 

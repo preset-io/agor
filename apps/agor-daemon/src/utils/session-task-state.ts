@@ -1,4 +1,4 @@
-import type { Session, Task } from '@agor/core/types';
+import type { Params, Session, Task } from '@agor/core/types';
 import {
   isTerminalTaskStatus,
   SessionStatus,
@@ -11,6 +11,16 @@ export function isTaskBlockingPrompt(task: Task): boolean {
 }
 
 export { sessionCanStartTask };
+
+export type TerminalQueueProcessingParams = Params & {
+  suppressTerminalQueueProcessing?: boolean;
+};
+
+export function isTerminalQueueProcessingSuppressed(params?: Params): boolean {
+  return (
+    (params as TerminalQueueProcessingParams | undefined)?.suppressTerminalQueueProcessing === true
+  );
+}
 
 /**
  * Detects the limbo state where persisted session status says "failed/not ready",

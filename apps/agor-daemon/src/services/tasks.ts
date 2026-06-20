@@ -35,6 +35,7 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
+import type { TerminalQueueProcessingParams } from '../utils/session-task-state.js';
 import type { SessionsService } from './sessions';
 
 /**
@@ -286,6 +287,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
       return failedTask;
     }
+    const sessionPatchParams: TerminalQueueProcessingParams = {
+      ...params,
+      suppressTerminalQueueProcessing: true,
+    };
     await this.app
       .service('sessions')
       .patch(
@@ -294,10 +299,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           status: SessionStatus.FAILED,
           ready_for_prompt: true,
         },
-        {
-          ...params,
-          suppressTerminalQueueProcessing: true,
-        }
+        sessionPatchParams
       )
       .catch((error: unknown) => {
         console.warn(
