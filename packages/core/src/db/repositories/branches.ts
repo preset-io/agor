@@ -759,9 +759,10 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * into filesystem access for the branch.
    *
    * This intentionally excludes ambient "others" access because there is no
-   * bounded user set to expand. Board owners/groups only apply when the branch
-   * is explicitly aligned to board permissions (`permission_source = 'board'`)
-   * and the board is shared; override branches must not inherit board grants.
+   * bounded user set to expand. Board owners apply whenever the branch is
+   * explicitly aligned to board permissions (`permission_source = 'board'`);
+   * board group grants additionally require a shared board. Override branches
+   * must not inherit board grants.
    */
   async findExplicitFsAccessUserIds(branchId: BranchID): Promise<UUID[]> {
     const branchRow = await select(this.db, {
