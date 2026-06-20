@@ -508,6 +508,33 @@ export interface Session {
   };
 }
 
+/**
+ * Minimal persisted session state needed to decide whether a new task can
+ * start immediately.
+ *
+ * `ready_for_prompt` is intentionally not equivalent to promptability: the UI
+ * also uses it as an attention/acknowledgement flag (for example timed-out
+ * permission requests can set it true). Use this helper instead of checking
+ * either field directly at task-execution boundaries.
+ */
+export type SessionPromptState = Pick<Session, 'status' | 'ready_for_prompt'>;
+
+export type PromptableSessionState =
+  | { status: typeof SessionStatus.IDLE; ready_for_prompt: boolean }
+  | { status: typeof SessionStatus.FAILED; ready_for_prompt: true };
+
+export function sessionCanStartTask(status: Session['status'], readyForPrompt?: boolean): boolean {
+  return (
+    status === SessionStatus.IDLE || (status === SessionStatus.FAILED && readyForPrompt === true)
+  );
+}
+
+export function isSessionPromptable<T extends SessionPromptState>(
+  session: T
+): session is T & PromptableSessionState {
+  return sessionCanStartTask(session.status, session.ready_for_prompt);
+}
+
 export type SessionRelationshipType = 'remote_create';
 
 /**
