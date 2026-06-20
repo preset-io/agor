@@ -1,8 +1,13 @@
-# Agor pixel monster logo concepts
+# Agor imagegen monster logo concepts
 
-Exploratory, non-production logo/mascot directions for Agor / agor.live.
+Exploratory, non-production mascot/logo directions for Agor / agor.live.
 
-Open `index.html` in a browser to review the panel. The marks are generated as inline SVG from small pixel-grid arrays, so the source is reproducible and easy to convert into standalone SVG/CSS pixel art later. `index.js` is the Sandpack/direct-browser entrypoint that mounts the board and draws the generated SVG monsters; `styles.css` contains the panel styling.
+Open `index.html` in a browser, or view the published Agor artifact. This pass uses file-backed raster concept sheets generated via the OpenAI Images API, plus the prompt notes below.
+
+## Generated sheets
+
+- `generated/refined-logo-monsters.png` — friendlier, mascot-forward logo candidates. Strongest first-pass picks: **A, B, D, G**.
+- `generated/edgy-logo-monsters.png` — more distinctive tech/product brand-mark candidates. Strongest first-pass picks: **I, J, L, O**.
 
 ## Brand inputs inspected
 
@@ -11,12 +16,6 @@ Open `index.html` in a browser to review the panel. The marks are generated as i
 - `apps/agor-docs/components/Hero.module.css` uses teal gradients: `#2e9a92`, `#7fe8df`, `#a8f5ed`.
 - Existing logo files reviewed: `apps/agor-ui/public/favicon.png`, `apps/agor-docs/public/logo.png`, `.github/logo.png`, `.github/logo_circle.png`.
 
-## Strongest directions
+## Next step
 
-1. **01 Cyclops Command** — best balance of mascot memorability and favicon clarity.
-2. **04 Branch Beast** — most Agor-specific because the branch-like tail/horn ties to the product's branch-centric model.
-3. **07 Terminal Gremlin** — most developer-native and least childish, with command-prompt eyes.
-
-## Notes
-
-This does **not** replace the production logo. Next step would be selecting 2–3 candidates and redrawing them as simplified production vectors, then testing beside the lowercase docs wordmark and the in-app `Agor` mark at 16/24/32/48px.
+Pick 2–4 favorites, then redraw as simplified production vectors and test at 16, 24, 32, and 48px beside the Agor wordmark.
