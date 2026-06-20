@@ -1,5 +1,5 @@
 import { resolveApiKey } from '@agor/core/config';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   attachRepositoryProgressReporting,
@@ -114,6 +114,8 @@ describe('SDK executor progress reporting', () => {
     return {
       markActivity: vi.fn(),
       markAgentProgress: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
     };
   }
 
@@ -128,6 +130,9 @@ describe('SDK executor progress reporting', () => {
       },
       tasksStreamingService: {
         create: vi.fn(async (event) => event),
+      },
+      tasksService: {
+        patch: vi.fn(async (_id, patch) => patch),
       },
     };
 
@@ -155,6 +160,9 @@ describe('SDK executor progress reporting', () => {
       tasksStreamingService: {
         create: vi.fn(async (event) => event),
       },
+      tasksService: {
+        patch: vi.fn(async (_id, patch) => patch),
+      },
     };
 
     attachRepositoryProgressReporting(repos as never, progress);
@@ -180,6 +188,9 @@ describe('SDK executor progress reporting', () => {
       tasksStreamingService: {
         create: vi.fn(async (event) => event),
       },
+      tasksService: {
+        patch: vi.fn(async (_id, patch) => patch),
+      },
     };
 
     attachRepositoryProgressReporting(repos as never, progress);
@@ -202,5 +213,31 @@ describe('SDK executor progress reporting', () => {
 
     expect(progress.markAgentProgress).toHaveBeenCalledWith('task-stream:tool:start');
     expect(progress.markAgentProgress).toHaveBeenCalledWith('stream:start');
+  });
+
+  it('pauses first-progress timeout while permission owns the wait', async () => {
+    const progress = makeProgressReporter();
+    const repos = {
+      messages: {
+        create: vi.fn(async (message) => message),
+      },
+      messagesService: {
+        create: vi.fn(async (message) => message),
+      },
+      tasksStreamingService: {
+        create: vi.fn(async (event) => event),
+      },
+      tasksService: {
+        patch: vi.fn(async (_id, patch) => patch),
+      },
+    };
+
+    attachRepositoryProgressReporting(repos as never, progress);
+
+    await repos.tasksService.patch('task-1', { status: TaskStatus.AWAITING_PERMISSION });
+    await repos.tasksService.patch('task-1', { status: TaskStatus.RUNNING });
+
+    expect(progress.pause).toHaveBeenCalledWith('task:awaiting_permission');
+    expect(progress.resume).toHaveBeenCalledWith('task:running');
   });
 });

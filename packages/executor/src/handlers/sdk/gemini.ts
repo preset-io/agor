@@ -6,6 +6,7 @@
 
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
+import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { GeminiTool } from '../../sdk-handlers/gemini/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
@@ -22,6 +23,7 @@ export async function executeGeminiTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  resolvedConfig?: ResolvedConfigSlice;
 }): Promise<void> {
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');

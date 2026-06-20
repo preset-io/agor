@@ -48,6 +48,14 @@ describe('buildResolvedConfigSlice', () => {
     });
   });
 
+  it('surfaces agent_first_progress_timeout_ms from execution.*', async () => {
+    await writeConfigYaml('execution:\n  agent_first_progress_timeout_ms: 0\n');
+    const slice = buildResolvedConfigSlice();
+    expect(slice).toMatchObject({
+      execution: { agent_first_progress_timeout_ms: 0 },
+    });
+  });
+
   it('surfaces executor heartbeat enabled and interval fields', async () => {
     await writeConfigYaml(
       [
@@ -95,6 +103,7 @@ describe('buildResolvedConfigSlice', () => {
       [
         'execution:',
         '  permission_timeout_ms: 60000',
+        '  agent_first_progress_timeout_ms: 300000',
         'opencode:',
         '  serverUrl: http://opencode.internal:4096',
         'daemon:',
@@ -114,6 +123,7 @@ describe('buildResolvedConfigSlice', () => {
       [
         'execution:',
         '  permission_timeout_ms: 60000',
+        '  agent_first_progress_timeout_ms: 300000',
         '  unix_user_mode: strict',
         'daemon:',
         '  host_ip_address: 10.0.0.5',
@@ -131,6 +141,7 @@ describe('buildResolvedConfigSlice', () => {
     const slice = buildResolvedConfigSlice() as Record<string, Record<string, unknown>>;
     // Allowed fields surface.
     expect(slice.execution?.permission_timeout_ms).toBe(60_000);
+    expect(slice.execution?.agent_first_progress_timeout_ms).toBe(300_000);
     expect(slice.execution?.executor_heartbeat).toEqual({ enabled: true, interval_ms: 10_000 });
     expect(slice.daemon?.host_ip_address).toBe('10.0.0.5');
     // Non-allowed top-level sections are absent — slice is a strict subset.
@@ -148,6 +159,7 @@ describe('buildResolvedConfigSlice', () => {
       [
         'execution:',
         '  permission_timeout_ms: 60000',
+        '  agent_first_progress_timeout_ms: 300000',
         'opencode:',
         '  serverUrl: http://opencode.internal:4096',
         'daemon:',

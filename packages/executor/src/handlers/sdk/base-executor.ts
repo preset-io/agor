@@ -18,10 +18,11 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, TaskStatus } from '@agor/core/types';
 import { startAgentProgressWatchdog } from '../../agent-progress-watchdog.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
+import type { ResolvedConfigSlice } from '../../payload-types.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -229,6 +230,8 @@ export function createExecutionContext(
 export interface ProgressReporter {
   markActivity(label: string): void;
   markAgentProgress(label: string): void;
+  pause(label: string): void;
+  resume(label: string): void;
 }
 
 export function withProgressCallbacks(
@@ -310,6 +313,19 @@ export function attachRepositoryProgressReporting(
     progress.markAgentProgress(`task-stream:${eventName}`);
     return originalTasksStreamingCreate(...args);
   }) as typeof repos.tasksStreamingService.create;
+
+  const originalTasksServicePatch = repos.tasksService.patch.bind(repos.tasksService);
+  repos.tasksService.patch = (async (...args: Parameters<typeof repos.tasksService.patch>) => {
+    const status = (args[1] as { status?: string } | undefined)?.status;
+    if (status === TaskStatus.AWAITING_PERMISSION) {
+      progress.pause('task:awaiting_permission');
+    } else if (status === TaskStatus.RUNNING) {
+      progress.resume('task:running');
+    } else if (status) {
+      progress.pause(`task:${status}`);
+    }
+    return originalTasksServicePatch(...args);
+  }) as typeof repos.tasksService.patch;
 }
 
 type CapturedGitState = {
@@ -477,6 +493,7 @@ export async function executeToolTask(params: {
   apiKeyEnvVar: ApiKeyName;
   toolName: AgenticToolName;
   messageSource?: MessageSource;
+  resolvedConfig?: ResolvedConfigSlice;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,
@@ -527,14 +544,16 @@ export async function executeToolTask(params: {
   // Create execution context
   const ctx = createExecutionContext(client, toolName, sessionId);
   const watchdog = startAgentProgressWatchdog({
-    client,
     taskId,
     toolName,
     abortController: params.abortController,
+    firstAgentProgressTimeoutMs: params.resolvedConfig?.execution?.agent_first_progress_timeout_ms,
   });
   const progress = {
     markActivity: watchdog.markActivity.bind(watchdog),
     markAgentProgress: watchdog.markAgentProgress.bind(watchdog),
+    pause: watchdog.pause.bind(watchdog),
+    resume: watchdog.resume.bind(watchdog),
   };
   ctx.callbacks = withProgressCallbacks(ctx.callbacks, progress);
   attachRepositoryProgressReporting(ctx.repos, progress);
@@ -584,6 +603,10 @@ export async function executeToolTask(params: {
       params.messageSource
     );
     watchdog.stop();
+
+    if (watchdog.hasStalled()) {
+      throw new Error(watchdog.getStallReason());
+    }
 
     console.log(
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`

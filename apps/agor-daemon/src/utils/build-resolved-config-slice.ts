@@ -55,6 +55,10 @@ export function buildResolvedConfigSlice(): ResolvedConfigSlice {
     if (permissionTimeoutMs !== undefined) {
       executionSlice.permission_timeout_ms = permissionTimeoutMs;
     }
+    const agentFirstProgressTimeoutMs = config.execution?.agent_first_progress_timeout_ms;
+    if (agentFirstProgressTimeoutMs !== undefined) {
+      executionSlice.agent_first_progress_timeout_ms = agentFirstProgressTimeoutMs;
+    }
     const heartbeat = resolveExecutorHeartbeatConfig(config.execution);
     executionSlice.executor_heartbeat = {
       enabled: heartbeat.enabled,

@@ -1,29 +1,25 @@
 import type { AgenticToolName, TaskID, TaskMetadata } from '@agor/core/types';
-import type { AgorClient } from './services/feathers-client.js';
 
-const DEFAULT_FIRST_PROGRESS_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_IDLE_PROGRESS_TIMEOUT_MS = 20 * 60 * 1000;
+const DEFAULT_FIRST_AGENT_PROGRESS_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_CHECK_INTERVAL_MS = 30 * 1000;
 
 type TimerHandle = ReturnType<typeof setInterval>;
 
 export interface AgentProgressWatchdogOptions {
-  client: Pick<AgorClient, 'service'>;
   taskId: TaskID;
   toolName: AgenticToolName;
   abortController: AbortController;
-  firstProgressTimeoutMs?: number;
-  idleProgressTimeoutMs?: number;
+  firstAgentProgressTimeoutMs?: number;
   checkIntervalMs?: number;
   nowMs?: () => number;
 }
 
-function envNumber(name: string, fallback: number): number {
+function envNumber(name: string, fallback: number): number | undefined {
   const value = process.env[name];
-  if (!value) return fallback;
+  if (value === undefined || value === '') return undefined;
 
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function toIso(ms: number): string {
@@ -31,12 +27,12 @@ function toIso(ms: number): string {
 }
 
 export class AgentProgressWatchdog {
-  private readonly firstProgressTimeoutMs: number;
-  private readonly idleProgressTimeoutMs: number;
+  private readonly firstAgentProgressTimeoutMs: number;
   private readonly checkIntervalMs: number;
   private readonly nowMs: () => number;
   private timer?: TimerHandle;
   private startedAtMs?: number;
+  private pausedAtMs?: number;
   private lastActivityAtMs?: number;
   private lastActivityLabel?: string;
   private lastAgentProgressAtMs?: number;
@@ -48,20 +44,19 @@ export class AgentProgressWatchdog {
   private stalledTimeoutMs?: number;
 
   constructor(private readonly options: AgentProgressWatchdogOptions) {
-    this.firstProgressTimeoutMs =
-      options.firstProgressTimeoutMs ??
-      envNumber('AGOR_AGENT_PROGRESS_FIRST_TIMEOUT_MS', DEFAULT_FIRST_PROGRESS_TIMEOUT_MS);
-    this.idleProgressTimeoutMs =
-      options.idleProgressTimeoutMs ??
-      envNumber('AGOR_AGENT_PROGRESS_IDLE_TIMEOUT_MS', DEFAULT_IDLE_PROGRESS_TIMEOUT_MS);
+    this.firstAgentProgressTimeoutMs =
+      options.firstAgentProgressTimeoutMs ??
+      envNumber('AGOR_AGENT_FIRST_PROGRESS_TIMEOUT_MS', DEFAULT_FIRST_AGENT_PROGRESS_TIMEOUT_MS) ??
+      DEFAULT_FIRST_AGENT_PROGRESS_TIMEOUT_MS;
     this.checkIntervalMs =
       options.checkIntervalMs ??
-      envNumber('AGOR_AGENT_PROGRESS_WATCHDOG_INTERVAL_MS', DEFAULT_CHECK_INTERVAL_MS);
+      envNumber('AGOR_AGENT_PROGRESS_WATCHDOG_INTERVAL_MS', DEFAULT_CHECK_INTERVAL_MS) ??
+      DEFAULT_CHECK_INTERVAL_MS;
     this.nowMs = options.nowMs ?? Date.now;
   }
 
   start(): void {
-    if (this.timer) return;
+    if (this.timer || this.firstAgentProgressTimeoutMs === 0) return;
 
     this.startedAtMs = this.nowMs();
     this.timer = setInterval(() => {
@@ -92,6 +87,34 @@ export class AgentProgressWatchdog {
     this.lastActivityLabel = label;
     this.lastAgentProgressAtMs = now;
     this.lastAgentProgressLabel = label;
+    this.stop();
+  }
+
+  pause(label: string): void {
+    if (this.stalled || this.lastAgentProgressAtMs !== undefined) return;
+
+    const now = this.nowMs();
+    this.pausedAtMs = now;
+    this.lastActivityAtMs = now;
+    this.lastActivityLabel = label;
+    this.stop();
+  }
+
+  resume(label: string): void {
+    if (
+      this.stalled ||
+      this.lastAgentProgressAtMs !== undefined ||
+      this.firstAgentProgressTimeoutMs === 0
+    ) {
+      return;
+    }
+
+    const now = this.nowMs();
+    this.startedAtMs = now;
+    this.lastActivityAtMs = now;
+    this.lastActivityLabel = label;
+    this.pausedAtMs = undefined;
+    this.start();
   }
 
   hasStalled(): boolean {
@@ -122,54 +145,46 @@ export class AgentProgressWatchdog {
         last_activity_at: this.lastActivityAtMs ? toIso(this.lastActivityAtMs) : undefined,
         last_activity_label: this.lastActivityLabel,
         timeout_ms: this.stalledTimeoutMs,
-        elapsed_ms: nowMs - (this.lastAgentProgressAtMs ?? this.startedAtMs),
+        elapsed_ms: nowMs - this.startedAtMs,
       },
     };
   }
 
   private async check(): Promise<void> {
-    if (this.checkInFlight || this.stalled || !this.startedAtMs) return;
+    if (
+      this.checkInFlight ||
+      this.stalled ||
+      !this.startedAtMs ||
+      this.pausedAtMs !== undefined ||
+      this.lastAgentProgressAtMs !== undefined
+    ) {
+      return;
+    }
 
     const now = this.nowMs();
-    const hasAgentProgress = this.lastAgentProgressAtMs !== undefined;
-    const referenceAtMs = this.lastAgentProgressAtMs ?? this.startedAtMs;
-    const timeoutMs = hasAgentProgress ? this.idleProgressTimeoutMs : this.firstProgressTimeoutMs;
-    const elapsedMs = now - referenceAtMs;
+    const timeoutMs = this.firstAgentProgressTimeoutMs;
+    const elapsedMs = now - this.startedAtMs;
 
     if (elapsedMs < timeoutMs) return;
 
     this.checkInFlight = true;
     try {
-      await this.markStalled(now, timeoutMs, hasAgentProgress);
+      await this.markStalled(now, timeoutMs);
     } finally {
       this.checkInFlight = false;
     }
   }
 
-  private async markStalled(now: number, timeoutMs: number, hadProgress: boolean): Promise<void> {
+  private async markStalled(now: number, timeoutMs: number): Promise<void> {
     if (this.stalled || !this.startedAtMs) return;
 
     this.stalled = true;
     this.stop();
 
-    const reason = hadProgress
-      ? `${this.options.toolName} task stalled: no agent progress for ${timeoutMs}ms after ${this.lastAgentProgressLabel ?? 'last progress'}.`
-      : `${this.options.toolName} task stalled: no agent progress within ${timeoutMs}ms after executor start.`;
+    const reason = `${this.options.toolName} task stalled: no agent progress within ${timeoutMs}ms after executor start.`;
     this.stallReason = reason;
     this.stalledAtMs = now;
     this.stalledTimeoutMs = timeoutMs;
-    const metadata = this.getDiagnosticMetadata(now);
-
-    try {
-      await this.options.client.service('tasks').patch(this.options.taskId, {
-        status: 'failed',
-        completed_at: toIso(now),
-        error_message: reason,
-        metadata,
-      });
-    } catch (error) {
-      console.error(`[${this.options.toolName}] Failed to mark task stalled:`, error);
-    }
 
     if (!this.options.abortController.signal.aborted) {
       this.options.abortController.abort(reason);

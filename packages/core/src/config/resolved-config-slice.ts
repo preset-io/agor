@@ -38,6 +38,7 @@ export const ResolvedConfigSliceSchema = z.object({
   execution: z
     .object({
       permission_timeout_ms: z.number().int().nonnegative().optional(),
+      agent_first_progress_timeout_ms: z.number().int().nonnegative().optional(),
       executor_heartbeat: z
         .object({
           enabled: z.boolean(),

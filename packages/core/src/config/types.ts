@@ -444,6 +444,16 @@ export interface AgorExecutionSettings {
   permission_timeout_ms?: number;
 
   /**
+   * First meaningful SDK event timeout in ms for executor-backed agent tasks
+   * (default: 300000 = 5 minutes). Set to 0 to disable.
+   *
+   * This only covers SDK startup wedges before the first observable agent
+   * event. It is not a max task duration and does not time out silent
+   * long-running tool calls after the agent has started.
+   */
+  agent_first_progress_timeout_ms?: number;
+
+  /**
    * Stateless filesystem mode for headless/k8s deployments without persistent volumes.
    *
    * When enabled, the agent SDK's session state (JSONL transcript file) is serialized
