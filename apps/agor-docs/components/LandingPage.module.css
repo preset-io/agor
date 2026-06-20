@@ -3,7 +3,7 @@
   --landing-muted: #aeb9c8;
   --landing-line: rgba(255, 255, 255, 0.12);
   --landing-teal: #7fe8df;
-  --landing-blue: #6bb7ff;
+  --landing-blue: #7fe8df;
   --landing-mint: #d9fb89;
   --landing-pink: #ffc3df;
   --landing-sky: #9bdcff;
@@ -129,9 +129,9 @@
 }
 
 .landingShell .primaryButton {
-  color: white;
-  background: #168bff;
-  box-shadow: 0 16px 34px rgba(35, 136, 242, 0.24);
+  color: #031311;
+  background: linear-gradient(135deg, #2e9a92 0%, #7fe8df 100%);
+  box-shadow: 0 16px 34px rgba(46, 154, 146, 0.3);
 }
 
 .primaryButton:hover,
@@ -141,8 +141,8 @@
 }
 
 .landingShell .primaryButton:hover {
-  color: white;
-  box-shadow: 0 20px 44px rgba(35, 136, 242, 0.32);
+  color: #031311;
+  box-shadow: 0 20px 44px rgba(127, 232, 223, 0.34);
 }
 
 .landingShell .secondaryButton {
