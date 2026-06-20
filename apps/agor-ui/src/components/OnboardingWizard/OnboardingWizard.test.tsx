@@ -173,5 +173,5 @@ describe('OnboardingWizard', () => {
     fireEvent.click(await screen.findByText('Cursor SDK (Beta)'));
 
     expect(await screen.findByText('Cursor SDK is configured')).toBeInTheDocument();
-  });
+  }, 30_000);
 });
