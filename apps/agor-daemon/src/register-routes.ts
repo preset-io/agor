@@ -170,6 +170,28 @@ interface RouteParams extends Params {
   user?: User;
 }
 
+export async function markStoppedSessionPromptableAndDrainQueue(
+  sessionsService: Pick<SessionsServiceImpl, 'patch' | 'triggerQueueProcessing'>,
+  sessionId: SessionID,
+  params?: Params
+): Promise<void> {
+  await sessionsService.patch(
+    sessionId,
+    {
+      status: SessionStatus.IDLE,
+      ready_for_prompt: true,
+    },
+    params
+  );
+
+  // Do not rely solely on the sessions.after.patch hook here. Stopping is an
+  // explicit "skip current and continue queued work" action, and the STOPPED
+  // task patch observes the old RUNNING session state before this patch lands.
+  // Trigger the drainer after the session is actually promptable so queued
+  // prompts resume even if hook timing/authorization changes regress later.
+  await sessionsService.triggerQueueProcessing(sessionId, params);
+}
+
 function isServiceAccountRoute(params: RouteParams): boolean {
   return (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
 }
@@ -2095,17 +2117,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.warn(
             `⚠️  [Stop] No active tasks for session ${shortId(id)}, resetting to IDLE${stopReason ? ` (reason: ${stopReason})` : ''}`
           );
-          // ready_for_prompt: true so the post-patch hook drains any QUEUED tasks.
           // Stop is "skip current", not "wipe everything" — queued prompts represent
-          // user intent and should still execute.
-          await app.service('sessions').patch(
-            id,
-            {
-              status: SessionStatus.IDLE,
-              ready_for_prompt: true,
-            },
-            params
-          );
+          // user intent and should still execute. Mark promptable, then explicitly
+          // trigger the drainer instead of depending only on the post-patch hook.
+          await markStoppedSessionPromptableAndDrainQueue(sessionsService, id as SessionID, params);
           return {
             success: true,
             status: SessionStatus.IDLE,
@@ -2136,19 +2151,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
 
         try {
-          // ready_for_prompt: true so the post-patch hook drains any QUEUED tasks.
           // Stop is "skip current", not "wipe everything" — queued prompts represent
-          // user intent and should still execute.
-          await app.service('sessions').patch(
-            id,
-            {
-              status: SessionStatus.IDLE,
-              ready_for_prompt: true,
-            },
-            params
-          );
+          // user intent and should still execute. Mark promptable, then explicitly
+          // trigger the drainer instead of depending only on the post-patch hook.
+          await markStoppedSessionPromptableAndDrainQueue(sessionsService, id as SessionID, params);
         } catch (error) {
-          console.error(`❌ [Stop] Failed to patch session to IDLE:`, error);
+          console.error(`❌ [Stop] Failed to mark session promptable or drain queue:`, error);
         }
 
         return { success: true, status: SessionStatus.IDLE };
