@@ -61,7 +61,13 @@ function makeUser(overrides: Partial<User> = {}): User {
   } as User;
 }
 
-describe('UserSettingsModal', () => {
+// This renders the full settings modal plus Ant Form/Menu/Modal plumbing so we
+// can prove dirty defaults survive real tab switches. That is intentionally
+// heavier than a pure unit test and can exceed Vitest's 15s package default on
+// the GitHub runner when the full UI suite is running in parallel.
+const ASYNC = { timeout: 10_000 };
+
+describe('UserSettingsModal', { timeout: 60_000 }, () => {
   it('saves dirty agentic defaults across tabs with the active tab', async () => {
     const user = makeUser({
       default_agentic_config: {
@@ -69,7 +75,7 @@ describe('UserSettingsModal', () => {
         codex: { permissionMode: 'ask', mcpServerIds: [] },
       },
     });
-    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onUpdate = vi.fn();
     const onClose = vi.fn();
 
     renderWithApp(
@@ -87,7 +93,7 @@ describe('UserSettingsModal', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: /claude code/i }));
     await waitFor(() => {
       expect(screen.getByLabelText('claude-code default')).toBeChecked();
-    });
+    }, ASYNC);
     fireEvent.click(screen.getByLabelText('claude-code acceptEdits'));
 
     fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
@@ -103,7 +109,7 @@ describe('UserSettingsModal', () => {
           codex: { permissionMode: 'allow-all', mcpServerIds: [] },
         },
       });
-    });
+    }, ASYNC);
     expect(onClose).toHaveBeenCalled();
   });
 });
