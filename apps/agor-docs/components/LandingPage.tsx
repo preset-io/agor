@@ -111,16 +111,27 @@ function ProductMockup() {
         />
       </div>
 
-      <div className={`${styles.floatingScreenshot} ${styles.floatingConversation}`}>
-        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-        <img src="/screenshots/conversation_full_page.png" alt="Agor conversation view" />
-      </div>
-
-      <div className={`${styles.floatingScreenshot} ${styles.floatingSessions}`}>
+      <div className={`${styles.floatingScreenshot} ${styles.floatingParallel}`}>
         {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
         <img
-          src="/screenshots/branch-card-with-scheduled-sessions.png"
-          alt="Agor branch card with scheduled assistant runs"
+          src="/screenshots/parallel-board-5-sessions.png"
+          alt="Agor branch card with parallel assistant sessions"
+        />
+      </div>
+
+      <div className={`${styles.floatingScreenshot} ${styles.floatingHierarchy}`}>
+        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+        <img
+          src="/screenshots/subsession-board-hierarchy.png"
+          alt="Agor branch card showing assistant session hierarchy"
+        />
+      </div>
+
+      <div className={`${styles.floatingScreenshot} ${styles.floatingReview}`}>
+        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+        <img
+          src="/screenshots/subsession-spawn-codex-review.png"
+          alt="Agor conversation delegating a Codex review subsession"
         />
       </div>
     </div>

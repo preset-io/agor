@@ -223,25 +223,34 @@
 
 .floatingScreenshot {
   position: absolute;
-  z-index: 1;
+  z-index: 3;
   overflow: hidden;
   border-radius: 8px;
+  opacity: 0.96;
 }
 
-.floatingConversation {
-  right: -4px;
-  top: 398px;
-  width: min(340px, 50%);
+.floatingParallel {
+  left: 26px;
+  top: 404px;
+  width: min(230px, 34%);
+  height: 224px;
+  transform: rotateY(6deg) rotateZ(-5.2deg) translateY(calc(var(--hero-scroll) * -118px));
+}
+
+.floatingHierarchy {
+  left: 206px;
+  top: 394px;
+  width: min(310px, 46%);
   height: 190px;
-  transform: rotateY(-5deg) rotateZ(4deg) translateY(calc(var(--hero-scroll) * 34px));
+  transform: rotateY(-4deg) rotateZ(2.4deg) translateY(calc(var(--hero-scroll) * -96px));
 }
 
-.floatingSessions {
-  left: 28px;
-  top: 382px;
-  width: min(235px, 36%);
-  height: 240px;
-  transform: rotateY(6deg) rotateZ(-5deg) translateY(calc(var(--hero-scroll) * -28px));
+.floatingReview {
+  right: -8px;
+  top: 386px;
+  width: min(330px, 49%);
+  height: 210px;
+  transform: rotateY(-7deg) rotateZ(4.6deg) translateY(calc(var(--hero-scroll) * -132px));
 }
 
 .assistantStrip {
@@ -569,12 +578,16 @@
     transition: none;
   }
 
-  .floatingConversation {
-    transform: rotateZ(4deg);
+  .floatingParallel {
+    transform: rotateZ(-5.2deg);
   }
 
-  .floatingSessions {
-    transform: rotateZ(-5deg);
+  .floatingHierarchy {
+    transform: rotateZ(2.4deg);
+  }
+
+  .floatingReview {
+    transform: rotateZ(4.6deg);
   }
 }
 
@@ -598,12 +611,16 @@
     width: 100%;
   }
 
-  .floatingConversation {
-    top: 376px;
+  .floatingParallel {
+    top: 370px;
   }
 
-  .floatingSessions {
+  .floatingHierarchy {
     top: 360px;
+  }
+
+  .floatingReview {
+    top: 354px;
   }
 
   .workspaceCopy {
@@ -671,18 +688,25 @@
     object-position: center;
   }
 
-  .floatingSessions {
-    top: 290px;
+  .floatingParallel {
+    top: 294px;
     left: 4px;
     width: 40%;
-    height: 176px;
+    height: 170px;
   }
 
-  .floatingConversation {
-    top: 306px;
+  .floatingHierarchy {
+    top: 286px;
+    left: 31%;
+    width: 48%;
+    height: 130px;
+  }
+
+  .floatingReview {
+    top: 344px;
     right: 0;
     width: 58%;
-    height: 150px;
+    height: 146px;
   }
 
   .problemGrid,
