@@ -50,7 +50,9 @@ import {
 import type {
   AuthenticatedParams,
   Board,
+  BoardID,
   Branch,
+  BranchID,
   HookContext,
   MCPServer,
   Paginated,
@@ -378,6 +380,63 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const invalidateRealtimeBranchFromRoute = async (context: HookContext): Promise<HookContext> => {
     await invalidateRealtimeBranchAccess(context.params.route?.id);
+    return context;
+  };
+
+  const syncBranchUnixAccess = (branchId: BranchID, logPrefix: string): void => {
+    if (!jwtSecret) return;
+    const serviceToken = createServiceToken(jwtSecret, undefined, {
+      branch_id: branchId,
+      command: 'unix.sync-branch',
+    });
+    spawnExecutorFireAndForget(
+      {
+        command: 'unix.sync-branch',
+        sessionToken: serviceToken,
+        daemonUrl: getDaemonUrl(),
+        params: {
+          branchId,
+          daemonUser: config.daemon?.unix_user,
+        },
+      },
+      { logPrefix }
+    );
+  };
+
+  const syncUnixAccessForBoardAlignedBranches = async (
+    boardId: unknown,
+    logPrefix: string
+  ): Promise<void> => {
+    if (!jwtSecret || typeof boardId !== 'string' || boardId.length === 0) return;
+    const alignedBranches = await branchRepository.findBoardAlignedBranches(boardId as BoardID);
+    if (alignedBranches.length === 0) return;
+    console.log(
+      `[Unix Integration] Syncing ${alignedBranches.length} board-aligned branch(es) for board ${shortId(boardId)}`
+    );
+    for (const branch of alignedBranches) {
+      syncBranchUnixAccess(branch.branch_id as BranchID, logPrefix);
+      await invalidateRealtimeBranchAccess(branch.branch_id);
+    }
+  };
+
+  const syncUnixAccessForBoardFromRoute = async (
+    context: HookContext,
+    logPrefix: string
+  ): Promise<HookContext> => {
+    await syncUnixAccessForBoardAlignedBranches(context.params.route?.id, logPrefix);
+    return context;
+  };
+
+  const syncUnixAccessForAllBranches = async (
+    context: HookContext,
+    logPrefix: string
+  ): Promise<HookContext> => {
+    if (!jwtSecret) return context;
+    const branches = await branchRepository.findAll({ includeArchived: false });
+    for (const branch of branches) {
+      syncBranchUnixAccess(branch.branch_id as BranchID, logPrefix);
+      await invalidateRealtimeBranchAccess(branch.branch_id);
+    }
     return context;
   };
 
@@ -1709,8 +1768,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('group-memberships')?.hooks(groupMembershipsHooks);
   safeService('group-memberships')?.hooks({
     after: {
-      create: [clearRealtimeBranchVisibility],
-      remove: [clearRealtimeBranchVisibility],
+      create: [
+        clearRealtimeBranchVisibility,
+        (context: HookContext) =>
+          syncUnixAccessForAllBranches(context, '[Executor/group-memberships.create]'),
+      ],
+      remove: [
+        clearRealtimeBranchVisibility,
+        (context: HookContext) =>
+          syncUnixAccessForAllBranches(context, '[Executor/group-memberships.remove]'),
+      ],
     },
   });
   safeService('branches/:id/owners')?.hooks({
@@ -1721,22 +1788,69 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   });
   safeService('branches/:id/group-grants')?.hooks({
     after: {
-      create: [invalidateRealtimeBranchFromRoute],
-      patch: [invalidateRealtimeBranchFromRoute],
-      remove: [invalidateRealtimeBranchFromRoute],
+      create: [
+        invalidateRealtimeBranchFromRoute,
+        (context: HookContext) => {
+          const branchId = context.params.route?.id;
+          if (typeof branchId === 'string') {
+            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.create]');
+          }
+          return context;
+        },
+      ],
+      patch: [
+        invalidateRealtimeBranchFromRoute,
+        (context: HookContext) => {
+          const branchId = context.params.route?.id;
+          if (typeof branchId === 'string') {
+            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.patch]');
+          }
+          return context;
+        },
+      ],
+      remove: [
+        invalidateRealtimeBranchFromRoute,
+        (context: HookContext) => {
+          const branchId = context.params.route?.id;
+          if (typeof branchId === 'string') {
+            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.remove]');
+          }
+          return context;
+        },
+      ],
     },
   });
   safeService('boards/:id/owners')?.hooks({
     after: {
-      create: [clearRealtimeBranchVisibility],
-      remove: [clearRealtimeBranchVisibility],
+      create: [
+        clearRealtimeBranchVisibility,
+        (context: HookContext) =>
+          syncUnixAccessForBoardFromRoute(context, '[Executor/board-owners.create]'),
+      ],
+      remove: [
+        clearRealtimeBranchVisibility,
+        (context: HookContext) =>
+          syncUnixAccessForBoardFromRoute(context, '[Executor/board-owners.remove]'),
+      ],
     },
   });
   safeService('boards/:id/group-grants')?.hooks({
     after: {
-      create: [clearRealtimeBranchVisibility],
-      patch: [clearRealtimeBranchVisibility],
-      remove: [clearRealtimeBranchVisibility],
+      create: [
+        clearRealtimeBranchVisibility,
+        (context: HookContext) =>
+          syncUnixAccessForBoardFromRoute(context, '[Executor/board-group-grants.create]'),
+      ],
+      patch: [
+        clearRealtimeBranchVisibility,
+        (context: HookContext) =>
+          syncUnixAccessForBoardFromRoute(context, '[Executor/board-group-grants.patch]'),
+      ],
+      remove: [
+        clearRealtimeBranchVisibility,
+        (context: HookContext) =>
+          syncUnixAccessForBoardFromRoute(context, '[Executor/board-group-grants.remove]'),
+      ],
     },
   });
 

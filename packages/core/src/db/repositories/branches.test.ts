@@ -920,3 +920,112 @@ describe('BranchRepository resolveUserAccess', () => {
     }
   );
 });
+
+describe('BranchRepository findExplicitFsAccessUserIds', () => {
+  dbTest(
+    'expands board owners and board groups only for board-aligned branches',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const boardRepo = new BoardRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const groupRepo = new GroupRepository(db);
+      const usersRepo = new UsersRepository(db);
+      const repo = await repoRepo.create(createRepoData({ slug: 'board-fs-users-repo' }));
+      const creatorId = generateId() as UUID;
+      const boardOwnerId = generateId() as UUID;
+      const groupMemberId = generateId() as UUID;
+
+      await usersRepo.create({ user_id: creatorId, email: 'creator-board-fs@example.com' });
+      await usersRepo.create({ user_id: boardOwnerId, email: 'owner-board-fs@example.com' });
+      await usersRepo.create({ user_id: groupMemberId, email: 'member-board-fs@example.com' });
+
+      const board = await boardRepo.create({
+        board_id: generateId(),
+        name: 'Board FS Users',
+        created_by: creatorId,
+        access_mode: 'shared',
+      });
+      await boardRepo.addOwner(board.board_id, boardOwnerId);
+      const group = await groupRepo.create({ name: 'Board FS Group', created_by: creatorId });
+      await groupRepo.addMember(group.group_id, groupMemberId, creatorId);
+      await groupRepo.upsertBoardGrant({
+        board_id: board.board_id,
+        group_id: group.group_id,
+        can: 'session',
+        fs_access: 'write',
+        created_by: creatorId,
+      });
+
+      const aligned = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          name: 'board-fs-aligned',
+          branch_unique_id: 9301,
+          created_by: creatorId,
+          permission_source: 'board',
+        })
+      );
+      const notAligned = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          name: 'board-fs-override',
+          branch_unique_id: 9302,
+          created_by: creatorId,
+          permission_source: 'override',
+        })
+      );
+
+      expect(await branchRepo.findExplicitFsAccessUserIds(aligned.branch_id)).toEqual(
+        expect.arrayContaining([boardOwnerId, groupMemberId])
+      );
+      expect(await branchRepo.findExplicitFsAccessUserIds(notAligned.branch_id)).not.toEqual(
+        expect.arrayContaining([boardOwnerId, groupMemberId])
+      );
+    }
+  );
+
+  dbTest('excludes board group grants with filesystem access none', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const boardRepo = new BoardRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const groupRepo = new GroupRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'board-fs-none-repo' }));
+    const creatorId = generateId() as UUID;
+    const groupMemberId = generateId() as UUID;
+
+    await usersRepo.create({ user_id: creatorId, email: 'creator-fs-none@example.com' });
+    await usersRepo.create({ user_id: groupMemberId, email: 'member-fs-none@example.com' });
+    const board = await boardRepo.create({
+      board_id: generateId(),
+      name: 'Board FS None',
+      created_by: creatorId,
+      access_mode: 'shared',
+    });
+    const group = await groupRepo.create({ name: 'Board No FS Group', created_by: creatorId });
+    await groupRepo.addMember(group.group_id, groupMemberId, creatorId);
+    await groupRepo.upsertBoardGrant({
+      board_id: board.board_id,
+      group_id: group.group_id,
+      can: 'prompt',
+      fs_access: 'none',
+      created_by: creatorId,
+    });
+    const branch = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        board_id: board.board_id,
+        name: 'board-fs-none',
+        branch_unique_id: 9303,
+        created_by: creatorId,
+        permission_source: 'board',
+      })
+    );
+
+    expect(await branchRepo.findExplicitFsAccessUserIds(branch.branch_id)).not.toContain(
+      groupMemberId
+    );
+  });
+});

@@ -63,6 +63,7 @@ const FS_ACCESS_RANK: Record<BranchFsAccessLevel, number> = {
 };
 const VIEW_OR_BETTER_BRANCH_PERMISSIONS = ['view', 'session', 'prompt', 'all'] as const;
 const BRANCH_PERMISSION_SOURCES = ['board', 'override'] as const;
+const FS_ACCESS_BRANCH_PERMISSIONS = ['read', 'write'] as const;
 
 /**
  * Session activity summary for a branch
@@ -751,6 +752,127 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       userIds.add(row.user_id as UUID);
     }
     return Array.from(userIds);
+  }
+
+  /**
+   * Find users whose explicit branch or aligned-board grants should materialize
+   * into filesystem access for the branch.
+   *
+   * This intentionally excludes ambient "others" access because there is no
+   * bounded user set to expand. Board owners/groups only apply when the branch
+   * is explicitly aligned to board permissions (`permission_source = 'board'`)
+   * and the board is shared; override branches must not inherit board grants.
+   */
+  async findExplicitFsAccessUserIds(branchId: BranchID): Promise<UUID[]> {
+    const branchRow = await select(this.db, {
+      board_id: branches.board_id,
+      permission_source: branches.permission_source,
+    })
+      .from(branches)
+      .where(eq(branches.branch_id, branchId))
+      .one();
+
+    const ownerRows = await select(this.db, { user_id: branchOwners.user_id })
+      .from(branchOwners)
+      .where(eq(branchOwners.branch_id, branchId))
+      .all();
+
+    const groupRows = await select(this.db, { user_id: groupMemberships.user_id })
+      .from(branchGroupGrants)
+      .innerJoin(groupMemberships, eq(groupMemberships.group_id, branchGroupGrants.group_id))
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .where(
+        and(
+          eq(branchGroupGrants.branch_id, branchId),
+          inArray(
+            sql`coalesce(${branchGroupGrants.fs_access}, 'read')`,
+            FS_ACCESS_BRANCH_PERMISSIONS
+          )
+        )
+      )
+      .all();
+
+    const isBoardAligned = branchRow?.permission_source === 'board' && branchRow.board_id;
+    const boardOwnerRows = isBoardAligned
+      ? await select(this.db, { user_id: boardOwners.user_id })
+          .from(boardOwners)
+          .innerJoin(
+            boards,
+            and(
+              eq(boards.board_id, boardOwners.board_id),
+              eq(
+                sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared')`,
+                'shared'
+              )
+            )
+          )
+          .where(eq(boardOwners.board_id, branchRow.board_id))
+          .all()
+      : [];
+
+    const boardGroupRows = isBoardAligned
+      ? await select(this.db, { user_id: groupMemberships.user_id })
+          .from(boardGroupGrants)
+          .innerJoin(groupMemberships, eq(groupMemberships.group_id, boardGroupGrants.group_id))
+          .innerJoin(
+            groups,
+            and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
+          )
+          .innerJoin(
+            boards,
+            and(
+              eq(boards.board_id, boardGroupGrants.board_id),
+              eq(
+                sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared')`,
+                'shared'
+              )
+            )
+          )
+          .where(
+            and(
+              eq(boardGroupGrants.board_id, branchRow.board_id),
+              inArray(
+                sql`coalesce(${boardGroupGrants.fs_access}, 'read')`,
+                FS_ACCESS_BRANCH_PERMISSIONS
+              )
+            )
+          )
+          .all()
+      : [];
+
+    const userIds = new Set<UUID>();
+    for (const row of ownerRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    for (const row of groupRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    for (const row of boardOwnerRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    for (const row of boardGroupRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    return Array.from(userIds);
+  }
+
+  async findBoardAlignedBranches(boardId: BoardID): Promise<Branch[]> {
+    const rows = await select(this.db)
+      .from(branches)
+      .where(
+        and(
+          eq(branches.board_id, boardId),
+          eq(branches.permission_source, 'board'),
+          eq(branches.archived, false)
+        )
+      )
+      .all();
+
+    const baseUrl = await getBaseUrl();
+    return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
   }
 
   /**
