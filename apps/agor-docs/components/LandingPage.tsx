@@ -168,9 +168,11 @@ export function LandingPage() {
             <p className={styles.kicker}>Team command center for all things agentic.</p>
             <h1>Meet your team of AI assistants.</h1>
             <p className={styles.heroDescription}>
-              Everyone’s cranking with AI, but it’s chaos: scattered sessions, ephemeral context,
-              nothing that compounds. Agor is where your team raises real assistants, wires them
-              into the systems you live in, and watches the work happen in one shared place.
+              Everyone’s cranking with AI.
+              <br />
+              But it’s chaos: scattered sessions, ephemeral context, nothing that compounds. Agor is
+              where your team raises real assistants, wires them into the systems you live in, and
+              watches the work happen in one shared place.
             </p>
             <div className={styles.heroActions}>
               <Link href="/guide" className={styles.primaryButton}>
