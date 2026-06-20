@@ -52,6 +52,13 @@ import { DAEMON } from '../config/constants';
  */
 const DEFAULT_DAEMON_URL = `http://${DAEMON.DEFAULT_HOST}:${DAEMON.DEFAULT_PORT}`;
 
+type AuthStorageLike = {
+  getItem(key: string): unknown;
+  // biome-ignore lint/suspicious/noExplicitAny: matches Feathers auth storage shape
+  setItem?(key: string, value: any): unknown;
+  removeItem?(key: string): unknown;
+};
+
 /**
  * Symbol used to mark the boards service after custom helpers have been attached.
  * Using a symbol avoids clashing with existing service properties.
@@ -976,6 +983,14 @@ export function createClient(
     verbose?: boolean;
     /** Limit reconnection attempts (useful for CLI to avoid hanging) */
     reconnectionAttempts?: number;
+    /**
+     * Authentication storage override. Executor processes use this to provide
+     * in-memory JWT storage before the Feathers auth client installs its
+     * socket reconnect hooks; configuring auth twice leaves the first hook
+     * bound to empty Node storage and can crash long-running executors on
+     * reconnect.
+     */
+    authStorage?: AuthStorageLike;
   }
 ): AgorClient {
   // Detect if running in browser vs Node.js (CLI)
@@ -1035,7 +1050,12 @@ export function createClient(
   const _ls = (globalThis as { localStorage?: unknown }).localStorage as
     | (Storage & { setItem?: unknown })
     | undefined;
-  const storage = _ls && typeof _ls.setItem === 'function' ? (_ls as Storage) : undefined;
+  const storage =
+    options && 'authStorage' in options
+      ? options.authStorage
+      : _ls && typeof _ls.setItem === 'function'
+        ? (_ls as Storage)
+        : undefined;
 
   client.configure(authentication({ storage }));
   client.io = socket;

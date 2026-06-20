@@ -101,13 +101,27 @@ export interface SpawnExecutorOptions {
   /** When set, uses template substitution instead of local subprocess. */
   executorCommandTemplate?: string | null;
   templateVariables?: ExecutorTemplateVariables;
-  onExit?: (code: number | null) => void;
+  onExit?: (code: number | null, output?: CapturedExecutorOutput) => void;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
   onSpawn?: (child: ChildProcess) => void;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
   preparedEnv?: Record<string, string>;
   /** Pre-written 0600 env file; bypasses prepareImpersonationEnv(). Only with asUser. */
   preparedEnvFilePath?: string;
+  /**
+   * Capture a bounded tail of executor stdout/stderr while still teeing output
+   * into daemon logs. Useful for surfacing the real crash reason in task
+   * records when a prompt executor exits before it can patch its own task.
+   */
+  captureOutput?: boolean;
+  /** Max bytes retained for each stdout/stderr/combined tail. */
+  outputTailMaxBytes?: number;
+}
+
+export interface CapturedExecutorOutput {
+  stdoutTail: string;
+  stderrTail: string;
+  combinedTail: string;
 }
 
 export interface ExecutorCommandResult {
@@ -194,6 +208,62 @@ export function findExecutorPath(): string {
   return executorPath;
 }
 
+const DEFAULT_OUTPUT_TAIL_MAX_BYTES = 32 * 1024;
+
+function appendTail(existing: string, chunk: string, maxBytes: number): string {
+  const next = `${existing}${chunk}`;
+  if (Buffer.byteLength(next, 'utf8') <= maxBytes) return next;
+
+  // Slice by characters first (fast/common path), then trim by bytes if the
+  // string contains multi-byte code points. This is diagnostic output, so a
+  // small amount of leading context loss is expected once the cap is reached.
+  let trimmed = next.slice(Math.max(0, next.length - maxBytes));
+  while (Buffer.byteLength(trimmed, 'utf8') > maxBytes && trimmed.length > 0) {
+    trimmed = trimmed.slice(1);
+  }
+  return trimmed;
+}
+
+function createExecutorOutputCapture(maxBytes?: number): {
+  append(stream: 'stdout' | 'stderr', chunk: Buffer): void;
+  snapshot(): CapturedExecutorOutput;
+} {
+  const limit =
+    typeof maxBytes === 'number' && Number.isFinite(maxBytes) && maxBytes > 0
+      ? Math.floor(maxBytes)
+      : DEFAULT_OUTPUT_TAIL_MAX_BYTES;
+  let stdoutTail = '';
+  let stderrTail = '';
+  let combinedTail = '';
+
+  return {
+    append(stream, chunk) {
+      const text = chunk.toString();
+      if (stream === 'stdout') {
+        stdoutTail = appendTail(stdoutTail, text, limit);
+      } else {
+        stderrTail = appendTail(stderrTail, text, limit);
+      }
+      combinedTail = appendTail(combinedTail, text, limit);
+    },
+    snapshot() {
+      return { stdoutTail, stderrTail, combinedTail };
+    },
+  };
+}
+
+function teeExecutorOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Buffer): void {
+  const text = chunk.toString();
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    if (stream === 'stdout') {
+      console.log(`${prefix} ${line}`);
+    } else {
+      console.error(`${prefix} ${line}`);
+    }
+  }
+}
+
 /**
  * Spawn executor process with JSON payload via stdin (fire-and-forget)
  *
@@ -247,7 +317,9 @@ export function spawnExecutor(
 
 /**
  * Spawn executor as a local subprocess.
- * stdout/stderr are inherited so logs appear in daemon output.
+ * stdout/stderr are inherited by default so logs appear in daemon output.
+ * When captureOutput is enabled, stdout/stderr are piped, tee'd to daemon
+ * output, and retained as bounded tails for failure diagnostics.
  */
 function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
   const executorPath = findExecutorPath();
@@ -265,6 +337,8 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     onSpawn,
     preparedEnv,
     preparedEnvFilePath,
+    captureOutput = false,
+    outputTailMaxBytes,
   } = options;
   const asUser = rawAsUser || undefined;
 
@@ -350,12 +424,25 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     return;
   }
 
+  const outputCapture = captureOutput ? createExecutorOutputCapture(outputTailMaxBytes) : undefined;
+
   const executorProcess = spawn(cmd, args, {
     cwd,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
-    stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
+    stdio: captureOutput ? ['pipe', 'pipe', 'pipe'] : ['pipe', 'inherit', 'inherit'],
     detached: false, // Don't detach - let daemon manage lifecycle
   });
+
+  if (outputCapture) {
+    executorProcess.stdout?.on('data', (chunk: Buffer) => {
+      outputCapture.append('stdout', chunk);
+      teeExecutorOutput(logPrefix, 'stdout', chunk);
+    });
+    executorProcess.stderr?.on('data', (chunk: Buffer) => {
+      outputCapture.append('stderr', chunk);
+      teeExecutorOutput(logPrefix, 'stderr', chunk);
+    });
+  }
 
   // Best-effort safety-net cleanup: the inner bash script `rm -f`s the env
   // file before exec, but if sudo/bash failed to launch — or `set -eu`
@@ -375,7 +462,12 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     } else {
       console.error(`${logPrefix} Executor exited with code ${code}`);
     }
-    options.onExit?.(code);
+    const capturedOutput = outputCapture?.snapshot();
+    if (capturedOutput) {
+      options.onExit?.(code, capturedOutput);
+    } else {
+      options.onExit?.(code);
+    }
   });
 
   executorProcess.stdin?.write(JSON.stringify(payload));
@@ -391,6 +483,9 @@ function spawnExecutorWithTemplate(
 ): void {
   const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
   const logLevel = templateVariables.log_level ?? getCurrentLogLevel();
+  const outputCapture = options.captureOutput
+    ? createExecutorOutputCapture(options.outputTailMaxBytes)
+    : undefined;
 
   const command = substituteTemplateVariables(executorCommandTemplate, templateVariables);
 
@@ -407,10 +502,12 @@ function spawnExecutorWithTemplate(
   options.onSpawn?.(executorProcess);
 
   executorProcess.stdout?.on('data', (data) => {
+    outputCapture?.append('stdout', data);
     console.log(`${logPrefix} ${data.toString().trim()}`);
   });
 
   executorProcess.stderr?.on('data', (data) => {
+    outputCapture?.append('stderr', data);
     console.error(`${logPrefix} ${data.toString().trim()}`);
   });
 
@@ -428,7 +525,12 @@ function spawnExecutorWithTemplate(
         `${logPrefix} Executor exited with code ${code} (task: ${templateVariables.task_id})`
       );
     }
-    options.onExit?.(code);
+    const capturedOutput = outputCapture?.snapshot();
+    if (capturedOutput) {
+      options.onExit?.(code, capturedOutput);
+    } else {
+      options.onExit?.(code);
+    }
   });
 
   executorProcess.stdin?.write(JSON.stringify(payload));

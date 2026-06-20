@@ -869,11 +869,24 @@ function createExecuteHandler(
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
 
+    const formatExecutorExitError = (
+      code: number | null,
+      output?: { stderrTail?: string; combinedTail?: string }
+    ): string => {
+      const codeText = code ?? 'unknown';
+      const rawTail = (output?.stderrTail?.trim() || output?.combinedTail?.trim() || '').trim();
+      const tail = rawTail.length > 4000 ? rawTail.slice(rawTail.length - 4000) : rawTail;
+      return tail
+        ? `Executor exited unexpectedly with code ${codeText}.\n\nLast executor stderr/output:\n${tail}`
+        : `Executor exited unexpectedly with code ${codeText}.`;
+    };
+
     spawnExecutor(executorPayload, {
       cwd,
       asUser: executorUnixUser || undefined,
       preparedEnv: executorEnv,
       logPrefix,
+      captureOutput: true,
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
@@ -885,7 +898,7 @@ function createExecuteHandler(
           console.log(`${logPrefix} PID: ${child.pid}`);
         }
       },
-      onExit: async (code) => {
+      onExit: async (code, output) => {
         console.log(`${logPrefix} Exited with code ${code}`);
         untrackExecutorProcess(sessionId);
 
@@ -896,8 +909,41 @@ function createExecuteHandler(
 
           if (latestTaskId && latestTaskId !== taskId) {
             console.log(
-              `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
+              `ℹ️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}); checking task-local safety net only`
             );
+            try {
+              const currentTask = await app.service('tasks').get(taskId, params);
+              const isTaskStillActive =
+                currentTask.status === TaskStatus.RUNNING ||
+                currentTask.status === 'awaiting_permission' ||
+                currentTask.status === 'awaiting_input' ||
+                currentTask.status === 'stopping' ||
+                currentTask.status === 'timed_out';
+
+              if (isTaskStillActive) {
+                await app.service('tasks').patch(
+                  taskId,
+                  {
+                    status: TaskStatus.FAILED,
+                    completed_at: new Date().toISOString(),
+                    error_message: formatExecutorExitError(code, output),
+                  },
+                  {
+                    ...params,
+                    suppressTerminalSessionIdle: true,
+                    suppressTerminalQueueProcessing: true,
+                  }
+                );
+                console.log(
+                  `✅ [Executor] Non-latest task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
+                );
+              }
+            } catch (taskError) {
+              console.error(
+                `⚠️  [Executor] Failed task-local safety net for non-latest task ${shortId(taskId)}:`,
+                taskError
+              );
+            }
           } else if (
             currentSession.status === SessionStatus.RUNNING ||
             currentSession.status === SessionStatus.AWAITING_PERMISSION ||
@@ -919,7 +965,8 @@ function createExecuteHandler(
                   taskId,
                   {
                     status: TaskStatus.FAILED,
-                    error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+                    completed_at: new Date().toISOString(),
+                    error_message: formatExecutorExitError(code, output),
                   },
                   params
                 );
