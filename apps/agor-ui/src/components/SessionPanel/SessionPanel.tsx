@@ -205,6 +205,8 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         onFilesDrop={onFilesDrop}
         slashCommands={slashCommands}
         skills={skills}
+        enableKnowledgeMentions
+        kbLinkTarget="absolute-route"
         highlightWhenEmpty
       />
     );

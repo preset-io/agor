@@ -90,6 +90,7 @@ import {
   AutocompleteTextarea,
   hydrateKbDocLinks,
   type KbDocMention,
+  kbMentionFromDocument,
 } from '../components/AutocompleteTextarea';
 import { BrandLogo } from '../components/BrandLogo';
 import { AgorEmojiPicker } from '../components/EmojiPickerInput';
@@ -395,17 +396,6 @@ const kindForSegment = (segment: string): KnowledgeDocumentKind | undefined => {
   if (segment === 'Skills') return 'skill';
   if (segment === 'Memories') return 'memory';
   return undefined;
-};
-
-// Non-throwing leaf title used only as a fallback when a doc has no title.
-const leafTitleFromPath = (path: string): string => {
-  const leaf = path.split('/').filter(Boolean).pop() ?? path;
-  return (
-    leaf
-      .replace(/\.(md|markdown)$/i, '')
-      .replace(/[-_]+/g, ' ')
-      .trim() || path
-  );
 };
 
 const normalizeFindResult = <T,>(result: T[] | { data?: T[] }): T[] =>
@@ -1163,20 +1153,9 @@ export function KnowledgePage({
     try {
       const result = await client.service('kb/documents').find({ query: { archived: false } });
       const rows = normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]);
-      const mentions = rows.reduce<KbDocMention[]>((acc, doc) => {
-        const path = doc.path?.trim();
-        if (!path) return acc;
-        const slug = namespaceSlugFromUri(doc.uri);
-        if (!slug) return acc;
-        acc.push({
-          title: doc.title?.trim() || leafTitleFromPath(path),
-          documentId: doc.document_id,
-          path,
-          uri: doc.uri,
-          routePath: buildKnowledgeRoutePath('/kb', slug, path),
-        });
-        return acc;
-      }, []);
+      const mentions = rows
+        .map((doc) => kbMentionFromDocument(doc, '/kb'))
+        .filter((doc): doc is KbDocMention => Boolean(doc));
       setMentionDocs(mentions);
     } catch (err) {
       console.error('Failed to load Knowledge mentions:', err);

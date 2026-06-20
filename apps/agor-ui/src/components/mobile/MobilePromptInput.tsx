@@ -72,6 +72,8 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
           sessionId={sessionId}
           userById={userById}
           autoSize={{ minRows: 1, maxRows: 4 }}
+          enableKnowledgeMentions
+          kbLinkTarget="absolute-route"
         />
       </div>
       <Button

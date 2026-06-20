@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { AutocompleteTextarea } from './AutocompleteTextarea';
+import { AutocompleteTextarea, type KbDocMention } from './AutocompleteTextarea';
 
 const renderSlashAutocomplete = () => {
   const Harness = () => {
@@ -78,7 +78,14 @@ const createMockClient = () => {
   return { client, filesFindAll, kbSearchFind, kbDocumentsFind };
 };
 
-const renderMentionAutocomplete = (client: ReturnType<typeof createMockClient>['client']) => {
+const renderMentionAutocomplete = (
+  client: ReturnType<typeof createMockClient>['client'],
+  options: {
+    enableKnowledgeMentions?: boolean;
+    kbLinkTarget?: 'stable-uri' | 'absolute-route';
+    kbDocs?: KbDocMention[];
+  } = {}
+) => {
   const Harness = () => {
     const [value, setValue] = useState('');
 
@@ -90,6 +97,9 @@ const renderMentionAutocomplete = (client: ReturnType<typeof createMockClient>['
         client={client as never}
         sessionId={'0190a000-0000-7000-8000-000000000001' as never}
         userById={new Map()}
+        enableKnowledgeMentions={options.enableKnowledgeMentions}
+        kbLinkTarget={options.kbLinkTarget}
+        kbDocs={options.kbDocs}
       />
     );
   };
@@ -99,9 +109,10 @@ const renderMentionAutocomplete = (client: ReturnType<typeof createMockClient>['
 };
 
 const waitForDebounce = () => new Promise((resolve) => setTimeout(resolve, 350));
+const waitForStateUpdate = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('AutocompleteTextarea', () => {
-  it('navigates autocomplete options with arrow keys and selects the highlighted item', async () => {
+  it('selects the default highlighted autocomplete item with Enter', async () => {
     const textarea = renderSlashAutocomplete();
 
     fireEvent.change(textarea, { target: { value: '/', selectionStart: 1 } });
@@ -109,11 +120,10 @@ describe('AutocompleteTextarea', () => {
     await screen.findByText('alpha');
     expect(screen.getByText('beta')).toBeInTheDocument();
 
-    fireEvent.keyDown(textarea, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40 });
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() => {
-      expect(textarea).toHaveValue('/beta ');
+      expect(textarea).toHaveValue('/alpha ');
     });
   });
 
@@ -126,7 +136,11 @@ describe('AutocompleteTextarea', () => {
     expect(screen.getByText('beta')).toBeInTheDocument();
 
     fireEvent.keyDown(textarea, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40 });
+    await waitForStateUpdate();
+    fireEvent.keyDown(textarea, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40 });
+    await waitForStateUpdate();
     fireEvent.keyDown(textarea, { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, which: 38 });
+    await waitForStateUpdate();
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() => {
@@ -136,7 +150,10 @@ describe('AutocompleteTextarea', () => {
 
   it('combines Knowledge and file suggestions for @ queries without changing file search', async () => {
     const { client, filesFindAll, kbSearchFind } = createMockClient();
-    const textarea = renderMentionAutocomplete(client);
+    const textarea = renderMentionAutocomplete(client, {
+      enableKnowledgeMentions: true,
+      kbLinkTarget: 'absolute-route',
+    });
 
     fireEvent.change(textarea, { target: { value: '@arc', selectionStart: 4 } });
     await waitForDebounce();
@@ -146,6 +163,9 @@ describe('AutocompleteTextarea', () => {
     expect(screen.queryByText('guides/architecture.md')).not.toBeInTheDocument();
     expect(screen.getByText('FILES & FOLDERS')).toBeInTheDocument();
     expect(screen.getByText('src/architecture.ts')).toBeInTheDocument();
+    expect(document.body.textContent?.indexOf('FILES & FOLDERS')).toBeLessThan(
+      document.body.textContent?.indexOf('KNOWLEDGE BASE') ?? Number.POSITIVE_INFINITY
+    );
     expect(kbSearchFind).toHaveBeenCalledWith({
       query: { q: 'arc', mode: 'text', limit: 8, include_chunks: false },
     });
@@ -154,9 +174,12 @@ describe('AutocompleteTextarea', () => {
     });
   });
 
-  it('inserts a stable agor:// Knowledge document link when a KB suggestion is selected', async () => {
+  it('inserts a clickable route link for prompt-composer KB selections', async () => {
     const { client } = createMockClient();
-    const textarea = renderMentionAutocomplete(client);
+    const textarea = renderMentionAutocomplete(client, {
+      enableKnowledgeMentions: true,
+      kbLinkTarget: 'absolute-route',
+    });
 
     fireEvent.change(textarea, { target: { value: 'Read @arc', selectionStart: 9 } });
     await waitForDebounce();
@@ -170,15 +193,54 @@ describe('AutocompleteTextarea', () => {
     });
   });
 
-  it('uses the readable document list instead of broad search for empty @ queries', async () => {
+  it('does not search Knowledge unless explicitly enabled', async () => {
     const { client, kbSearchFind, kbDocumentsFind } = createMockClient();
     const textarea = renderMentionAutocomplete(client);
+
+    fireEvent.change(textarea, { target: { value: '@arc', selectionStart: 4 } });
+    await waitForDebounce();
+
+    expect(screen.queryByText('KNOWLEDGE BASE')).not.toBeInTheDocument();
+    expect(kbSearchFind).not.toHaveBeenCalled();
+    expect(kbDocumentsFind).not.toHaveBeenCalled();
+  });
+
+  it('does not fetch broad Knowledge lists for empty @ queries', async () => {
+    const { client, kbSearchFind, kbDocumentsFind } = createMockClient();
+    const textarea = renderMentionAutocomplete(client, { enableKnowledgeMentions: true });
 
     fireEvent.change(textarea, { target: { value: '@', selectionStart: 1 } });
     await waitForDebounce();
 
-    await screen.findByText('Recent Runbook');
-    expect(kbDocumentsFind).toHaveBeenCalledWith({ query: { archived: false } });
+    expect(screen.queryByText('Recent Runbook')).not.toBeInTheDocument();
+    expect(kbDocumentsFind).not.toHaveBeenCalled();
     expect(kbSearchFind).not.toHaveBeenCalled();
+  });
+
+  it('inserts stable agor:// links for provided KB docs, without live KB search', async () => {
+    const { client, kbSearchFind, kbDocumentsFind } = createMockClient();
+    const kbDocs: KbDocMention[] = [
+      {
+        title: 'Architecture Overview',
+        documentId: '0190a000-0000-7000-8000-0000000000aa' as never,
+        path: 'guides/architecture.md',
+        uri: 'agor://kb/global/guides/architecture.md',
+        routePath: '/kb/global/guides/architecture.md',
+      },
+    ];
+    const textarea = renderMentionAutocomplete(client, { kbDocs });
+
+    fireEvent.change(textarea, { target: { value: 'Read @arc', selectionStart: 9 } });
+    await waitForDebounce();
+
+    fireEvent.click(await screen.findByText('Architecture Overview'));
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue(
+        'Read [Architecture Overview](agor://kb/document/0190a000-0000-7000-8000-0000000000aa) '
+      );
+    });
+    expect(kbSearchFind).not.toHaveBeenCalled();
+    expect(kbDocumentsFind).not.toHaveBeenCalled();
   });
 });

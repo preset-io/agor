@@ -233,6 +233,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             client={client}
             sessionId={session?.session_id || null}
             userById={userById}
+            enableKnowledgeMentions
+            kbLinkTarget="absolute-route"
           />
         </Form.Item>
 
@@ -317,6 +319,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                     client={client}
                     sessionId={session?.session_id || null}
                     userById={userById}
+                    enableKnowledgeMentions
+                    kbLinkTarget="absolute-route"
                   />
                 </Form.Item>
               </>

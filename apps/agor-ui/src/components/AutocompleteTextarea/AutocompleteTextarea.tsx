@@ -8,23 +8,21 @@
  * Highlights @ mentions with a background overlay.
  */
 
-import type {
-  KnowledgeDocument,
-  KnowledgeDocumentID,
-  KnowledgeSearchResult,
-} from '@agor/core/types';
+import type { KnowledgeDocumentID, KnowledgeSearchResult } from '@agor/core/types';
 import type { AgorClient, SessionID, User } from '@agor-live/client';
 import { Input, Popover, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useEmojiAutocomplete } from '@/hooks/useEmojiAutocomplete';
-import { buildKnowledgeRoutePath, namespaceSlugFromUri } from '@/utils/knowledgeRoutes';
 import { mapToArray } from '@/utils/mapHelpers';
 import './AutocompleteTextarea.css';
 import {
+  buildKbDocLink,
   buildKbMarkdownLink,
   filterKbDocs,
   type KbDocMention,
+  kbMentionFromDocument,
   MAX_KB_DOC_RESULTS,
+  uniqueKbMentions,
 } from './kbMentions';
 
 export type { KbDocMention } from './kbMentions';
@@ -43,7 +41,6 @@ const AUTOCOMPLETE_POPOVER_MAX_HEIGHT = 300;
 const EMPTY_SLASH_COMMANDS: string[] = [];
 const EMPTY_SKILLS: string[] = [];
 const MIN_KB_SEARCH_QUERY_LENGTH = 2;
-const MAX_KB_PREFETCH_RESULTS = 25;
 
 interface FileResult {
   path: string;
@@ -84,6 +81,8 @@ type AutocompleteResult =
   | KbDocResult
   | { heading: string };
 
+type KbLinkTarget = 'stable-uri' | 'absolute-route';
+
 interface AutocompleteTextareaProps {
   value: string;
   onChange: (value: string) => void;
@@ -101,12 +100,19 @@ interface AutocompleteTextareaProps {
   slashCommands?: string[];
   /** Available skills from the SDK (stored on session.custom_context) */
   skills?: string[];
+  /** Enable live Knowledge Base lookup for `@` references. Disabled by default so shared comment inputs do not search KB. */
+  enableKnowledgeMentions?: boolean;
   /**
-   * Knowledge Base documents available for `@` references. When provided, the
-   * `@` autocomplete includes a "Knowledge Base" section and inserts a markdown
-   * link to the selected doc. Empty/omitted in non-KB contexts.
+   * Knowledge Base documents available for local `@` references. Supplying this
+   * also enables the Knowledge section without live network search (used by the
+   * Knowledge editor).
    */
   kbDocs?: KbDocMention[];
+  /**
+   * Link form inserted for KB selections. `stable-uri` is rename-proof for persisted
+   * Knowledge markdown; prompt composers use `absolute-route` so conversation markdown is clickable.
+   */
+  kbLinkTarget?: KbLinkTarget;
   /** Draw attention to the textarea while it is empty. */
   highlightWhenEmpty?: boolean;
 }
@@ -228,36 +234,6 @@ const quoteIfNeeded = (text: string): string => {
 
 const normalizeFindResult = <T,>(result: T[] | { data?: T[] }): T[] =>
   Array.isArray(result) ? result : (result.data ?? []);
-
-const leafTitleFromPath = (path: string): string => {
-  const leaf = path.split('/').filter(Boolean).pop() ?? path;
-  return leaf.replace(/\.[^.]+$/, '') || 'Untitled';
-};
-
-const kbMentionFromDocument = (doc: KnowledgeDocument): KbDocMention | null => {
-  const path = doc.path?.trim();
-  if (!path) return null;
-  const slug = namespaceSlugFromUri(doc.uri);
-  if (!slug) return null;
-  return {
-    title: doc.title?.trim() || leafTitleFromPath(path),
-    documentId: doc.document_id,
-    path,
-    uri: doc.uri,
-    routePath: buildKnowledgeRoutePath('/kb', slug, path),
-  };
-};
-
-const uniqueKbMentions = (docs: KbDocMention[]): KbDocMention[] => {
-  const seen = new Set<string>();
-  const unique: KbDocMention[] = [];
-  for (const doc of docs) {
-    if (seen.has(doc.documentId)) continue;
-    seen.add(doc.documentId);
-    unique.push(doc);
-  }
-  return unique;
-};
 
 /**
  * Highlight @ mentions in text
@@ -391,7 +367,9 @@ export const AutocompleteTextarea = React.forwardRef<
       onFilesDrop,
       slashCommands = EMPTY_SLASH_COMMANDS,
       skills = EMPTY_SKILLS,
+      enableKnowledgeMentions = false,
       kbDocs,
+      kbLinkTarget = 'stable-uri',
       highlightWhenEmpty = false,
     },
     ref
@@ -422,7 +400,8 @@ export const AutocompleteTextarea = React.forwardRef<
     const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
     const hasProvidedKbDocs = kbDocs !== undefined;
-    const effectiveKbDocs = kbDocs ?? fetchedKbDocs;
+    const shouldSearchKnowledge = enableKnowledgeMentions || hasProvidedKbDocs;
+    const effectiveKbDocs = shouldSearchKnowledge ? (kbDocs ?? fetchedKbDocs) : [];
     const isLoading = isFileLoading || isKbLoading;
 
     // Scroll synchronization state
@@ -546,17 +525,25 @@ export const AutocompleteTextarea = React.forwardRef<
     );
 
     /**
-     * Search readable Knowledge documents for @ references. Query length >= 2
-     * uses kb/search; empty/one-character queries use the list endpoint and
-     * local filtering so @ opens quickly without issuing broad text searches.
-     * Both services enforce Knowledge RBAC server-side.
+     * Search readable Knowledge documents for @ references. Uses kb/search only
+     * for meaningful queries; empty/one-character queries stay local so `@` does
+     * not fan out into broad Knowledge listing. The search service enforces
+     * Knowledge RBAC server-side.
      */
     const searchKnowledgeDocs = useCallback(
       async (searchQuery: string) => {
         const requestId = kbSearchSeqRef.current + 1;
         kbSearchSeqRef.current = requestId;
 
-        if (hasProvidedKbDocs || !client) {
+        if (!shouldSearchKnowledge || hasProvidedKbDocs || !client) {
+          setFetchedKbDocs([]);
+          setKbError(null);
+          setIsKbLoading(false);
+          return;
+        }
+
+        const trimmed = searchQuery.trim();
+        if (trimmed.length < MIN_KB_SEARCH_QUERY_LENGTH) {
           setFetchedKbDocs([]);
           setKbError(null);
           setIsKbLoading(false);
@@ -567,40 +554,19 @@ export const AutocompleteTextarea = React.forwardRef<
         setKbError(null);
 
         try {
-          const trimmed = searchQuery.trim();
-          let mentions: KbDocMention[] = [];
-
-          if (trimmed.length >= MIN_KB_SEARCH_QUERY_LENGTH) {
-            const result = await client.service('kb/search').find({
-              query: {
-                q: trimmed,
-                mode: 'text',
-                limit: MAX_KB_DOC_RESULTS,
-                include_chunks: false,
-              },
-            });
-            mentions = normalizeFindResult<KnowledgeSearchResult>(
-              result as KnowledgeSearchResult[] | { data?: KnowledgeSearchResult[] }
-            )
-              .map((row) => kbMentionFromDocument(row.document))
-              .filter((doc): doc is KbDocMention => Boolean(doc));
-          } else {
-            const result = await client.service('kb/documents').find({
-              query: { archived: false },
-            });
-            const listed = normalizeFindResult<KnowledgeDocument>(
-              result as KnowledgeDocument[] | { data?: KnowledgeDocument[] }
-            )
-              .sort(
-                (a, b) =>
-                  new Date(b.updated_at || b.created_at || 0).getTime() -
-                  new Date(a.updated_at || a.created_at || 0).getTime()
-              )
-              .slice(0, MAX_KB_PREFETCH_RESULTS)
-              .map(kbMentionFromDocument)
-              .filter((doc): doc is KbDocMention => Boolean(doc));
-            mentions = filterKbDocs(listed, trimmed);
-          }
+          const result = await client.service('kb/search').find({
+            query: {
+              q: trimmed,
+              mode: 'text',
+              limit: MAX_KB_DOC_RESULTS,
+              include_chunks: false,
+            },
+          });
+          const mentions = normalizeFindResult<KnowledgeSearchResult>(
+            result as KnowledgeSearchResult[] | { data?: KnowledgeSearchResult[] }
+          )
+            .map((row) => kbMentionFromDocument(row.document))
+            .filter((doc): doc is KbDocMention => Boolean(doc));
 
           if (kbSearchSeqRef.current !== requestId) return;
           setFetchedKbDocs(uniqueKbMentions(mentions).slice(0, MAX_KB_DOC_RESULTS));
@@ -613,7 +579,7 @@ export const AutocompleteTextarea = React.forwardRef<
           if (kbSearchSeqRef.current === requestId) setIsKbLoading(false);
         }
       },
-      [client, hasProvidedKbDocs]
+      [client, hasProvidedKbDocs, shouldSearchKnowledge]
     );
 
     /**
@@ -830,13 +796,13 @@ export const AutocompleteTextarea = React.forwardRef<
           setEmojiResults([]);
           setSlashCommandResults([]);
 
-          // Debounced search for files + Knowledge. Request sequence refs ignore stale in-flight results.
+          // Debounced search for files + optional Knowledge. Request sequence refs ignore stale in-flight results.
           if (debounceTimerRef.current) {
             clearTimeout(debounceTimerRef.current);
           }
           debounceTimerRef.current = setTimeout(() => {
             searchFiles(atTrigger.query);
-            searchKnowledgeDocs(atTrigger.query);
+            if (shouldSearchKnowledge) searchKnowledgeDocs(atTrigger.query);
           }, DEBOUNCE_MS);
 
           setShowPopover(true);
@@ -888,7 +854,15 @@ export const AutocompleteTextarea = React.forwardRef<
         kbSearchSeqRef.current += 1;
         setHighlightedIndex(-1);
       },
-      [onChange, searchFiles, searchKnowledgeDocs, searchEmojis, slashCommands, skills]
+      [
+        onChange,
+        searchFiles,
+        searchKnowledgeDocs,
+        searchEmojis,
+        slashCommands,
+        skills,
+        shouldSearchKnowledge,
+      ]
     );
 
     /**
@@ -906,12 +880,13 @@ export const AutocompleteTextarea = React.forwardRef<
         let addTrailingSpace = true;
 
         if ('kbDocumentId' in item) {
-          // KB doc reference - replace @query with a user-clickable in-app URL.
-          // `agor://` is the internal stable URI, but conversation markdown
-          // intentionally blocks non-http(s) schemes. Use the current origin so
-          // the prompt remains useful and clickable wherever the UI is served.
-          const href = `${window.location.origin}${item.kbRoutePath}`;
-          insertText = buildKbMarkdownLink(item.kbTitle, href);
+          // KB doc reference. Persisted Knowledge markdown should use the stable
+          // document URI; prompt composers opt into absolute in-app URLs so
+          // conversation markdown renders a user-clickable link.
+          insertText =
+            kbLinkTarget === 'absolute-route'
+              ? buildKbMarkdownLink(item.kbTitle, `${window.location.origin}${item.kbRoutePath}`)
+              : buildKbDocLink(item.kbTitle, item.kbDocumentId);
         } else if ('command' in item) {
           // Slash command selection - replace with /command
           insertText = `/${item.command}`;
@@ -954,7 +929,7 @@ export const AutocompleteTextarea = React.forwardRef<
           textareaRef.current.current?.focus();
         }, 0);
       },
-      [triggerIndex, value, onChange]
+      [triggerIndex, value, onChange, kbLinkTarget]
     );
 
     /**

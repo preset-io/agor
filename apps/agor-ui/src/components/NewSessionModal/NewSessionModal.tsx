@@ -245,6 +245,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             client={client}
             sessionId={null}
             userById={userById}
+            enableKnowledgeMentions
+            kbLinkTarget="absolute-route"
           />
         </Form.Item>
 
