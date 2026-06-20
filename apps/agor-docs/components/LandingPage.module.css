@@ -205,7 +205,7 @@
   aspect-ratio: 2340 / 1334;
   border-radius: 10px;
   overflow: hidden;
-  transform: rotate(-1.2deg);
+  transform: rotateY(-6deg) rotateX(1.5deg) rotateZ(-2.2deg);
   transform-origin: center;
 }
 
@@ -233,7 +233,7 @@
   top: 398px;
   width: min(340px, 50%);
   height: 190px;
-  transform: rotate(1.8deg) translateY(calc(var(--hero-scroll) * 34px));
+  transform: rotateY(-5deg) rotateZ(4deg) translateY(calc(var(--hero-scroll) * 34px));
 }
 
 .floatingSessions {
@@ -241,7 +241,7 @@
   top: 382px;
   width: min(235px, 36%);
   height: 240px;
-  transform: rotate(-2.4deg) translateY(calc(var(--hero-scroll) * -28px));
+  transform: rotateY(6deg) rotateZ(-5deg) translateY(calc(var(--hero-scroll) * -28px));
 }
 
 .assistantStrip {
@@ -570,11 +570,11 @@
   }
 
   .floatingConversation {
-    transform: rotate(1.8deg);
+    transform: rotateZ(4deg);
   }
 
   .floatingSessions {
-    transform: rotate(-2.4deg);
+    transform: rotateZ(-5deg);
   }
 }
 
