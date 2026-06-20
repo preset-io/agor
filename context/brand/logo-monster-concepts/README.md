@@ -2,13 +2,13 @@
 
 Exploratory, non-production mascot/logo directions for Agor / agor.live.
 
-Open `index.html` in a browser, or view the published Agor artifact. This pass uses file-backed raster concept sheets generated via the OpenAI Images API, plus the prompt notes below.
+Open `index.html` in a browser, or view the published Agor artifact. This pass uses file-backed raster concept sheets generated via the OpenAI Images API, plus a polished static review gallery.
 
 ## Generated sheets
 
-- `generated/wide-board-monster-variants.png` — focused landscape board-card monster candidates. Strongest first-pass picks: **A, C, E, G**.
-- `generated/refined-logo-monsters.png` — friendlier, mascot-forward logo candidates. Strongest first-pass picks: **A, B, D, G**.
-- `generated/edgy-logo-monsters.png` — more distinctive tech/product brand-mark candidates. Strongest first-pass picks: **I, J, L, O**.
+- `generated/wide-board-monster-variants.png` — focused landscape board-card monster candidates. Current lead direction; strongest first-pass picks: **A, C, E, G**.
+- `generated/refined-logo-monsters.png` — friendlier, mascot-forward logo candidates. Useful reference for an app-icon crop.
+- `generated/edgy-logo-monsters.png` — more distinctive tech/product brand-mark candidates. Useful attitude references, less directly tied to Agor.
 
 ## Brand inputs inspected
 
@@ -19,4 +19,4 @@ Open `index.html` in a browser, or view the published Agor artifact. This pass u
 
 ## Next step
 
-Current lead direction is the wide board-card monster sheet. Pick 1–2 favorites, then redraw as simplified production vectors and test at website-logo, app-icon, and favicon sizes beside the Agor wordmark.
+Vectorize one wide board-monster direction first, then stress-test it at website-logo, branch-card avatar, app-icon, favicon, and monochrome sizes beside the Agor wordmark.
