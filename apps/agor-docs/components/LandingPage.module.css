@@ -26,6 +26,7 @@
 .workspaceSection,
 .useCaseSection,
 .productShowcase,
+.capabilitySection,
 .controlSection,
 .finalCta {
   max-width: 1180px;
@@ -409,6 +410,85 @@
   transform: translateY(-2px);
 }
 
+.capabilitySection {
+  padding-top: 40px;
+}
+
+.capabilityGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 42px;
+}
+
+.capabilityCard {
+  min-height: 260px;
+  padding: 24px;
+  border: 1px solid var(--landing-line);
+  border-radius: 26px;
+  color: var(--landing-ink);
+  background:
+    radial-gradient(circle at 24% 0%, rgba(127, 232, 223, 0.1), transparent 16rem),
+    rgba(10, 18, 31, 0.72);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.2);
+  text-decoration: none;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.capabilityCard:nth-child(1),
+.capabilityCard:nth-child(2) {
+  grid-column: span 3;
+}
+
+.capabilityCard:nth-child(n + 3) {
+  grid-column: span 2;
+}
+
+.capabilityCard > span {
+  display: inline-flex;
+  margin-bottom: 18px;
+  color: var(--landing-teal);
+  background: var(--landing-eyebrow-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 0.76rem;
+  font-weight: 850;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.capabilityCard h3 {
+  max-width: 520px;
+  margin: 0;
+  color: var(--landing-ink);
+  font-size: clamp(1.55rem, 2.2vw, 2.05rem);
+  line-height: 1.08;
+  letter-spacing: -0.035em;
+}
+
+.capabilityCard p {
+  margin: 16px 0 24px;
+  color: var(--landing-muted);
+  line-height: 1.65;
+}
+
+.capabilityCard strong {
+  color: var(--landing-teal);
+  font-size: 0.92rem;
+}
+
+.capabilityCard:hover {
+  border-color: rgba(127, 232, 223, 0.32);
+  background:
+    radial-gradient(circle at 24% 0%, rgba(127, 232, 223, 0.15), transparent 16rem),
+    rgba(14, 24, 40, 0.82);
+  transform: translateY(-2px);
+}
+
 .useCaseSection {
   text-align: center;
 }
@@ -562,6 +642,17 @@
   .productGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .capabilityGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .capabilityCard,
+  .capabilityCard:nth-child(1),
+  .capabilityCard:nth-child(2),
+  .capabilityCard:nth-child(n + 3) {
+    grid-column: auto;
+  }
 }
 
 @media (max-width: 720px) {
@@ -573,6 +664,7 @@
   .problemSection,
   .workspaceSection,
   .productShowcase,
+  .capabilitySection,
   .useCaseSection,
   .finalCta {
     padding: 64px 18px;
@@ -621,8 +713,13 @@
 
   .problemGrid,
   .featureGrid,
-  .productGrid {
+  .productGrid,
+  .capabilityGrid {
     grid-template-columns: 1fr;
+  }
+
+  .capabilityCard {
+    min-height: 0;
   }
 
   .sectionHeader h2,
