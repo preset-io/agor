@@ -1040,15 +1040,15 @@ export function isUnixSyncBranchPayload(
 }
 
 /**
- * Type guard for UnixSyncRepoPayload
- */
-/**
  * Type guard for UnixSyncBoardPayload
  */
 export function isUnixSyncBoardPayload(payload: ExecutorPayload): payload is UnixSyncBoardPayload {
   return payload.command === 'unix.sync-board';
 }
 
+/**
+ * Type guard for UnixSyncRepoPayload
+ */
 export function isUnixSyncRepoPayload(payload: ExecutorPayload): payload is UnixSyncRepoPayload {
   return payload.command === 'unix.sync-repo';
 }
