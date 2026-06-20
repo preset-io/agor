@@ -143,6 +143,7 @@ describe('AutocompleteTextarea', () => {
 
     await screen.findByText('KNOWLEDGE BASE');
     expect(screen.getByText('Architecture Overview')).toBeInTheDocument();
+    expect(screen.queryByText('guides/architecture.md')).not.toBeInTheDocument();
     expect(screen.getByText('FILES & FOLDERS')).toBeInTheDocument();
     expect(screen.getByText('src/architecture.ts')).toBeInTheDocument();
     expect(kbSearchFind).toHaveBeenCalledWith({
@@ -164,7 +165,7 @@ describe('AutocompleteTextarea', () => {
 
     await waitFor(() => {
       expect(textarea).toHaveValue(
-        'Read [Architecture Overview](agor://kb/document/0190a000-0000-7000-8000-0000000000aa) '
+        `Read [Architecture Overview](${window.location.origin}/kb/global/guides/architecture.md) `
       );
     });
   });

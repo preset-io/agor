@@ -58,14 +58,17 @@ export function filterKbDocs(
 }
 
 /**
- * Build a markdown link to a KB doc. The href is the rename-proof
- * `agor://kb/document/<uuid>` URI (hydrated to a clickable route at render time);
- * the label is the doc title with `[` / `]` escaped so it can't break out of the
- * link syntax.
+ * Build a markdown link with a KB document title as the label. Escapes square
+ * brackets so the title can't break out of link syntax.
  */
-export function buildKbDocLink(title: string, documentId: KnowledgeDocumentID): string {
+export function buildKbMarkdownLink(title: string, href: string): string {
   const label = title.replace(/[[\]]/g, '\\$&').trim() || 'Untitled';
-  return `[${label}](${buildKnowledgeDocumentUri(documentId)})`;
+  return `[${label}](${href})`;
+}
+
+/** Build the internal rename-proof KB document URI form for persisted Knowledge docs. */
+export function buildKbDocLink(title: string, documentId: KnowledgeDocumentID): string {
+  return buildKbMarkdownLink(title, buildKnowledgeDocumentUri(documentId));
 }
 
 const KB_DOC_URI_RE = new RegExp(

@@ -20,7 +20,12 @@ import { useEmojiAutocomplete } from '@/hooks/useEmojiAutocomplete';
 import { buildKnowledgeRoutePath, namespaceSlugFromUri } from '@/utils/knowledgeRoutes';
 import { mapToArray } from '@/utils/mapHelpers';
 import './AutocompleteTextarea.css';
-import { buildKbDocLink, filterKbDocs, type KbDocMention, MAX_KB_DOC_RESULTS } from './kbMentions';
+import {
+  buildKbMarkdownLink,
+  filterKbDocs,
+  type KbDocMention,
+  MAX_KB_DOC_RESULTS,
+} from './kbMentions';
 
 export type { KbDocMention } from './kbMentions';
 
@@ -66,7 +71,6 @@ interface SlashCommandResult {
 interface KbDocResult {
   kbTitle: string;
   kbDocumentId: KnowledgeDocumentID;
-  kbPath: string;
   kbUri: string;
   kbRoutePath: string;
   type: 'kb_doc';
@@ -667,7 +671,6 @@ export const AutocompleteTextarea = React.forwardRef<
           const kbResults: KbDocResult[] = docsForOptions.map((doc) => ({
             kbTitle: doc.title,
             kbDocumentId: doc.documentId,
-            kbPath: doc.path,
             kbUri: doc.uri,
             kbRoutePath: doc.routePath,
             type: 'kb_doc' as const,
@@ -903,8 +906,12 @@ export const AutocompleteTextarea = React.forwardRef<
         let addTrailingSpace = true;
 
         if ('kbDocumentId' in item) {
-          // KB doc reference - replace @query with a rename-proof markdown link
-          insertText = buildKbDocLink(item.kbTitle, item.kbDocumentId);
+          // KB doc reference - replace @query with a user-clickable in-app URL.
+          // `agor://` is the internal stable URI, but conversation markdown
+          // intentionally blocks non-http(s) schemes. Use the current origin so
+          // the prompt remains useful and clickable wherever the UI is served.
+          const href = `${window.location.origin}${item.kbRoutePath}`;
+          insertText = buildKbMarkdownLink(item.kbTitle, href);
         } else if ('command' in item) {
           // Slash command selection - replace with /command
           insertText = `/${item.command}`;
@@ -1303,20 +1310,6 @@ export const AutocompleteTextarea = React.forwardRef<
                         : ''
                       : label}
                 </Text>
-                {/* Show namespace/path for KB docs */}
-                {isKbDoc && 'kbPath' in item && (
-                  <Text
-                    style={{
-                      fontSize: token.fontSizeSM - 1,
-                      color: token.colorTextDescription,
-                      flexShrink: 0,
-                      maxWidth: 140,
-                    }}
-                    ellipsis
-                  >
-                    {item.kbPath}
-                  </Text>
-                )}
                 {/* Show source badge for slash commands */}
                 {isCommand && 'source' in item && (
                   <Text
