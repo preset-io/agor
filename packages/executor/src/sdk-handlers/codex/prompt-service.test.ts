@@ -383,6 +383,75 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       threadId: 'mock-thread-id',
     });
   });
+
+  it('requires MCP startup from gateway session metadata in the prompt path', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-gateway.md');
+
+    configMocks.getDaemonUrl.mockResolvedValue('http://localhost:3030');
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'remote',
+          transport: 'http',
+          url: 'https://example.com/mcp',
+        },
+      },
+    ]);
+
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-gateway',
+      branch_id: 'branch-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: null,
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+      custom_context: { gateway_source: { channel_id: 'channel-1' } },
+    });
+    mockSessionsRepo.update.mockResolvedValue(undefined);
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
+      path: process.cwd(),
+    });
+
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+
+    for await (const _event of service.promptSessionStreaming('session-gateway' as any, 'review')) {
+      // Drain stream to force client setup.
+    }
+
+    expect(mockInstanceConfigs.at(-1)).toMatchObject({
+      model_instructions_file: '/tmp/agor-codex-instructions-gateway.md',
+      mcp_servers: {
+        agor: {
+          required: true,
+          startup_timeout_ms: 30_000,
+        },
+        remote: {
+          required: true,
+          startup_timeout_ms: 30_000,
+        },
+      },
+    });
+  });
 });
 
 describe('CodexPromptService - forked sessions', () => {
@@ -1031,5 +1100,87 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
         default_tools_approval_mode: 'approve',
       });
     }
+  });
+
+  it('marks built-in Agor MCP required for gateway sessions', async () => {
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      'agor-bearer-token',
+      undefined,
+      true
+    );
+
+    expect(total).toBe(1);
+    expect(servers.agor).toMatchObject({
+      default_tools_approval_mode: 'approve',
+      required: true,
+      startup_timeout_ms: 30_000,
+    });
+  });
+
+  it('marks attached MCP servers required for gateway sessions', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'github',
+          transport: 'stdio',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+        },
+      },
+      {
+        server: {
+          name: 'linear',
+          transport: 'http',
+          url: 'https://mcp.linear.app/sse',
+        },
+      },
+    ]);
+
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      'agor-bearer-token',
+      undefined,
+      true
+    );
+
+    expect(total).toBe(3);
+    for (const name of ['agor', 'github', 'linear']) {
+      expect(servers[name], `server "${name}" missing startup guard`).toMatchObject({
+        required: true,
+        startup_timeout_ms: 30_000,
+      });
+    }
+  });
+
+  it('does not require unauthenticated OAuth MCP servers for gateway sessions', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'oauthRemote',
+          transport: 'http',
+          url: 'https://example.com/mcp',
+          auth: { type: 'oauth' },
+        },
+      },
+    ]);
+    mcpAuthMocks.resolveMCPAuthHeaders.mockResolvedValue(null);
+
+    const service = makeService();
+    const { servers, total } = await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      undefined,
+      true
+    );
+
+    expect(total).toBe(1);
+    expect(servers.oauthremote).toMatchObject({
+      default_tools_approval_mode: 'approve',
+    });
+    expect(servers.oauthremote.required).toBeUndefined();
+    expect(servers.oauthremote.startup_timeout_ms).toBeUndefined();
   });
 });

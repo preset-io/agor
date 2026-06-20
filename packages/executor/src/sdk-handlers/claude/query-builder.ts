@@ -12,6 +12,7 @@ import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
+import { isGatewaySession } from '@agor/core/types';
 
 const { query } = Claude;
 type PermissionMode = Claude.PermissionMode;
@@ -175,6 +176,7 @@ export async function setupQuery(
   if (!session) {
     throw new Error(`Session not found: ${sessionId}`);
   }
+  const shouldBlockOnMcpStartup = isGatewaySession(session);
 
   // Determine which user's context to use for environment variables and API
   // keys: the task creator (prompter) when known, else the session owner.
@@ -542,6 +544,7 @@ export async function setupQuery(
           headers: {
             Authorization: `Bearer ${mcpToken}`,
           },
+          ...(shouldBlockOnMcpStartup ? { alwaysLoad: true } : {}),
         },
       };
       queryOptions.mcpServers = mcpConfig;
@@ -587,6 +590,7 @@ export async function setupQuery(
             type: transport,
             env: server.env,
           };
+          let canAlwaysLoad = shouldBlockOnMcpStartup;
 
           // Add transport-specific fields
           if (transport === 'stdio') {
@@ -600,17 +604,26 @@ export async function setupQuery(
           try {
             // Pass mcpUrl for OAuth token cache lookup
             const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            const missingOAuthAuth =
+              server.auth?.type === 'oauth' && transport !== 'stdio' && !authHeaders?.Authorization;
             const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (headers && transport !== 'stdio') {
               serverConfig.headers = headers;
               serversWithHeaders += 1;
-            } else if (server.auth?.type === 'oauth' && transport !== 'stdio') {
+            }
+            if (missingOAuthAuth) {
               // OAuth server but no token. Track for one concise per-query summary below.
               missingOAuthServers.push(server.name);
+              canAlwaysLoad = false;
             }
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             unresolvedAuthServers.push(`${server.name}: ${message}`);
+            canAlwaysLoad = false;
+          }
+
+          if (canAlwaysLoad) {
+            serverConfig.alwaysLoad = true;
           }
 
           mcpConfig[server.name] = serverConfig;
