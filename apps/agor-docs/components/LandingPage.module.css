@@ -180,177 +180,92 @@
   font-family: inherit;
 }
 
-.mockup {
+.screenshotCollage {
   position: relative;
   min-height: 560px;
-  padding: 58px 28px 30px;
-  border: 1px solid rgba(17, 24, 39, 0.1);
+  perspective: 1200px;
+}
+
+.mainScreenshotFrame,
+.floatingScreenshot,
+.screenshotBadge {
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 36px 90px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(16px);
+}
+
+.mainScreenshotFrame {
+  position: absolute;
+  inset: 54px 0 54px 28px;
   border-radius: 34px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.72)),
-    radial-gradient(circle at 50% 0%, rgba(35, 136, 242, 0.17), transparent 24rem);
-  box-shadow: 0 36px 90px rgba(15, 23, 42, 0.14);
   overflow: hidden;
+  transform: rotateY(-10deg) rotateX(2deg);
+  transform-origin: left center;
 }
 
-.mockup::before {
-  position: absolute;
-  inset: 82px -80px -80px;
-  content: "";
-  background-image:
-    linear-gradient(rgba(17, 24, 39, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(17, 24, 39, 0.06) 1px, transparent 1px);
-  background-size: 40px 40px;
-  transform: perspective(520px) rotateX(58deg) rotateZ(-10deg);
-  transform-origin: top center;
-}
-
-.mockupTopbar {
-  position: absolute;
-  top: 20px;
-  left: 24px;
+.screenshotTopbar {
   display: flex;
   gap: 8px;
+  align-items: center;
+  height: 42px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+  background: rgba(255, 255, 255, 0.92);
 }
 
-.mockupTopbar span {
+.screenshotTopbar span {
   width: 10px;
   height: 10px;
   border-radius: 999px;
   background: rgba(17, 24, 39, 0.18);
 }
 
-.boardGrid {
-  position: relative;
-  height: 420px;
-}
-
-.zone {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  gap: 18px;
-  min-width: 235px;
-  min-height: 156px;
-  padding: 18px;
-  border: 1px solid rgba(17, 24, 39, 0.12);
-  border-radius: 28px;
-  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
-  transform: rotate(-8deg) skewY(-4deg);
-}
-
-.zone > span {
-  color: rgba(17, 24, 39, 0.58);
-  font-size: 0.8rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.zoneA {
-  top: 118px;
-  left: 22px;
-  background: var(--landing-sky);
-}
-
-.zoneB {
-  top: 54px;
-  right: 48px;
-  background: var(--landing-mint);
-}
-
-.zoneC {
-  right: -4px;
-  bottom: 22px;
-  background: var(--landing-pink);
-}
-
-.branchCard {
-  padding: 14px;
-  border: 1px solid rgba(17, 24, 39, 0.08);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.8);
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.1);
-  transform: skewY(4deg);
-}
-
-.branchCard strong,
-.branchCard small {
+.mainScreenshotFrame img,
+.floatingScreenshot img {
   display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
-.branchCard strong {
-  color: var(--landing-ink);
-  font-size: 0.98rem;
+.mainScreenshotFrame img {
+  height: calc(100% - 42px);
+  object-position: center top;
 }
 
-.branchCard small {
-  margin-top: 4px;
-  color: var(--landing-muted);
-}
-
-.agentBubble,
-.commandCard {
+.floatingScreenshot {
   position: absolute;
   z-index: 2;
-  border: 1px solid rgba(17, 24, 39, 0.1);
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.16);
-  backdrop-filter: blur(16px);
-}
-
-.agentBubble {
-  top: 86px;
-  left: 72px;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 14px;
-  width: min(400px, calc(100% - 92px));
-  padding: 16px;
+  overflow: hidden;
   border-radius: 24px;
 }
 
-.agentBubble p {
-  margin: 0;
-  color: var(--landing-muted);
-  font-size: 0.95rem;
-  line-height: 1.45;
+.floatingConversation {
+  right: -10px;
+  bottom: 28px;
+  width: min(390px, 58%);
+  height: 228px;
+  transform: rotate(2deg);
 }
 
-.agentBubble strong {
-  color: var(--landing-ink);
+.floatingSessions {
+  left: 0;
+  top: 0;
+  width: min(295px, 46%);
+  height: 292px;
+  transform: rotate(-4deg);
 }
 
-.avatarStack {
-  display: flex;
-  align-items: center;
-}
-
-.avatarStack span {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  margin-left: -8px;
-  border: 2px solid white;
-  border-radius: 999px;
-  color: #0b3b38;
-  background: #7fe8df;
-  font-size: 0.75rem;
-  font-weight: 850;
-}
-
-.avatarStack span:first-child {
-  margin-left: 0;
-}
-
-.commandCard {
-  right: 38px;
-  bottom: 78px;
+.screenshotBadge {
+  position: absolute;
+  z-index: 3;
+  right: 42px;
+  top: 94px;
   display: inline-flex;
   gap: 10px;
   align-items: center;
+  max-width: 360px;
   padding: 13px 16px;
   border-radius: 999px;
   color: var(--landing-ink);
@@ -359,6 +274,7 @@
 }
 
 .statusDot {
+  flex: 0 0 auto;
   width: 9px;
   height: 9px;
   border-radius: 999px;
@@ -561,8 +477,12 @@
     gap: 44px;
   }
 
-  .mockup {
+  .screenshotCollage {
     min-height: 500px;
+  }
+
+  .mainScreenshotFrame {
+    inset: 54px 20px 54px 28px;
   }
 
   .workspaceCopy {
@@ -616,37 +536,34 @@
     width: 100%;
   }
 
-  .mockup {
-    min-height: 480px;
-    padding-inline: 16px;
+  .screenshotCollage {
+    min-height: 500px;
+  }
+
+  .mainScreenshotFrame {
+    inset: 62px 0 42px 0;
     border-radius: 26px;
+    transform: none;
   }
 
-  .zone {
-    min-width: 205px;
+  .floatingSessions {
+    top: 0;
+    width: 52%;
+    height: 180px;
   }
 
-  .zoneA {
-    left: 0;
-  }
-
-  .zoneB {
+  .floatingConversation {
     right: 0;
+    bottom: 8px;
+    width: 66%;
+    height: 160px;
   }
 
-  .zoneC {
-    right: -24px;
-  }
-
-  .agentBubble {
-    top: 58px;
-    left: 18px;
-    width: calc(100% - 36px);
-  }
-
-  .commandCard {
-    right: 16px;
-    bottom: 38px;
+  .screenshotBadge {
+    top: 206px;
+    right: 14px;
+    left: 14px;
+    border-radius: 22px;
   }
 
   .featureGrid {

@@ -65,48 +65,33 @@ const trustItems = [
 
 function ProductMockup() {
   return (
-    <div className={styles.mockup} role="img" aria-label="Agor product preview">
-      <div className={styles.mockupTopbar}>
-        <span />
-        <span />
-        <span />
+    <div className={styles.screenshotCollage} role="img" aria-label="Agor product screenshots">
+      <div className={styles.mainScreenshotFrame}>
+        <div className={styles.screenshotTopbar}>
+          <span />
+          <span />
+          <span />
+        </div>
+        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+        <img
+          src="/screenshots/board-hero.png"
+          alt="Agor board showing branches on a shared canvas"
+        />
       </div>
-      <div className={styles.boardGrid}>
-        <div className={`${styles.zone} ${styles.zoneA}`}>
-          <span>Review lane</span>
-          <div className={styles.branchCard}>
-            <strong>security-audit</strong>
-            <small>3 assistants running</small>
-          </div>
-        </div>
-        <div className={`${styles.zone} ${styles.zoneB}`}>
-          <span>Launch</span>
-          <div className={styles.branchCard}>
-            <strong>docs-refresh</strong>
-            <small>ready for PR</small>
-          </div>
-        </div>
-        <div className={`${styles.zone} ${styles.zoneC}`}>
-          <span>Research</span>
-          <div className={styles.branchCard}>
-            <strong>pricing-intel</strong>
-            <small>scheduled daily</small>
-          </div>
-        </div>
+
+      <div className={`${styles.floatingScreenshot} ${styles.floatingConversation}`}>
+        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+        <img src="/screenshots/conversation_full_page.png" alt="Agor conversation view" />
       </div>
-      <div className={styles.agentBubble}>
-        <div className={styles.avatarStack}>
-          <span>R</span>
-          <span>L</span>
-          <span>S</span>
-        </div>
-        <p>
-          <strong>Scout</strong> found 6 changes, opened a follow-up, and posted the report.
-        </p>
+
+      <div className={`${styles.floatingScreenshot} ${styles.floatingSessions}`}>
+        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+        <img src="/screenshots/parallel-board-5-sessions.png" alt="Agor parallel session tree" />
       </div>
-      <div className={styles.commandCard}>
+
+      <div className={styles.screenshotBadge}>
         <span className={styles.statusDot} />
-        <span>Schedule · every weekday at 9:00</span>
+        <span>Live branches, sessions, agents, and teammates in one place</span>
       </div>
     </div>
   );
