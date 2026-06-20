@@ -4,6 +4,7 @@
   --landing-line: rgba(255, 255, 255, 0.12);
   --landing-teal: #7fe8df;
   --landing-blue: #7fe8df;
+  --landing-gradient: linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%);
   --landing-mint: #d9fb89;
   --landing-pink: #ffc3df;
   --landing-sky: #9bdcff;
@@ -53,21 +54,32 @@
   gap: 12px;
   margin-bottom: 34px;
   color: var(--landing-ink);
-  font-size: 1.42rem;
-  font-weight: 800;
+  font-size: 1.58rem;
+  font-weight: 850;
 }
 
 .brandMark img {
-  width: 64px;
-  height: 64px;
+  width: 72px;
+  height: 72px;
   border-radius: 50%;
   box-shadow: 0 0 34px rgba(127, 232, 223, 0.2);
+}
+
+.brandMark span {
+  background: var(--landing-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .kicker,
 .eyebrow {
   margin: 0 0 16px;
   color: var(--landing-teal);
+  background: var(--landing-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
   font-size: 0.82rem;
   font-weight: 800;
   letter-spacing: 0.13em;
@@ -89,7 +101,7 @@
 
 .heroCopy h1 {
   max-width: 720px;
-  font-size: clamp(3.45rem, 6.65vw, 5.7rem);
+  font-size: clamp(3.25rem, 5.75vw, 5.25rem);
   overflow-wrap: normal;
   word-break: normal;
   hyphens: none;
@@ -306,7 +318,7 @@
 }
 
 .sectionHeader {
-  max-width: 760px;
+  max-width: 920px;
 }
 
 .sectionHeader h2,
@@ -314,7 +326,7 @@
 .useCaseSection h2,
 .controlSection h2,
 .finalCta h2 {
-  font-size: clamp(2.55rem, 4.45vw, 4.45rem);
+  font-size: clamp(2.45rem, 4vw, 4.05rem);
 }
 
 .problemGrid,
@@ -395,10 +407,12 @@
   width: 36px;
   height: 36px;
   margin-bottom: 24px;
-  border: 1px solid rgba(127, 232, 223, 0.18);
+  border: 1px solid transparent;
   border-radius: 999px;
   color: var(--landing-blue);
-  background: rgba(127, 232, 223, 0.08);
+  background:
+    linear-gradient(rgba(9, 17, 30, 0.92), rgba(9, 17, 30, 0.92)) padding-box,
+    var(--landing-gradient) border-box;
   font-weight: 850;
 }
 
