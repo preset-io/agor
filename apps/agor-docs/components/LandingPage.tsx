@@ -110,30 +110,6 @@ function ProductMockup() {
           alt="Agor board showing colorful zones and branch cards on a shared canvas"
         />
       </div>
-
-      <div className={`${styles.floatingScreenshot} ${styles.floatingParallel}`}>
-        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-        <img
-          src="/screenshots/parallel-board-5-sessions.png"
-          alt="Agor branch card with parallel assistant sessions"
-        />
-      </div>
-
-      <div className={`${styles.floatingScreenshot} ${styles.floatingHierarchy}`}>
-        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-        <img
-          src="/screenshots/subsession-board-hierarchy.png"
-          alt="Agor branch card showing assistant session hierarchy"
-        />
-      </div>
-
-      <div className={`${styles.floatingScreenshot} ${styles.floatingReview}`}>
-        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-        <img
-          src="/screenshots/subsession-spawn-codex-review.png"
-          alt="Agor conversation delegating a Codex review subsession"
-        />
-      </div>
     </div>
   );
 }
@@ -141,37 +117,6 @@ function ProductMockup() {
 export function LandingPage() {
   const [isContactOpen, setIsContactOpen] = useState(false);
   const landingRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const landing = landingRef.current;
-    if (!landing || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      return;
-    }
-
-    let frame = 0;
-    const updateParallax = () => {
-      frame = 0;
-      const progress = Math.min(window.scrollY / 520, 1).toFixed(3);
-      landing.style.setProperty('--hero-scroll', progress);
-    };
-
-    const onScroll = () => {
-      if (frame) {
-        return;
-      }
-      frame = window.requestAnimationFrame(updateParallax);
-    };
-
-    updateParallax();
-    window.addEventListener('scroll', onScroll, { passive: true });
-
-    return () => {
-      window.removeEventListener('scroll', onScroll);
-      if (frame) {
-        window.cancelAnimationFrame(frame);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     const landing = landingRef.current;
