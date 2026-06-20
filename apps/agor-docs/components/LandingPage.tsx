@@ -271,6 +271,13 @@ export function LandingPage() {
             Agor gives your team one place to launch assistants, teach them the workflows that
             matter, coordinate live work, and turn the patterns that work into shared muscle.
           </p>
+          <div className={styles.workspaceScreenshot}>
+            {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+            <img
+              src="/screenshots/assistants-list.png"
+              alt="Agor assistants list showing persistent team assistants"
+            />
+          </div>
         </div>
         <div className={styles.featureGrid}>
           {featureCards.map((feature) => (

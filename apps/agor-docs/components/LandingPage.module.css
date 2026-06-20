@@ -324,6 +324,24 @@
   top: 92px;
 }
 
+.workspaceScreenshot {
+  margin-top: 28px;
+  overflow: hidden;
+  border: 1px solid var(--landing-line);
+  border-radius: 18px;
+  background: rgba(8, 14, 24, 0.78);
+  box-shadow: 0 22px 58px rgba(0, 0, 0, 0.24);
+}
+
+.workspaceScreenshot img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1.18 / 1;
+  object-fit: cover;
+  object-position: 50% 24%;
+  filter: saturate(1.05) brightness(1.05);
+}
+
 .featureGrid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 0;
@@ -636,6 +654,10 @@
 
   .workspaceCopy {
     position: static;
+  }
+
+  .workspaceScreenshot {
+    max-width: 520px;
   }
 
   .problemGrid,
