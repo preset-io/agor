@@ -101,8 +101,8 @@ importers:
         specifier: workspace:*
         version: link:../agor-daemon
       '@oclif/core':
-        specifier: ^4.11.6
-        version: 4.11.6
+        specifier: ^4.11.7
+        version: 4.11.7
       '@oclif/plugin-help':
         specifier: ^6.2.50
         version: 6.2.50
@@ -374,8 +374,8 @@ importers:
         specifier: ^6.4.4
         version: 6.4.4(luxon@3.7.2)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       cronstrue:
-        specifier: ^3.14.0
-        version: 3.14.0
+        specifier: ^3.20.0
+        version: 3.20.0
       d3-force:
         specifier: ^3.0.0
         version: 3.0.0
@@ -407,8 +407,8 @@ importers:
         specifier: ^3.0.6
         version: 3.0.6(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react-router-dom:
-        specifier: ^7.17.0
-        version: 7.17.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^7.18.0
+        version: 7.18.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react-syntax-highlighter:
         specifier: ^16.1.1
         version: 16.1.1(react@19.2.7)
@@ -519,8 +519,8 @@ importers:
         specifier: '>=1.29.0 <2'
         version: 1.29.0(zod@4.4.3)
       '@oclif/core':
-        specifier: ^4.11.6
-        version: 4.11.6
+        specifier: ^4.11.7
+        version: 4.11.7
       '@oclif/plugin-help':
         specifier: ^6.2.50
         version: 6.2.50
@@ -573,8 +573,8 @@ importers:
         specifier: ^5.5.0
         version: 5.5.0
       cronstrue:
-        specifier: ^3.14.0
-        version: 3.14.0
+        specifier: ^3.20.0
+        version: 3.20.0
       diff:
         specifier: '>=8.0.3 <9'
         version: 8.0.3
@@ -784,8 +784,8 @@ importers:
         specifier: ^5.5.0
         version: 5.5.0
       cronstrue:
-        specifier: ^3.14.0
-        version: 3.14.0
+        specifier: ^3.20.0
+        version: 3.20.0
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@libsql/client@0.17.4)(@opentelemetry/api@1.9.0)(postgres@3.4.9)(sqlite3@5.1.7)
@@ -2741,8 +2741,8 @@ packages:
     engines: {node: '>=10'}
     deprecated: This functionality has been moved to @npmcli/fs
 
-  '@oclif/core@4.11.6':
-    resolution: {integrity: sha512-8OTkBkWA0HJz2bSIQI0AoiIeL7ok4bZhUaJNEzfLu+iAn3liAyj4KmXRdXAUZBCjPEfdBTpyxKDAg1l/BDJKVg==}
+  '@oclif/core@4.11.7':
+    resolution: {integrity: sha512-LHii7kSaLvv5bpbS09I7BlI1AQa3Kak/QDyyZOik79ET8tQyt1U5O38al+sYkMxi139105w5gS+aWe+5BlJ0yQ==}
     engines: {node: '>=18.0.0'}
 
   '@oclif/plugin-help@6.2.50':
@@ -5191,8 +5191,8 @@ packages:
     resolution: {integrity: sha512-oML4lKUXxizYswqmxuOCpgFS8BNUJpIu6k/2HVHyaL8Ynnf3wdf9tkns0yRdJLSIjkJ+b0DXHMZEHGpMwjnPww==}
     engines: {node: '>=18'}
 
-  cronstrue@3.14.0:
-    resolution: {integrity: sha512-XnW4vuK/jPJjmTyDWiej1Zq36Od7ITwxaV2O1pzHZuyMVvdy7NAvyvIBzybt+idqSpfqYuoDG7uf/ocGtJVWxA==}
+  cronstrue@3.20.0:
+    resolution: {integrity: sha512-2VOOE8DSemXhqEtlU23GBMoeowHnhcto+HPelhtCfM5cP+PB59UOuoeOIBQATzKSW+RfOGF7OJjcwfaUxRW6QQ==}
     hasBin: true
 
   cross-fetch@4.1.0:
@@ -7988,15 +7988,15 @@ packages:
       react: ^16.14.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc
       react-dom: ^16.14.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc
 
-  react-router-dom@7.17.0:
-    resolution: {integrity: sha512-fyU2yjGups/hE6Xz0I5ZYbVL8Gx29eCjgpHaRaTaVU+OOAdfRX05KsvyRm0GO8YQwOkhpU3MurW1jyMUJn+zSw==}
+  react-router-dom@7.18.0:
+    resolution: {integrity: sha512-Fi0yY6kgtKae/Th2xibdWK0KSdYZ4B53Gyf6wRtomOKWgpNm7H7+DyfDhncdz9FKbpS+1jmDhg3F4WoGJ+yFOA==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       react: '>=18'
       react-dom: '>=18'
 
-  react-router@7.17.0:
-    resolution: {integrity: sha512-FDELK7rTMlCHO5+reyXsPlmfr7N1F91lPHsWYfMEGQm/KQ+F4JFM8jGoeQDmDvdTs93Fw9aSilH+uKRb4/jXvQ==}
+  react-router@7.18.0:
+    resolution: {integrity: sha512-pTTGt8J+ji1NOmYnjzT+bAJy/1zD+Jp4ziO6cL7T3ZLvXKtusO7BpFqlRXitqpcPVqllsIXFHRMt+2/k3Xn6HQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       react: '>=18'
@@ -8307,8 +8307,8 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  semver@7.8.4:
-    resolution: {integrity: sha512-rUCObTnP32Q08R2uuIrt7r9PlEonuTmtuXYcW6s5kjdlj3xbnwe+21yXptAUYcMAABLkYYTtnmzb3w3EDZfueA==}
+  semver@7.8.5:
+    resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
     engines: {node: '>=10'}
     hasBin: true
 
@@ -11680,7 +11680,7 @@ snapshots:
   '@npmcli/fs@1.1.1':
     dependencies:
       '@gar/promisify': 1.1.3
-      semver: 7.8.4
+      semver: 7.8.5
     optional: true
 
   '@npmcli/move-file@1.1.2':
@@ -11689,7 +11689,7 @@ snapshots:
       rimraf: 3.0.2
     optional: true
 
-  '@oclif/core@4.11.6':
+  '@oclif/core@4.11.7':
     dependencies:
       ansi-escapes: 4.3.2
       ansis: 3.17.0
@@ -11702,7 +11702,7 @@ snapshots:
       is-wsl: 2.2.0
       lilconfig: 3.1.3
       minimatch: 10.2.5
-      semver: 7.8.4
+      semver: 7.8.5
       string-width: 4.2.3
       supports-color: 8.1.1
       tinyglobby: 0.2.17
@@ -11712,12 +11712,12 @@ snapshots:
 
   '@oclif/plugin-help@6.2.50':
     dependencies:
-      '@oclif/core': 4.11.6
+      '@oclif/core': 4.11.7
 
   '@oclif/plugin-not-found@3.2.87(@types/node@24.10.0)':
     dependencies:
       '@inquirer/prompts': 7.10.1(@types/node@24.10.0)
-      '@oclif/core': 4.11.6
+      '@oclif/core': 4.11.7
       ansis: 3.17.0
       fast-levenshtein: 3.0.0
     transitivePeerDependencies:
@@ -11725,7 +11725,7 @@ snapshots:
 
   '@oclif/plugin-warn-if-update-available@3.1.65':
     dependencies:
-      '@oclif/core': 4.11.6
+      '@oclif/core': 4.11.7
       ansis: 3.17.0
       debug: 4.4.3(supports-color@8.1.1)
       http-call: 5.3.0
@@ -14558,7 +14558,7 @@ snapshots:
     dependencies:
       luxon: 3.7.2
 
-  cronstrue@3.14.0: {}
+  cronstrue@3.20.0: {}
 
   cross-fetch@4.1.0(encoding@0.1.13):
     dependencies:
@@ -16677,7 +16677,7 @@ snapshots:
 
   make-dir@4.0.0:
     dependencies:
-      semver: 7.8.4
+      semver: 7.8.5
 
   make-fetch-happen@9.1.0:
     dependencies:
@@ -17552,7 +17552,7 @@ snapshots:
 
   node-abi@3.92.0:
     dependencies:
-      semver: 7.8.4
+      semver: 7.8.5
     optional: true
 
   node-addon-api@4.3.0:
@@ -17587,7 +17587,7 @@ snapshots:
       nopt: 5.0.0
       npmlog: 6.0.2
       rimraf: 3.0.2
-      semver: 7.8.4
+      semver: 7.8.5
       tar: 6.2.1
       which: 2.0.2
     transitivePeerDependencies:
@@ -17648,7 +17648,7 @@ snapshots:
       '@inquirer/confirm': 3.2.0
       '@inquirer/input': 2.3.0
       '@inquirer/select': 2.5.0
-      '@oclif/core': 4.11.6
+      '@oclif/core': 4.11.7
       '@oclif/plugin-help': 6.2.50
       '@oclif/plugin-not-found': 3.2.87(@types/node@24.10.0)
       '@oclif/plugin-warn-if-update-available': 3.1.65
@@ -18125,13 +18125,13 @@ snapshots:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
 
-  react-router-dom@7.17.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
+  react-router-dom@7.18.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
     dependencies:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      react-router: 7.17.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      react-router: 7.18.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
 
-  react-router@7.17.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
+  react-router@7.18.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
     dependencies:
       cookie: 1.1.1
       react: 19.2.7
@@ -18601,7 +18601,7 @@ snapshots:
 
   semver@7.8.2: {}
 
-  semver@7.8.4: {}
+  semver@7.8.5: {}
 
   send@0.19.2:
     dependencies:
@@ -18699,7 +18699,7 @@ snapshots:
     dependencies:
       '@img/colour': 1.1.0
       detect-libc: 2.1.2
-      semver: 7.8.4
+      semver: 7.8.5
     optionalDependencies:
       '@img/sharp-darwin-arm64': 0.34.5
       '@img/sharp-darwin-x64': 0.34.5

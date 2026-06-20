@@ -392,7 +392,7 @@
     "bcryptjs": "^2.4.3",
     "botbuilder": "^4.23.3",
     "cron-parser": "^5.5.0",
-    "cronstrue": "^3.14.0",
+    "cronstrue": "^3.20.0",
     "drizzle-orm": "^0.45.2",
     "js-yaml": "^4.2.0",
     "open": "^11.0.0",
