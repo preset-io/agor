@@ -1563,7 +1563,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_stop',
     {
       description:
-        'Stop a running session. Kills the executor process and sets the session to idle. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, awaiting_permission, stopping).',
+        'Stop a running session. Kills the executor process and sets the session to idle. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input).',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId('sessionId', 'Session', 'Session ID to stop (UUIDv7 or short ID)'),
