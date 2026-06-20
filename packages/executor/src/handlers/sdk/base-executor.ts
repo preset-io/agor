@@ -583,6 +583,7 @@ export async function executeToolTask(params: {
       params.abortController,
       params.messageSource
     );
+    watchdog.stop();
 
     console.log(
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`

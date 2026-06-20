@@ -119,6 +119,24 @@ describe('AgentProgressWatchdog', () => {
     watchdog.stop();
   });
 
+  it('does not fire after it is stopped', async () => {
+    const { watchdog, patch, abortController } = createWatchdog({
+      firstProgressTimeoutMs: 1000,
+      idleProgressTimeoutMs: 1000,
+    });
+
+    watchdog.start();
+    watchdog.markAgentProgress('stream:end');
+
+    await vi.advanceTimersByTimeAsync(900);
+    watchdog.stop();
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(watchdog.hasStalled()).toBe(false);
+    expect(abortController.signal.aborted).toBe(false);
+    expect(patch).not.toHaveBeenCalled();
+  });
+
   it('does not treat local activity as first agent progress', async () => {
     const { watchdog, patch, abortController } = createWatchdog({
       firstProgressTimeoutMs: 1000,
