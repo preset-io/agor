@@ -322,7 +322,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     };
 
     for (const tool of tools) {
-      const values = agenticConfigDraftByTool[tool] ?? agenticFormByTool[tool].getFieldsValue();
+      const values: AgenticConfigFormValues =
+        agenticConfigDraftByTool[tool] ??
+        (agenticFormByTool[tool].getFieldsValue() as AgenticConfigFormValues);
       nextConfig[tool] = buildConfigFromFormValues(tool, values);
     }
 
