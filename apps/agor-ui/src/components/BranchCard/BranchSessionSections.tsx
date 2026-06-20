@@ -2,11 +2,13 @@ import type { AgorClient, Branch, Session, SessionID, SpawnConfig, User } from '
 import {
   getGatewaySource as getGatewaySourceCore,
   isGatewaySession as isGatewaySessionCore,
+  SessionStatus,
 } from '@agor-live/client';
 import {
   ArrowUpOutlined,
   ClockCircleOutlined,
   DisconnectOutlined,
+  ExclamationCircleOutlined,
   ExportOutlined,
   EyeOutlined,
   LinkOutlined,
@@ -481,6 +483,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const isCreating = branch.filesystem_status === 'creating';
   const isFailed = branch.filesystem_status === 'failed';
 
+  const isSessionFailed = (session: Session): boolean => session.status === SessionStatus.FAILED;
+
   useEffect(() => {
     const collectKeysWithChildren = (nodes: SessionTreeNode[]): React.Key[] => {
       const keys: React.Key[] = [];
@@ -529,11 +533,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     options: { strong?: boolean; secondary?: boolean; query?: string } = {}
   ) => {
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
+    const failed = isSessionFailed(session);
 
     return (
       <Typography.Text
         strong={options.strong}
-        type={options.secondary ? 'secondary' : undefined}
+        type={failed ? 'danger' : options.secondary ? 'secondary' : undefined}
         style={{
           fontSize: isPanel ? 13 : 12,
           flex: 1,
@@ -545,6 +550,29 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       </Typography.Text>
     );
   };
+
+  const renderSessionFailureIcon = (session: Session) => {
+    if (!isSessionFailed(session)) return null;
+
+    return (
+      <Tooltip title="Latest task failed">
+        <ExclamationCircleOutlined
+          aria-label="Latest task failed"
+          style={{ color: token.colorErrorText, fontSize: 12, flex: '0 0 auto' }}
+        />
+      </Tooltip>
+    );
+  };
+
+  const renderSessionTitleWithFailure = (
+    session: Session,
+    options: { strong?: boolean; secondary?: boolean; query?: string } = {}
+  ) => (
+    <>
+      {renderSessionFailureIcon(session)}
+      {renderSessionTitle(session, options)}
+    </>
+  );
 
   const renderFlatSessionRow = (session: Session, query = '') => {
     const isActive = session.status === 'running' || session.status === 'stopping';
@@ -590,7 +618,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             <SessionRelationshipIcon session={session} size={10} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              {renderSessionTitle(session, { query })}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                {renderSessionTitleWithFailure(session, { query })}
+              </div>
               {(sourceLabel || toolMatches) && (
                 <Typography.Text
                   type="secondary"
@@ -675,7 +705,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             ) : (
               <SessionRelationshipIcon session={session} size={10} />
             )}
-            {renderSessionTitle(session)}
+            {renderSessionTitleWithFailure(session)}
           </div>
         </div>
       </SessionItemWithActions>
@@ -801,7 +831,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 ) : (
                   <ToolIcon tool={session.agentic_tool} size={20} />
                 )}
-                {renderSessionTitle(session, { secondary: true })}
+                {renderSessionTitleWithFailure(session, { secondary: true })}
               </Space>
             </div>
           </SessionItemWithActions>
@@ -878,7 +908,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 <div
                   style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}
                 >
-                  {renderSessionTitle(session)}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                    {renderSessionTitleWithFailure(session)}
+                  </div>
                   <div style={{ alignSelf: 'flex-start' }}>
                     {gatewaySource ? (
                       <ChannelPill

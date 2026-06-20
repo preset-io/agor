@@ -75,6 +75,31 @@ describe('BranchSessionSections', () => {
     expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument();
   });
 
+  it('marks a failed session', () => {
+    const failedSession = makeManualSession({
+      session_id: 'session-failed-task',
+      title: 'Investigate crash',
+      status: 'failed',
+    });
+
+    renderSections({ sessions: [failedSession] });
+
+    expect(screen.getByText('Investigate crash')).toBeInTheDocument();
+    expect(screen.getByLabelText('Latest task failed')).toBeInTheDocument();
+  });
+
+  it('does not mark idle sessions as failures', () => {
+    const stoppedSession = makeManualSession({
+      session_id: 'session-stopped-task',
+      title: 'Stopped by user',
+    });
+
+    renderSections({ sessions: [stoppedSession] });
+
+    expect(screen.getByText('Stopped by user')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Latest task failed')).not.toBeInTheDocument();
+  });
+
   it('counts and renders only visible manual sessions when archived ancestors are filtered out', () => {
     const archivedParent = makeManualSession({
       session_id: 'session-archived-parent',

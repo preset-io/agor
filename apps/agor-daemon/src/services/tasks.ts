@@ -290,7 +290,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       .service('sessions')
       .patch(
         failedTask.session_id,
-        { status: SessionStatus.FAILED, ready_for_prompt: true },
+        {
+          status: SessionStatus.FAILED,
+          ready_for_prompt: true,
+        },
         params
       )
       .catch((error: unknown) => {
@@ -494,14 +497,15 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             await this.app.service('sessions').patch(
               task.session_id,
               {
-                status: 'idle',
+                status:
+                  data.status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
                 ready_for_prompt: true,
               },
               params
             );
 
             console.log(
-              `✅ [TasksService] Session ${shortId(task.session_id)} status updated to IDLE (task ${shortId(task.task_id)} ${data.status})`
+              `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${data.status})`
             );
           }
 
