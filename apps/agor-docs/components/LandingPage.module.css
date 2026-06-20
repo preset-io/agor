@@ -203,7 +203,7 @@
   left: -10px;
   width: min(700px, 120%);
   aspect-ratio: 2340 / 1334;
-  border-radius: 20px;
+  border-radius: 10px;
   overflow: hidden;
   transform: rotate(-1.2deg);
   transform-origin: center;
@@ -225,7 +225,7 @@
   position: absolute;
   z-index: 1;
   overflow: hidden;
-  border-radius: 16px;
+  border-radius: 8px;
 }
 
 .floatingConversation {
@@ -663,7 +663,7 @@
     top: 72px;
     left: 0;
     width: 100%;
-    border-radius: 18px;
+    border-radius: 10px;
     transform: none;
   }
 
