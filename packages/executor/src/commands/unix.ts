@@ -34,6 +34,7 @@ import {
 } from '@agor/core/unix';
 import type {
   ExecutorResult,
+  UnixSyncBoardPayload,
   UnixSyncBranchPayload,
   UnixSyncRepoPayload,
   UnixSyncUserPayload,
@@ -665,6 +666,96 @@ export async function handleUnixSyncBranch(
     return {
       success: false,
       error: { code: 'UNIX_SYNC_BRANCH_FAILED', message: errorMessage },
+    };
+  } finally {
+    if (client) {
+      try {
+        client.io.disconnect();
+      } catch {
+        // Ignore
+      }
+    }
+  }
+}
+
+// ============================================================
+// BOARD SYNC OPERATIONS
+// ============================================================
+
+/**
+ * Sync Unix state for every branch currently aligned with a board.
+ *
+ * This keeps board permission propagation in one executor process while
+ * preserving the branch-level sync semantics and no-overgrant alignment gate.
+ */
+export async function handleUnixSyncBoard(
+  payload: UnixSyncBoardPayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  if (options.dryRun) {
+    return {
+      success: true,
+      data: { dryRun: true, command: 'unix.sync-board', boardId: payload.params.boardId },
+    };
+  }
+
+  let client: AgorClient | null = null;
+
+  try {
+    const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
+    client = await createExecutorClient(daemonUrl, payload.sessionToken);
+    console.log('[unix.sync-board] Connected to daemon');
+
+    const boardId = payload.params.boardId;
+    const branchesResult = await client.service(`boards/${boardId}/aligned-branches`).find({});
+    const branches = Array.isArray(branchesResult) ? branchesResult : branchesResult.data || [];
+
+    console.log(
+      `[unix.sync-board] Syncing ${branches.length} board-aligned branch(es) for board ${shortId(boardId)}`
+    );
+
+    // This client was only needed to resolve the board's branch set. Each
+    // branch sync opens its own daemon client through the existing handler,
+    // but all work still runs inside this one executor process.
+    client.io.disconnect();
+    client = null;
+
+    const results: Array<{ branchId: string; success: boolean; error?: unknown }> = [];
+    for (const branch of branches as Array<{ branch_id?: string }>) {
+      if (!branch.branch_id) continue;
+      const result = await handleUnixSyncBranch(
+        {
+          ...payload,
+          command: 'unix.sync-branch',
+          params: {
+            branchId: branch.branch_id,
+            daemonUser: payload.params.daemonUser,
+          },
+        },
+        options
+      );
+      results.push({ branchId: branch.branch_id, success: result.success, error: result.error });
+    }
+
+    const failed = results.filter((result) => !result.success);
+    if (failed.length > 0) {
+      return {
+        success: false,
+        data: { boardId, synced: results.length, failed },
+        error: {
+          code: 'UNIX_SYNC_BOARD_PARTIAL_FAILURE',
+          message: `Failed to sync ${failed.length} of ${results.length} board-aligned branch(es)`,
+        },
+      };
+    }
+
+    return { success: true, data: { boardId, synced: results.length } };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[unix.sync-board] Failed:', errorMessage);
+    return {
+      success: false,
+      error: { code: 'UNIX_SYNC_BOARD_FAILED', message: errorMessage },
     };
   } finally {
     if (client) {

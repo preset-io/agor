@@ -631,10 +631,11 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('git.repo.realign-origin');
     expect(commands).toContain('git.repo.delete');
     expect(commands).toContain('unix.sync-branch');
+    expect(commands).toContain('unix.sync-board');
     expect(commands).toContain('unix.sync-repo');
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands.length).toBe(18);
+    expect(commands.length).toBe(19);
   });
 });

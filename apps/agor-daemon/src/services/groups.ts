@@ -9,6 +9,8 @@ import { BoardRepository, type Database, GroupRepository } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   BoardGroupGrantWithGroup,
+  BoardID,
+  Branch,
   BranchGroupGrantWithGroup,
   BranchID,
   BranchPermissionLevel,
@@ -403,6 +405,34 @@ export function setupBranchEffectiveAccessService(
         }
 
         return effective;
+      },
+    },
+    { methods: ['find'] }
+  );
+}
+
+export function setupBoardAlignedBranchesService(
+  app: import('@agor/core/feathers').Application,
+  branchRepo: BranchRepository
+) {
+  app.use(
+    'boards/:id/aligned-branches',
+    {
+      async find(params?: Params): Promise<Branch[]> {
+        const authParams = params as
+          | (Params & { user?: { user_id: string; role: string; _isServiceAccount?: boolean } })
+          | undefined;
+        if (authParams?.provider && !authParams.user?._isServiceAccount) {
+          const user = authParams.user;
+          if (!user) throw new NotAuthenticated('Authentication required');
+          if (!hasMinimumRole(user.role, ROLES.ADMIN)) {
+            throw new Forbidden('Only admins can list board-aligned branches');
+          }
+        }
+
+        const boardId = paramsRoute(params)?.id;
+        if (!boardId) throw new BadRequest('Board ID is required');
+        return branchRepo.findBoardAlignedBranches(boardId as BoardID);
       },
     },
     { methods: ['find'] }

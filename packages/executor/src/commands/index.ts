@@ -21,7 +21,12 @@ import {
   handleGitRepoDelete,
   handleGitRepoRealignOrigin,
 } from './git.js';
-import { handleUnixSyncBranch, handleUnixSyncRepo, handleUnixSyncUser } from './unix.js';
+import {
+  handleUnixSyncBoard,
+  handleUnixSyncBranch,
+  handleUnixSyncRepo,
+  handleUnixSyncUser,
+} from './unix.js';
 import { handleZellijAttach, handleZellijTab } from './zellij.js';
 
 export interface CommandOptions {
@@ -166,6 +171,7 @@ registerCommand('git.repo.realign-origin', handleGitRepoRealignOrigin);
 registerCommand('git.repo.delete', handleGitRepoDelete);
 registerCommand('unix.sync-repo', handleUnixSyncRepo);
 registerCommand('unix.sync-branch', handleUnixSyncBranch);
+registerCommand('unix.sync-board', handleUnixSyncBoard);
 registerCommand('unix.sync-user', handleUnixSyncUser);
 registerCommand('zellij.attach', handleZellijAttach);
 registerCommand('zellij.tab', handleZellijTab);

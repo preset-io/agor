@@ -76,6 +76,7 @@ import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
   createGroupsService,
+  setupBoardAlignedBranchesService,
   setupBoardGroupGrantsService,
   setupBranchEffectiveAccessService,
   setupBranchFsAccessUsersService,
@@ -369,6 +370,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: ['find', 'create', 'remove'],
   });
   setupBranchEffectiveAccessService(app, new BranchRepository(db));
+  setupBoardAlignedBranchesService(app, new BranchRepository(db));
   setupBranchFsAccessUsersService(app, new BranchRepository(db));
   if (branchRbacEnabled) {
     setupBoardOwnersService(app, new BoardRepository(db));

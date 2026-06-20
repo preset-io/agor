@@ -411,12 +411,28 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const alignedBranches = await branchRepository.findBoardAlignedBranches(boardId as BoardID);
     if (alignedBranches.length === 0) return;
     console.log(
-      `[Unix Integration] Syncing ${alignedBranches.length} board-aligned branch(es) for board ${shortId(boardId)}`
+      `[Unix Integration] Queueing board permission sync for ${alignedBranches.length} board-aligned branch(es) on board ${shortId(boardId)}`
     );
     for (const branch of alignedBranches) {
-      syncBranchUnixAccess(branch.branch_id as BranchID, logPrefix);
       await invalidateRealtimeBranchAccess(branch.branch_id);
     }
+
+    const serviceToken = createServiceToken(jwtSecret, undefined, {
+      board_id: boardId,
+      command: 'unix.sync-board',
+    });
+    spawnExecutorFireAndForget(
+      {
+        command: 'unix.sync-board',
+        sessionToken: serviceToken,
+        daemonUrl: getDaemonUrl(),
+        params: {
+          boardId,
+          daemonUser: config.daemon?.unix_user,
+        },
+      },
+      { logPrefix }
+    );
   };
 
   const syncUnixAccessForBoardFromRoute = async (
