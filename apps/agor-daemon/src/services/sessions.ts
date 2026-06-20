@@ -86,9 +86,20 @@ export type SessionParams = QueryParams<{
   InternalEnrichmentParams & {
     /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
     _include_last_message?: boolean | 'true' | 'false';
-    /** Internal marker to avoid enriching the same find result twice in hooks. */
-    _remote_relationships_enriched?: boolean;
   };
+
+const remoteRelationshipsEnrichedResults = new WeakSet<object>();
+
+export function markRemoteRelationshipsEnrichedResult<T extends object>(result: T): T {
+  remoteRelationshipsEnrichedResults.add(result);
+  return result;
+}
+
+export function isRemoteRelationshipsEnrichedResult(result: unknown): boolean {
+  return (
+    typeof result === 'object' && result !== null && remoteRelationshipsEnrichedResults.has(result)
+  );
+}
 
 /**
  * Execute task data payload
@@ -802,16 +813,14 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     if (Array.isArray(result)) {
       const enriched = await this.enrichRemoteRelationships(result);
-      if (params) params._remote_relationships_enriched = true;
-      return enriched;
+      return markRemoteRelationshipsEnrichedResult(enriched);
     }
 
     const enrichedData = await this.enrichRemoteRelationships(result.data);
-    if (params) params._remote_relationships_enriched = true;
-    return {
+    return markRemoteRelationshipsEnrichedResult({
       ...result,
       data: enrichedData,
-    };
+    });
   }
 }
 

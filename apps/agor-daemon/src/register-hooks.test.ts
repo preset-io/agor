@@ -20,6 +20,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  enrichSessionFindResultWithRemoteRelationships,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
   shouldDrainQueueAfterSessionPostTurnPatch,
@@ -27,6 +28,23 @@ import {
   shouldValidateRepoEnvironmentPayload,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
+
+const makeSession = (sessionId: string): import('@agor/core/types').Session =>
+  ({
+    session_id: sessionId,
+    branch_id: 'branch-1',
+    status: 'idle',
+    agentic_tool: 'codex',
+    created_at: '2026-01-01T00:00:00.000Z',
+    last_updated: '2026-01-01T00:00:00.000Z',
+    tasks: [],
+    genealogy: { children: [] },
+    contextFiles: [],
+    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
+    scheduled_from_branch: false,
+    ready_for_prompt: false,
+    archived: false,
+  }) as import('@agor/core/types').Session;
 
 describe('shouldValidateRepoEnvironmentPayload', () => {
   it('skips absent repo environment payloads', () => {
@@ -82,6 +100,64 @@ describe('shouldDrainQueueAfterSessionPostTurnPatch', () => {
     expect(
       shouldDrainQueueAfterSessionPostTurnPatch({ status: 'idle', ready_for_prompt: false })
     ).toBe(false);
+  });
+});
+
+describe('enrichSessionFindResultWithRemoteRelationships', () => {
+  it('enriches paginated results produced by before.find RBAC scoping', async () => {
+    const session = makeSession('session-1');
+    const relationship = {
+      relationship_id: 'relationship-1',
+      source_session_id: 'session-1',
+      target_session_id: 'session-2',
+      relationship_type: 'remote_create',
+      created_by: 'user-1',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      callback_enabled: false,
+      callback_session_id: null,
+      data: null,
+    } as const;
+    let calls = 0;
+    const service = {
+      async enrichRemoteRelationships(sessions: import('@agor/core/types').Session[]) {
+        calls += 1;
+        return sessions.map((item) =>
+          item.session_id === session.session_id
+            ? { ...item, remote_relationships: { as_source: [relationship], as_target: [] } }
+            : item
+        );
+      },
+    };
+
+    const result = await enrichSessionFindResultWithRemoteRelationships(
+      { total: 1, limit: 10, skip: 0, data: [session] },
+      service
+    );
+
+    expect(calls).toBe(1);
+    expect(Array.isArray(result)).toBe(false);
+    expect(Array.isArray(result) ? null : result.data[0].remote_relationships?.as_source?.[0]).toBe(
+      relationship
+    );
+  });
+
+  it('does not enrich a result that the sessions service already enriched', async () => {
+    const session = makeSession('session-1');
+    let calls = 0;
+    const service = {
+      async enrichRemoteRelationships(sessions: import('@agor/core/types').Session[]) {
+        calls += 1;
+        return sessions.map((item) => ({ ...item, title: 'enriched twice' }));
+      },
+    };
+
+    const once = await enrichSessionFindResultWithRemoteRelationships([session], service);
+    const twice = await enrichSessionFindResultWithRemoteRelationships(once, service);
+
+    expect(twice).toBe(once);
+    expect(calls).toBe(1);
+    expect((twice as import('@agor/core/types').Session[])[0].title).toBe('enriched twice');
   });
 });
 

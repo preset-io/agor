@@ -1035,50 +1035,51 @@ export function useAgorData(
 
         const branchSessions = next.get(newBranchId) || [];
         const index = branchSessions.findIndex((s) => s.session_id === session.session_id);
+        let sourceSessionForRemoteProjection = session;
 
         if (index === -1) {
           next.set(newBranchId, [...branchSessions, session]);
-          return next;
-        }
+        } else {
+          const mergedSession = preserveSessionRelationshipFields(session, branchSessions[index]);
+          sourceSessionForRemoteProjection = mergedSession;
 
-        const mergedSession = preserveSessionRelationshipFields(session, branchSessions[index]);
+          // Bail out when the session is content-equal to what we already hold.
+          // Mirrors the sessionById bailout above so an idempotent patch doesn't
+          // produce a fresh branch-bucket array (which would invalidate
+          // `data.sessions === n.sessions` in BranchNode's custom areEqual and
+          // re-render every BranchCard on the affected branch).
+          if (
+            branchSessions[index] === mergedSession ||
+            shallowEqualEntity(branchSessions[index], mergedSession)
+          ) {
+            return changed ? next : prev;
+          }
 
-        // Bail out when the session is content-equal to what we already hold.
-        // Mirrors the sessionById bailout above so an idempotent patch doesn't
-        // produce a fresh branch-bucket array (which would invalidate
-        // `data.sessions === n.sessions` in BranchNode's custom areEqual and
-        // re-render every BranchCard on the affected branch).
-        if (
-          branchSessions[index] === mergedSession ||
-          shallowEqualEntity(branchSessions[index], mergedSession)
-        ) {
-          return changed ? next : prev;
-        }
+          const updatedSessions = [...branchSessions];
+          updatedSessions[index] = mergedSession;
+          next.set(newBranchId, updatedSessions);
 
-        const updatedSessions = [...branchSessions];
-        updatedSessions[index] = mergedSession;
-        next.set(newBranchId, updatedSessions);
+          // Also update any remote/surrogate projections of this session that
+          // live in source-branch buckets. Preserve their local tree placement
+          // while refreshing status/callback_config/etc. from the canonical row.
+          for (const [branchId, bucket] of next) {
+            if (branchId === newBranchId) continue;
 
-        // Also update any remote/surrogate projections of this session that
-        // live in source-branch buckets. Preserve their local tree placement
-        // while refreshing status/callback_config/etc. from the canonical row.
-        for (const [branchId, bucket] of next) {
-          if (branchId === newBranchId) continue;
+            let bucketChanged = false;
+            const refreshedBucket = bucket.map((item) => {
+              if (item.session_id !== session.session_id) return item;
+              bucketChanged = true;
+              return {
+                ...preserveSessionRelationshipFields(session, item),
+                branch_id: item.branch_id,
+                genealogy: item.genealogy,
+                remote_surrogate: item.remote_surrogate,
+              };
+            });
 
-          let bucketChanged = false;
-          const refreshedBucket = bucket.map((item) => {
-            if (item.session_id !== session.session_id) return item;
-            bucketChanged = true;
-            return {
-              ...preserveSessionRelationshipFields(session, item),
-              branch_id: item.branch_id,
-              genealogy: item.genealogy,
-              remote_surrogate: item.remote_surrogate,
-            };
-          });
-
-          if (bucketChanged) {
-            next.set(branchId, refreshedBucket);
+            if (bucketChanged) {
+              next.set(branchId, refreshedBucket);
+            }
           }
         }
 
@@ -1087,13 +1088,14 @@ export function useAgorData(
         // remote_relationships.as_source populated. Project that single source
         // row into muted remote-surrogate children now, instead of doing any
         // expensive relationship work during render.
-        for (const relationship of mergedSession.remote_relationships?.as_source ?? []) {
+        for (const relationship of sourceSessionForRemoteProjection.remote_relationships
+          ?.as_source ?? []) {
           if (relationship.relationship_type !== 'remote_create') continue;
 
           const targetSession = findSessionInBranchBuckets(next, relationship.target_session_id);
           if (!targetSession) continue;
 
-          const sourceBranchSessions = next.get(mergedSession.branch_id) ?? [];
+          const sourceBranchSessions = next.get(sourceSessionForRemoteProjection.branch_id) ?? [];
           if (
             sourceBranchSessions.some(
               (candidate) => candidate.session_id === targetSession.session_id
@@ -1103,13 +1105,16 @@ export function useAgorData(
           }
 
           const remoteSurrogate = createRemoteSurrogateSession(
-            mergedSession,
+            sourceSessionForRemoteProjection,
             targetSession,
             relationship
           );
           if (!remoteSurrogate) continue;
 
-          next.set(mergedSession.branch_id, [...sourceBranchSessions, remoteSurrogate]);
+          next.set(sourceSessionForRemoteProjection.branch_id, [
+            ...sourceBranchSessions,
+            remoteSurrogate,
+          ]);
         }
 
         return next;

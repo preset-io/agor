@@ -71,7 +71,10 @@ import type { ArtifactsService } from './services/artifacts.js';
 import { normalizeBoardObjectFindQuery } from './services/board-objects.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
-import type { SessionParams } from './services/sessions.js';
+import {
+  isRemoteRelationshipsEnrichedResult,
+  markRemoteRelationshipsEnrichedResult,
+} from './services/sessions.js';
 import { isLocalAuthenticationLookup } from './services/users.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import { applySessionConfigDefaults } from './utils/apply-session-config-defaults.js';
@@ -309,6 +312,24 @@ export function shouldDrainQueueAfterSessionPostTurnPatch(
     session.ready_for_prompt === true &&
     !isTerminalQueueProcessingSuppressed(params)
   );
+}
+
+export async function enrichSessionFindResultWithRemoteRelationships(
+  result: Paginated<Session> | Session[],
+  sessionsService: Pick<SessionsServiceImpl, 'enrichRemoteRelationships'>
+): Promise<Paginated<Session> | Session[]> {
+  if (isRemoteRelationshipsEnrichedResult(result)) return result;
+
+  if (Array.isArray(result)) {
+    return markRemoteRelationshipsEnrichedResult(
+      await sessionsService.enrichRemoteRelationships(result)
+    );
+  }
+
+  return markRemoteRelationshipsEnrichedResult({
+    ...result,
+    data: await sessionsService.enrichRemoteRelationships(result.data),
+  });
 }
 
 /**
@@ -2216,22 +2237,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           // before.find for SQL-efficient access control. That intentionally
           // short-circuits SessionsService.find(), so enrich list payloads here
           // as a single batched query over the final page.
-          const params = context.params as SessionParams | undefined;
-          if (params?._remote_relationships_enriched) return context;
-
-          const result = context.result as Paginated<Session> | Session[];
-          if (Array.isArray(result)) {
-            context.result = await sessionsService.enrichRemoteRelationships(result);
-            return context;
-          }
-
-          if (result?.data) {
-            context.result = {
-              ...result,
-              data: await sessionsService.enrichRemoteRelationships(result.data),
-            };
-          }
-
+          context.result = await enrichSessionFindResultWithRemoteRelationships(
+            context.result as Paginated<Session> | Session[],
+            sessionsService
+          );
           return context;
         },
       ],
