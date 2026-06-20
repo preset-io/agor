@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
-import { getAssistantConfig, isAssistant } from '@agor-live/client';
+import { getAssistantConfig, isAssistant, isSessionExecuting } from '@agor-live/client';
 import {
   BranchesOutlined,
   CodeOutlined,
@@ -181,7 +181,7 @@ const BranchCardComponent = ({
 
   // Check if any active (non-archived) session is running or stopping
   const hasRunningSession = useMemo(
-    () => activeSessions.some((s) => s.status === 'running' || s.status === 'stopping'),
+    () => activeSessions.some(isSessionExecuting),
     [activeSessions]
   );
 

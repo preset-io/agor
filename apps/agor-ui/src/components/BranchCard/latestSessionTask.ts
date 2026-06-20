@@ -35,6 +35,13 @@ function compareLatestTasks(a: Task, b: Task): number {
   const bQueued = b.status === TaskStatus.QUEUED;
   if (aQueued !== bQueued) return aQueued ? -1 : 1;
 
+  // Unstarted terminal tasks (legacy/admin cleanup rows with sentinel
+  // start_index=-1) were never added to the transcript. Do not let them steal
+  // the "latest task" peek from a task that actually ran.
+  const aPinnedToTranscript = Boolean(a.started_at) || (a.message_range?.start_index ?? -1) >= 0;
+  const bPinnedToTranscript = Boolean(b.started_at) || (b.message_range?.start_index ?? -1) >= 0;
+  if (aPinnedToTranscript !== bPinnedToTranscript) return aPinnedToTranscript ? 1 : -1;
+
   const activityDiff = taskActivityTimestamp(a) - taskActivityTimestamp(b);
   if (activityDiff !== 0) return activityDiff;
 

@@ -118,11 +118,11 @@ import {
 } from './utils/mcp-header-secrets.js';
 import { canControlCliSession } from './utils/mcp-token-authorization.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
+import { stopSessionPreserveQueue } from './utils/session-stop.js';
 import {
   sessionCanStartTask,
   shouldReconcileSessionPromptState,
 } from './utils/session-task-state.js';
-import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -168,28 +168,6 @@ interface RouteParams extends Params {
     name?: string;
   };
   user?: User;
-}
-
-export async function markStoppedSessionPromptableAndDrainQueue(
-  sessionsService: Pick<SessionsServiceImpl, 'patch' | 'triggerQueueProcessing'>,
-  sessionId: SessionID,
-  params?: Params
-): Promise<void> {
-  await sessionsService.patch(
-    sessionId,
-    {
-      status: SessionStatus.IDLE,
-      ready_for_prompt: true,
-    },
-    params
-  );
-
-  // Do not rely solely on the sessions.after.patch hook here. Stopping is an
-  // explicit "skip current and continue queued work" action, and the STOPPED
-  // task patch observes the old RUNNING session state before this patch lands.
-  // Trigger the drainer after the session is actually promptable so queued
-  // prompts resume even if hook timing/authorization changes regress later.
-  await sessionsService.triggerQueueProcessing(sessionId, params);
 }
 
 function isServiceAccountRoute(params: RouteParams): boolean {
@@ -2094,72 +2072,35 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             ? data.reason
             : undefined;
 
-        const session = await sessionsService.get(id, params);
-
-        const activeStates: SessionStatus[] = [
-          SessionStatus.RUNNING,
-          SessionStatus.AWAITING_PERMISSION,
-          SessionStatus.STOPPING,
-        ];
-        if (!activeStates.includes(session.status as SessionStatus)) {
-          return {
-            success: false,
-            reason: `Session cannot be stopped (status: ${session.status})`,
-          };
-        }
-
-        // `TasksService.find()` short-circuits on session_id and silently
-        // ignores the status filter; use the shared helper that filters in
-        // process. Already recency-DESC sorted.
-        const targetTasksArray = await findActiveTasksForSession(app as never, id as SessionID);
-
-        if (targetTasksArray.length === 0) {
-          console.warn(
-            `⚠️  [Stop] No active tasks for session ${shortId(id)}, resetting to IDLE${stopReason ? ` (reason: ${stopReason})` : ''}`
-          );
-          // Stop is "skip current", not "wipe everything" — queued prompts represent
-          // user intent and should still execute. Mark promptable, then explicitly
-          // trigger the drainer instead of depending only on the post-patch hook.
-          await markStoppedSessionPromptableAndDrainQueue(sessionsService, id as SessionID, params);
-          return {
-            success: true,
-            status: SessionStatus.IDLE,
-            reason: 'No active tasks found, session reset to idle',
-          };
-        }
-
-        const latestTask = targetTasksArray[0];
-
-        console.log(
-          `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(id)}${stopReason ? ` (reason: ${stopReason})` : ''}`
+        const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
+          stopSessionPreserveQueue(
+            {
+              app,
+              taskRepo: new TaskRepository(db),
+              sessionsService,
+              tasksService,
+              killExecutorProcess,
+            },
+            id as SessionID,
+            params,
+            { reason: stopReason }
+          )
         );
 
-        const processKilled = killExecutorProcess(id);
-        if (!processKilled) {
-          console.warn(
-            `⚠️  [Stop] No tracked process for session ${shortId(id)} — executor may have already exited`
-          );
-        }
-
-        try {
-          await tasksService.patch(latestTask.task_id, {
-            status: TaskStatus.STOPPED,
-            completed_at: new Date().toISOString(),
+        if (result.success) {
+          setImmediate(async () => {
+            try {
+              await sessionsService.triggerQueueProcessing(id as SessionID, params);
+            } catch (error) {
+              console.error(
+                `❌ [Stop] Failed to process queue after stopping session ${shortId(id)}:`,
+                error
+              );
+            }
           });
-        } catch (error) {
-          console.error(`❌ [Stop] Failed to patch task to STOPPED:`, error);
         }
 
-        try {
-          // Stop is "skip current", not "wipe everything" — queued prompts represent
-          // user intent and should still execute. Mark promptable, then explicitly
-          // trigger the drainer instead of depending only on the post-patch hook.
-          await markStoppedSessionPromptableAndDrainQueue(sessionsService, id as SessionID, params);
-        } catch (error) {
-          console.error(`❌ [Stop] Failed to mark session promptable or drain queue:`, error);
-        }
-
-        return { success: true, status: SessionStatus.IDLE };
+        return result;
       },
     },
     {

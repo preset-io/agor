@@ -535,6 +535,19 @@ export function isSessionPromptable<T extends SessionPromptState>(
   return sessionCanStartTask(session.status, session.ready_for_prompt);
 }
 
+export const EXECUTING_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set<SessionStatus>([
+  SessionStatus.RUNNING,
+  SessionStatus.STOPPING,
+  SessionStatus.AWAITING_PERMISSION,
+  SessionStatus.AWAITING_INPUT,
+]);
+
+export type SessionExecutionState = Pick<Session, 'status'>;
+
+export function isSessionExecuting(session: SessionExecutionState): boolean {
+  return EXECUTING_SESSION_STATUSES.has(session.status);
+}
+
 export type SessionRelationshipType = 'remote_create';
 
 /**

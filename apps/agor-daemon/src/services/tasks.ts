@@ -69,6 +69,11 @@ export type TaskParams = QueryParams<{
    * owning session. Heartbeat-loss handling must not auto-start queued prompts.
    */
   suppressTerminalQueueProcessing?: boolean;
+  /**
+   * Internal-only: skip callbacks and other completion side effects for
+   * terminal transitions that are administrative cancellation, not agent output.
+   */
+  suppressCompletionCallbacks?: boolean;
 };
 
 interface CompletionCallbackDispatchResult {
@@ -472,6 +477,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
           const latestTaskId = session.tasks?.[session.tasks.length - 1];
 
+          const suppressCompletionCallbacks = params?.suppressCompletionCallbacks === true;
+
           if (latestTaskId && latestTaskId !== task.task_id) {
             console.log(
               `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
@@ -479,7 +486,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             // Still process completion callbacks (task completed, callback target needs to know).
             // Route through the same centralized/idempotent dispatcher used by the normal
             // completion path so races cannot enqueue duplicate parent callbacks.
-            await this.dispatchCompletionCallbacks(task, session, params);
+            if (!suppressCompletionCallbacks) {
+              await this.dispatchCompletionCallbacks(task, session, params);
+            }
             return result;
           }
 
@@ -515,11 +524,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
           }
 
-          await this.dispatchCompletionCallbacks(task, session, params);
+          if (!suppressCompletionCallbacks) {
+            await this.dispatchCompletionCallbacks(task, session, params);
+          }
 
           // "btw" fork origin: auto-archive the ephemeral fork after task completion.
           // Runs regardless of callback success — btw forks should always be cleaned up.
-          if (session.fork_origin === 'btw') {
+          if (!suppressCompletionCallbacks && session.fork_origin === 'btw') {
             try {
               await this.app.service('sessions').patch(session.session_id, {
                 archived: true,

@@ -2,6 +2,7 @@ import type { AgorClient, Branch, Session, SessionID, SpawnConfig, User } from '
 import {
   getGatewaySource as getGatewaySourceCore,
   isGatewaySession as isGatewaySessionCore,
+  isSessionExecuting,
   SessionStatus,
 } from '@agor-live/client';
 import {
@@ -472,11 +473,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   );
 
   const hasRunningScheduledSession = useMemo(
-    () => scheduledSessions.some((s) => s.status === 'running' || s.status === 'stopping'),
+    () => scheduledSessions.some(isSessionExecuting),
     [scheduledSessions]
   );
   const hasRunningGatewaySession = useMemo(
-    () => gatewaySessions.some((s) => s.status === 'running' || s.status === 'stopping'),
+    () => gatewaySessions.some(isSessionExecuting),
     [gatewaySessions]
   );
 
@@ -575,7 +576,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   );
 
   const renderFlatSessionRow = (session: Session, query = '') => {
-    const isActive = session.status === 'running' || session.status === 'stopping';
+    const isActive = isSessionExecuting(session);
     const callbackToggle = getCallbackToggle(session);
     const remoteParentId = getRemoteParentId(session);
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
@@ -658,7 +659,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   const renderSessionNode = (node: SessionTreeNode) => {
     const session = node.session;
-    const isActive = session.status === 'running' || session.status === 'stopping';
+    const isActive = isSessionExecuting(session);
     const isRemoteSurrogate = node.relationshipType === 'remote';
     const callbackToggle = getCallbackToggle(session);
     const remoteParentId = getRemoteParentId(session);
@@ -793,7 +794,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const scheduledRunsContent = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {scheduledSessions.map((session) => {
-        const isActive = session.status === 'running' || session.status === 'stopping';
+        const isActive = isSessionExecuting(session);
         const callbackToggle = getCallbackToggle(session);
         const remoteParentId = getRemoteParentId(session);
         return (
@@ -866,7 +867,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {gatewaySessions.map((session) => {
         const gatewaySource = getGatewaySource(session);
-        const isActive = session.status === 'running' || session.status === 'stopping';
+        const isActive = isSessionExecuting(session);
         const callbackToggle = getCallbackToggle(session);
         const remoteParentId = getRemoteParentId(session);
 
