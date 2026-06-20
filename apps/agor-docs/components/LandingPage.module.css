@@ -199,28 +199,14 @@
 
 .mainScreenshotFrame {
   position: absolute;
-  inset: 34px 18px 70px 6px;
+  top: 44px;
+  left: -14px;
+  width: min(720px, 124%);
+  aspect-ratio: 2340 / 1334;
   border-radius: 32px;
   overflow: hidden;
-  transform: rotateY(-7deg) rotateX(1.5deg);
+  transform: rotateY(-5deg) rotateX(1deg);
   transform-origin: left center;
-}
-
-.screenshotTopbar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  height: 42px;
-  padding: 0 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(7, 12, 20, 0.92);
-}
-
-.screenshotTopbar span {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.24);
 }
 
 .mainScreenshotFrame img,
@@ -232,8 +218,7 @@
 }
 
 .mainScreenshotFrame img {
-  height: calc(100% - 42px);
-  object-position: 24% 44%;
+  object-position: center;
 }
 
 .floatingScreenshot {
@@ -244,26 +229,26 @@
 }
 
 .floatingConversation {
-  right: -4px;
-  bottom: 16px;
-  width: min(410px, 60%);
-  height: 236px;
+  right: -2px;
+  bottom: 38px;
+  width: min(320px, 46%);
+  height: 176px;
   transform: rotate(2.5deg) translateY(calc(var(--hero-scroll) * 44px));
 }
 
 .floatingSessions {
-  left: -6px;
-  top: 8px;
-  width: min(285px, 42%);
-  height: 260px;
+  left: -2px;
+  top: 0;
+  width: min(195px, 30%);
+  height: 210px;
   transform: rotate(-3deg) translateY(calc(var(--hero-scroll) * -64px));
 }
 
 .screenshotBadge {
   position: absolute;
   z-index: 3;
-  right: 34px;
-  top: 286px;
+  right: 42px;
+  top: 370px;
   display: inline-flex;
   gap: 10px;
   align-items: center;
@@ -636,7 +621,8 @@
   }
 
   .mainScreenshotFrame {
-    inset: 54px 20px 54px 28px;
+    left: 0;
+    width: 100%;
   }
 
   .workspaceCopy {
@@ -693,30 +679,32 @@
   }
 
   .mainScreenshotFrame {
-    inset: 62px 0 42px 0;
+    top: 72px;
+    left: 0;
+    width: 100%;
     border-radius: 26px;
     transform: none;
   }
 
   .mainScreenshotFrame img {
-    object-position: 34% 48%;
+    object-position: center;
   }
 
   .floatingSessions {
     top: 0;
-    width: 52%;
+    width: 42%;
     height: 176px;
   }
 
   .floatingConversation {
     right: 0;
-    bottom: 8px;
-    width: 66%;
-    height: 160px;
+    bottom: 20px;
+    width: 58%;
+    height: 150px;
   }
 
   .screenshotBadge {
-    top: 198px;
+    top: 300px;
     right: 14px;
     left: 14px;
     border-radius: 22px;

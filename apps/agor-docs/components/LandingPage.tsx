@@ -104,11 +104,6 @@ function ProductMockup() {
   return (
     <div className={styles.screenshotCollage} role="img" aria-label="Agor product screenshots">
       <div className={styles.mainScreenshotFrame}>
-        <div className={styles.screenshotTopbar}>
-          <span />
-          <span />
-          <span />
-        </div>
         {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
         <img
           src="/screenshots/board-hero.png"
