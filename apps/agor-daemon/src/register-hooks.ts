@@ -125,6 +125,7 @@ import {
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
+import { sessionCanStartTask } from './utils/session-task-state.js';
 import {
   createServiceToken,
   getDaemonUrl,
@@ -287,6 +288,12 @@ export function isPromptFlowPatchOnly(data: unknown): boolean {
   const keys = Object.keys(data);
   if (keys.length === 0) return false;
   return keys.every((key) => PROMPT_FLOW_PATCH_FIELDS.includes(key));
+}
+
+export function shouldRunSessionPostTurnHooks(
+  session: Pick<Session, 'status' | 'ready_for_prompt'>
+): boolean {
+  return sessionCanStartTask(session.status, session.ready_for_prompt);
 }
 
 /**
@@ -2379,11 +2386,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         async (context) => {
-          // Automatically process queued tasks when session becomes IDLE
-          // This ensures queued tasks are processed regardless of how the session became IDLE
+          // Automatically run post-turn side effects when a session becomes promptable.
+          // Historically that meant IDLE; failed terminal tasks are now promptable too
+          // (status=failed, ready_for_prompt=true) so the UI can surface the failure
+          // without blocking queue draining or gateway finalization.
           const session = Array.isArray(context.result) ? context.result[0] : context.result;
 
-          if (session && session.status === 'idle') {
+          if (session && shouldRunSessionPostTurnHooks(session)) {
             // Flush GitHub message buffer (fire-and-forget).
             // When a GitHub-connected session finishes its turn, post the last
             // buffered message as a PR/issue comment. Must happen before queue
@@ -2409,7 +2418,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               setImmediate(async () => {
                 try {
                   console.log(
-                    `🔄 [SessionsService.after.patch] Session ${shortId(session.session_id)} became IDLE, checking for queued tasks...`
+                    `🔄 [SessionsService.after.patch] Session ${shortId(session.session_id)} became promptable (${session.status}), checking for queued tasks...`
                   );
 
                   await sessionsService.triggerQueueProcessing(session.session_id, context.params);

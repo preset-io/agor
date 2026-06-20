@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
@@ -35,6 +36,25 @@ describe('shouldValidateRepoEnvironmentPayload', () => {
   it('validates present repo environment payloads', () => {
     expect(shouldValidateRepoEnvironmentPayload({})).toBe(true);
     expect(shouldValidateRepoEnvironmentPayload('invalid shape')).toBe(true);
+  });
+});
+
+describe('shouldRunSessionPostTurnHooks', () => {
+  it('runs for idle sessions, preserving stop-route gateway finalization behavior', () => {
+    expect(shouldRunSessionPostTurnHooks({ status: 'idle', ready_for_prompt: false })).toBe(true);
+  });
+
+  it('runs for failed sessions only once they are promptable', () => {
+    expect(shouldRunSessionPostTurnHooks({ status: 'failed', ready_for_prompt: true })).toBe(true);
+    expect(shouldRunSessionPostTurnHooks({ status: 'failed', ready_for_prompt: false })).toBe(
+      false
+    );
+  });
+
+  it('does not run for busy sessions', () => {
+    expect(shouldRunSessionPostTurnHooks({ status: 'running', ready_for_prompt: false })).toBe(
+      false
+    );
   });
 });
 
