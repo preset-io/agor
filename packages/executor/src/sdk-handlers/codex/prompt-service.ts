@@ -404,7 +404,7 @@ export class CodexPromptService {
    * rotated MCP bearer tokens invalidate the cache even when the config
    * shape stays the same — see `snapshotMcpEnvValues()`.
    */
-  private ensureCodexClient(config: CodexConfigObject): void {
+  private async ensureCodexClient(config: CodexConfigObject): Promise<void> {
     const baseUrl = this.resolveBaseUrl();
     const fingerprint = JSON.stringify({
       apiKey: this.apiKey || '',
@@ -421,7 +421,7 @@ export class CodexPromptService {
     codexDebug(
       `🔄 [Codex] Per-session config changed, reinitializing SDK (apiKey=${this.apiKey ? 'set' : 'unset'}, useNativeAuth=${this.useNativeAuth})`
     );
-    this.replaceCodexClient(this.buildCodexOptions(this.apiKey, baseUrl, config));
+    await this.replaceCodexClient(this.buildCodexOptions(this.apiKey, baseUrl, config));
     this.lastApiKey = this.apiKey || null;
     this.lastBaseUrl = baseUrl ?? null;
     this.lastClientFingerprint = fingerprint;
@@ -430,10 +430,12 @@ export class CodexPromptService {
   /**
    * Best-effort close for SDK clients that expose a lifecycle method. The
    * current Codex SDK API has changed over time, so probe common method names
-   * rather than depending on one concrete type. Closing before replacement keeps
-   * abandoned app-server/MCP transports from flapping alongside the new client.
+   * rather than depending on one concrete type. Awaiting close before replacement
+   * keeps abandoned app-server/MCP transports from overlapping the new client.
    */
-  private closeCodexClient(client: InstanceType<typeof Codex.Codex> | undefined): void {
+  private async closeCodexClient(
+    client: InstanceType<typeof Codex.Codex> | undefined
+  ): Promise<void> {
     if (!client) return;
     const candidate = client as unknown as {
       close?: () => void | Promise<void>;
@@ -444,18 +446,19 @@ export class CodexPromptService {
     if (!close) return;
 
     try {
-      void Promise.resolve(close.call(candidate)).catch((error) => {
-        console.warn('⚠️  [Codex] Failed to close previous SDK client:', error);
-      });
+      await Promise.resolve(close.call(candidate));
     } catch (error) {
       console.warn('⚠️  [Codex] Failed to close previous SDK client:', error);
     }
   }
 
-  private replaceCodexClient(options: ConstructorParameters<typeof Codex.Codex>[0]): void {
+  private async replaceCodexClient(
+    options: ConstructorParameters<typeof Codex.Codex>[0]
+  ): Promise<void> {
     const previous = this.codex;
+    this.codex = undefined;
+    await this.closeCodexClient(previous);
     this.codex = new Codex.Codex(options);
-    this.closeCodexClient(previous);
   }
 
   private getCodexClient(): InstanceType<typeof Codex.Codex> {
@@ -971,7 +974,7 @@ export class CodexPromptService {
 
     // Recreate Codex instance only if the per-session config payload (or
     // apiKey/baseUrl) actually changed — issue #133 protection.
-    this.ensureCodexClient(codexConfigPayload);
+    await this.ensureCodexClient(codexConfigPayload);
 
     codexDebug(
       `   Configured: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}, ${mcpServerCount} MCP server(s)`
