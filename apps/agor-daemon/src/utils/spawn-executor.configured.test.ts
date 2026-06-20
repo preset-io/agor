@@ -125,6 +125,35 @@ describe('configured executor spawning', () => {
     expect(onExit).toHaveBeenCalledWith(17);
   });
 
+  it('captures bounded stdout/stderr tails for onExit diagnostics', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const onExit = vi.fn();
+    const { spawnExecutor } = await import('./spawn-executor');
+
+    spawnExecutor(
+      { command: 'prompt' },
+      {
+        captureOutput: true,
+        outputTailMaxBytes: 8,
+        onExit,
+        logPrefix: '[test]',
+      }
+    );
+
+    proc.stdout.emit('data', Buffer.from('stdout-before\n'));
+    proc.stderr.emit('data', Buffer.from('stderr-before\n'));
+    proc.stdout.emit('data', Buffer.from('stdout-after'));
+    proc.stderr.emit('data', Buffer.from('stderr-after'));
+    proc.emit('exit', 1);
+
+    expect(onExit).toHaveBeenCalledWith(1, {
+      stdoutTail: 'ut-after',
+      stderrTail: 'rr-after',
+      combinedTail: 'rr-after',
+    });
+  });
+
   it('keeps createConfiguredSpawner isolated from module-level defaults', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);

@@ -87,6 +87,21 @@ export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
   return status !== undefined && TERMINAL_TASK_STATUSES.has(status);
 }
 
+export const ACTIVE_EXECUTOR_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  TaskStatus.RUNNING,
+  TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.AWAITING_INPUT,
+  TaskStatus.STOPPING,
+  // Historical executor-exit safety-net behavior also repairs timed-out tasks
+  // that never completed their terminal hooks. Keep this explicit instead of
+  // inferring from non-terminal status because TIMED_OUT is terminal.
+  TaskStatus.TIMED_OUT,
+]);
+
+export function isActiveExecutorTaskStatus(status: TaskStatus | undefined): boolean {
+  return status !== undefined && ACTIVE_EXECUTOR_TASK_STATUSES.has(status);
+}
+
 /**
  * Authoritative context-window snapshot captured at task completion.
  *

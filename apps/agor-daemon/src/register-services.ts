@@ -37,7 +37,7 @@ import type {
   SessionID,
   UserID,
 } from '@agor/core/types';
-import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor/core/types';
+import { AGENTIC_TOOL_CAPABILITIES, SessionStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -105,6 +105,7 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
+import { markActiveTaskFailedForExecutorExit } from './utils/executor-exit-safety-net.js';
 import { escapeHtml } from './utils/html.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -869,18 +870,6 @@ function createExecuteHandler(
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
 
-    const formatExecutorExitError = (
-      code: number | null,
-      output?: { stderrTail?: string; combinedTail?: string }
-    ): string => {
-      const codeText = code ?? 'unknown';
-      const rawTail = (output?.stderrTail?.trim() || output?.combinedTail?.trim() || '').trim();
-      const tail = rawTail.length > 4000 ? rawTail.slice(rawTail.length - 4000) : rawTail;
-      return tail
-        ? `Executor exited unexpectedly with code ${codeText}.\n\nLast executor stderr/output:\n${tail}`
-        : `Executor exited unexpectedly with code ${codeText}.`;
-    };
-
     spawnExecutor(executorPayload, {
       cwd,
       asUser: executorUnixUser || undefined,
@@ -912,28 +901,16 @@ function createExecuteHandler(
               `ℹ️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}); checking task-local safety net only`
             );
             try {
-              const currentTask = await app.service('tasks').get(taskId, params);
-              const isTaskStillActive =
-                currentTask.status === TaskStatus.RUNNING ||
-                currentTask.status === 'awaiting_permission' ||
-                currentTask.status === 'awaiting_input' ||
-                currentTask.status === 'stopping' ||
-                currentTask.status === 'timed_out';
+              const { patched } = await markActiveTaskFailedForExecutorExit({
+                app,
+                params,
+                taskId,
+                code,
+                output,
+                suppressTerminalSideEffects: true,
+              });
 
-              if (isTaskStillActive) {
-                await app.service('tasks').patch(
-                  taskId,
-                  {
-                    status: TaskStatus.FAILED,
-                    completed_at: new Date().toISOString(),
-                    error_message: formatExecutorExitError(code, output),
-                  },
-                  {
-                    ...params,
-                    suppressTerminalSessionIdle: true,
-                    suppressTerminalQueueProcessing: true,
-                  }
-                );
+              if (patched) {
                 console.log(
                   `✅ [Executor] Non-latest task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
                 );
@@ -952,30 +929,21 @@ function createExecuteHandler(
             currentSession.status === SessionStatus.TIMED_OUT
           ) {
             try {
-              const currentTask = await app.service('tasks').get(taskId, params);
-              const isTaskStillActive =
-                currentTask.status === TaskStatus.RUNNING ||
-                currentTask.status === 'awaiting_permission' ||
-                currentTask.status === 'awaiting_input' ||
-                currentTask.status === 'stopping' ||
-                currentTask.status === 'timed_out';
+              const { patched, task: currentTask } = await markActiveTaskFailedForExecutorExit({
+                app,
+                params,
+                taskId,
+                code,
+                output,
+              });
 
-              if (isTaskStillActive) {
-                await app.service('tasks').patch(
-                  taskId,
-                  {
-                    status: TaskStatus.FAILED,
-                    completed_at: new Date().toISOString(),
-                    error_message: formatExecutorExitError(code, output),
-                  },
-                  params
-                );
+              if (patched) {
                 console.log(
                   `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
                 );
               } else {
                 console.log(
-                  `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
+                  `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask?.status}, but session still ${currentSession.status} — repairing session state`
                 );
                 await app
                   .service('sessions')
