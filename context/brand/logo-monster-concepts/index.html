@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agor pixel monster logo concepts</title>
+    <style>
+      :root {
+        --agor-teal: #2e9a92;
+        --agor-teal-bright: #3db4aa;
+        --agor-mint: #7fe8df;
+        --agor-pale: #a8f5ed;
+        --agor-ink: #1b2029;
+        --agor-ink-2: #0f171a;
+        --agor-slate: #25313a;
+        --agor-cream: #eafffb;
+        --agor-danger: #ff6b5f;
+        --agor-gold: #ffd166;
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--agor-ink-2);
+        color: #edfdfa;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 20% 8%, rgba(127, 232, 223, 0.16), transparent 34rem),
+          radial-gradient(circle at 82% 18%, rgba(46, 154, 146, 0.2), transparent 32rem),
+          linear-gradient(135deg, #080b0d 0%, #151b23 42%, #0f1f1e 100%);
+      }
+
+      main { width: min(1240px, calc(100% - 36px)); margin: 0 auto; padding: 42px 0 56px; }
+      .hero {
+        display: grid;
+        grid-template-columns: 1.35fr 0.65fr;
+        gap: 28px;
+        align-items: stretch;
+        margin-bottom: 28px;
+      }
+      .panel,
+      .card {
+        border: 1px solid rgba(168, 245, 237, 0.16);
+        background: rgba(17, 24, 31, 0.76);
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+        backdrop-filter: blur(14px);
+        border-radius: 24px;
+      }
+      .panel { padding: 28px; }
+      h1 { margin: 0; font-size: clamp(2.2rem, 5vw, 5.4rem); line-height: 0.96; letter-spacing: -0.065em; }
+      .gradient {
+        background: linear-gradient(90deg, var(--agor-teal) 0%, var(--agor-mint) 58%, var(--agor-pale) 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .subtitle { max-width: 78ch; margin: 18px 0 0; color: rgba(237, 253, 250, 0.76); font-size: 1.05rem; line-height: 1.7; }
+      .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+      .pill {
+        border: 1px solid rgba(127, 232, 223, 0.22);
+        background: rgba(46, 154, 146, 0.12);
+        color: #cbfffa;
+        padding: 7px 11px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        letter-spacing: 0.03em;
+      }
+      .palette { display: grid; gap: 14px; align-content: start; }
+      .palette h2 { margin: 0 0 4px; font-size: 1rem; color: #d9fffb; }
+      .swatches { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .swatch { border-radius: 16px; padding: 12px; min-height: 86px; display: flex; flex-direction: column; justify-content: end; border: 1px solid rgba(255,255,255,0.12); }
+      .swatch span { font-size: 0.72rem; color: rgba(255,255,255,0.84); text-shadow: 0 1px 10px rgba(0,0,0,0.35); }
+      .concept-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+      .card {
+        position: relative;
+        overflow: hidden;
+        min-height: 388px;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+      }
+      .card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at 50% 18%, rgba(127, 232, 223, 0.1), transparent 52%);
+        opacity: 0.9;
+        pointer-events: none;
+      }
+      .mark-stage {
+        position: relative;
+        display: grid;
+        place-items: center;
+        min-height: 172px;
+        margin: 2px 0 14px;
+      }
+      .pixel-mark {
+        width: 144px;
+        height: 144px;
+        image-rendering: pixelated;
+        filter: drop-shadow(0 10px 0 rgba(0,0,0,0.16)) drop-shadow(0 22px 34px rgba(46,154,146,0.2));
+      }
+      .small-row { display: flex; align-items: center; gap: 12px; justify-content: center; margin-top: -8px; opacity: 0.92; }
+      .small-row .pixel-mark { width: 32px; height: 32px; filter: none; }
+      .small-row .wordmark { font-weight: 800; letter-spacing: -0.06em; font-size: 1.45rem; color: #eafffb; }
+      .card h3 { position: relative; margin: 0 0 8px; font-size: 1.08rem; letter-spacing: -0.02em; }
+      .card p { position: relative; margin: 0; color: rgba(237,253,250,0.68); font-size: 0.88rem; line-height: 1.5; }
+      .tagline { position: relative; margin-top: auto; padding-top: 14px; display: flex; flex-wrap: wrap; gap: 7px; }
+      .tagline span { font-size: 0.7rem; border: 1px solid rgba(168,245,237,0.16); border-radius: 999px; padding: 5px 8px; color: rgba(203,255,250,0.88); background: rgba(0,0,0,0.16); }
+      .strong { outline: 1px solid rgba(127, 232, 223, 0.34); }
+      .strong::after {
+        content: "strong candidate";
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        padding: 5px 8px;
+        border-radius: 999px;
+        background: rgba(127,232,223,0.14);
+        border: 1px solid rgba(127,232,223,0.28);
+        color: #b9fff8;
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .notes { margin-top: 28px; padding: 26px; }
+      .notes h2 { margin: 0 0 12px; }
+      .notes-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; color: rgba(237,253,250,0.78); line-height: 1.6; }
+      .notes li { margin: 0.45rem 0; }
+      code { color: #a8f5ed; background: rgba(127,232,223,0.08); padding: 0.1em 0.35em; border-radius: 0.35em; }
+      @media (max-width: 980px) { .hero, .notes-grid { grid-template-columns: 1fr; } .concept-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (max-width: 620px) { main { width: min(100% - 20px, 1240px); padding-top: 18px; } .panel { padding: 20px; } .concept-grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div class="panel">
+          <h1><span class="gradient">Agor</span><br />pixel monster explorations</h1>
+          <p class="subtitle">
+            A fast, reproducible concept board for a cute little Agor monster mascot/logo. The brief: start with the current teal/ink palette, keep it memorable at favicon size, make it non-threatening but a bit badass, and avoid anything too childish.
+          </p>
+          <div class="meta">
+            <span class="pill">SVG generated from tiny pixel grids</span>
+            <span class="pill">No production logo replacement</span>
+            <span class="pill">Designed for small-size review</span>
+          </div>
+        </div>
+        <aside class="panel palette" aria-label="Palette notes">
+          <h2>Palette source</h2>
+          <p style="margin:0;color:rgba(237,253,250,.72);line-height:1.55;font-size:.9rem">Observed in <code>ThemeContext</code>, docs metadata, and existing logo assets.</p>
+          <div class="swatches">
+            <div class="swatch" style="background:#2e9a92"><span>#2e9a92<br />primary teal</span></div>
+            <div class="swatch" style="background:#3db4aa"><span>#3db4aa<br />hover teal</span></div>
+            <div class="swatch" style="background:#7fe8df;color:#072"><span>#7fe8df<br />mint glow</span></div>
+            <div class="swatch" style="background:#1b2029"><span>#1b2029<br />logo ink</span></div>
+          </div>
+        </aside>
+      </section>
+
+      <section id="concepts" class="concept-grid" aria-label="Logo monster concepts"></section>
+
+      <section class="panel notes">
+        <h2>Direction notes</h2>
+        <div class="notes-grid">
+          <div>
+            <ul>
+              <li><strong>Strongest overall:</strong> 01 Cyclops Command, 04 Branch Beast, and 07 Terminal Gremlin. They read fastest at 32px and feel most connected to Agor’s command-center / branch / terminal world.</li>
+              <li><strong>Most mascot-forward:</strong> 03 Fluffy Orbit and 08 Soft Spike. Friendly without becoming a toy brand; useful if Max wants a character that can emote in empty states.</li>
+              <li><strong>Most logo-forward:</strong> 02 Shield Fuzz and 10 Portal Pup. These simplify into an app icon more naturally than a full mascot illustration.</li>
+            </ul>
+          </div>
+          <div>
+            <ul>
+              <li>All marks are intentionally built from a 16×16-ish pixel vocabulary so they can be converted to standalone SVGs or CSS pixel art later.</li>
+              <li>Badass cues are kept small: horns, brows, terminal eyes, branch tails, and ink-heavy silhouettes. No sharp teeth gore, no horror language.</li>
+              <li>Next step: choose 2–3 directions and redraw them as production vectors with fewer internal details, then test at 16/24/32/48px and beside the lowercase <code>agor</code> docs wordmark.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const colors = {
+        t: '#2e9a92', b: '#3db4aa', m: '#7fe8df', p: '#a8f5ed', i: '#1b2029', k: '#0f171a',
+        w: '#eafffb', r: '#ff6b5f', y: '#ffd166', d: '#26343d', x: 'transparent'
+      };
+
+      const concepts = [
+        {
+          n: '01', title: 'Cyclops Command', strong: true,
+          note: 'Single-eye fluffy monster with tiny horns. Best balance of cute, sharp, and recognizable at favicon scale.',
+          tags: ['single eye', 'favicon-safe', 'badass brow'],
+          pattern: [
+            'xxxxrrxxxxrrxxxx','xxxriixxxxiirxxx','xxrtiiittiiitrxx','xxttttttttttttxx','xttttttttttttttx','xttttwwwwwwttttx','ttttwkkkkkkwtttt','ttttwkmmmmkwtttt','ttttwkmppmkwtttt','xtttwkkkkkkwtttx','xttttwwwwwwttttx','xxttttttttttttxx','xxxtttttttttxxx','xxxxittxxittxxxx','xxxiiixxxiiixxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '02', title: 'Shield Fuzz',
+          note: 'App-icon silhouette: fluffy shield body, one watchful lens, little feet. More logo than character.',
+          tags: ['iconic shape', 'protective', 'clean'],
+          pattern: [
+            'xxxxmxxxxxxmxxxx','xxxmmxxxxxxmmxxx','xxmttmmmmmmttmxx','xxttttttttttttxx','xttttttttttttttx','xttttwwwwwwttttx','ttttwkkkkkkwtttt','ttttwkmpppkwtttt','ttttwkkkkkkwtttt','xttttwwwwwwttttx','xttttttttttttttx','xxttttttttttttxx','xxxxttttttttxxxx','xxxxxiixxiixxxxx','xxxxiiixxiiixxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '03', title: 'Fluffy Orbit',
+          note: 'Rounder mascot with antenna/orbit ears. Softer and friendly, with enough ink to stay technical.',
+          tags: ['friendly', 'orbit ears', 'empty states'],
+          pattern: [
+            'xxxxxpxxxxpxxxxx','xxxxpxttttxpxxxx','xxxpxttttttxpxxx','xxxttttttttttxxx','xxttttttttttttxx','xtttwwttttwwtttx','xtttwkkttkkwtttx','ttttwkmttmkwtttt','ttttwkkttkkwtttt','xtttwwttttwwtttx','xttttttyyttttttx','xxtttttyytttttxx','xxxxttttttttxxxx','xxxxxiixxiixxxxx','xxxxxiixxiixxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '04', title: 'Branch Beast', strong: true,
+          note: 'Monster body with a branching tail/horn motif: the most Agor-specific metaphor without showing git literally.',
+          tags: ['branch cue', 'product-native', 'distinct'],
+          pattern: [
+            'xxxxxxmxxxxxxxxx','xxxxxmxxmxxxxxxx','xxxxmxxxxmxxxxxx','xxxmttttttmxxxxx','xxttttttttttxxxx','xtttwwttttwwtxxx','ttttwkkttkkwttxx','ttttwkmppmkwtttx','ttttwkkkkkkwtttx','xttttwwwwwwttttx','xxttttttttttttxx','xxxtttttttttmxxx','xxxxiittttmxmxxx','xxxiiixxxmxxxmxx','xxxxxxxxmxxxxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '05', title: 'Two-Eye Rascal',
+          note: 'Classic two-eyed creature. High trust, expressive, but may be less ownable than the cyclops routes.',
+          tags: ['expressive', 'approachable', 'safe'],
+          pattern: [
+            'xxxmxxxxxxxxmxxx','xxmmiixxxxiimmxx','xxtttiiiiittttxx','xttttttttttttttx','ttttwwttttwwtttt','ttttwkkttkkwtttt','ttttwkmttmkwtttt','ttttwkkttkkwtttt','ttttwwttttwwtttt','xttttttyyttttttx','xxtttttyytttttxx','xxxtttttttttxxx','xxxxiitxxiitxxxx','xxxiiixxxiiixxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '06', title: 'Crowned Imp',
+          note: 'Tiny mint crown/horns and a compact squat body. Feels confident and a bit mischievous.',
+          tags: ['confident', 'compact', 'mischief'],
+          pattern: [
+            'xxxxpxxppxxpxxxx','xxxppxppppxppxxx','xxxtttttttttxxx','xxttttttttttttxx','xttttwwwwwwttttx','ttttwkkkkkkwtttt','ttttwkmpppkwtttt','ttttwkkkkkkwtttt','xttttwwwwwwttttx','xttttttyyttttttx','xxtttttyytttttxx','xxxxttttttttxxxx','xxxxxiixxiixxxxx','xxxxiiixxiiixxxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '07', title: 'Terminal Gremlin', strong: true,
+          note: 'Pixel monster with command prompt eyes. Very product-aware and less childish; strongest for developer audience.',
+          tags: ['terminal', 'developer', 'sharp'],
+          pattern: [
+            'xxxrrxxxxxxrrxxx','xxriiixxxxiirxx','xxttttttttttttxx','xttttttttttttttx','ttttwwttttwwtttt','ttttwkkttkkwtttt','ttttwmmttmmwtttt','ttttwkpttkkwtttt','ttttwwttttwwtttt','xtttttkkkktttttx','xxttttyyyyttttxx','xxxtttttttttxxx','xxxxiitxxiitxxxx','xxxiiixxxiiixxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '08', title: 'Soft Spike',
+          note: 'Fluff-ball with small silhouette spikes. Friendly but still has an edge; good social-avatar candidate.',
+          tags: ['fluffy', 'social', 'edge'],
+          pattern: [
+            'xxxxmxxmmxxmxxxx','xxxmmttttmmxxxxx','xxmttttttttmxxxx','xmttttttttttmxxx','ttttwwwwwwttttxx','ttttwkkkkkwttttx','ttttwkmmpkwttttx','ttttwkkkkkwttttx','ttttwwwwwwttttxx','xmttttttyyttmxxx','xxmttttyyttmxxxx','xxxmmttttmmxxxxx','xxxxiixxiixxxxxx','xxxiiixxiiixxxxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '09', title: 'Agent Bat',
+          note: 'Wing/ear silhouette nods to agents flying around the board. Fun, but riskier because bat cues can get spooky.',
+          tags: ['motion', 'agent swarm', 'riskier'],
+          pattern: [
+            'xxmmxxxxxxxxmmxx','xmttmxxxxxxmttmx','mttttmxxxxmttttm','xxtttttmmtttttxx','xttttttttttttttx','ttttwwttttwwtttt','ttttwkkttkkwtttt','ttttwkmppkwttttt','ttttwkkkkkwttttt','xttttwwwwwtttttx','xxttttyyyttttxx','xxxxttttttttxxxx','xxxxxiixxiixxxxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '10', title: 'Portal Pup',
+          note: 'Monster as a portal/window: big center eye in a rounded-square silhouette. Very app-icon friendly.',
+          tags: ['app icon', 'portal', 'simple'],
+          pattern: [
+            'xxxxmmmmmmmmxxxx','xxxmttttttttmxxx','xxmttttttttttmxx','xxttttttttttttxx','xttttwwwwwwttttx','ttttwkkkkkkwtttt','ttttwkmmmmkwtttt','ttttwkmppmkwtttt','ttttwkkkkkkwtttt','xttttwwwwwwttttx','xxttttttttttttxx','xxmttttttttttmxx','xxxmttttttttmxxx','xxxxmmmmmmmmxxxx','xxxxxiixxiixxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '11', title: 'Spark Mote',
+          note: 'Smallest, simplest sprite with asymmetric sparks. Could animate well, but may lack mascot personality.',
+          tags: ['tiny', 'animated', 'minimal'],
+          pattern: [
+            'xxxxxxxxpxxxxxxx','xxxxxpxxpxxxxxxx','xxxxxxpptxxxxxxx','xxxxxxttttxxxxxx','xxxxxttttttxxxxx','xxxxttwwwwttxxxx','xxxxttwkkwttxxxx','xxxxttwmmwttxxxx','xxxxttwkkwttxxxx','xxxxttwwwwttxxxx','xxxxxttyyttxxxxx','xxxxxxttttxxxxxx','xxxxxxxiixxxxxxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        },
+        {
+          n: '12', title: 'Board Bruiser',
+          note: 'Wide, grounded creature with card-like proportions. Reads like a branch card mascot; maybe too horizontal for favicon.',
+          tags: ['board card', 'grounded', 'wide'],
+          pattern: [
+            'xxxxxxxxxxxxxxxx','xxxxmxxxxxxmxxxx','xxxmttttttttmxxx','xxmttttttttttmxx','xmttwwttttwwttmx','ttttwkkttkkwtttt','ttttwkmttmkwtttt','ttttwkkttkkwtttt','xmttwwttttwwttmx','xxmttttkkkkttmxx','xxxmtttyyyttmxxx','xxxxmttttttmxxxx','xxxiiixxxiiixxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx','xxxxxxxxxxxxxxxx'
+          ]
+        }
+      ];
+
+      function svgFromPattern(pattern, label) {
+        const size = 16;
+        const scale = 8;
+        const rects = [];
+        pattern.forEach((row, y) => [...row].forEach((cell, x) => {
+          if (cell === 'x') return;
+          rects.push(`<rect x="${x * scale}" y="${y * scale}" width="${scale}" height="${scale}" fill="${colors[cell] || colors.t}"/>`);
+        }));
+        return `<svg class="pixel-mark" viewBox="0 0 ${size * scale} ${size * scale}" role="img" aria-label="${label}" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><title>${label}</title>${rects.join('')}</svg>`;
+      }
+
+      const grid = document.querySelector('#concepts');
+      grid.innerHTML = concepts.map((c) => `
+        <article class="card ${c.strong ? 'strong' : ''}">
+          <div class="mark-stage">${svgFromPattern(c.pattern, c.title)}</div>
+          <div class="small-row">${svgFromPattern(c.pattern, `${c.title} 32px preview`)}<span class="wordmark">agor</span></div>
+          <h3>${c.n} · ${c.title}</h3>
+          <p>${c.note}</p>
+          <div class="tagline">${c.tags.map((tag) => `<span>${tag}</span>`).join('')}</div>
+        </article>
+      `).join('');
+    </script>
+  </body>
+</html>
