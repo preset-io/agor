@@ -6,6 +6,7 @@ Open `index.html` in a browser, or view the published Agor artifact. This pass u
 
 ## Generated sheets
 
+- `generated/wide-board-monster-variants.png` — focused landscape board-card monster candidates. Strongest first-pass picks: **A, C, E, G**.
 - `generated/refined-logo-monsters.png` — friendlier, mascot-forward logo candidates. Strongest first-pass picks: **A, B, D, G**.
 - `generated/edgy-logo-monsters.png` — more distinctive tech/product brand-mark candidates. Strongest first-pass picks: **I, J, L, O**.
 
@@ -18,4 +19,4 @@ Open `index.html` in a browser, or view the published Agor artifact. This pass u
 
 ## Next step
 
-Pick 2–4 favorites, then redraw as simplified production vectors and test at 16, 24, 32, and 48px beside the Agor wordmark.
+Current lead direction is the wide board-card monster sheet. Pick 1–2 favorites, then redraw as simplified production vectors and test at website-logo, app-icon, and favicon sizes beside the Agor wordmark.

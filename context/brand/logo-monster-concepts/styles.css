@@ -143,3 +143,25 @@ h1 {
 @media (max-width: 780px) {
   .hero { grid-template-columns: 1fr; }
 }
+
+.sheet-card.lead {
+  border-color: rgba(127, 232, 223, 0.42);
+  box-shadow:
+    0 0 0 1px rgba(127, 232, 223, 0.12) inset,
+    0 24px 90px rgba(46, 154, 146, 0.18),
+    0 18px 70px rgba(0, 0, 0, 0.42);
+}
+
+.sheet-card.lead .sheet-header h2::after {
+  content: "current lead";
+  display: inline-block;
+  margin-left: 10px;
+  padding: 3px 8px;
+  border: 1px solid rgba(127, 232, 223, 0.3);
+  border-radius: 999px;
+  color: var(--mint);
+  background: rgba(127, 232, 223, 0.08);
+  font-size: 0.68rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
