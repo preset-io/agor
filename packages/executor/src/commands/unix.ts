@@ -444,6 +444,7 @@ export async function handleUnixSyncBranch(
     // branch groups plus board owners/groups for board-aligned branches.
     const explicitFsUsernames = new Set(ownerUsernames);
     let fsAccessUsersAdded = 0;
+    let explicitFsUsersFetched = false;
     try {
       const fsUsersResult = await client.service(`branches/${branchId}/fs-access-users`).find({});
       const fsUsers = Array.isArray(fsUsersResult) ? fsUsersResult : fsUsersResult.data || [];
@@ -452,6 +453,7 @@ export async function handleUnixSyncBranch(
           explicitFsUsernames.add(user.unix_username);
         }
       }
+      explicitFsUsersFetched = true;
       fsAccessUsersAdded = await addUsersToGroup(explicitFsUsernames, groupName);
       if (fsAccessUsersAdded > 0) {
         console.log(
@@ -523,7 +525,13 @@ export async function handleUnixSyncBranch(
         // Best-effort stale-member cleanup only.
       }
     }
-    await reconcileGroupMembers(groupName, allowedBranchMembers, '[unix.sync-branch]');
+    if (explicitFsUsersFetched) {
+      await reconcileGroupMembers(groupName, allowedBranchMembers, '[unix.sync-branch]');
+    } else {
+      console.log(
+        '[unix.sync-branch] Skipping stale branch group member cleanup because explicit filesystem access users could not be fetched'
+      );
+    }
 
     // Also sync repo group (ensure owners and authorized session users have .git/ access)
     if (branch.repo_id) {
