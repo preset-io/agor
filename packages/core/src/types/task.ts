@@ -65,6 +65,22 @@ export interface TaskMetadata {
    * this prompt. Links the task back to the originating widget for audit.
    */
   widget_id?: MessageID;
+  /**
+   * Executor-side watchdog diagnostics for SDK turns that stopped producing
+   * observable agent progress while the wrapper process was still alive.
+   */
+  agent_progress_watchdog?: {
+    status: 'stalled';
+    tool: string;
+    reason: string;
+    started_at: string;
+    stalled_at: string;
+    first_progress_seen: boolean;
+    last_progress_at?: string;
+    last_progress_label?: string;
+    timeout_ms: number;
+    elapsed_ms: number;
+  };
 }
 
 /**

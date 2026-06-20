@@ -19,6 +19,7 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
+import { startAgentProgressWatchdog } from '../../agent-progress-watchdog.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
@@ -223,6 +224,75 @@ export function createExecutionContext(
     repos: createFeathersBackedRepositories(client),
     callbacks: createStreamingCallbacks(client, toolName, sessionId),
   };
+}
+
+type ProgressReporter = (label: string) => void;
+
+function withProgressCallbacks(
+  callbacks: StreamingCallbacks,
+  markProgress: ProgressReporter
+): StreamingCallbacks {
+  return {
+    ...callbacks,
+    onStreamStart: async (...args) => {
+      markProgress('stream:start');
+      await callbacks.onStreamStart(...args);
+    },
+    onStreamChunk: async (...args) => {
+      markProgress('stream:chunk');
+      await callbacks.onStreamChunk(...args);
+    },
+    onStreamEnd: async (...args) => {
+      markProgress('stream:end');
+      await callbacks.onStreamEnd(...args);
+    },
+    onStreamError: async (...args) => {
+      markProgress('stream:error');
+      await callbacks.onStreamError(...args);
+    },
+    onThinkingStart: async (...args) => {
+      markProgress('thinking:start');
+      await callbacks.onThinkingStart?.(...args);
+    },
+    onThinkingChunk: async (...args) => {
+      markProgress('thinking:chunk');
+      await callbacks.onThinkingChunk?.(...args);
+    },
+    onThinkingEnd: async (...args) => {
+      markProgress('thinking:end');
+      await callbacks.onThinkingEnd?.(...args);
+    },
+  };
+}
+
+function attachRepositoryProgressReporting(
+  repos: ReturnType<typeof createFeathersBackedRepositories>,
+  markProgress: ProgressReporter
+): void {
+  const originalMessageRepositoryCreate = repos.messages.create.bind(repos.messages);
+  repos.messages.create = (async (...args: Parameters<typeof repos.messages.create>) => {
+    markProgress('message:create');
+    return originalMessageRepositoryCreate(...args);
+  }) as typeof repos.messages.create;
+
+  const originalMessagesServiceCreate = repos.messagesService.create.bind(repos.messagesService);
+  repos.messagesService.create = (async (
+    ...args: Parameters<typeof repos.messagesService.create>
+  ) => {
+    markProgress('message-service:create');
+    return originalMessagesServiceCreate(...args);
+  }) as typeof repos.messagesService.create;
+
+  const originalTasksStreamingCreate = repos.tasksStreamingService.create.bind(
+    repos.tasksStreamingService
+  );
+  repos.tasksStreamingService.create = (async (
+    ...args: Parameters<typeof repos.tasksStreamingService.create>
+  ) => {
+    const eventName = (args[0] as { event?: string } | undefined)?.event ?? 'create';
+    markProgress(`task-stream:${eventName}`);
+    return originalTasksStreamingCreate(...args);
+  }) as typeof repos.tasksStreamingService.create;
 }
 
 type CapturedGitState = {
@@ -439,6 +509,15 @@ export async function executeToolTask(params: {
 
   // Create execution context
   const ctx = createExecutionContext(client, toolName, sessionId);
+  const watchdog = startAgentProgressWatchdog({
+    client,
+    taskId,
+    toolName,
+    abortController: params.abortController,
+  });
+  const markProgress = watchdog.markProgress.bind(watchdog);
+  ctx.callbacks = withProgressCallbacks(ctx.callbacks, markProgress);
+  attachRepositoryProgressReporting(ctx.repos, markProgress);
 
   // Create tool instance using factory function
   // Pass the resolved key (or empty string) and useNativeAuth flag
@@ -594,7 +673,7 @@ export async function executeToolTask(params: {
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
     await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
-    const err = error as Error;
+    const err = watchdog.getStallReason() ? new Error(watchdog.getStallReason()) : (error as Error);
     console.error(`[${toolName}] Execution failed:`, err);
 
     // Capture git SHA at task end (even for failed tasks)
@@ -650,6 +729,7 @@ export async function executeToolTask(params: {
 
     throw err;
   } finally {
+    watchdog.stop();
     // Clean up abort listener
     params.abortController.signal.removeEventListener('abort', abortHandler);
   }
