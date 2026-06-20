@@ -5,6 +5,7 @@
   --landing-teal: #7fe8df;
   --landing-blue: #7fe8df;
   --landing-gradient: linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%);
+  --landing-eyebrow-gradient: linear-gradient(90deg, #a8f5ed 0%, #7fe8df 45%, #2e9a92 100%);
   --landing-mint: #d9fb89;
   --landing-pink: #ffc3df;
   --landing-sky: #9bdcff;
@@ -76,7 +77,7 @@
 .eyebrow {
   margin: 0 0 16px;
   color: var(--landing-teal);
-  background: var(--landing-gradient);
+  background: var(--landing-eyebrow-gradient);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
