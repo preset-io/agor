@@ -641,6 +641,19 @@ function createExecuteHandler(
   sessionTokenService: import('./services/session-token-service.js').SessionTokenService
 ) {
   const { db, app, config, daemonUrl } = ctx;
+  const logStartupTiming = (
+    sessionId: string,
+    taskId: string,
+    startedAtMs: number,
+    phase: string,
+    extra?: Record<string, unknown>
+  ) => {
+    const message =
+      `[executor-startup] session=${shortId(sessionId)} task=${shortId(taskId)} ` +
+      `phase=${phase} elapsed_ms=${Date.now() - startedAtMs}`;
+    if (extra) console.log(message, extra);
+    else console.log(message);
+  };
 
   return async (
     sessionId: string,
@@ -654,10 +667,14 @@ function createExecuteHandler(
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
   ) => {
+    const startupStartedAt = Date.now();
+    const taskId = data.taskId;
+    logStartupTiming(sessionId, taskId, startupStartedAt, 'execute_handler_start');
     const session = await sessionsService.get(sessionId, params);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
+    logStartupTiming(sessionId, taskId, startupStartedAt, 'session_loaded');
 
     // Validate stateless_fs_mode compatibility with agentic tool
     if (config.execution?.stateless_fs_mode) {
@@ -697,8 +714,7 @@ function createExecuteHandler(
         maxUses: -1,
       }
     );
-
-    const taskId = data.taskId;
+    logStartupTiming(sessionId, taskId, startupStartedAt, 'session_token_generated');
 
     // Get branch path
     let cwd = process.cwd();
@@ -710,6 +726,7 @@ function createExecuteHandler(
         console.warn(`Could not get branch path for ${session.branch_id}:`, error);
       }
     }
+    logStartupTiming(sessionId, taskId, startupStartedAt, 'branch_path_resolved', { cwd });
 
     // Determine Unix user for executor
     const {
@@ -791,6 +808,9 @@ function createExecuteHandler(
       sessionId as SessionID,
       session.agentic_tool
     );
+    logStartupTiming(sessionId, taskId, startupStartedAt, 'executor_env_resolved', {
+      envKeyCount: Object.keys(executorEnv).length,
+    });
 
     // Validate required user environment variables
     const requiredUserEnvVars = config.execution?.required_user_env_vars;
@@ -866,9 +886,14 @@ function createExecuteHandler(
         // Don't block the executor — proceed with potentially stale/missing session file
       }
     }
+    logStartupTiming(sessionId, taskId, startupStartedAt, 'stateless_fs_restore_checked');
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
 
+    logStartupTiming(sessionId, taskId, startupStartedAt, 'spawn_calling', {
+      asUser: executorUnixUser || undefined,
+      cwd,
+    });
     spawnExecutor(executorPayload, {
       cwd,
       asUser: executorUnixUser || undefined,
@@ -880,6 +905,9 @@ function createExecuteHandler(
         unix_user: executorUnixUser || undefined,
       },
       onSpawn: (child) => {
+        logStartupTiming(sessionId, taskId, startupStartedAt, 'process_spawned', {
+          pid: child.pid,
+        });
         if (child.pid) {
           trackExecutorProcess(sessionId, child.pid);
           console.log(`${logPrefix} PID: ${child.pid}`);

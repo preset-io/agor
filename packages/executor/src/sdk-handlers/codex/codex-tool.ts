@@ -73,6 +73,21 @@ function shouldRefreshEditFilesBaselineAfterTool(toolName: string): boolean {
   return normalized === 'bash' || toolName.includes('.');
 }
 
+function codexStartupTiming(
+  taskId: TaskID | undefined,
+  sessionId: SessionID,
+  startedAtMs: number,
+  phase: string,
+  extra?: Record<string, unknown>
+): void {
+  const taskLabel = taskId ? shortId(taskId) : 'unknown';
+  const message =
+    `[codex-startup] session=${shortId(sessionId)} task=${taskLabel} ` +
+    `phase=${phase} elapsed_ms=${Date.now() - startedAtMs}`;
+  if (extra) console.log(message, extra);
+  else console.log(message);
+}
+
 export class CodexTool implements ITool {
   readonly toolType = 'codex' as const;
   readonly name = 'OpenAI Codex';
@@ -220,6 +235,8 @@ export class CodexTool implements ITool {
     const pendingToolMessageIds = new Map<string, MessageID>();
     const pendingSnapshotToolIds = new Set<string>();
     const snapshotContext = { snapshotScope: sessionId };
+    const startupStartedAt = Date.now();
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'execute_prompt_start');
 
     if (this.sessionsRepo && this.branchesRepo) {
       const session = await this.sessionsRepo.findById(sessionId);
@@ -228,11 +245,26 @@ export class CodexTool implements ITool {
         workingDirectory = branch?.path;
       }
     }
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'working_directory_resolved');
 
-    await registerEditFilesTurnBaseline({
+    let editFilesBaselineLogged = false;
+    const editFilesBaselineReady = registerEditFilesTurnBaseline({
       ...(workingDirectory ? { workingDirectory } : {}),
       ...snapshotContext,
+    }).catch(() => {
+      // registerEditFilesTurnBaseline is already best-effort, but keep the
+      // fire-and-overlap promise non-rejecting so SDK startup is never delayed
+      // by baseline capture.
     });
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'edit_files_baseline_started');
+
+    const awaitEditFilesBaseline = async () => {
+      await editFilesBaselineReady;
+      if (!editFilesBaselineLogged) {
+        editFilesBaselineLogged = true;
+        codexStartupTiming(taskId, sessionId, startupStartedAt, 'edit_files_baseline_ready');
+      }
+    };
 
     try {
       for await (const event of this.promptService.promptSessionStreaming(
@@ -415,6 +447,7 @@ export class CodexTool implements ITool {
           ];
 
           // Best-effort diff enrichment for Edit/Write tool results
+          await awaitEditFilesBaseline();
           enrichContentBlocks(toolContent, {
             ...(workingDirectory ? { workingDirectory } : {}),
             ...snapshotContext,
@@ -562,6 +595,7 @@ export class CodexTool implements ITool {
         }
       }
     } finally {
+      await awaitEditFilesBaseline();
       for (const toolUseId of pendingSnapshotToolIds) {
         clearToolInvocationState(toolUseId, snapshotContext);
       }

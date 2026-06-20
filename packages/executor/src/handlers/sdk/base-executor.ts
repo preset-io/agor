@@ -35,6 +35,20 @@ function sdkDebug(...args: unknown[]): void {
   }
 }
 
+function startupTiming(
+  toolName: string,
+  taskId: TaskID,
+  startedAtMs: number,
+  phase: string,
+  extra?: Record<string, unknown>
+): void {
+  const message =
+    `[executor-startup] tool=${toolName} task=${shortId(taskId)} ` +
+    `phase=${phase} elapsed_ms=${Date.now() - startedAtMs}`;
+  if (extra) console.log(message, extra);
+  else console.log(message);
+}
+
 /**
  * Tool interface that all SDK wrappers must implement
  */
@@ -395,26 +409,35 @@ export async function executeToolTask(params: {
 }): Promise<void> {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
     params;
+  const startupStartedAt = Date.now();
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
+  startupTiming(toolName, taskId, startupStartedAt, 'base_execute_start');
 
   // Ensure plain git commands launched by the agent SDK inherit safe.directory
   // trust for this managed checkout. Without this, Unix-isolated sessions can
   // create and run successfully through executor-mediated git probes while
   // `git status` inside the agent shell still fails with dubious ownership.
   await configureSessionGitSafeDirectories(client, sessionId, `[${toolName} git.safe-directory]`);
+  startupTiming(toolName, taskId, startupStartedAt, 'git_safe_directories_configured');
 
   // Capture and stamp task-start git state inside the executor as early as
   // possible. The daemon transitions the task to RUNNING before spawn, but the
   // authoritative branch git read belongs here with the rest of
   // executor-mediated git work.
   await stampGitStateAtTaskStart(client, sessionId, taskId);
+  startupTiming(toolName, taskId, startupStartedAt, 'git_state_start_stamped');
 
   // Resolve API key with proper precedence (user → config → env → native auth).
   // Pass `toolName` so the daemon scopes the per-user lookup to this tool's
   // credential bucket — prevents cross-SDK leak (e.g. Codex picking up an
   // ANTHROPIC_API_KEY stored under claude-code).
   const resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
+  startupTiming(toolName, taskId, startupStartedAt, 'api_key_resolved', {
+    source: resolution.source,
+    hasApiKey: Boolean(resolution.apiKey),
+    useNativeAuth: resolution.useNativeAuth,
+  });
 
   // Fail fast if stored key can't be decrypted (e.g. master secret changed)
   if (resolution.decryptionFailed) {
@@ -436,10 +459,12 @@ export async function executeToolTask(params: {
 
   // Create execution context
   const ctx = createExecutionContext(client, toolName, sessionId);
+  startupTiming(toolName, taskId, startupStartedAt, 'execution_context_created');
 
   // Create tool instance using factory function
   // Pass the resolved key (or empty string) and useNativeAuth flag
   const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
+  startupTiming(toolName, taskId, startupStartedAt, 'tool_instance_created');
 
   // Wire up abort signal to tool's stopTask method.
   // Triggered by SIGTERM handler calling abortController.abort().
@@ -472,6 +497,7 @@ export async function executeToolTask(params: {
   try {
     // Execute prompt with streaming
     // Pass abortController directly to SDK for proper cancellation support
+    startupTiming(toolName, taskId, startupStartedAt, 'execute_prompt_with_streaming_start');
     const result = await tool.executePromptWithStreaming(
       sessionId,
       prompt,
@@ -481,6 +507,7 @@ export async function executeToolTask(params: {
       params.abortController,
       params.messageSource
     );
+    startupTiming(toolName, taskId, startupStartedAt, 'execute_prompt_with_streaming_done');
 
     console.log(
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`

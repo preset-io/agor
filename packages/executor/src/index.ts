@@ -35,6 +35,20 @@ function executorDebug(...args: unknown[]): void {
   }
 }
 
+function startupTiming(
+  tool: string,
+  taskId: string,
+  startedAtMs: number,
+  phase: string,
+  extra?: Record<string, unknown>
+): void {
+  const message =
+    `[executor-startup] tool=${tool} task=${shortId(taskId)} ` +
+    `phase=${phase} elapsed_ms=${Date.now() - startedAtMs}`;
+  if (extra) console.log(message, extra);
+  else console.log(message);
+}
+
 export interface ExecutorConfig {
   sessionToken: string;
   sessionId: string;
@@ -75,17 +89,20 @@ export class AgorExecutor {
    * Start the executor process
    */
   async start(): Promise<void> {
+    const startupStartedAt = Date.now();
     const uid = typeof process.getuid === 'function' ? process.getuid() : 'N/A';
     console.log(
       `[executor] Starting ${this.config.tool} task ${shortId(this.config.taskId)} ` +
         `for session ${shortId(this.config.sessionId)} as ${process.env.USER || 'unknown'} (uid: ${uid})`
     );
+    startupTiming(this.config.tool, this.config.taskId, startupStartedAt, 'process_start');
 
     try {
       // Connect to daemon via Feathers/WebSocket
       executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken);
       executorDebug('[executor] Connected to daemon');
+      startupTiming(this.config.tool, this.config.taskId, startupStartedAt, 'daemon_connected');
 
       // Setup event listeners
       this.setupEventListeners();
@@ -94,7 +111,7 @@ export class AgorExecutor {
       this.setupShutdownHandlers();
 
       // Execute the task
-      await this.executeTask();
+      await this.executeTask(startupStartedAt);
 
       // Exit successfully
       console.log('[executor] Task completed, exiting');
@@ -152,7 +169,7 @@ export class AgorExecutor {
   /**
    * Execute the task using the appropriate SDK
    */
-  private async executeTask(): Promise<void> {
+  private async executeTask(startupStartedAt: number): Promise<void> {
     if (!this.client) {
       throw new Error('Feathers client not initialized');
     }
@@ -166,6 +183,7 @@ export class AgorExecutor {
       enabled: heartbeatConfig?.enabled ?? true,
       intervalMs: heartbeatConfig?.interval_ms,
     });
+    startupTiming(this.config.tool, this.config.taskId, startupStartedAt, 'heartbeat_started');
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);
 
@@ -174,9 +192,17 @@ export class AgorExecutor {
       const { ToolRegistry, initializeToolRegistry } = await import(
         './handlers/sdk/tool-registry.js'
       );
-      await initializeToolRegistry();
+      startupTiming(
+        this.config.tool,
+        this.config.taskId,
+        startupStartedAt,
+        'tool_registry_imported'
+      );
+      await initializeToolRegistry(this.config.tool);
+      startupTiming(this.config.tool, this.config.taskId, startupStartedAt, 'tool_registered');
 
       // Execute using registry
+      startupTiming(this.config.tool, this.config.taskId, startupStartedAt, 'tool_execute_start');
       await ToolRegistry.execute(this.config.tool, {
         client: this.client,
         sessionId: this.config.sessionId as SessionID,

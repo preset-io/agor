@@ -167,8 +167,7 @@ async function handlePromptPayload(
   }
 
   // Validate tool using registry
-  const { ToolRegistry, initializeToolRegistry } = await import('./handlers/sdk/tool-registry.js');
-  await initializeToolRegistry();
+  const { ToolRegistry } = await import('./handlers/sdk/tool-registry.js');
 
   if (!ToolRegistry.has(payload.params.tool)) {
     console.error(`[executor] Invalid tool: ${payload.params.tool}`);
@@ -226,11 +225,11 @@ async function handleLegacyMode(values: {
   }
 
   // Validate tool using registry
-  const { ToolRegistry, initializeToolRegistry } = await import('./handlers/sdk/tool-registry.js');
-  await initializeToolRegistry();
+  const { ToolRegistry } = await import('./handlers/sdk/tool-registry.js');
+  const tool = values.tool as string;
 
-  if (!ToolRegistry.has(values.tool as string)) {
-    console.error(`Invalid tool: ${values.tool}`);
+  if (!ToolRegistry.has(tool)) {
+    console.error(`Invalid tool: ${tool}`);
     console.error(`Valid tools: ${ToolRegistry.getAll().join(', ')}`);
     process.exit(1);
   }

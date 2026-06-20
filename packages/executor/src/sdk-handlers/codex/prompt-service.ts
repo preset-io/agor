@@ -100,6 +100,21 @@ function codexDebug(...args: unknown[]): void {
   }
 }
 
+function codexStartupTiming(
+  taskId: TaskID | undefined,
+  sessionId: SessionID,
+  startedAtMs: number,
+  phase: string,
+  extra?: Record<string, unknown>
+): void {
+  const taskLabel = taskId ? shortId(taskId) : 'unknown';
+  const message =
+    `[codex-startup] session=${shortId(sessionId)} task=${taskLabel} ` +
+    `phase=${phase} elapsed_ms=${Date.now() - startedAtMs}`;
+  if (extra) console.log(message, extra);
+  else console.log(message);
+}
+
 function applyGatewayMcpStartupGuard(config: CodexConfigObject, requireMcpServers: boolean): void {
   if (!requireMcpServers) return;
   config.required = true;
@@ -915,11 +930,14 @@ export class CodexPromptService {
     permissionMode?: PermissionMode,
     abortController?: AbortController
   ): AsyncGenerator<CodexStreamEvent> {
+    const startupStartedAt = Date.now();
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'prompt_service_start');
     // Get session to check for existing thread ID and working directory
     const session = await this.sessionsRepo.findById(sessionId);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'session_loaded');
 
     // NOTE: API key resolution is already handled by executeToolTask in base-executor
     // The API key was resolved via daemon service and passed to this constructor
@@ -964,6 +982,7 @@ export class CodexPromptService {
     // executor user's $HOME/.codex which already contains auth.json plus any
     // user-authored config.toml.
     const instructionsFile = await this.ensureCodexInstructionsFile(sessionId);
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'instructions_file_ready');
 
     const mcpToken = session.mcp_token;
     if (!mcpToken) {
@@ -986,6 +1005,10 @@ export class CodexPromptService {
       forUserId,
       requireMcpServers
     );
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'mcp_config_ready', {
+      mcpServerCount,
+      requireMcpServers,
+    });
 
     const codexConfigPayload: CodexConfigObject = {
       model_instructions_file: instructionsFile,
@@ -995,6 +1018,7 @@ export class CodexPromptService {
     // Recreate Codex instance only if the per-session config payload (or
     // apiKey/baseUrl) actually changed — issue #133 protection.
     await this.ensureCodexClient(codexConfigPayload);
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'codex_client_ready');
 
     codexDebug(
       `   Configured: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}, ${mcpServerCount} MCP server(s)`
@@ -1005,10 +1029,12 @@ export class CodexPromptService {
     if (!branch) {
       throw new Error(`Branch ${session.branch_id} not found for session ${sessionId}`);
     }
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'branch_loaded');
 
     codexDebug(`   Working directory: ${branch.path}`);
 
     await this.ensureForkedCodexThread(sessionId, session);
+    codexStartupTiming(taskId, sessionId, startupStartedAt, 'fork_state_ready');
 
     // Build thread options. approvalPolicy + networkAccessEnabled flow through
     // here (not config.toml); ThreadOptions override matching `--config` keys.
@@ -1138,7 +1164,9 @@ export class CodexPromptService {
       // The signal is passed to Codex SDK which will throw AbortError when aborted
       codexDebug(`🎬 [Codex] Starting runStreamed() for session ${shortId(sessionId)}`);
       const turnOptions = abortController ? { signal: abortController.signal } : undefined;
+      codexStartupTiming(taskId, sessionId, startupStartedAt, 'run_streamed_calling');
       const { events } = await thread.runStreamed(prompt, turnOptions);
+      codexStartupTiming(taskId, sessionId, startupStartedAt, 'run_streamed_returned');
       codexDebug(`✅ [Codex] runStreamed() returned, starting event iteration`);
 
       const currentMessage: Array<{
@@ -1161,6 +1189,11 @@ export class CodexPromptService {
 
       for await (const event of events) {
         eventCount++;
+        if (eventCount === 1) {
+          codexStartupTiming(taskId, sessionId, startupStartedAt, 'first_sdk_event', {
+            eventType: event.type,
+          });
+        }
         codexDebug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
 
         // Check if stop was requested

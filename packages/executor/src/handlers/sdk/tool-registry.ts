@@ -15,6 +15,15 @@ import type { AgorClient } from '../../services/feathers-client.js';
  */
 export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
 
+export const KNOWN_TOOLS: readonly Tool[] = [
+  'claude-code',
+  'codex',
+  'gemini',
+  'opencode',
+  'copilot',
+  'cursor',
+] as const;
+
 /**
  * Tool runner function - executes via Feathers WebSocket
  */
@@ -69,14 +78,14 @@ export class ToolRegistry {
    * Get all registered tools
    */
   static getAll(): Tool[] {
-    return Array.from(ToolRegistry.tools.keys());
+    return [...KNOWN_TOOLS];
   }
 
   /**
    * Check if tool is registered
    */
   static has(tool: string): tool is Tool {
-    return ToolRegistry.tools.has(tool as Tool);
+    return (KNOWN_TOOLS as readonly string[]).includes(tool);
   }
 
   /**
@@ -117,62 +126,78 @@ export class ToolRegistry {
 /**
  * Initialize tool registry with all available tools
  */
-export async function initializeToolRegistry(): Promise<void> {
-  // Import all tool handlers
-  const [claude, codex, gemini, opencode, copilot, cursor] = await Promise.all([
-    import('./claude.js'),
-    import('./codex.js'),
-    import('./gemini.js'),
-    import('./opencode.js'),
-    import('./copilot.js'),
-    import('./cursor.js'),
-  ]);
+export async function initializeToolRegistry(tool?: Tool): Promise<void> {
+  const registerTool = async (selectedTool: Tool): Promise<void> => {
+    if (ToolRegistry.get(selectedTool)) return;
 
-  // Register Claude Code
-  ToolRegistry.register({
-    tool: 'claude-code',
-    name: 'Claude Code',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES['claude-code']!,
-    runner: claude.executeClaudeCodeTask,
-  });
+    switch (selectedTool) {
+      case 'claude-code': {
+        const claude = await import('./claude.js');
+        ToolRegistry.register({
+          tool: 'claude-code',
+          name: 'Claude Code',
+          apiKeyEnvVar: TOOL_API_KEY_NAMES['claude-code']!,
+          runner: claude.executeClaudeCodeTask,
+        });
+        break;
+      }
+      case 'codex': {
+        const codex = await import('./codex.js');
+        ToolRegistry.register({
+          tool: 'codex',
+          name: 'Codex',
+          apiKeyEnvVar: TOOL_API_KEY_NAMES.codex!,
+          runner: codex.executeCodexTask,
+        });
+        break;
+      }
+      case 'gemini': {
+        const gemini = await import('./gemini.js');
+        ToolRegistry.register({
+          tool: 'gemini',
+          name: 'Gemini',
+          apiKeyEnvVar: TOOL_API_KEY_NAMES.gemini!,
+          runner: gemini.executeGeminiTask,
+        });
+        break;
+      }
+      case 'opencode': {
+        const opencode = await import('./opencode.js');
+        ToolRegistry.register({
+          tool: 'opencode',
+          name: 'OpenCode',
+          apiKeyEnvVar: 'NONE', // OpenCode doesn't need API key
+          runner: opencode.executeOpenCodeTask,
+        });
+        break;
+      }
+      case 'copilot': {
+        const copilot = await import('./copilot.js');
+        ToolRegistry.register({
+          tool: 'copilot',
+          name: 'GitHub Copilot',
+          apiKeyEnvVar: TOOL_API_KEY_NAMES.copilot!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
+          runner: copilot.executeCopilotTask,
+        });
+        break;
+      }
+      case 'cursor': {
+        const cursor = await import('./cursor.js');
+        ToolRegistry.register({
+          tool: 'cursor',
+          name: 'Cursor SDK',
+          apiKeyEnvVar: TOOL_API_KEY_NAMES.cursor!,
+          runner: cursor.executeCursorTask,
+        });
+        break;
+      }
+    }
+  };
 
-  // Register Codex
-  ToolRegistry.register({
-    tool: 'codex',
-    name: 'Codex',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.codex!,
-    runner: codex.executeCodexTask,
-  });
+  if (tool) {
+    await registerTool(tool);
+    return;
+  }
 
-  // Register Gemini
-  ToolRegistry.register({
-    tool: 'gemini',
-    name: 'Gemini',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.gemini!,
-    runner: gemini.executeGeminiTask,
-  });
-
-  // Register OpenCode
-  ToolRegistry.register({
-    tool: 'opencode',
-    name: 'OpenCode',
-    apiKeyEnvVar: 'NONE', // OpenCode doesn't need API key
-    runner: opencode.executeOpenCodeTask,
-  });
-
-  // Register Copilot
-  ToolRegistry.register({
-    tool: 'copilot',
-    name: 'GitHub Copilot',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.copilot!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
-    runner: copilot.executeCopilotTask,
-  });
-
-  // Register Cursor SDK (experimental skeleton; handler intentionally fails until runtime lands)
-  ToolRegistry.register({
-    tool: 'cursor',
-    name: 'Cursor SDK',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.cursor!,
-    runner: cursor.executeCursorTask,
-  });
+  await Promise.all(KNOWN_TOOLS.map((knownTool) => registerTool(knownTool)));
 }

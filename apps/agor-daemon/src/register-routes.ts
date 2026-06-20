@@ -1016,7 +1016,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     params: RouteParams
   ): Promise<Task> {
+    const startupStartedAt = Date.now();
     const session = await sessionsService.get(task.session_id, params);
+    const logStartupTiming = (
+      phase: string,
+      extra?: Record<string, unknown>
+    ) => {
+      const message =
+        `[executor-startup] session=${shortId(task.session_id)} task=${shortId(task.task_id)} ` +
+        `phase=${phase} elapsed_ms=${Date.now() - startupStartedAt}`;
+      if (extra) console.log(message, extra);
+      else console.log(message);
+    };
+    logStartupTiming('spawn_task_executor_start');
 
     // Recompute message_range.start_index against the live message count.
     const messageStartIndex = await sessionsRepository.countMessages(task.session_id);
@@ -1049,6 +1061,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
       params
     )) as Task;
+    logStartupTiming('task_marked_running');
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
@@ -1080,6 +1093,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
         });
         await app.service('messages').create(userMessage, params);
+        logStartupTiming('initial_user_message_written');
       } catch (msgErr) {
         // Don't fail the spawn — the executor's createUserMessage fallback
         // (with skip-if-exists) will write the row when it connects.
@@ -1109,6 +1123,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
       params
     );
+    logStartupTiming('session_marked_running');
 
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
     // non-owner is prompting. The prompter identity comes from `task.created_by`
@@ -1225,6 +1240,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // response should not block on the executor process being live.
     setImmediate(async () => {
       try {
+        logStartupTiming('execute_task_dispatch_start', { agenticTool: session.agentic_tool });
         console.log(
           `🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor (task ${shortId(taskId)})`
         );
@@ -1244,6 +1260,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         console.log(
           `✅ [Daemon] Executor spawned for session ${shortId(sessionId)}, waiting for task completion`
         );
+        logStartupTiming('execute_task_dispatch_returned');
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(
