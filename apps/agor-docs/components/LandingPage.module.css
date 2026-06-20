@@ -246,11 +246,22 @@
 }
 
 .floatingReview {
-  right: -8px;
+  right: -58px;
   top: 386px;
   width: min(330px, 49%);
   height: 210px;
   transform: rotateY(-7deg) rotateZ(4.6deg) translateY(calc(var(--hero-scroll) * -132px));
+}
+
+
+.floatingParallel img {
+  object-position: 50% 46%;
+  transform: scale(1.08);
+}
+
+.floatingHierarchy img {
+  object-position: 50% 50%;
+  transform: scale(1.12);
 }
 
 .assistantStrip {
@@ -704,7 +715,7 @@
 
   .floatingReview {
     top: 344px;
-    right: 0;
+    right: -22px;
     width: 58%;
     height: 146px;
   }
