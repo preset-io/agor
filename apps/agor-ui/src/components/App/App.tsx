@@ -205,6 +205,8 @@ const EMPTY_BOARD_OBJECTS: BoardEntityObject[] = Object.freeze(
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
 const LEFT_PANEL_MIN_WIDTH_PX = 320;
 const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
+const LEFT_PANEL_TOGGLE_HIT_SIZE_PX = 36;
+const LEFT_PANEL_TOGGLE_KNOB_SIZE_PX = 20;
 
 const getLeftPanelMinSizePercent = (viewportWidth: number) =>
   Math.min(LEFT_PANEL_MAX_SIZE_PERCENT, (LEFT_PANEL_MIN_WIDTH_PX / viewportWidth) * 100);
@@ -1177,62 +1179,7 @@ export const App: React.FC<AppProps> = ({
                         'var(--ant-color-border-secondary)';
                     }
                   }}
-                >
-                  {currentBoard && (
-                    <Tooltip
-                      title={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
-                      placement="right"
-                      getPopupContainer={() => document.body}
-                    >
-                      <button
-                        type="button"
-                        aria-label={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-                        style={{
-                          position: 'absolute',
-                          top: '50%',
-                          left: '50%',
-                          transform: 'translate(-50%, -50%)',
-                          width: 36,
-                          height: 36,
-                          padding: 0,
-                          border: 0,
-                          background: 'transparent',
-                          cursor: 'pointer',
-                          pointerEvents: 'auto',
-                          zIndex: 10,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <span
-                          aria-hidden="true"
-                          style={{
-                            width: 20,
-                            height: 20,
-                            borderRadius: '50%',
-                            border: '1px solid var(--ant-color-border)',
-                            background: 'var(--ant-color-bg-container)',
-                            boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
-                            color: 'var(--ant-color-text)',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                        >
-                          {leftPanelCollapsed ? (
-                            <RightOutlined style={{ fontSize: 10 }} />
-                          ) : (
-                            <LeftOutlined style={{ fontSize: 10 }} />
-                          )}
-                        </span>
-                      </button>
-                    </Tooltip>
-                  )}
-                </PanelResizeHandle>
+                />
                 <Panel
                   id="content-panel"
                   order={2}
@@ -1401,6 +1348,59 @@ export const App: React.FC<AppProps> = ({
                   </PanelGroup>
                 </Panel>
               </PanelGroup>
+              {currentBoard && (
+                <Tooltip
+                  title={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
+                  placement="right"
+                  getPopupContainer={() => document.body}
+                >
+                  <button
+                    type="button"
+                    aria-label={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
+                    onClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+                    style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: leftPanelCollapsed ? 0 : `calc(${effectiveCommentsPanelSize}% + 2px)`,
+                      transform: 'translate(-50%, -50%)',
+                      width: LEFT_PANEL_TOGGLE_HIT_SIZE_PX,
+                      height: LEFT_PANEL_TOGGLE_HIT_SIZE_PX,
+                      padding: 0,
+                      border: 0,
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      pointerEvents: 'auto',
+                      zIndex: 20,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: LEFT_PANEL_TOGGLE_KNOB_SIZE_PX,
+                        height: LEFT_PANEL_TOGGLE_KNOB_SIZE_PX,
+                        borderRadius: '50%',
+                        border: '1px solid var(--ant-color-border)',
+                        background: 'var(--ant-color-bg-container)',
+                        boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
+                        color: 'var(--ant-color-text)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {leftPanelCollapsed ? (
+                        <RightOutlined style={{ fontSize: 10 }} />
+                      ) : (
+                        <LeftOutlined style={{ fontSize: 10 }} />
+                      )}
+                    </span>
+                  </button>
+                </Tooltip>
+              )}
             </Content>
             {/* Invisible mount of antd Upload so its CSS-in-JS styles stay
               registered even after the SessionPanel (which contains FileUpload)
