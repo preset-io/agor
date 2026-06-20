@@ -867,8 +867,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onSubmit={handleSendPrompt}
           placeholder={
             isRunning
-              ? 'Session is working... Type here to queue, or use "btw" for a side question'
-              : 'Send a prompt, fork, or use "btw" for a side question... (type @ for autocomplete)'
+              ? 'Queue here… @ for mentions, : for emoji'
+              : 'Prompt here… @ for mentions, : for emoji'
           }
           autoSize={{ minRows: 1, maxRows: 10 }}
           client={client}
