@@ -1028,4 +1028,44 @@ describe('BranchRepository findExplicitFsAccessUserIds', () => {
       groupMemberId
     );
   });
+
+  dbTest(
+    'includes private board owners for board-aligned branch filesystem access',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const boardRepo = new BoardRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const usersRepo = new UsersRepository(db);
+      const repo = await repoRepo.create(createRepoData({ slug: 'private-board-owner-fs-repo' }));
+      const creatorId = generateId() as UUID;
+      const boardOwnerId = generateId() as UUID;
+
+      await usersRepo.create({ user_id: creatorId, email: 'creator-private-owner-fs@example.com' });
+      await usersRepo.create({
+        user_id: boardOwnerId,
+        email: 'owner-private-owner-fs@example.com',
+      });
+      const board = await boardRepo.create({
+        board_id: generateId(),
+        name: 'Private Board Owner FS',
+        created_by: creatorId,
+        access_mode: 'private',
+      });
+      await boardRepo.addOwner(board.board_id, boardOwnerId);
+      const branch = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          name: 'private-board-owner-fs',
+          branch_unique_id: 9304,
+          created_by: creatorId,
+          permission_source: 'board',
+        })
+      );
+
+      expect(await branchRepo.findExplicitFsAccessUserIds(branch.branch_id)).toContain(
+        boardOwnerId
+      );
+    }
+  );
 });

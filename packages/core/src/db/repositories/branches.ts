@@ -799,16 +799,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const boardOwnerRows = isBoardAligned
       ? await select(this.db, { user_id: boardOwners.user_id })
           .from(boardOwners)
-          .innerJoin(
-            boards,
-            and(
-              eq(boards.board_id, boardOwners.board_id),
-              eq(
-                sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared')`,
-                'shared'
-              )
-            )
-          )
           .where(eq(boardOwners.board_id, branchRow.board_id))
           .all()
       : [];
