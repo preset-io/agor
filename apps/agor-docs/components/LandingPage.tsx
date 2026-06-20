@@ -58,6 +58,27 @@ const featureCards = [
   },
 ];
 
+const productPreviews = [
+  {
+    title: 'Spatial boards',
+    body: 'Arrange branches, zones, sessions, and teammates on one live canvas.',
+    image: '/screenshots/board-hero.png',
+    href: '/guide/boards',
+  },
+  {
+    title: 'Rich agent sessions',
+    body: 'Watch tool calls, decisions, reports, and handoffs unfold with full context.',
+    image: '/screenshots/conversation_full_page.png',
+    href: '/guide/rich-chat-ux',
+  },
+  {
+    title: 'Persistent assistants',
+    body: 'Give long-lived helpers memory, skills, schedules, and team-wide reach.',
+    image: '/screenshots/assistants-list.png',
+    href: '/guide/assistants',
+  },
+];
+
 const useCases = [
   { label: 'multi-agent code review', href: '/guide/sessions' },
   { label: 'release audits', href: '/guide/scheduler' },
@@ -91,7 +112,7 @@ function ProductMockup() {
         {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
         <img
           src="/screenshots/board-hero.png"
-          alt="Agor board showing branches on a shared canvas"
+          alt="Agor board showing colorful zones and branch cards on a shared canvas"
         />
       </div>
 
@@ -102,12 +123,15 @@ function ProductMockup() {
 
       <div className={`${styles.floatingScreenshot} ${styles.floatingSessions}`}>
         {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-        <img src="/screenshots/parallel-board-5-sessions.png" alt="Agor parallel session tree" />
+        <img
+          src="/screenshots/branch-card-with-scheduled-sessions.png"
+          alt="Agor branch card with scheduled assistant runs"
+        />
       </div>
 
       <div className={styles.screenshotBadge}>
         <span className={styles.statusDot} />
-        <span>Live branches, sessions, agents, and teammates in one place</span>
+        <span>A living board for assistants, branches, sessions, and teammates</span>
       </div>
     </div>
   );
@@ -282,6 +306,32 @@ export function LandingPage() {
                 {feature.linkLabel} →
               </Link>
             </article>
+          ))}
+        </div>
+      </section>
+
+      <section className={styles.productShowcase} data-reveal>
+        <div className={styles.sectionHeader}>
+          <span className={styles.eyebrow}>Product surfaces</span>
+          <h2>Show the work, not an abstraction.</h2>
+        </div>
+        <div className={styles.productGrid}>
+          {productPreviews.map((preview, index) => (
+            <Link
+              className={styles.productCard}
+              href={preview.href}
+              key={preview.title}
+              data-reveal
+              style={revealDelay(index)}
+            >
+              {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+              <img src={preview.image} alt="" />
+              <div>
+                <h3>{preview.title}</h3>
+                <p>{preview.body}</p>
+                <span>Open guide →</span>
+              </div>
+            </Link>
           ))}
         </div>
       </section>

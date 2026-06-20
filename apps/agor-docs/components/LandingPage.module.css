@@ -24,6 +24,7 @@
 .problemSection,
 .workspaceSection,
 .useCaseSection,
+.productShowcase,
 .controlSection,
 .finalCta {
   max-width: 1180px;
@@ -170,7 +171,7 @@
 .screenshotCollage {
   position: relative;
   min-height: 560px;
-  perspective: 1200px;
+  perspective: 1400px;
   transform: translateY(calc(var(--hero-scroll) * -80px));
 }
 
@@ -185,10 +186,10 @@
 
 .mainScreenshotFrame {
   position: absolute;
-  inset: 54px 0 54px 28px;
-  border-radius: 34px;
+  inset: 34px 18px 70px 6px;
+  border-radius: 32px;
   overflow: hidden;
-  transform: rotateY(-10deg) rotateX(2deg);
+  transform: rotateY(-7deg) rotateX(1.5deg);
   transform-origin: left center;
 }
 
@@ -219,7 +220,7 @@
 
 .mainScreenshotFrame img {
   height: calc(100% - 42px);
-  object-position: center top;
+  object-position: 24% 44%;
 }
 
 .floatingScreenshot {
@@ -230,26 +231,26 @@
 }
 
 .floatingConversation {
-  right: -10px;
-  bottom: 28px;
-  width: min(390px, 58%);
-  height: 228px;
-  transform: rotate(2deg) translateY(calc(var(--hero-scroll) * 44px));
+  right: -4px;
+  bottom: 16px;
+  width: min(410px, 60%);
+  height: 236px;
+  transform: rotate(2.5deg) translateY(calc(var(--hero-scroll) * 44px));
 }
 
 .floatingSessions {
-  left: 0;
-  top: 0;
-  width: min(295px, 46%);
-  height: 292px;
-  transform: rotate(-4deg) translateY(calc(var(--hero-scroll) * -64px));
+  left: -6px;
+  top: 8px;
+  width: min(285px, 42%);
+  height: 260px;
+  transform: rotate(-3deg) translateY(calc(var(--hero-scroll) * -64px));
 }
 
 .screenshotBadge {
   position: absolute;
   z-index: 3;
-  right: 42px;
-  top: 94px;
+  right: 34px;
+  top: 286px;
   display: inline-flex;
   gap: 10px;
   align-items: center;
@@ -329,8 +330,10 @@
 
 .problemCard,
 .featureCard {
-  min-height: 220px;
-  padding: 28px;
+  min-height: 236px;
+  padding: 26px;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--landing-line);
   border-radius: 28px;
   background: rgba(10, 18, 31, 0.72);
@@ -357,7 +360,8 @@
 
 .cardLink {
   display: inline-flex;
-  margin-top: 22px;
+  margin-top: auto;
+  padding-top: 22px;
   color: var(--landing-teal);
   font-size: 0.92rem;
   font-weight: 800;
@@ -386,10 +390,82 @@
 }
 
 .featureCard span {
-  display: inline-flex;
-  margin-bottom: 42px;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 24px;
+  border: 1px solid rgba(127, 232, 223, 0.18);
+  border-radius: 999px;
   color: var(--landing-blue);
+  background: rgba(127, 232, 223, 0.08);
   font-weight: 850;
+}
+
+.productShowcase {
+  padding-top: 42px;
+}
+
+.productGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 42px;
+}
+
+.productCard {
+  overflow: hidden;
+  border: 1px solid var(--landing-line);
+  border-radius: 28px;
+  color: var(--landing-ink);
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  text-decoration: none;
+}
+
+.productCard img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  object-position: 34% 44%;
+  border-bottom: 1px solid var(--landing-line);
+  filter: saturate(1.08) brightness(1.04);
+}
+
+.productCard:nth-child(2) img {
+  object-position: 72% 45%;
+}
+
+.productCard:nth-child(3) img {
+  object-position: 50% 20%;
+}
+
+.productCard div {
+  padding: 22px;
+}
+
+.productCard h3 {
+  margin: 0;
+  font-size: 1.22rem;
+  letter-spacing: -0.02em;
+}
+
+.productCard p {
+  margin: 10px 0 18px;
+  color: var(--landing-muted);
+  line-height: 1.55;
+}
+
+.productCard span {
+  color: var(--landing-teal);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.productCard:hover {
+  border-color: rgba(127, 232, 223, 0.3);
+  transform: translateY(-2px);
 }
 
 .useCaseSection {
@@ -521,11 +597,11 @@
   }
 
   .floatingConversation {
-    transform: rotate(2deg);
+    transform: rotate(2.5deg);
   }
 
   .floatingSessions {
-    transform: rotate(-4deg);
+    transform: rotate(-3deg);
   }
 }
 
@@ -552,7 +628,8 @@
     position: static;
   }
 
-  .problemGrid {
+  .problemGrid,
+  .productGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -565,6 +642,7 @@
   .heroSection,
   .problemSection,
   .workspaceSection,
+  .productShowcase,
   .useCaseSection,
   .finalCta {
     padding: 64px 18px;
@@ -605,10 +683,14 @@
     transform: none;
   }
 
+  .mainScreenshotFrame img {
+    object-position: 34% 48%;
+  }
+
   .floatingSessions {
     top: 0;
     width: 52%;
-    height: 180px;
+    height: 176px;
   }
 
   .floatingConversation {
@@ -619,14 +701,15 @@
   }
 
   .screenshotBadge {
-    top: 206px;
+    top: 198px;
     right: 14px;
     left: 14px;
     border-radius: 22px;
   }
 
   .problemGrid,
-  .featureGrid {
+  .featureGrid,
+  .productGrid {
     grid-template-columns: 1fr;
   }
 
