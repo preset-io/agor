@@ -11,8 +11,11 @@
         --agor-gold: #ffd166;
         color-scheme: dark;
         font-family:
-          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-feature-settings: "kern" 1, "liga" 1;
         background: var(--agor-ink-2);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: geometricPrecision;
         color: #edfdfa;
       }
 
@@ -43,14 +46,14 @@
         border-radius: 24px;
       }
       .panel { padding: 16px; }
-      h1 { margin: 0; font-size: clamp(1.5rem, 3.2vw, 3.3rem); line-height: 0.98; letter-spacing: -0.055em; }
+      h1 { margin: 0; font-size: clamp(1.35rem, 2.8vw, 2.65rem); line-height: 1; letter-spacing: -0.045em; font-weight: 760; }
       .gradient {
-        background: linear-gradient(90deg, var(--agor-teal) 0%, var(--agor-mint) 58%, var(--agor-pale) 100%);
+        background: linear-gradient(90deg, #5fd1c8 0%, var(--agor-mint) 70%, #d6fffb 100%);
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
       }
-      .subtitle { max-width: 78ch; margin: 10px 0 0; color: rgba(237, 253, 250, 0.76); font-size: 0.86rem; line-height: 1.45; }
+      .subtitle { max-width: 78ch; margin: 10px 0 0; color: rgba(237, 253, 250, 0.76); font-size: 0.84rem; line-height: 1.5; }
       .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
       .pill {
         border: 1px solid rgba(127, 232, 223, 0.22);
@@ -59,7 +62,7 @@
         padding: 3px 6px;
         border-radius: 999px;
         font-size: 0.52rem;
-        letter-spacing: 0.03em;
+        letter-spacing: 0.01em;
       }
       .palette { display: grid; gap: 9px; align-content: start; }
       .palette h2 { margin: 0 0 4px; font-size: 1rem; color: #d9fffb; }
@@ -98,8 +101,8 @@
       }
       .small-row { display: flex; align-items: center; gap: 5px; justify-content: center; margin-top: -4px; opacity: 0.92; }
       .small-row .pixel-mark { width: 22px; height: 22px; filter: none; }
-      .small-row .wordmark { font-weight: 800; letter-spacing: -0.06em; font-size: 1rem; color: #eafffb; }
-      .card h3 { position: relative; margin: 0 0 5px; font-size: 0.86rem; letter-spacing: -0.02em; }
+      .small-row .wordmark { font-weight: 720; letter-spacing: -0.04em; font-size: 1rem; color: #eafffb; }
+      .card h3 { position: relative; margin: 0 0 5px; font-size: 0.84rem; letter-spacing: -0.02em; }
       .card p { position: relative; margin: 0; color: rgba(237,253,250,0.68); font-size: 0.72rem; line-height: 1.35; }
       .tagline { position: relative; margin-top: auto; padding-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; }
       .tagline span { font-size: 0.6rem; border: 1px solid rgba(168,245,237,0.16); border-radius: 999px; padding: 3px 6px; color: rgba(203,255,250,0.88); background: rgba(0,0,0,0.16); }
@@ -115,8 +118,8 @@
         border: 1px solid rgba(127,232,223,0.28);
         color: #b9fff8;
         font-size: 0.52rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        text-transform: none;
+        letter-spacing: 0.01em;
       }
       .notes { margin-top: 14px; padding: 16px; }
       .notes h2 { margin: 0 0 12px; }
