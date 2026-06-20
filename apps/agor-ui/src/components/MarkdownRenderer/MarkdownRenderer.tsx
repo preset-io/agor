@@ -116,7 +116,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   return (
     <Typography style={mergedStyles} className={compact ? 'markdown-compact' : undefined}>
       <Streamdown
-        key={isStreaming ? undefined : markdownContentKey(rawText)}
+        key={isStreaming ? undefined : markdownContentKey(rawText, { headingAnchors })}
         parseIncompleteMarkdown={isStreaming} // Parse incomplete syntax only while streaming
         className={inline ? 'inline-markdown' : 'markdown-content'}
         isAnimating={isStreaming} // Disable buttons during streaming
@@ -138,7 +138,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
 export const MarkdownRenderer = React.memo(MarkdownRendererInner);
 MarkdownRenderer.displayName = 'MarkdownRenderer';
 
-function markdownContentKey(text: string): string {
+function markdownContentKey(text: string, options: { headingAnchors?: boolean } = {}): string {
   // Streamdown memoizes several rendered markdown node components by AST
   // position. Container positions (for example a `<ul>` spanning multiple
   // bullets) do not change when text changes inside an earlier child line, so
@@ -150,7 +150,9 @@ function markdownContentKey(text: string): string {
     hash ^= text.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193);
   }
-  return `${text.length}:${(hash >>> 0).toString(36)}`;
+  return `${options.headingAnchors ? 'anchors' : 'plain'}:${text.length}:${(hash >>> 0).toString(
+    36
+  )}`;
 }
 
 const parseMarkdownAsSingleBlock = (markdown: string) => [markdown];
