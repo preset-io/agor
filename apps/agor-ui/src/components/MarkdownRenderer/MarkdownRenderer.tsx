@@ -103,6 +103,10 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
       headingAnchors ? [...Object.values(defaultRehypePlugins), rehypeHeadingAnchors] : undefined,
     [headingAnchors]
   );
+  const components = useMemo(
+    () => (headingAnchors ? { a: MarkdownAnchor } : undefined),
+    [headingAnchors]
+  );
 
   // Use default dual theme [light, dark] - Streamdown handles CSS-based switching
   // Note: This may render both themes in the DOM, controlled by CSS media queries
@@ -118,7 +122,10 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
         isAnimating={isStreaming} // Disable buttons during streaming
         controls={showControls} // Show/hide controls based on context
         mermaidConfig={mermaidConfig} // Set Mermaid theme based on current theme mode
+        components={components}
         rehypePlugins={rehypePlugins}
+        // Keep anchored documents in one Streamdown block so the heading slugger
+        // sees the whole document and duplicate headings are deduped globally.
         parseMarkdownIntoBlocksFn={headingAnchors ? parseMarkdownAsSingleBlock : undefined}
         // Use default ['github-light', 'github-dark'] for automatic theme switching
       >
@@ -147,3 +154,32 @@ function markdownContentKey(text: string): string {
 }
 
 const parseMarkdownAsSingleBlock = (markdown: string) => [markdown];
+
+type MarkdownAnchorProps = React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+  node?: unknown;
+};
+
+function MarkdownAnchor({ children, className, href, node: _node, ...props }: MarkdownAnchorProps) {
+  if (className?.split(/\s+/).includes('markdown-heading-anchor') && href?.startsWith('#')) {
+    return (
+      <a className={className} href={href} {...props}>
+        {children}
+      </a>
+    );
+  }
+
+  return (
+    <a
+      className={['wrap-anywhere font-medium text-primary underline', className]
+        .filter(Boolean)
+        .join(' ')}
+      data-streamdown="link"
+      href={href}
+      rel="noreferrer"
+      target="_blank"
+      {...props}
+    >
+      {children}
+    </a>
+  );
+}

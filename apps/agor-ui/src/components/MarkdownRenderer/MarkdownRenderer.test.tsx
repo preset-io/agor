@@ -25,7 +25,9 @@ describe('MarkdownRenderer', () => {
 
     const headings = await screen.findAllByRole('heading', { level: 2 });
     expect(headings.map((heading) => heading.id)).toEqual(['foo', 'foo-1']);
-    expect(container.querySelector('a.markdown-heading-anchor[href="#foo"]')).toBeInTheDocument();
+    const firstAnchor = container.querySelector('a.markdown-heading-anchor[href="#foo"]');
+    expect(firstAnchor).toBeInTheDocument();
+    expect(firstAnchor).not.toHaveAttribute('target', '_blank');
     expect(container.querySelector('a.markdown-heading-anchor[href="#foo-1"]')).toBeInTheDocument();
   });
 });
