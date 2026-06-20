@@ -47,15 +47,24 @@ export async function markActiveTaskFailedForExecutorExit({
       }
     : params;
 
-  await app.service('tasks').patch(
+  const completedAt = new Date().toISOString();
+  const errorMessage = formatExecutorExitError(code, output);
+  const patchedTask = await app.service('tasks').patch(
     taskId,
     {
       status: TaskStatus.FAILED,
-      completed_at: new Date().toISOString(),
-      error_message: formatExecutorExitError(code, output),
+      completed_at: completedAt,
+      error_message: errorMessage,
     },
     patchParams
   );
 
-  return { patched: true, task: currentTask };
+  return {
+    patched:
+      !Array.isArray(patchedTask) &&
+      patchedTask.status === TaskStatus.FAILED &&
+      patchedTask.error_message === errorMessage &&
+      patchedTask.completed_at === completedAt,
+    task: Array.isArray(patchedTask) ? currentTask : patchedTask,
+  };
 }
