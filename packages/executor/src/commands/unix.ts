@@ -121,6 +121,39 @@ async function runCommands(commands: string[]): Promise<void> {
   }
 }
 
+function parseGroupMembers(output: string): string[] {
+  return output.trim().split(',').filter(Boolean);
+}
+
+async function addUsersToGroup(usernames: Iterable<string>, groupName: string): Promise<number> {
+  let added = 0;
+  for (const username of usernames) {
+    const inGroup = await checkCommand(UnixGroupCommands.isUserInGroup(username, groupName));
+    if (!inGroup) {
+      await runCommand(UnixGroupCommands.addUserToGroup(username, groupName));
+      added++;
+    }
+  }
+  return added;
+}
+
+async function reconcileGroupMembers(
+  groupName: string,
+  allowedUsernames: Set<string>,
+  logPrefix: string
+): Promise<void> {
+  const currentMembers = parseGroupMembers(
+    await runCommand(UnixGroupCommands.listGroupMembers(groupName))
+  );
+  for (const username of currentMembers) {
+    if (allowedUsernames.has(username)) continue;
+    await runCommand(UnixGroupCommands.removeUserFromGroup(username, groupName), {
+      ignoreErrors: true,
+    });
+    console.log(`${logPrefix} Removed stale group member ${username} from ${groupName}`);
+  }
+}
+
 // ============================================================
 // REPO SYNC OPERATIONS
 // ============================================================
@@ -407,6 +440,28 @@ export async function handleUnixSyncBranch(
       console.log(`[unix.sync-branch] Could not fetch owners, skipping user sync`);
     }
 
+    // Fetch and add all users with explicit filesystem access. This expands
+    // branch groups plus board owners/groups for board-aligned branches.
+    const explicitFsUsernames = new Set(ownerUsernames);
+    let fsAccessUsersAdded = 0;
+    try {
+      const fsUsersResult = await client.service(`branches/${branchId}/fs-access-users`).find({});
+      const fsUsers = Array.isArray(fsUsersResult) ? fsUsersResult : fsUsersResult.data || [];
+      for (const user of fsUsers as Array<{ unix_username?: string | null }>) {
+        if (user.unix_username) {
+          explicitFsUsernames.add(user.unix_username);
+        }
+      }
+      fsAccessUsersAdded = await addUsersToGroup(explicitFsUsernames, groupName);
+      if (fsAccessUsersAdded > 0) {
+        console.log(
+          `[unix.sync-branch] Added ${fsAccessUsersAdded} explicit filesystem access user(s) to branch group`
+        );
+      }
+    } catch (_error) {
+      console.log(`[unix.sync-branch] Could not fetch filesystem access users, skipping`);
+    }
+
     // When others_fs_access is 'write', non-owner session users need branch group
     // membership for full read-write access. For 'read' mode, they rely on ACL "others"
     // bits (o::rX) on the branch directory — adding them to the branch group would
@@ -429,7 +484,7 @@ export async function handleUnixSyncBranch(
         // Collect unique non-owner unix_usernames from sessions
         const sessionUsernames = new Set<string>();
         for (const session of sessions as Array<{ unix_username?: string | null }>) {
-          if (session.unix_username && !ownerUsernames.has(session.unix_username)) {
+          if (session.unix_username && !explicitFsUsernames.has(session.unix_username)) {
             sessionUsernames.add(session.unix_username);
           }
         }
@@ -449,6 +504,27 @@ export async function handleUnixSyncBranch(
       }
     }
 
+    const allowedBranchMembers = new Set(explicitFsUsernames);
+    if (payload.params.daemonUser) allowedBranchMembers.add(payload.params.daemonUser);
+    if (othersAccess === 'write') {
+      try {
+        const sessionsResult = await client.service('sessions').find({
+          query: {
+            branch_id: branchId,
+            $select: ['unix_username'],
+            $limit: 500,
+          },
+        });
+        const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data || [];
+        for (const session of sessions as Array<{ unix_username?: string | null }>) {
+          if (session.unix_username) allowedBranchMembers.add(session.unix_username);
+        }
+      } catch {
+        // Best-effort stale-member cleanup only.
+      }
+    }
+    await reconcileGroupMembers(groupName, allowedBranchMembers, '[unix.sync-branch]');
+
     // Also sync repo group (ensure owners and authorized session users have .git/ access)
     if (branch.repo_id) {
       try {
@@ -466,6 +542,9 @@ export async function handleUnixSyncBranch(
               console.log(`[unix.sync-branch] Added daemon user to repo group ${repo.unix_group}`);
             }
           }
+
+          // Add all explicit filesystem access users to repo group (for .git/ access)
+          await addUsersToGroup(explicitFsUsernames, repo.unix_group);
 
           // Add all branch owners to repo group (for .git/ access)
           // This ensures owners can run git commands which need .git/ access
@@ -510,7 +589,7 @@ export async function handleUnixSyncBranch(
 
               const sessionUsernames = new Set<string>();
               for (const session of sessions as Array<{ unix_username?: string | null }>) {
-                if (session.unix_username && !ownerUsernames.has(session.unix_username)) {
+                if (session.unix_username && !explicitFsUsernames.has(session.unix_username)) {
                   sessionUsernames.add(session.unix_username);
                 }
               }
@@ -568,6 +647,7 @@ export async function handleUnixSyncBranch(
         branchId,
         groupName,
         ownersAdded,
+        fsAccessUsersAdded,
         sessionUsersAdded,
       },
     };

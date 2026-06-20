@@ -17,6 +17,7 @@ import type {
   GroupMembership,
   HookContext,
   Params,
+  User,
   UserID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
@@ -402,6 +403,46 @@ export function setupBranchEffectiveAccessService(
         }
 
         return effective;
+      },
+    },
+    { methods: ['find'] }
+  );
+}
+
+export function setupBranchFsAccessUsersService(
+  app: import('@agor/core/feathers').Application,
+  branchRepo: BranchRepository
+) {
+  app.use(
+    'branches/:id/fs-access-users',
+    {
+      async find(params?: Params): Promise<User[]> {
+        const authParams = params as
+          | (Params & { user?: { user_id: string; role: string; _isServiceAccount?: boolean } })
+          | undefined;
+        if (authParams?.provider && !authParams.user?._isServiceAccount) {
+          const user = authParams.user;
+          if (!user) throw new NotAuthenticated('Authentication required');
+          if (!hasMinimumRole(user.role, ROLES.ADMIN)) {
+            throw new Forbidden('Only admins can list branch filesystem access users');
+          }
+        }
+
+        const branchId = paramsRoute(params)?.id;
+        if (!branchId) throw new BadRequest('Branch ID is required');
+        const userIds = await branchRepo.findExplicitFsAccessUserIds(branchId as BranchID);
+        const usersService = app.service('users');
+        const users = await Promise.all(
+          userIds.map(async (userId): Promise<User | null> => {
+            try {
+              return (await usersService.get(userId)) as User;
+            } catch (error) {
+              console.error(`Failed to fetch branch filesystem access user ${userId}:`, error);
+              return null;
+            }
+          })
+        );
+        return users.filter((user): user is User => user !== null);
       },
     },
     { methods: ['find'] }

@@ -78,6 +78,7 @@ import {
   createGroupsService,
   setupBoardGroupGrantsService,
   setupBranchEffectiveAccessService,
+  setupBranchFsAccessUsersService,
   setupBranchGroupGrantsService,
 } from './services/groups.js';
 import { createKnowledgeDocumentEditsService } from './services/knowledge-document-edits.js';
@@ -368,6 +369,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: ['find', 'create', 'remove'],
   });
   setupBranchEffectiveAccessService(app, new BranchRepository(db));
+  setupBranchFsAccessUsersService(app, new BranchRepository(db));
   if (branchRbacEnabled) {
     setupBoardOwnersService(app, new BoardRepository(db));
     setupBoardGroupGrantsService(app, db);
