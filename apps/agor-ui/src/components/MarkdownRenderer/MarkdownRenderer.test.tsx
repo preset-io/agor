@@ -19,4 +19,13 @@ describe('MarkdownRenderer', () => {
       screen.queryByText('Add semantic and hybrid search once embeddings are configured.')
     ).not.toBeInTheDocument();
   });
+
+  it('adds stable ids and self-links when heading anchors are enabled', async () => {
+    const { container } = render(<MarkdownRenderer content={'## Foo\n\n## Foo!'} headingAnchors />);
+
+    const headings = await screen.findAllByRole('heading', { level: 2 });
+    expect(headings.map((heading) => heading.id)).toEqual(['foo', 'foo-1']);
+    expect(container.querySelector('a.markdown-heading-anchor[href="#foo"]')).toBeInTheDocument();
+    expect(container.querySelector('a.markdown-heading-anchor[href="#foo-1"]')).toBeInTheDocument();
+  });
 });

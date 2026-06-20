@@ -1888,13 +1888,15 @@ export function KnowledgePage({
       documentPath: activeDoc.path,
       currentSearch: location.search,
     });
-    const currentUrl = `${location.pathname}${location.search}`;
-    if (targetUrl !== currentUrl) navigate(targetUrl, { replace: true });
+    const targetUrlWithHash = `${targetUrl}${location.hash}`;
+    const currentUrl = `${location.pathname}${location.search}${location.hash}`;
+    if (targetUrlWithHash !== currentUrl) navigate(targetUrlWithHash, { replace: true });
   }, [
     activeDoc,
     activeDocId,
     documents,
     draftDocument,
+    location.hash,
     location.pathname,
     location.search,
     namespaceSlugForDocument,
@@ -2849,6 +2851,29 @@ export function KnowledgePage({
     Boolean(activeDoc && (!activeDocMatchesRoute || !activeDocContentReady));
   const fillMain = isEditing || showGraph || showDocumentLoading || showRouteDocumentFailure;
 
+  useEffect(() => {
+    if (!location.hash || isEditing || showDocumentLoading || !activeDocMatchesRoute) return;
+
+    const hash = location.hash.slice(1);
+    const targetId = safeDecodeURIComponent(hash);
+    let cancelled = false;
+    const scrollToHeading = () => {
+      if (cancelled) return;
+      const target =
+        document.getElementById(targetId) ||
+        (targetId !== hash ? document.getElementById(hash) : null);
+      target?.scrollIntoView({ block: 'start' });
+    };
+
+    const frame = window.requestAnimationFrame(scrollToHeading);
+    const timeout = window.setTimeout(scrollToHeading, 80);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
+  }, [activeDocMatchesRoute, isEditing, location.hash, showDocumentLoading]);
+
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden', background: token.colorBgLayout }}>
       <Header
@@ -3458,7 +3483,10 @@ export function KnowledgePage({
                               background: token.colorBgContainer,
                             }}
                           >
-                            <MarkdownRenderer content={hydrateKbLinks(markdownDraft)} />
+                            <MarkdownRenderer
+                              content={hydrateKbLinks(markdownDraft)}
+                              headingAnchors
+                            />
                           </div>
                         </div>
                       </Flex>
@@ -3477,6 +3505,7 @@ export function KnowledgePage({
                               ? stripFirstMarkdownTitleLine(markdownDraft)
                               : markdownDraft
                           )}
+                          headingAnchors
                         />
                       </div>
                     )}
@@ -3666,6 +3695,7 @@ export function KnowledgePage({
                     </Space>
                     <MarkdownRenderer
                       content={hydrateKbLinks(selectedVersion.content_text ?? '')}
+                      headingAnchors
                     />
                   </Space>
                 </div>

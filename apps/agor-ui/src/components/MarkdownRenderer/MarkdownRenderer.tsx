@@ -12,8 +12,9 @@
  */
 
 import { Typography, theme } from 'antd';
-import React from 'react';
-import { Streamdown } from 'streamdown';
+import React, { useMemo } from 'react';
+import { defaultRehypePlugins, Streamdown } from 'streamdown';
+import { rehypeHeadingAnchors } from '../../utils/headingAnchors';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 import { isDarkTheme } from '../../utils/theme';
 import './MarkdownRenderer.css';
@@ -46,6 +47,11 @@ interface MarkdownRendererProps {
    * Useful for compact contexts where controls add clutter
    */
   showControls?: boolean;
+  /**
+   * If true, rendered headings receive stable ids and visible self-links.
+   * Intended for non-streaming document views such as Knowledge Base pages.
+   */
+  headingAnchors?: boolean;
 }
 
 // Memoized: Streamdown does meaningful per-render work (syntax highlighting,
@@ -62,6 +68,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   isStreaming = false,
   compact = false,
   showControls = true,
+  headingAnchors = false,
 }) => {
   const { token } = theme.useToken();
 
@@ -91,6 +98,11 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
     : {};
 
   const mergedStyles = { ...style, ...compactStyles };
+  const rehypePlugins = useMemo(
+    () =>
+      headingAnchors ? [...Object.values(defaultRehypePlugins), rehypeHeadingAnchors] : undefined,
+    [headingAnchors]
+  );
 
   // Use default dual theme [light, dark] - Streamdown handles CSS-based switching
   // Note: This may render both themes in the DOM, controlled by CSS media queries
@@ -106,6 +118,8 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
         isAnimating={isStreaming} // Disable buttons during streaming
         controls={showControls} // Show/hide controls based on context
         mermaidConfig={mermaidConfig} // Set Mermaid theme based on current theme mode
+        rehypePlugins={rehypePlugins}
+        parseMarkdownIntoBlocksFn={headingAnchors ? parseMarkdownAsSingleBlock : undefined}
         // Use default ['github-light', 'github-dark'] for automatic theme switching
       >
         {text}
@@ -131,3 +145,5 @@ function markdownContentKey(text: string): string {
   }
   return `${text.length}:${(hash >>> 0).toString(36)}`;
 }
+
+const parseMarkdownAsSingleBlock = (markdown: string) => [markdown];
