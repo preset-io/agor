@@ -714,11 +714,12 @@ export async function handleUnixSyncBoard(
       `[unix.sync-board] Syncing ${branches.length} board-aligned branch(es) for board ${shortId(boardId)}`
     );
 
-    // This client was only needed to resolve the board's branch set. Each
-    // branch sync opens its own daemon client through the existing handler,
-    // but all work still runs inside this one executor process.
-    client.io.disconnect();
-    client = null;
+    // Keep this authenticated client open while nested branch syncs run.
+    // Branch syncs currently open their own daemon clients, but all work still
+    // runs inside this one executor process. Disconnecting here can race the
+    // auth client's async re-auth/logout bookkeeping while the nested syncs
+    // start. The finally block below closes the board client after all branch
+    // work finishes.
 
     const results: Array<{ branchId: string; success: boolean; error?: unknown }> = [];
     for (const branch of branches as Array<{ branch_id?: string }>) {
