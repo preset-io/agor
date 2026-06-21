@@ -70,7 +70,7 @@ const productPreviews = [
   {
     title: 'Message gateway',
     body: 'Bring agents into Slack, GitHub, and the threads where your team already coordinates work.',
-    image: '/screenshots/subsession-spawn-codex-review.png',
+    image: '/screenshots/marketing/agor-marketing-slack-thread.png',
     href: '/guide/message-gateway',
   },
   {

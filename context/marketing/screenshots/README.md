@@ -28,6 +28,7 @@ It is intentionally hardcoded and daemon-free. `apps/agor-ui/src/App.tsx` short-
 - `context/marketing/screenshots/agor-marketing-social-comment-context.png` — contextual spatial comment crop used in the docs multiplayer section
 - `context/marketing/screenshots/agor-marketing-social-comment-closeup.png` — alternate tight spatial comment crop
 - `context/marketing/screenshots/agor-marketing-cursor-indicator.png` — live cursor label closeup for collage layering
+- `context/marketing/screenshots/agor-marketing-slack-thread.png` — Slack Message Gateway thread used for docs feature cards/pages
 - Public docs copies:
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-board.png`
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-board-wide.png`
@@ -36,6 +37,7 @@ It is intentionally hardcoded and daemon-free. `apps/agor-ui/src/App.tsx` short-
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-social-comment-context.png`
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-social-comment-closeup.png`
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-cursor-indicator.png`
+  - `apps/agor-docs/public/screenshots/marketing/agor-marketing-slack-thread.png`
 
 ## Reproduce/update
 
