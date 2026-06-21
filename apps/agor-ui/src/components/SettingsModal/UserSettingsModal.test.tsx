@@ -1,7 +1,7 @@
 import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -110,6 +110,79 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         },
       });
     }, ASYNC);
-    expect(onClose).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: 'Codex' })).toBeInTheDocument();
+  });
+
+  it('keeps the Env Vars section selected after saving and receiving updated user props', async () => {
+    const initialUser = makeUser({
+      env_vars: {
+        Z_TOKEN: { set: true, scope: 'global', resource_id: null },
+      },
+    });
+    const onClose = vi.fn();
+    const updateSpy = vi.fn();
+
+    function Harness() {
+      const [user, setUser] = useState(initialUser);
+      return (
+        <UserSettingsModal
+          open
+          onClose={onClose}
+          user={user}
+          currentUser={user}
+          client={null as AgorClient | null}
+          mcpServerById={new Map()}
+          onUpdate={async (userId, updates) => {
+            updateSpy(userId, updates);
+            if (updates.env_vars) {
+              setUser((prev) => ({
+                ...prev,
+                env_vars: {
+                  ...(prev.env_vars ?? {}),
+                  ...Object.fromEntries(
+                    Object.entries(updates.env_vars ?? {}).flatMap(([key, value]) =>
+                      value === null
+                        ? []
+                        : [
+                            [
+                              key,
+                              {
+                                set: true,
+                                scope: updates.env_var_scopes?.[key] ?? 'global',
+                                resource_id: null,
+                              },
+                            ],
+                          ]
+                    )
+                  ),
+                },
+              }));
+            }
+          }}
+        />
+      );
+    }
+
+    renderWithApp(<Harness />);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /env vars/i }));
+    await screen.findByRole('heading', { name: 'Environment Variables' });
+
+    fireEvent.change(screen.getByPlaceholderText(/variable name/i), {
+      target: { value: 'ALPHA_TOKEN' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Value'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /add/i }));
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith('user-1', {
+        env_vars: { ALPHA_TOKEN: 'secret' },
+        env_var_scopes: { ALPHA_TOKEN: 'global' },
+      });
+    }, ASYNC);
+
+    expect(screen.getByRole('heading', { name: 'Environment Variables' })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

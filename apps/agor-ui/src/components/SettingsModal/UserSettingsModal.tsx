@@ -39,7 +39,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import {
@@ -95,6 +95,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState<string>('general');
+  const initializedUserIdRef = useRef<string | null>(null);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Separate forms for each agentic tool tab
@@ -195,7 +196,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   );
 
   const loadUserGroups = useCallback(async () => {
-    if (!client || !user || !isAdmin) {
+    const userId = user?.user_id;
+    if (!client || !userId || !isAdmin) {
       setAvailableGroups([]);
       setUserGroupIds([]);
       setGroupsLoaded(false);
@@ -208,7 +210,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     try {
       const [groups, memberships] = await Promise.all([
         client.service('groups').findAll({ query: { archived: false } }),
-        client.service('group-memberships').findAll({ query: { user_id: user.user_id } }),
+        client.service('group-memberships').findAll({ query: { user_id: userId } }),
       ]);
       const nextGroupIds = (memberships as GroupMembership[]).map(
         (membership) => membership.group_id
@@ -222,14 +224,21 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     } finally {
       setLoadingGroups(false);
     }
-  }, [client, form, isAdmin, user]);
+  }, [client, form, isAdmin, user?.user_id]);
 
   // Initialize when modal opens with user data
   useEffect(() => {
-    if (open && user) {
-      initializeForms(user);
-      void loadUserGroups();
+    if (!open) {
+      initializedUserIdRef.current = null;
+      return;
     }
+
+    const userId = user?.user_id;
+    if (!user || !userId || initializedUserIdRef.current === userId) return;
+
+    initializedUserIdRef.current = userId;
+    initializeForms(user);
+    void loadUserGroups();
   }, [open, user, initializeForms, loadUserGroups]);
 
   // Hydrate tab-specific forms only after that tab has rendered its
@@ -382,7 +391,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       await onUpdate?.(user.user_id, updates);
       await syncUserGroups(values.groupIds || []);
       await saveDirtyAgenticConfigs();
-      handleClose();
     } catch (err) {
       console.error('Validation failed:', err);
     }
@@ -521,8 +529,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       });
 
       await saveAgenticConfigs(toolsToSave);
-
-      handleClose();
     } catch (err) {
       console.error(`Failed to save ${tool} config:`, err);
       throw err;
@@ -563,7 +569,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       });
 
       await saveDirtyAgenticConfigs();
-      handleClose();
     } catch (error) {
       console.error('Failed to save audio settings:', error);
     }
@@ -575,18 +580,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     switch (activeTab) {
       case 'general':
-        handleUpdate();
+        await handleUpdate();
         break;
       case 'env-vars':
       case 'personal-api-keys':
-        // These tabs save individually, just close
+        // These tabs save inline; keep the user on the current section.
         await saveDirtyAgenticConfigs();
-        handleClose();
         break;
       case 'groups':
         await syncUserGroups(form.getFieldValue('groupIds') || []);
         await saveDirtyAgenticConfigs();
-        handleClose();
         break;
       case 'audio':
         await handleAudioSave();
