@@ -193,6 +193,56 @@ describe('OnboardingWizard', () => {
     expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
   });
 
+  it('ignores stale failed framework repo rows when retrying setup', async () => {
+    const repoById = new Map<string, Repo>([
+      [
+        'failed-old',
+        makeRepo({
+          repo_id: 'failed-old',
+          clone_status: 'failed',
+          clone_error: { message: 'old failure', exit_code: 1 },
+        }),
+      ],
+    ]);
+    const onCreateRepo = vi.fn(async () => undefined);
+    const view = renderWizard({ repoById, onCreateRepo });
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+
+    await waitFor(() => expect(onCreateRepo).toHaveBeenCalled());
+    expect(screen.getByText(/Cloning assistant framework/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Setup failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/old failure/i)).not.toBeInTheDocument();
+
+    const nextRepoById = new Map(repoById);
+    nextRepoById.set(
+      'failed-new',
+      makeRepo({
+        repo_id: 'failed-new',
+        clone_status: 'failed',
+        clone_error: { message: 'new failure', exit_code: 1 },
+      })
+    );
+    view.rerender(<OnboardingWizard {...view.props} repoById={nextRepoById} />);
+
+    expect(await screen.findByText(/Setup failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/new failure/i)).toBeInTheDocument();
+  });
+
+  it('uses an existing ready framework repo without cloning it again', async () => {
+    const repoById = new Map<string, Repo>([['repo-1', makeRepo()]]);
+    const onCreateRepo = vi.fn(async () => undefined);
+    const onCreateBranch = vi.fn(async () => makeBranch());
+    renderWizard({ repoById, onCreateRepo, onCreateBranch });
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+
+    await waitFor(() => expect(onCreateBranch).toHaveBeenCalled());
+    expect(onCreateRepo).not.toHaveBeenCalled();
+  });
+
   it('creates setup resources with the default assistant branch name and preserves model defaults', async () => {
     const repoById = new Map<string, Repo>();
     const onCreateBranch = vi.fn(async () =>

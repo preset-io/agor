@@ -256,6 +256,7 @@ export function OnboardingWizard({
 
   const cloneTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completingRepoRef = useRef<string | null>(null);
+  const knownFailedRepoIdsRef = useRef<Set<string>>(new Set());
   const effectiveFrameworkUrl = frameworkRepoUrl || FRAMEWORK_REPO_URL;
 
   const defaultBranchName = useMemo(
@@ -491,17 +492,25 @@ export function OnboardingWizard({
     setError(null);
     completingRepoRef.current = null;
 
+    const readyRepo = findReadyFrameworkRepo(repoById);
+    if (readyRepo) {
+      setOperationText('Preparing assistant workspace…');
+      void finishSetupFromRepo(readyRepo[0]);
+      return;
+    }
+
+    knownFailedRepoIdsRef.current = new Set(
+      Array.from(repoById.values())
+        .filter((repo) => repo.clone_status === 'failed')
+        .map((repo) => repo.repo_id)
+    );
+
     try {
       await onCreateRepo({
         url: effectiveFrameworkUrl,
         slug: FRAMEWORK_REPO_SLUG,
         default_branch: 'main',
       });
-      const readyRepo = findReadyFrameworkRepo(repoById);
-      if (readyRepo) {
-        void finishSetupFromRepo(readyRepo[0]);
-        return;
-      }
       cloneTimeoutRef.current = setTimeout(() => {
         setSetupStage('error');
         setError(
@@ -524,6 +533,7 @@ export function OnboardingWizard({
     if (currentStep !== 'loading' || setupStage !== 'cloning') return;
     for (const repo of repoById.values()) {
       if (repo.clone_status !== 'failed') continue;
+      if (knownFailedRepoIdsRef.current.has(repo.repo_id)) continue;
       if (repo.slug !== FRAMEWORK_REPO_SLUG && !repo.remote_url?.includes('agor-assistant'))
         continue;
       setSetupStage('error');
