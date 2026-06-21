@@ -127,7 +127,7 @@ const trustItems = [
   { label: 'Agor Cloud is coming', href: '/blog/agor-cloud' },
   { label: 'Open source / self-hosted', href: '/guide/getting-started' },
   { label: 'MCP-native', href: '/guide/internal-mcp' },
-  { label: 'Claude Code · Codex · Gemini', href: '/guide/sdk-comparison' },
+  { label: 'Best harnesses, no frontier lock-in', href: '/guide/sdk-comparison' },
   { label: 'Unix-level isolation when you need it', href: '/guide/multiplayer-unix-isolation' },
 ];
 
@@ -367,9 +367,9 @@ export function LandingPage() {
           <span className={styles.eyebrow}>Built for real teams</span>
           <h2>Your work, your data, your assistants.</h2>
           <p>
-            Self-host Agor, connect the best models and harnesses, and keep your data yours. As the
-            stakes grow, add governance, observability, and isolation without locking into one
-            vendor.
+            Self-host Agor and build on the best agent harnesses: Claude Code, Codex, OpenCode,
+            Copilot, Gemini, and whatever comes next. Keep your data yours, pick the right runtime
+            for the job, and avoid locking your team into one frontier.
           </p>
         </div>
         <ul className={styles.trustList}>
