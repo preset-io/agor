@@ -121,6 +121,11 @@ const loadStreamdownDemoPage = cacheRouteLoader(
   () => import('./pages/StreamdownDemoPage'),
   (module) => ({ default: module.StreamdownDemoPage })
 );
+const MarketingScreenshotPage = lazy(() =>
+  import('./pages/MarketingScreenshotPage').then((module) => ({
+    default: module.MarketingScreenshotPage,
+  }))
+);
 
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
@@ -1682,8 +1687,9 @@ function AppContent() {
         <DeviceRouter />
         <Suspense fallback={routeFallback}>
           <Routes>
-            {/* Demo route */}
+            {/* Demo routes */}
             <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
+            <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />
 
             {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
             {KNOWLEDGE_ROUTE_PATHS.map((path) => (
@@ -1760,6 +1766,8 @@ function AppContent() {
 
 function AppWrapper() {
   const { getCurrentThemeConfig } = useTheme();
+  const location = useLocation();
+  const isMarketingScreenshotRoute = location.pathname === '/demo/marketing-screenshots';
 
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
@@ -1770,7 +1778,13 @@ function AppWrapper() {
               read the canvas-nav context. The inner App component used to
               wrap its own JSX in this provider; that's been removed. */}
           <CanvasNavigationProvider>
-            <AppContent />
+            {isMarketingScreenshotRoute ? (
+              <Suspense fallback={<InitialLoadingScreen message="Loading screenshot fixture…" />}>
+                <MarketingScreenshotPage />
+              </Suspense>
+            ) : (
+              <AppContent />
+            )}
           </CanvasNavigationProvider>
         </ErrorBoundary>
       </AntApp>

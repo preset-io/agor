@@ -80,11 +80,11 @@ export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
 export const DEMO_SURFACE = defineSurface({
   id: 'demo',
   label: 'Demo',
-  routePaths: ['/demo/streamdown'],
+  routePaths: ['/demo/streamdown', '/demo/marketing-screenshots'],
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: false,
-  branding: surfaceTitle('Streamdown demo'),
+  branding: surfaceTitle('Demo'),
 });
 
 export const WORKSPACE_SURFACE = defineSurface({
