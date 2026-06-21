@@ -69,7 +69,6 @@ export async function buildSessionContext(
   if (session) {
     context.session = {
       session_id: session.session_id,
-      sdk_session_id: session.sdk_session_id, // Claude SDK session ID (for conversation continuity)
       agentic_tool: session.agentic_tool,
       permission_config: session.permission_config || {},
       created_at: session.created_at,

@@ -36,4 +36,26 @@ describe('getMcpServersForSession', () => {
       { server: sessionServer, source: 'session-assigned' },
     ]);
   });
+
+  it('returns deterministic effective ordering', async () => {
+    const zSession = makeServer('session-z', 'session', 'zeta');
+    const bGlobal = makeServer('global-b', 'global', 'beta');
+    const aSession = makeServer('session-a', 'session', 'alpha');
+    const aGlobal = makeServer('global-a', 'global', 'alpha');
+    const listEffectiveServers = vi
+      .fn()
+      .mockResolvedValue([zSession, bGlobal, aSession, aGlobal]);
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: { listEffectiveServers } as never,
+    });
+
+    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual([
+      'global-a',
+      'global-b',
+      'session-a',
+      'session-z',
+    ]);
+  });
 });
