@@ -41,54 +41,33 @@ const featureCards = [
 
 const productPreviews = [
   {
-    title: 'Spatial boards',
-    body: 'Arrange branches, zones, sessions, and teammates on one live canvas.',
+    title: 'Figma-like canvas for agentic workflows',
+    body: 'Branches become cards, zones become prompts, and teammates can read the state of AI work at a glance.',
     image: '/screenshots/board-hero.png',
     href: '/guide/boards',
   },
   {
-    title: 'Rich agent sessions',
-    body: 'Watch tool calls, decisions, reports, and handoffs unfold with full context.',
-    image: '/screenshots/conversation_full_page.png',
-    href: '/guide/rich-chat-ux',
-  },
-  {
-    title: 'Persistent assistants',
-    body: 'Give long-lived helpers memory, skills, schedules, and team-wide reach.',
-    image: '/screenshots/assistants-list.png',
-    href: '/guide/assistants',
-  },
-];
-
-const workflowHighlights = [
-  {
-    eyebrow: 'Spatial board',
-    title: 'Figma-like canvas for agentic workflows',
-    body: 'Branches become cards, zones become prompts, and teammates can read the state of AI work at a glance.',
-    href: '/guide/boards',
-  },
-  {
-    eyebrow: 'Message gateway',
     title: 'Your agents in Slack, GitHub, and wherever work happens',
     body: 'DM Agor or mention it on a PR. Sessions start on the right branch and route the answer back to the thread.',
+    image: '/screenshots/subsession-spawn-codex-review.png',
     href: '/guide/message-gateway',
   },
   {
-    eyebrow: 'Automation',
     title: 'Schedulers and artifacts for repeatable work',
     body: 'Run standups, audits, and reports on a cadence — or let agents render live dashboards and tools on the board.',
-    href: '/guide/scheduler',
+    image: '/images/artifacts-hero.png',
+    href: '/guide/artifacts',
   },
   {
-    eyebrow: 'Grown-up agent ops',
     title: 'Governance, observability, and MCP-native control',
     body: 'Track sessions, tools, and spend; let agents operate Agor itself; add RBAC and Unix isolation when stakes rise.',
+    image: '/screenshots/context-window-viz.png',
     href: '/guide/internal-mcp',
   },
   {
-    eyebrow: 'Environments',
     title: 'One dev server per branch, without port fights',
     body: 'Start, stop, health-check, and inspect logs for every branch environment from the same shared workspace.',
+    image: '/screenshots/env_configuration.png',
     href: '/guide/environment-configuration',
   },
 ];
@@ -261,7 +240,7 @@ export function LandingPage() {
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Product surfaces</span>
-          <h2>Show the work, not an abstraction.</h2>
+          <h2>This product is much bigger than a chat window.</h2>
         </div>
         <div className={styles.productGrid}>
           {productPreviews.map((preview, index) => (
@@ -279,29 +258,6 @@ export function LandingPage() {
                 <p>{preview.body}</p>
                 <span>Open guide →</span>
               </div>
-            </Link>
-          ))}
-        </div>
-      </section>
-
-      <section className={styles.capabilitySection} data-reveal>
-        <div className={styles.sectionHeader}>
-          <span className={styles.eyebrow}>Why it becomes a command center</span>
-          <h2>This product is much bigger than a chat window.</h2>
-        </div>
-        <div className={styles.capabilityGrid}>
-          {workflowHighlights.map((highlight, index) => (
-            <Link
-              className={styles.capabilityCard}
-              href={highlight.href}
-              key={highlight.title}
-              data-reveal
-              style={revealDelay(index)}
-            >
-              <span>{highlight.eyebrow}</span>
-              <h3>{highlight.title}</h3>
-              <p>{highlight.body}</p>
-              <strong>Explore →</strong>
             </Link>
           ))}
         </div>
