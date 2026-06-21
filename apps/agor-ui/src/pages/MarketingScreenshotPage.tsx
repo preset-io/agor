@@ -63,8 +63,8 @@ const board: Board = {
       width: 680,
       height: 1180,
       label: '🚢 Ship this week',
-      borderColor: '#14b8a6',
-      backgroundColor: 'rgba(20,184,166,0.16)',
+      borderColor: '#fde047',
+      backgroundColor: 'rgba(120,53,15,0.24)',
       locked: true,
       trigger: {
         behavior: 'show_picker',
@@ -79,8 +79,8 @@ const board: Board = {
       width: 680,
       height: 1180,
       label: '🔎 Review lane',
-      borderColor: '#f59e0b',
-      backgroundColor: 'rgba(15,23,42,0.28)',
+      borderColor: '#fed7aa',
+      backgroundColor: 'rgba(127,29,29,0.26)',
       locked: true,
       trigger: {
         behavior: 'always_new',
@@ -95,8 +95,8 @@ const board: Board = {
       width: 1120,
       height: 1180,
       label: '🤖 Assistants + artifacts',
-      borderColor: '#8b5cf6',
-      backgroundColor: 'rgba(139,92,246,0.18)',
+      borderColor: '#f472b6',
+      backgroundColor: 'rgba(88,28,135,0.16)',
       locked: true,
       trigger: {
         behavior: 'show_picker',
