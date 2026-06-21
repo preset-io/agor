@@ -66,7 +66,9 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
         zIndex: 2000,
       }}
     >
-      {cursors.map(([userId, { x, y, user, color }]) => {
+      {cursors.map(([userId, cursor]) => {
+        const { x, y, user } = cursor;
+        const color = 'color' in cursor ? cursor.color : undefined;
         const screenX = x * viewport.zoom + viewport.x;
         const screenY = y * viewport.zoom + viewport.y;
 

@@ -285,7 +285,7 @@ const repo: Repo = {
   updated_at: now,
   created_by: users[0].user_id,
   archived: false,
-} as Repo;
+} as unknown as Repo;
 
 interface BranchFixture {
   id: string;
@@ -404,7 +404,7 @@ const branches = branchFixtures.map(
       new_branch: true,
       board_id: boardId,
       issue_url: fixture.issue,
-      pull_request_url: fixture.pr,
+      pull_request_url: 'pr' in fixture ? fixture.pr : undefined,
       notes: fixture.notes,
       environment_instance: {
         instance_id: `env-${fixture.id}`,
@@ -422,7 +422,7 @@ const branches = branchFixtures.map(
       filesystem_status: 'ready',
       others_can: 'session',
       url: `/ui/w/${fixture.id.slice(0, 8)}`,
-    }) as Branch
+    }) as unknown as Branch
 );
 
 const boardEntityObjects: BoardEntityObject[] = branchFixtures.map((fixture) => ({
@@ -461,11 +461,11 @@ const sessions = branchFixtures.flatMap((fixture, branchIndex) =>
         description,
         ready_for_prompt: readyForPrompt === true,
         archived: false,
-      }) as Session
+      }) as unknown as Session
   )
 );
 
-const cards: CardWithType[] = [
+const cards = [
   {
     card_id: '019ee88d-demo-card-0000-000000000201',
     board_id: boardId,
@@ -505,7 +505,7 @@ const cards: CardWithType[] = [
     updated_at: now,
     archived: false,
   },
-];
+] as unknown as CardWithType[];
 
 const cardObjects: BoardEntityObject[] = [
   {
@@ -537,7 +537,7 @@ const cardObjects: BoardEntityObject[] = [
   },
 ];
 
-const comments: BoardComment[] = [
+const comments = [
   {
     comment_id: '019ee88d-demo-comment-0000-000000000301',
     board_id: boardId,
@@ -559,7 +559,7 @@ const comments: BoardComment[] = [
     mentions: [users[0].user_id],
     created_at: new Date(now),
   },
-];
+] as unknown as BoardComment[];
 
 const activeUsers: ActiveUser[] = users.map((user, index) => ({
   user,
