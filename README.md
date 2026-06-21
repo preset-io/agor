@@ -2,21 +2,44 @@
 
 # Agor
 
-### Meet your team of AI assistants.
-
 **Team command center for all things agentic.**
 
-Everyone's cranking with AI, but it's chaos: scattered sessions, ephemeral context, nothing that
-compounds. Agor is where your team raises real assistants — not throwaway agents. You decide what
-each one is for, wire it into the systems you already use (MCP and skills), and let it act on a
-schedule instead of waiting to be asked. It all happens in one shared, self-hosted place, so what
-works for one person finally reaches everyone.
+Agor is a self-hosted, multiplayer-ready web workspace for running coding agents — Claude Code,
+Codex, Gemini, and others — on isolated git branches. Each branch is a first-class git working
+directory with its own dev environment and conversation history. Agents run in the browser instead
+of a terminal, with per-prompt token and cost accounting, structured tool output, and an MCP
+endpoint agents can drive themselves. Run it solo in a few minutes; turn on multiplayer and
+Unix-level isolation when you bring your team.
 
+[![npm](https://img.shields.io/npm/v/agor-live?logo=npm&label=agor-live)](https://www.npmjs.com/package/agor-live)
 [![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-agor.live-1f6feb.svg)](https://agor.live/guide/getting-started)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/Qh4TrFQZpd)
 
 **[Documentation](https://agor.live/) · [Quick Start](#quick-start) · [Architecture](#architecture) · [Contributing](#development)**
+
+---
+
+## Built on the agent CLIs you already use
+
+Agor ships no model of its own. It drives the agent CLIs/SDKs you already run, interchangeable per
+session — bring your own provider and subscription, no lock-in.
+
+<p>
+  <a href="https://github.com/anthropics/claude-code"><img src="apps/agor-docs/public/tools/claude-code.png" alt="Claude Code" height="44" /></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/openai/codex"><img src="apps/agor-docs/public/tools/codex.png" alt="Codex" height="44" /></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/google-gemini/gemini-cli"><img src="apps/agor-docs/public/tools/gemini.png" alt="Gemini CLI" height="44" /></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/features/copilot"><img src="apps/agor-docs/public/tools/copilot.png" alt="GitHub Copilot" height="44" /></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/sst/opencode"><img src="apps/agor-docs/public/tools/opencode.png" alt="OpenCode" height="44" /></a>
+  &nbsp;&nbsp;
+  <a href="https://cursor.com"><img src="apps/agor-docs/public/tools/cursor.png" alt="Cursor" height="44" /></a>
+</p>
+
+[Claude Code](https://github.com/anthropics/claude-code) · [Codex](https://github.com/openai/codex) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [GitHub Copilot](https://github.com/features/copilot) · [OpenCode](https://github.com/sst/opencode) · Cursor (beta) — compared in the [SDK guide](https://agor.live/guide/sdk-comparison).
 
 <!--
   HERO VIDEO PLACEHOLDER
@@ -27,27 +50,30 @@ works for one person finally reaches everyone.
 
 ![Agor board with live cursors, branch cards, zones, and agent dashboards](apps/agor-docs/public/screenshots/board-hero.png)
 
-_The board: branches as cards, zones as regions, teammates and their agents present live._
+_The board: branches as cards, zones as regions, agent sessions, and — optionally — teammates present live._
 
 **▶ [Watch the unscripted demo on YouTube](https://www.youtube.com/watch?v=3in0qh7ZH0g)** (13 min)
 
 ---
 
-## Why Agor
+## What it does
 
-Agor gives your team's AI work a place to live — shared, observable, and self-hosted:
-
-- **Team workspace for AI agents** — multiplayer is the core differentiator. Live cursors,
-  facepile, scoped comments, shared sessions, and shared dev environments.
-- **Real assistants, not throwaway agents** — long-lived helpers with identity, file-based
-  memory, and skills. Taught conversationally, then given a real job on a schedule.
-- **Branches as the anchor** — one entity per piece of work, where conversations, dev
-  environment, prompts, issues, and the PR all converge.
-- **Multi-agent, multi-runtime** — Claude Code, Codex, Gemini, OpenCode, Copilot, and Cursor
-  (beta) are interchangeable per session. Bring your own provider; no frontier lock-in.
-- **MCP-native** — anything a user can do in Agor, an agent can do too. Sessions are
-  auto-issued an MCP token, so agents fork, spawn, schedule, and report on their own work.
-- **Self-hosted** — your repos, your DB (LibSQL or Postgres), your isolation posture. BSL 1.1.
+- **Branches as the anchor** — every piece of work is a git branch with its own working directory,
+  dev environment, conversation history, and PR. One entity to point at.
+- **Isolated dev environments** — a one-click dev server per branch, with ports auto-assigned so
+  parallel branches never collide.
+- **Multi-runtime** — Claude Code, Codex, Gemini, OpenCode, Copilot, and Cursor (beta) are
+  interchangeable per session. Bring your own provider; no frontier lock-in.
+- **Rich session UI** — per-prompt token and dollar accounting, structured tool blocks,
+  model/effort selectors, completion chimes. The terminal experience, in the browser.
+- **MCP-native** — Agor exposes itself over MCP; sessions are auto-issued a token, so agents fork,
+  spawn, schedule, and report on their own work.
+- **Long-lived assistants** — persistent helpers with file-based memory, skills, and schedules,
+  beyond one-off sessions.
+- **Multiplayer when you want it** — live cursors, comments, and shared sessions/environments for
+  your team. Optional; works fine solo.
+- **Self-hosted** — your repos, your DB (LibSQL or Postgres), progressive Unix isolation modes.
+  BSL 1.1.
 
 ---
 
