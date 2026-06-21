@@ -20,12 +20,13 @@ Unix-level isolation when you bring your team.
 
 ---
 
-## Built on the agent CLIs you already use
+## Built on the agent CLIs & SDKs you already use
 
-Agor ships no model of its own. It drives the agent CLIs/SDKs you already run, interchangeable per
-session — bring your own provider and subscription, no lock-in.
+Agor ships no model of its own. It drives the coding-agent CLIs and SDKs you already run,
+interchangeable per session — bring your own provider and subscription, no vendor lock-in.
+[Compare the harnesses →](https://agor.live/guide/sdk-comparison)
 
-<p>
+<p align="center">
   <a href="https://github.com/anthropics/claude-code"><img src="apps/agor-docs/public/tools/claude-code.png" alt="Claude Code" height="44" /></a>
   &nbsp;&nbsp;
   <a href="https://github.com/openai/codex"><img src="apps/agor-docs/public/tools/codex.png" alt="Codex" height="44" /></a>
@@ -38,8 +39,6 @@ session — bring your own provider and subscription, no lock-in.
   &nbsp;&nbsp;
   <a href="https://cursor.com"><img src="apps/agor-docs/public/tools/cursor.png" alt="Cursor" height="44" /></a>
 </p>
-
-[Claude Code](https://github.com/anthropics/claude-code) · [Codex](https://github.com/openai/codex) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [GitHub Copilot](https://github.com/features/copilot) · [OpenCode](https://github.com/sst/opencode) · Cursor (beta) — compared in the [SDK guide](https://agor.live/guide/sdk-comparison).
 
 <!--
   HERO VIDEO PLACEHOLDER
@@ -63,7 +62,7 @@ _The board: branches as cards, zones as regions, agent sessions, and — optiona
 - **Isolated dev environments** — a one-click dev server per branch, with ports auto-assigned so
   parallel branches never collide.
 - **Multi-runtime** — Claude Code, Codex, Gemini, OpenCode, Copilot, and Cursor (beta) are
-  interchangeable per session. Bring your own provider; no frontier lock-in.
+  interchangeable per session. Bring your own provider; no vendor lock-in.
 - **Rich session UI** — per-prompt token and dollar accounting, structured tool blocks,
   model/effort selectors, completion chimes. The terminal experience, in the browser.
 - **MCP-native** — Agor exposes itself over MCP; sessions are auto-issued a token, so agents fork,
