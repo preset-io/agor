@@ -211,6 +211,22 @@ const board: Board = {
       width: 320,
       content: '```bash\npnpm -w agor session list\n✓ 7 running · 3 waiting · 19 done\n```',
     },
+    'note-architecture': {
+      type: 'markdown',
+      x: 100,
+      y: 820,
+      width: 480,
+      content:
+        '### Staged product architecture\n\n```mermaid\nflowchart LR\n  Header[AppHeader] --> Facepile[Facepile + overflow]\n  Board[SessionCanvas] --> Zones[Real zones]\n  Board --> Branches[Branch cards]\n  Board --> Artifacts[Board artifacts]\n  Presence[Static users] -.demo-only.-> Facepile\n  Cursors[3 static cursors] -.demo-only.-> Board\n```\n\nDemo fixtures stay behind `/demo/marketing-screenshots`.',
+    },
+    'note-sequence': {
+      type: 'markdown',
+      x: 900,
+      y: 820,
+      width: 500,
+      content:
+        '### Screenshot capture flow\n\n```mermaid\nsequenceDiagram\n  participant Max\n  participant UI as Demo route\n  participant Canvas as Product canvas\n  participant Shot as Playwright\n  Max->>UI: open /demo/marketing-screenshots\n  UI->>Canvas: render branches, zones, notes\n  Canvas->>Canvas: mount burndown artifact\n  Shot->>UI: wait 7-10s\n  Shot-->>Max: board PNGs\n```\n\nThe live route is hardcoded for staging only.',
+    },
   },
 };
 
