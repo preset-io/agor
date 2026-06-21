@@ -342,21 +342,6 @@
   margin-top: 0;
 }
 
-.featureCard span {
-  display: inline-grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  margin-bottom: 24px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  color: var(--landing-blue);
-  background:
-    linear-gradient(rgba(9, 17, 30, 0.92), rgba(9, 17, 30, 0.92)) padding-box,
-    var(--landing-gradient) border-box;
-  font-weight: 850;
-}
-
 .productShowcase {
   padding-top: 42px;
 }

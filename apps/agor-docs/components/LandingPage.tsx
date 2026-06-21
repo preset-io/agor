@@ -9,49 +9,42 @@ const assistants = ['ReviewBot', 'LaunchOps', 'Scout', 'Standup', 'Docs'];
 
 const featureCards = [
   {
-    eyebrow: '01',
     title: 'Shared memory',
-    body: 'Each assistant gets a namespace in the knowledge base: semantic-searchable, durable, and shared with the team.',
+    body: 'Each assistant gets a namespace in the knowledge base: semantically searchable, durable, and shared with the team.',
     href: '/guide/knowledge',
     linkLabel: 'Explore Knowledge',
   },
   {
-    eyebrow: '02',
     title: 'Skills + MCP',
     body: 'Package repeatable workflows as skills and connect assistants to the MCP servers your team already trusts.',
     href: '/guide/internal-mcp',
     linkLabel: 'See MCP control',
   },
   {
-    eyebrow: '03',
     title: 'Conversational onboarding',
     body: 'Teach an assistant by talking to it. The programming language is conversation, and the useful parts become reusable context.',
     href: '/guide/assistants',
     linkLabel: 'Read about Assistants',
   },
   {
-    eyebrow: '04',
     title: 'Where your team works',
     body: 'Reach assistants from Slack, GitHub, or wherever work already happens through gateway channels.',
     href: '/guide/message-gateway',
     linkLabel: 'Open Message Gateway',
   },
   {
-    eyebrow: '05',
     title: 'Scheduled agency',
     body: 'Run heartbeats, daily standups, audits, digests, or longer workflows without waiting for a prompt.',
     href: '/guide/scheduler',
     linkLabel: 'Explore Scheduler',
   },
   {
-    eyebrow: '06',
     title: 'Personality + boundaries',
     body: 'Tune voice, style, and level of agency so every assistant knows how bold to be and when to ask first.',
     href: '/blog/agent-modeling-101',
     linkLabel: 'Agent modeling 101',
   },
 ];
-
 const productPreviews = [
   {
     title: 'Spatial boards',
@@ -267,9 +260,9 @@ export function LandingPage() {
           <span className={styles.eyebrow}>The shared workspace</span>
           <h2>Raise team assistants with memory, skills, and a place to work.</h2>
           <p>
-            Give each assistant a durable identity: shared memory, reusable skills, MCP connections,
-            gateway channels, schedules, and a configurable style of agency. Teach them
-            conversationally, then let the useful patterns compound for the whole team.
+            One-off prompts don’t compound. In Agor, assistants have durable identities your team
+            can teach conversationally, then equip with memory, tools, channels, and schedules as
+            they grow.
           </p>
           <div className={styles.workspaceScreenshot}>
             {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
@@ -287,7 +280,6 @@ export function LandingPage() {
               data-reveal
               style={revealDelay(featureCards.indexOf(feature))}
             >
-              <span>{feature.eyebrow}</span>
               <h3>{feature.title}</h3>
               <p>{feature.body}</p>
               <Link href={feature.href} className={styles.cardLink}>
