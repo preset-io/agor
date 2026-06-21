@@ -119,11 +119,7 @@ export async function stopSessionPreserveQueue(
     console.error(`❌ [Stop] Failed to patch task to STOPPED:`, error);
   }
 
-  try {
-    await markStoppedSessionPromptableNoDrain(deps.sessionsService, sessionId, params);
-  } catch (error) {
-    console.error(`❌ [Stop] Failed to mark session promptable:`, error);
-  }
+  await markStoppedSessionPromptableNoDrain(deps.sessionsService, sessionId, params);
 
   return {
     success: true,

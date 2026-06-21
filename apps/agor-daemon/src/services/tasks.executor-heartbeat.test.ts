@@ -262,4 +262,80 @@ describe('TasksService executor heartbeat helpers', () => {
     expect(sessionsPatch).not.toHaveBeenCalled();
     expect(triggerQueueProcessing).not.toHaveBeenCalled();
   });
+
+  it('ignores late executor attempts to revive a stopped task as awaiting permission', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000022';
+    const sessionId = '018f0000-0000-7000-8000-000000000023';
+    const stoppedTask = {
+      task_id: taskId,
+      session_id: sessionId,
+      status: TaskStatus.STOPPED,
+      created_at: '2026-01-01T00:00:00.000Z',
+      started_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:00:05.000Z',
+    };
+    const service = Object.create(TasksService.prototype) as TasksService & {
+      app: unknown;
+      get: ReturnType<typeof vi.fn>;
+      repository: { update: ReturnType<typeof vi.fn> };
+      id: string;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    service.get = vi.fn().mockResolvedValue(stoppedTask);
+    service.repository = { update: vi.fn() };
+    service.id = 'task_id';
+    service.emit = vi.fn();
+    service.app = {
+      service: (_name: string) => {
+        throw new Error(`unexpected service ${_name}`);
+      },
+    };
+
+    const result = await service.patch(taskId, {
+      status: TaskStatus.AWAITING_PERMISSION,
+      last_executor_heartbeat_at: '2026-01-01T00:00:06.000Z',
+    });
+
+    expect(result).toBe(stoppedTask);
+    expect(service.repository.update).not.toHaveBeenCalled();
+    expect(service.emit).not.toHaveBeenCalled();
+  });
+
+  it('ignores late executor attempts to revive a stopped task as running', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000020';
+    const sessionId = '018f0000-0000-7000-8000-000000000021';
+    const stoppedTask = {
+      task_id: taskId,
+      session_id: sessionId,
+      status: TaskStatus.STOPPED,
+      created_at: '2026-01-01T00:00:00.000Z',
+      started_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:00:05.000Z',
+    };
+    const service = Object.create(TasksService.prototype) as TasksService & {
+      app: unknown;
+      get: ReturnType<typeof vi.fn>;
+      repository: { update: ReturnType<typeof vi.fn> };
+      id: string;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    service.get = vi.fn().mockResolvedValue(stoppedTask);
+    service.repository = { update: vi.fn() };
+    service.id = 'task_id';
+    service.emit = vi.fn();
+    service.app = {
+      service: (_name: string) => {
+        throw new Error(`unexpected service ${_name}`);
+      },
+    };
+
+    const result = await service.patch(taskId, {
+      status: TaskStatus.RUNNING,
+      last_executor_heartbeat_at: '2026-01-01T00:00:06.000Z',
+    });
+
+    expect(result).toBe(stoppedTask);
+    expect(service.repository.update).not.toHaveBeenCalled();
+    expect(service.emit).not.toHaveBeenCalled();
+  });
 });

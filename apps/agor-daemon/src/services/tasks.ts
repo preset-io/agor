@@ -354,16 +354,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const nextStatus = data.status;
-    const mayTransitionStatus =
-      nextStatus === TaskStatus.RUNNING || isAnalyticsTerminalTaskStatus(nextStatus);
-    const currentTask = mayTransitionStatus ? await this.get(id, params) : undefined;
-    if (
-      currentTask &&
-      isTerminalTaskStatus(currentTask.status) &&
-      isTerminalTaskStatus(nextStatus)
-    ) {
+    const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
+    if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
       console.warn(
-        `⏭️ [TasksService] Ignoring terminal status rewrite for task ${shortId(currentTask.task_id)} ` +
+        `⏭️ [TasksService] Ignoring status rewrite for terminal task ${shortId(currentTask.task_id)} ` +
           `(${currentTask.status} → ${nextStatus})`
       );
       return currentTask;

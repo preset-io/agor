@@ -2072,12 +2072,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             ? data.reason
             : undefined;
 
+        const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
+
         const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
           stopSessionPreserveQueue(
             {
               app,
               taskRepo: new TaskRepository(db),
-              sessionsService,
+              sessionsService: sessionsServiceWithHooks,
               tasksService,
               killExecutorProcess,
             },
@@ -2090,7 +2092,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (result.success) {
           setImmediate(async () => {
             try {
-              await sessionsService.triggerQueueProcessing(id as SessionID, params);
+              await sessionsServiceWithHooks.triggerQueueProcessing(id as SessionID, params);
             } catch (error) {
               console.error(
                 `❌ [Stop] Failed to process queue after stopping session ${shortId(id)}:`,

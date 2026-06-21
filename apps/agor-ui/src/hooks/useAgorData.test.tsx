@@ -192,6 +192,30 @@ describe('useAgorData — socket-event bailouts', () => {
     expect(result.current.sessionById.get('s-1')).toMatchObject({ status: 'running' });
   });
 
+  it('updates branch-card session buckets when stop patches a running session idle', async () => {
+    const session = makeSession({ status: 'running', ready_for_prompt: false });
+    const { client, emit } = makeMockClient({ sessions: [session] });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    act(() =>
+      emit('sessions', 'patched', {
+        ...session,
+        status: 'idle',
+        ready_for_prompt: true,
+      })
+    );
+
+    expect(result.current.sessionById.get('s-1')).toMatchObject({
+      status: 'idle',
+      ready_for_prompt: true,
+    });
+    expect(result.current.sessionsByBranch.get('b-1')?.[0]).toMatchObject({
+      status: 'idle',
+      ready_for_prompt: true,
+    });
+  });
+
   it('ignores `sessions.removed` for a session not in the map', async () => {
     const { client, emit } = makeMockClient();
     const { result } = renderHook(() => useAgorData(client));
