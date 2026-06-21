@@ -486,17 +486,48 @@
   overflow: hidden;
   border: 1px solid var(--landing-line);
   border-radius: 16px;
-  background: rgba(8, 14, 24, 0.78);
+  background:
+    radial-gradient(circle at 18% 18%, rgba(127, 232, 223, 0.18), transparent 22rem),
+    radial-gradient(circle at 90% 16%, rgba(241, 39, 17, 0.22), transparent 18rem),
+    rgba(8, 14, 24, 0.78);
   box-shadow: 0 32px 84px rgba(0, 0, 0, 0.44);
 }
 
-.liveVisual img {
+.socialCollage {
+  position: relative;
+  min-height: 520px;
+  padding: 24px;
+}
+
+.socialCollage img {
+  position: absolute;
   display: block;
-  width: 100%;
-  aspect-ratio: 16 / 10;
-  object-fit: cover;
-  object-position: 50% 0;
-  filter: saturate(1.04) brightness(1.04);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 18px;
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.45);
+  filter: saturate(1.06) brightness(1.04);
+}
+
+.socialMain {
+  z-index: 2;
+  top: 92px;
+  left: 52px;
+  width: 78%;
+}
+
+.socialFacepile {
+  z-index: 3;
+  top: 24px;
+  right: 32px;
+  width: 58%;
+  border-radius: 14px;
+}
+
+.socialCloseup {
+  z-index: 4;
+  right: 18px;
+  bottom: 30px;
+  width: 58%;
 }
 
 .landingFooter {
@@ -604,8 +635,12 @@
   }
 
   .liveVisual {
-    max-width: 520px;
+    max-width: 620px;
     max-height: none;
+  }
+
+  .socialCollage {
+    min-height: 480px;
   }
 
   .landingFooter {
@@ -685,6 +720,29 @@
 
   .mainScreenshotFrame img {
     object-position: center;
+  }
+
+  .socialCollage {
+    min-height: 430px;
+    padding: 18px;
+  }
+
+  .socialMain {
+    top: 88px;
+    left: 18px;
+    width: 84%;
+  }
+
+  .socialFacepile {
+    top: 18px;
+    right: 14px;
+    width: 72%;
+  }
+
+  .socialCloseup {
+    right: 10px;
+    bottom: 22px;
+    width: 70%;
   }
 
   .featureGrid,

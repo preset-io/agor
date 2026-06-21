@@ -158,6 +158,35 @@ function ProductMockup() {
   );
 }
 
+function MultiplayerCollage() {
+  return (
+    <div
+      className={styles.socialCollage}
+      role="img"
+      aria-label="Agor multiplayer presence with facepile, board comments, and live collaboration"
+    >
+      {/* biome-ignore lint/performance/noImgElement: Static product screenshot collage */}
+      <img
+        className={styles.socialMain}
+        src="/screenshots/marketing/agor-marketing-social-comment-context.png"
+        alt="Board comment attached to an active Agor branch card"
+      />
+      {/* biome-ignore lint/performance/noImgElement: Static product screenshot collage */}
+      <img
+        className={styles.socialFacepile}
+        src="/screenshots/marketing/agor-marketing-facepile-tooltip.png"
+        alt="Agor facepile with overflow and active teammate tooltip"
+      />
+      {/* biome-ignore lint/performance/noImgElement: Static product screenshot collage */}
+      <img
+        className={styles.socialCloseup}
+        src="/screenshots/marketing/agor-marketing-social-comment-closeup.png"
+        alt="Close-up of a spatial board comment"
+      />
+    </div>
+  );
+}
+
 export function LandingPage() {
   const landingRef = useRef<HTMLDivElement>(null);
 
@@ -281,11 +310,7 @@ export function LandingPage() {
           </Link>
         </div>
         <div className={styles.liveVisual}>
-          {/* biome-ignore lint/performance/noImgElement: Static product screenshot (interim — needs a bespoke presence/cursors shot before launch) */}
-          <img
-            src="/screenshots/cards-hero.png"
-            alt="Agor board with branches and sessions organized in shared zones"
-          />
+          <MultiplayerCollage />
         </div>
       </section>
 
