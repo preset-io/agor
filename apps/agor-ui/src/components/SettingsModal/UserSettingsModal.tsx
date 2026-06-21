@@ -391,6 +391,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       await onUpdate?.(user.user_id, updates);
       await syncUserGroups(values.groupIds || []);
       await saveDirtyAgenticConfigs();
+      form.setFieldValue('password', undefined);
     } catch (err) {
       console.error('Validation failed:', err);
     }

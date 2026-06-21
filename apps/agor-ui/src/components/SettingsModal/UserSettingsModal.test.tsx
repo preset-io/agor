@@ -114,6 +114,45 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByRole('heading', { name: 'Codex' })).toBeInTheDocument();
   });
 
+  it('clears the password field after saving General settings in place', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        mcpServerById={new Map()}
+        onUpdate={onUpdate}
+      />
+    );
+
+    const passwordInput = screen.getByPlaceholderText('••••••••') as HTMLInputElement;
+    fireEvent.change(passwordInput, { target: { value: 'new-password' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ password: 'new-password' })
+      );
+    }, ASYNC);
+
+    expect(passwordInput).toHaveValue('');
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledTimes(2);
+    }, ASYNC);
+    expect(onUpdate.mock.calls[1][1]).not.toHaveProperty('password');
+  });
+
   it('keeps the Env Vars section selected after saving and receiving updated user props', async () => {
     const initialUser = makeUser({
       env_vars: {
