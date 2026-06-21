@@ -1,0 +1,1029 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script src="assets/music/audio-data.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #05070b;
+      }
+      body {
+        font-family: "Inter", system-ui, sans-serif;
+        color: #f8fafc;
+      }
+      .mono {
+        font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      }
+
+      /* ---- Scene stack ---- */
+      .scene {
+        position: absolute;
+        inset: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      .scene-inner {
+        position: absolute;
+        inset: 0;
+        width: 1920px;
+        height: 1080px;
+        will-change: opacity, transform, filter;
+      }
+      .scene-content {
+        position: relative;
+        z-index: 3;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        box-sizing: border-box;
+      }
+
+      /* Shared dark-teal backdrop for text scenes */
+      .teal-bg {
+        background: #05070b;
+      }
+      .teal-bg::before {
+        /* localized radial glows — NO full-screen linear gradients */
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        background:
+          radial-gradient(
+            720px 540px at 22% 18%,
+            rgba(46, 154, 146, 0.22),
+            rgba(46, 154, 146, 0) 70%
+          ),
+          radial-gradient(
+            760px 560px at 82% 14%,
+            rgba(35, 136, 242, 0.16),
+            rgba(35, 136, 242, 0) 70%
+          ),
+          radial-gradient(
+            900px 700px at 50% 108%,
+            rgba(9, 17, 29, 0.9),
+            rgba(7, 11, 18, 0) 70%
+          );
+      }
+      .constellation {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        width: 1920px;
+        height: 1080px;
+      }
+
+      .eyebrow {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0.26em;
+        text-transform: uppercase;
+        color: #7fe8df;
+      }
+
+      /* ===== Scene 1 — Terminal ===== */
+      #s1 .scene-content {
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+      }
+      .term {
+        width: 1320px;
+        background: rgba(7, 13, 22, 0.82);
+        border: 2px solid rgba(127, 232, 223, 0.18);
+        border-radius: 18px;
+        box-shadow:
+          0 40px 120px rgba(0, 0, 0, 0.55),
+          0 0 0 1px rgba(127, 232, 223, 0.06),
+          0 0 70px rgba(46, 154, 146, 0.14);
+        padding: 0 0 56px 0;
+        overflow: hidden;
+      }
+      .term-bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        height: 54px;
+        padding: 0 26px;
+        background: rgba(5, 9, 15, 0.9);
+        border-bottom: 1px solid rgba(127, 232, 223, 0.12);
+      }
+      .term-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+      }
+      .term-label {
+        margin-left: 14px;
+        font-size: 20px;
+        letter-spacing: 0.02em;
+        color: #aeb9c8;
+      }
+      .term-body {
+        padding: 54px 60px 0 60px;
+      }
+      .term-line {
+        font-size: 40px;
+        line-height: 1.5;
+        letter-spacing: -0.01em;
+        color: #aeb9c8;
+        white-space: nowrap;
+      }
+      .term-prompt {
+        color: #7fe8df;
+        margin-right: 18px;
+      }
+      .term-l2 {
+        color: #f8fafc;
+        font-weight: 700;
+        font-size: 56px;
+        letter-spacing: -0.02em;
+      }
+      .term-caret {
+        display: inline-block;
+        width: 18px;
+        height: 44px;
+        margin-left: 4px;
+        transform: translateY(7px);
+        background: #7fe8df;
+        border-radius: 2px;
+      }
+
+      /* ===== Scene 2 — Reveal ===== */
+      #s2 {
+        background: #07100c;
+      }
+      #s2 .scene-content {
+        align-items: center;
+        justify-content: center;
+        perspective: 1700px;
+      }
+      .board-stage {
+        position: absolute;
+        z-index: 2;
+        top: 50%;
+        left: 50%;
+        width: 1500px;
+        transform: translate(-50%, -50%);
+        transform-style: preserve-3d;
+      }
+      .board-wrap {
+        position: relative;
+        border-radius: 22px;
+        overflow: hidden;
+        border: 1px solid rgba(240, 162, 58, 0.35);
+        box-shadow:
+          0 60px 150px rgba(0, 0, 0, 0.6),
+          0 0 80px rgba(232, 115, 31, 0.22);
+      }
+      .board-wrap img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .board-glow {
+        position: absolute;
+        z-index: 1;
+        top: 50%;
+        left: 50%;
+        width: 1960px;
+        height: 1240px;
+        transform: translate(-50%, -50%);
+        background: radial-gradient(
+          closest-side,
+          rgba(240, 162, 58, 0.36),
+          rgba(232, 115, 31, 0.15) 55%,
+          rgba(232, 115, 31, 0) 78%
+        );
+        pointer-events: none;
+        will-change: opacity, transform;
+      }
+      .reveal-headline {
+        position: absolute;
+        z-index: 4;
+        left: 50%;
+        bottom: 86px;
+        transform: translateX(-50%);
+        width: 1500px;
+        text-align: center;
+        font-size: 96px;
+        font-weight: 900;
+        letter-spacing: -0.05em;
+        line-height: 1;
+        color: #ffffff;
+        text-shadow: 0 10px 50px rgba(0, 0, 0, 0.7);
+      }
+
+      /* ===== Scene 3 — Harnesses ===== */
+      #s3 .scene-content {
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 0;
+      }
+      .s3-eyebrow {
+        position: absolute;
+        z-index: 6;
+        top: 196px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+      .logo-row {
+        position: absolute;
+        z-index: 5;
+        top: 340px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 44px;
+        align-items: center;
+      }
+      .logo-chip {
+        width: 184px;
+        height: 184px;
+        border-radius: 30px;
+        background: rgba(10, 18, 30, 0.9);
+        border: 2px solid rgba(127, 232, 223, 0.16);
+        box-shadow:
+          0 26px 70px rgba(0, 0, 0, 0.5),
+          0 0 40px rgba(46, 154, 146, 0.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .logo-chip img {
+        width: 116px;
+        height: 116px;
+        object-fit: contain;
+      }
+      .s3-cap {
+        position: absolute;
+        z-index: 6;
+        top: 612px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 1500px;
+        text-align: center;
+        font-size: 66px;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        color: #f8fafc;
+      }
+
+      /* ===== Scene 4 — Multiplayer ===== */
+      #s4 .scene-content {
+        align-items: stretch;
+        justify-content: flex-start;
+      }
+      .board-dim {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+      }
+      .board-dim img {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 2000px;
+        transform: translate(-50%, -50%) scale(1.02);
+        filter: saturate(0.85) brightness(0.42);
+        border-radius: 0;
+      }
+      .board-dim::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: rgba(5, 7, 11, 0.55);
+      }
+      .crop {
+        position: absolute;
+        z-index: 3;
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow:
+          0 30px 90px rgba(0, 0, 0, 0.55),
+          0 0 0 1px rgba(127, 232, 223, 0.12);
+      }
+      .crop img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      #facepile {
+        top: 150px;
+        left: 150px;
+        width: 638px;
+      }
+      #comment {
+        top: 466px;
+        right: 170px;
+        width: 1010px;
+      }
+      #cursor {
+        z-index: 5;
+        top: 360px;
+        left: 760px;
+        width: 300px;
+        box-shadow: 0 18px 50px rgba(232, 115, 31, 0.4);
+        border-radius: 14px;
+      }
+      .s4-caption {
+        position: absolute;
+        z-index: 6;
+        left: 150px;
+        bottom: 118px;
+        font-size: 74px;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        color: #f8fafc;
+        text-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+      }
+      .s4-eyebrow {
+        position: absolute;
+        z-index: 6;
+        left: 154px;
+        bottom: 206px;
+      }
+
+      /* ===== Scene 5 — Feature montage ===== */
+      #s5 .scene-content {
+        align-items: center;
+        justify-content: center;
+      }
+      .montage-title {
+        position: absolute;
+        z-index: 8;
+        top: 92px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 40px;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        color: #7fe8df;
+        text-align: center;
+        text-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
+      }
+      .fcard {
+        position: absolute;
+        z-index: 4;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 30px;
+        will-change: opacity, transform, filter;
+      }
+      .fshot {
+        border-radius: 18px;
+        overflow: hidden;
+        border: 1px solid rgba(127, 232, 223, 0.22);
+        box-shadow:
+          0 44px 120px rgba(0, 0, 0, 0.62),
+          0 0 0 1px rgba(127, 232, 223, 0.08),
+          0 0 70px rgba(46, 154, 146, 0.16);
+        background: rgba(8, 14, 24, 0.6);
+      }
+      .fshot img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .flabel {
+        text-align: center;
+      }
+      .flabel .fname {
+        font-size: 60px;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        color: #f8fafc;
+        line-height: 1.05;
+      }
+      .flabel .fsub {
+        margin-top: 10px;
+        font-size: 32px;
+        font-weight: 500;
+        letter-spacing: -0.01em;
+        color: #aeb9c8;
+      }
+      /* landscape shots */
+      .fshot.land {
+        width: 1180px;
+        height: 660px;
+      }
+      /* portrait shot */
+      .fshot.port {
+        width: 470px;
+        height: 554px;
+      }
+      /* squarish shot */
+      .fshot.sq {
+        width: 660px;
+        height: 628px;
+      }
+
+      /* ===== Scene 6 — Raise team assistants + Slack ===== */
+      #s6 .scene-content {
+        align-items: center;
+        justify-content: center;
+      }
+      .s6-eyebrow {
+        position: absolute;
+        z-index: 7;
+        top: 156px;
+        left: 150px;
+      }
+      .assist-card {
+        position: absolute;
+        z-index: 4;
+        left: 150px;
+        bottom: 64px;
+        width: 660px;
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow:
+          0 40px 110px rgba(0, 0, 0, 0.6),
+          0 0 0 1px rgba(127, 232, 223, 0.12),
+          0 0 60px rgba(46, 154, 146, 0.12);
+      }
+      .assist-card img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .s6-head {
+        position: absolute;
+        z-index: 6;
+        left: 150px;
+        top: 196px;
+        width: 1560px;
+        font-size: 66px;
+        font-weight: 800;
+        letter-spacing: -0.045em;
+        line-height: 1.08;
+        color: #f8fafc;
+      }
+      .s6-head .hl {
+        color: #7fe8df;
+      }
+      .slack-card {
+        position: absolute;
+        z-index: 7;
+        right: 150px;
+        bottom: 116px;
+        width: 624px;
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow:
+          0 40px 110px rgba(0, 0, 0, 0.62),
+          0 0 0 1px rgba(127, 232, 223, 0.12);
+      }
+      .slack-card img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .s6-slack-cap {
+        position: absolute;
+        z-index: 7;
+        right: 150px;
+        bottom: 56px;
+        width: 624px;
+        font-size: 30px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        color: #aeb9c8;
+        text-align: right;
+        pointer-events: none;
+      }
+
+      /* ===== Scene 7 — Outro ===== */
+      #s7 .scene-content {
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 30px;
+      }
+      .wordmark {
+        font-size: 260px;
+        font-weight: 900;
+        letter-spacing: -0.06em;
+        line-height: 1;
+        color: #f8fafc;
+      }
+      .wordmark .glyph {
+        color: #7fe8df;
+      }
+      .outro-rule {
+        width: 0;
+        height: 3px;
+        border-radius: 999px;
+        background: #2e9a92;
+        margin: 6px 0 2px 0;
+      }
+      .outro-tag {
+        font-size: 52px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        color: #f8fafc;
+        text-align: center;
+      }
+      .outro-sub {
+        margin-top: 10px;
+        font-size: 30px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: #aeb9c8;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="40"
+      data-width="1920"
+      data-height="1080"
+    >
+      <!-- ============ AUDIO ============ -->
+      <audio
+        id="music"
+        class="clip"
+        data-start="0"
+        data-duration="40"
+        data-track-index="0"
+        data-volume="0.36"
+        src="assets/music/agor-epic-40s.mp3"
+      ></audio>
+
+      <!-- Scene 1 — typing keypress ticks -->
+      <audio id="sfx-k1" class="clip" data-start="0.45" data-duration="0.3" data-track-index="1" data-volume="0.42" src="assets/sfx/keyboard/keypress-001.wav"></audio>
+      <audio id="sfx-k2" class="clip" data-start="0.78" data-duration="0.3" data-track-index="2" data-volume="0.42" src="assets/sfx/keyboard/keypress-013.wav"></audio>
+      <audio id="sfx-k3" class="clip" data-start="1.10" data-duration="0.3" data-track-index="1" data-volume="0.42" src="assets/sfx/keyboard/keypress-021.wav"></audio>
+      <audio id="sfx-k4" class="clip" data-start="1.42" data-duration="0.3" data-track-index="2" data-volume="0.42" src="assets/sfx/keyboard/keypress-009.wav"></audio>
+      <audio id="sfx-k5" class="clip" data-start="1.78" data-duration="0.3" data-track-index="1" data-volume="0.42" src="assets/sfx/keyboard/keypress-005.wav"></audio>
+      <audio id="sfx-k6" class="clip" data-start="2.12" data-duration="0.3" data-track-index="2" data-volume="0.42" src="assets/sfx/keyboard/keypress-001.wav"></audio>
+      <!-- deep cinematic tone as the hook line settles -->
+      <audio id="sfx-hook" class="clip" data-start="2.85" data-duration="0.7" data-track-index="3" data-volume="0.5" src="assets/sfx/impact/impactSoft_medium_001.ogg"></audio>
+
+      <!-- Scene 2 — reveal swell (whoosh + deep bell), beat-locked 5.39 -->
+      <audio id="sfx-swell" class="clip" data-start="4.95" data-duration="0.6" data-track-index="1" data-volume="0.72" src="assets/sfx/impact/impactSoft_heavy_002.ogg"></audio>
+      <audio id="sfx-bell" class="clip" data-start="5.39" data-duration="0.9" data-track-index="2" data-volume="0.6" src="assets/sfx/impact/impactBell_heavy_000.ogg"></audio>
+
+      <!-- Scene 3 — harness logo pops on beat grid -->
+      <audio id="sfx-l1" class="clip" data-start="10.55" data-duration="0.3" data-track-index="1" data-volume="0.55" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio id="sfx-l2" class="clip" data-start="11.05" data-duration="0.3" data-track-index="2" data-volume="0.55" src="assets/sfx/interface/drop_002.ogg"></audio>
+      <audio id="sfx-l3" class="clip" data-start="11.55" data-duration="0.3" data-track-index="3" data-volume="0.55" src="assets/sfx/interface/drop_003.ogg"></audio>
+      <audio id="sfx-l4" class="clip" data-start="12.05" data-duration="0.3" data-track-index="1" data-volume="0.55" src="assets/sfx/interface/click_002.ogg"></audio>
+      <audio id="sfx-l5" class="clip" data-start="12.55" data-duration="0.3" data-track-index="2" data-volume="0.55" src="assets/sfx/interface/click_005.ogg"></audio>
+
+      <!-- Scene 4 — facepile pops + comment tick -->
+      <audio id="sfx-p1" class="clip" data-start="14.56" data-duration="0.3" data-track-index="1" data-volume="0.58" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio id="sfx-p2" class="clip" data-start="15.06" data-duration="0.3" data-track-index="2" data-volume="0.58" src="assets/sfx/interface/drop_002.ogg"></audio>
+      <audio id="sfx-comment" class="clip" data-start="16.56" data-duration="0.3" data-track-index="3" data-volume="0.55" src="assets/sfx/interface/click_003.ogg"></audio>
+
+      <!-- Scene 5 — montage cinematic ticks per card (beat-grid) -->
+      <audio id="sfx-m1" class="clip" data-start="18.72" data-duration="0.4" data-track-index="1" data-volume="0.5" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio id="sfx-m2" class="clip" data-start="21.39" data-duration="0.4" data-track-index="2" data-volume="0.5" src="assets/sfx/interface/drop_002.ogg"></audio>
+      <audio id="sfx-m3" class="clip" data-start="24.06" data-duration="0.4" data-track-index="3" data-volume="0.5" src="assets/sfx/interface/drop_003.ogg"></audio>
+      <audio id="sfx-m4" class="clip" data-start="26.70" data-duration="0.4" data-track-index="1" data-volume="0.5" src="assets/sfx/interface/click_002.ogg"></audio>
+      <audio id="sfx-m5" class="clip" data-start="29.38" data-duration="0.5" data-track-index="2" data-volume="0.55" src="assets/sfx/interface/bong_001.ogg"></audio>
+
+      <!-- Scene 6 — peak impact + slack chime -->
+      <audio id="sfx-peak" class="clip" data-start="32.72" data-duration="0.9" data-track-index="1" data-volume="0.66" src="assets/sfx/impact/impactSoft_heavy_004.ogg"></audio>
+      <audio id="sfx-slack" class="clip" data-start="33.40" data-duration="0.6" data-track-index="2" data-volume="0.55" src="assets/sfx/impact/impactBell_heavy_003.ogg"></audio>
+
+      <!-- Scene 7 — outro bell on the 38.05 hit -->
+      <audio id="sfx-outro" class="clip" data-start="38.05" data-duration="1.0" data-track-index="1" data-volume="0.6" src="assets/sfx/impact/impactBell_heavy_004.ogg"></audio>
+
+      <!-- ============ SCENE 1 — TERMINAL HOOK ============ -->
+      <div id="s1" class="scene teal-bg clip" data-start="0" data-duration="5.0" data-track-index="11">
+       <div class="scene-inner" id="s1-inner" data-layout-allow-overflow data-layout-allow-overlap>
+        <canvas id="cst1" class="constellation" width="1920" height="1080"></canvas>
+        <div class="scene-content">
+          <div class="term" id="s1-term">
+            <div class="term-bar">
+              <span class="term-dot" style="background:#e8731f"></span>
+              <span class="term-dot" style="background:#f0a23a"></span>
+              <span class="term-dot" style="background:#2e9a92"></span>
+              <span class="term-label mono">agor — zsh</span>
+            </div>
+            <div class="term-body">
+              <div class="term-line mono">
+                <span class="term-prompt">claude$</span><span id="s1-l1"></span><span class="term-caret" id="s1-caret"></span>
+              </div>
+              <div class="term-line mono term-l2" id="s1-l2" style="margin-top:22px">Break out of the terminal.</div>
+            </div>
+          </div>
+        </div>
+       </div>
+      </div>
+
+      <!-- ============ SCENE 2 — BOARD REVEAL ============ -->
+      <div id="s2" class="scene clip" data-start="4.9" data-duration="5.1" data-track-index="12" data-layout-allow-overflow>
+       <div class="scene-inner" id="s2-inner" data-layout-allow-overflow data-layout-allow-occlusion data-layout-allow-overlap>
+        <div class="board-glow" id="s2-glow"></div>
+        <div class="scene-content">
+          <div class="board-stage" id="s2-stage">
+            <div class="board-wrap">
+              <img src="assets/screenshots/board-hero.png" alt="Agor board" />
+            </div>
+          </div>
+        </div>
+        <div class="reveal-headline" id="s2-head">Meet your team of AI assistants.</div>
+       </div>
+      </div>
+
+      <!-- ============ SCENE 3 — HARNESSES ============ -->
+      <div id="s3" class="scene teal-bg clip" data-start="9.9" data-duration="4.1" data-track-index="13">
+       <div class="scene-inner" id="s3-inner" data-layout-allow-overflow>
+        <canvas id="cst3" class="constellation" width="1920" height="1080"></canvas>
+        <div class="scene-content"></div>
+        <div class="s3-eyebrow eyebrow" id="s3-eyebrow">Built on the harnesses you already use.</div>
+        <div class="logo-row" id="s3-row">
+          <div class="logo-chip lc"><img src="assets/tools/claude-code.png" alt="Claude Code" /></div>
+          <div class="logo-chip lc"><img src="assets/tools/codex.png" alt="Codex" /></div>
+          <div class="logo-chip lc"><img src="assets/tools/gemini.png" alt="Gemini" /></div>
+          <div class="logo-chip lc"><img src="assets/tools/copilot.png" alt="Copilot" /></div>
+          <div class="logo-chip lc"><img src="assets/tools/opencode.png" alt="OpenCode" /></div>
+        </div>
+        <div class="s3-cap" id="s3-cap">Pick the best harness per session. No lock-in.</div>
+       </div>
+      </div>
+
+      <!-- ============ SCENE 4 — MULTIPLAYER ============ -->
+      <div id="s4" class="scene clip" data-start="13.9" data-duration="4.6" data-track-index="14">
+       <div class="scene-inner" id="s4-inner" data-layout-allow-overflow>
+        <div class="board-dim">
+          <img src="assets/screenshots/board-hero-dim.png" alt="" />
+        </div>
+        <div class="scene-content"></div>
+        <div class="crop" id="facepile">
+          <img src="assets/screenshots/marketing/agor-marketing-facepile-tooltip.png" alt="Live facepile" />
+        </div>
+        <div class="crop" id="comment">
+          <img src="assets/screenshots/marketing/agor-marketing-social-comment-context.png" alt="Board comment" />
+        </div>
+        <div class="crop" id="cursor">
+          <img src="assets/screenshots/marketing/agor-marketing-cursor-indicator.png" alt="Mina cursor" />
+        </div>
+        <div class="s4-eyebrow eyebrow" id="s4-eyebrow">Multiplayer by default.</div>
+        <div class="s4-caption" id="s4-cap">Live cursors. Comments. Presence.</div>
+       </div>
+      </div>
+
+      <!-- ============ SCENE 5 — FEATURE MONTAGE ============ -->
+      <div id="s5" class="scene teal-bg clip" data-start="18.4" data-duration="13.1" data-track-index="15">
+       <div class="scene-inner" id="s5-inner" data-layout-allow-overflow>
+        <canvas id="cst5" class="constellation" width="1920" height="1080"></canvas>
+        <div class="scene-content"></div>
+        <div class="montage-title" id="s5-title">So much more than a chat box.</div>
+
+        <div class="fcard" id="fc1">
+          <div class="fshot land"><img src="assets/screenshots/conversation_full_page.png" alt="Agent session" /></div>
+          <div class="flabel"><div class="fname">Rich agent sessions</div><div class="fsub">Every tool call, fork &amp; handoff</div></div>
+        </div>
+        <div class="fcard" id="fc2">
+          <div class="fshot land"><img src="assets/screenshots/knowledge-hero.png" alt="Knowledge base" /></div>
+          <div class="flabel"><div class="fname">Shared knowledge base</div><div class="fsub">Shared memory for humans + agents</div></div>
+        </div>
+        <div class="fcard" id="fc3">
+          <div class="fshot land"><img src="assets/screenshots/artifacts-hero.png" alt="Live artifacts" /></div>
+          <div class="flabel"><div class="fname">Live artifacts</div><div class="fsub">Dashboards &amp; tools, rendered on the board</div></div>
+        </div>
+        <div class="fcard" id="fc4">
+          <div class="fshot port"><img src="assets/screenshots/scheduler-modal.png" alt="Scheduler" /></div>
+          <div class="flabel"><div class="fname">Scheduler</div><div class="fsub">Standups, audits &amp; digests on a cadence</div></div>
+        </div>
+        <div class="fcard" id="fc5">
+          <div class="fshot sq"><img src="assets/screenshots/mcp_environment.png" alt="MCP environment" /></div>
+          <div class="flabel"><div class="fname">MCP-native</div><div class="fsub">Anything you can do, an agent can do too</div></div>
+        </div>
+       </div>
+      </div>
+
+      <!-- ============ SCENE 6 — RAISE TEAM ASSISTANTS ============ -->
+      <div id="s6" class="scene teal-bg clip" data-start="31.4" data-duration="4.6" data-track-index="16">
+       <div class="scene-inner" id="s6-inner" data-layout-allow-overflow>
+        <canvas id="cst6" class="constellation" width="1920" height="1080"></canvas>
+        <div class="scene-content"></div>
+        <div class="s6-eyebrow eyebrow" id="s6-eyebrow">The shared workspace.</div>
+        <div class="assist-card" id="s6-assist">
+          <img src="assets/screenshots/assistants-list.png" alt="Team assistants" />
+        </div>
+        <div class="s6-head" id="s6-head">Raise team assistants — <span class="hl">memory, skills,</span> a place to work.</div>
+        <div class="s6-slack-cap" id="s6-slackcap">Reach them from Slack, GitHub, anywhere.</div>
+        <div class="slack-card" id="s6-slack">
+          <img src="assets/screenshots/marketing/agor-marketing-slack-thread.png" alt="Slack thread" />
+        </div>
+       </div>
+      </div>
+
+      <!-- ============ SCENE 7 — OUTRO ============ -->
+      <div id="s7" class="scene teal-bg clip" data-start="35.9" data-duration="4.1" data-track-index="17">
+       <div class="scene-inner" id="s7-inner" data-layout-allow-overflow>
+        <canvas id="cst7" class="constellation" width="1920" height="1080"></canvas>
+        <div class="scene-content">
+          <div class="wordmark" id="s7-word">ag<span class="glyph">o</span>r</div>
+          <div class="outro-rule" id="s7-rule"></div>
+          <div class="outro-tag" id="s7-tag">Team command center for all things agentic.</div>
+          <div class="outro-sub" id="s7-sub">open source · agor.live</div>
+        </div>
+       </div>
+      </div>
+    </div>
+
+    <script>
+      // ---------- deterministic PRNG (mulberry32) ----------
+      function mulberry32(a) {
+        return function () {
+          a |= 0;
+          a = (a + 0x6d2b79f5) | 0;
+          var t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      // ---------- constellation field ----------
+      function buildField(seed, count) {
+        var rnd = mulberry32(seed);
+        var nodes = [];
+        for (var i = 0; i < count; i++) {
+          nodes.push({
+            x: rnd() * 1920,
+            y: rnd() * 1080,
+            r: 1.3 + rnd() * 2.4,
+            dx: (rnd() - 0.5) * 14,
+            dy: (rnd() - 0.5) * 14,
+            ph: rnd() * Math.PI * 2,
+          });
+        }
+        return nodes;
+      }
+
+      function drawConstellation(ctx, nodes, t, energy) {
+        ctx.clearRect(0, 0, 1920, 1080);
+        var pts = [];
+        for (var i = 0; i < nodes.length; i++) {
+          var n = nodes[i];
+          var x = (((n.x + n.dx * t) % 1940) + 1940) % 1940 - 10;
+          var y = (((n.y + n.dy * t) % 1100) + 1100) % 1100 - 10;
+          pts.push({ x: x, y: y, r: n.r, ph: n.ph });
+        }
+        var maxD = 230;
+        for (var a = 0; a < pts.length; a++) {
+          for (var b = a + 1; b < pts.length; b++) {
+            var ddx = pts[a].x - pts[b].x;
+            var ddy = pts[a].y - pts[b].y;
+            var d = Math.sqrt(ddx * ddx + ddy * ddy);
+            if (d < maxD) {
+              var alpha = (1 - d / maxD) * 0.2 * (0.7 + 0.5 * energy);
+              ctx.strokeStyle = "rgba(127,232,223," + alpha.toFixed(3) + ")";
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(pts[a].x, pts[a].y);
+              ctx.lineTo(pts[b].x, pts[b].y);
+              ctx.stroke();
+            }
+          }
+        }
+        for (var k = 0; k < pts.length; k++) {
+          var p = pts[k];
+          var tw = 0.5 + 0.5 * Math.sin(p.ph + t * 1.4);
+          var da = (0.2 + 0.45 * tw) * (0.75 + 0.4 * energy);
+          ctx.fillStyle = "rgba(127,232,223," + da.toFixed(3) + ")";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // ---------- audio data (pre-extracted, deterministic) ----------
+      var AUDIO_DATA = window.__AUDIO_DATA || { fps: 30, totalFrames: 0, frames: [] };
+      function energyAt(globalT) {
+        if (!AUDIO_DATA.frames.length) return 0.5;
+        var idx = Math.min(
+          AUDIO_DATA.frames.length - 1,
+          Math.max(0, Math.round(globalT * AUDIO_DATA.fps))
+        );
+        var fr = AUDIO_DATA.frames[idx];
+        if (!fr) return 0.5;
+        var bass = fr.bands && fr.bands.length ? (fr.bands[0] + (fr.bands[1] || 0)) / 2 : 0;
+        return Math.min(1, 0.55 * (fr.rms || 0) + 0.45 * bass);
+      }
+
+      // helper: drive a constellation canvas across a scene window (local time, audio-reactive)
+      function animateConstellation(tl, ctx, nodes, sceneStart, sceneDur) {
+        var n = Math.ceil(sceneDur * 30);
+        for (var f = 0; f <= n; f++) {
+          (function (lt, gt) {
+            tl.call(function () {
+              drawConstellation(ctx, nodes, lt, energyAt(gt));
+            }, [], gt);
+          })(f / 30, sceneStart + f / 30);
+        }
+      }
+
+      window.__timelines = window.__timelines || {};
+      var tl = gsap.timeline({ paused: true });
+
+      // ============================================================
+      // SCENE 1 — Terminal hook (0 - 5.0)
+      // ============================================================
+      var s1nodes = buildField(13371, 46);
+      var c1 = document.getElementById("cst1").getContext("2d");
+      var L1_TEXT = "how do i share this with my team?";
+
+      var typeStart = 0.4;
+      var typeEnd = 2.35;
+      var totalChars = L1_TEXT.length;
+      for (var ci = 0; ci <= totalChars; ci++) {
+        (function (n) {
+          var tt = typeStart + (typeEnd - typeStart) * (n / totalChars);
+          tl.call(function () {
+            document.getElementById("s1-l1").textContent = L1_TEXT.slice(0, n);
+          }, [], tt);
+        })(ci);
+      }
+      // terminal container entrance
+      tl.fromTo("#s1-term", { opacity: 0, y: 40, scale: 0.97 }, { opacity: 1, y: 0, scale: 1, duration: 0.6, ease: "power3.out" }, 0.1);
+      // caret blink (finite repeats)
+      tl.to("#s1-caret", { opacity: 0.15, duration: 0.45, ease: "power1.inOut", yoyo: true, repeat: 8 }, 0.2);
+      // the hook line resolves in — heavy, confident
+      tl.fromTo("#s1-l2", { opacity: 0, y: 22, scale: 0.98, filter: "blur(4px)" }, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.4, ease: "power4.out" }, 2.85);
+      tl.set("#s1-l2", { opacity: 0 }, 0);
+      animateConstellation(tl, c1, s1nodes, 0, 5.0);
+      // S1 -> S2 transition: terminal cracks (scale up + blur + fade)
+      tl.to("#s1-inner", { opacity: 0, scale: 1.14, filter: "blur(16px)", duration: 0.45, ease: "power3.in" }, 4.85);
+
+      // ============================================================
+      // SCENE 2 — Board reveal (4.9 - 10.0) — beat-locked 5.39
+      // ============================================================
+      tl.fromTo("#s2-inner", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power2.out" }, 4.9);
+      // board sweeps in with a cinematic 3D tilt; motion crosses the 5.39 lift // beat-locked
+      tl.fromTo(
+        "#s2-stage",
+        { opacity: 0, rotationY: 22, rotationX: 7, scale: 0.82, y: 60, transformPerspective: 1700 },
+        { opacity: 1, rotationY: -5, rotationX: 1, scale: 1, y: 0, duration: 1.2, ease: "power2.inOut" },
+        5.0
+      );
+      // headline slams down on the lift // beat-locked 5.39
+      tl.fromTo(
+        "#s2-head",
+        { opacity: 0, y: -80, scale: 1.07, filter: "blur(7px)" },
+        { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.55, ease: "power4.out" },
+        5.39
+      );
+      tl.set("#s2-head", { opacity: 0 }, 0);
+      tl.set("#s2-glow", { opacity: 0 }, 0);
+      // audio-reactive warm board glow breathing across the hold (owns #s2-glow exclusively)
+      var glowStart = 5.1;
+      var glowEnd = 10.0;
+      for (var f2 = 0; f2 <= Math.ceil((glowEnd - glowStart) * 30); f2++) {
+        (function (gt) {
+          tl.call(function () {
+            var e = energyAt(gt);
+            var ramp = Math.min(1, (gt - glowStart) / 0.3);
+            gsap.set("#s2-glow", { opacity: (0.48 + 0.42 * e) * ramp, scale: 0.96 + 0.07 * e });
+          }, [], gt);
+        })(glowStart + f2 / 30);
+      }
+      // S2 -> S3 transition: push-in / zoom through
+      tl.to("#s2-inner", { opacity: 0, scale: 1.08, duration: 0.42, ease: "power2.in" }, 9.6);
+
+      // ============================================================
+      // SCENE 3 — Harnesses (9.9 - 14.0)
+      // ============================================================
+      var s3nodes = buildField(80211, 40);
+      var c3 = document.getElementById("cst3").getContext("2d");
+      tl.fromTo("#s3-inner", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power2.out" }, 9.9);
+      tl.fromTo("#s3-eyebrow", { opacity: 0, y: -24 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 10.15);
+      // logos pop one by one on the ~0.5s beat grid // beat-grid
+      tl.fromTo(
+        ".lc",
+        { opacity: 0, y: 54, scale: 0.6 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.42, ease: "back.out(2)", stagger: { each: 0.5 } },
+        10.55
+      );
+      tl.fromTo("#s3-cap", { opacity: 0, y: 32 }, { opacity: 1, y: 0, duration: 0.55, ease: "expo.out" }, 10.55);
+      tl.set(["#s3-eyebrow", ".lc", "#s3-cap"], { opacity: 0 }, 0);
+      animateConstellation(tl, c3, s3nodes, 9.9, 4.1);
+      // S3 -> S4 transition: clean wipe (push left)
+      tl.to("#s3-inner", { opacity: 0, x: -100, filter: "blur(8px)", duration: 0.42, ease: "power2.in" }, 13.6);
+
+      // ============================================================
+      // SCENE 4 — Multiplayer presence (13.9 - 18.5)
+      // ============================================================
+      tl.fromTo("#s4-inner", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power2.out" }, 13.9);
+      // dimmed board slow ken-burns (ambient)
+      tl.fromTo(".board-dim img", { scale: 1.02 }, { scale: 1.08, duration: 4.4, ease: "none" }, 13.9);
+      // eyebrow + caption
+      tl.fromTo("#s4-eyebrow", { opacity: 0, x: -40 }, { opacity: 1, x: 0, duration: 0.5, ease: "expo.out" }, 14.2);
+      tl.fromTo("#s4-cap", { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out" }, 14.9);
+      // facepile pops in
+      tl.fromTo("#facepile", { opacity: 0, y: 30, scale: 0.9 }, { opacity: 1, y: 0, scale: 1, duration: 0.45, ease: "back.out(1.6)" }, 14.56);
+      // cursor glides across
+      tl.fromTo("#cursor", { opacity: 0, x: -260, y: 40 }, { opacity: 1, x: 0, y: 0, duration: 0.9, ease: "power2.out" }, 15.06);
+      // comment popover pops
+      tl.fromTo("#comment", { opacity: 0, y: 44, scale: 0.92 }, { opacity: 1, y: 0, scale: 1, duration: 0.5, ease: "back.out(1.5)" }, 16.56);
+      tl.set(["#s4-eyebrow", "#s4-cap", "#facepile", "#cursor", "#comment"], { opacity: 0 }, 0);
+      // S4 -> S5 transition: smooth blur crossfade
+      tl.to("#s4-inner", { opacity: 0, filter: "blur(12px)", duration: 0.42, ease: "power2.in" }, 18.1);
+
+      // ============================================================
+      // SCENE 5 — Feature flash montage (18.4 - 31.5)
+      // 5 cards snap to strong cues 18.72 / 21.39 / 24.06 / 26.70 / 29.38 // beat-grid
+      // ============================================================
+      var s5nodes = buildField(44922, 38);
+      var c5 = document.getElementById("cst5").getContext("2d");
+      tl.fromTo("#s5-inner", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power2.out" }, 18.4);
+      // section title beat — shown ONCE as the montage intro, then fades before the cards flow
+      tl.fromTo("#s5-title", { opacity: 0, y: -26 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 18.5);
+      tl.to("#s5-title", { opacity: 0, y: -22, duration: 0.4, ease: "power2.in" }, 20.9);
+      animateConstellation(tl, c5, s5nodes, 18.4, 13.1);
+
+      // card cue starts + varied entrance eases; each card holds, prev card swaps out (mid-scene, not scene exit)
+      var cards = ["#fc1", "#fc2", "#fc3", "#fc4", "#fc5"];
+      var cueIn = [18.72, 21.39, 24.06, 26.70, 29.38];
+      var entrances = [
+        { opacity: 0, y: 70, scale: 0.92, filter: "blur(8px)" },
+        { opacity: 0, x: 120, scale: 0.94, filter: "blur(8px)" },
+        { opacity: 0, y: -70, scale: 0.93, filter: "blur(8px)" },
+        { opacity: 0, x: -120, scale: 0.94, filter: "blur(8px)" },
+        { opacity: 0, scale: 0.82, filter: "blur(10px)" },
+      ];
+      var eases = ["power4.out", "expo.out", "back.out(1.5)", "power3.out", "expo.out"];
+      for (var ic = 0; ic < cards.length; ic++) {
+        var cin = cueIn[ic];
+        tl.fromTo(
+          cards[ic],
+          entrances[ic],
+          { opacity: 1, x: 0, y: 0, scale: 1, filter: "blur(0px)", duration: 0.55, ease: eases[ic] },
+          cin
+        );
+        // swap out the previous card just before the next card lands (internal swap; last card stays)
+        if (ic > 0) {
+          tl.to(cards[ic - 1], { opacity: 0, scale: 0.96, filter: "blur(6px)", duration: 0.35, ease: "power2.in" }, cin - 0.34);
+        }
+      }
+      tl.set(cards, { opacity: 0 }, 0);
+      // S5 -> S6 transition: blur-through (last card carries the cut)
+      tl.to("#s5-inner", { opacity: 0, filter: "blur(14px)", scale: 1.04, duration: 0.45, ease: "power2.in" }, 31.1);
+
+      // ============================================================
+      // SCENE 6 — Raise team assistants (31.4 - 36.0) — peak 32.72
+      // ============================================================
+      var s6nodes = buildField(67013, 34);
+      var c6 = document.getElementById("cst6").getContext("2d");
+      tl.fromTo("#s6-inner", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power2.out" }, 31.4);
+      tl.fromTo("#s6-eyebrow", { opacity: 0, y: -22 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 31.6);
+      // headline (top) lands ON the 32.72 build peak; assistants card sits bottom-left
+      tl.fromTo("#s6-head", { opacity: 0, y: -50, scale: 1.04, filter: "blur(6px)" }, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.55, ease: "power4.out" }, 32.72);
+      tl.fromTo("#s6-assist", { opacity: 0, x: -90, y: 30, filter: "blur(8px)" }, { opacity: 1, x: 0, y: 0, filter: "blur(0px)", duration: 0.6, ease: "power3.out" }, 31.9);
+      // sub-beat: slack card slides into the bottom-right column (own space, no overlap), holds to scene end. chime at 33.4
+      tl.fromTo("#s6-slack", { opacity: 0, x: 260, rotationY: -12, transformPerspective: 1400 }, { opacity: 1, x: 0, rotationY: 0, duration: 0.6, ease: "power3.out" }, 33.4);
+      tl.fromTo("#s6-slackcap", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.5, ease: "expo.out" }, 34.0);
+      tl.set(["#s6-eyebrow", "#s6-assist", "#s6-head", "#s6-slackcap", "#s6-slack"], { opacity: 0 }, 0);
+      animateConstellation(tl, c6, s6nodes, 31.4, 4.6);
+      // S6 -> S7 transition: soft blur fade
+      tl.to("#s6-inner", { opacity: 0, filter: "blur(12px)", duration: 0.45, ease: "power2.in" }, 35.6);
+
+      // ============================================================
+      // SCENE 7 — Outro / logo (35.9 - 40.0) — wordmark hit 38.05
+      // ============================================================
+      var s7nodes = buildField(55229, 50);
+      var c7 = document.getElementById("cst7").getContext("2d");
+      tl.fromTo("#s7-inner", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power2.out" }, 35.9);
+      // tagline + sub settle first, wordmark resolves on the 38.05 hit
+      tl.fromTo("#s7-tag", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 36.7);
+      tl.fromTo("#s7-sub", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.5, ease: "sine.out" }, 37.1);
+      tl.fromTo("#s7-word", { opacity: 0, scale: 0.84, filter: "blur(10px)" }, { opacity: 1, scale: 1, filter: "blur(0px)", duration: 0.7, ease: "power3.out" }, 38.05);
+      tl.fromTo("#s7-rule", { width: 0, opacity: 0 }, { width: 380, opacity: 1, duration: 0.6, ease: "power2.inOut" }, 38.35);
+      tl.set(["#s7-word", "#s7-rule", "#s7-tag", "#s7-sub"], { opacity: 0 }, 0);
+      animateConstellation(tl, c7, s7nodes, 35.9, 4.1);
+      // FINAL fade (only the last scene may exit); music fades 38.8 -> 40.0
+      tl.to("#s7 .scene-content", { opacity: 0, duration: 0.6, ease: "power2.in" }, 39.4);
+      tl.to("#music", { volume: 0, duration: 1.2, ease: "power1.in" }, 38.8);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>
