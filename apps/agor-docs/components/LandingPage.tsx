@@ -8,25 +8,6 @@ import styles from './LandingPage.module.css';
 
 const assistants = ['ReviewBot', 'LaunchOps', 'Scout', 'Standup', 'Docs'];
 
-const problemCards = [
-  {
-    title: 'My agents are everywhere',
-    body: 'More agents, more models, more tabs. Keeping them straight has become its own job.',
-  },
-  {
-    title: 'I can’t see what anyone else is doing',
-    body: 'Teammates find great ways to use AI, but prompts and patterns get reinvented in private.',
-  },
-  {
-    title: 'AI adoption isn’t stalled',
-    body: 'It’s unevenly distributed: the best agent runs stay hidden on laptops instead of becoming team muscle.',
-  },
-  {
-    title: 'The bots live on someone’s laptop',
-    body: 'Team-critical helpers need ownership, governance, schedules, and observability in one shared place.',
-  },
-];
-
 const featureCards = [
   {
     eyebrow: '01',
@@ -242,26 +223,6 @@ export function LandingPage() {
         <div>
           {assistants.map((assistant) => (
             <strong key={assistant}>@{assistant}</strong>
-          ))}
-        </div>
-      </section>
-
-      <section className={styles.problemSection} data-reveal>
-        <div className={styles.sectionHeader}>
-          <span className={styles.eyebrow}>Why teams need a home for AI work</span>
-          <h2>Everyone’s cranking with AI. Now make it compound.</h2>
-        </div>
-        <div className={styles.problemGrid}>
-          {problemCards.map((card) => (
-            <article
-              className={styles.problemCard}
-              key={card.title}
-              data-reveal
-              style={revealDelay(problemCards.indexOf(card))}
-            >
-              <h3>{card.title}</h3>
-              <p>{card.body}</p>
-            </article>
           ))}
         </div>
       </section>

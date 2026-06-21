@@ -22,7 +22,6 @@
 }
 
 .heroSection,
-.problemSection,
 .workspaceSection,
 .useCaseSection,
 .productShowcase,
@@ -267,18 +266,12 @@
   font-size: clamp(2.45rem, 4vw, 4.05rem);
 }
 
-.problemGrid,
 .featureGrid {
   display: grid;
   gap: 18px;
   margin-top: 48px;
 }
 
-.problemGrid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.problemCard,
 .featureCard {
   min-height: 236px;
   padding: 26px;
@@ -290,7 +283,6 @@
   box-shadow: 0 18px 48px rgba(15, 23, 42, 0.06);
 }
 
-.problemCard h3,
 .featureCard h3 {
   margin: 0;
   color: var(--landing-ink);
@@ -298,7 +290,6 @@
   letter-spacing: -0.02em;
 }
 
-.problemCard p,
 .featureCard p,
 .workspaceCopy p,
 .controlSection p,
@@ -670,7 +661,6 @@
     max-width: 520px;
   }
 
-  .problemGrid,
   .productGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -693,7 +683,6 @@
   }
 
   .heroSection,
-  .problemSection,
   .workspaceSection,
   .productShowcase,
   .capabilitySection,
@@ -747,7 +736,6 @@
     object-position: center;
   }
 
-  .problemGrid,
   .featureGrid,
   .productGrid,
   .capabilityGrid {
