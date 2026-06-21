@@ -26,9 +26,18 @@ import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils
 import { shallowEqualEntity } from '../utils/shallowEqual';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
-// Canonical list of initial-load items tracked by the loading checklist.
-// Internal only — consumers receive the derived `initialLoadItems` array
-// (each entry carries label/done/count) rather than the raw key list.
+// Canonical list of initial-load items tracked by the loading checklist —
+// the ESSENTIAL set the first-paint gate blocks on. Internal only; consumers
+// receive the derived `initialLoadItems` array (each entry carries
+// label/done/count) rather than the raw key list.
+//
+// The first paint only needs what's required to render the canvas (branch
+// cards, their sessions, cards, comments, zones). Collections that aren't
+// needed to paint — mcp-servers, session-mcp-servers, gateway-channels,
+// artifacts, and the oauth-status probe — are fetched in the BACKGROUND
+// (see `fetchData`) and intentionally absent here so the gate never waits on
+// them. Their realtime subscriptions are still attached immediately in the
+// subscribe effect, so live updates land even before their fetch resolves.
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
@@ -39,10 +48,6 @@ const INITIAL_LOAD_ITEMS = [
   { key: 'users', label: 'Users' },
   { key: 'cards', label: 'Cards' },
   { key: 'card-types', label: 'Card types' },
-  { key: 'mcp-servers', label: 'MCP servers' },
-  { key: 'session-mcp-servers', label: 'Session MCP links' },
-  { key: 'gateway-channels', label: 'Gateway channels' },
-  { key: 'artifacts', label: 'Artifacts' },
 ] as const;
 
 export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
@@ -138,6 +143,30 @@ function replaceIfChanged<T extends object>(
   const next = new Map(prev);
   next.set(id, entity);
   return next;
+}
+
+// Build a plain `byId` Map from a fetched list. Used by the background
+// (non-gated) fetches whose results land via their own setter rather than the
+// single atomic setMaps the essential gate performs.
+function buildById<T>(list: readonly T[], key: keyof T): Map<string, T> {
+  const map = new Map<string, T>();
+  for (const item of list) {
+    map.set(item[key] as unknown as string, item);
+  }
+  return map;
+}
+
+// Group session-MCP relationship rows by session_id.
+function buildSessionMcpMap(
+  list: readonly { session_id: string; mcp_server_id: string }[]
+): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const relationship of list) {
+    const ids = map.get(relationship.session_id);
+    if (ids) ids.push(relationship.mcp_server_id);
+    else map.set(relationship.session_id, [relationship.mcp_server_id]);
+  }
+  return map;
 }
 
 function removeBoardObjectFromBoardBucket(
@@ -463,8 +492,95 @@ export function useAgorData(
           });
         };
 
-        // Fetch sessions, boards, board-objects, comments, repos, branches, users, mcp servers, session-mcp relationships in parallel.
-        // Task/message detail now comes from per-session reactive state in conversation components.
+        // ── Background (non-gated) fetches ──────────────────────────────
+        // These collections are NOT needed to paint the canvas, so they must
+        // never block the first-paint gate. Fire-and-forget: each populates
+        // its own map slice via the existing setter when it resolves. Their
+        // realtime subscriptions are attached unconditionally in the subscribe
+        // effect below, so live `created`/`patched`/`removed` events land even
+        // while these fetches are still in flight. We deliberately do NOT
+        // `track()` them — they're absent from INITIAL_LOAD_ITEMS, so the
+        // loading checklist / `initialLoadComplete` gate ignores them.
+        //
+        // Errors are swallowed (logged) so a slow/failing optional service
+        // can't surface the fullscreen error overlay; the next reconnect
+        // refetch retries.
+        // We merge each result through the stable `setMaps` (not the per-slice
+        // setMapSlice setters, which are recreated every render and would
+        // destabilize this useCallback's deps and re-fire the subscribe effect).
+        void client
+          .service('mcp-servers')
+          .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          .then((list) =>
+            setMaps((prev) => ({ ...prev, mcpServerById: buildById(list, 'mcp_server_id') }))
+          )
+          .catch((err) => console.warn('[useAgorData] background mcp-servers fetch failed:', err));
+        void client
+          .service('session-mcp-servers')
+          .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          .then((list) =>
+            setMaps((prev) => ({ ...prev, sessionMcpServerIds: buildSessionMcpMap(list) }))
+          )
+          .catch((err) =>
+            console.warn('[useAgorData] background session-mcp-servers fetch failed:', err)
+          );
+        void client
+          .service('gateway-channels')
+          .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          .then((list) =>
+            setMaps((prev) => ({ ...prev, gatewayChannelById: buildById(list, 'id') }))
+          )
+          .catch((err) =>
+            console.warn('[useAgorData] background gateway-channels fetch failed:', err)
+          );
+        void client
+          .service('artifacts')
+          .findAll({
+            query: {
+              $limit: PAGINATION.DEFAULT_LIMIT,
+              $select: [
+                'artifact_id',
+                'branch_id',
+                'source_session_id',
+                'board_id',
+                'name',
+                'description',
+                'path',
+                'template',
+                'build_status',
+                'build_errors',
+                'content_hash',
+                'public',
+                'created_by',
+                'created_at',
+                'updated_at',
+                'archived',
+                'archived_at',
+                'fullscreen_url',
+                'url',
+              ],
+            },
+          })
+          .then((list) =>
+            setMaps((prev) => ({ ...prev, artifactById: buildById(list, 'artifact_id') }))
+          )
+          .catch((err) => console.warn('[useAgorData] background artifacts fetch failed:', err));
+        void client
+          .service('mcp-servers/oauth-status')
+          .find()
+          .then((res) => {
+            const status = res as { authenticated_server_ids?: string[] };
+            setMaps((prev) => ({
+              ...prev,
+              userAuthenticatedMcpServerIds: new Set(status?.authenticated_server_ids ?? []),
+            }));
+          })
+          .catch((err) => console.warn('[useAgorData] background oauth-status fetch failed:', err));
+
+        // ── Essential (gated) fetches ───────────────────────────────────
+        // Only the collections required to paint the current board. The
+        // first-paint gate (`loading` + `initialLoadComplete`) blocks on
+        // exactly this Promise.all.
         debugTimer?.startFetchPhase();
         const [
           sessionsList,
@@ -476,11 +592,6 @@ export function useAgorData(
           reposList,
           branchesList,
           usersList,
-          mcpServersList,
-          sessionMcpList,
-          gatewayChannelsList,
-          artifactsList,
-          oauthStatusResult,
         ] = await Promise.all([
           track(
             'sessions',
@@ -528,55 +639,6 @@ export function useAgorData(
             'users',
             client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
-          track(
-            'mcp-servers',
-            client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'session-mcp-servers',
-            client
-              .service('session-mcp-servers')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'gateway-channels',
-            client
-              .service('gateway-channels')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'artifacts',
-            client.service('artifacts').findAll({
-              query: {
-                $limit: PAGINATION.DEFAULT_LIMIT,
-                $select: [
-                  'artifact_id',
-                  'branch_id',
-                  'source_session_id',
-                  'board_id',
-                  'name',
-                  'description',
-                  'path',
-                  'template',
-                  'build_status',
-                  'build_errors',
-                  'content_hash',
-                  'public',
-                  'created_by',
-                  'created_at',
-                  'updated_at',
-                  'archived',
-                  'archived_at',
-                  'fullscreen_url',
-                  'url',
-                ],
-              },
-            })
-          ),
-          client
-            .service('mcp-servers/oauth-status')
-            .find()
-            .catch(() => ({ authenticated_server_ids: [] })),
         ]);
         debugTimer?.endFetchPhase();
 
@@ -753,34 +815,15 @@ export function useAgorData(
         for (const user of usersList) {
           usersMap.set(user.user_id, user);
         }
-        // Build MCP server Map for efficient lookups
-        const mcpServersMap = new Map<string, MCPServer>();
-        for (const mcpServer of mcpServersList) {
-          mcpServersMap.set(mcpServer.mcp_server_id, mcpServer);
-        }
-        // Build gateway channel Map for efficient lookups
-        const gatewayChannelsMap = new Map<string, GatewayChannel>();
-        for (const channel of gatewayChannelsList) {
-          gatewayChannelsMap.set(channel.id, channel);
-        }
-        // Build artifact Map for efficient lookups
-        const artifactsMap = new Map<string, Artifact>();
-        for (const artifact of artifactsList) {
-          artifactsMap.set(artifact.artifact_id, artifact);
-        }
-        // Group session-MCP relationships by session_id
-        const sessionMcpMap = new Map<string, string[]>();
-        for (const relationship of sessionMcpList) {
-          if (!sessionMcpMap.has(relationship.session_id)) {
-            sessionMcpMap.set(relationship.session_id, []);
-          }
-          sessionMcpMap.get(relationship.session_id)!.push(relationship.mcp_server_id);
-        }
-        // Set per-user OAuth auth status
-        const oauthStatus = oauthStatusResult as { authenticated_server_ids?: string[] };
-        const userAuthenticatedMcpServerIds = new Set(oauthStatus?.authenticated_server_ids ?? []);
 
-        setMaps({
+        // Merge the essential slices in one atomic update. We spread `prev`
+        // (rather than replacing the whole object) so the BACKGROUND-managed
+        // slices — mcpServerById / gatewayChannelById / artifactById /
+        // sessionMcpServerIds / userAuthenticatedMcpServerIds — survive even if
+        // their fire-and-forget fetches resolved before this gate did. Those
+        // slices are owned by their background setters + realtime handlers.
+        setMaps((prev) => ({
+          ...prev,
           sessionById: sessionsById,
           sessionsByBranch: sessionsByBranchId,
           boardById: boardsMap,
@@ -794,12 +837,7 @@ export function useAgorData(
           repoById: reposMap,
           branchById: branchesMap,
           userById: usersMap,
-          mcpServerById: mcpServersMap,
-          gatewayChannelById: gatewayChannelsMap,
-          artifactById: artifactsMap,
-          sessionMcpServerIds: sessionMcpMap,
-          userAuthenticatedMcpServerIds,
-        });
+        }));
         debugTimer?.endIndexing();
         debugFinishStatus = 'success';
 
