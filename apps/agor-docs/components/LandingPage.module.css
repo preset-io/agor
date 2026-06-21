@@ -523,8 +523,15 @@
   border-radius: 14px;
 }
 
-.socialCloseup {
+.socialCursor {
   z-index: 4;
+  top: 34px;
+  left: 26px;
+  width: 34%;
+}
+
+.socialCloseup {
+  z-index: 5;
   right: 18px;
   bottom: 30px;
   width: 58%;
@@ -737,6 +744,12 @@
     top: 18px;
     right: 14px;
     width: 72%;
+  }
+
+  .socialCursor {
+    top: 26px;
+    left: 12px;
+    width: 42%;
   }
 
   .socialCloseup {

@@ -27,6 +27,7 @@ It is intentionally hardcoded and daemon-free. `apps/agor-ui/src/App.tsx` short-
 - `context/marketing/screenshots/agor-marketing-facepile-tooltip.png` — close crop of facepile overflow/tooltip behavior
 - `context/marketing/screenshots/agor-marketing-social-comment-context.png` — contextual spatial comment crop used in the docs multiplayer section
 - `context/marketing/screenshots/agor-marketing-social-comment-closeup.png` — tight spatial comment crop for collage layering
+- `context/marketing/screenshots/agor-marketing-cursor-indicator.png` — live cursor label closeup for collage layering
 - Public docs copies:
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-board.png`
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-board-wide.png`
@@ -34,6 +35,7 @@ It is intentionally hardcoded and daemon-free. `apps/agor-ui/src/App.tsx` short-
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-facepile-tooltip.png`
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-social-comment-context.png`
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-social-comment-closeup.png`
+  - `apps/agor-docs/public/screenshots/marketing/agor-marketing-cursor-indicator.png`
 
 ## Reproduce/update
 

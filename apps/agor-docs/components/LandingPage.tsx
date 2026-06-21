@@ -179,6 +179,12 @@ function MultiplayerCollage() {
       />
       {/* biome-ignore lint/performance/noImgElement: Static product screenshot collage */}
       <img
+        className={styles.socialCursor}
+        src="/screenshots/marketing/agor-marketing-cursor-indicator.png"
+        alt="Live cursor indicator showing Mina on the board"
+      />
+      {/* biome-ignore lint/performance/noImgElement: Static product screenshot collage */}
+      <img
         className={styles.socialCloseup}
         src="/screenshots/marketing/agor-marketing-social-comment-closeup.png"
         alt="Close-up of a spatial board comment"
