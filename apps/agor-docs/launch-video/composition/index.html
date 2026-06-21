@@ -753,7 +753,7 @@
     <script>
       // ---------- deterministic PRNG (mulberry32) ----------
       function mulberry32(a) {
-        return function () {
+        return () => {
           a |= 0;
           a = (a + 0x6d2b79f5) | 0;
           var t = Math.imul(a ^ (a >>> 15), 1 | a);
@@ -834,8 +834,8 @@
       function animateConstellation(tl, ctx, nodes, sceneStart, sceneDur) {
         var n = Math.ceil(sceneDur * 30);
         for (var f = 0; f <= n; f++) {
-          (function (lt, gt) {
-            tl.call(function () {
+          ((lt, gt) => {
+            tl.call(() => {
               drawConstellation(ctx, nodes, lt, energyAt(gt));
             }, [], gt);
           })(f / 30, sceneStart + f / 30);
@@ -856,9 +856,9 @@
       var typeEnd = 2.35;
       var totalChars = L1_TEXT.length;
       for (var ci = 0; ci <= totalChars; ci++) {
-        (function (n) {
+        ((n) => {
           var tt = typeStart + (typeEnd - typeStart) * (n / totalChars);
-          tl.call(function () {
+          tl.call(() => {
             document.getElementById("s1-l1").textContent = L1_TEXT.slice(0, n);
           }, [], tt);
         })(ci);
@@ -898,8 +898,8 @@
       var glowStart = 5.1;
       var glowEnd = 10.0;
       for (var f2 = 0; f2 <= Math.ceil((glowEnd - glowStart) * 30); f2++) {
-        (function (gt) {
-          tl.call(function () {
+        ((gt) => {
+          tl.call(() => {
             var e = energyAt(gt);
             var ramp = Math.min(1, (gt - glowStart) / 0.3);
             gsap.set("#s2-glow", { opacity: (0.48 + 0.42 * e) * ramp, scale: 0.96 + 0.07 * e });

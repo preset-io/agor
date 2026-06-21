@@ -15,12 +15,7 @@
   },
   "scoring": {
     "intensityFormula": "0.45*onset_strength + 0.25*local_onset_contrast + 0.20*rms + 0.10*bass_energy",
-    "features": [
-      "onset_strength",
-      "local_onset_contrast",
-      "rms",
-      "bass_energy"
-    ],
+    "features": ["onset_strength", "local_onset_contrast", "rms", "bass_energy"],
     "normalization": "Per-track robust normalization to 0-1 using the 98th percentile, then clamped.",
     "strongCueMinimumIntensity": 0.45,
     "strongCueMaxCount": 64

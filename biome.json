@@ -52,6 +52,31 @@
           }
         }
       }
+    },
+    {
+      "includes": ["apps/agor-docs/launch-video/composition/index.html"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useMediaCaption": "off"
+          },
+          "correctness": {
+            "noInnerDeclarations": "off"
+          },
+          "style": {
+            "useTemplate": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/agor-docs/launch-video/composition/assets/music/audio-data.js"],
+      "formatter": {
+        "enabled": false
+      },
+      "linter": {
+        "enabled": false
+      }
     }
   ],
   "javascript": {
