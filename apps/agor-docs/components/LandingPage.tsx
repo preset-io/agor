@@ -198,17 +198,14 @@ export function LandingPage() {
               <img src={LOGO_PATH} alt={`${BRAND_NAME} logo`} />
               <span>agor</span>
             </div>
+            <p className={styles.kicker}>Team command center for all things agentic.</p>
             <h1>Meet your team of AI assistants.</h1>
-            <p className={styles.heroProvocation}>
-              Break out of the terminal.
-              <br />
-              Bring the team and agents together.
-            </p>
             <p className={styles.heroDescription}>
-              AI adoption isn’t stalled — it’s unevenly distributed. Agent workflows are trapped
-              behind local-environment curtains, so teammates can’t see what worked, reuse prompts,
-              share workflows, or learn from each other. Agor pulls that work onto a shared canvas
-              where agents, branches, dev environments, and the team all meet.
+              Everyone’s cranking with AI.
+              <br />
+              But it’s chaos: scattered sessions, ephemeral context, nothing that compounds. Agor is
+              where your team raises real assistants, wires them into the systems you live in, and
+              watches the work happen in one shared place.
             </p>
             <div className={styles.heroActions}>
               <Link href="/guide" className={styles.primaryButton}>
@@ -304,7 +301,11 @@ export function LandingPage() {
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Product surfaces</span>
-          <h2>Show the work, not an abstraction.</h2>
+          <h2>
+            Break out of the terminal.
+            <br />
+            Bring the team and agents together.
+          </h2>
         </div>
         <div className={styles.productGrid}>
           {productPreviews.map((preview, index) => (
