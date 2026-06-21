@@ -5,11 +5,20 @@ import { useViewport } from 'reactflow';
 import { useBoardPresenceRoom } from '../../../hooks/useBoardPresenceRoom';
 import { usePresence } from '../../../hooks/usePresence';
 
+export interface StaticRemoteCursor {
+  userId: string;
+  x: number;
+  y: number;
+  user: User;
+}
+
 interface RemoteCursorLayerProps {
   client: AgorClient | null;
   boardId: BoardID | null;
   users: User[];
   enabled?: boolean;
+  /** Demo/screenshot-only override: render fixed cursors without socket presence. */
+  staticCursors?: StaticRemoteCursor[];
 }
 
 export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
@@ -17,6 +26,7 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
   boardId,
   users,
   enabled = true,
+  staticCursors,
 }) => {
   const { token } = theme.useToken();
   const viewport = useViewport();
@@ -24,17 +34,23 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
   useBoardPresenceRoom({
     client,
     boardId,
-    enabled,
+    enabled: enabled && !staticCursors,
   });
 
   const { remoteCursors } = usePresence({
     client,
     boardId,
     users,
-    enabled,
+    enabled: enabled && !staticCursors,
   });
 
-  const cursors = useMemo(() => Array.from(remoteCursors.entries()), [remoteCursors]);
+  const cursors = useMemo(
+    () =>
+      staticCursors
+        ? staticCursors.map((cursor) => [cursor.userId, cursor] as const)
+        : Array.from(remoteCursors.entries()),
+    [remoteCursors, staticCursors]
+  );
   if (cursors.length === 0) return null;
 
   return (

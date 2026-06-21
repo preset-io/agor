@@ -459,33 +459,6 @@
   color: #fff7ed;
 }
 
-.marketing-cursor {
-  position: absolute;
-  z-index: 30;
-  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.38));
-}
-.marketing-cursor svg {
-  display: block;
-  fill: var(--cursor-color);
-  stroke: white;
-  stroke-width: 1.5px;
-}
-.marketing-cursor__label {
-  margin-left: 14px;
-  margin-top: -2px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 9px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--cursor-color), #020617 22%);
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
 .marketing-connection {
   position: absolute;
   height: 2px;

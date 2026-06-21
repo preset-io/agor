@@ -1,3 +1,4 @@
+import type { ActiveUser, Board, BoardID, User } from '@agor-live/client';
 import {
   ApiOutlined,
   BranchesOutlined,
@@ -10,9 +11,15 @@ import {
   GithubOutlined,
   ThunderboltFilled,
 } from '@ant-design/icons';
-import { Avatar, Badge, ConfigProvider, Progress, Tag, Tooltip } from 'antd';
+import { Badge, ConfigProvider, Progress, Tag } from 'antd';
 import { useEffect } from 'react';
+import { ReactFlowProvider } from 'reactflow';
 import { BRAND, brandMarkHref } from '../branding/brand';
+import { GlobalPresenceFacepile } from '../components/AppHeader/GlobalPresenceFacepile';
+import {
+  RemoteCursorLayer,
+  type StaticRemoteCursor,
+} from '../components/SessionCanvas/canvas/RemoteCursorLayer';
 import './MarketingScreenshotPage.css';
 
 type AgentStatus = 'running' | 'review' | 'done' | 'blocked';
@@ -38,12 +45,48 @@ interface DemoBranch {
   notes: string[];
 }
 
+const DEMO_BOARD_ID = '019ee88d-demo-board' as BoardID;
+
 const USERS = [
-  { name: 'Max', emoji: '🧑‍🚀', color: '#8b5cf6' },
-  { name: 'Ari', emoji: '🧠', color: '#06b6d4' },
-  { name: 'Mina', emoji: '🎨', color: '#f97316' },
-  { name: 'Devon', emoji: '🛠️', color: '#22c55e' },
-  { name: 'Kai', emoji: '🚢', color: '#ec4899' },
+  { user_id: 'demo-user-max', name: 'Max', email: 'max@preset.io', emoji: '🧑‍🚀' },
+  { user_id: 'demo-user-ari', name: 'Ari', email: 'ari@example.com', emoji: '🧠' },
+  { user_id: 'demo-user-mina', name: 'Mina', email: 'mina@example.com', emoji: '🎨' },
+  { user_id: 'demo-user-devon', name: 'Devon', email: 'devon@example.com', emoji: '🛠️' },
+  { user_id: 'demo-user-kai', name: 'Kai', email: 'kai@example.com', emoji: '🚢' },
+  { user_id: 'demo-user-jules', name: 'Jules', email: 'jules@example.com', emoji: '🔍' },
+  { user_id: 'demo-user-sam', name: 'Sam', email: 'sam@example.com', emoji: '⚡' },
+  { user_id: 'demo-user-rin', name: 'Rin', email: 'rin@example.com', emoji: '🧪' },
+  { user_id: 'demo-user-noor', name: 'Noor', email: 'noor@example.com', emoji: '📝' },
+  { user_id: 'demo-user-lina', name: 'Lina', email: 'lina@example.com', emoji: '🎯' },
+  { user_id: 'demo-user-omar', name: 'Omar', email: 'omar@example.com', emoji: '🔧' },
+  { user_id: 'demo-user-ivy', name: 'Ivy', email: 'ivy@example.com', emoji: '🌿' },
+] as User[];
+
+const DEMO_BOARD = {
+  board_id: DEMO_BOARD_ID,
+  name: 'Launch board',
+  icon: '🚢',
+} as Board;
+
+const DEMO_BOARD_BY_ID = new Map<string, Board>([[DEMO_BOARD_ID, DEMO_BOARD]]);
+
+const DEMO_ACTIVE_USERS: ActiveUser[] = USERS.map((user, index) => ({
+  user,
+  lastSeen: Date.now() - index * 1_000,
+  boardId: DEMO_BOARD_ID,
+  cursor: { x: 420 + index * 42, y: 180 + (index % 3) * 84 },
+}));
+
+const DEMO_CURSORS: StaticRemoteCursor[] = [
+  { userId: USERS[0].user_id, user: USERS[0], x: 445, y: 128 },
+  { userId: USERS[1].user_id, user: USERS[1], x: 815, y: 478 },
+  { userId: USERS[2].user_id, user: USERS[2], x: 1150, y: 270 },
+  { userId: USERS[3].user_id, user: USERS[3], x: 590, y: 728 },
+  { userId: USERS[4].user_id, user: USERS[4], x: 1020, y: 540 },
+  { userId: USERS[5].user_id, user: USERS[5], x: 220, y: 418 },
+  { userId: USERS[6].user_id, user: USERS[6], x: 1260, y: 620 },
+  { userId: USERS[7].user_id, user: USERS[7], x: 350, y: 810 },
+  { userId: USERS[8].user_id, user: USERS[8], x: 980, y: 188 },
 ];
 
 const BRANCHES: DemoBranch[] = [
@@ -212,34 +255,6 @@ function BranchCard({ branch }: { branch: DemoBranch }) {
   );
 }
 
-function Cursor({
-  user,
-  x,
-  y,
-  rotate = 0,
-}: {
-  user: (typeof USERS)[number];
-  x: number;
-  y: number;
-  rotate?: number;
-}) {
-  return (
-    <div
-      className="marketing-cursor"
-      style={{ left: x, top: y, ['--cursor-color' as string]: user.color }}
-    >
-      <svg width="28" height="28" viewBox="0 0 24 24" style={{ rotate: `${rotate}deg` }}>
-        <title>{`${user.name} cursor`}</title>
-        <path d="M5.5 3.5L18.5 12L11 14L8 20.5L5.5 3.5Z" />
-      </svg>
-      <div className="marketing-cursor__label">
-        <span>{user.emoji}</span>
-        {user.name}
-      </div>
-    </div>
-  );
-}
-
 function Zone({
   name,
   subtitle,
@@ -348,15 +363,17 @@ export const MarketingScreenshotPage = () => {
 
           <div className="marketing-topbar__right">
             <div className="marketing-presence-pill">
-              <span className="marketing-presence-pill__pulse" />5 online
+              <span className="marketing-presence-pill__pulse" />
+              12 online
             </div>
-            <Avatar.Group max={{ count: 4 }}>
-              {USERS.map((user) => (
-                <Tooltip title={user.name} key={user.name}>
-                  <Avatar style={{ background: user.color }}>{user.emoji}</Avatar>
-                </Tooltip>
-              ))}
-            </Avatar.Group>
+            <GlobalPresenceFacepile
+              client={null}
+              currentBoardId={DEMO_BOARD_ID}
+              users={USERS}
+              currentUser={USERS[0]}
+              boardById={DEMO_BOARD_BY_ID}
+              staticActiveUsers={DEMO_ACTIVE_USERS}
+            />
           </div>
         </header>
 
@@ -397,53 +414,56 @@ export const MarketingScreenshotPage = () => {
             </div>
           </aside>
 
-          <section className="marketing-board-canvas" aria-label="Demo Agor board screenshot">
-            <div className="marketing-board-grid" />
-            <Zone
-              name="🚢 Ship this week"
-              subtitle="polish + landing-page ready"
-              x={72}
-              y={92}
-              w={770}
-              h={390}
-              color="#14b8a6"
-            />
-            <Zone
-              name="🔎 Review lane"
-              subtitle="security, docs, and handoffs"
-              x={878}
-              y={96}
-              w={398}
-              h={362}
-              color="#f59e0b"
-            />
-            <Zone
-              name="🤖 Assistants"
-              subtitle="scheduled agents + artifacts"
-              x={166}
-              y={518}
-              w={975}
-              h={352}
-              color="#8b5cf6"
-            />
+          <ReactFlowProvider>
+            <section className="marketing-board-canvas" aria-label="Demo Agor board screenshot">
+              <div className="marketing-board-grid" />
+              <Zone
+                name="🚢 Ship this week"
+                subtitle="polish + landing-page ready"
+                x={72}
+                y={92}
+                w={770}
+                h={390}
+                color="#14b8a6"
+              />
+              <Zone
+                name="🔎 Review lane"
+                subtitle="security, docs, and handoffs"
+                x={878}
+                y={96}
+                w={398}
+                h={362}
+                color="#f59e0b"
+              />
+              <Zone
+                name="🤖 Assistants"
+                subtitle="scheduled agents + artifacts"
+                x={166}
+                y={518}
+                w={975}
+                h={352}
+                color="#8b5cf6"
+              />
 
-            {BRANCHES.map((branch) => (
-              <BranchCard branch={branch} key={branch.id} />
-            ))}
+              {BRANCHES.map((branch) => (
+                <BranchCard branch={branch} key={branch.id} />
+              ))}
 
-            <ArtifactCard />
-            <CommentPin />
+              <ArtifactCard />
+              <CommentPin />
 
-            <div className="marketing-connection marketing-connection--one" />
-            <div className="marketing-connection marketing-connection--two" />
-            <div className="marketing-connection marketing-connection--three" />
+              <div className="marketing-connection marketing-connection--one" />
+              <div className="marketing-connection marketing-connection--two" />
+              <div className="marketing-connection marketing-connection--three" />
 
-            <Cursor user={USERS[0]} x={445} y={128} rotate={-8} />
-            <Cursor user={USERS[1]} x={815} y={478} rotate={6} />
-            <Cursor user={USERS[2]} x={1150} y={270} rotate={-4} />
-            <Cursor user={USERS[3]} x={590} y={728} rotate={8} />
-            <Cursor user={USERS[4]} x={1020} y={540} rotate={-10} />
-          </section>
+              <RemoteCursorLayer
+                client={null}
+                boardId={DEMO_BOARD_ID}
+                users={USERS}
+                staticCursors={DEMO_CURSORS}
+              />
+            </section>
+          </ReactFlowProvider>
 
           <aside className="marketing-right-rail">
             <div className="marketing-event-card">

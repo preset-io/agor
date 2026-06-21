@@ -10,12 +10,12 @@ The UI fixture lives at:
 /demo/marketing-screenshots
 ```
 
-It is intentionally hardcoded and daemon-free. `apps/agor-ui/src/App.tsx` short-circuits this explicit route before auth, client, or live workspace data hooks mount, so the fake presence/cursors/board state cannot leak into normal production workspace paths.
+It is intentionally hardcoded and daemon-free. `apps/agor-ui/src/App.tsx` short-circuits this explicit route before auth, client, or live workspace data hooks mount, so the fake board state cannot leak into normal production workspace paths. Presence and cursor screenshot data is passed through explicit `staticActiveUsers` / `staticCursors` demo props on the base components.
 
 ## What it renders
 
-- Polished Agor-like navbar with presence facepile and online indicator
-- Large board canvas with zones, branch cards, session progress, comments, artifacts, and live cursors
+- Polished navbar using the real `GlobalPresenceFacepile`/`Facepile` components with fixed demo users
+- Large board canvas with zones, branch cards, session progress, comments, artifacts, and the real `RemoteCursorLayer` with fixed demo cursors
 - Left activity/sidebar and event stream overlay for a dense landing-page composition
 
 ## Captured files
