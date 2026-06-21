@@ -105,6 +105,19 @@ const productPreviews = [
   },
 ];
 
+// Harnesses with an executor handler in packages/executor/src/sdk-handlers.
+// Logos mirror the in-app ToolIcon set (apps/agor-ui/src/assets/tools), copied
+// into this app's public/tools. Cursor is in beta and has no logo asset yet —
+// it falls back to its ⌘ glyph until one lands.
+const harnesses: Array<{ name: string; logo?: string; glyph?: string; beta?: boolean }> = [
+  { name: 'Claude Code', logo: '/tools/claude-code.png' },
+  { name: 'Codex', logo: '/tools/codex.png' },
+  { name: 'Gemini', logo: '/tools/gemini.png' },
+  { name: 'Copilot', logo: '/tools/copilot.png' },
+  { name: 'OpenCode', logo: '/tools/opencode.png' },
+  { name: 'Cursor', logo: '/tools/cursor.png', beta: true },
+];
+
 const trustItems = [
   {
     label: 'Open source & self-hosted',
@@ -113,7 +126,7 @@ const trustItems = [
   },
   {
     label: 'No frontier lock-in',
-    body: 'Claude Code, Codex, Gemini, OpenCode — pick the best harness per session.',
+    body: 'Claude Code, Codex, Gemini, Copilot, OpenCode — pick the best harness per session, on your own provider subscription.',
     href: '/guide/sdk-comparison',
   },
   {
@@ -232,17 +245,12 @@ export function LandingPage() {
       <section className={styles.heroSection}>
         <div className={styles.heroGrid}>
           <div className={styles.heroCopy} data-reveal>
-            <div className={styles.brandMark}>
-              {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
-              <img src={LOGO_PATH} alt={`${BRAND_NAME} logo`} />
-              <span>agor</span>
-            </div>
             <p className={styles.kicker}>Team command center for all things agentic.</p>
             <h1>Meet your team of AI assistants.</h1>
             <p className={styles.heroProvocation}>
               Break out of the terminal.
               <br />
-              Bring the team and agents together.
+              Bring your team and agents together.
             </p>
             <div className={styles.heroActions}>
               <Link
@@ -266,6 +274,9 @@ export function LandingPage() {
                 View GitHub
               </Link>
             </div>
+            <p className={styles.heroMeta}>
+              Open source — try it today with a 3-minute local install.
+            </p>
           </div>
           <div data-reveal style={revealDelay(1)}>
             <ProductMockup />
@@ -273,10 +284,34 @@ export function LandingPage() {
         </div>
       </section>
 
+      <section className={styles.harnessStrip} data-reveal>
+        <span className={styles.harnessLabel}>Built on the harnesses you already use</span>
+        <ul className={styles.harnessList}>
+          {harnesses.map((harness) => (
+            <li className={styles.harnessItem} key={harness.name}>
+              <span className={styles.harnessLogo}>
+                {harness.logo ? (
+                  // biome-ignore lint/performance/noImgElement: Static brand logo
+                  <img src={harness.logo} alt={`${harness.name} logo`} />
+                ) : (
+                  <span className={styles.harnessGlyph}>{harness.glyph}</span>
+                )}
+              </span>
+              <span className={styles.harnessName}>{harness.name}</span>
+              {harness.beta ? <span className={styles.harnessBeta}>Beta</span> : null}
+            </li>
+          ))}
+        </ul>
+        <p className={styles.harnessNote}>
+          Bring your own provider and subscription. Pick the best harness per session — no lock-in,
+          wrapped in a web workspace that leaves the terminal behind.
+        </p>
+      </section>
+
       <section className={styles.liveSection} data-reveal>
         <div className={styles.liveCopy}>
           <span className={styles.eyebrow}>Multiplayer by default</span>
-          <h2>Your team’s agents, live on a Figma-like canvas.</h2>
+          <h2>Your team’s agents on one live, Figma-like canvas.</h2>
           <p>
             Most agent tools are solo. Agor isn’t. Cursors, comments, and a facepile show who’s
             here. Sessions, dev environments, and branches are shared. One link, one running thing,
@@ -317,7 +352,7 @@ export function LandingPage() {
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Product surfaces</span>
-          <h2>This product is much bigger than a chat window.</h2>
+          <h2>So much more than a chat box.</h2>
         </div>
         <div className={styles.productGrid}>
           {productPreviews.map((preview, index) => (
@@ -425,6 +460,9 @@ export function LandingPage() {
           <div>
             <strong>agor</strong>
             <p>Team command center for all things agentic.</p>
+            <p className={styles.footerEtymology}>
+              <span>AG</span>ent <span>OR</span>chestration
+            </p>
           </div>
         </div>
         <div className={styles.footerLinks}>

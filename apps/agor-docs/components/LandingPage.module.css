@@ -112,7 +112,7 @@
   color: var(--landing-ink);
   font-size: clamp(1.18rem, 1.8vw, 1.55rem);
   font-weight: 620;
-  line-height: 1.42;
+  line-height: 1.62;
   letter-spacing: -0.025em;
 }
 
@@ -122,6 +122,122 @@
   gap: 14px;
   align-items: center;
   margin-top: 34px;
+}
+
+.footerEtymology {
+  margin: 6px 0 0;
+  color: var(--landing-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.footerEtymology span {
+  color: var(--landing-teal);
+  font-weight: 800;
+}
+
+.heroMeta {
+  margin: 18px 0 0;
+  color: var(--landing-muted);
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.harnessStrip {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 4px 28px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+}
+
+.harnessLabel {
+  color: var(--landing-teal);
+  background: var(--landing-eyebrow-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.harnessList {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.harnessItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 6px 18px 6px 7px;
+  border: 1px solid var(--landing-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--landing-ink);
+}
+
+.harnessLogo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 5px;
+  border-radius: 50%;
+  background: #000;
+  flex-shrink: 0;
+}
+
+.harnessLogo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.harnessGlyph {
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--landing-ink);
+}
+
+.harnessName {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.harnessBeta {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(127, 232, 223, 0.14);
+  color: var(--landing-teal);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.harnessNote {
+  max-width: 560px;
+  margin: 0;
+  color: var(--landing-muted);
+  font-size: 0.98rem;
+  line-height: 1.5;
 }
 
 .primaryButton,
