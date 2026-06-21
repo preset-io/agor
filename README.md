@@ -1,23 +1,22 @@
-<div align="center">
-
-<img src=".github/logo_circle.png" alt="Agor logo" width="140" />
+<img src=".github/logo_circle.png" alt="Agor logo" width="92" />
 
 # Agor
 
+### Meet your team of AI assistants.
+
 **Team command center for all things agentic.**
 
-Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived
-assistants run side-by-side on isolated git branches — the anchor entity where sessions, dev
-environments, prompts, and PRs converge. Your whole team rallies around the same live work in
-real time, and the agents themselves drive Agor over MCP.
+Everyone's cranking with AI, but it's chaos: scattered sessions, ephemeral context, nothing that
+compounds. Agor is where your team raises real assistants — not throwaway agents. You decide what
+each one is for, wire it into the systems you already use (MCP and skills), and let it act on a
+schedule instead of waiting to be asked. It all happens in one shared, self-hosted place, so what
+works for one person finally reaches everyone.
 
 [![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-agor.live-1f6feb.svg)](https://agor.live/guide/getting-started)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/Qh4TrFQZpd)
 
 **[Documentation](https://agor.live/) · [Quick Start](#quick-start) · [Architecture](#architecture) · [Contributing](#development)**
-
-</div>
 
 <!--
   HERO VIDEO PLACEHOLDER
@@ -26,10 +25,9 @@ real time, and the agents themselves drive Agor over MCP.
   Until then, the unscripted demo below stands in.
 -->
 
-<div align="center">
-  <img src="apps/agor-docs/public/screenshots/board-hero.png" alt="Agor multiplayer board with live cursors, branch cards, zones, and agent dashboards" width="100%" />
-  <p><em>The board: branches as cards, zones as regions, teammates and their agents present live.</em></p>
-</div>
+![Agor board with live cursors, branch cards, zones, and agent dashboards](apps/agor-docs/public/screenshots/board-hero.png)
+
+_The board: branches as cards, zones as regions, teammates and their agents present live._
 
 **▶ [Watch the unscripted demo on YouTube](https://www.youtube.com/watch?v=3in0qh7ZH0g)** (13 min)
 
@@ -37,15 +35,12 @@ real time, and the agents themselves drive Agor over MCP.
 
 ## Why Agor
 
-One coding agent in a terminal is fine. Five agents across a team — with assistants quietly
-grooming the backlog at night — falls apart fast. Conversations vanish, branches collide, dev
-servers fight for ports, configs rot on individual laptops, and nobody can see what anyone
-else's agent is doing.
-
-Agor gives that work a place to live:
+Agor gives your team's AI work a place to live — shared, observable, and self-hosted:
 
 - **Team workspace for AI agents** — multiplayer is the core differentiator. Live cursors,
   facepile, scoped comments, shared sessions, and shared dev environments.
+- **Real assistants, not throwaway agents** — long-lived helpers with identity, file-based
+  memory, and skills. Taught conversationally, then given a real job on a schedule.
 - **Branches as the anchor** — one entity per piece of work, where conversations, dev
   environment, prompts, issues, and the PR all converge.
 - **Multi-agent, multi-runtime** — Claude Code, Codex, Gemini, OpenCode, Copilot, and Cursor
