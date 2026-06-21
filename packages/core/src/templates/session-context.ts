@@ -144,6 +144,11 @@ export async function renderAgorSystemPrompt(
   }
 ): Promise<string> {
   const template = await loadAgorSystemPromptTemplate();
-  const context = await buildSessionContext(sessionId, repos);
-  return renderTemplate(template, context);
+  // Keep this prompt static across turns. Dynamic Agor context is available to
+  // agents through MCP tools such as agor_sessions_get_current_context; putting
+  // IDs, branch notes, owner names, or repo metadata here changes the provider-
+  // visible prompt prefix and can reduce server-side prompt-cache hits.
+  void sessionId;
+  void repos;
+  return renderTemplate(template, {});
 }
