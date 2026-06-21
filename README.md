@@ -133,7 +133,7 @@ Everything else builds on these. **[Read the Features Overview →](https://agor
     </tr>
     <tr>
       <td width="50%">
-        <img src="https://github.com/preset-io/agor/releases/download/v0.3.15/env_configuration.png" alt="Environment Configuration"/>
+        <img src="https://github.com/preset-io/agor/releases/download/v0.15.0/env_configuration.png" alt="Environment Configuration"/>
         <p align="center"><em style="opacity: 0.5;">Branch environment setup</em></p>
       </td>
       <td width="50%">
