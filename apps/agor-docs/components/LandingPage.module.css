@@ -413,12 +413,6 @@
   line-height: 1.55;
 }
 
-.productCard span {
-  color: var(--landing-teal);
-  font-size: 0.9rem;
-  font-weight: 800;
-}
-
 .productCard:hover {
   border-color: rgba(127, 232, 223, 0.3);
   transform: translateY(-2px);

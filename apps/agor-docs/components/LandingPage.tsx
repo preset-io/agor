@@ -227,7 +227,6 @@ export function LandingPage() {
               <div>
                 <h3>{preview.title}</h3>
                 <p>{preview.body}</p>
-                <span>Open guide →</span>
               </div>
             </Link>
           ))}
