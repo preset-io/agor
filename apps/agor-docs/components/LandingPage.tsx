@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
+import { AGOR_CLOUD_DEMO_URL, AGOR_CLOUD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { BRAND_NAME, LOGO_PATH } from '../lib/siteMetadata';
 import { HubSpotFormModal } from './HubSpotFormModal';
 import styles from './LandingPage.module.css';
@@ -299,32 +299,27 @@ export function LandingPage() {
 
       <section className={styles.finalCta} data-reveal>
         <h2>Give your team’s AI work a place to live.</h2>
-        <p>
-          Start with the guide, join the community, or reach out if you’re rolling Agor out for a
-          team.
-        </p>
+        <p>Join the private beta, book a demo for Agor Cloud, or self-host Agor today.</p>
         <div className={styles.heroActions}>
-          <Link href="/guide" className={styles.primaryButton}>
-            Read the docs
-          </Link>
-          <Link href="/guide/features-overview" className={styles.secondaryButton}>
-            Feature map
+          <Link
+            href={AGOR_CLOUD_INVITE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.primaryButton}
+          >
+            Join the private beta
           </Link>
           <Link
-            href={DISCORD_INVITE_URL}
+            href={AGOR_CLOUD_DEMO_URL}
             target="_blank"
             rel="noopener noreferrer"
             className={styles.secondaryButton}
           >
-            Join Discord
+            Book a demo
           </Link>
-          <button
-            type="button"
-            className={styles.textButton}
-            onClick={() => setIsContactOpen(true)}
-          >
-            Talk to us →
-          </button>
+          <Link href="/guide/getting-started" className={styles.secondaryButton}>
+            Self-host Agor
+          </Link>
         </div>
       </section>
 
