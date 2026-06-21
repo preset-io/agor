@@ -105,7 +105,7 @@ Everything else builds on these. **[Read the Features Overview →](https://agor
 ## Screenshots
 
 <div align="center">
-  <img src="apps/agor-docs/public/screenshots/board-hero.png" alt="Agor Board" style="width: 100%; border-radius: 8px; margin-bottom: 24px;" />
+  <img src="https://github.com/preset-io/agor/releases/download/v0.15.0/board-hero.png" alt="Agor Board" style="width: 100%; border-radius: 8px; margin-bottom: 24px;" />
   <p style="opacity: 0.5;"><em>Multiplayer canvas with live cursors, rich branch cards, zones, and interactive agent dashboards</em></p>
 </div>
 
