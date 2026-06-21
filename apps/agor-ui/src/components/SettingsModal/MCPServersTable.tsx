@@ -20,6 +20,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
@@ -347,9 +348,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 140,
+      width: 96,
       render: (_: unknown, server: MCPServer) => (
-        <Space size="small">
+        <SettingsActionGroup>
           <Button
             type="text"
             size="small"
@@ -374,7 +375,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           >
             <Button type="text" size="small" icon={<DeleteOutlined />} danger title="Delete" />
           </Popconfirm>
-        </Space>
+        </SettingsActionGroup>
       ),
     },
   ];

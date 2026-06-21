@@ -39,6 +39,7 @@ import { ArchiveToggleButton } from '../ArchiveButton';
 import { BoardFormFields, extractBoardFormValues, isCustomCSS } from '../forms/BoardFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BoardsTableProps {
   client: AgorClient | null;
@@ -394,9 +395,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 280,
+      width: 184,
       render: (_: unknown, board: Board) => (
-        <Space size="small">
+        <SettingsActionGroup>
           <ArchiveToggleButton
             archived={Boolean(board.archived)}
             tooltip={board.archived ? 'Archived • Click to unarchive' : 'Archive board'}
@@ -445,7 +446,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
               <Button type="text" size="small" icon={<DeleteOutlined />} danger />
             </Tooltip>
           </Popconfirm>
-        </Space>
+        </SettingsActionGroup>
       ),
     },
   ];

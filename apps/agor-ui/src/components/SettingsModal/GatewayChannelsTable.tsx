@@ -66,6 +66,7 @@ import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BranchSelect } from './BranchSelect';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
@@ -1886,9 +1887,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 140,
+      width: 96,
       render: (_: unknown, channel: GatewayChannel) => (
-        <Space size="small">
+        <SettingsActionGroup>
           <Button
             type="text"
             size="small"
@@ -1912,7 +1913,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           >
             <Button type="text" size="small" icon={<DeleteOutlined />} danger title="Delete" />
           </Popconfirm>
-        </Space>
+        </SettingsActionGroup>
       ),
     },
   ];

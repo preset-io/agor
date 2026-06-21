@@ -29,6 +29,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
+import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserSettingsModal } from './UserSettingsModal';
 
 interface UsersTableProps {
@@ -212,9 +213,9 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 120,
+      width: 88,
       render: (_: unknown, user: User) => (
-        <Space size="small">
+        <SettingsActionGroup>
           <Button
             type="text"
             size="small"
@@ -231,7 +232,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           >
             <Button type="text" size="small" icon={<DeleteOutlined />} danger />
           </Popconfirm>
-        </Space>
+        </SettingsActionGroup>
       ),
     },
   ];

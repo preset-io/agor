@@ -21,6 +21,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface GroupsTableProps {
   client: AgorClient | null;
@@ -239,9 +240,9 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
           },
           {
             title: 'Actions',
-            width: 110,
+            width: 76,
             render: (_: unknown, group: Group) => (
-              <Space>
+              <SettingsActionGroup>
                 <Button
                   type="text"
                   size="small"
@@ -256,7 +257,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
                 <Popconfirm title="Archive group?" onConfirm={() => archiveGroup(group)}>
                   <Button type="text" size="small" icon={<DeleteOutlined />} danger />
                 </Popconfirm>
-              </Space>
+              </SettingsActionGroup>
             ),
           },
         ]}

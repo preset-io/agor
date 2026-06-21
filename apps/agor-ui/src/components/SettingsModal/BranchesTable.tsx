@@ -32,6 +32,7 @@ import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { BranchFormFields } from '../BranchFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { renderEnvCell } from './BranchEnvColumn';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BranchesTableProps {
   client: AgorClient | null;
@@ -317,21 +318,40 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
   const columns = [
     {
-      title: 'Name',
+      title: 'Branch',
       dataIndex: 'name',
-      key: 'name',
-      render: (name: string, record: Branch) => (
-        <Space>
-          {isAssistant(record) ? (
-            <RobotOutlined style={{ color: token.colorInfo }} />
-          ) : (
-            <BranchesOutlined />
-          )}
-          <Typography.Text strong>
-            <HighlightMatch text={name} query={searchTerm} />
-          </Typography.Text>
-        </Space>
-      ),
+      key: 'branch',
+      render: (name: string, record: Branch) => {
+        const nameMatchesRef = name === record.ref;
+        return (
+          <Space style={{ minWidth: 0, width: '100%' }}>
+            {isAssistant(record) ? (
+              <RobotOutlined style={{ color: token.colorInfo }} />
+            ) : (
+              <BranchesOutlined />
+            )}
+            <Space orientation="vertical" size={0} style={{ minWidth: 0, flex: 1 }}>
+              <Typography.Text
+                strong
+                ellipsis={{ tooltip: name }}
+                style={{ display: 'block', maxWidth: '100%' }}
+              >
+                <HighlightMatch text={name} query={searchTerm} />
+              </Typography.Text>
+              {!nameMatchesRef && (
+                <Typography.Text
+                  code
+                  type="secondary"
+                  ellipsis={{ tooltip: record.ref }}
+                  style={{ display: 'block', maxWidth: '100%' }}
+                >
+                  <HighlightMatch text={record.ref} query={searchTerm} />
+                </Typography.Text>
+              )}
+            </Space>
+          </Space>
+        );
+      },
     },
     {
       title: 'Env',
@@ -354,16 +374,6 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             <HighlightMatch text={getRepoName(repoId)} query={searchTerm} />
           </Typography.Text>
         </Space>
-      ),
-    },
-    {
-      title: 'Branch',
-      dataIndex: 'ref',
-      key: 'ref',
-      render: (ref: string) => (
-        <Typography.Text code>
-          <HighlightMatch text={ref} query={searchTerm} />
-        </Typography.Text>
       ),
     },
     {
@@ -396,9 +406,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 160,
+      width: 144,
       render: (_: unknown, record: Branch) => (
-        <Space size="small">
+        <SettingsActionGroup>
           {!record.archived && record.board_id && (
             <Tooltip title="Center map on branch">
               <Button
@@ -467,7 +477,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               setArchiveDeleteModalOpen(true);
             }}
           />
-        </Space>
+        </SettingsActionGroup>
       ),
     },
   ];
