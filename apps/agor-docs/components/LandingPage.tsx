@@ -76,6 +76,24 @@ const productPreviews = [
     image: '/images/artifacts-hero.png',
     href: '/guide/artifacts',
   },
+  {
+    title: 'Built-in knowledge base',
+    body: 'Give humans and agents one shared place for decisions, runbooks, prompts, memory, and reusable context.',
+    image: '/images/knowledge-hero.png',
+    href: '/guide/knowledge',
+  },
+  {
+    title: 'Branch environments',
+    body: 'Start, stop, health-check, and inspect logs for every branch environment without port fights.',
+    image: '/screenshots/env_configuration.png',
+    href: '/guide/environment-configuration',
+  },
+  {
+    title: 'MCP-native control',
+    body: 'Anything a user can do in Agor, an agent can do too: spawn peers, move work, schedule runs, and report back.',
+    image: '/screenshots/mcp_environment.png',
+    href: '/guide/internal-mcp',
+  },
 ];
 
 const useCases = [

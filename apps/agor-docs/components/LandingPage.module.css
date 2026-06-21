@@ -397,6 +397,12 @@
   object-position: 50% 22%;
 }
 
+.productCard:nth-child(7) img,
+.productCard:nth-child(8) img,
+.productCard:nth-child(9) img {
+  object-position: 50% 24%;
+}
+
 .productCard div {
   padding: 22px;
 }
