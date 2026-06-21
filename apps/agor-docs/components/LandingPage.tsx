@@ -330,7 +330,7 @@ export function LandingPage() {
       <section className={styles.capabilitySection} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Why it becomes a command center</span>
-          <h2>The product is bigger than a chat window.</h2>
+          <h2>This product is much bigger than a chat window.</h2>
         </div>
         <div className={styles.capabilityGrid}>
           {workflowHighlights.map((highlight, index) => (
