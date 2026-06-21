@@ -1,11 +1,14 @@
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { useEffect, useRef } from 'react';
-import { AGOR_CLOUD_DEMO_URL, AGOR_CLOUD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
+import {
+  AGOR_CLOUD_DEMO_URL,
+  AGOR_CLOUD_INVITE_URL,
+  DISCORD_INVITE_URL,
+  GITHUB_REPO_URL,
+} from '../lib/links';
 import { BRAND_NAME, LOGO_PATH } from '../lib/siteMetadata';
 import styles from './LandingPage.module.css';
-
-const assistants = ['ReviewBot', 'LaunchOps', 'Scout', 'Standup', 'Docs'];
 
 const featureCards = [
   {
@@ -48,8 +51,8 @@ const featureCards = [
 const productPreviews = [
   {
     title: 'Spatial boards',
-    body: 'Arrange branches, zones, sessions, and teammates on one Figma-like canvas for agentic workflows.',
-    image: '/screenshots/board-hero.png',
+    body: 'Arrange branches, zones, sessions, and teammates on one spatial canvas for agentic workflows.',
+    image: '/screenshots/board.png',
     href: '/guide/boards',
   },
   {
@@ -103,11 +106,31 @@ const productPreviews = [
 ];
 
 const trustItems = [
-  { label: 'Agor Cloud is coming', href: '/blog/agor-cloud' },
-  { label: 'Open source / self-hosted', href: '/guide/getting-started' },
-  { label: 'MCP-native', href: '/guide/internal-mcp' },
-  { label: 'Best harnesses, no frontier lock-in', href: '/guide/sdk-comparison' },
-  { label: 'Unix-level isolation when you need it', href: '/guide/multiplayer-unix-isolation' },
+  {
+    label: 'Open source & self-hosted',
+    body: 'Your repos, your database, your infrastructure. BSL 1.1.',
+    href: '/guide/getting-started',
+  },
+  {
+    label: 'No frontier lock-in',
+    body: 'Claude Code, Codex, Gemini, OpenCode — pick the best harness per session.',
+    href: '/guide/sdk-comparison',
+  },
+  {
+    label: 'MCP-native',
+    body: 'Anything you can do, an agent can do too — over Agor’s own MCP server.',
+    href: '/guide/internal-mcp',
+  },
+  {
+    label: 'Unix-level isolation',
+    body: 'Progressive isolation modes for when teams and security demand it.',
+    href: '/guide/multiplayer-unix-isolation',
+  },
+  {
+    label: 'Agor Cloud is coming',
+    body: 'Managed hosting for teams who’d rather not run it themselves.',
+    href: '/blog/agor-cloud',
+  },
 ];
 
 const revealDelay = (index: number): CSSProperties =>
@@ -221,6 +244,51 @@ export function LandingPage() {
         </div>
       </section>
 
+      <section className={styles.liveSection} data-reveal>
+        <div className={styles.liveCopy}>
+          <span className={styles.eyebrow}>Multiplayer by default</span>
+          <h2>Your team’s agents, live on a Figma-like canvas.</h2>
+          <p>
+            Most agent tools are solo. Agor isn’t. Cursors, comments, and a facepile show who’s
+            here. Sessions, dev environments, and branches are shared. One link, one running thing,
+            everyone looking at the same live work.
+          </p>
+          <ul className={styles.liveHighlights}>
+            <li>
+              <strong>Live presence</strong>
+              <span>
+                See teammates’ cursors, comments, and reactions as work happens — not after the
+                fact.
+              </span>
+            </li>
+            <li>
+              <strong>Shared dev environments</strong>
+              <span>
+                Engineers, reviewers, PMs, and QA rally around the same running branch instead of
+                “spin up your own to see it.”
+              </span>
+            </li>
+            <li>
+              <strong>Learn from each other</strong>
+              <span>
+                Watch how teammates prompt, lift the patterns that work, and standardize them as
+                zone triggers.
+              </span>
+            </li>
+          </ul>
+          <Link href="/guide/multiplayer-social" className={styles.cardLink}>
+            Explore multiplayer →
+          </Link>
+        </div>
+        <div className={styles.liveVisual}>
+          {/* biome-ignore lint/performance/noImgElement: Static product screenshot (interim — needs a bespoke presence/cursors shot before launch) */}
+          <img
+            src="/screenshots/cards-hero.png"
+            alt="Agor board with branches and sessions organized in shared zones"
+          />
+        </div>
+      </section>
+
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Product surfaces</span>
@@ -246,15 +314,6 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.assistantStrip} aria-label="Example assistants" data-reveal>
-        <span>What works for one person finally reaches everyone</span>
-        <div>
-          {assistants.map((assistant) => (
-            <strong key={assistant}>@{assistant}</strong>
-          ))}
-        </div>
-      </section>
-
       <section className={styles.workspaceSection} data-reveal>
         <div className={styles.workspaceCopy}>
           <span className={styles.eyebrow}>The shared workspace</span>
@@ -262,15 +321,8 @@ export function LandingPage() {
           <p>
             One-off prompts don’t compound. In Agor, assistants have durable identities your team
             can teach conversationally, then equip with memory, tools, channels, and schedules as
-            they grow.
+            they grow — so what works for one person finally reaches the whole team.
           </p>
-          <div className={styles.workspaceScreenshot}>
-            {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-            <img
-              src="/screenshots/assistants-list.png"
-              alt="Agor assistants list showing persistent team assistants"
-            />
-          </div>
         </div>
         <div className={styles.featureGrid}>
           {featureCards.map((feature) => (
@@ -292,7 +344,7 @@ export function LandingPage() {
 
       <section className={styles.controlSection} data-reveal>
         <div>
-          <span className={styles.eyebrow}>Built for real teams</span>
+          <span className={styles.eyebrow}>Built for teams</span>
           <h2>
             Everyone’s cranking with AI.
             <br />
@@ -306,7 +358,10 @@ export function LandingPage() {
         <ul className={styles.trustList}>
           {trustItems.map((item) => (
             <li key={item.label}>
-              <Link href={item.href}>{item.label} →</Link>
+              <Link href={item.href}>
+                <span className={styles.trustLabel}>{item.label} →</span>
+                <span className={styles.trustBody}>{item.body}</span>
+              </Link>
             </li>
           ))}
         </ul>
@@ -337,6 +392,44 @@ export function LandingPage() {
           </Link>
         </div>
       </section>
+
+      <footer className={styles.landingFooter} data-reveal>
+        <div className={styles.footerBrand}>
+          {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
+          <img src={LOGO_PATH} alt={`${BRAND_NAME} logo`} />
+          <div>
+            <strong>agor</strong>
+            <p>Team command center for all things agentic.</p>
+          </div>
+        </div>
+        <div className={styles.footerLinks}>
+          <div>
+            <h4>Product</h4>
+            <Link href="/guide/boards">Boards</Link>
+            <Link href="/guide/sessions">Sessions</Link>
+            <Link href="/guide/assistants">Assistants</Link>
+            <Link href="/guide/internal-mcp">MCP control</Link>
+          </div>
+          <div>
+            <h4>Resources</h4>
+            <Link href="/guide/getting-started">Get started</Link>
+            <Link href="/guide">Documentation</Link>
+            <Link href="/blog/agor-cloud">Agor Cloud</Link>
+          </div>
+          <div>
+            <h4>Community</h4>
+            <Link href={GITHUB_REPO_URL} target="_blank" rel="noopener noreferrer">
+              GitHub
+            </Link>
+            <Link href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
+              Discord
+            </Link>
+            <Link href={AGOR_CLOUD_INVITE_URL} target="_blank" rel="noopener noreferrer">
+              Join the private beta
+            </Link>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
