@@ -45,7 +45,7 @@ const board: Board = {
   board_id: boardId,
   name: 'Launch board',
   slug: 'launch-board',
-  description: 'Marketing screenshot staging board built from product canvas components.',
+  description: 'Landing-page staging board built from product canvas components.',
   icon: '🚢',
   color: '#14b8a6',
   access_mode: 'shared',
@@ -69,7 +69,7 @@ const board: Board = {
       trigger: {
         behavior: 'show_picker',
         agent: 'claude-code',
-        template: 'Polish {{branch.name}} for the landing-page screenshot crop.',
+        template: 'Polish {{branch.name}} for the landing-page hero crop.',
       },
     },
     'zone-review': {
@@ -202,7 +202,7 @@ const board: Board = {
       y: 140,
       width: 320,
       content:
-        '### Screenshot staging\n\nReal board, zone, branch, card, and markdown components. Only **presence** and **remote cursors** are fixed fixtures for capture.',
+        '### Launch staging\n\nReal board, zone, branch, card, and markdown components. Only **presence** and **remote cursors** are fixed fixtures for capture.',
     },
     'note-terminal': {
       type: 'markdown',
@@ -217,7 +217,7 @@ const board: Board = {
       y: 820,
       width: 480,
       content:
-        '### Staged product architecture\n\n```mermaid\nflowchart LR\n  Header[AppHeader] --> Facepile[Facepile + overflow]\n  Board[SessionCanvas] --> Zones[Real zones]\n  Board --> Branches[Branch cards]\n  Board --> Artifacts[Board artifacts]\n  Presence[Static users] -.demo-only.-> Facepile\n  Cursors[3 static cursors] -.demo-only.-> Board\n```\n\nDemo fixtures stay behind `/demo/marketing-screenshots`.',
+        '### Staged product architecture\n\n```mermaid\nflowchart LR\n  Header[AppHeader] --> Facepile[Facepile + overflow]\n  Board[SessionCanvas] --> Zones[Real zones]\n  Board --> Branches[Branch cards]\n  Board --> Artifacts[Board artifacts]\n  Presence[Static users] -.demo-only.-> Facepile\n  Cursors[3 static cursors] -.demo-only.-> Board\n```\n\nDemo fixtures stay behind an explicit demo route.',
     },
     'note-sequence': {
       type: 'markdown',
@@ -225,7 +225,7 @@ const board: Board = {
       y: 820,
       width: 500,
       content:
-        '### Screenshot capture flow\n\n```mermaid\nsequenceDiagram\n  participant Max\n  participant UI as Demo route\n  participant Canvas as Product canvas\n  participant Shot as Playwright\n  Max->>UI: open /demo/marketing-screenshots\n  UI->>Canvas: render branches, zones, notes\n  Canvas->>Canvas: mount burndown artifact\n  Shot->>UI: wait 7-10s\n  Shot-->>Max: board PNGs\n```\n\nThe live route is hardcoded for staging only.',
+        '### Capture flow\n\n```mermaid\nsequenceDiagram\n  participant Max\n  participant UI as Demo route\n  participant Canvas as Product canvas\n  participant Shot as Playwright\n  Max->>UI: open demo route\n  UI->>Canvas: render branches, zones, notes\n  Canvas->>Canvas: mount burndown artifact\n  Shot->>UI: wait 7-10s\n  Shot-->>Max: board PNGs\n```\n\nThe live route is hardcoded for staging only.',
     },
   },
 };
@@ -284,7 +284,7 @@ const branchFixtures = [
     issue: 'https://linear.app/agor/issue/AG-220',
     pr: 'https://github.com/preset-io/agor/pull/1251',
     notes:
-      'Static fixture drives the live facepile/cursor components for screenshot reliability. Product presence behavior remains unchanged.',
+      'Static fixture drives the live facepile/cursor components for deterministic staging. Product presence behavior remains unchanged.',
     env: { status: 'running', url: 'http://localhost:9182' },
     sessions: [
       ['Codex', 'codex', SessionStatus.RUNNING, 'cursor layer fixture'],
@@ -316,7 +316,7 @@ const branchFixtures = [
     issue: 'https://linear.app/agor/issue/AG-198',
     pr: 'https://github.com/preset-io/agor/pull/1244',
     notes:
-      'Agent-authored dashboard card is pinned below the branch. Synthetic data is OK for screenshot staging.',
+      'Agent-authored dashboard card is pinned below the branch. Synthetic data is OK for landing-page staging.',
     env: { status: 'running', url: 'http://localhost:7341' },
     sessions: [
       ['Gemini', 'gemini', SessionStatus.COMPLETED, 'chart artifact published'],
@@ -426,7 +426,7 @@ const cards: CardWithType[] = [
   {
     card_id: '019ee88d-demo-card-0000-000000000201',
     board_id: boardId,
-    title: 'Landing page screenshot checklist',
+    title: 'Landing page launch checklist',
     description: 'Crop variants, homepage placement, facepile state, board density, and docs copy.',
     note: 'Mina: wide crop reads best. Keep cursor labels visible but not covering PR pills.',
     effective_emoji: '✅',
@@ -441,7 +441,7 @@ const cards: CardWithType[] = [
     board_id: boardId,
     title: 'Usage cockpit artifact',
     description: 'Agent-authored dashboard preview with cost, token, and run counters.',
-    note: 'Published by Gemini, wired by Codex, ready for docs-site screenshot folder.',
+    note: 'Published by Gemini, wired by Codex, ready for the docs-site hero assets.',
     effective_emoji: '📊',
     effective_color: '#06b6d4',
     created_by: users[5].user_id,
@@ -533,7 +533,7 @@ const staticCursors: StaticRemoteCursor[] = [
 
 export const MarketingScreenshotPage = () => {
   useEffect(() => {
-    document.title = 'Marketing screenshot board · Agor';
+    document.title = 'Launch board · Agor';
   }, []);
 
   const maps = useMemo(() => {
@@ -616,7 +616,6 @@ export const MarketingScreenshotPage = () => {
               branchById={maps.branchById}
               boardById={maps.boardById}
               recentBoards={[]}
-              instanceLabel="Marketing screenshot"
               sessionById={maps.sessionById}
               artifactById={new Map()}
               mcpServerById={new Map<string, MCPServer>()}

@@ -1779,7 +1779,7 @@ function AppWrapper() {
               wrap its own JSX in this provider; that's been removed. */}
           <CanvasNavigationProvider>
             {isMarketingScreenshotRoute ? (
-              <Suspense fallback={<InitialLoadingScreen message="Loading screenshot fixture…" />}>
+              <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
                 <MarketingScreenshotPage />
               </Suspense>
             ) : (
