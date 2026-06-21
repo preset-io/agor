@@ -645,7 +645,7 @@
   .workspaceSection,
   .productShowcase,
   .finalCta {
-    padding: 64px 18px;
+    padding: 64px 24px;
   }
 
   .heroSection {
@@ -701,7 +701,19 @@
   }
 
   .controlSection {
-    margin-inline: 18px;
-    padding: 48px 22px;
+    margin-inline: 24px;
+    padding: 48px 24px;
+  }
+
+  .landingFooter {
+    padding: 48px 24px 72px;
+  }
+
+  .footerLinks {
+    gap: 18px;
+  }
+
+  .footerLinks h4 {
+    letter-spacing: 0.06em;
   }
 }
