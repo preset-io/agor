@@ -23,9 +23,13 @@ It is intentionally hardcoded and daemon-free. `apps/agor-ui/src/App.tsx` short-
 
 - `context/marketing/screenshots/agor-marketing-board.png` — 1600×1000 crop for quick previews
 - `context/marketing/screenshots/agor-marketing-board-wide.png` — 2200×1300 wide hero composition
+- `context/marketing/screenshots/agor-marketing-comment-popover.png` — close crop of spatial comment + branch card
+- `context/marketing/screenshots/agor-marketing-facepile-tooltip.png` — close crop of facepile overflow/tooltip behavior
 - Public docs copies:
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-board.png`
   - `apps/agor-docs/public/screenshots/marketing/agor-marketing-board-wide.png`
+  - `apps/agor-docs/public/screenshots/marketing/agor-marketing-comment-popover.png`
+  - `apps/agor-docs/public/screenshots/marketing/agor-marketing-facepile-tooltip.png`
 
 ## Reproduce/update
 
