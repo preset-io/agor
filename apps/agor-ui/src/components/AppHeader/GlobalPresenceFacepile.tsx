@@ -18,6 +18,8 @@ interface GlobalPresenceFacepileProps {
   ) => void;
   /** Demo/screenshot-only override: render a fixed facepile without live socket presence. */
   staticActiveUsers?: ActiveUser[];
+  /** Override visible avatar count for demo/screenshot compositions. */
+  maxVisible?: number;
 }
 
 export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
@@ -28,6 +30,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
   boardById,
   onUserClick,
   staticActiveUsers,
+  maxVisible = 5,
 }) => {
   const { activeUsers } = usePresence({
     client,
@@ -60,7 +63,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
       <Facepile
         activeUsers={allActiveUsers}
         currentUserId={currentUser?.user_id}
-        maxVisible={5}
+        maxVisible={maxVisible}
         boardById={boardById}
         onUserClick={onUserClick}
         style={{

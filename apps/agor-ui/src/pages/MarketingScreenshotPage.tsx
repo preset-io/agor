@@ -78,15 +78,15 @@ const DEMO_ACTIVE_USERS: ActiveUser[] = USERS.map((user, index) => ({
 }));
 
 const DEMO_CURSORS: StaticRemoteCursor[] = [
-  { userId: USERS[0].user_id, user: USERS[0], x: 445, y: 128 },
-  { userId: USERS[1].user_id, user: USERS[1], x: 815, y: 478 },
-  { userId: USERS[2].user_id, user: USERS[2], x: 1150, y: 270 },
-  { userId: USERS[3].user_id, user: USERS[3], x: 590, y: 728 },
-  { userId: USERS[4].user_id, user: USERS[4], x: 1020, y: 540 },
-  { userId: USERS[5].user_id, user: USERS[5], x: 220, y: 418 },
-  { userId: USERS[6].user_id, user: USERS[6], x: 1260, y: 620 },
-  { userId: USERS[7].user_id, user: USERS[7], x: 350, y: 810 },
-  { userId: USERS[8].user_id, user: USERS[8], x: 980, y: 188 },
+  { userId: USERS[0].user_id, user: USERS[0], color: '#8b5cf6', x: 445, y: 128 },
+  { userId: USERS[1].user_id, user: USERS[1], color: '#06b6d4', x: 815, y: 478 },
+  { userId: USERS[2].user_id, user: USERS[2], color: '#f97316', x: 1150, y: 270 },
+  { userId: USERS[3].user_id, user: USERS[3], color: '#22c55e', x: 590, y: 728 },
+  { userId: USERS[4].user_id, user: USERS[4], color: '#ec4899', x: 1020, y: 540 },
+  { userId: USERS[5].user_id, user: USERS[5], color: '#eab308', x: 220, y: 418 },
+  { userId: USERS[6].user_id, user: USERS[6], color: '#14b8a6', x: 1260, y: 620 },
+  { userId: USERS[7].user_id, user: USERS[7], color: '#38bdf8', x: 350, y: 810 },
+  { userId: USERS[8].user_id, user: USERS[8], color: '#f43f5e', x: 980, y: 188 },
 ];
 
 const BRANCHES: DemoBranch[] = [
@@ -373,6 +373,7 @@ export const MarketingScreenshotPage = () => {
               currentUser={USERS[0]}
               boardById={DEMO_BOARD_BY_ID}
               staticActiveUsers={DEMO_ACTIVE_USERS}
+              maxVisible={12}
             />
           </div>
         </header>
