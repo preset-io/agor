@@ -262,19 +262,6 @@ for the agent-oriented map of the codebase.
 
 ---
 
-## Roadmap
-
-**[View the roadmap on GitHub →](https://github.com/preset-io/agor/issues?q=is%3Aissue+state%3Aopen+label%3Aroadmap)**
-
-Highlights:
-
-- **Match CLI-native features** — push integrations deeper as the agent SDKs expose more.
-- **Bring your own IDE** — attach VS Code, Cursor, or any IDE to Agor-managed branches over SSH/Remote.
-- **Unix user integration** — true multi-tenancy with per-user OS isolation. [Read the guide →](https://agor.live/guide/multiplayer-unix-isolation)
-- **Agor Cloud** — managed hosting for teams who'd rather not self-host. [Learn more →](https://agor.live/blog/agor-cloud)
-
----
-
 <div align="center">
 
 ### ✨ Pledge ✨
