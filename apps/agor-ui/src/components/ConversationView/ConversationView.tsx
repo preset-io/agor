@@ -147,7 +147,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // user scrolls up. `scrollRef` goes on the scroll container, `contentRef`
     // on the inner content wrapper. `initial`/`resize: 'instant'` avoids
     // smooth-scroll animation jank on first paint and on layout growth.
-    const { scrollRef, contentRef, scrollToBottom, isAtBottom } = useStickToBottom({
+    const { scrollRef, contentRef, scrollToBottom, stopScroll, state } = useStickToBottom({
       initial: 'instant',
       resize: 'instant',
     });
@@ -159,14 +159,17 @@ export const ConversationView = React.memo<ConversationViewProps>(
       scrollToBottom();
     }, [scrollToBottom]);
 
-    // Scroll to top. The library's persistent observer stops following once the
-    // viewport leaves the bottom, so a plain scrollTop = 0 is enough — no manual
-    // intent flag needed.
+    // Scroll to top. While content is still streaming/growing, the library's
+    // persistent observer can re-pin to the bottom before our scrollTop write
+    // takes effect, snapping the user right back down. `stopScroll()`
+    // synchronously releases the bottom lock (and cancels any in-flight scroll
+    // animation) so the scrollTop = 0 sticks.
     const scrollToTop = useCallback(() => {
+      stopScroll();
       if (scrollRef.current) {
         scrollRef.current.scrollTop = 0;
       }
-    }, [scrollRef]);
+    }, [scrollRef, stopScroll]);
 
     // Expose scroll functions to parent
     useEffect(() => {
@@ -247,9 +250,17 @@ export const ConversationView = React.memo<ConversationViewProps>(
     const lastTaskId = tasks.length > 0 ? tasks[tasks.length - 1].task_id : null;
     useEffect(() => {
       if (!isActive || !lastTaskId) return;
+      // Read the library's SYNCHRONOUS live state, not the returned `isAtBottom`
+      // React value. The returned value lags a render and also counts
+      // "near bottom" as pinned — both would mis-classify a user who just
+      // scrolled up moments before a task arrives, collapsing the tasks they're
+      // reading. `state.escapedFromLock` is mutated synchronously the instant
+      // the user scrolls away from the bottom lock, restoring the old
+      // `userScrolledUpRef` semantics exactly.
+      const userScrolledUp = state.escapedFromLock;
       setExpandedTaskIds((prev) => {
         if (prev.has(lastTaskId)) return prev;
-        if (!isAtBottom) {
+        if (userScrolledUp) {
           // User has scrolled away — just expand the new task, keep older ones
           // visible so we don't disturb what they're reading.
           const next = new Set(prev);
@@ -259,7 +270,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
         // At bottom — collapse older tasks and focus the new one.
         return new Set([lastTaskId]);
       });
-    }, [isActive, lastTaskId, isAtBottom]);
+    }, [isActive, lastTaskId, state]);
 
     // Handle task expand/collapse. Single stable callback shared by every
     // TaskBlock — the callback takes `taskId` so we don't need to mint a
