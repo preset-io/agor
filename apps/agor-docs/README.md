@@ -51,7 +51,7 @@ heroImage: '/screenshots/cards-hero.png'
 Local image paths must live under `public/` and start with `/`. The metadata layer turns
 them into absolute `og:image` and `twitter:image` URLs using `NEXT_PUBLIC_SITE_URL` plus
 `NEXT_PUBLIC_BASE_PATH` when configured. Pages without any image field fall back to
-`/hero.png`. Add `imageWidth` and `imageHeight` only when you know the exact image
+`/screenshots/board-hero.png`. Add `imageWidth` and `imageHeight` only when you know the exact image
 dimensions.
 
 ## Phase 1 (Complete)

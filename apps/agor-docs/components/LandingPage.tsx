@@ -52,7 +52,7 @@ const productPreviews = [
   {
     title: 'Spatial boards',
     body: 'Arrange branches, zones, sessions, and teammates on one spatial canvas for agentic workflows.',
-    image: '/screenshots/board.png',
+    image: '/screenshots/board-hero.png',
     href: '/guide/boards',
   },
   {
@@ -151,7 +151,7 @@ function ProductMockup() {
         {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
         <img
           src="/screenshots/board-hero.png"
-          alt="Agor board showing colorful zones and branch cards on a shared canvas"
+          alt="Agor board showing live cursors, rich branch cards, zones, and agent dashboards"
         />
       </div>
     </div>
