@@ -216,12 +216,11 @@ export async function getMcpServersForSession(
     // same. Global servers stay before session-assigned servers to preserve the
     // historical scoping precedence; names and IDs make the ordering total.
     servers.sort((a, b) => {
-      const sourceRank = (source: MCPServerWithSource['source']) =>
-        source === 'global' ? 0 : 1;
+      const sourceRank = (source: MCPServerWithSource['source']) => (source === 'global' ? 0 : 1);
       return (
         sourceRank(a.source) - sourceRank(b.source) ||
         a.server.name.localeCompare(b.server.name) ||
-        a.server.mcp_server_id.localeCompare(b.server.mcp_server_id)
+        String(a.server.mcp_server_id).localeCompare(String(b.server.mcp_server_id))
       );
     });
   } catch (error) {

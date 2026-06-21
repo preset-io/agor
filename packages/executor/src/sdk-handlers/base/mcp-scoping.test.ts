@@ -42,9 +42,7 @@ describe('getMcpServersForSession', () => {
     const bGlobal = makeServer('global-b', 'global', 'beta');
     const aSession = makeServer('session-a', 'session', 'alpha');
     const aGlobal = makeServer('global-a', 'global', 'alpha');
-    const listEffectiveServers = vi
-      .fn()
-      .mockResolvedValue([zSession, bGlobal, aSession, aGlobal]);
+    const listEffectiveServers = vi.fn().mockResolvedValue([zSession, bGlobal, aSession, aGlobal]);
 
     const servers = await getMcpServersForSession('session-a' as SessionID, {
       mcpServerRepo: { findAll: vi.fn() } as never,
