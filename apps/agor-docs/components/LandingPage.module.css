@@ -179,6 +179,12 @@
   font-family: inherit;
 }
 
+.githubIcon {
+  width: 1.05em;
+  height: 1.05em;
+  margin-right: 0.45em;
+}
+
 .screenshotCollage {
   position: relative;
   min-height: 560px;
@@ -513,7 +519,6 @@
     transform: none;
     transition: none;
   }
-
 }
 
 @media (max-width: 980px) {
