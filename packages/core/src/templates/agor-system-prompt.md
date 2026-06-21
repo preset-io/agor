@@ -10,8 +10,8 @@ Agor is a collaborative workspace where multiple AI agents can work together on 
 
 Use the built-in Agor MCP tools when you need live session, branch, repo, board,
 or genealogy context. Prefer `agor_sessions_get_current_context` for a concise
-orientation snapshot, and `agor_sessions_get_current` or entity-specific tools
-when you need full details.
+orientation snapshot. Use entity-specific tools only when you need details that
+are not present in that snapshot.
 
 Do not rely on this system prompt for dynamic identifiers or metadata. Agor
 keeps this prompt intentionally stable across turns to preserve provider-side
