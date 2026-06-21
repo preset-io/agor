@@ -44,7 +44,39 @@ pnpm --filter @agor-live/client dev
 pnpm --filter agor-ui dev --host 127.0.0.1 --port 5173
 
 mkdir -p context/marketing/screenshots apps/agor-docs/public/screenshots/marketing
+```
 
+Open `http://127.0.0.1:5173/demo/marketing-screenshots` and wait a few seconds for
+the embedded Sandpack artifact to render before capturing. The committed board
+screenshots were captured with Playwright/browser tooling after a 10s wait:
+
+```js
+await page.setViewportSize({ width: 1600, height: 1000 });
+await page.goto('http://127.0.0.1:5173/demo/marketing-screenshots', {
+  waitUntil: 'domcontentloaded',
+});
+await page.waitForTimeout(10000);
+await page.screenshot({ path: 'context/marketing/screenshots/agor-marketing-board.png' });
+
+await page.setViewportSize({ width: 2200, height: 1300 });
+await page.goto('http://127.0.0.1:5173/demo/marketing-screenshots', {
+  waitUntil: 'domcontentloaded',
+});
+await page.waitForTimeout(10000);
+await page.screenshot({ path: 'context/marketing/screenshots/agor-marketing-board-wide.png' });
+```
+
+Then mirror the landing-page assets:
+
+```bash
+cp context/marketing/screenshots/agor-marketing-board*.png \
+  apps/agor-docs/public/screenshots/marketing/
+```
+
+Raw Chrome headless also works for quick static checks, but it may snapshot
+before the Sandpack artifact iframe has painted:
+
+```bash
 google-chrome --headless --disable-gpu --no-sandbox \
   --window-size=1600,1000 --hide-scrollbars --virtual-time-budget=5000 \
   --screenshot=context/marketing/screenshots/agor-marketing-board.png \

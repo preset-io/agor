@@ -27,3 +27,9 @@
 .marketing-product-page .react-flow__node-comment {
   filter: drop-shadow(0 22px 45px rgba(0, 0, 0, 0.28));
 }
+
+/* Marketing capture: remove secondary canvas chrome that competes with the artifact. */
+.marketing-product-page .react-flow__minimap,
+.marketing-product-page .react-flow__attribution {
+  display: none;
+}

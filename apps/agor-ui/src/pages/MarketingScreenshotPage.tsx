@@ -54,18 +54,17 @@ const board: Board = {
   created_by: users[0].user_id,
   archived: false,
   url: '/demo/marketing-screenshots',
-  background_color:
-    'radial-gradient(circle at 50% 42%, rgba(255,214,140,0.34) 0%, rgba(249,115,22,0.16) 30%, transparent 58%), repeating-conic-gradient(from -18deg at 50% 42%, rgba(251,146,60,0.18) 0deg 7deg, rgba(20,184,166,0.06) 7deg 10deg, transparent 10deg 22deg), radial-gradient(circle at 78% 26%, rgba(139,92,246,0.26), transparent 36%), linear-gradient(135deg, #120b08 0%, #24100a 42%, #0a1020 100%)',
+  background_color: 'linear-gradient(135deg, #f5af19 0%, #f12711 30%, #f5af19 60%, #f12711 100%)',
   objects: {
     'zone-ship': {
       type: 'zone',
-      x: 40,
-      y: 60,
-      width: 980,
-      height: 560,
+      x: 60,
+      y: 80,
+      width: 680,
+      height: 1180,
       label: '🚢 Ship this week',
       borderColor: '#14b8a6',
-      backgroundColor: 'rgba(20,184,166,0.10)',
+      backgroundColor: 'rgba(20,184,166,0.16)',
       locked: true,
       trigger: {
         behavior: 'show_picker',
@@ -75,13 +74,13 @@ const board: Board = {
     },
     'zone-review': {
       type: 'zone',
-      x: 1090,
-      y: 90,
+      x: 820,
+      y: 80,
       width: 680,
-      height: 560,
+      height: 1180,
       label: '🔎 Review lane',
       borderColor: '#f59e0b',
-      backgroundColor: 'rgba(245,158,11,0.10)',
+      backgroundColor: 'rgba(15,23,42,0.28)',
       locked: true,
       trigger: {
         behavior: 'always_new',
@@ -91,13 +90,13 @@ const board: Board = {
     },
     'zone-assistants': {
       type: 'zone',
-      x: 160,
-      y: 720,
-      width: 1480,
-      height: 520,
+      x: 1580,
+      y: 80,
+      width: 1120,
+      height: 1180,
       label: '🤖 Assistants + artifacts',
       borderColor: '#8b5cf6',
-      backgroundColor: 'rgba(139,92,246,0.11)',
+      backgroundColor: 'rgba(139,92,246,0.18)',
       locked: true,
       trigger: {
         behavior: 'show_picker',
@@ -105,10 +104,59 @@ const board: Board = {
         template: 'Turn this branch into an artifact or status summary for the board.',
       },
     },
+    'app-usage-cockpit': {
+      type: 'app',
+      x: 2030,
+      y: 850,
+      width: 520,
+      height: 330,
+      title: 'Agent cost cockpit artifact',
+      description: 'Published by an assistant as a live board artifact.',
+      template: 'vanilla',
+      showEditor: false,
+      showConsole: false,
+      entryFile: '/index.js',
+      files: {
+        '/index.html': '<div id="app"></div><script type="module" src="/index.js"></script>',
+        '/index.js':
+          `
+          import './styles.css';
+          document.getElementById('app').innerHTML = ` +
+          '`' +
+          `
+            <div class="artifact">
+              <div class="top"><span>📊 Agent cost cockpit</span><b>Live</b></div>
+              <section class="hero"><small>today</small><strong>$42.18</strong><em>19 active runs · 4.7m tokens</em></section>
+              <div class="grid">
+                <div><small>Claude</small><b>7</b></div><div><small>Codex</small><b>6</b></div><div><small>Gemini</small><b>4</b></div><div><small>OpenCode</small><b>2</b></div>
+              </div>
+              <div class="bars"><i style="height:64%"></i><i style="height:48%"></i><i style="height:82%"></i><i style="height:56%"></i><i style="height:92%"></i><i style="height:70%"></i></div>
+            </div>
+          ` +
+          '`' +
+          `;
+        `,
+        '/styles.css': `
+          body { margin:0; min-height:100vh; background:#060b14; color:#eaffff; font-family: Inter, ui-sans-serif, system-ui; }
+          .artifact { height:100vh; box-sizing:border-box; padding:22px; background: radial-gradient(circle at 20% 20%, rgba(20,184,166,.34), transparent 35%), linear-gradient(135deg, #0b1220, #111827 55%, #251005); border:1px solid rgba(255,255,255,.14); }
+          .top { display:flex; justify-content:space-between; align-items:center; font-weight:800; letter-spacing:-.02em; }
+          .top b { color:#06251f; background:#5eead4; padding:4px 9px; border-radius:999px; font-size:12px; }
+          .hero { margin:20px 0; padding:18px; border-radius:22px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.12); }
+          small { color:#a7f3d0; text-transform:uppercase; font-size:11px; letter-spacing:.12em; }
+          strong { display:block; font-size:42px; line-height:1; margin:6px 0; }
+          em { color:#cbd5e1; font-style:normal; }
+          .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+          .grid div { border-radius:16px; padding:12px; background:rgba(15,23,42,.82); border:1px solid rgba(255,255,255,.08); }
+          .grid b { display:block; font-size:26px; color:#67e8f9; }
+          .bars { height:70px; display:flex; gap:8px; align-items:end; margin-top:18px; }
+          .bars i { flex:1; display:block; border-radius:8px 8px 2px 2px; background:linear-gradient(#fbbf24, #f97316 45%, #14b8a6); box-shadow:0 0 24px rgba(251,146,60,.28); }
+        `,
+      },
+    },
     'note-launch': {
       type: 'markdown',
       x: -360,
-      y: 110,
+      y: 140,
       width: 320,
       content:
         '### Screenshot staging\n\nReal board, zone, branch, card, and markdown components. Only **presence** and **remote cursors** are fixed fixtures for capture.',
@@ -116,7 +164,7 @@ const board: Board = {
     'note-terminal': {
       type: 'markdown',
       x: -360,
-      y: 380,
+      y: 420,
       width: 320,
       content: '```bash\npnpm -w agor session list\n✓ 7 running · 3 waiting · 19 done\n```',
     },
@@ -156,7 +204,7 @@ const branchFixtures = [
     name: 'landing-hero-polish',
     ref: 'landing-hero-polish',
     zoneId: 'zone-ship',
-    position: { x: 60, y: 92 },
+    position: { x: 70, y: 110 },
     issue: 'https://github.com/preset-io/agor/issues/214',
     pr: 'https://github.com/preset-io/agor/pull/1248',
     notes:
@@ -173,7 +221,7 @@ const branchFixtures = [
     name: 'multiplayer-presence',
     ref: 'multiplayer-presence',
     zoneId: 'zone-ship',
-    position: { x: 570, y: 210 },
+    position: { x: 70, y: 520 },
     issue: 'https://linear.app/agor/issue/AG-220',
     pr: 'https://github.com/preset-io/agor/pull/1251',
     notes:
@@ -189,7 +237,7 @@ const branchFixtures = [
     name: 'rbac-terminal-safe-defaults',
     ref: 'rbac-terminal-safe-defaults',
     zoneId: 'zone-review',
-    position: { x: 70, y: 120 },
+    position: { x: 80, y: 130 },
     issue: 'https://github.com/preset-io/agor/issues/42',
     pr: 'https://github.com/preset-io/agor/pull/1254',
     notes:
@@ -205,7 +253,7 @@ const branchFixtures = [
     name: 'usage-dashboard-artifact',
     ref: 'usage-dashboard-artifact',
     zoneId: 'zone-assistants',
-    position: { x: 80, y: 96 },
+    position: { x: 90, y: 120 },
     issue: 'https://linear.app/agor/issue/AG-198',
     pr: 'https://github.com/preset-io/agor/pull/1244',
     notes:
@@ -221,7 +269,7 @@ const branchFixtures = [
     name: 'assistant-heartbeat',
     ref: 'assistant-heartbeat',
     zoneId: 'zone-assistants',
-    position: { x: 690, y: 144 },
+    position: { x: 90, y: 510 },
     issue: 'https://linear.app/agor/issue/BOT-17',
     notes:
       'Scheduled assistant heartbeat: daily backlog scan, Slack digest ready, three branches spawned for follow-up.',
@@ -363,7 +411,7 @@ const cardObjects: BoardEntityObject[] = [
     board_id: boardId,
     card_id: cards[0].card_id,
     entity_type: 'card',
-    position: { x: 1060, y: 300 },
+    position: { x: 80, y: 1010 },
     zone_id: 'zone-assistants',
     created_at: now,
   },
@@ -372,7 +420,7 @@ const cardObjects: BoardEntityObject[] = [
     board_id: boardId,
     card_id: cards[1].card_id,
     entity_type: 'card',
-    position: { x: 120, y: 335 },
+    position: { x: 80, y: 780 },
     zone_id: 'zone-assistants',
     created_at: now,
   },
@@ -381,7 +429,7 @@ const cardObjects: BoardEntityObject[] = [
     board_id: boardId,
     card_id: cards[2].card_id,
     entity_type: 'card',
-    position: { x: 210, y: 360 },
+    position: { x: 120, y: 540 },
     zone_id: 'zone-review',
     created_at: now,
   },
@@ -402,8 +450,8 @@ const comments: BoardComment[] = [
       relative: {
         parent_id: branchFixtures[1].id,
         parent_type: 'branch',
-        offset_x: 430,
-        offset_y: 54,
+        offset_x: 420,
+        offset_y: 80,
       },
     },
     mentions: [users[0].user_id],
@@ -419,14 +467,14 @@ const activeUsers: ActiveUser[] = users.map((user, index) => ({
 }));
 
 const staticCursors: StaticRemoteCursor[] = [
-  { userId: users[0].user_id, user: users[0], color: '#8b5cf6', x: 860, y: 250 },
-  { userId: users[1].user_id, user: users[1], color: '#06b6d4', x: 1420, y: 520 },
-  { userId: users[2].user_id, user: users[2], color: '#f97316', x: 1660, y: 320 },
-  { userId: users[3].user_id, user: users[3], color: '#22c55e', x: 720, y: 980 },
-  { userId: users[4].user_id, user: users[4], color: '#ec4899', x: 1180, y: 830 },
-  { userId: users[5].user_id, user: users[5], color: '#eab308', x: 290, y: 520 },
-  { userId: users[6].user_id, user: users[6], color: '#14b8a6', x: 1570, y: 1010 },
-  { userId: users[7].user_id, user: users[7], color: '#38bdf8', x: 500, y: 1130 },
+  { userId: users[0].user_id, user: users[0], color: '#8b5cf6', x: 680, y: 320 },
+  { userId: users[1].user_id, user: users[1], color: '#06b6d4', x: 1370, y: 620 },
+  { userId: users[2].user_id, user: users[2], color: '#f97316', x: 2550, y: 260 },
+  { userId: users[3].user_id, user: users[3], color: '#22c55e', x: 2370, y: 730 },
+  { userId: users[4].user_id, user: users[4], color: '#ec4899', x: 2050, y: 565 },
+  { userId: users[5].user_id, user: users[5], color: '#eab308', x: 650, y: 820 },
+  { userId: users[6].user_id, user: users[6], color: '#14b8a6', x: 1500, y: 1080 },
+  { userId: users[7].user_id, user: users[7], color: '#38bdf8', x: 1860, y: 1110 },
 ];
 
 export const MarketingScreenshotPage = () => {
