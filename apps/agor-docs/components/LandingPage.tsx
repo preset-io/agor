@@ -314,10 +314,7 @@ export function LandingPage() {
 
       <section className={styles.finalCta} data-reveal>
         <h2>Give your team’s AI work a place to live.</h2>
-        <p>
-          Join the private beta, book a demo for Agor Cloud, or install the open-source version
-          locally.
-        </p>
+        <p>Agor Cloud is opening to teams now. The open-source build is ready when you are.</p>
         <div className={styles.heroActions}>
           <Link
             href={AGOR_CLOUD_INVITE_URL}
