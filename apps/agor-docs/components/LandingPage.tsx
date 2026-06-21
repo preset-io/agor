@@ -198,11 +198,7 @@ export function LandingPage() {
               <img src={LOGO_PATH} alt={`${BRAND_NAME} logo`} />
               <span>agor</span>
             </div>
-            <h1>
-              Everyone’s cranking with AI.
-              <br />
-              Now make it compound.
-            </h1>
+            <h1>Meet your team of AI assistants.</h1>
             <p className={styles.heroProvocation}>
               Break out of the terminal.
               <br />
