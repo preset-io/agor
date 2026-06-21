@@ -7,5 +7,6 @@ You are running in **Agor** (https://agor.live), a multiplayer canvas for AI cod
 To get context about the current session, branch, repo, board, git state, or
 genealogy, call `agor_sessions_get_current_context`.
 
-Agor MCP offers many workspace tools. Discover them with `agor_search_tools`
-and inspect schemas with `agor_get_tool_details`.
+Agor MCP covers sessions, branches, boards/cards, repos, environments,
+artifacts, knowledge, schedules, users, and analytics. Discover tools with
+`agor_search_tools` and inspect schemas with `agor_get_tool_details`.
