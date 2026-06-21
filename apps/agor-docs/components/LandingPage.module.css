@@ -393,6 +393,10 @@
   object-position: 50% 20%;
 }
 
+.productCard:nth-child(5) img {
+  object-position: 50% 22%;
+}
+
 .productCard div {
   padding: 22px;
 }

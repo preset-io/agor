@@ -41,34 +41,40 @@ const featureCards = [
 
 const productPreviews = [
   {
-    title: 'Figma-like canvas for agentic workflows',
-    body: 'Branches become cards, zones become prompts, and teammates can read the state of AI work at a glance.',
+    title: 'Spatial boards',
+    body: 'Arrange branches, zones, sessions, and teammates on one Figma-like canvas for agentic workflows.',
     image: '/screenshots/board-hero.png',
     href: '/guide/boards',
   },
   {
-    title: 'Your agents in Slack, GitHub, and wherever work happens',
-    body: 'DM Agor or mention it on a PR. Sessions start on the right branch and route the answer back to the thread.',
+    title: 'Rich agent sessions',
+    body: 'Watch tool calls, decisions, session trees, forks, subsessions, and handoffs unfold with full context.',
+    image: '/screenshots/conversation_full_page.png',
+    href: '/guide/rich-chat-ux',
+  },
+  {
+    title: 'Persistent assistants',
+    body: 'Give long-lived helpers memory, skills, schedules, and team-wide reach beyond one-off prompts.',
+    image: '/screenshots/assistants-list.png',
+    href: '/guide/assistants',
+  },
+  {
+    title: 'Message gateway',
+    body: 'Bring agents into Slack, GitHub, and the threads where your team already coordinates work.',
     image: '/screenshots/subsession-spawn-codex-review.png',
     href: '/guide/message-gateway',
   },
   {
-    title: 'Schedulers and artifacts for repeatable work',
-    body: 'Run standups, audits, and reports on a cadence — or let agents render live dashboards and tools on the board.',
+    title: 'Scheduler',
+    body: 'Run standups, audits, digests, reports, and assistant heartbeats without waiting to be asked.',
+    image: '/screenshots/scheduler-modal.png',
+    href: '/guide/scheduler',
+  },
+  {
+    title: 'Artifacts',
+    body: 'Let agents render live dashboards, mockups, calculators, and tools directly on the board.',
     image: '/images/artifacts-hero.png',
     href: '/guide/artifacts',
-  },
-  {
-    title: 'Governance, observability, and MCP-native control',
-    body: 'Track sessions, tools, and spend; let agents operate Agor itself; add RBAC and Unix isolation when stakes rise.',
-    image: '/screenshots/context-window-viz.png',
-    href: '/guide/internal-mcp',
-  },
-  {
-    title: 'One dev server per branch, without port fights',
-    body: 'Start, stop, health-check, and inspect logs for every branch environment from the same shared workspace.',
-    image: '/screenshots/env_configuration.png',
-    href: '/guide/environment-configuration',
   },
 ];
 
@@ -202,6 +208,32 @@ export function LandingPage() {
         </div>
       </section>
 
+      <section className={styles.productShowcase} data-reveal>
+        <div className={styles.sectionHeader}>
+          <span className={styles.eyebrow}>Product surfaces</span>
+          <h2>This product is much bigger than a chat window.</h2>
+        </div>
+        <div className={styles.productGrid}>
+          {productPreviews.map((preview, index) => (
+            <Link
+              className={styles.productCard}
+              href={preview.href}
+              key={preview.title}
+              data-reveal
+              style={revealDelay(index)}
+            >
+              {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+              <img src={preview.image} alt="" />
+              <div>
+                <h3>{preview.title}</h3>
+                <p>{preview.body}</p>
+                <span>Open guide →</span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </section>
+
       <section className={styles.workspaceSection} data-reveal>
         <div className={styles.workspaceCopy}>
           <span className={styles.eyebrow}>The shared workspace</span>
@@ -233,32 +265,6 @@ export function LandingPage() {
                 {feature.linkLabel} →
               </Link>
             </article>
-          ))}
-        </div>
-      </section>
-
-      <section className={styles.productShowcase} data-reveal>
-        <div className={styles.sectionHeader}>
-          <span className={styles.eyebrow}>Product surfaces</span>
-          <h2>This product is much bigger than a chat window.</h2>
-        </div>
-        <div className={styles.productGrid}>
-          {productPreviews.map((preview, index) => (
-            <Link
-              className={styles.productCard}
-              href={preview.href}
-              key={preview.title}
-              data-reveal
-              style={revealDelay(index)}
-            >
-              {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-              <img src={preview.image} alt="" />
-              <div>
-                <h3>{preview.title}</h3>
-                <p>{preview.body}</p>
-                <span>Open guide →</span>
-              </div>
-            </Link>
           ))}
         </div>
       </section>
