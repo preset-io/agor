@@ -389,9 +389,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         updates.must_change_password = values.must_change_password;
       }
       await onUpdate?.(user.user_id, updates);
+      form.setFieldValue('password', undefined);
       await syncUserGroups(values.groupIds || []);
       await saveDirtyAgenticConfigs();
-      form.setFieldValue('password', undefined);
     } catch (err) {
       console.error('Validation failed:', err);
     }
