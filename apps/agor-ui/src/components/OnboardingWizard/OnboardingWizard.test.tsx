@@ -247,7 +247,7 @@ describe('OnboardingWizard', () => {
         expect.objectContaining({
           branch_id: 'branch-1',
           agent: 'codex',
-          modelConfig: { model: 'gpt-5', effort: 'high' },
+          modelConfig: { mode: 'exact', model: 'gpt-5' },
           effort: 'high',
           mcpServerIds: ['mcp-1'],
           permissionMode: 'auto',

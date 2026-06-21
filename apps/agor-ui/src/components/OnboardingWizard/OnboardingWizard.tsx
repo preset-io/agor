@@ -17,6 +17,7 @@ import type {
   CodexSandboxMode,
   CreateLocalRepoRequest,
   CreateRepoRequest,
+  DefaultModelConfig,
   PermissionMode,
   Repo,
   UpdateUserInput,
@@ -193,6 +194,17 @@ function defaultAuthMethodForAgent(agent: AgenticToolName): AuthMethod {
   return agent === 'codex' ? 'codex-cli-auth' : 'api-key';
 }
 
+function toSessionModelConfig(
+  config?: DefaultModelConfig
+): NewSessionConfig['modelConfig'] | undefined {
+  if (!config?.model) return undefined;
+  return {
+    mode: config.mode ?? 'exact',
+    model: config.model,
+    ...(config.advisorModel ? { advisorModel: config.advisorModel } : {}),
+  };
+}
+
 function authMethodOptionsForAgent(agent: AgenticToolName) {
   if (agent === 'claude-code') {
     return [
@@ -351,7 +363,7 @@ export function OnboardingWizard({
           userName: user?.name,
           userEmail: user?.email,
         }),
-        modelConfig: agentDefaults?.modelConfig,
+        modelConfig: toSessionModelConfig(agentDefaults?.modelConfig),
         effort: agentDefaults?.modelConfig?.effort,
         mcpServerIds: agentDefaults?.mcpServerIds,
         permissionMode,
