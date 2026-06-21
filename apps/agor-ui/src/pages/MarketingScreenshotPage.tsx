@@ -196,21 +196,6 @@ const board: Board = {
         `,
       },
     },
-    'note-launch': {
-      type: 'markdown',
-      x: -360,
-      y: 140,
-      width: 320,
-      content:
-        '### Launch staging\n\nReal board, zone, branch, card, and markdown components. Only **presence** and **remote cursors** are fixed fixtures for capture.',
-    },
-    'note-terminal': {
-      type: 'markdown',
-      x: -360,
-      y: 420,
-      width: 320,
-      content: '```bash\npnpm -w agor session list\n✓ 7 running · 3 waiting · 19 done\n```',
-    },
     'note-architecture': {
       type: 'markdown',
       x: 100,
