@@ -10,29 +10,43 @@ const assistants = ['ReviewBot', 'LaunchOps', 'Scout', 'Standup', 'Docs'];
 const featureCards = [
   {
     eyebrow: '01',
-    title: 'Give each assistant a real job',
-    body: 'Define what it’s for, give it memory, and wire it into the systems your team already uses.',
+    title: 'Shared memory',
+    body: 'Each assistant gets a namespace in the knowledge base: semantic-searchable, durable, and shared with the team.',
+    href: '/guide/knowledge',
+    linkLabel: 'Explore Knowledge',
+  },
+  {
+    eyebrow: '02',
+    title: 'Skills + MCP',
+    body: 'Package repeatable workflows as skills and connect assistants to the MCP servers your team already trusts.',
+    href: '/guide/internal-mcp',
+    linkLabel: 'See MCP control',
+  },
+  {
+    eyebrow: '03',
+    title: 'Conversational onboarding',
+    body: 'Teach an assistant by talking to it. The programming language is conversation, and the useful parts become reusable context.',
     href: '/guide/assistants',
     linkLabel: 'Read about Assistants',
   },
   {
-    eyebrow: '02',
-    title: 'Make the learning visible',
-    body: 'The whole team can see what each assistant is doing and lift the prompts that work.',
-    href: '/guide/multiplayer-social',
-    linkLabel: 'See multiplayer',
+    eyebrow: '04',
+    title: 'Where your team works',
+    body: 'Reach assistants from Slack, GitHub, or wherever work already happens through gateway channels.',
+    href: '/guide/message-gateway',
+    linkLabel: 'Open Message Gateway',
   },
   {
-    eyebrow: '03',
-    title: 'Let work happen on schedule',
-    body: 'Run audits, standups, grooming, digests, reviews, and reports instead of waiting to be asked.',
+    eyebrow: '05',
+    title: 'Scheduled agency',
+    body: 'Run heartbeats, daily standups, audits, digests, or longer workflows without waiting for a prompt.',
     href: '/guide/scheduler',
     linkLabel: 'Explore Scheduler',
   },
   {
-    eyebrow: '04',
-    title: 'Keep ownership and control',
-    body: 'Model assistants like team members: scoped on purpose, governed, observable, and owned together.',
+    eyebrow: '06',
+    title: 'Personality + boundaries',
+    body: 'Tune voice, style, and level of agency so every assistant knows how bold to be and when to ask first.',
     href: '/blog/agent-modeling-101',
     linkLabel: 'Agent modeling 101',
   },
@@ -251,10 +265,11 @@ export function LandingPage() {
       <section className={styles.workspaceSection} data-reveal>
         <div className={styles.workspaceCopy}>
           <span className={styles.eyebrow}>The shared workspace</span>
-          <h2>Raise real assistants, not throwaway agents.</h2>
+          <h2>Raise team assistants with memory, skills, and a place to work.</h2>
           <p>
-            Agor gives your team one place to launch assistants, teach them the workflows that
-            matter, coordinate live work, and turn the patterns that work into shared muscle.
+            Give each assistant a durable identity: shared memory, reusable skills, MCP connections,
+            gateway channels, schedules, and a configurable style of agency. Teach them
+            conversationally, then let the useful patterns compound for the whole team.
           </p>
           <div className={styles.workspaceScreenshot}>
             {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
