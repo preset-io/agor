@@ -126,12 +126,12 @@ const trustItems = [
   },
   {
     label: 'No frontier lock-in',
-    body: 'Claude Code, Codex, Gemini, Copilot, OpenCode — pick the best harness per session, on your own provider subscription.',
+    body: 'Claude Code, Codex, Gemini, Copilot, OpenCode. Pick the best harness per session, on your own provider subscription.',
     href: '/guide/sdk-comparison',
   },
   {
     label: 'MCP-native',
-    body: 'Anything you can do, an agent can do too — over Agor’s own MCP server.',
+    body: 'Anything you can do, an agent can do too, over Agor’s own MCP server.',
     href: '/guide/internal-mcp',
   },
   {
@@ -275,7 +275,7 @@ export function LandingPage() {
               </Link>
             </div>
             <p className={styles.heroMeta}>
-              Open source — try it today with a 3-minute local install.
+              Open source. Try it today with a 3-minute local install.
             </p>
           </div>
           <div data-reveal style={revealDelay(1)}>
@@ -303,8 +303,8 @@ export function LandingPage() {
           ))}
         </ul>
         <p className={styles.harnessNote}>
-          Bring your own provider and subscription. Pick the best harness per session — no lock-in,
-          wrapped in a web workspace that leaves the terminal behind.
+          Bring your own provider and subscription. Pick the best harness per session, no lock-in.
+          All in a web workspace that leaves the terminal behind.
         </p>
       </section>
 
@@ -321,8 +321,7 @@ export function LandingPage() {
             <li>
               <strong>Live presence</strong>
               <span>
-                See teammates’ cursors, comments, and reactions as work happens — not after the
-                fact.
+                See teammates’ cursors, comments, and reactions as work happens, not after the fact.
               </span>
             </li>
             <li>
@@ -381,7 +380,7 @@ export function LandingPage() {
           <p>
             One-off prompts don’t compound. In Agor, assistants have durable identities your team
             can teach conversationally, then equip with memory, tools, channels, and schedules as
-            they grow — so what works for one person finally reaches the whole team.
+            they grow, so what works for one person finally reaches the whole team.
           </p>
         </div>
         <div className={styles.featureGrid}>
