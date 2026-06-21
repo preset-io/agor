@@ -92,7 +92,7 @@ const board: Board = {
       type: 'zone',
       x: 1580,
       y: 80,
-      width: 1120,
+      width: 1400,
       height: 1180,
       label: '🤖 Assistants + artifacts',
       borderColor: '#f472b6',
@@ -106,10 +106,10 @@ const board: Board = {
     },
     'app-usage-cockpit': {
       type: 'app',
-      x: 2170,
-      y: 780,
-      width: 520,
-      height: 330,
+      x: 2180,
+      y: 760,
+      width: 780,
+      height: 495,
       title: 'Agent cost cockpit artifact',
       description: 'Published by an assistant as a live board artifact.',
       template: 'react',
@@ -193,6 +193,64 @@ const board: Board = {
           footer span { display:flex; align-items:center; gap:5px; }
           i { width:8px; height:8px; border-radius:99px; display:inline-block; }
           .burn-dot { background:#14b8a6; }.claude-dot { background:#a78bfa; }.codex-dot { background:#f59e0b; }
+        `,
+      },
+    },
+
+    'app-ai-cost-tracker': {
+      type: 'app',
+      x: 2180,
+      y: 430,
+      width: 520,
+      height: 300,
+      title: 'AI cost tracker artifact',
+      description: 'Companion cost dashboard published by an assistant.',
+      template: 'react',
+      showEditor: false,
+      showConsole: false,
+      entryFile: '/App.js',
+      files: {
+        '/App.js': `
+          import './styles.css';
+
+          const rows = [
+            ['Claude Code', '$18.72', '43%', '#a78bfa'],
+            ['Codex', '$12.90', '31%', '#14b8a6'],
+            ['Other agents', '$10.56', '26%', '#f59e0b'],
+          ];
+
+          export default function App() {
+            return (
+              <main className="cost-card">
+                <header><span>AI spend</span><b>Live</b></header>
+                <section className="hero"><small>today</small><strong>$42.18</strong><em>4.7m tokens · 19 runs</em></section>
+                <div className="meter"><i /></div>
+                <div className="rows">
+                  {rows.map(([label, cost, pct, color]) => (
+                    <div className="row" key={label} style={{ '--color': color }}>
+                      <span><i />{label}</span><b>{cost}</b><small>{pct}</small>
+                    </div>
+                  ))}
+                </div>
+              </main>
+            );
+          }
+        `,
+        '/styles.css': `
+          body { margin:0; background:#07111f; color:#eaffff; font-family: Inter, ui-sans-serif, system-ui; }
+          .cost-card { min-height:100vh; box-sizing:border-box; padding:18px; background:radial-gradient(circle at 85% 0%, rgba(251,191,36,.28), transparent 34%), linear-gradient(135deg,#08111f,#111827 58%,#241005); border:1px solid rgba(255,255,255,.14); }
+          header { display:flex; justify-content:space-between; align-items:center; font-weight:900; letter-spacing:-.02em; }
+          header span { font-size:22px; } header b { color:#06251f; background:#fde047; padding:4px 9px; border-radius:999px; font-size:12px; }
+          .hero { margin:14px 0; padding:14px; border-radius:18px; background:rgba(15,23,42,.78); border:1px solid rgba(255,255,255,.09); }
+          small { color:#a7f3d0; text-transform:uppercase; font-size:10px; letter-spacing:.12em; }
+          strong { display:block; font-size:39px; line-height:1; margin:5px 0; }
+          em { color:#cbd5e1; font-style:normal; font-size:12px; }
+          .meter { height:10px; overflow:hidden; border-radius:99px; background:rgba(255,255,255,.10); margin:14px 0; }
+          .meter i { display:block; width:78%; height:100%; border-radius:99px; background:linear-gradient(90deg,#a78bfa,#14b8a6,#f59e0b); box-shadow:0 0 20px rgba(20,184,166,.42); }
+          .rows { display:grid; gap:8px; }
+          .row { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:10px; padding:10px; border-radius:14px; background:rgba(2,6,23,.55); border:1px solid rgba(255,255,255,.08); }
+          .row span { display:flex; align-items:center; gap:8px; font-size:12px; } .row i { width:8px; height:8px; border-radius:99px; background:var(--color); box-shadow:0 0 12px var(--color); }
+          .row b { font-size:14px; } .row small { color:#cbd5e1; }
         `,
       },
     },
