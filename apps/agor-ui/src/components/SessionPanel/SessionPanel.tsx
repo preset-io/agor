@@ -617,6 +617,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     // WebSocket event populates the queue panel for queued prompts.
     promptRef.current?.clear();
     onSendPrompt?.(session.session_id, promptToSend, permissionMode);
+
+    // Re-engage the bottom lock so a scrolled-up user follows their just-sent
+    // message and the streaming reply (behavior 3). `scrollToBottom` is the
+    // function ConversationView exposed via onScrollRef.
+    scrollToBottom?.();
   };
 
   const handleStop = async () => {

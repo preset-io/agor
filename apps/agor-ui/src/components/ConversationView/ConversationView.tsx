@@ -14,7 +14,8 @@ import type { AgorClient, Message, PermissionScope, SessionID, User } from '@ago
 import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useStickToBottom } from 'use-stick-to-bottom';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
@@ -27,8 +28,6 @@ const EMPTY_STREAMING_MESSAGES = new Map();
 // reference for tasks whose messages haven't been loaded — otherwise `|| []`
 // would mint a fresh array on every render and thrash TaskBlock's React.memo.
 const EMPTY_MESSAGES: Message[] = [];
-const INITIAL_AUTO_SCROLL_STABLE_FRAMES = 3;
-const INITIAL_AUTO_SCROLL_MAX_FRAMES = 90;
 
 export interface ConversationViewProps {
   /**
@@ -138,150 +137,43 @@ export const ConversationView = React.memo<ConversationViewProps>(
     genealogy,
     assistantEmoji,
   }) => {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const contentRef = useRef<HTMLDivElement>(null);
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
 
-    // true when the user has intentionally scrolled away from the bottom;
-    // auto-scroll is suppressed while this is set. We only set it after an
-    // explicit scroll interaction, not merely because layout growth made the
-    // viewport no longer be near the bottom.
-    const userScrolledUpRef = useRef(false);
-    const userScrollIntentRef = useRef(false);
-    const initialTasksScrollDoneRef = useRef(false);
-    const initialMessagesScrollDoneForTaskRef = useRef<string | null>(null);
-    const scrollLifecycleKeyRef = useRef<string | null>(null);
-    const pendingAutoScrollRafRef = useRef<number | null>(null);
-    const pendingAutoScrollResizeObserverRef = useRef<ResizeObserver | null>(null);
+    // use-stick-to-bottom owns the entire auto-scroll lifecycle. It keeps a
+    // PERSISTENT ResizeObserver on the content element, so any late content
+    // growth (images, lazy markdown/code, fonts, async tool output) keeps the
+    // viewport pinned while the user is at bottom — and stops the moment the
+    // user scrolls up. `scrollRef` goes on the scroll container, `contentRef`
+    // on the inner content wrapper. `initial`/`resize: 'instant'` avoids
+    // smooth-scroll animation jank on first paint and on layout growth.
+    const { scrollRef, contentRef, scrollToBottom, isAtBottom } = useStickToBottom({
+      initial: 'instant',
+      resize: 'instant',
+    });
 
-    // Within 20px of the end counts as "at the bottom". Tight enough that a
-    // mid-swipe scroll won't accidentally keep auto-scroll on, but loose enough
-    // to handle sub-pixel rounding.
-    const isNearBottom = useCallback(() => {
-      if (!containerRef.current) return true;
-      const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-      return scrollHeight - scrollTop - clientHeight < 20;
-    }, []);
+    // Public scroll-to-bottom exposed via onScrollRef (button clicks) and the
+    // resume-on-send wiring in SessionPanel. Wrap to a plain `() => void` so we
+    // don't leak the library's optional ScrollToBottom options to callers.
+    const handleScrollToBottom = useCallback(() => {
+      scrollToBottom();
+    }, [scrollToBottom]);
 
-    // Internal scroll used by auto-scroll effects. Does NOT reset user intent.
-    const doAutoScroll = useCallback(() => {
-      if (containerRef.current) {
-        containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      }
-    }, []);
-
-    const cancelPendingAutoScroll = useCallback(() => {
-      if (pendingAutoScrollRafRef.current !== null) {
-        cancelAnimationFrame(pendingAutoScrollRafRef.current);
-        pendingAutoScrollRafRef.current = null;
-      }
-      if (pendingAutoScrollResizeObserverRef.current) {
-        pendingAutoScrollResizeObserverRef.current.disconnect();
-        pendingAutoScrollResizeObserverRef.current = null;
-      }
-    }, []);
-
-    const scheduleGuardedAutoScroll = useCallback(
-      ({ waitForStableLayout = false }: { waitForStableLayout?: boolean } = {}) => {
-        cancelPendingAutoScroll();
-        const lifecycleKey = scrollLifecycleKeyRef.current;
-        const contentElement = contentRef.current;
-        let lastScrollHeight = -1;
-        let stableFrameCount = 0;
-        let totalFrameCount = 0;
-
-        const isAutoScrollStillAllowed = () =>
-          scrollLifecycleKeyRef.current === lifecycleKey &&
-          !userScrolledUpRef.current &&
-          !!containerRef.current;
-
-        const disconnectResizeObserver = () => {
-          if (pendingAutoScrollResizeObserverRef.current) {
-            pendingAutoScrollResizeObserverRef.current.disconnect();
-            pendingAutoScrollResizeObserverRef.current = null;
-          }
-        };
-
-        function scheduleNextFrame() {
-          if (pendingAutoScrollRafRef.current !== null) return;
-          pendingAutoScrollRafRef.current = requestAnimationFrame(runAutoScrollFrame);
-        }
-
-        function runAutoScrollFrame() {
-          pendingAutoScrollRafRef.current = null;
-
-          if (!isAutoScrollStillAllowed()) {
-            disconnectResizeObserver();
-            return;
-          }
-
-          doAutoScroll();
-
-          if (!waitForStableLayout || !containerRef.current) {
-            disconnectResizeObserver();
-            return;
-          }
-
-          const currentScrollHeight = containerRef.current.scrollHeight;
-          totalFrameCount += 1;
-
-          if (currentScrollHeight === lastScrollHeight) {
-            stableFrameCount += 1;
-          } else {
-            lastScrollHeight = currentScrollHeight;
-            stableFrameCount = 0;
-          }
-
-          if (
-            stableFrameCount >= INITIAL_AUTO_SCROLL_STABLE_FRAMES ||
-            totalFrameCount >= INITIAL_AUTO_SCROLL_MAX_FRAMES
-          ) {
-            disconnectResizeObserver();
-            return;
-          }
-
-          scheduleNextFrame();
-        }
-
-        if (waitForStableLayout && contentElement && typeof ResizeObserver !== 'undefined') {
-          pendingAutoScrollResizeObserverRef.current = new ResizeObserver(() => {
-            stableFrameCount = 0;
-            scheduleNextFrame();
-          });
-          pendingAutoScrollResizeObserverRef.current.observe(contentElement);
-        }
-
-        scheduleNextFrame();
-      },
-      [cancelPendingAutoScroll, doAutoScroll]
-    );
-
-    // Public scroll-to-bottom exposed via onScrollRef (button clicks). Resets
-    // user intent so auto-scroll resumes after an explicit "go to bottom".
-    const scrollToBottom = useCallback(() => {
-      userScrolledUpRef.current = false;
-      userScrollIntentRef.current = false;
-      if (containerRef.current) {
-        containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      }
-    }, []);
-
-    // Scroll to top: mark user as reading so auto-scroll doesn't yank them back.
+    // Scroll to top. The library's persistent observer stops following once the
+    // viewport leaves the bottom, so a plain scrollTop = 0 is enough — no manual
+    // intent flag needed.
     const scrollToTop = useCallback(() => {
-      userScrolledUpRef.current = true;
-      userScrollIntentRef.current = true;
-      if (containerRef.current) {
-        containerRef.current.scrollTop = 0;
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = 0;
       }
-    }, []);
+    }, [scrollRef]);
 
     // Expose scroll functions to parent
     useEffect(() => {
       if (onScrollRef) {
-        onScrollRef(scrollToBottom, scrollToTop);
+        onScrollRef(handleScrollToBottom, scrollToTop);
       }
-    }, [onScrollRef, scrollToBottom, scrollToTop]);
+    }, [onScrollRef, handleScrollToBottom, scrollToTop]);
 
     const { handle: reactiveSession, state: reactiveState } = useSharedReactiveSession(
       client,
@@ -293,19 +185,20 @@ export const ConversationView = React.memo<ConversationViewProps>(
     );
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
 
-    useLayoutEffect(() => {
-      const lifecycleKey = isActive && sessionId ? `${sessionId}:active` : null;
-      if (scrollLifecycleKeyRef.current === lifecycleKey) return;
-
-      scrollLifecycleKeyRef.current = lifecycleKey;
-      cancelPendingAutoScroll();
-      initialTasksScrollDoneRef.current = false;
-      initialMessagesScrollDoneForTaskRef.current = null;
-      userScrolledUpRef.current = false;
-      userScrollIntentRef.current = false;
-    }, [cancelPendingAutoScroll, isActive, sessionId]);
-
-    useEffect(() => cancelPendingAutoScroll, [cancelPendingAutoScroll]);
+    // Land at the bottom on panel open / session switch.
+    //
+    // ConversationView stays MOUNTED while the panel is closed (SessionPanel
+    // renders it with display:none), so the library's `initial` scroll fires
+    // once at mount while the view is hidden (0 height ⇒ no-op) and does NOT
+    // re-run when the panel later opens. This effect re-engages the bottom lock
+    // whenever the view becomes active or the session changes; the library's
+    // persistent observer then follows lazy task/message growth from there
+    // (covers behaviors 1, 2, 4).
+    useEffect(() => {
+      if (isActive && sessionId) {
+        scrollToBottom();
+      }
+    }, [isActive, sessionId, scrollToBottom]);
 
     // Queued tasks belong to the queue drawer, not the conversation. They
     // haven't run yet — there's no message_range, no user-message row, no
@@ -338,9 +231,12 @@ export const ConversationView = React.memo<ConversationViewProps>(
     });
 
     // When a new task arrives (i.e. the *last* task id changes), expand it.
-    // If the user is still at the bottom, collapse older tasks and follow the new one;
-    // if the user has scrolled away, preserve what they were reading. We deliberately depend on
-    // `lastTaskId` rather than `tasks` so that:
+    // If the user is still at the bottom, collapse older tasks and follow the
+    // new one; if the user has scrolled away, preserve what they were reading.
+    // Following is handled by the library's persistent observer — a new last
+    // task while `isAtBottom` re-pins automatically, so we only need to manage
+    // the expand state here. We deliberately depend on `lastTaskId` rather than
+    // `tasks` so that:
     //   1. unrelated re-renders don't fire this effect (`tasks` still gets
     //      a new reference whenever any task patch lands — the useMemo bails
     //      out only when the *upstream* `reactiveState.tasks` array is
@@ -353,52 +249,33 @@ export const ConversationView = React.memo<ConversationViewProps>(
       if (!isActive || !lastTaskId) return;
       setExpandedTaskIds((prev) => {
         if (prev.has(lastTaskId)) return prev;
-        if (userScrolledUpRef.current) {
+        if (!isAtBottom) {
+          // User has scrolled away — just expand the new task, keep older ones
+          // visible so we don't disturb what they're reading.
           const next = new Set(prev);
           next.add(lastTaskId);
           return next;
         }
-        scheduleGuardedAutoScroll();
+        // At bottom — collapse older tasks and focus the new one.
         return new Set([lastTaskId]);
       });
-    }, [isActive, lastTaskId, scheduleGuardedAutoScroll]);
-
-    // Initial-open scroll phase 1: once the task list bootstrap has completed
-    // and the task DOM is present, land near the latest task. This is separate
-    // from streaming auto-scroll and only runs once per opened session.
-    useEffect(() => {
-      if (initialTasksScrollDoneRef.current) return;
-      if (!isActive || loading || tasks.length === 0) return;
-
-      initialTasksScrollDoneRef.current = true;
-      scheduleGuardedAutoScroll({ waitForStableLayout: true });
-    }, [isActive, loading, tasks.length, scheduleGuardedAutoScroll]);
+    }, [isActive, lastTaskId, isAtBottom]);
 
     // Handle task expand/collapse. Single stable callback shared by every
     // TaskBlock — the callback takes `taskId` so we don't need to mint a
     // per-task closure (which previously rebuilt on every render and broke
     // TaskBlock's React.memo for the entire task list).
-    const handleTaskExpandChange = useCallback(
-      (taskId: string, expanded: boolean) => {
-        // Treat explicit task expand/collapse as user intent. In particular,
-        // stop any initial-load layout stabilization loop so a large task
-        // finishing render does not yank the viewport after the user has begun
-        // interacting with the conversation.
-        userScrolledUpRef.current = true;
-        userScrollIntentRef.current = true;
-        cancelPendingAutoScroll();
-        setExpandedTaskIds((prev) => {
-          const next = new Set(prev);
-          if (expanded) {
-            next.add(taskId);
-          } else {
-            next.delete(taskId);
-          }
-          return next;
-        });
-      },
-      [cancelPendingAutoScroll]
-    );
+    const handleTaskExpandChange = useCallback((taskId: string, expanded: boolean) => {
+      setExpandedTaskIds((prev) => {
+        const next = new Set(prev);
+        if (expanded) {
+          next.add(taskId);
+        } else {
+          next.delete(taskId);
+        }
+        return next;
+      });
+    }, []);
 
     // Stable load/unload callbacks. The previous inline arrows were minted on
     // every ConversationView render → every TaskBlock saw new `onLoadTaskMessages`
@@ -420,83 +297,9 @@ export const ConversationView = React.memo<ConversationViewProps>(
       [reactiveSession]
     );
 
-    // Track user scroll intent separately from scroll position. The scroll event
-    // also fires for programmatic scrolls and browser/layout adjustments while a
-    // large conversation is still rendering; treating every non-bottom scroll as
-    // user intent can suppress the second initial-load scroll before latest
-    // messages finish loading. Only explicit scroll inputs are allowed to break
-    // the bottom lock.
-    const hasConversation = tasks.length > 0;
-    // biome-ignore lint/correctness/useExhaustiveDependencies: hasConversation re-triggers when the container mounts
-    useEffect(() => {
-      const container = containerRef.current;
-      if (!container) return;
-
-      const markUserScrollIntent = () => {
-        userScrollIntentRef.current = true;
-      };
-      const handleKeyDown = (event: KeyboardEvent) => {
-        if (
-          event.key === 'ArrowUp' ||
-          event.key === 'ArrowDown' ||
-          event.key === 'PageUp' ||
-          event.key === 'PageDown' ||
-          event.key === 'Home' ||
-          event.key === 'End' ||
-          event.key === ' '
-        ) {
-          markUserScrollIntent();
-        }
-      };
-      const handleScroll = () => {
-        if (isNearBottom()) {
-          userScrolledUpRef.current = false;
-          userScrollIntentRef.current = false;
-          return;
-        }
-
-        if (userScrollIntentRef.current) {
-          userScrolledUpRef.current = true;
-        }
-      };
-
-      container.addEventListener('wheel', markUserScrollIntent, { passive: true });
-      container.addEventListener('touchstart', markUserScrollIntent, { passive: true });
-      container.addEventListener('pointerdown', markUserScrollIntent);
-      container.addEventListener('keydown', handleKeyDown);
-      container.addEventListener('scroll', handleScroll, { passive: true });
-      return () => {
-        container.removeEventListener('wheel', markUserScrollIntent);
-        container.removeEventListener('touchstart', markUserScrollIntent);
-        container.removeEventListener('pointerdown', markUserScrollIntent);
-        container.removeEventListener('keydown', handleKeyDown);
-        container.removeEventListener('scroll', handleScroll);
-      };
-    }, [isNearBottom, hasConversation]);
-
-    // Auto-scroll during streaming — only if the user has not scrolled away.
-    // biome-ignore lint/correctness/useExhaustiveDependencies: We want to scroll on streaming change
-    useEffect(() => {
-      if (isActive && !userScrolledUpRef.current) {
-        doAutoScroll();
-      }
-    }, [allStreamingMessages, isActive]);
-
-    const latestTaskExpanded = !!lastTaskId && expandedTaskIds.has(lastTaskId);
-    const latestTaskMessagesLoaded =
-      !!lastTaskId && latestTaskExpanded && !!currentReactiveState?.loadedTaskIds.has(lastTaskId);
-
-    // Initial-open scroll phase 2: when the latest expanded task's lazy message
-    // load finishes, scroll again so the newest message is visible. The
-    // userScrolledUpRef guard is checked in the RAF callback so a manual scroll
-    // between load completion and paint still wins.
-    useEffect(() => {
-      if (!isActive || !lastTaskId || !latestTaskMessagesLoaded) return;
-      if (initialMessagesScrollDoneForTaskRef.current === lastTaskId) return;
-
-      initialMessagesScrollDoneForTaskRef.current = lastTaskId;
-      scheduleGuardedAutoScroll({ waitForStableLayout: true });
-    }, [isActive, lastTaskId, latestTaskMessagesLoaded, scheduleGuardedAutoScroll]);
+    // Streaming auto-scroll, manual scroll-away detection, and lazy-content
+    // re-pinning are all handled by use-stick-to-bottom's persistent
+    // ResizeObserver — no manual scroll listeners or streaming effect needed.
 
     if (error) {
       // Deterministic escape hatch when auto-recovery (socket-reconnect resync,
@@ -637,7 +440,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
     return (
       <div
-        ref={containerRef}
+        ref={scrollRef}
         data-testid="conversation-scroll-container"
         style={{
           flex: 1,
