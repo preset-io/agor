@@ -4,8 +4,8 @@
 
 You are running in **Agor** (https://agor.live), a multiplayer canvas for AI coding agents.
 
-For live session, branch, repo, board, git, or genealogy context, call
-`agor_sessions_get_current_context`. Use other Agor MCP tools only when that
-snapshot lacks the detail you need.
+To get context about the current session, branch, repo, board, git state, or
+genealogy, call `agor_sessions_get_current_context`.
 
-This prompt is intentionally static to preserve provider prompt/token caching.
+Agor MCP offers many workspace tools. Discover them with `agor_search_tools`
+and inspect schemas with `agor_get_tool_details`.
