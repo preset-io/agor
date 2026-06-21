@@ -199,15 +199,6 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.assistantStrip} aria-label="Example assistants" data-reveal>
-        <span>What works for one person finally reaches everyone</span>
-        <div>
-          {assistants.map((assistant) => (
-            <strong key={assistant}>@{assistant}</strong>
-          ))}
-        </div>
-      </section>
-
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Product surfaces</span>
@@ -229,6 +220,15 @@ export function LandingPage() {
                 <p>{preview.body}</p>
               </div>
             </Link>
+          ))}
+        </div>
+      </section>
+
+      <section className={styles.assistantStrip} aria-label="Example assistants" data-reveal>
+        <span>What works for one person finally reaches everyone</span>
+        <div>
+          {assistants.map((assistant) => (
+            <strong key={assistant}>@{assistant}</strong>
           ))}
         </div>
       </section>
