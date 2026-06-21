@@ -187,10 +187,6 @@ export function LandingPage() {
               <br />
               Bring the team and agents together.
             </p>
-            <p className={styles.heroDescription}>
-              Agor gives every agent run a place to live: branches, sessions, dev environments,
-              prompts, and teammates together on one shared canvas.
-            </p>
             <div className={styles.heroActions}>
               <Link href="/guide" className={styles.primaryButton}>
                 Start with the guide

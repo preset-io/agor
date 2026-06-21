@@ -112,17 +112,9 @@
   margin: 24px 0 0;
   color: var(--landing-ink);
   font-size: clamp(1.18rem, 1.8vw, 1.55rem);
-  font-weight: 760;
-  line-height: 1.34;
+  font-weight: 620;
+  line-height: 1.42;
   letter-spacing: -0.025em;
-}
-
-.heroDescription {
-  max-width: 590px;
-  margin: 28px 0 0;
-  color: var(--landing-muted);
-  font-size: 1.16rem;
-  line-height: 1.68;
 }
 
 .heroActions {
@@ -701,10 +693,6 @@
 
   .heroProvocation {
     font-size: 1.16rem;
-  }
-
-  .heroDescription {
-    font-size: 1.04rem;
   }
 
   .heroActions,
