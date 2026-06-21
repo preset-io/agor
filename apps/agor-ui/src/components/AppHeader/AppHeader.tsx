@@ -1,4 +1,5 @@
 import type {
+  ActiveUser,
   AgorClient,
   Artifact,
   Board,
@@ -35,6 +36,10 @@ export interface AppHeaderProps {
   presenceClient?: AgorClient | null;
   presenceUsers?: User[];
   currentUserId?: string;
+  /** Demo/screenshot-only fixture: render static presence while keeping AppHeader chrome. */
+  staticActiveUsers?: ActiveUser[];
+  /** Demo/screenshot-only override for facepile composition. Normal product defaults remain in GlobalPresenceFacepile. */
+  presenceMaxVisible?: number;
   connected?: boolean;
   connecting?: boolean;
   onMenuClick?: () => void;
@@ -118,6 +123,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   presenceClient = null,
   presenceUsers = [],
   currentUserId,
+  staticActiveUsers,
+  presenceMaxVisible,
   connected = false,
   connecting = false,
   onCommentsClick,
@@ -278,6 +285,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           currentUser={user}
           boardById={boardById}
           onUserClick={onUserClick}
+          staticActiveUsers={staticActiveUsers}
+          maxVisible={presenceMaxVisible}
         />
         <GlobalSearch
           currentUserId={currentUserId}

@@ -10,13 +10,14 @@ The UI fixture lives at:
 /demo/marketing-screenshots
 ```
 
-It is intentionally hardcoded and daemon-free. `apps/agor-ui/src/App.tsx` short-circuits this explicit route before auth, client, or live workspace data hooks mount, so the fake board state cannot leak into normal production workspace paths. Presence and cursor screenshot data is passed through explicit `staticActiveUsers` / `staticCursors` demo props on the base components.
+It is intentionally hardcoded and daemon-free. `apps/agor-ui/src/App.tsx` short-circuits this explicit route before auth, client, or live workspace data hooks mount, so the fake state cannot leak into normal production workspace paths. The staging fixture uses the real `AppHeader`, `GlobalPresenceFacepile`/`Facepile`, `SessionCanvas`, zones, branch cards, generic cards, markdown notes, and spatial comments. Only the things that are hard to produce deterministically for screenshots — multiple logged-in users and their remote cursors — are injected through explicit `staticActiveUsers` / `staticCursors` demo props.
 
 ## What it renders
 
-- Polished navbar using the real `GlobalPresenceFacepile`/`Facepile` components with fixed demo users
-- Large board canvas with zones, branch cards, session progress, comments, artifacts, and the real `RemoteCursorLayer` with fixed demo cursors
-- Left activity/sidebar and event stream overlay for a dense landing-page composition
+- Product navbar via `AppHeader`, including board switcher, search, connection state, comments badge, and user menu
+- Product facepile behavior via `GlobalPresenceFacepile` / `Facepile` with 12 fixed demo users; normal max/overflow behavior is preserved unless explicitly overridden
+- Product board via `SessionCanvas`, with real zone nodes, branch cards, generic cards, markdown notes, and a spatial comment
+- Product cursor rendering via `RemoteCursorLayer` with fixed demo cursor positions
 
 ## Captured files
 

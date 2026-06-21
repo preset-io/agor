@@ -18,7 +18,7 @@ interface GlobalPresenceFacepileProps {
   ) => void;
   /** Demo/screenshot-only override: render a fixed facepile without live socket presence. */
   staticActiveUsers?: ActiveUser[];
-  /** Override visible avatar count for demo/screenshot compositions. */
+  /** Optional screenshot/demo composition override. Omit to preserve the product default cap. */
   maxVisible?: number;
 }
 

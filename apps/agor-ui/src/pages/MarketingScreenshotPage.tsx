@@ -1,53 +1,32 @@
-import type { ActiveUser, Board, BoardID, User } from '@agor-live/client';
-import {
-  ApiOutlined,
-  BranchesOutlined,
-  CheckCircleFilled,
-  ClockCircleOutlined,
-  CodeOutlined,
-  CommentOutlined,
-  DeploymentUnitOutlined,
-  ForkOutlined,
-  GithubOutlined,
-  ThunderboltFilled,
-} from '@ant-design/icons';
-import { Badge, ConfigProvider, Progress, Tag } from 'antd';
-import { useEffect } from 'react';
+import type {
+  ActiveUser,
+  Board,
+  BoardComment,
+  BoardEntityObject,
+  BoardID,
+  Branch,
+  BranchID,
+  CardWithType,
+  MCPServer,
+  Repo,
+  Session,
+  User,
+} from '@agor-live/client';
+import { SessionStatus } from '@agor-live/client';
+import { App as AntdApp, ConfigProvider, Layout, theme } from 'antd';
+import { useEffect, useMemo } from 'react';
 import { ReactFlowProvider } from 'reactflow';
-import { BRAND, brandMarkHref } from '../branding/brand';
-import { GlobalPresenceFacepile } from '../components/AppHeader/GlobalPresenceFacepile';
-import {
-  RemoteCursorLayer,
-  type StaticRemoteCursor,
-} from '../components/SessionCanvas/canvas/RemoteCursorLayer';
+import { AppHeader } from '../components/AppHeader';
+import { SessionCanvas } from '../components/SessionCanvas';
+import type { StaticRemoteCursor } from '../components/SessionCanvas/canvas/RemoteCursorLayer';
+import { ConnectionProvider } from '../contexts/ConnectionContext';
 import './MarketingScreenshotPage.css';
 
-type AgentStatus = 'running' | 'review' | 'done' | 'blocked';
+const now = '2026-06-21T06:00:00.000Z';
+const boardId = '019ee88d-demo-board-0000-000000000001' as BoardID;
+const repoId = '019ee88d-demo-repo-0000-000000000001';
 
-interface DemoBranch {
-  id: string;
-  emoji: string;
-  title: string;
-  repo: string;
-  zone: 'ship' | 'review' | 'assistants';
-  x: number;
-  y: number;
-  accent: string;
-  pr?: string;
-  issue?: string;
-  env?: string;
-  sessions: Array<{
-    agent: 'Claude' | 'Codex' | 'Gemini' | 'OpenCode';
-    status: AgentStatus;
-    label: string;
-    progress: number;
-  }>;
-  notes: string[];
-}
-
-const DEMO_BOARD_ID = '019ee88d-demo-board' as BoardID;
-
-const USERS = [
+const users = [
   { user_id: 'demo-user-max', name: 'Max', email: 'max@preset.io', emoji: '🧑‍🚀' },
   { user_id: 'demo-user-ari', name: 'Ari', email: 'ari@example.com', emoji: '🧠' },
   { user_id: 'demo-user-mina', name: 'Mina', email: 'mina@example.com', emoji: '🎨' },
@@ -62,281 +41,442 @@ const USERS = [
   { user_id: 'demo-user-ivy', name: 'Ivy', email: 'ivy@example.com', emoji: '🌿' },
 ] as User[];
 
-const DEMO_BOARD = {
-  board_id: DEMO_BOARD_ID,
+const board: Board = {
+  board_id: boardId,
   name: 'Launch board',
+  slug: 'launch-board',
+  description: 'Marketing screenshot staging board built from product canvas components.',
   icon: '🚢',
-} as Board;
+  color: '#14b8a6',
+  access_mode: 'shared',
+  created_at: now,
+  last_updated: now,
+  created_by: users[0].user_id,
+  archived: false,
+  url: '/demo/marketing-screenshots',
+  background_color:
+    'radial-gradient(circle at 18% 10%, rgba(20,184,166,0.18), transparent 28%), radial-gradient(circle at 80% 20%, rgba(139,92,246,0.16), transparent 32%), linear-gradient(135deg, #07111d 0%, #090d1a 52%, #0d1020 100%)',
+  objects: {
+    'zone-ship': {
+      type: 'zone',
+      x: 80,
+      y: 70,
+      width: 820,
+      height: 430,
+      label: '🚢 Ship this week',
+      borderColor: '#14b8a6',
+      backgroundColor: 'rgba(20,184,166,0.10)',
+      locked: true,
+      trigger: {
+        behavior: 'show_picker',
+        agent: 'claude-code',
+        template: 'Polish {{branch.name}} for the landing-page screenshot crop.',
+      },
+    },
+    'zone-review': {
+      type: 'zone',
+      x: 940,
+      y: 80,
+      width: 520,
+      height: 420,
+      label: '🔎 Review lane',
+      borderColor: '#f59e0b',
+      backgroundColor: 'rgba(245,158,11,0.10)',
+      locked: true,
+      trigger: {
+        behavior: 'always_new',
+        agent: 'codex',
+        template: 'Run a security/docs pass on {{branch.name}} and leave concise review notes.',
+      },
+    },
+    'zone-assistants': {
+      type: 'zone',
+      x: 210,
+      y: 560,
+      width: 1120,
+      height: 390,
+      label: '🤖 Assistants + artifacts',
+      borderColor: '#8b5cf6',
+      backgroundColor: 'rgba(139,92,246,0.11)',
+      locked: true,
+      trigger: {
+        behavior: 'show_picker',
+        agent: 'gemini',
+        template: 'Turn this branch into an artifact or status summary for the board.',
+      },
+    },
+    'note-launch': {
+      type: 'markdown',
+      x: -290,
+      y: 90,
+      width: 320,
+      content:
+        '### Screenshot staging\n\nReal board, zone, branch, card, and markdown components. Only **presence** and **remote cursors** are fixed fixtures for capture.',
+    },
+    'note-terminal': {
+      type: 'markdown',
+      x: -290,
+      y: 350,
+      width: 320,
+      content: '```bash\npnpm -w agor session list\n✓ 7 running · 3 waiting · 19 done\n```',
+    },
+  },
+};
 
-const DEMO_BOARD_BY_ID = new Map<string, Board>([[DEMO_BOARD_ID, DEMO_BOARD]]);
+const repo: Repo = {
+  repo_id: repoId,
+  slug: 'preset-io/agor',
+  name: 'preset-io/agor',
+  repo_type: 'remote',
+  remote_url: 'https://github.com/preset-io/agor.git',
+  local_path: '/home/max/.agor/repos/preset-io/agor',
+  default_branch: 'main',
+  created_at: now,
+  updated_at: now,
+  created_by: users[0].user_id,
+  archived: false,
+} as Repo;
 
-const DEMO_ACTIVE_USERS: ActiveUser[] = USERS.map((user, index) => ({
+interface BranchFixture {
+  id: string;
+  name: string;
+  ref: string;
+  zoneId: string;
+  position: { x: number; y: number };
+  issue: string;
+  pr?: string;
+  notes: string;
+  env: { status: string; url: string };
+  sessions: ReadonlyArray<readonly [string, string, string, string]>;
+}
+
+const branchFixtures = [
+  {
+    id: '019ee88d-demo-branch-0000-000000000101',
+    name: 'landing-hero-polish',
+    ref: 'landing-hero-polish',
+    zoneId: 'zone-ship',
+    position: { x: 50, y: 66 },
+    issue: 'https://github.com/preset-io/agor/issues/214',
+    pr: 'https://github.com/preset-io/agor/pull/1248',
+    notes:
+      '**Goal:** make the homepage crop feel alive. Hero copy tightened, CTA contrast updated, final crop pending.',
+    env: { status: 'running', url: 'http://localhost:5174' },
+    sessions: [
+      ['Claude', 'claude-code', SessionStatus.RUNNING, 'tightening hero copy'],
+      ['Codex', 'codex', SessionStatus.COMPLETED, 'responsive CSS pass'],
+      ['Gemini', 'gemini', SessionStatus.RUNNING, 'visual critique'],
+    ],
+  },
+  {
+    id: '019ee88d-demo-branch-0000-000000000102',
+    name: 'multiplayer-presence',
+    ref: 'multiplayer-presence',
+    zoneId: 'zone-ship',
+    position: { x: 470, y: 118 },
+    issue: 'https://linear.app/agor/issue/AG-220',
+    pr: 'https://github.com/preset-io/agor/pull/1251',
+    notes:
+      'Static fixture drives the live facepile/cursor components for screenshot reliability. Product presence behavior remains unchanged.',
+    env: { status: 'running', url: 'http://localhost:9182' },
+    sessions: [
+      ['Codex', 'codex', SessionStatus.RUNNING, 'cursor layer fixture'],
+      ['Claude', 'claude-code', SessionStatus.RUNNING, 'facepile polish'],
+    ],
+  },
+  {
+    id: '019ee88d-demo-branch-0000-000000000103',
+    name: 'rbac-terminal-safe-defaults',
+    ref: 'rbac-terminal-safe-defaults',
+    zoneId: 'zone-review',
+    position: { x: 44, y: 78 },
+    issue: 'https://github.com/preset-io/agor/issues/42',
+    pr: 'https://github.com/preset-io/agor/pull/1254',
+    notes:
+      'Review lane fan-out: sudoers warning copy drafted, docs link attached, awaiting a second pass.',
+    env: { status: 'starting', url: 'http://localhost:3030' },
+    sessions: [
+      ['Claude', 'claude-code', SessionStatus.RUNNING, 'sudoers audit'],
+      ['OpenCode', 'opencode', SessionStatus.AWAITING_PERMISSION, 'waiting on ops note'],
+    ],
+  },
+  {
+    id: '019ee88d-demo-branch-0000-000000000104',
+    name: 'usage-dashboard-artifact',
+    ref: 'usage-dashboard-artifact',
+    zoneId: 'zone-assistants',
+    position: { x: 60, y: 72 },
+    issue: 'https://linear.app/agor/issue/AG-198',
+    pr: 'https://github.com/preset-io/agor/pull/1244',
+    notes:
+      'Agent-authored dashboard card is pinned below the branch. Synthetic data is OK for screenshot staging.',
+    env: { status: 'running', url: 'http://localhost:7341' },
+    sessions: [
+      ['Gemini', 'gemini', SessionStatus.COMPLETED, 'chart artifact published'],
+      ['Codex', 'codex', SessionStatus.RUNNING, 'wire cost cards'],
+    ],
+  },
+  {
+    id: '019ee88d-demo-branch-0000-000000000105',
+    name: 'assistant-heartbeat',
+    ref: 'assistant-heartbeat',
+    zoneId: 'zone-assistants',
+    position: { x: 545, y: 98 },
+    issue: 'https://linear.app/agor/issue/BOT-17',
+    notes:
+      'Scheduled assistant heartbeat: daily backlog scan, Slack digest ready, three branches spawned for follow-up.',
+    env: { status: 'stopped', url: 'http://localhost:7777' },
+    sessions: [
+      ['Claude', 'claude-code', SessionStatus.RUNNING, 'daily backlog scan'],
+      ['Codex', 'codex', SessionStatus.COMPLETED, 'triage report'],
+      ['Gemini', 'gemini', SessionStatus.RUNNING, 'summarize risks'],
+    ],
+  },
+] as const satisfies readonly BranchFixture[];
+
+const branches = branchFixtures.map(
+  (fixture, index) =>
+    ({
+      branch_id: fixture.id as BranchID,
+      repo_id: repoId,
+      branch_unique_id: 1200 + index,
+      created_at: now,
+      updated_at: now,
+      created_by: users[index % users.length].user_id,
+      name: fixture.name,
+      ref: fixture.ref,
+      ref_type: 'branch',
+      path: `/home/max/.agor/worktrees/preset-io/agor/${fixture.name}`,
+      base_ref: 'main',
+      base_sha: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+      last_commit_sha: '8f14e45fceea167a5a36dedd4bea2543a6f7dabc',
+      tracking_branch: `origin/${fixture.ref}`,
+      new_branch: true,
+      board_id: boardId,
+      issue_url: fixture.issue,
+      pull_request_url: fixture.pr,
+      notes: fixture.notes,
+      environment_instance: {
+        instance_id: `env-${fixture.id}`,
+        branch_id: fixture.id,
+        status: fixture.env.status,
+        url: fixture.env.url,
+        ports: [],
+        env_vars: {},
+        created_at: now,
+        updated_at: now,
+      },
+      last_used: now,
+      needs_attention: index === 1,
+      archived: false,
+      filesystem_status: 'ready',
+      others_can: 'session',
+      url: `/ui/w/${fixture.id.slice(0, 8)}`,
+    }) as Branch
+);
+
+const boardEntityObjects: BoardEntityObject[] = branchFixtures.map((fixture) => ({
+  object_id: `board-object-${fixture.id}`,
+  board_id: boardId,
+  branch_id: fixture.id as BranchID,
+  entity_type: 'branch',
+  position: fixture.position,
+  zone_id: fixture.zoneId,
+  created_at: now,
+}));
+
+const sessions = branchFixtures.flatMap((fixture, branchIndex) =>
+  fixture.sessions.map(
+    ([title, tool, status, description], sessionIndex) =>
+      ({
+        session_id: `${fixture.id.slice(0, 28)}${sessionIndex + 1}`,
+        agentic_tool: tool,
+        status,
+        created_at: now,
+        last_updated: now,
+        created_by: users[(branchIndex + sessionIndex) % users.length].user_id,
+        unix_username: null,
+        branch_id: fixture.id as BranchID,
+        branch_board_id: boardId,
+        url: `/ui/s/${fixture.id.slice(0, 8)}${sessionIndex}`,
+        git_state: {
+          ref: fixture.ref,
+          base_sha: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+          current_sha: '8f14e45fceea167a5a36dedd4bea2543a6f7dabc',
+        },
+        contextFiles: [],
+        genealogy: { children: [] },
+        tasks: [],
+        title: `${title}: ${description}`,
+        description,
+        ready_for_prompt: status === SessionStatus.COMPLETED && sessionIndex === 0,
+        archived: false,
+      }) as Session
+  )
+);
+
+const cards: CardWithType[] = [
+  {
+    card_id: '019ee88d-demo-card-0000-000000000201',
+    board_id: boardId,
+    title: 'Landing page screenshot checklist',
+    description: 'Crop variants, homepage placement, facepile state, board density, and docs copy.',
+    note: 'Mina: wide crop reads best. Keep cursor labels visible but not covering PR pills.',
+    effective_emoji: '✅',
+    effective_color: '#14b8a6',
+    created_by: users[2].user_id,
+    created_at: now,
+    updated_at: now,
+    archived: false,
+  },
+  {
+    card_id: '019ee88d-demo-card-0000-000000000202',
+    board_id: boardId,
+    title: 'Usage cockpit artifact',
+    description: 'Agent-authored dashboard preview with cost, token, and run counters.',
+    note: 'Published by Gemini, wired by Codex, ready for docs-site screenshot folder.',
+    effective_emoji: '📊',
+    effective_color: '#06b6d4',
+    created_by: users[5].user_id,
+    created_at: now,
+    updated_at: now,
+    archived: false,
+  },
+  {
+    card_id: '019ee88d-demo-card-0000-000000000203',
+    board_id: boardId,
+    title: 'Security review prompt template',
+    description: 'Zone trigger prompt for RBAC, terminal, and Unix isolation changes.',
+    note: 'Drop any branch into Review lane to spawn Claude + Codex with audit context.',
+    effective_emoji: '🔐',
+    effective_color: '#f59e0b',
+    created_by: users[6].user_id,
+    created_at: now,
+    updated_at: now,
+    archived: false,
+  },
+];
+
+const cardObjects: BoardEntityObject[] = [
+  {
+    object_id: 'board-object-card-201',
+    board_id: boardId,
+    card_id: cards[0].card_id,
+    entity_type: 'card',
+    position: { x: 900, y: 620 },
+    zone_id: 'zone-assistants',
+    created_at: now,
+  },
+  {
+    object_id: 'board-object-card-202',
+    board_id: boardId,
+    card_id: cards[1].card_id,
+    entity_type: 'card',
+    position: { x: 60, y: 255 },
+    zone_id: 'zone-assistants',
+    created_at: now,
+  },
+  {
+    object_id: 'board-object-card-203',
+    board_id: boardId,
+    card_id: cards[2].card_id,
+    entity_type: 'card',
+    position: { x: 110, y: 285 },
+    zone_id: 'zone-review',
+    created_at: now,
+  },
+];
+
+const comments: BoardComment[] = [
+  {
+    comment_id: '019ee88d-demo-comment-0000-000000000301',
+    board_id: boardId,
+    created_by: users[2].user_id,
+    content: 'Can we keep the facepile capped but still show the +7 overflow?',
+    content_preview: 'Can we keep the facepile capped but still show the +7 overflow?',
+    branch_id: branchFixtures[1].id as BranchID,
+    resolved: false,
+    edited: false,
+    reactions: [{ user_id: users[0].user_id, emoji: '👍' }],
+    position: {
+      relative: {
+        parent_id: branchFixtures[1].id,
+        parent_type: 'branch',
+        offset_x: 410,
+        offset_y: 44,
+      },
+    },
+    mentions: [users[0].user_id],
+    created_at: new Date(now),
+  },
+];
+
+const activeUsers: ActiveUser[] = users.map((user, index) => ({
   user,
   lastSeen: Date.now() - index * 1_000,
-  boardId: DEMO_BOARD_ID,
+  boardId,
   cursor: { x: 420 + index * 42, y: 180 + (index % 3) * 84 },
 }));
 
-const DEMO_CURSORS: StaticRemoteCursor[] = [
-  { userId: USERS[0].user_id, user: USERS[0], color: '#8b5cf6', x: 445, y: 128 },
-  { userId: USERS[1].user_id, user: USERS[1], color: '#06b6d4', x: 815, y: 478 },
-  { userId: USERS[2].user_id, user: USERS[2], color: '#f97316', x: 1150, y: 270 },
-  { userId: USERS[3].user_id, user: USERS[3], color: '#22c55e', x: 590, y: 728 },
-  { userId: USERS[4].user_id, user: USERS[4], color: '#ec4899', x: 1020, y: 540 },
-  { userId: USERS[5].user_id, user: USERS[5], color: '#eab308', x: 220, y: 418 },
-  { userId: USERS[6].user_id, user: USERS[6], color: '#14b8a6', x: 1260, y: 620 },
-  { userId: USERS[7].user_id, user: USERS[7], color: '#38bdf8', x: 350, y: 810 },
-  { userId: USERS[8].user_id, user: USERS[8], color: '#f43f5e', x: 980, y: 188 },
+const staticCursors: StaticRemoteCursor[] = [
+  { userId: users[0].user_id, user: users[0], color: '#8b5cf6', x: 760, y: 190 },
+  { userId: users[1].user_id, user: users[1], color: '#06b6d4', x: 1240, y: 475 },
+  { userId: users[2].user_id, user: users[2], color: '#f97316', x: 1380, y: 285 },
+  { userId: users[3].user_id, user: users[3], color: '#22c55e', x: 610, y: 760 },
+  { userId: users[4].user_id, user: users[4], color: '#ec4899', x: 1040, y: 600 },
+  { userId: users[5].user_id, user: users[5], color: '#eab308', x: 225, y: 430 },
+  { userId: users[6].user_id, user: users[6], color: '#14b8a6', x: 1460, y: 710 },
+  { userId: users[7].user_id, user: users[7], color: '#38bdf8', x: 420, y: 890 },
 ];
-
-const BRANCHES: DemoBranch[] = [
-  {
-    id: 'b1',
-    emoji: '🚀',
-    title: 'landing-hero-polish',
-    repo: 'preset-io/agor',
-    zone: 'ship',
-    x: 112,
-    y: 150,
-    accent: '#14b8a6',
-    pr: '#1248',
-    issue: 'AG-214',
-    env: '5174',
-    sessions: [
-      { agent: 'Claude', status: 'running', label: 'tightening hero copy', progress: 68 },
-      { agent: 'Codex', status: 'done', label: 'responsive CSS pass', progress: 100 },
-      { agent: 'Gemini', status: 'review', label: 'visual critique', progress: 84 },
-    ],
-    notes: ['Hero screenshot selected', 'CTA contrast updated', 'Needs final crop'],
-  },
-  {
-    id: 'b2',
-    emoji: '👥',
-    title: 'multiplayer-presence',
-    repo: 'preset-io/agor',
-    zone: 'ship',
-    x: 500,
-    y: 202,
-    accent: '#8b5cf6',
-    pr: '#1251',
-    issue: 'AG-220',
-    env: '9182',
-    sessions: [
-      { agent: 'Codex', status: 'running', label: 'cursor layer fixture', progress: 73 },
-      { agent: 'Claude', status: 'review', label: 'facepile polish', progress: 91 },
-    ],
-    notes: ['Live cursors look stable', 'Navbar facepile visible', 'Add tooltip labels'],
-  },
-  {
-    id: 'b3',
-    emoji: '🔐',
-    title: 'rbac-terminal-safe-defaults',
-    repo: 'preset-io/agor',
-    zone: 'review',
-    x: 930,
-    y: 160,
-    accent: '#f59e0b',
-    pr: '#1254',
-    issue: 'SEC-42',
-    env: '3030',
-    sessions: [
-      { agent: 'Claude', status: 'running', label: 'sudoers audit', progress: 56 },
-      { agent: 'OpenCode', status: 'blocked', label: 'waiting on ops note', progress: 42 },
-    ],
-    notes: ['Warning copy drafted', 'Docs link attached', 'Awaiting second review'],
-  },
-  {
-    id: 'b4',
-    emoji: '📊',
-    title: 'usage-dashboard-artifact',
-    repo: 'preset-io/agor',
-    zone: 'assistants',
-    x: 255,
-    y: 560,
-    accent: '#06b6d4',
-    pr: '#1244',
-    issue: 'AG-198',
-    env: '7341',
-    sessions: [
-      { agent: 'Gemini', status: 'done', label: 'chart artifact published', progress: 100 },
-      { agent: 'Codex', status: 'running', label: 'wire cost cards', progress: 61 },
-    ],
-    notes: ['Artifact pinned below', 'Synthetic data OK', 'Color tokens matched'],
-  },
-  {
-    id: 'b5',
-    emoji: '🤖',
-    title: 'assistant-heartbeat',
-    repo: 'preset-io/agor',
-    zone: 'assistants',
-    x: 690,
-    y: 590,
-    accent: '#22c55e',
-    issue: 'BOT-17',
-    env: '7777',
-    sessions: [
-      { agent: 'Claude', status: 'running', label: 'daily backlog scan', progress: 47 },
-      { agent: 'Codex', status: 'done', label: 'triage report', progress: 100 },
-      { agent: 'Gemini', status: 'review', label: 'summarize risks', progress: 80 },
-    ],
-    notes: ['Scheduled zone trigger', 'Slack digest ready', '3 branches spawned'],
-  },
-];
-
-const statusMeta: Record<AgentStatus, { label: string; color: string; className: string }> = {
-  running: { label: 'running', color: 'processing', className: 'is-running' },
-  review: { label: 'needs review', color: 'warning', className: 'is-review' },
-  done: { label: 'done', color: 'success', className: 'is-done' },
-  blocked: { label: 'blocked', color: 'error', className: 'is-blocked' },
-};
-
-function BranchCard({ branch }: { branch: DemoBranch }) {
-  const activeSessions = branch.sessions.filter((session) => session.status === 'running').length;
-
-  return (
-    <article
-      className={`marketing-branch-card marketing-branch-card--${branch.zone}`}
-      style={{ left: branch.x, top: branch.y, ['--accent' as string]: branch.accent }}
-    >
-      <div className="marketing-branch-card__glow" />
-      <header className="marketing-branch-card__header">
-        <div className="marketing-branch-card__title-row">
-          <span className="marketing-branch-card__emoji">{branch.emoji}</span>
-          <div>
-            <h3>{branch.title}</h3>
-            <div className="marketing-branch-card__repo">
-              <GithubOutlined /> {branch.repo}
-            </div>
-          </div>
-        </div>
-        <Badge count={activeSessions} color={branch.accent} />
-      </header>
-
-      <div className="marketing-branch-card__meta">
-        {branch.pr && <Tag color="cyan">PR {branch.pr}</Tag>}
-        {branch.issue && <Tag color="purple">{branch.issue}</Tag>}
-        {branch.env && <Tag color="green">env :{branch.env}</Tag>}
-      </div>
-
-      <div className="marketing-branch-card__sessions">
-        {branch.sessions.map((session) => {
-          const meta = statusMeta[session.status];
-          return (
-            <div
-              className="marketing-session-row"
-              key={`${branch.id}-${session.agent}-${session.label}`}
-            >
-              <div className={`marketing-agent-dot ${meta.className}`} />
-              <div className="marketing-session-row__body">
-                <div className="marketing-session-row__topline">
-                  <strong>{session.agent}</strong>
-                  <Tag color={meta.color}>{meta.label}</Tag>
-                </div>
-                <span>{session.label}</span>
-                <Progress
-                  percent={session.progress}
-                  showInfo={false}
-                  size="small"
-                  strokeColor={branch.accent}
-                  railColor="rgba(255,255,255,0.08)"
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <ul className="marketing-branch-card__notes">
-        {branch.notes.map((note) => (
-          <li key={note}>{note}</li>
-        ))}
-      </ul>
-    </article>
-  );
-}
-
-function Zone({
-  name,
-  subtitle,
-  x,
-  y,
-  w,
-  h,
-  color,
-}: {
-  name: string;
-  subtitle: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  color: string;
-}) {
-  return (
-    <section
-      className="marketing-zone"
-      style={{ left: x, top: y, width: w, height: h, ['--zone-color' as string]: color }}
-    >
-      <div className="marketing-zone__label">
-        <strong>{name}</strong>
-        <span>{subtitle}</span>
-      </div>
-    </section>
-  );
-}
-
-function ArtifactCard() {
-  return (
-    <aside className="marketing-artifact-card">
-      <div className="marketing-artifact-card__header">
-        <div>
-          <span className="marketing-eyebrow">Published artifact</span>
-          <h3>Usage cockpit</h3>
-        </div>
-        <Tag color="cyan">live preview</Tag>
-      </div>
-      <div className="marketing-bars">
-        {[68, 44, 82, 58, 92, 74, 48].map((height) => (
-          <span key={`bar-${height}`} style={{ height: `${height}%` }} />
-        ))}
-      </div>
-      <div className="marketing-artifact-card__stats">
-        <div>
-          <strong>$42.18</strong>
-          <span>today</span>
-        </div>
-        <div>
-          <strong>19</strong>
-          <span>active runs</span>
-        </div>
-        <div>
-          <strong>4.7m</strong>
-          <span>tokens</span>
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-function CommentPin() {
-  return (
-    <div className="marketing-comment-pin">
-      <CommentOutlined />
-      <div>
-        <strong>Mina</strong> left a note on the review zone
-      </div>
-    </div>
-  );
-}
 
 export const MarketingScreenshotPage = () => {
   useEffect(() => {
     document.title = 'Marketing screenshot board · Agor';
   }, []);
 
+  const maps = useMemo(() => {
+    const boardById = new Map<string, Board>([[boardId, board]]);
+    const repoById = new Map<string, Repo>([[repoId, repo]]);
+    const branchById = new Map<string, Branch>(
+      branches.map((branch) => [branch.branch_id, branch])
+    );
+    const sessionById = new Map<string, Session>(
+      sessions.map((session) => [session.session_id, session])
+    );
+    const sessionsByBranch = new Map<string, Session[]>();
+    for (const session of sessions) {
+      const next = sessionsByBranch.get(session.branch_id) ?? [];
+      next.push(session);
+      sessionsByBranch.set(session.branch_id, next);
+    }
+    const boardObjects = [...boardEntityObjects, ...cardObjects];
+    const boardObjectById = new Map<string, BoardEntityObject>(
+      boardObjects.map((object) => [object.object_id, object])
+    );
+    const boardObjectsByBoardId = new Map<string, BoardEntityObject[]>([[boardId, boardObjects]]);
+    const cardById = new Map<string, CardWithType>(cards.map((card) => [card.card_id, card]));
+    const userById = new Map<string, User>(users.map((user) => [user.user_id, user]));
+    const commentById = new Map<string, BoardComment>(
+      comments.map((comment) => [comment.comment_id, comment])
+    );
+    return {
+      boardById,
+      repoById,
+      branchById,
+      sessionById,
+      sessionsByBranch,
+      boardObjectById,
+      boardObjectsByBoardId,
+      cardById,
+      userById,
+      commentById,
+    };
+  }, []);
+
   return (
     <ConfigProvider
       theme={{
+        algorithm: theme.darkAlgorithm,
         token: {
           colorPrimary: '#14b8a6',
           borderRadius: 12,
@@ -345,148 +485,69 @@ export const MarketingScreenshotPage = () => {
         },
       }}
     >
-      <main className="marketing-screenshot-page" data-testid="marketing-screenshot-page">
-        <header className="marketing-topbar">
-          <div className="marketing-topbar__brand">
-            <img src={brandMarkHref()} alt={BRAND.name} />
-            <div>
-              <strong>Agor</strong>
-              <span>Team command center</span>
-            </div>
-          </div>
-
-          <div className="marketing-board-switcher">
-            <DeploymentUnitOutlined />
-            <span>Launch board</span>
-            <Tag color="cyan">Marketing screenshot</Tag>
-          </div>
-
-          <div className="marketing-topbar__right">
-            <div className="marketing-presence-pill">
-              <span className="marketing-presence-pill__pulse" />
-              12 online
-            </div>
-            <GlobalPresenceFacepile
-              client={null}
-              currentBoardId={DEMO_BOARD_ID}
-              users={USERS}
-              currentUser={USERS[0]}
-              boardById={DEMO_BOARD_BY_ID}
-              staticActiveUsers={DEMO_ACTIVE_USERS}
-              maxVisible={12}
+      <AntdApp>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <Layout className="marketing-product-page" data-testid="marketing-screenshot-page">
+            <AppHeader
+              user={users[0]}
+              presenceClient={null}
+              presenceUsers={users}
+              currentUserId={users[0].user_id}
+              staticActiveUsers={activeUsers}
+              connected={true}
+              connecting={false}
+              currentBoardName={board.name}
+              currentBoardIcon={board.icon}
+              unreadCommentsCount={comments.length}
+              eventStreamEnabled={true}
+              hasUserMentions={true}
+              boards={[board]}
+              currentBoardId={boardId}
+              branchById={maps.branchById}
+              boardById={maps.boardById}
+              recentBoards={[]}
+              instanceLabel="Marketing screenshot"
+              sessionById={maps.sessionById}
+              artifactById={new Map()}
+              mcpServerById={new Map<string, MCPServer>()}
             />
-          </div>
-        </header>
-
-        <div className="marketing-stage-shell">
-          <aside className="marketing-left-panel">
-            <div className="marketing-panel-card marketing-panel-card--hero">
-              <span className="marketing-eyebrow">All sessions</span>
-              <h2>18 agent runs across 5 branches</h2>
-              <p>
-                Branches anchor the work: prompts, PRs, environments, comments, and artifacts all
-                stay visible together.
-              </p>
-              <div className="marketing-panel-kpis">
-                <span>
-                  <ThunderboltFilled /> 7 running
-                </span>
-                <span>
-                  <CheckCircleFilled /> 9 done
-                </span>
-                <span>
-                  <ClockCircleOutlined /> 2 queued
-                </span>
-              </div>
-            </div>
-            <div className="marketing-panel-card">
-              <span className="marketing-eyebrow">Zone trigger</span>
-              <h3>Security review fan-out</h3>
-              <p>
-                Dropping a branch into Review spawns Claude + Codex with the team's audit prompt.
-              </p>
-            </div>
-            <div className="marketing-panel-card marketing-terminal-card">
-              <div>
-                <CodeOutlined /> shared terminal
-              </div>
-              <code>$ pnpm -w agor session list</code>
-              <code>✓ 7 running · 3 waiting · 19 done</code>
-            </div>
-          </aside>
-
-          <ReactFlowProvider>
-            <section className="marketing-board-canvas" aria-label="Demo Agor board screenshot">
-              <div className="marketing-board-grid" />
-              <Zone
-                name="🚢 Ship this week"
-                subtitle="polish + landing-page ready"
-                x={72}
-                y={92}
-                w={770}
-                h={390}
-                color="#14b8a6"
-              />
-              <Zone
-                name="🔎 Review lane"
-                subtitle="security, docs, and handoffs"
-                x={878}
-                y={96}
-                w={398}
-                h={362}
-                color="#f59e0b"
-              />
-              <Zone
-                name="🤖 Assistants"
-                subtitle="scheduled agents + artifacts"
-                x={166}
-                y={518}
-                w={975}
-                h={352}
-                color="#8b5cf6"
-              />
-
-              {BRANCHES.map((branch) => (
-                <BranchCard branch={branch} key={branch.id} />
-              ))}
-
-              <ArtifactCard />
-              <CommentPin />
-
-              <div className="marketing-connection marketing-connection--one" />
-              <div className="marketing-connection marketing-connection--two" />
-              <div className="marketing-connection marketing-connection--three" />
-
-              <RemoteCursorLayer
-                client={null}
-                boardId={DEMO_BOARD_ID}
-                users={USERS}
-                staticCursors={DEMO_CURSORS}
-              />
-            </section>
-          </ReactFlowProvider>
-
-          <aside className="marketing-right-rail">
-            <div className="marketing-event-card">
-              <span className="marketing-eyebrow">Live event stream</span>
-              <ul>
-                <li>
-                  <ForkOutlined /> Codex forked <strong>presence fixture</strong>
-                </li>
-                <li>
-                  <BranchesOutlined /> Claude spawned a review child session
-                </li>
-                <li>
-                  <ApiOutlined /> Artifact published to board
-                </li>
-                <li>
-                  <CommentOutlined /> Mina mentioned Max in Review
-                </li>
-              </ul>
-            </div>
-          </aside>
-        </div>
-      </main>
+            <main className="marketing-product-canvas">
+              <ReactFlowProvider>
+                <SessionCanvas
+                  board={board}
+                  client={null}
+                  sessionById={maps.sessionById}
+                  sessionsByBranch={maps.sessionsByBranch}
+                  userById={maps.userById}
+                  repoById={maps.repoById}
+                  branches={branches}
+                  branchById={maps.branchById}
+                  boardObjectById={maps.boardObjectById}
+                  boardObjectsByBoardId={maps.boardObjectsByBoardId}
+                  commentById={maps.commentById}
+                  cardById={maps.cardById}
+                  currentUserId={users[0].user_id}
+                  selectedSessionId={sessions[0]?.session_id ?? null}
+                  availableAgents={[]}
+                  mcpServerById={new Map()}
+                  sessionMcpServerIds={new Map()}
+                  staticCursors={staticCursors}
+                  staticCursorScale={1.3}
+                  height="calc(100vh - 64px)"
+                />
+              </ReactFlowProvider>
+            </main>
+          </Layout>
+        </ConnectionProvider>
+      </AntdApp>
     </ConfigProvider>
   );
 };

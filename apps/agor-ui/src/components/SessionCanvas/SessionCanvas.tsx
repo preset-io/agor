@@ -77,7 +77,7 @@ import { AppNode } from './canvas/AppNode';
 import { ArtifactNode } from './canvas/ArtifactNode';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
 import { MarkdownNode } from './canvas/MarkdownNode';
-import { RemoteCursorLayer } from './canvas/RemoteCursorLayer';
+import { RemoteCursorLayer, type StaticRemoteCursor } from './canvas/RemoteCursorLayer';
 import { useBoardObjects } from './canvas/useBoardObjects';
 import { findIntersectingObjects, findZoneAtPosition } from './canvas/utils/collisionDetection';
 import { getBranchParentInfo, getZoneParentInfo } from './canvas/utils/commentUtils';
@@ -142,6 +142,12 @@ interface SessionCanvasProps {
   onOpenCommentsPanel?: () => void;
   onCommentHover?: (commentId: string | null) => void;
   onCommentSelect?: (commentId: string | null) => void;
+  /** Demo/screenshot-only fixture: render static cursors while keeping the product canvas. */
+  staticCursors?: StaticRemoteCursor[];
+  /** Demo/screenshot-only scale boost for static cursors. */
+  staticCursorScale?: number;
+  /** Optional host-controlled height for embedded/demo canvases. Defaults to full viewport. */
+  height?: React.CSSProperties['height'];
 }
 
 export interface SessionCanvasRef {
@@ -383,6 +389,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onOpenCommentsPanel,
       onCommentHover,
       onCommentSelect,
+      staticCursors,
+      staticCursorScale,
+      height = '100vh',
     }: SessionCanvasProps,
     ref
   ) => {
@@ -982,7 +991,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       client,
       boardId: board?.board_id as BoardID | null,
       reactFlowInstance: reactFlowInstanceRef.current,
-      enabled: !!board && !!client,
+      enabled: !!board && !!client && !staticCursors,
     });
 
     // Create comment nodes from spatial comments
@@ -2321,7 +2330,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       <div
         style={{
           width: '100%',
-          height: '100vh',
+          height,
           position: 'relative',
         }}
         onPointerDown={handlePointerDown}
@@ -2580,6 +2589,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               boardId={(board?.board_id as BoardID | null) ?? null}
               users={mapToArray(userById)}
               enabled={!!board && !!client}
+              staticCursors={staticCursors}
+              staticCursorScale={staticCursorScale}
             />
           </ReactFlow>
         </div>
