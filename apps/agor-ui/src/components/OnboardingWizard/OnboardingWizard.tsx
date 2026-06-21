@@ -586,13 +586,42 @@ export function OnboardingWizard({
 
   const renderIdentity = () => (
     <div>
-      <Title level={4}>Create your assistant</Title>
-      <Paragraph>
-        Your assistant is a persistent agent for setup and ongoing work in Agor.
+      <Title level={4} style={{ marginBottom: 8 }}>
+        Welcome to Agor ✨
+      </Title>
+      <Paragraph style={{ marginBottom: 14 }}>
+        Start by creating your{' '}
+        <Typography.Link
+          strong
+          href="https://agor.live/guide/assistants"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Agor assistant
+        </Typography.Link>
+        : a persistent agent that can help set up your workspace and keep things moving.
       </Paragraph>
-      <Paragraph type="secondary">Pick a name and emoji to get started.</Paragraph>
+
+      <div
+        style={{
+          background: token.colorPrimaryBg,
+          border: `1px solid ${token.colorPrimaryBorder}`,
+          borderRadius: 8,
+          padding: '12px 14px',
+          marginBottom: 16,
+        }}
+      >
+        <Text strong>Your assistant can help:</Text>
+        <ul style={{ margin: '8px 0 0', paddingLeft: 20, color: token.colorTextSecondary }}>
+          <li>🧰 Connect tools and credentials</li>
+          <li>🗺️ Set up your board and workflow</li>
+          <li>🤝 Coordinate agents and sessions</li>
+          <li>💬 Show you around and answer questions</li>
+        </ul>
+      </div>
+
       <Form layout="vertical">
-        <Form.Item label="Assistant" required>
+        <Form.Item label="Name and emoji" required>
           <Space.Compact style={{ display: 'flex' }}>
             <EmojiPickerInput
               value={assistantEmoji}

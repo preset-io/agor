@@ -93,11 +93,15 @@ describe('OnboardingWizard', () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
-    expect(screen.getByText(/Create your assistant/i)).toBeInTheDocument();
-    expect(screen.getByText(/persistent agent for setup and ongoing work/i)).toBeInTheDocument();
+    expect(screen.getByText(/Welcome to Agor/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Agor assistant/i })).toHaveAttribute(
+      'href',
+      'https://agor.live/guide/assistants'
+    );
+    expect(screen.getByText('Your assistant can help:')).toBeInTheDocument();
+    expect(screen.getByText(/Connect tools and credentials/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /emoji picker/i })).toBeInTheDocument();
     expect(screen.getByDisplayValue('My Assistant')).toBeInTheDocument();
-    expect(screen.queryByText(/Welcome to Agor/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Add Your Repository/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Branch name/i)).not.toBeInTheDocument();
 
