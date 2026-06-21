@@ -510,31 +510,24 @@
 
 .socialMain {
   z-index: 2;
-  top: 92px;
-  left: 52px;
+  top: 190px;
+  left: 54px;
   width: 78%;
 }
 
 .socialFacepile {
   z-index: 3;
-  top: 24px;
+  top: 32px;
   right: 32px;
-  width: 58%;
+  width: 48%;
   border-radius: 14px;
 }
 
 .socialCursor {
   z-index: 4;
   top: 34px;
-  left: 26px;
-  width: 34%;
-}
-
-.socialCloseup {
-  z-index: 5;
-  right: 18px;
-  bottom: 30px;
-  width: 58%;
+  left: 30px;
+  width: 31%;
 }
 
 .landingFooter {
@@ -735,7 +728,7 @@
   }
 
   .socialMain {
-    top: 88px;
+    top: 168px;
     left: 18px;
     width: 84%;
   }
@@ -743,19 +736,13 @@
   .socialFacepile {
     top: 18px;
     right: 14px;
-    width: 72%;
+    width: 58%;
   }
 
   .socialCursor {
     top: 26px;
     left: 12px;
-    width: 42%;
-  }
-
-  .socialCloseup {
-    right: 10px;
-    bottom: 22px;
-    width: 70%;
+    width: 36%;
   }
 
   .featureGrid,
