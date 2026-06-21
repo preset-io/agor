@@ -169,6 +169,50 @@ function buildSessionMcpMap(
   return map;
 }
 
+// Derived board-object index set, built once from a fetched list. Shared by
+// the essential (board-scoped, first-paint) index build and the background
+// full-hydration pass — single source of truth so the two can't diverge.
+function buildBoardObjectMaps(list: readonly BoardEntityObject[]): {
+  boardObjectById: Map<string, BoardEntityObject>;
+  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
+  boardObjectByBranchId: Map<string, BoardEntityObject>;
+  boardObjectByCardId: Map<string, BoardEntityObject>;
+} {
+  const boardObjectById = new Map<string, BoardEntityObject>();
+  const boardObjectsByBoardId = new Map<string, BoardEntityObject[]>();
+  const boardObjectByBranchId = new Map<string, BoardEntityObject>();
+  const boardObjectByCardId = new Map<string, BoardEntityObject>();
+  for (const boardObject of list) {
+    boardObjectById.set(boardObject.object_id, boardObject);
+
+    const bucket = boardObjectsByBoardId.get(boardObject.board_id);
+    if (bucket) bucket.push(boardObject);
+    else boardObjectsByBoardId.set(boardObject.board_id, [boardObject]);
+
+    if (boardObject.branch_id) {
+      boardObjectByBranchId.set(boardObject.branch_id, boardObject);
+    }
+    if (boardObject.card_id) {
+      boardObjectByCardId.set(boardObject.card_id, boardObject);
+    }
+  }
+  return { boardObjectById, boardObjectsByBoardId, boardObjectByBranchId, boardObjectByCardId };
+}
+
+// Read the board the user was last viewing — the same localStorage key
+// App.tsx persists (components/App/App.tsx). Used to scope the heavy
+// first-paint collections to just the current board. Returns null when there
+// is no stored board (fresh user) or localStorage is unavailable.
+function readStoredBoardId(): string | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const stored = window.localStorage.getItem('agor:currentBoardId');
+    return stored && stored.length > 0 ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
 function removeBoardObjectFromBoardBucket(
   buckets: Map<string, BoardEntityObject[]>,
   boardObject: BoardEntityObject
@@ -492,6 +536,22 @@ export function useAgorData(
           });
         };
 
+        // ── Board scoping for first paint ───────────────────────────────
+        // The heavy collections (board-objects / cards / board-comments) are
+        // global dumps — on a real workspace that's thousands of rows the gate
+        // doesn't need to paint the CURRENT board. On the initial (non-silent)
+        // load we scope them to the last-viewed board so first paint blocks on
+        // only that board's rows; the rest is hydrated in the background after
+        // the gate opens. Silent reconnect refetches stay GLOBAL so they fully
+        // resync every board's missed realtime events.
+        //
+        // Fallback: when there is no stored board (fresh user / no localStorage)
+        // `boardScope` is undefined and we fetch globally exactly as before, so
+        // we never block on a board that may not exist. A stale stored id that
+        // no longer matches a board simply returns an empty scoped set for first
+        // paint; the background full-hydration below then fills in everything.
+        const boardScope = silent ? undefined : (readStoredBoardId() ?? undefined);
+
         // ── Background (non-gated) fetches ──────────────────────────────
         // These collections are NOT needed to paint the canvas, so they must
         // never block the first-paint gate. Fire-and-forget: each populates
@@ -609,17 +669,30 @@ export function useAgorData(
           ),
           track(
             'board-objects',
-            client.service('board-objects').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            client.service('board-objects').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                ...(boardScope ? { board_id: boardScope } : {}),
+              },
+            })
           ),
           track(
             'board-comments',
-            client
-              .service('board-comments')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            client.service('board-comments').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                ...(boardScope ? { board_id: boardScope } : {}),
+              },
+            })
           ),
           track(
             'cards',
-            client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            client.service('cards').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                ...(boardScope ? { board_id: boardScope } : {}),
+              },
+            })
           ),
           track(
             'card-types',
@@ -763,28 +836,14 @@ export function useAgorData(
         for (const board of boardsList) {
           boardsMap.set(board.board_id, board);
         }
-        // Build board object Maps for efficient lookups
-        const boardObjectsMap = new Map<string, BoardEntityObject>();
-        const boardObjectsByBoardMap = new Map<string, BoardEntityObject[]>();
-        const boardObjectByBranchMap = new Map<string, BoardEntityObject>();
-        const boardObjectByCardMap = new Map<string, BoardEntityObject>();
-        for (const boardObject of boardObjectsList) {
-          boardObjectsMap.set(boardObject.object_id, boardObject);
-
-          const boardObjectsForBoard = boardObjectsByBoardMap.get(boardObject.board_id);
-          if (boardObjectsForBoard) {
-            boardObjectsForBoard.push(boardObject);
-          } else {
-            boardObjectsByBoardMap.set(boardObject.board_id, [boardObject]);
-          }
-
-          if (boardObject.branch_id) {
-            boardObjectByBranchMap.set(boardObject.branch_id, boardObject);
-          }
-          if (boardObject.card_id) {
-            boardObjectByCardMap.set(boardObject.card_id, boardObject);
-          }
-        }
+        // Build board object Maps for efficient lookups (shared with the
+        // background full-hydration pass so the two index builds stay identical)
+        const {
+          boardObjectById: boardObjectsMap,
+          boardObjectsByBoardId: boardObjectsByBoardMap,
+          boardObjectByBranchId: boardObjectByBranchMap,
+          boardObjectByCardId: boardObjectByCardMap,
+        } = buildBoardObjectMaps(boardObjectsList);
         // Build comment Map for efficient lookups
         const commentsMap = new Map<string, BoardComment>();
         for (const comment of commentsList) {
@@ -840,6 +899,43 @@ export function useAgorData(
         }));
         debugTimer?.endIndexing();
         debugFinishStatus = 'success';
+
+        // ── Background full hydration ───────────────────────────────────
+        // First paint is now open with ONLY the current board's heavy
+        // collections. Pull the global set so cross-board nav, GlobalSearch,
+        // BoardSwitcher, branch-list drawer, facepiles and session genealogy
+        // see every board's objects/cards/comments. Fire-and-forget — the Map
+        // setters merge late data progressively (board-objects/cards/comments
+        // are server-authoritative full lists, so rebuilding from the global
+        // snapshot is safe and matches the reconnect-refetch semantics).
+        //
+        // Sessions, branches, repos, users, boards and card-types are already
+        // global above, so only the board-scoped collections need topping up.
+        // Only runs when first paint was actually scoped (`boardScope` set).
+        if (boardScope) {
+          void Promise.all([
+            client
+              .service('board-objects')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            client
+              .service('board-comments')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          ])
+            .then(([allBoardObjects, allCards, allComments]) => {
+              const boardObjectMaps = buildBoardObjectMaps(allBoardObjects);
+              setMaps((prev) => ({
+                ...prev,
+                boardObjectById: boardObjectMaps.boardObjectById,
+                boardObjectsByBoardId: boardObjectMaps.boardObjectsByBoardId,
+                boardObjectByBranchId: boardObjectMaps.boardObjectByBranchId,
+                boardObjectByCardId: boardObjectMaps.boardObjectByCardId,
+                cardById: buildById(allCards, 'card_id'),
+                commentById: buildById(allComments, 'comment_id'),
+              }));
+            })
+            .catch((err) => console.warn('[useAgorData] background full hydration failed:', err));
+        }
 
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.
