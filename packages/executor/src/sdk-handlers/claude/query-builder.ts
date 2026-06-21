@@ -259,20 +259,15 @@ export async function setupQuery(
   // Buffer to capture stderr for better error messages
   let stderrBuffer = '';
 
-  // Render Agor system prompt with full session/branch/repo context
-  const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-    sessions: deps.sessionsRepo,
-    branches: deps.branchesRepo,
-    repos: deps.reposRepo,
-    users: deps.usersRepo,
-  });
+  // Append static Agor orientation. Dynamic context is available through Agor MCP.
+  const agorSystemPrompt = await renderAgorSystemPrompt();
 
   const queryOptions: Record<string, unknown> = {
     cwd,
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
-      append: agorSystemPrompt, // Append rich Agor context (session, branch, repo)
+      append: agorSystemPrompt,
     },
     settingSources: ['user', 'project', 'local'], // Load user + project + local permissions, auto-loads CLAUDE.md
     // Defensive copy — the const is readonly but the SDK option is typed `string[]`.

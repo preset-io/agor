@@ -121,10 +121,10 @@ export class CopilotPromptService {
     private sessionsRepo: SessionRepository,
     private sessionMCPServerRepo?: SessionMCPServerRepository,
     private branchesRepo?: BranchRepository,
-    private reposRepo?: RepoRepository,
+    _reposRepo?: RepoRepository,
     apiKey?: string,
     private mcpServerRepo?: MCPServerRepository,
-    private usersRepo?: UsersRepository,
+    _usersRepo?: UsersRepository,
     permissionService?: PermissionService,
     messagesService?: MessagesService,
     tasksService?: TasksService,
@@ -205,15 +205,10 @@ export class CopilotPromptService {
   }
 
   /**
-   * Create Agor system prompt for Copilot session context
+   * Create static Agor system prompt for Copilot orientation
    */
-  private async buildSystemMessage(sessionId: SessionID): Promise<string> {
-    return renderAgorSystemPrompt(sessionId, {
-      sessions: this.sessionsRepo,
-      branches: this.branchesRepo,
-      repos: this.reposRepo,
-      users: this.usersRepo,
-    });
+  private async buildSystemMessage(_sessionId: SessionID): Promise<string> {
+    return renderAgorSystemPrompt();
   }
 
   /**

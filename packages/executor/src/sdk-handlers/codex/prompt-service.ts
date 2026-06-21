@@ -219,10 +219,10 @@ export class CodexPromptService {
     private sessionsRepo: SessionRepository,
     private sessionMCPServerRepo?: SessionMCPServerRepository,
     private branchesRepo?: BranchRepository,
-    private reposRepo?: RepoRepository,
+    _reposRepo?: RepoRepository,
     apiKey?: string,
     private mcpServerRepo?: MCPServerRepository,
-    private usersRepo?: UsersRepository,
+    _usersRepo?: UsersRepository,
     useNativeAuth: boolean = false,
     private tasksService?: TasksService
   ) {
@@ -477,7 +477,7 @@ export class CodexPromptService {
   }
 
   /**
-   * Write the rendered Agor session-context prompt to a single file under
+   * Write the rendered static Agor orientation prompt to a single file under
    * `os.tmpdir()` and return its absolute path.
    *
    * Replaces the per-session CODEX_HOME directory + AGENTS.md mechanism — we
@@ -488,12 +488,7 @@ export class CodexPromptService {
    * config.toml stay where they are.
    */
   private async ensureCodexInstructionsFile(sessionId: SessionID): Promise<string> {
-    const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-      sessions: this.sessionsRepo,
-      branches: this.branchesRepo,
-      repos: this.reposRepo,
-      users: this.usersRepo,
-    });
+    const agorSystemPrompt = await renderAgorSystemPrompt();
 
     const fileName = `agor-codex-instructions-${sessionId}.md`;
 

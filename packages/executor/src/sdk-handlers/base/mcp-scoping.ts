@@ -33,6 +33,10 @@ function mcpDebug(...args: unknown[]): void {
   }
 }
 
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /**
  * MCP server with source metadata
  */
@@ -219,8 +223,8 @@ export async function getMcpServersForSession(
       const sourceRank = (source: MCPServerWithSource['source']) => (source === 'global' ? 0 : 1);
       return (
         sourceRank(a.source) - sourceRank(b.source) ||
-        a.server.name.localeCompare(b.server.name) ||
-        String(a.server.mcp_server_id).localeCompare(String(b.server.mcp_server_id))
+        compareStrings(a.server.name, b.server.name) ||
+        compareStrings(String(a.server.mcp_server_id), String(b.server.mcp_server_id))
       );
     });
   } catch (error) {

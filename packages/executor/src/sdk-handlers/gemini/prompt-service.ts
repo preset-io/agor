@@ -108,12 +108,12 @@ export class GeminiPromptService {
     private sessionsRepo: SessionRepository,
     apiKey?: string,
     private branchesRepo?: BranchRepository,
-    private reposRepo?: RepoRepository,
+    _reposRepo?: RepoRepository,
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
     private mcpEnabled?: boolean,
     useNativeAuth?: boolean, // Flag from base-executor indicating OAuth should be used
-    private usersRepo?: UsersRepository,
+    _usersRepo?: UsersRepository,
     private tasksService?: TasksService
   ) {
     this.apiKey = apiKey;
@@ -659,18 +659,13 @@ export class GeminiPromptService {
       `🔧 [Gemini] Creating new client with approval mode: ${permissionMode || 'ask'} → ${approvalMode}`
     );
 
-    // Inject Agor session context via temp file (no race conditions!)
+    // Inject static Agor orientation via temp file (no race conditions!)
     // Gemini SDK supports geminiMdFilePaths parameter to load additional context files.
     // We use a per-session temp file to avoid race conditions between concurrent sessions.
     //
     // IMPORTANT: Gemini uses GEMINI.md (not CLAUDE.md) for project instructions!
     // User's project GEMINI.md files are still loaded hierarchically.
-    const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-      sessions: this.sessionsRepo,
-      branches: this.branchesRepo,
-      repos: this.reposRepo,
-      users: this.usersRepo,
-    });
+    const agorSystemPrompt = await renderAgorSystemPrompt();
 
     // Write to temp file (unique per session, no races!)
     // Use mode 0o600 (rw-------) to prevent other users from reading session metadata
