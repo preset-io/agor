@@ -74,17 +74,23 @@ const CompactTooltipText: React.FC<{
   </Tooltip>
 );
 
-const userLabel = (userId: string | null | undefined, userById: Map<string, User>) => {
+const userLabel = (
+  userId: string | null | undefined,
+  userById: Map<string, User>,
+  currentUser?: User | null
+) => {
   if (!userId) return '—';
   const user = userById.get(userId);
-  return user?.email ?? user?.name ?? shortId(userId);
+  const label = user?.email ?? user?.name ?? shortId(userId);
+  return currentUser?.user_id === userId ? `${label} (you)` : label;
 };
 
 const ScheduleDetails: React.FC<{
   schedule: Schedule;
   humanizedCron: string;
   userById: Map<string, User>;
-}> = ({ schedule, humanizedCron, userById }) => (
+  currentUser?: User | null;
+}> = ({ schedule, humanizedCron, userById, currentUser }) => (
   <Space direction="vertical" size={2} style={{ maxWidth: 360 }}>
     <Text strong>{schedule.name || 'Untitled schedule'}</Text>
     {schedule.description ? <Text>{schedule.description}</Text> : null}
@@ -105,7 +111,7 @@ const ScheduleDetails: React.FC<{
       <Text strong>Last:</Text> {formatTimestamp(schedule.last_run_at)}
     </Text>
     <Text>
-      <Text strong>Runs as:</Text> {userLabel(schedule.created_by, userById)}
+      <Text strong>Runs as:</Text> {userLabel(schedule.created_by, userById, currentUser)}
     </Text>
   </Space>
 );
@@ -114,6 +120,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   branch,
   client,
   mcpServerById = new Map(),
+  currentUser,
   userById = new Map(),
   onOpenSession,
 }) => {
@@ -217,6 +224,18 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     }
   };
 
+  const renderScheduleDetails = useCallback(
+    (schedule: Schedule, humanizedCron: string) => (
+      <ScheduleDetails
+        schedule={schedule}
+        humanizedCron={humanizedCron}
+        userById={userById}
+        currentUser={currentUser}
+      />
+    ),
+    [currentUser, userById]
+  );
+
   const columns: TableColumnsType<Schedule> = [
     {
       title: 'On',
@@ -239,9 +258,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       width: 220,
       render: (_, s) => {
         const humanizedCron = formatHumanizedCron(s.cron_expression);
-        const tooltip = (
-          <ScheduleDetails schedule={s} humanizedCron={humanizedCron} userById={userById} />
-        );
+        const tooltip = renderScheduleDetails(s, humanizedCron);
         return (
           <Space direction="vertical" size={0} style={{ display: 'flex', minWidth: 0 }}>
             <CompactTooltipText title={tooltip} ariaLabel={`Schedule title: ${s.name}`}>
@@ -262,9 +279,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       width: 240,
       render: (_, s) => {
         const humanizedCron = formatHumanizedCron(s.cron_expression);
-        const tooltip = (
-          <ScheduleDetails schedule={s} humanizedCron={humanizedCron} userById={userById} />
-        );
+        const tooltip = renderScheduleDetails(s, humanizedCron);
         return (
           <Space direction="vertical" size={0} style={{ display: 'flex', minWidth: 0 }}>
             <CompactTooltipText title={tooltip}>{humanizedCron}</CompactTooltipText>
@@ -302,14 +317,12 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       render: (_, s) => {
         const humanizedCron = formatHumanizedCron(s.cron_expression);
         return (
-          <Tooltip
-            title={
-              <ScheduleDetails schedule={s} humanizedCron={humanizedCron} userById={userById} />
-            }
-          >
-            <InfoCircleOutlined
+          <Tooltip title={renderScheduleDetails(s, humanizedCron)}>
+            <Button
+              type="text"
+              size="small"
+              icon={<InfoCircleOutlined />}
               aria-label={`Details for schedule ${s.name}`}
-              style={{ color: 'var(--ant-color-text-secondary)' }}
             />
           </Tooltip>
         );
