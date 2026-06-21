@@ -195,7 +195,7 @@ export function LandingPage() {
                 Join the private beta
               </Link>
               <Link href="/guide/getting-started" className={styles.secondaryButton}>
-                Try locally
+                Get started
               </Link>
               <Link
                 href={GITHUB_REPO_URL}
@@ -329,7 +329,7 @@ export function LandingPage() {
             Book a demo
           </Link>
           <Link href="/guide/getting-started" className={styles.secondaryButton}>
-            Try locally
+            Get started
           </Link>
         </div>
       </section>
