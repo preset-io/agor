@@ -288,4 +288,7 @@ for the agent-oriented map of the codebase.
 [Apache Superset](https://github.com/apache/superset), [Apache Airflow](https://github.com/apache/airflow)),
 built by an army of Claudes and Codexes.
 
-Read the story: [Making of Agor →](https://agor.live/blog/making-of-agor)
+**Read more:** [Agor Cloud — opening a private beta](https://agor.live/blog/agor-cloud) ·
+[Agent Modeling 101](https://agor.live/blog/agent-modeling-101) ·
+[Raise a team helper agent in an afternoon](https://agor.live/blog/raise-team-helper-agent) ·
+[all posts →](https://agor.live/blog)
