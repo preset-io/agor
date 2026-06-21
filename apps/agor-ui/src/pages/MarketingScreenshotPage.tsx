@@ -106,50 +106,93 @@ const board: Board = {
     },
     'app-usage-cockpit': {
       type: 'app',
-      x: 2030,
-      y: 850,
+      x: 2170,
+      y: 780,
       width: 520,
       height: 330,
       title: 'Agent cost cockpit artifact',
       description: 'Published by an assistant as a live board artifact.',
-      template: 'vanilla',
+      template: 'react',
       showEditor: false,
       showConsole: false,
-      entryFile: '/index.js',
+      entryFile: '/App.js',
       files: {
-        '/index.html': '<div id="app"></div><script type="module" src="/index.js"></script>',
-        '/index.js':
-          `
+        '/App.js': `
           import './styles.css';
-          document.getElementById('app').innerHTML = ` +
-          '`' +
-          `
-            <div class="artifact">
-              <div class="top"><span>📊 Agent cost cockpit</span><b>Live</b></div>
-              <section class="hero"><small>today</small><strong>$42.18</strong><em>19 active runs · 4.7m tokens</em></section>
-              <div class="grid">
-                <div><small>Claude</small><b>7</b></div><div><small>Codex</small><b>6</b></div><div><small>Gemini</small><b>4</b></div><div><small>OpenCode</small><b>2</b></div>
-              </div>
-              <div class="bars"><i style="height:64%"></i><i style="height:48%"></i><i style="height:82%"></i><i style="height:56%"></i><i style="height:92%"></i><i style="height:70%"></i></div>
-            </div>
-          ` +
-          '`' +
-          `;
+
+          const burndown = [
+            [34, 42], [92, 35], [150, 31], [208, 26], [266, 22], [324, 16], [382, 9], [440, 5],
+          ];
+          const claude = [
+            [34, 118], [92, 96], [150, 104], [208, 72], [266, 78], [324, 52], [382, 48], [440, 30],
+          ];
+          const codex = [
+            [34, 132], [92, 126], [150, 108], [208, 112], [266, 86], [324, 88], [382, 61], [440, 54],
+          ];
+          const toPath = (points) => points.map(([x, y], index) => \`\${index ? 'L' : 'M'}\${x} \${y}\`).join(' ');
+
+          export default function App() {
+            return (
+              <main className="artifact">
+                <header>
+                  <div>
+                    <p>Live artifact</p>
+                    <h1>Agent burndown</h1>
+                  </div>
+                  <span className="pill">9 sessions</span>
+                </header>
+                <section className="summary">
+                  <div><small>Open prompts</small><strong>5</strong></div>
+                  <div><small>Claude Code</small><strong>3</strong></div>
+                  <div><small>Codex</small><strong>4</strong></div>
+                  <div><small>Other</small><strong>2</strong></div>
+                </section>
+                <svg viewBox="0 0 480 170" className="chart" role="img" aria-label="Burndown chart by agent">
+                  <defs>
+                    <linearGradient id="area" x1="0" x2="0" y1="0" y2="1">
+                      <stop stopColor="#14b8a6" stopOpacity=".45" />
+                      <stop offset="1" stopColor="#14b8a6" stopOpacity=".02" />
+                    </linearGradient>
+                    <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+                  </defs>
+                  {[34,92,150,208,266,324,382,440].map((x) => <line key={x} x1={x} x2={x} y1="18" y2="148" />)}
+                  <path d={\`\${toPath(burndown)} L440 148 L34 148 Z\`} fill="url(#area)" />
+                  <path d={toPath(claude)} className="claude" />
+                  <path d={toPath(codex)} className="codex" />
+                  <path d={toPath(burndown)} className="burn" filter="url(#glow)" />
+                  {burndown.map(([x, y]) => <circle key={x} cx={x} cy={y} r="4" />)}
+                </svg>
+                <footer>
+                  <span><i className="burn-dot" /> remaining work</span>
+                  <span><i className="claude-dot" /> claude-code</span>
+                  <span><i className="codex-dot" /> codex</span>
+                </footer>
+              </main>
+            );
+          }
         `,
         '/styles.css': `
-          body { margin:0; min-height:100vh; background:#060b14; color:#eaffff; font-family: Inter, ui-sans-serif, system-ui; }
-          .artifact { height:100vh; box-sizing:border-box; padding:22px; background: radial-gradient(circle at 20% 20%, rgba(20,184,166,.34), transparent 35%), linear-gradient(135deg, #0b1220, #111827 55%, #251005); border:1px solid rgba(255,255,255,.14); }
-          .top { display:flex; justify-content:space-between; align-items:center; font-weight:800; letter-spacing:-.02em; }
-          .top b { color:#06251f; background:#5eead4; padding:4px 9px; border-radius:999px; font-size:12px; }
-          .hero { margin:20px 0; padding:18px; border-radius:22px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.12); }
-          small { color:#a7f3d0; text-transform:uppercase; font-size:11px; letter-spacing:.12em; }
-          strong { display:block; font-size:42px; line-height:1; margin:6px 0; }
-          em { color:#cbd5e1; font-style:normal; }
-          .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
-          .grid div { border-radius:16px; padding:12px; background:rgba(15,23,42,.82); border:1px solid rgba(255,255,255,.08); }
-          .grid b { display:block; font-size:26px; color:#67e8f9; }
-          .bars { height:70px; display:flex; gap:8px; align-items:end; margin-top:18px; }
-          .bars i { flex:1; display:block; border-radius:8px 8px 2px 2px; background:linear-gradient(#fbbf24, #f97316 45%, #14b8a6); box-shadow:0 0 24px rgba(251,146,60,.28); }
+          body { margin:0; background:#06111f; color:#eaffff; font-family: Inter, ui-sans-serif, system-ui; }
+          .artifact { min-height:100vh; box-sizing:border-box; padding:18px; background:radial-gradient(circle at 20% 10%, rgba(94,234,212,.32), transparent 34%), linear-gradient(135deg,#07111f,#111827 56%,#241005); border:1px solid rgba(255,255,255,.14); }
+          header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+          p { margin:0; color:#93c5fd; text-transform:uppercase; font-size:10px; letter-spacing:.16em; font-weight:800; }
+          h1 { margin:2px 0 0; font-size:24px; letter-spacing:-.04em; }
+          .pill { color:#052e2b; background:#5eead4; padding:4px 9px; border-radius:999px; font-size:12px; font-weight:900; box-shadow:0 0 22px rgba(20,184,166,.35); }
+          .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:14px 0 8px; }
+          .summary div { padding:10px; border-radius:14px; background:rgba(15,23,42,.82); border:1px solid rgba(255,255,255,.09); }
+          small { display:block; color:#a7f3d0; font-size:10px; text-transform:uppercase; letter-spacing:.09em; white-space:nowrap; }
+          strong { display:block; margin-top:4px; font-size:25px; line-height:1; color:#f8fafc; }
+          .chart { width:100%; height:150px; overflow:visible; }
+          line { stroke:rgba(255,255,255,.08); stroke-width:1; }
+          path { fill:none; stroke-linecap:round; stroke-linejoin:round; stroke-width:4; }
+          circle { fill:#14b8a6; stroke:#ecfeff; stroke-width:2; }
+          .burn { stroke:#14b8a6; }
+          .claude { stroke:#a78bfa; opacity:.78; stroke-dasharray:6 7; }
+          .codex { stroke:#f59e0b; opacity:.82; stroke-dasharray:2 8; }
+          footer { display:flex; gap:12px; align-items:center; color:#cbd5e1; font-size:11px; flex-wrap:wrap; }
+          footer span { display:flex; align-items:center; gap:5px; }
+          i { width:8px; height:8px; border-radius:99px; display:inline-block; }
+          .burn-dot { background:#14b8a6; }.claude-dot { background:#a78bfa; }.codex-dot { background:#f59e0b; }
         `,
       },
     },
@@ -195,7 +238,7 @@ interface BranchFixture {
   pr?: string;
   notes: string;
   env: { status: string; url: string };
-  sessions: ReadonlyArray<readonly [string, string, string, string]>;
+  sessions: ReadonlyArray<readonly [string, string, string, string, boolean?]>;
 }
 
 const branchFixtures = [
@@ -211,9 +254,9 @@ const branchFixtures = [
       '**Goal:** make the homepage crop feel alive. Hero copy tightened, CTA contrast updated, final crop pending.',
     env: { status: 'running', url: 'http://localhost:5174' },
     sessions: [
-      ['Claude', 'claude-code', SessionStatus.RUNNING, 'tightening hero copy'],
+      ['Claude', 'claude-code', SessionStatus.COMPLETED, 'tightening hero copy'],
       ['Codex', 'codex', SessionStatus.COMPLETED, 'responsive CSS pass'],
-      ['Gemini', 'gemini', SessionStatus.RUNNING, 'visual critique'],
+      ['Gemini', 'gemini', SessionStatus.IDLE, 'visual critique', true],
     ],
   },
   {
@@ -229,7 +272,7 @@ const branchFixtures = [
     env: { status: 'running', url: 'http://localhost:9182' },
     sessions: [
       ['Codex', 'codex', SessionStatus.RUNNING, 'cursor layer fixture'],
-      ['Claude', 'claude-code', SessionStatus.RUNNING, 'facepile polish'],
+      ['Claude', 'claude-code', SessionStatus.COMPLETED, 'facepile polish', true],
     ],
   },
   {
@@ -244,7 +287,7 @@ const branchFixtures = [
       'Review lane fan-out: sudoers warning copy drafted, docs link attached, awaiting a second pass.',
     env: { status: 'starting', url: 'http://localhost:3030' },
     sessions: [
-      ['Claude', 'claude-code', SessionStatus.RUNNING, 'sudoers audit'],
+      ['Claude', 'claude-code', SessionStatus.COMPLETED, 'sudoers audit'],
       ['OpenCode', 'opencode', SessionStatus.AWAITING_PERMISSION, 'waiting on ops note'],
     ],
   },
@@ -261,7 +304,7 @@ const branchFixtures = [
     env: { status: 'running', url: 'http://localhost:7341' },
     sessions: [
       ['Gemini', 'gemini', SessionStatus.COMPLETED, 'chart artifact published'],
-      ['Codex', 'codex', SessionStatus.RUNNING, 'wire cost cards'],
+      ['Codex', 'codex', SessionStatus.IDLE, 'wire cost cards', true],
     ],
   },
   {
@@ -275,9 +318,9 @@ const branchFixtures = [
       'Scheduled assistant heartbeat: daily backlog scan, Slack digest ready, three branches spawned for follow-up.',
     env: { status: 'stopped', url: 'http://localhost:7777' },
     sessions: [
-      ['Claude', 'claude-code', SessionStatus.RUNNING, 'daily backlog scan'],
+      ['Claude', 'claude-code', SessionStatus.IDLE, 'daily backlog scan'],
       ['Codex', 'codex', SessionStatus.COMPLETED, 'triage report'],
-      ['Gemini', 'gemini', SessionStatus.RUNNING, 'summarize risks'],
+      ['Gemini', 'gemini', SessionStatus.COMPLETED, 'summarize risks'],
     ],
   },
 ] as const satisfies readonly BranchFixture[];
@@ -335,9 +378,9 @@ const boardEntityObjects: BoardEntityObject[] = branchFixtures.map((fixture) => 
 
 const sessions = branchFixtures.flatMap((fixture, branchIndex) =>
   fixture.sessions.map(
-    ([title, tool, status, description], sessionIndex) =>
+    ([title, tool, status, description, readyForPrompt], sessionIndex) =>
       ({
-        session_id: `${fixture.id.slice(0, 28)}${sessionIndex + 1}`,
+        session_id: `${fixture.id}-session-${sessionIndex + 1}`,
         agentic_tool: tool,
         status,
         created_at: now,
@@ -357,7 +400,7 @@ const sessions = branchFixtures.flatMap((fixture, branchIndex) =>
         tasks: [],
         title: `${title}: ${description}`,
         description,
-        ready_for_prompt: status === SessionStatus.COMPLETED && sessionIndex === 0,
+        ready_for_prompt: readyForPrompt === true,
         archived: false,
       }) as Session
   )
@@ -467,14 +510,9 @@ const activeUsers: ActiveUser[] = users.map((user, index) => ({
 }));
 
 const staticCursors: StaticRemoteCursor[] = [
-  { userId: users[0].user_id, user: users[0], color: '#8b5cf6', x: 680, y: 320 },
   { userId: users[1].user_id, user: users[1], color: '#06b6d4', x: 1370, y: 620 },
   { userId: users[2].user_id, user: users[2], color: '#f97316', x: 2550, y: 260 },
-  { userId: users[3].user_id, user: users[3], color: '#22c55e', x: 2370, y: 730 },
-  { userId: users[4].user_id, user: users[4], color: '#ec4899', x: 2050, y: 565 },
   { userId: users[5].user_id, user: users[5], color: '#eab308', x: 650, y: 820 },
-  { userId: users[6].user_id, user: users[6], color: '#14b8a6', x: 1500, y: 1080 },
-  { userId: users[7].user_id, user: users[7], color: '#38bdf8', x: 1860, y: 1110 },
 ];
 
 export const MarketingScreenshotPage = () => {
@@ -583,7 +621,7 @@ export const MarketingScreenshotPage = () => {
                   commentById={maps.commentById}
                   cardById={maps.cardById}
                   currentUserId={users[0].user_id}
-                  selectedSessionId={sessions[0]?.session_id ?? null}
+                  selectedSessionId={null}
                   availableAgents={[]}
                   mcpServerById={new Map()}
                   sessionMcpServerIds={new Map()}
