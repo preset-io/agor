@@ -195,7 +195,7 @@ export function LandingPage() {
                 Join the private beta
               </Link>
               <Link href="/guide/getting-started" className={styles.secondaryButton}>
-                Install locally in 3 minutes
+                Try locally
               </Link>
               <Link
                 href={GITHUB_REPO_URL}
@@ -329,7 +329,7 @@ export function LandingPage() {
             Book a demo
           </Link>
           <Link href="/guide/getting-started" className={styles.secondaryButton}>
-            Install locally in 3 minutes
+            Try locally
           </Link>
         </div>
       </section>
