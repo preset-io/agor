@@ -586,8 +586,11 @@ export function OnboardingWizard({
 
   const renderIdentity = () => (
     <div>
-      <Title level={4}>Name your assistant</Title>
-      <Paragraph type="secondary">Pick a name and emoji.</Paragraph>
+      <Title level={4}>Create your assistant</Title>
+      <Paragraph>
+        Your assistant is a persistent agent for setup and ongoing work in Agor.
+      </Paragraph>
+      <Paragraph type="secondary">Pick a name and emoji to get started.</Paragraph>
       <Form layout="vertical">
         <Form.Item label="Assistant" required>
           <Space.Compact style={{ display: 'flex' }}>

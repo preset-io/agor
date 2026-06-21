@@ -93,7 +93,8 @@ describe('OnboardingWizard', () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
-    expect(screen.getByText(/Name your assistant/i)).toBeInTheDocument();
+    expect(screen.getByText(/Create your assistant/i)).toBeInTheDocument();
+    expect(screen.getByText(/persistent agent for setup and ongoing work/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /emoji picker/i })).toBeInTheDocument();
     expect(screen.getByDisplayValue('My Assistant')).toBeInTheDocument();
     expect(screen.queryByText(/Welcome to Agor/i)).not.toBeInTheDocument();
