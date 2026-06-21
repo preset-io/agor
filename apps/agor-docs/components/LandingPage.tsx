@@ -96,17 +96,6 @@ const productPreviews = [
   },
 ];
 
-const useCases = [
-  { label: 'multi-agent code review', href: '/guide/sessions' },
-  { label: 'release audits', href: '/guide/scheduler' },
-  { label: 'backlog grooming', href: '/blog/raise-team-helper-agent' },
-  { label: 'security sweeps', href: '/guide/multiplayer-unix-isolation' },
-  { label: 'competitive intel', href: '/guide/assistants' },
-  { label: 'customer digests', href: '/guide/message-gateway' },
-  { label: 'weekly reports', href: '/guide/scheduler' },
-  { label: 'standups', href: '/blog/raise-team-helper-agent' },
-];
-
 const trustItems = [
   { label: 'Agor Cloud is coming', href: '/blog/agor-cloud' },
   { label: 'Open source / self-hosted', href: '/guide/getting-started' },
@@ -286,18 +275,6 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.useCaseSection} data-reveal>
-        <span className={styles.eyebrow}>What teams run</span>
-        <h2>From code reviews to customer digests.</h2>
-        <div className={styles.useCaseGrid}>
-          {useCases.map((useCase) => (
-            <Link href={useCase.href} key={useCase.label}>
-              {useCase.label}
-            </Link>
-          ))}
-        </div>
-      </section>
-
       <section className={styles.controlSection} data-reveal>
         <div>
           <span className={styles.eyebrow}>Built for real teams</span>
@@ -307,9 +284,8 @@ export function LandingPage() {
             Now make it compound.
           </h2>
           <p>
-            Self-host Agor and build on the best agent harnesses: Claude Code, Codex, OpenCode,
-            Copilot, Gemini, and whatever comes next. Keep your data yours, pick the right runtime
-            for the job, and avoid locking your team into one frontier.
+            Choose the right agent harness, keep your data yours, and move from solo experiments to
+            team-visible workflows without locking into one frontier.
           </p>
         </div>
         <ul className={styles.trustList}>

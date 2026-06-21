@@ -23,7 +23,6 @@
 
 .heroSection,
 .workspaceSection,
-.useCaseSection,
 .productShowcase,
 .controlSection,
 .finalCta {
@@ -88,7 +87,6 @@
 .heroCopy h1,
 .sectionHeader h2,
 .workspaceCopy h2,
-.useCaseSection h2,
 .controlSection h2,
 .finalCta h2 {
   margin: 0;
@@ -251,7 +249,6 @@
 
 .sectionHeader h2,
 .workspaceCopy h2,
-.useCaseSection h2,
 .controlSection h2,
 .finalCta h2 {
   font-size: clamp(2.45rem, 4vw, 4.05rem);
@@ -424,36 +421,6 @@
   transform: translateY(-2px);
 }
 
-.useCaseSection {
-  text-align: center;
-}
-
-.useCaseGrid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  justify-content: center;
-  max-width: 900px;
-  margin: 38px auto 0;
-}
-
-.useCaseGrid a {
-  padding: 12px 16px;
-  border: 1px solid var(--landing-line);
-  border-radius: 999px;
-  color: var(--landing-muted);
-  background: rgba(255, 255, 255, 0.06);
-  font-weight: 720;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
-  text-decoration: none;
-}
-
-.useCaseGrid a:hover {
-  border-color: rgba(127, 232, 223, 0.34);
-  color: var(--landing-ink);
-  background: rgba(127, 232, 223, 0.1);
-}
-
 .controlSection {
   display: grid;
   grid-template-columns: 1fr 0.8fr;
@@ -590,7 +557,6 @@
   .heroSection,
   .workspaceSection,
   .productShowcase,
-  .useCaseSection,
   .finalCta {
     padding: 64px 18px;
   }
@@ -643,7 +609,6 @@
 
   .sectionHeader h2,
   .workspaceCopy h2,
-  .useCaseSection h2,
   .controlSection h2,
   .finalCta h2 {
     font-size: clamp(2.25rem, 10.5vw, 3.65rem);
