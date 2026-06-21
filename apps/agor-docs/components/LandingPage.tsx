@@ -124,7 +124,8 @@ const useCases = [
 ];
 
 const trustItems = [
-  { label: 'Self-hosted first', href: '/guide/getting-started' },
+  { label: 'Agor Cloud is coming', href: '/blog/agor-cloud' },
+  { label: 'Open source / self-hosted', href: '/guide/getting-started' },
   { label: 'MCP-native', href: '/guide/internal-mcp' },
   { label: 'Claude Code · Codex · Gemini', href: '/guide/sdk-comparison' },
   { label: 'Unix-level isolation when you need it', href: '/guide/multiplayer-unix-isolation' },
