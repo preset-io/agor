@@ -365,7 +365,11 @@ export function LandingPage() {
       <section className={styles.controlSection} data-reveal>
         <div>
           <span className={styles.eyebrow}>Built for real teams</span>
-          <h2>Your work, your data, your assistants.</h2>
+          <h2>
+            Everyone’s cranking with AI.
+            <br />
+            Now make it compound.
+          </h2>
           <p>
             Self-host Agor and build on the best agent harnesses: Claude Code, Codex, OpenCode,
             Copilot, Gemini, and whatever comes next. Keep your data yours, pick the right runtime
