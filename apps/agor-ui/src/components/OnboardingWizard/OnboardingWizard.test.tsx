@@ -177,20 +177,20 @@ describe('OnboardingWizard', () => {
     });
   });
 
-  it('uses one fixed modal body for input and loading steps', async () => {
+  it('uses one bounded modal body for input and loading steps', async () => {
     renderWizard();
     const body = document.querySelector('.ant-modal-body') as HTMLElement;
-    expect(body).toHaveStyle({ height: '440px', overflowY: 'auto' });
+    expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
 
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
     expect(document.querySelector('.ant-modal-body')).toBe(body);
-    expect(body).toHaveStyle({ height: '440px', overflowY: 'auto' });
+    expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
 
     fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
     expect(await screen.findByText(/Setting up Agor/i)).toBeInTheDocument();
     expect(screen.getByText(/Cloning assistant framework/i)).toBeInTheDocument();
     expect(document.querySelector('.ant-modal-body')).toBe(body);
-    expect(body).toHaveStyle({ height: '440px', overflowY: 'auto' });
+    expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
   });
 
   it('creates setup resources with the default assistant branch name and preserves model defaults', async () => {

@@ -979,7 +979,8 @@ export function OnboardingWizard({
       width={680}
       styles={{
         body: {
-          height: 440,
+          minHeight: 440,
+          maxHeight: 640,
           overflowY: 'auto',
           padding: '28px 36px',
         },
