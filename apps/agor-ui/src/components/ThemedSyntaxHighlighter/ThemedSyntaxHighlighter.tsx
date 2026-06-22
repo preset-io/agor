@@ -1,8 +1,19 @@
 /**
  * ThemedSyntaxHighlighter - Centralized themed code syntax highlighter
  *
- * A wrapper around react-syntax-highlighter that automatically adapts to the current
- * Ant Design theme (light/dark mode). Provides consistent code highlighting across the app.
+ * A wrapper around react-syntax-highlighter that automatically adapts to the
+ * current Ant Design theme (light/dark mode). Provides consistent code
+ * highlighting across the app.
+ *
+ * The actual Prism-backed implementation (`react-syntax-highlighter` +
+ * grammars, ~140KB) lives in `ThemedSyntaxHighlighter.inner.tsx` and is pulled
+ * in via React.lazy so Vite code-splits it into its own chunk. The first
+ * render of any code block triggers the async import; subsequent renders are
+ * synchronous.
+ *
+ * The fallback renders the raw code inside the same wrapper tag (`PreTag`) so
+ * the layout doesn't jump — and so the wrapper element identity is preserved
+ * while the highlighter chunk downloads.
  *
  * Features:
  * - Auto-switches between oneDark and oneLight based on theme
@@ -12,71 +23,43 @@
  */
 
 import { theme } from 'antd';
-import type { CSSProperties } from 'react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { isDarkTheme } from '@/utils/theme';
+import { lazy, Suspense } from 'react';
+import type { ThemedSyntaxHighlighterProps } from './ThemedSyntaxHighlighter.inner';
 
-export interface ThemedSyntaxHighlighterProps {
-  /**
-   * Code content to highlight
-   */
-  children: string;
-  /**
-   * Programming language for syntax highlighting
-   * @default 'typescript'
-   */
-  language?: string;
-  /**
-   * Show line numbers
-   * @default false
-   */
-  showLineNumbers?: boolean;
-  /**
-   * Custom styles to apply to the highlighter container
-   */
-  customStyle?: CSSProperties;
-  /**
-   * HTML tag to use for wrapping. Must be a block-level element when
-   * `showLineNumbers` is set or when the content can wrap, otherwise soft
-   * wraps flow inline from the previous line's end (the "staircase" bug).
-   * Use 'span' only for truly inline single-line snippets.
-   * @default 'pre'
-   */
-  PreTag?: keyof React.JSX.IntrinsicElements;
-  /**
-   * Props forwarded to the inner <code> element. Use this to override the
-   * Prism theme's white-space/overflow rules (e.g. to enable wrapping for
-   * long one-liners).
-   */
-  codeTagProps?: React.HTMLAttributes<HTMLElement> & { style?: CSSProperties };
-}
+export type { ThemedSyntaxHighlighterProps };
 
-export const ThemedSyntaxHighlighter: React.FC<ThemedSyntaxHighlighterProps> = ({
+const ThemedSyntaxHighlighterInner = lazy(() => import('./ThemedSyntaxHighlighter.inner'));
+
+/**
+ * Plain, unhighlighted fallback shown while the Prism chunk loads. Uses the
+ * caller's `PreTag` so the outer wrapper element matches the highlighted
+ * output (default block-level `<pre>`; `'span'` for inline snippets).
+ */
+const PlainCodeFallback: React.FC<ThemedSyntaxHighlighterProps> = ({
   children,
-  language = 'typescript',
-  showLineNumbers = false,
   customStyle,
   PreTag = 'pre',
-  codeTagProps,
 }) => {
   const { token } = theme.useToken();
-  const isDark = isDarkTheme(token);
-
+  const Tag = PreTag as keyof React.JSX.IntrinsicElements;
   return (
-    <SyntaxHighlighter
-      language={language}
-      style={isDark ? oneDark : oneLight}
-      showLineNumbers={showLineNumbers}
-      customStyle={{
+    <Tag
+      style={{
         margin: 0,
         borderRadius: token.borderRadius,
+        fontFamily:
+          "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace",
+        whiteSpace: 'pre',
         ...customStyle,
       }}
-      PreTag={PreTag}
-      codeTagProps={codeTagProps}
     >
       {children}
-    </SyntaxHighlighter>
+    </Tag>
   );
 };
+
+export const ThemedSyntaxHighlighter: React.FC<ThemedSyntaxHighlighterProps> = (props) => (
+  <Suspense fallback={<PlainCodeFallback {...props} />}>
+    <ThemedSyntaxHighlighterInner {...props} />
+  </Suspense>
+);
