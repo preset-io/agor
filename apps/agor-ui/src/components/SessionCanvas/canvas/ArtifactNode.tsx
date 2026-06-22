@@ -47,7 +47,7 @@ import { withBodyReset } from './utils/sandpackDefaults';
 
 ensureSandpackCryptoSubtle();
 
-interface ArtifactNodeData {
+export interface ArtifactNodeData {
   objectId: string;
   artifactId: string;
   width: number;

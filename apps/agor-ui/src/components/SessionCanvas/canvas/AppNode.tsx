@@ -6,7 +6,7 @@ import { useCallback, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import { withBodyReset } from './utils/sandpackDefaults';
 
-interface AppNodeData {
+export interface AppNodeData {
   objectId: string;
   title: string;
   description?: string;
