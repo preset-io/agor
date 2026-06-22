@@ -1,12 +1,32 @@
 import { SmileOutlined } from '@ant-design/icons';
 import { Button, Form, Input, Popover } from 'antd';
-import EmojiPicker, {
-  type EmojiClickData,
-  EmojiStyle,
-  type PickerProps,
-  Theme,
-} from 'emoji-picker-react';
-import { useState } from 'react';
+import type { EmojiClickData, PickerProps } from 'emoji-picker-react';
+import { lazy, Suspense, useState } from 'react';
+
+// Lazy-load the emoji-picker-react render (~60KB) so the library is fetched
+// only when a picker is first opened, not at app mount. Types above are
+// `import type` and erase at compile time, so they don't pull the library in.
+const AgorEmojiPickerInner = lazy(() => import('./AgorEmojiPickerInner'));
+
+/**
+ * Sized placeholder matching the picker's footprint (350x400) so the popover
+ * doesn't reflow when the lazy chunk resolves.
+ */
+const EmojiPickerFallback: React.FC = () => (
+  <div
+    style={{
+      width: 350,
+      height: 400,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      color: 'var(--ant-color-text-secondary, #888)',
+      fontSize: 12,
+    }}
+  >
+    Loading…
+  </div>
+);
 
 /**
  * Shared <EmojiPicker /> wrapper that pins CSP-safe and visually-consistent
@@ -15,13 +35,9 @@ import { useState } from 'react';
  * cdn.jsdelivr.net, blocked by Agor's default img-src CSP.
  */
 export const AgorEmojiPicker: React.FC<Pick<PickerProps, 'onEmojiClick'>> = ({ onEmojiClick }) => (
-  <EmojiPicker
-    onEmojiClick={onEmojiClick}
-    theme={Theme.DARK}
-    emojiStyle={EmojiStyle.NATIVE}
-    width={350}
-    height={400}
-  />
+  <Suspense fallback={<EmojiPickerFallback />}>
+    <AgorEmojiPickerInner onEmojiClick={onEmojiClick} />
+  </Suspense>
 );
 
 interface EmojiPickerInputProps {
