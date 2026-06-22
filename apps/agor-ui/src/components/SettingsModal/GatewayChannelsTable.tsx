@@ -42,6 +42,7 @@ import {
   Radio,
   Result,
   Select,
+  type SelectProps,
   Space,
   Spin,
   Steps,
@@ -140,11 +141,12 @@ const SectionLabel: React.FC<{ icon: React.ReactNode; title: string; subtitle?: 
   </Space>
 );
 
-const UserSelect: React.FC<{ userById: Map<string, User>; placeholder?: string }> = ({
+const UserSelect: React.FC<SelectProps<string> & { userById: Map<string, User> }> = ({
   userById,
   placeholder = 'Select a user',
+  ...selectProps
 }) => (
-  <Select placeholder={placeholder} showSearch optionFilterProp="children">
+  <Select {...selectProps} placeholder={placeholder} showSearch optionFilterProp="children">
     {Array.from(userById.values())
       .sort((a, b) =>
         (a.name || a.email || a.user_id).localeCompare(b.name || b.email || b.user_id)
