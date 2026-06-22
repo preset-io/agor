@@ -414,6 +414,13 @@
       "when": 1781700000000,
       "tag": "0060_session_relationships",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1781800000000,
+      "tag": "0061_gateway_outbound_messages",
+      "breakpoints": true
     }
   ]
 }

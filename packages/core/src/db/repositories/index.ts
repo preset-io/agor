@@ -13,6 +13,7 @@ export * from './branches';
 export * from './card-types';
 export * from './cards';
 export * from './gateway-channels';
+export * from './gateway-outbound-messages';
 export * from './groups';
 export * from './knowledge';
 export * from './mcp-servers';

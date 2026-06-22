@@ -1,12 +1,20 @@
+import { BranchRepository, GatewayChannelRepository, SessionRepository } from '@agor/core/db';
 import {
+  type Branch,
+  type BranchID,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   type GatewayChannel,
   hasMinimumRole,
   ROLES,
+  type ScheduleID,
+  type UserID,
+  type UUID,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { GatewayService } from '../../services/gateway.js';
+import { hasBranchPermission } from '../../utils/branch-authorization.js';
 import {
   mcpLimit,
   mcpOptionalId,
@@ -24,11 +32,55 @@ function requireAdmin(ctx: McpContext, action: string): void {
   }
 }
 
+async function canUseGatewayOutbound(
+  ctx: McpContext,
+  branchRepo: BranchRepository,
+  branch: Branch
+): Promise<boolean> {
+  if (hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN)) return true;
+  const userId = ctx.userId as UUID;
+  const isOwner = await branchRepo.isOwner(branch.branch_id as BranchID, userId);
+  const effective = await branchRepo.resolveUserPermission(branch, userId);
+  return hasBranchPermission(
+    branch,
+    userId,
+    isOwner,
+    'all',
+    ctx.authenticatedUser?.role,
+    true,
+    effective
+  );
+}
+
+function getOutboundConfig(channel: GatewayChannel): {
+  outbound_enabled: boolean;
+  default_outbound_target?: string;
+  allowed_outbound_targets: string[];
+} {
+  const config = channel.config ?? {};
+  return {
+    outbound_enabled: config.outbound_enabled === true,
+    ...(typeof config.default_outbound_target === 'string'
+      ? { default_outbound_target: config.default_outbound_target }
+      : {}),
+    allowed_outbound_targets: Array.isArray(config.allowed_outbound_targets)
+      ? config.allowed_outbound_targets.filter(
+          (value): value is string => typeof value === 'string'
+        )
+      : [],
+  };
+}
+
 const configSchema = z
   .record(z.string(), z.unknown())
   .describe(
     'Platform-specific gateway configuration. Secrets are stored encrypted and returned redacted. Prefer env/template references for shared credentials where the connector supports them.'
   );
+
+const outboundTargetSchema = z
+  .string()
+  .regex(/^(channel:[^:\s]+|thread:[^:\s]+:[^:\s]+)$/)
+  .describe('Slack outbound target: channel:C123 or thread:C123:171234.000100');
 
 const envVarSchema = z.strictObject({
   key: mcpRequiredString('agenticConfig.envVars[].key', 'Environment variable name'),
@@ -353,6 +405,106 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         gateway_channel: redactGatewayChannel(updated),
         next_steps: ['Verify with agor_gateway_channels_list.'],
       });
+    }
+  );
+
+  server.registerTool(
+    'agor_gateway_outbound_targets_list',
+    {
+      description:
+        'List Slack gateway outbound targets the caller can use. Returns only outbound-enabled channels where the caller has branch all permission or admin access. Secrets and inbound channel keys are never returned.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.strictObject({
+        branchId: mcpOptionalId('branchId', 'Branch', 'Filter by target branch ID.'),
+        gatewayChannelId: mcpOptionalId(
+          'gatewayChannelId',
+          'Gateway channel',
+          'Filter by gateway channel ID.'
+        ),
+        channelType: z.enum(['slack']).optional().describe('Only Slack is supported for v0.'),
+      }),
+    },
+    async (args) => {
+      const channelRepo = new GatewayChannelRepository(ctx.db);
+      const branchRepo = new BranchRepository(ctx.db);
+      const branchFilter = args.branchId ? await branchRepo.findById(args.branchId) : null;
+      const branchFilterId = branchFilter?.branch_id;
+      const allChannels = args.gatewayChannelId
+        ? [await channelRepo.findById(args.gatewayChannelId)]
+        : await channelRepo.findAll();
+
+      const channels = [];
+      for (const channel of allChannels) {
+        if (!channel) continue;
+        if (args.channelType && channel.channel_type !== args.channelType) continue;
+        if (channel.channel_type !== 'slack') continue;
+        if (args.branchId && channel.target_branch_id !== branchFilterId) continue;
+        if (!channel.enabled) continue;
+        const outbound = getOutboundConfig(channel);
+        if (!outbound.outbound_enabled) continue;
+
+        const branch = await branchRepo.findById(channel.target_branch_id);
+        if (!branch) continue;
+        if (!(await canUseGatewayOutbound(ctx, branchRepo, branch))) continue;
+
+        channels.push({
+          gateway_channel_id: channel.id,
+          name: channel.name,
+          channel_type: 'slack' as const,
+          target_branch_id: channel.target_branch_id,
+          target_branch_name: branch.name,
+          outbound_enabled: outbound.outbound_enabled,
+          ...(outbound.default_outbound_target
+            ? { default_outbound_target: outbound.default_outbound_target }
+            : {}),
+          allowed_outbound_targets: outbound.allowed_outbound_targets,
+        });
+      }
+
+      return textResult({ channels });
+    }
+  );
+
+  server.registerTool(
+    'agor_gateway_emit_message',
+    {
+      description:
+        'Send a proactive Slack message through an outbound-enabled gateway channel and persist a seed/audit record. Does not create a thread-session mapping until a human replies.',
+      annotations: { destructiveHint: false, idempotentHint: false },
+      inputSchema: z.strictObject({
+        gatewayChannelId: mcpRequiredId(
+          'gatewayChannelId',
+          'Gateway channel',
+          'Gateway channel ID (UUIDv7 or short ID).'
+        ),
+        message: mcpRequiredString('message', 'Message to send to Slack.'),
+        target: outboundTargetSchema.optional().describe('Omit to use default_outbound_target.'),
+        purpose: mcpOptionalNonEmptyString('purpose', 'Optional audit purpose.'),
+      }),
+    },
+    async (args) => {
+      const gatewayService = ctx.app.service('gateway') as unknown as GatewayService;
+      let emittedByScheduleId: ScheduleID | undefined;
+      if (ctx.sessionId) {
+        try {
+          const session = await new SessionRepository(ctx.db).findById(ctx.sessionId);
+          emittedByScheduleId = session?.schedule_id;
+        } catch {
+          // Best-effort audit enrichment. A missing/stale session context should
+          // not block an otherwise authorized outbound emit.
+        }
+      }
+      const result = await gatewayService.emitMessage({
+        gatewayChannelId: args.gatewayChannelId,
+        message: args.message,
+        ...(args.target ? { target: args.target } : {}),
+        ...(args.purpose ? { purpose: args.purpose } : {}),
+        emittedByUserId: ctx.userId as UserID,
+        ...(ctx.sessionId ? { emittedBySessionId: ctx.sessionId } : {}),
+        ...(emittedByScheduleId ? { emittedByScheduleId } : {}),
+        userRole: ctx.authenticatedUser?.role,
+      });
+      return textResult(result);
     }
   );
 }

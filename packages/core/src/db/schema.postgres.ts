@@ -1735,6 +1735,87 @@ export const threadSessionMap = pgTable(
 );
 
 /**
+ * Gateway Outbound Messages table - Durable audit/seed rows for proactive outbound messages.
+ *
+ * Proactive emits seed external platform threads. They intentionally do NOT create
+ * thread_session_map rows until a human replies, preserving the invariant that one
+ * external conversation maps to one Agor session.
+ */
+export const gatewayOutboundMessages = pgTable(
+  'gateway_outbound_messages',
+  {
+    id: varchar('id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+
+    gateway_channel_id: varchar('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    channel_type: text('channel_type', {
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams'],
+    }).notNull(),
+
+    platform_channel_id: text('platform_channel_id').notNull(),
+    platform_message_id: text('platform_message_id').notNull(),
+    platform_thread_id: text('platform_thread_id').notNull(),
+    platform_permalink: text('platform_permalink'),
+
+    target_branch_id: varchar('target_branch_id', { length: 36 })
+      .notNull()
+      .references(() => branches.branch_id),
+    emitted_by_user_id: varchar('emitted_by_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id),
+    emitted_by_session_id: varchar('emitted_by_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+    emitted_by_task_id: varchar('emitted_by_task_id', { length: 36 }).references(
+      () => tasks.task_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+    emitted_by_schedule_id: varchar('emitted_by_schedule_id', { length: 36 }).references(
+      () => schedules.schedule_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+
+    message_text: text('message_text').notNull(),
+    message_preview: text('message_preview').notNull(),
+    metadata: t.json<Record<string, unknown> | null>('metadata'),
+    consumed_by_session_id: varchar('consumed_by_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+    consumed_at: t.timestamp('consumed_at'),
+  },
+  (table) => ({
+    uniqueChannelThread: uniqueIndex('uniq_gateway_outbound_channel_thread').on(
+      table.gateway_channel_id,
+      table.platform_thread_id
+    ),
+    emittedSessionIdx: index('idx_gateway_outbound_emitted_session').on(
+      table.emitted_by_session_id
+    ),
+    emittedScheduleIdx: index('idx_gateway_outbound_emitted_schedule').on(
+      table.emitted_by_schedule_id
+    ),
+    targetBranchCreatedIdx: index('idx_gateway_outbound_branch_created').on(
+      table.target_branch_id,
+      table.created_at
+    ),
+    consumedIdx: index('idx_gateway_outbound_consumed').on(table.consumed_at),
+  })
+);
+
+/**
  * Session Env Selections - Many-to-many between sessions and session-scope env vars.
  *
  * See the matching sqlite definition for full docs.
@@ -2209,6 +2290,8 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
+export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
+export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type SerializedSessionRow = typeof serializedSessions.$inferSelect;
 export type SerializedSessionInsert = typeof serializedSessions.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;

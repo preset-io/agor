@@ -12,7 +12,7 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
-import { SessionStatus } from '@agor-live/client';
+import { SessionStatus, shortId } from '@agor-live/client';
 import { App as AntdApp, ConfigProvider, Layout, theme } from 'antd';
 import { useEffect, useMemo } from 'react';
 import { ReactFlowProvider } from 'reactflow';
@@ -421,7 +421,7 @@ const branches = branchFixtures.map(
       archived: false,
       filesystem_status: 'ready',
       others_can: 'session',
-      url: `/ui/w/${fixture.id.slice(0, 8)}`,
+      url: `/ui/w/${shortId(fixture.id)}`,
     }) as unknown as Branch
 );
 
@@ -448,7 +448,7 @@ const sessions = branchFixtures.flatMap((fixture, branchIndex) =>
         unix_username: null,
         branch_id: fixture.id as BranchID,
         branch_board_id: boardId,
-        url: `/ui/s/${fixture.id.slice(0, 8)}${sessionIndex}`,
+        url: `/ui/s/${shortId(fixture.id)}${sessionIndex}`,
         git_state: {
           ref: fixture.ref,
           base_sha: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',

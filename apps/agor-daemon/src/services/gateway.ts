@@ -8,8 +8,10 @@
 
 import { PublicBaseUrlNotConfiguredError, requirePublicBaseUrl } from '@agor/core/config';
 import {
+  BranchRepository,
   type Database,
   GatewayChannelRepository,
+  GatewayOutboundMessageRepository,
   MCPServerRepository,
   shortId,
   ThreadSessionMapRepository,
@@ -31,8 +33,11 @@ import {
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   AgenticToolName,
+  BranchPermissionLevel,
   ChannelType,
   GatewayChannel,
+  GatewayOutboundMessage,
+  GatewayOutboundMessageID,
   MCPServerID,
   MessageSource,
   Session,
@@ -42,8 +47,9 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
+import { hasBranchPermission } from '../utils/branch-authorization.js';
 
 /**
  * Inbound message data (platform → session)
@@ -80,6 +86,45 @@ interface RouteMessageData {
 interface RouteMessageResult {
   routed: boolean;
   channelType?: string;
+}
+
+interface EmitGatewayMessageData {
+  gatewayChannelId: string;
+  message: string;
+  target?: string;
+  purpose?: string;
+  emittedByUserId: UserID;
+  emittedBySessionId?: SessionID;
+  emittedByTaskId?: string;
+  emittedByScheduleId?: string;
+  userRole?: string;
+}
+
+interface EmitGatewayMessageResult {
+  success: true;
+  gateway_outbound_message_id: string;
+  gateway_channel_id: string;
+  channel_type: 'slack';
+  platform_channel_id: string;
+  platform_message_id: string;
+  platform_thread_id: string;
+  platform_permalink?: string | null;
+}
+
+interface SlackOutboundTarget {
+  kind: 'channel' | 'thread';
+  channel: string;
+  thread_ts?: string;
+}
+
+interface SlackDirectConnector extends GatewayConnector {
+  sendSlackMessage(req: {
+    channel: string;
+    text: string;
+    blocks?: unknown[];
+    thread_ts?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ ts: string; channel: string; thread_ts: string; permalink?: string | null }>;
 }
 
 export type GatewayProgressState = 'queued' | 'working' | 'done' | 'failed';
@@ -133,6 +178,88 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
 
 function isSlackThinkingPlaceholder(text: string): boolean {
   return /^thinking\s*\.{3}$/i.test(text.trim());
+}
+
+function parseSlackOutboundTarget(target: string): SlackOutboundTarget {
+  const channelMatch = /^channel:([^:\s]+)$/.exec(target);
+  if (channelMatch) {
+    return { kind: 'channel', channel: channelMatch[1] };
+  }
+
+  const threadMatch = /^thread:([^:\s]+):([^:\s]+)$/.exec(target);
+  if (threadMatch) {
+    return { kind: 'thread', channel: threadMatch[1], thread_ts: threadMatch[2] };
+  }
+
+  throw new Error(
+    'Invalid Slack outbound target. Expected channel:C123 or thread:C123:171234.000100'
+  );
+}
+
+function redactProviderErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/xox[baprs]-[A-Za-z0-9-]+/g, '[redacted-slack-token]')
+    .replace(/xapp-[A-Za-z0-9-]+/g, '[redacted-slack-token]');
+}
+
+function previewText(text: string, maxChars = 500): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function quoteForPrompt(text: string, maxChars = 2000): string {
+  const truncated = text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`;
+  return truncated
+    .split(/\r?\n/)
+    .map((line) => `> ${line}`)
+    .join('\n');
+}
+
+function buildSeededThreadInitialPrompt(args: {
+  seed: GatewayOutboundMessage;
+  channel: GatewayChannel;
+  replyText: string;
+  metadata?: Record<string, unknown>;
+}): string {
+  const slackSenderName =
+    typeof args.metadata?.slack_user_name === 'string' ? args.metadata.slack_user_name : undefined;
+  const slackSenderId =
+    typeof args.metadata?.slack_user_id === 'string' ? args.metadata.slack_user_id : undefined;
+  const slackSenderEmail =
+    typeof args.metadata?.slack_user_email === 'string'
+      ? args.metadata.slack_user_email
+      : undefined;
+  const slackChannelName =
+    typeof args.metadata?.slack_channel_name === 'string'
+      ? args.metadata.slack_channel_name
+      : undefined;
+
+  const lines = [
+    '[Gateway context]',
+    '',
+    'This Slack thread began from a proactive Agor gateway message. Use the provenance below to understand what the human is replying to.',
+    '',
+    `Outbound seed ID: ${args.seed.id}`,
+    `Originating session: ${args.seed.emitted_by_session_id ?? 'none'}`,
+    `Originating task: ${args.seed.emitted_by_task_id ?? 'none'}`,
+    `Originating schedule: ${args.seed.emitted_by_schedule_id ?? 'none'}`,
+    `Emitted by Agor user: ${args.seed.emitted_by_user_id}`,
+    `Gateway channel: ${args.channel.name} (${args.channel.id})`,
+    `Slack thread: ${args.seed.platform_thread_id}`,
+    `Slack channel: ${slackChannelName ?? args.seed.platform_channel_id}`,
+    `Slack sender name: ${slackSenderName ?? 'unknown'}`,
+    `Slack sender ID: ${slackSenderId ?? 'unknown'}`,
+    `Slack sender email: ${slackSenderEmail ?? 'unknown'}`,
+    '',
+    'Original proactive Agor message:',
+    quoteForPrompt(args.seed.message_text),
+    '',
+    'Human Slack reply:',
+    quoteForPrompt(args.replyText),
+  ];
+  return lines.join('\n');
 }
 
 /**
@@ -277,6 +404,8 @@ function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): Ga
 export class GatewayService {
   private channelRepo: GatewayChannelRepository;
   private threadMapRepo: ThreadSessionMapRepository;
+  private outboundRepo: GatewayOutboundMessageRepository;
+  private branchRepo: BranchRepository;
   private usersRepo: UsersRepository;
 
   private mcpServerRepo: MCPServerRepository;
@@ -322,6 +451,8 @@ export class GatewayService {
   constructor(db: Database, app: Application) {
     this.channelRepo = new GatewayChannelRepository(db);
     this.threadMapRepo = new ThreadSessionMapRepository(db);
+    this.outboundRepo = new GatewayOutboundMessageRepository(db);
+    this.branchRepo = new BranchRepository(db);
     this.usersRepo = new UsersRepository(db);
 
     this.mcpServerRepo = new MCPServerRepository(db);
@@ -1024,6 +1155,136 @@ export class GatewayService {
     }
   }
 
+  private async ensureCanEmitFromChannel(
+    channel: GatewayChannel,
+    userId: UserID,
+    userRole?: string
+  ): Promise<void> {
+    if (hasMinimumRole(userRole, ROLES.ADMIN)) return;
+
+    const branch = await this.branchRepo.findById(channel.target_branch_id);
+    if (!branch) {
+      throw new Error(`Branch not found for gateway channel ${shortId(channel.id)}`);
+    }
+
+    const isOwner = await this.branchRepo.isOwner(branch.branch_id, userId);
+    const effectivePermission = await this.branchRepo.resolveUserPermission(branch, userId);
+    const canEmit = hasBranchPermission(
+      branch,
+      userId,
+      isOwner,
+      'all' as BranchPermissionLevel,
+      userRole,
+      true,
+      effectivePermission
+    );
+
+    if (!canEmit) {
+      throw new Error(
+        'Insufficient branch permission: gateway outbound emits require branch all permission or admin access'
+      );
+    }
+  }
+
+  async emitMessage(data: EmitGatewayMessageData): Promise<EmitGatewayMessageResult> {
+    const channel = await this.channelRepo.findById(data.gatewayChannelId);
+    if (!channel) throw new Error('Gateway channel not found');
+    if (!channel.enabled) throw new Error('Gateway channel is disabled');
+    if (channel.channel_type !== 'slack')
+      throw new Error('Gateway outbound v0 only supports Slack channels');
+
+    const config = channel.config as Record<string, unknown>;
+    if (config.outbound_enabled !== true) {
+      throw new Error('Gateway outbound is disabled for this channel');
+    }
+
+    await this.ensureCanEmitFromChannel(channel, data.emittedByUserId, data.userRole);
+
+    const target =
+      data.target ??
+      (typeof config.default_outbound_target === 'string'
+        ? config.default_outbound_target
+        : undefined);
+    if (!target) throw new Error('No usable default outbound target configured');
+
+    const allowedTargets = Array.isArray(config.allowed_outbound_targets)
+      ? config.allowed_outbound_targets.filter(
+          (value): value is string => typeof value === 'string'
+        )
+      : [];
+    if (data.target && !allowedTargets.includes(target)) {
+      throw new Error('Outbound target is not allowlisted for this gateway channel');
+    }
+
+    const parsedTarget = parseSlackOutboundTarget(target);
+    const connector = getConnector(
+      channel.channel_type as ChannelType,
+      channel.config
+    ) as SlackDirectConnector;
+    if (typeof connector.sendSlackMessage !== 'function') {
+      throw new Error('Slack connector does not support direct outbound sends');
+    }
+
+    const { text, blocks } = normalizeOutbound(
+      connector.formatMessage ? connector.formatMessage(data.message) : data.message
+    );
+
+    let sent: Awaited<ReturnType<SlackDirectConnector['sendSlackMessage']>>;
+    try {
+      sent = await connector.sendSlackMessage({
+        channel: parsedTarget.channel,
+        text,
+        blocks,
+        ...(parsedTarget.thread_ts ? { thread_ts: parsedTarget.thread_ts } : {}),
+        metadata: {
+          ...(data.purpose ? { purpose: data.purpose } : {}),
+          target,
+        },
+      });
+    } catch (error) {
+      throw new Error(`Slack API failure: ${redactProviderErrorMessage(error)}`);
+    }
+
+    const platformThreadId = `${sent.channel}-${sent.thread_ts || sent.ts}`;
+    const row = await this.outboundRepo.create({
+      gateway_channel_id: channel.id,
+      channel_type: 'slack',
+      platform_channel_id: sent.channel,
+      platform_message_id: sent.ts,
+      platform_thread_id: platformThreadId,
+      platform_permalink: sent.permalink ?? null,
+      target_branch_id: channel.target_branch_id,
+      emitted_by_user_id: data.emittedByUserId,
+      emitted_by_session_id: data.emittedBySessionId ?? null,
+      emitted_by_task_id:
+        (data.emittedByTaskId as GatewayOutboundMessage['emitted_by_task_id']) ?? null,
+      emitted_by_schedule_id:
+        (data.emittedByScheduleId as GatewayOutboundMessage['emitted_by_schedule_id']) ?? null,
+      message_text: data.message,
+      message_preview: previewText(data.message),
+      metadata: {
+        target,
+        ...(data.purpose ? { purpose: data.purpose } : {}),
+      },
+    });
+
+    await this.channelRepo.updateLastMessage(channel.id);
+    console.log(
+      `[gateway] Proactive Slack outbound ${shortId(row.id)} sent via ${shortId(channel.id)} to ${target}`
+    );
+
+    return {
+      success: true,
+      gateway_outbound_message_id: row.id,
+      gateway_channel_id: channel.id,
+      channel_type: 'slack',
+      platform_channel_id: sent.channel,
+      platform_message_id: sent.ts,
+      platform_thread_id: platformThreadId,
+      ...(sent.permalink ? { platform_permalink: sent.permalink } : {}),
+    };
+  }
+
   private async fetchExistingSessionUrlForGatewayUser(
     sessionId: SessionID,
     user: User
@@ -1089,6 +1350,16 @@ export class GatewayService {
       );
     }
 
+    const outboundSeed =
+      !existingMapping && channel.channel_type === 'slack'
+        ? await this.outboundRepo.findUnconsumedByChannelAndThread(channel.id, data.thread_id)
+        : null;
+    if (outboundSeed) {
+      console.log(
+        `[gateway] Slack inbound thread ${data.thread_id} is replying to outbound seed ${shortId(outboundSeed.id)}`
+      );
+    }
+
     // 3. Cross-channel ownership check (MUST happen before any sendSystemMessage calls).
     // If this thread is owned by a DIFFERENT gateway channel on the same daemon,
     // silently drop the message — we must not interfere with another gateway's thread.
@@ -1124,7 +1395,7 @@ export class GatewayService {
     // IMPORTANT: Silently drop — do NOT send a debug message. These are normal messages
     // in threads that have nothing to do with Agor. Sending a visible rejection would
     // cause the bot to spam every active thread in the channel.
-    if (!existingMapping && data.metadata?.requires_mapping_verification) {
+    if (!existingMapping && !outboundSeed && data.metadata?.requires_mapping_verification) {
       // Use debug level — this fires for every non-Agor thread reply in monitored
       // channels and would create excessive log noise at info level.
       console.debug(
@@ -1398,6 +1669,12 @@ export class GatewayService {
         thread_id: data.thread_id,
       };
 
+      if (outboundSeed) {
+        gatewaySource.outbound_seed_id = outboundSeed.id;
+        gatewaySource.outbound_seed_thread_id = outboundSeed.platform_thread_id;
+        gatewaySource.proactive_seed = true;
+      }
+
       // Add GitHub-specific metadata for richer context
       if (channel.channel_type === 'github') {
         try {
@@ -1492,9 +1769,20 @@ export class GatewayService {
         status: 'active',
         metadata:
           channel.channel_type === 'slack'
-            ? { ...(data.metadata ?? {}), slack_active_thread_id: data.thread_id }
+            ? {
+                ...(data.metadata ?? {}),
+                slack_active_thread_id: data.thread_id,
+                ...(outboundSeed ? { outbound_seed_id: outboundSeed.id } : {}),
+              }
             : (data.metadata ?? null),
       });
+
+      if (outboundSeed) {
+        await this.outboundRepo.markConsumed(
+          outboundSeed.id as GatewayOutboundMessageID,
+          session.session_id as SessionID
+        );
+      }
 
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
 
@@ -1542,7 +1830,14 @@ export class GatewayService {
       // so the agent knows where it's operating. Follow-up messages (existing
       // mapping) are sent as-is since the session already has context.
       let promptText = data.text;
-      if (created && channel.channel_type === 'github') {
+      if (created && outboundSeed) {
+        promptText = buildSeededThreadInitialPrompt({
+          seed: outboundSeed,
+          channel,
+          replyText: data.text,
+          metadata: data.metadata,
+        });
+      } else if (created && channel.channel_type === 'github') {
         promptText = buildGitHubInitialPrompt(data.thread_id, data.text, data.metadata);
       }
 
@@ -1551,7 +1846,7 @@ export class GatewayService {
       // come from a different user in a shared channel.
       // Skip for initial GitHub messages — buildGitHubInitialPrompt() already
       // includes repo/issue/user context and adding both would be redundant.
-      const skipContext = created && channel.channel_type === 'github';
+      const skipContext = created && (channel.channel_type === 'github' || !!outboundSeed);
       if (!skipContext) {
         const gatewayCtx = buildGatewayContext(channel, data);
         const contextPrefix = formatGatewayContext(gatewayCtx);

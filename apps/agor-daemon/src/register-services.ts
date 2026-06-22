@@ -460,6 +460,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.use('/gateway-channels', createGatewayChannelsService(db));
     app.use('/thread-session-map', createThreadSessionMapService(db));
     app.use('/gateway', createGatewayService(db, app), {
+      // Only expose the inbound gateway entrypoint and existing route hook
+      // externally. Proactive outbound emits are intentionally invoked through
+      // the authenticated Agor MCP tool surface; exposing emitMessage here would
+      // bypass the gateway service's normal channel_key auth model.
       methods: ['create', 'routeMessage'],
     });
 

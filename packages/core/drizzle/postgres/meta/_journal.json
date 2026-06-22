@@ -358,6 +358,13 @@
       "when": 1781700000000,
       "tag": "0051_session_relationships",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1781800000000,
+      "tag": "0052_gateway_outbound_messages",
+      "breakpoints": true
     }
   ]
 }

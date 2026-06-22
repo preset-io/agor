@@ -293,4 +293,56 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(services.create).not.toHaveBeenCalled();
     expect(services.patch).not.toHaveBeenCalled();
   });
+
+  it('emits outbound messages through the gateway service without returning secrets', async () => {
+    const emitMessage = vi.fn(async () => ({
+      success: true,
+      gateway_outbound_message_id: 'out-1',
+      gateway_channel_id: 'chan-1',
+      channel_type: 'slack',
+      platform_channel_id: 'C123',
+      platform_message_id: '171234.000100',
+      platform_thread_id: 'C123-171234.000100',
+      platform_permalink: 'https://slack.example/archives/C123/p171234000100',
+    }));
+    const app = makeFakeApp({
+      gateway: { emitMessage },
+    });
+
+    const tools = await captureTools('member', app);
+    const result = await tools.agor_gateway_emit_message.handler({
+      gatewayChannelId: 'chan-1',
+      message: 'Hello Slack',
+      target: 'channel:C123',
+      purpose: 'test',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(emitMessage).toHaveBeenCalledWith({
+      gatewayChannelId: 'chan-1',
+      message: 'Hello Slack',
+      target: 'channel:C123',
+      purpose: 'test',
+      emittedByUserId: 'user-1',
+      emittedBySessionId: 'sess-1',
+      userRole: 'member',
+    });
+    expect(payload).toMatchObject({
+      success: true,
+      gateway_outbound_message_id: 'out-1',
+      platform_thread_id: 'C123-171234.000100',
+    });
+    expect(JSON.stringify(payload)).not.toContain('xoxb');
+    expect(JSON.stringify(payload)).not.toContain('channel_key');
+  });
+
+  it('validates outbound target grammar', async () => {
+    const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage: vi.fn() } }));
+    const parsed = tools.agor_gateway_emit_message.cfg.inputSchema.safeParse({
+      gatewayChannelId: 'chan-1',
+      message: 'Hello',
+      target: 'C123',
+    });
+    expect(parsed.success).toBe(false);
+  });
 });
