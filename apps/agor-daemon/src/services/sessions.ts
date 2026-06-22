@@ -16,8 +16,13 @@ import {
   type SessionWithLastMessage,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, Forbidden } from '@agor/core/feathers';
-import { formatModelToolMismatchWarning, lintModelToolMatch } from '@agor/core/models';
+import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
+import {
+  formatModelToolMismatchWarning,
+  formatUnsupportedAgorCodexModelMessage,
+  isUnsupportedAgorCodexModel,
+  lintModelToolMatch,
+} from '@agor/core/models';
 import { resolveChildSessionConfig } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
@@ -124,6 +129,19 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private sessionEnvSelectionRepo: SessionEnvSelectionRepository;
   private usersRepo: UsersRepository;
   private branchRepo: BranchRepository;
+
+  private assertSupportedModelConfig(
+    agenticTool: Session['agentic_tool'],
+    modelConfig: Session['model_config'] | undefined
+  ): void {
+    if (
+      agenticTool === 'codex' &&
+      modelConfig?.model &&
+      isUnsupportedAgorCodexModel(modelConfig.model)
+    ) {
+      throw new BadRequest(formatUnsupportedAgorCodexModelMessage(modelConfig.model));
+    }
+  }
 
   constructor(db: Database, app: Application) {
     const sessionRepo = new SessionRepository(db);
@@ -347,6 +365,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
     // only when the branch opts in via dangerously_allow_session_sharing.
     const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
+    const inheritableConfig = getInheritableConfig(parent);
+    this.assertSupportedModelConfig(parent.agentic_tool, inheritableConfig.model_config);
 
     const forkedSession = await this.create(
       {
@@ -367,7 +387,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
           children: [],
         },
         contextFiles: [...(parent.contextFiles || [])],
-        ...getInheritableConfig(parent),
+        ...inheritableConfig,
         tasks: [],
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
@@ -495,6 +515,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     if (lintWarning) {
       console.warn(`[SessionsService.spawn] ${lintWarning}`);
     }
+
+    this.assertSupportedModelConfig(targetTool, modelConfig);
 
     // callback_session_id is the single source of truth for where to deliver
     // callbacks. Default to parent session when callbacks are enabled (which

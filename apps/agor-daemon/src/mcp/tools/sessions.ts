@@ -1680,6 +1680,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codex: {
           default: DEFAULT_CODEX_MODEL,
           models: codexModels,
+          note: 'Codex defaults to gpt-5.5; omit modelConfig unless a specific model is required. Use gpt-5.4-mini for lighter subagents. Legacy Codex aliases are intentionally omitted from this selectable list.',
         },
         copilot: {
           default: DEFAULT_COPILOT_MODEL,

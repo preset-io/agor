@@ -1212,6 +1212,13 @@ describe('agor_models_list', () => {
       displayName: expect.any(String),
       description: expect.any(String),
     });
+    expect(parsed.codex.note).toContain('omit modelConfig');
+
+    const codexIds = parsed.codex.models.map((m: { id: string }) => m.id);
+    expect(codexIds).toContain('gpt-5.5');
+    expect(codexIds).toContain('gpt-5.4-mini');
+    expect(codexIds).not.toContain('gpt-5.4');
+    expect(codexIds).not.toContain('gpt-5-codex');
   });
 });
 

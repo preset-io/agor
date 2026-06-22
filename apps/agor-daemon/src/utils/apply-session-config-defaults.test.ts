@@ -89,6 +89,23 @@ describe('applySessionConfigDefaults', () => {
     );
   });
 
+  it('rejects an explicit unsupported Codex model before create', async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: {
+        agentic_tool: 'codex',
+        created_by: ALICE,
+        permission_config: { mode: 'acceptEdits' },
+        model_config: { mode: 'alias', model: 'gpt-5-codex', updated_at: 'now' },
+      },
+      users: { [ALICE]: { user_id: ALICE } },
+    });
+
+    await expect(hook(ctx)).rejects.toThrow('gpt-5-codex');
+  });
+
   it("fills missing model_config from the user's default", async () => {
     const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
     const ctx = makeContext({
@@ -108,6 +125,25 @@ describe('applySessionConfigDefaults', () => {
     expect((ctx.data as { model_config: { model: string } }).model_config.model).toBe(
       'claude-opus-4-6'
     );
+  });
+
+  it("rejects an unsupported Codex model from the user's default", async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: { agentic_tool: 'codex', created_by: ALICE },
+      users: {
+        [ALICE]: {
+          user_id: ALICE,
+          default_agentic_config: {
+            codex: { modelConfig: { model: 'gpt-5-codex' } },
+          },
+        },
+      },
+    });
+
+    await expect(hook(ctx)).rejects.toThrow('gpt-5-codex');
   });
 
   it("fills missing advisorModel from the user's model default", async () => {
