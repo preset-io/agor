@@ -61,7 +61,12 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import {
+  GATEWAY_REDACTED_SENTINEL,
+  GATEWAY_SENSITIVE_CONFIG_FIELDS,
+  hasMinimumRole,
+  ROLES,
+} from '@agor/core/types';
 import { executorRuntimeScopeGuard } from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
@@ -1600,6 +1605,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           const data = context.data as Record<string, unknown> | undefined;
           if (!data || !context.id) return context;
 
+          // Explicit null means clear all agentic config. Do not resurrect envVars
+          // from the existing row while resolving redacted sentinels.
+          if (data.agentic_config === null) return context;
+
           let ac = data.agentic_config as Record<string, unknown> | undefined;
           const hadAgenticConfigInPatch = ac !== undefined;
           const ensureAc = (): Record<string, unknown> => {
@@ -1610,7 +1619,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             return ac;
           };
 
-          const SENTINEL = '••••••••';
+          const SENTINEL = GATEWAY_REDACTED_SENTINEL;
           const incomingVars = ac?.envVars as
             | { key: string; value: string; forceOverride: boolean }[]
             | undefined;
@@ -1679,16 +1688,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           const redact = (channel: Record<string, unknown>) => {
             if (channel?.config && typeof channel.config === 'object') {
               const config = { ...(channel.config as Record<string, unknown>) };
-              for (const field of [
-                'bot_token',
-                'app_token',
-                'signing_secret',
-                'private_key',
-                'webhook_secret',
-                'app_password',
-              ]) {
+              for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
                 if (config[field]) {
-                  config[field] = '••••••••';
+                  config[field] = GATEWAY_REDACTED_SENTINEL;
                 }
               }
               channel.config = config;
@@ -1699,7 +1701,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               if (Array.isArray(ac.envVars)) {
                 ac.envVars = (
                   ac.envVars as { key: string; value: string; forceOverride: boolean }[]
-                ).map((v) => ({ key: v.key, value: '••••••••', forceOverride: v.forceOverride }));
+                ).map((v) => ({
+                  key: v.key,
+                  value: GATEWAY_REDACTED_SENTINEL,
+                  forceOverride: v.forceOverride,
+                }));
               }
             }
           };

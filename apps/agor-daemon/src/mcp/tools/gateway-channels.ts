@@ -1,7 +1,15 @@
-import { type GatewayChannel, hasMinimumRole, ROLES } from '@agor/core/types';
+import {
+  GATEWAY_REDACTED_SENTINEL,
+  GATEWAY_SENSITIVE_CONFIG_FIELDS,
+  type GatewayChannel,
+  hasMinimumRole,
+  ROLES,
+} from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
+  mcpLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNonEmptyString,
   mcpRequiredId,
@@ -9,16 +17,6 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
-
-const REDACTED_SENTINEL = '••••••••';
-const SENSITIVE_CONFIG_FIELDS = new Set([
-  'bot_token',
-  'app_token',
-  'signing_secret',
-  'private_key',
-  'webhook_secret',
-  'app_password',
-]);
 
 function requireAdmin(ctx: McpContext, action: string): void {
   if (!hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN)) {
@@ -36,7 +34,7 @@ const envVarSchema = z.strictObject({
   key: mcpRequiredString('agenticConfig.envVars[].key', 'Environment variable name'),
   value: mcpRequiredString(
     'agenticConfig.envVars[].value',
-    `Environment variable value. Prefer references/templates over raw secrets. Existing redacted values may be passed as '${REDACTED_SENTINEL}' on update to preserve them.`
+    `Environment variable value. Prefer references/templates over raw secrets. Existing redacted values may be passed as '${GATEWAY_REDACTED_SENTINEL}' on update to preserve them.`
   ),
   forceOverride: z
     .boolean()
@@ -170,7 +168,7 @@ const gatewayChannelUpdateSchema = z.strictObject({
   config: configSchema
     .optional()
     .describe(
-      `Partial platform config to merge. Send '${REDACTED_SENTINEL}' or omit sensitive fields to preserve existing secrets; send a new value to rotate.`
+      `Partial platform config to merge. Send '${GATEWAY_REDACTED_SENTINEL}' or omit sensitive fields to preserve existing secrets; send a new value to rotate.`
     ),
   agenticConfig: agenticConfigSchema
     .nullable()
@@ -185,15 +183,15 @@ type GatewayChannelSummary = Omit<
   channel_type: GatewayChannel['channel_type'];
   target_branch_id: string;
   agor_user_id: string;
-  channel_key: typeof REDACTED_SENTINEL;
+  channel_key: typeof GATEWAY_REDACTED_SENTINEL;
   config: Record<string, unknown>;
   agentic_config: GatewayChannel['agentic_config'];
 };
 
 function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
   const config = { ...(channel.config ?? {}) };
-  for (const field of SENSITIVE_CONFIG_FIELDS) {
-    if (config[field]) config[field] = REDACTED_SENTINEL;
+  for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
+    if (config[field]) config[field] = GATEWAY_REDACTED_SENTINEL;
   }
 
   let agentic_config = channel.agentic_config;
@@ -202,7 +200,7 @@ function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
       ...agentic_config,
       envVars: agentic_config.envVars.map((envVar) => ({
         ...envVar,
-        value: REDACTED_SENTINEL,
+        value: GATEWAY_REDACTED_SENTINEL,
       })),
     };
   }
@@ -211,7 +209,7 @@ function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
     ...channel,
     target_branch_id: channel.target_branch_id,
     agor_user_id: channel.agor_user_id,
-    channel_key: REDACTED_SENTINEL,
+    channel_key: GATEWAY_REDACTED_SENTINEL,
     config,
     agentic_config,
   };
@@ -275,24 +273,34 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           .enum(['slack', 'github', 'teams', 'discord', 'whatsapp', 'telegram'])
           .optional()
           .describe('Optional platform filter.'),
+        limit: mcpLimit(100),
+        skip: mcpOffset(0),
       }),
     },
     async (args) => {
       requireAdmin(ctx, 'list gateway channels');
       const result = await ctx.app.service('gateway-channels').find({
         ...ctx.baseServiceParams,
-        query: { $limit: 100 },
+        query: {
+          ...(args.includeDisabled === false ? { enabled: true } : {}),
+          ...(args.channelType ? { channel_type: args.channelType } : {}),
+          $limit: args.limit ?? 100,
+          $skip: args.skip ?? 0,
+        },
       });
-      let channels = (Array.isArray(result) ? result : result.data) as GatewayChannel[];
-      if (args.includeDisabled === false) channels = channels.filter((channel) => channel.enabled);
-      if (args.channelType) {
-        channels = channels.filter((channel) => channel.channel_type === args.channelType);
-      }
+      const channels = (Array.isArray(result) ? result : result.data) as GatewayChannel[];
+      const totalAvailable = Array.isArray(result) ? channels.length : result.total;
 
       return textResult({
         gateway_channels: channels.map(redactGatewayChannel),
+        pagination: {
+          total: totalAvailable,
+          returned: channels.length,
+          limit: args.limit ?? 100,
+          skip: args.skip ?? 0,
+        },
         summary: {
-          total: channels.length,
+          returned: channels.length,
           enabled: channels.filter((channel) => channel.enabled).length,
           disabled: channels.filter((channel) => !channel.enabled).length,
         },
@@ -327,7 +335,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
   server.registerTool(
     'agor_gateway_channels_update',
     {
-      description: `Update a gateway channel definition (admin-only) through the gateway-channels service. Provide only fields to change. To preserve an existing secret in config or agenticConfig.envVars, omit it or pass '${REDACTED_SENTINEL}'; to rotate it, pass a new value. Responses always redact secrets and channel_key.`,
+      description: `Update a gateway channel definition (admin-only) through the gateway-channels service. Provide only fields to change. To preserve an existing secret in config or agenticConfig.envVars, omit it or pass '${GATEWAY_REDACTED_SENTINEL}'; to rotate it, pass a new value. Responses always redact secrets and channel_key.`,
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: gatewayChannelUpdateSchema,
     },

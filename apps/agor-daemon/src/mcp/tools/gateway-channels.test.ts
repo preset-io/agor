@@ -126,42 +126,34 @@ describe('agor_gateway_channels MCP tools', () => {
   });
 
   it('lists with filters and redacts Teams app_password', async () => {
+    const findCalls: Array<Record<string, unknown> | undefined> = [];
     const app = makeFakeApp({
       'gateway-channels': {
-        find: async () => ({
-          data: [
-            {
-              id: 'chan-slack',
-              created_by: 'admin-1',
-              name: 'Slack',
-              channel_type: 'slack',
-              target_branch_id: 'branch-1',
-              agor_user_id: 'user-1',
-              channel_key: 'slack-key',
-              config: { bot_token: 'xoxb', app_token: 'xapp' },
-              agentic_config: null,
-              enabled: false,
-              created_at: '2026-06-22T00:00:00.000Z',
-              updated_at: '2026-06-22T00:00:00.000Z',
-              last_message_at: null,
-            },
-            {
-              id: 'chan-teams',
-              created_by: 'admin-1',
-              name: 'Teams',
-              channel_type: 'teams',
-              target_branch_id: 'branch-1',
-              agor_user_id: 'user-1',
-              channel_key: 'teams-key',
-              config: { app_id: 'app', app_password: 'teams-secret' },
-              agentic_config: null,
-              enabled: true,
-              created_at: '2026-06-22T00:00:00.000Z',
-              updated_at: '2026-06-22T00:00:00.000Z',
-              last_message_at: null,
-            },
-          ],
-        }),
+        find: async (params: { query?: Record<string, unknown> }) => {
+          findCalls.push(params.query);
+          return {
+            total: 1,
+            limit: params.query?.$limit,
+            skip: params.query?.$skip,
+            data: [
+              {
+                id: 'chan-teams',
+                created_by: 'admin-1',
+                name: 'Teams',
+                channel_type: 'teams',
+                target_branch_id: 'branch-1',
+                agor_user_id: 'user-1',
+                channel_key: 'teams-key',
+                config: { app_id: 'app', app_password: 'teams-secret' },
+                agentic_config: null,
+                enabled: true,
+                created_at: '2026-06-22T00:00:00.000Z',
+                updated_at: '2026-06-22T00:00:00.000Z',
+                last_message_at: null,
+              },
+            ],
+          };
+        },
       },
     });
 
@@ -169,9 +161,17 @@ describe('agor_gateway_channels MCP tools', () => {
     const result = await tools.agor_gateway_channels_list.handler({
       includeDisabled: false,
       channelType: 'teams',
+      limit: 25,
+      skip: 10,
     });
     const payload = JSON.parse(result.content[0].text);
 
+    expect(findCalls[0]).toMatchObject({
+      enabled: true,
+      channel_type: 'teams',
+      $limit: 25,
+      $skip: 10,
+    });
     expect(payload.gateway_channels).toHaveLength(1);
     expect(payload.gateway_channels[0]).toMatchObject({
       id: 'chan-teams',
@@ -179,7 +179,8 @@ describe('agor_gateway_channels MCP tools', () => {
       config: { app_id: 'app', app_password: '••••••••' },
     });
     expect(JSON.stringify(payload)).not.toContain('teams-secret');
-    expect(payload.summary).toMatchObject({ total: 1, enabled: 1, disabled: 0 });
+    expect(payload.pagination).toMatchObject({ total: 1, returned: 1, limit: 25, skip: 10 });
+    expect(payload.summary).toMatchObject({ returned: 1, enabled: 1, disabled: 0 });
   });
 
   it('updates only provided fields through gateway-channels service', async () => {
@@ -227,6 +228,40 @@ describe('agor_gateway_channels MCP tools', () => {
       },
     ]);
     expect(payload.gateway_channel.config.bot_token).toBe('••••••••');
+  });
+
+  it('passes agenticConfig null through so service hooks can clear it', async () => {
+    const patchCalls: Array<{ id: string; data: Record<string, unknown> }> = [];
+    const app = makeFakeApp({
+      'gateway-channels': {
+        patch: async (id: string, data: Record<string, unknown>) => {
+          patchCalls.push({ id, data });
+          return {
+            id,
+            created_by: 'admin-1',
+            name: 'Slack',
+            channel_type: 'slack',
+            target_branch_id: 'branch-1',
+            agor_user_id: 'user-1',
+            channel_key: 'raw-key',
+            config: {},
+            agentic_config: data.agentic_config,
+            enabled: true,
+            created_at: '2026-06-22T00:00:00.000Z',
+            updated_at: '2026-06-22T00:00:00.000Z',
+            last_message_at: null,
+          };
+        },
+      },
+    });
+
+    const tools = await captureTools('admin', app);
+    await tools.agor_gateway_channels_update.handler({
+      gatewayChannelId: 'chan-1',
+      agenticConfig: null,
+    });
+
+    expect(patchCalls).toEqual([{ id: 'chan-1', data: { agentic_config: null } }]);
   });
 
   it('denies list/create/update for non-admin users before service calls', async () => {

@@ -30,6 +30,19 @@ export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram' | 'githu
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';
 
+/** Sensitive gateway config fields that must be encrypted at rest and redacted in responses. */
+export const GATEWAY_SENSITIVE_CONFIG_FIELDS = [
+  'bot_token',
+  'app_token',
+  'signing_secret',
+  'private_key',
+  'webhook_secret',
+  'app_password',
+] as const;
+
+/** Sentinel value used by gateway APIs/tools to represent a redacted secret. */
+export const GATEWAY_REDACTED_SENTINEL = '••••••••';
+
 // ============================================================================
 // Agentic Tool Configuration
 // ============================================================================

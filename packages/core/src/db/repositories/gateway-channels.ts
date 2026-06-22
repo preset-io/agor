@@ -13,7 +13,11 @@ import type {
   GatewayEnvVar,
   UUID,
 } from '@agor/core/types';
-import { prefixToLikePattern } from '@agor/core/types';
+import {
+  GATEWAY_REDACTED_SENTINEL,
+  GATEWAY_SENSITIVE_CONFIG_FIELDS,
+  prefixToLikePattern,
+} from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -27,25 +31,12 @@ import {
   RepositoryError,
 } from './base';
 
-/** Sensitive config fields that should be encrypted at rest */
-const SENSITIVE_CONFIG_FIELDS = [
-  'bot_token',
-  'app_token',
-  'signing_secret', // Slack
-  'private_key',
-  'webhook_secret', // GitHub
-  'app_password', // Teams (Azure Bot App Secret)
-];
-
-/** Sentinel value used by the API to redact sensitive fields in responses */
-const REDACTED_SENTINEL = '••••••••';
-
 /**
  * Encrypt sensitive fields within a config object
  */
 function encryptConfig(config: Record<string, unknown>): Record<string, unknown> {
   const encrypted = { ...config };
-  for (const field of SENSITIVE_CONFIG_FIELDS) {
+  for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
     if (typeof encrypted[field] === 'string' && encrypted[field]) {
       encrypted[field] = encryptApiKey(encrypted[field] as string);
     }
@@ -58,7 +49,7 @@ function encryptConfig(config: Record<string, unknown>): Record<string, unknown>
  */
 function decryptConfig(config: Record<string, unknown>): Record<string, unknown> {
   const decrypted = { ...config };
-  for (const field of SENSITIVE_CONFIG_FIELDS) {
+  for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
     if (typeof decrypted[field] === 'string' && decrypted[field]) {
       try {
         decrypted[field] = decryptApiKey(decrypted[field] as string);
@@ -323,9 +314,12 @@ export class GatewayChannelRepository
       // sends that sentinel back it means "no change" — not "set token to bullets".
       if (updates.config) {
         const mergedConfig = { ...current.config, ...updates.config };
-        for (const field of SENSITIVE_CONFIG_FIELDS) {
+        for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
           const updateValue = updates.config[field];
-          if ((!updateValue || updateValue === REDACTED_SENTINEL) && current.config[field]) {
+          if (
+            (!updateValue || updateValue === GATEWAY_REDACTED_SENTINEL) &&
+            current.config[field]
+          ) {
             mergedConfig[field] = current.config[field];
           }
         }
