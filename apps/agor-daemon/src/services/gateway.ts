@@ -1244,7 +1244,12 @@ export class GatewayService {
       if (typeof connector.resolveChannelByName !== 'function') {
         throw new Error('Slack connector does not support channel-name resolution');
       }
-      const resolved = await connector.resolveChannelByName(parsedTarget.name as string);
+      let resolved: Awaited<ReturnType<NonNullable<SlackDirectConnector['resolveChannelByName']>>>;
+      try {
+        resolved = await connector.resolveChannelByName(parsedTarget.name as string);
+      } catch (error) {
+        throw new Error(`Slack API failure: ${redactProviderErrorMessage(error)}`);
+      }
       resolvedChannel = resolved.channel;
       resolvedTargetMetadata.resolved_channel_id = resolved.channel;
       resolvedTargetMetadata.resolved_channel_name = resolved.name;
@@ -1252,7 +1257,12 @@ export class GatewayService {
       if (typeof connector.openDmByEmail !== 'function') {
         throw new Error('Slack connector does not support email-to-DM resolution');
       }
-      const resolved = await connector.openDmByEmail(parsedTarget.email as string);
+      let resolved: Awaited<ReturnType<NonNullable<SlackDirectConnector['openDmByEmail']>>>;
+      try {
+        resolved = await connector.openDmByEmail(parsedTarget.email as string);
+      } catch (error) {
+        throw new Error(`Slack API failure: ${redactProviderErrorMessage(error)}`);
+      }
       resolvedChannel = resolved.channel;
       resolvedTargetMetadata.resolved_channel_id = resolved.channel;
       resolvedTargetMetadata.resolved_user_id = resolved.user_id;
