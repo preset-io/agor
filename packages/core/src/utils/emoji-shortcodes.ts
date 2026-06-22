@@ -1,5 +1,17 @@
-import emojiData from 'emojibase-data/en/compact.json';
-import shortcodes from 'emojibase-data/en/shortcodes/emojibase.json';
+import { createRequire } from 'node:module';
+
+interface EmojibaseCompactEmoji {
+  hexcode: string;
+  unicode?: string;
+}
+
+type EmojibaseShortcodes = Record<string, string | string[]>;
+
+const requireJson = createRequire(import.meta.url);
+const emojiData = requireJson('emojibase-data/en/compact.json') as EmojibaseCompactEmoji[];
+const shortcodes = requireJson(
+  'emojibase-data/en/shortcodes/emojibase.json'
+) as EmojibaseShortcodes;
 
 const emojiByHexcode = new Map<string, string>();
 for (const emoji of emojiData) {
