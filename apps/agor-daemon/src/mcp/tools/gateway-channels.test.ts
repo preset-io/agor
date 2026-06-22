@@ -338,11 +338,18 @@ describe('agor_gateway_channels MCP tools', () => {
 
   it('validates outbound target grammar', async () => {
     const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage: vi.fn() } }));
-    const parsed = tools.agor_gateway_emit_message.cfg.inputSchema.safeParse({
+    const bareChannel = tools.agor_gateway_emit_message.cfg.inputSchema.safeParse({
       gatewayChannelId: 'chan-1',
       message: 'Hello',
       target: 'C123',
     });
-    expect(parsed.success).toBe(false);
+    expect(bareChannel.success).toBe(false);
+
+    const existingThread = tools.agor_gateway_emit_message.cfg.inputSchema.safeParse({
+      gatewayChannelId: 'chan-1',
+      message: 'Hello',
+      target: 'thread:C123:171234.000100',
+    });
+    expect(existingThread.success).toBe(false);
   });
 });

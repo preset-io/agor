@@ -112,9 +112,8 @@ interface EmitGatewayMessageResult {
 }
 
 interface SlackOutboundTarget {
-  kind: 'channel' | 'thread';
+  kind: 'channel';
   channel: string;
-  thread_ts?: string;
 }
 
 interface SlackDirectConnector extends GatewayConnector {
@@ -186,14 +185,7 @@ function parseSlackOutboundTarget(target: string): SlackOutboundTarget {
     return { kind: 'channel', channel: channelMatch[1] };
   }
 
-  const threadMatch = /^thread:([^:\s]+):([^:\s]+)$/.exec(target);
-  if (threadMatch) {
-    return { kind: 'thread', channel: threadMatch[1], thread_ts: threadMatch[2] };
-  }
-
-  throw new Error(
-    'Invalid Slack outbound target. Expected channel:C123 or thread:C123:171234.000100'
-  );
+  throw new Error('Invalid Slack outbound target. Gateway outbound v0 expects channel:C123');
 }
 
 function redactProviderErrorMessage(error: unknown): string {
@@ -1235,7 +1227,6 @@ export class GatewayService {
         channel: parsedTarget.channel,
         text,
         blocks,
-        ...(parsedTarget.thread_ts ? { thread_ts: parsedTarget.thread_ts } : {}),
         metadata: {
           ...(data.purpose ? { purpose: data.purpose } : {}),
           target,

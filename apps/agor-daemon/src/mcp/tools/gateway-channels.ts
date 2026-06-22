@@ -52,6 +52,10 @@ async function canUseGatewayOutbound(
   );
 }
 
+function isSlackChannelOutboundTarget(value: unknown): value is string {
+  return typeof value === 'string' && /^channel:[^:\s]+$/.test(value);
+}
+
 function getOutboundConfig(channel: GatewayChannel): {
   outbound_enabled: boolean;
   default_outbound_target?: string;
@@ -60,13 +64,11 @@ function getOutboundConfig(channel: GatewayChannel): {
   const config = channel.config ?? {};
   return {
     outbound_enabled: config.outbound_enabled === true,
-    ...(typeof config.default_outbound_target === 'string'
+    ...(isSlackChannelOutboundTarget(config.default_outbound_target)
       ? { default_outbound_target: config.default_outbound_target }
       : {}),
     allowed_outbound_targets: Array.isArray(config.allowed_outbound_targets)
-      ? config.allowed_outbound_targets.filter(
-          (value): value is string => typeof value === 'string'
-        )
+      ? config.allowed_outbound_targets.filter(isSlackChannelOutboundTarget)
       : [],
   };
 }
@@ -79,8 +81,10 @@ const configSchema = z
 
 const outboundTargetSchema = z
   .string()
-  .regex(/^(channel:[^:\s]+|thread:[^:\s]+:[^:\s]+)$/)
-  .describe('Slack outbound target: channel:C123 or thread:C123:171234.000100');
+  .regex(/^channel:[^:\s]+$/)
+  .describe(
+    'Slack outbound target for v0: channel:C123. Thread targets are intentionally not supported.'
+  );
 
 const envVarSchema = z.strictObject({
   key: mcpRequiredString('agenticConfig.envVars[].key', 'Environment variable name'),
@@ -469,7 +473,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_emit_message',
     {
       description:
-        'Send a proactive Slack message through an outbound-enabled gateway channel and persist a seed/audit record. Does not create a thread-session mapping until a human replies.',
+        'Send a proactive Slack message to a configured Slack channel and persist a seed/audit record. v0 intentionally starts a fresh Slack thread for each emit and does not create a thread-session mapping until a human replies.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: z.strictObject({
         gatewayChannelId: mcpRequiredId(
