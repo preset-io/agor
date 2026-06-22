@@ -446,6 +446,9 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         if (!channel.enabled) continue;
         const outbound = getOutboundConfig(channel);
         if (!outbound.outbound_enabled) continue;
+        if (!outbound.default_outbound_target && outbound.allowed_outbound_targets.length === 0) {
+          continue;
+        }
 
         const branch = await branchRepo.findById(channel.target_branch_id);
         if (!branch) continue;
