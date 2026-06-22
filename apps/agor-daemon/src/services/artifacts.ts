@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { generateId } from '@agor/core';
 import {
@@ -2123,7 +2124,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
 
     const canonical = await canonicalizeExistingPrefix(resolved);
-    const allowedTempRoots = ['/tmp', '/var/tmp'];
+    const allowedTempRoots = ['/tmp', '/var/tmp', tmpdir()];
     for (const root of allowedTempRoots) {
       const rootReal = await canonicalizeExistingPrefix(root);
       if (canonical.startsWith(rootReal + path.sep) || canonical === rootReal) {

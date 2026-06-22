@@ -5,7 +5,15 @@
  * land (filesystem materialization, path-traversal defenses).
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateId } from '@agor/core';
@@ -116,7 +124,7 @@ function defaultLandDestForArtifact(
     .slice(0, 40);
   const idShort = shortId(artifact.artifact_id);
   const folder = slug.length > 0 ? `${slug}-${idShort}` : artifact.artifact_id;
-  return path.join(tmpRoot, '.agor', 'artifacts', folder);
+  return path.join(realpathSync(tmpRoot), '.agor', 'artifacts', folder);
 }
 
 /** Seed an artifact with a known file map and a board placement. */
@@ -516,7 +524,9 @@ describe('ArtifactsService.land', () => {
       subpath: 'apps/frontend/demo',
     });
 
-    expect(result.destinationPath).toBe(path.join(tmpRoot, 'apps', 'frontend', 'demo'));
+    expect(result.destinationPath).toBe(
+      path.join(realpathSync(tmpRoot), 'apps', 'frontend', 'demo')
+    );
   });
 
   dbTest('rejects subpath that escapes the branch via ".."', async ({ db }) => {
@@ -650,7 +660,7 @@ describe('ArtifactsService.land', () => {
     const result = await service.land(artifact.artifact_id, symlinkedBranch);
 
     // Destination path is reported under the real root (post-canonicalize).
-    expect(result.destinationPath.startsWith(realBranch)).toBe(true);
+    expect(result.destinationPath.startsWith(realpathSync(realBranch))).toBe(true);
     expect(readFileSync(path.join(result.destinationPath, 'index.js'), 'utf-8')).toBe(
       'console.log("hello")'
     );
