@@ -52,24 +52,16 @@ async function canUseGatewayOutbound(
   );
 }
 
-function isSlackChannelOutboundTarget(value: unknown): value is string {
-  return typeof value === 'string' && /^channel:[^:\s]+$/.test(value);
-}
-
 function getOutboundConfig(channel: GatewayChannel): {
   outbound_enabled: boolean;
   default_outbound_target?: string;
-  allowed_outbound_targets: string[];
 } {
   const config = channel.config ?? {};
   return {
     outbound_enabled: config.outbound_enabled === true,
-    ...(isSlackChannelOutboundTarget(config.default_outbound_target)
+    ...(typeof config.default_outbound_target === 'string' && config.default_outbound_target.trim()
       ? { default_outbound_target: config.default_outbound_target }
       : {}),
-    allowed_outbound_targets: Array.isArray(config.allowed_outbound_targets)
-      ? config.allowed_outbound_targets.filter(isSlackChannelOutboundTarget)
-      : [],
   };
 }
 
@@ -81,9 +73,12 @@ const configSchema = z
 
 const outboundTargetSchema = z
   .string()
-  .regex(/^channel:[^:\s]+$/)
+  .trim()
+  .regex(
+    /^(channel:[^:\s]+|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
+  )
   .describe(
-    'Slack outbound target for v0: channel:C123. Thread targets are intentionally not supported.'
+    'Slack outbound target for v0: channel:C123, #team-data, channel_name:team-data, or user@example.com. Thread targets are intentionally not supported.'
   );
 
 const envVarSchema = z.strictObject({
@@ -446,9 +441,6 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         if (!channel.enabled) continue;
         const outbound = getOutboundConfig(channel);
         if (!outbound.outbound_enabled) continue;
-        if (!outbound.default_outbound_target && outbound.allowed_outbound_targets.length === 0) {
-          continue;
-        }
 
         const branch = await branchRepo.findById(channel.target_branch_id);
         if (!branch) continue;
@@ -464,7 +456,12 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           ...(outbound.default_outbound_target
             ? { default_outbound_target: outbound.default_outbound_target }
             : {}),
-          allowed_outbound_targets: outbound.allowed_outbound_targets,
+          accepted_target_formats: [
+            'channel:C123',
+            '#team-data',
+            'channel_name:team-data',
+            'user@example.com',
+          ],
         });
       }
 
@@ -476,7 +473,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_emit_message',
     {
       description:
-        'Send a proactive Slack message to a configured Slack channel and persist a seed/audit record. v0 intentionally starts a fresh Slack thread for each emit and does not create a thread-session mapping until a human replies.',
+        'Send a proactive Slack message through an outbound-enabled gateway channel and persist a seed/audit record. Targets may be Slack channel IDs, channel names, or user emails; v0 intentionally starts a fresh Slack thread/DM message for each emit and does not create a thread-session mapping until a human replies.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: z.strictObject({
         gatewayChannelId: mcpRequiredId(

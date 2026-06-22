@@ -112,8 +112,10 @@ interface EmitGatewayMessageResult {
 }
 
 interface SlackOutboundTarget {
-  kind: 'channel';
-  channel: string;
+  kind: 'channel_id' | 'channel_name' | 'email';
+  channel?: string;
+  name?: string;
+  email?: string;
 }
 
 interface SlackDirectConnector extends GatewayConnector {
@@ -124,6 +126,8 @@ interface SlackDirectConnector extends GatewayConnector {
     thread_ts?: string;
     metadata?: Record<string, unknown>;
   }): Promise<{ ts: string; channel: string; thread_ts: string; permalink?: string | null }>;
+  resolveChannelByName?(name: string): Promise<{ channel: string; name: string }>;
+  openDmByEmail?(email: string): Promise<{ channel: string; user_id: string }>;
 }
 
 export type GatewayProgressState = 'queued' | 'working' | 'done' | 'failed';
@@ -180,12 +184,29 @@ function isSlackThinkingPlaceholder(text: string): boolean {
 }
 
 function parseSlackOutboundTarget(target: string): SlackOutboundTarget {
-  const channelMatch = /^channel:([^:\s]+)$/.exec(target);
+  const trimmed = target.trim();
+  const channelMatch = /^channel:([^:\s]+)$/.exec(trimmed);
   if (channelMatch) {
-    return { kind: 'channel', channel: channelMatch[1] };
+    return { kind: 'channel_id', channel: channelMatch[1] };
   }
 
-  throw new Error('Invalid Slack outbound target. Gateway outbound v0 expects channel:C123');
+  const channelNameMatch = /^channel_name:([^\s]+)$/.exec(trimmed);
+  if (channelNameMatch) {
+    return { kind: 'channel_name', name: channelNameMatch[1].replace(/^#/, '') };
+  }
+
+  if (/^#[^\s]+$/.test(trimmed)) {
+    return { kind: 'channel_name', name: trimmed.slice(1) };
+  }
+
+  const emailMatch = /^(?:email:|user_email:)?([^@\s]+@[^@\s]+\.[^@\s]+)$/.exec(trimmed);
+  if (emailMatch) {
+    return { kind: 'email', email: emailMatch[1] };
+  }
+
+  throw new Error(
+    'Invalid Slack outbound target. Expected channel:C123, #channel-name, channel_name:channel-name, or user@example.com'
+  );
 }
 
 function redactProviderErrorMessage(error: unknown): string {
@@ -1199,15 +1220,6 @@ export class GatewayService {
         : undefined);
     if (!target) throw new Error('No usable default outbound target configured');
 
-    const allowedTargets = Array.isArray(config.allowed_outbound_targets)
-      ? config.allowed_outbound_targets.filter(
-          (value): value is string => typeof value === 'string'
-        )
-      : [];
-    if (data.target && !allowedTargets.includes(target)) {
-      throw new Error('Outbound target is not allowlisted for this gateway channel');
-    }
-
     const parsedTarget = parseSlackOutboundTarget(target);
     const connector = getConnector(
       channel.channel_type as ChannelType,
@@ -1221,15 +1233,40 @@ export class GatewayService {
       connector.formatMessage ? connector.formatMessage(data.message) : data.message
     );
 
+    let resolvedChannel: string;
+    const resolvedTargetMetadata: Record<string, unknown> = {
+      target,
+      target_kind: parsedTarget.kind,
+    };
+    if (parsedTarget.kind === 'channel_id') {
+      resolvedChannel = parsedTarget.channel as string;
+    } else if (parsedTarget.kind === 'channel_name') {
+      if (typeof connector.resolveChannelByName !== 'function') {
+        throw new Error('Slack connector does not support channel-name resolution');
+      }
+      const resolved = await connector.resolveChannelByName(parsedTarget.name as string);
+      resolvedChannel = resolved.channel;
+      resolvedTargetMetadata.resolved_channel_id = resolved.channel;
+      resolvedTargetMetadata.resolved_channel_name = resolved.name;
+    } else {
+      if (typeof connector.openDmByEmail !== 'function') {
+        throw new Error('Slack connector does not support email-to-DM resolution');
+      }
+      const resolved = await connector.openDmByEmail(parsedTarget.email as string);
+      resolvedChannel = resolved.channel;
+      resolvedTargetMetadata.resolved_channel_id = resolved.channel;
+      resolvedTargetMetadata.resolved_user_id = resolved.user_id;
+    }
+
     let sent: Awaited<ReturnType<SlackDirectConnector['sendSlackMessage']>>;
     try {
       sent = await connector.sendSlackMessage({
-        channel: parsedTarget.channel,
+        channel: resolvedChannel,
         text,
         blocks,
         metadata: {
           ...(data.purpose ? { purpose: data.purpose } : {}),
-          target,
+          ...resolvedTargetMetadata,
         },
       });
     } catch (error) {

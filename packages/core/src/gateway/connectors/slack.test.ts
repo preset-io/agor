@@ -446,6 +446,60 @@ describe('markdownToSlackPayload', () => {
   });
 });
 
+describe('SlackConnector outbound target resolution', () => {
+  it('resolves channel names via conversations.list', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    const calls: unknown[] = [];
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        list: async (args: unknown) => {
+          calls.push(args);
+          return {
+            ok: true,
+            channels: [
+              { id: 'C111', name: 'random' },
+              { id: 'C222', name: 'team-data', name_normalized: 'team-data' },
+            ],
+            response_metadata: {},
+          };
+        },
+      },
+    };
+
+    const resolved = await connector.resolveChannelByName('#team-data');
+
+    expect(resolved).toEqual({ channel: 'C222', name: 'team-data' });
+    expect(calls).toEqual([{ types: 'public_channel,private_channel', limit: 1000 }]);
+  });
+
+  it('opens a DM by Slack user email', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    const calls: Array<{ method: string; args: unknown }> = [];
+    (connector as unknown as { web: unknown }).web = {
+      users: {
+        lookupByEmail: async (args: unknown) => {
+          calls.push({ method: 'lookupByEmail', args });
+          return { ok: true, user: { id: 'U123' } };
+        },
+      },
+      conversations: {
+        open: async (args: unknown) => {
+          calls.push({ method: 'open', args });
+          return { ok: true, channel: { id: 'D123' } };
+        },
+      },
+    };
+
+    const resolved = await connector.openDmByEmail('Max@Example.com');
+
+    expect(resolved).toEqual({ channel: 'D123', user_id: 'U123' });
+    expect(calls).toEqual([
+      { method: 'lookupByEmail', args: { email: 'max@example.com' } },
+      { method: 'open', args: { users: 'U123' } },
+    ]);
+  });
+});
+
 // Mirrors SECTION_MAX_CHARS in slack.ts; kept in the test as a lower-bound
 // sanity check (we expect the legacy mrkdwn fallback to carry more than this).
 const SECTION_MAX_CHARS_TEST = 3000;

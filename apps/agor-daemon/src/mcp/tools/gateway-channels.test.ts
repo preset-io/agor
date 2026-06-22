@@ -338,6 +338,21 @@ describe('agor_gateway_channels MCP tools', () => {
 
   it('validates outbound target grammar', async () => {
     const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage: vi.fn() } }));
+
+    for (const target of [
+      'channel:C123',
+      '#team-data',
+      'channel_name:team-data',
+      'max@example.com',
+    ]) {
+      const parsed = tools.agor_gateway_emit_message.cfg.inputSchema.safeParse({
+        gatewayChannelId: 'chan-1',
+        message: 'Hello',
+        target,
+      });
+      expect(parsed.success).toBe(true);
+    }
+
     const bareChannel = tools.agor_gateway_emit_message.cfg.inputSchema.safeParse({
       gatewayChannelId: 'chan-1',
       message: 'Hello',

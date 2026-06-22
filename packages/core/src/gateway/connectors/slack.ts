@@ -947,6 +947,61 @@ export class SlackConnector implements GatewayConnector {
     };
   }
 
+  /** Resolve a Slack channel by its human name (with or without #). */
+  async resolveChannelByName(name: string): Promise<{ channel: string; name: string }> {
+    const normalized = name.replace(/^#/, '').trim().toLowerCase();
+    if (!normalized) throw new Error('Slack channel name is required');
+
+    let cursor: string | undefined;
+    do {
+      const result = await this.web.conversations.list({
+        types: 'public_channel,private_channel',
+        limit: 1000,
+        ...(cursor ? { cursor } : {}),
+      });
+
+      if (!result.ok) {
+        throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+      }
+
+      const channels = (result.channels ?? []) as Array<{
+        id?: string;
+        name?: string;
+        name_normalized?: string;
+        is_archived?: boolean;
+      }>;
+      const match = channels.find((channel) => {
+        if (channel.is_archived) return false;
+        return (channel.name_normalized ?? channel.name ?? '').toLowerCase() === normalized;
+      });
+      if (match?.id) {
+        return { channel: match.id, name: match.name ?? normalized };
+      }
+
+      cursor = result.response_metadata?.next_cursor || undefined;
+    } while (cursor);
+
+    throw new Error(`Slack channel not found: #${normalized}`);
+  }
+
+  /** Resolve a Slack user email to a DM channel with that user. */
+  async openDmByEmail(email: string): Promise<{ channel: string; user_id: string }> {
+    const normalized = email.trim().toLowerCase();
+    if (!normalized) throw new Error('Slack user email is required');
+
+    const userResult = await this.web.users.lookupByEmail({ email: normalized });
+    if (!userResult.ok || !userResult.user?.id) {
+      throw new Error(`Slack user lookup failed: ${userResult.error ?? 'user_not_found'}`);
+    }
+
+    const dmResult = await this.web.conversations.open({ users: userResult.user.id });
+    if (!dmResult.ok || !dmResult.channel?.id) {
+      throw new Error(`Slack DM open failed: ${dmResult.error ?? 'unknown error'}`);
+    }
+
+    return { channel: dmResult.channel.id, user_id: userResult.user.id };
+  }
+
   async startStream(req: {
     threadId: string;
     text?: string;

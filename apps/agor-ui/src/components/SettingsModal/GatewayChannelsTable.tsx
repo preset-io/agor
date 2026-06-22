@@ -1331,6 +1331,61 @@ const ChannelFormFields: React.FC<{
               ),
             },
 
+            // ── Outbound ──
+            {
+              key: 'outbound',
+              label: (
+                <SectionLabel
+                  icon={<MessageOutlined />}
+                  title="Outbound"
+                  subtitle="proactive sends"
+                />
+              ),
+              children: (
+                <>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                  >
+                    Allow authorized agents to send proactive Slack messages through this gateway.
+                    Targets can be Slack channel IDs, channel names, or Slack user emails.
+                  </Typography.Text>
+
+                  <Form.Item
+                    label="Enable outbound sends"
+                    name="outbound_enabled"
+                    valuePropName="checked"
+                    initialValue={false}
+                    tooltip="When enabled, branch admins/owners with full branch access can send proactive Slack messages through this gateway."
+                  >
+                    <Switch />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Default outbound target"
+                    name="default_outbound_target"
+                    tooltip="Optional. Used when the agent omits a target. Examples: #team-data, channel:C01ABC123, max@example.com."
+                  >
+                    <Input placeholder="#team-data, channel:C01ABC123, or max@example.com" />
+                  </Form.Item>
+
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="Slack scopes"
+                    description={
+                      <span>
+                        Channel-name targets require <code>channels:read</code> and, for private
+                        channels, <code>groups:read</code>. Email targets require{' '}
+                        <code>users:read.email</code> and open a DM with that Slack user.
+                      </span>
+                    }
+                    style={{ fontSize: 12 }}
+                  />
+                </>
+              ),
+            },
+
             // ── Advanced ──
             {
               key: 'advanced',
@@ -1639,6 +1694,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.require_mention = values.require_mention ?? true;
       config.align_slack_users = values.align_slack_users ?? false;
       config.allowed_channel_ids = values.allowed_channel_ids ?? [];
+      config.outbound_enabled = values.outbound_enabled ?? false;
+      config.default_outbound_target = values.default_outbound_target || null;
     }
 
     // Build agentic config from form values
@@ -1751,6 +1808,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.require_mention = config?.require_mention ?? true;
       formValues.align_slack_users = config?.align_slack_users ?? false;
       formValues.allowed_channel_ids = (config?.allowed_channel_ids as string[]) ?? [];
+      formValues.outbound_enabled = config?.outbound_enabled ?? false;
+      formValues.default_outbound_target = config?.default_outbound_target;
     } else if (channel.channel_type === 'github') {
       formValues.github_app_id = config?.app_id;
       formValues.github_installation_id = config?.installation_id;
