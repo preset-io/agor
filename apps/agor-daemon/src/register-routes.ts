@@ -65,6 +65,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
+import crypto from 'node:crypto';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
@@ -3756,6 +3757,133 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       }
     }
   }
+
+  // ============================================================================
+  // Webhook inbound trigger endpoint
+  //
+  // POST /v1/gateway/inbound/:channel_key
+  //
+  // Unauthenticated — the channel_key in the path IS the auth credential.
+  // Optional HMAC-SHA256 verification via X-Agor-Signature: sha256=<hex>.
+  // ============================================================================
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
+  (app as any).post('/v1/gateway/inbound/:channel_key', async (req: any, res: any) => {
+    // Mask the channel_key in all logs — only log a short prefix for correlation
+    const rawKey: string = req.params.channel_key ?? '';
+    const keyHint = rawKey.slice(0, 8) || '(empty)';
+
+    if (!rawKey) {
+      return res.status(400).json({ error: 'channel_key is required' });
+    }
+
+    const body = req.body as Record<string, unknown>;
+
+    if (!body || typeof body.prompt !== 'string' || !body.prompt.trim()) {
+      return res.status(400).json({ error: 'prompt (string) is required' });
+    }
+
+    // Look up the channel early so we can verify HMAC before doing more work
+    const channelRepo = new (await import('@agor/core/db')).GatewayChannelRepository(db);
+    const channel = await channelRepo.findByKey(rawKey).catch(() => null);
+
+    if (!channel) {
+      // Return 401 without revealing whether the key exists
+      console.warn(`[webhook-inbound] Unknown channel_key hint=${keyHint}`);
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (!channel.enabled) {
+      return res.status(403).json({ error: 'Channel is disabled' });
+    }
+
+    // HMAC-SHA256 verification (optional — only when webhook_secret is configured)
+    const channelConfig = channel.config as Record<string, unknown>;
+    const webhookSecret = typeof channelConfig.webhook_secret === 'string'
+      ? channelConfig.webhook_secret
+      : null;
+
+    if (webhookSecret) {
+      const signatureHeader = req.headers['x-agor-signature'] as string | undefined;
+      if (!signatureHeader?.startsWith('sha256=')) {
+        return res.status(401).json({ error: 'Missing X-Agor-Signature header' });
+      }
+      const providedHex = signatureHeader.slice('sha256='.length);
+
+      // Compute HMAC over the raw request body
+      const rawBody: Buffer = (req as unknown as { rawBody?: Buffer }).rawBody ??
+        Buffer.from(JSON.stringify(body));
+      const expectedHmac = crypto
+        .createHmac('sha256', webhookSecret)
+        .update(rawBody)
+        .digest('hex');
+
+      const expectedBuf = Buffer.from(expectedHmac, 'hex');
+      const providedBuf = Buffer.from(providedHex, 'hex');
+      // timingSafeEqual requires equal lengths — use alloc(32) on mismatch so
+      // the comparison always runs in constant time but returns false.
+      const signatureValid = crypto.timingSafeEqual(
+        providedBuf.length === expectedBuf.length ? providedBuf : Buffer.alloc(32),
+        expectedBuf
+      );
+
+      if (!signatureValid) {
+        console.warn(`[webhook-inbound] HMAC mismatch for channel hint=${keyHint}`);
+        return res.status(401).json({ error: 'Signature mismatch' });
+      }
+    }
+
+    // Auto-generate thread_id if caller did not supply one
+    const threadId: string =
+      typeof body.thread_id === 'string' && body.thread_id.trim()
+        ? body.thread_id.trim()
+        : generateId();
+
+    const prompt = (body.prompt as string).trim();
+    const summary = typeof body.summary === 'string' ? body.summary : undefined;
+    const extraMetadata =
+      body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+        ? (body.metadata as Record<string, unknown>)
+        : {};
+
+    try {
+      const gatewayService = app.service('gateway') as unknown as GatewayService;
+      const result = await gatewayService.create({
+        channel_key: rawKey,
+        thread_id: threadId,
+        text: prompt,
+        metadata: {
+          ...extraMetadata,
+          // Store trigger fields for post-action template resolution
+          webhook_prompt: prompt,
+          ...(summary ? { webhook_summary: summary } : {}),
+          ...(Object.keys(extraMetadata).length > 0 ? { webhook_metadata: extraMetadata } : {}),
+        },
+      });
+
+      if (!result.success) {
+        return res.status(400).json({ error: 'Failed to process inbound message' });
+      }
+
+      const response: Record<string, unknown> = {
+        session_id: result.sessionId,
+        thread_id: threadId,
+        status: result.taskStatus === 'queued' ? 'queued' : 'started',
+      };
+      if (result.taskQueuePosition !== undefined) {
+        response.queue_position = result.taskQueuePosition;
+      }
+
+      console.log(
+        `[webhook-inbound] Processed: hint=${keyHint} session=${shortId(result.sessionId)} status=${response.status}`
+      );
+      return res.status(200).json(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[webhook-inbound] Error for hint=${keyHint}: ${message}`);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 
   // ============================================================================
   // MCP routes

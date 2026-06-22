@@ -29,7 +29,7 @@ export type GatewayOutboundMessageID = UUID;
 // ============================================================================
 
 /** Supported messaging platform types */
-export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram' | 'github' | 'teams';
+export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram' | 'github' | 'teams' | 'webhook';
 
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';
@@ -46,6 +46,32 @@ export const GATEWAY_SENSITIVE_CONFIG_FIELDS = [
 
 /** Sentinel value used by gateway APIs/tools to represent a redacted secret. */
 export const GATEWAY_REDACTED_SENTINEL = '••••••••';
+
+// ============================================================================
+// Webhook Post-Action Configuration
+// ============================================================================
+
+/**
+ * What to do after a webhook-triggered session reaches a terminal state.
+ */
+export interface PostActionConfig {
+  action: 'none' | 'channel_message';
+  /** Target gateway channel to send the message through */
+  gateway_channel_id?: string;
+  /** Handlebars template for the outbound message */
+  message_template?: string;
+}
+
+/**
+ * Webhook channel config stored in GatewayChannel.config.
+ */
+export interface WebhookChannelConfig {
+  webhook_secret?: string;
+  post_actions?: {
+    success?: PostActionConfig;
+    fail?: PostActionConfig;
+  };
+}
 
 // ============================================================================
 // Agentic Tool Configuration

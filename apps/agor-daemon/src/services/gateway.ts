@@ -40,6 +40,7 @@ import type {
   GatewayOutboundMessageID,
   MCPServerID,
   MessageSource,
+  PostActionConfig,
   Session,
   SessionID,
   Task,
@@ -47,6 +48,7 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
+import Handlebars from 'handlebars';
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
@@ -69,6 +71,8 @@ interface PostMessageResult {
   success: boolean;
   sessionId: string;
   created: boolean;
+  taskStatus?: 'running' | 'queued';
+  taskQueuePosition?: number;
 }
 
 /**
@@ -401,6 +405,12 @@ function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): Ga
         userEmail: (meta.teams_user_email as string) ?? undefined,
       };
     }
+
+    case 'webhook':
+      return {
+        platform: 'webhook',
+        userName: data.user_name,
+      };
 
     default:
       // Generic fallback for future platforms
@@ -1713,6 +1723,19 @@ export class GatewayService {
         gatewaySource.proactive_seed = true;
       }
 
+      // Add webhook-specific trigger context so post-actions can read it later
+      if (channel.channel_type === 'webhook') {
+        if (data.metadata?.webhook_prompt) {
+          gatewaySource.webhook_prompt = data.metadata.webhook_prompt;
+        }
+        if (data.metadata?.webhook_summary) {
+          gatewaySource.webhook_summary = data.metadata.webhook_summary;
+        }
+        if (data.metadata?.webhook_metadata) {
+          gatewaySource.webhook_metadata = data.metadata.webhook_metadata;
+        }
+      }
+
       // Add GitHub-specific metadata for richer context
       if (channel.channel_type === 'github') {
         try {
@@ -1905,7 +1928,12 @@ export class GatewayService {
         { route: { id: sessionId }, user }
       );
 
+      let taskStatus: PostMessageResult['taskStatus'] = 'running';
+      let taskQueuePosition: number | undefined;
+
       if (task.status === 'queued') {
+        taskStatus = 'queued';
+        taskQueuePosition = task.queue_position;
         console.log(
           `[gateway] Message queued for session ${shortId(sessionId)} at position ${task.queue_position}`
         );
@@ -1931,6 +1959,14 @@ export class GatewayService {
           task_id: task.task_id,
         });
       }
+
+      return {
+        success: true,
+        sessionId,
+        created,
+        taskStatus,
+        taskQueuePosition,
+      };
     } catch (error) {
       console.error('[gateway] Failed to send prompt to session:', error);
       this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${error}`);
@@ -2102,6 +2138,84 @@ export class GatewayService {
         `[gateway] Failed to flush GitHub buffer for session ${shortId(sessionId)} (re-queued):`,
         error
       );
+    }
+  }
+
+  /**
+   * Execute a webhook post-action after a session reaches a terminal state.
+   *
+   * Called by the sessions.after.patch hook when a webhook-sourced session
+   * transitions to completed / failed / timed_out. Renders the configured
+   * Handlebars template and dispatches via the target gateway channel.
+   */
+  async firePostAction(opts: {
+    postAction: PostActionConfig;
+    triggerContext: {
+      prompt?: string;
+      summary?: string;
+      metadata?: Record<string, unknown>;
+    };
+    sessionOutcome: {
+      id: string;
+      status: string;
+      error?: string;
+      duration_s?: number;
+      branch_name?: string;
+    };
+    emittedByUserId: UserID;
+  }): Promise<void> {
+    if (opts.postAction.action !== 'channel_message') return;
+    if (!opts.postAction.gateway_channel_id) {
+      console.warn('[gateway] firePostAction: channel_message requires gateway_channel_id');
+      return;
+    }
+    if (!opts.postAction.message_template) {
+      console.warn('[gateway] firePostAction: channel_message requires message_template');
+      return;
+    }
+
+    const targetChannel = await this.channelRepo.findById(opts.postAction.gateway_channel_id);
+    if (!targetChannel?.enabled) {
+      console.warn(
+        `[gateway] firePostAction: target channel ${shortId(opts.postAction.gateway_channel_id)} not found or disabled`
+      );
+      return;
+    }
+
+    let renderedMessage: string;
+    try {
+      const compiledTemplate = Handlebars.compile(opts.postAction.message_template);
+      renderedMessage = compiledTemplate({
+        trigger: {
+          prompt: opts.triggerContext.prompt ?? '',
+          summary: opts.triggerContext.summary ?? '',
+          metadata: opts.triggerContext.metadata ?? {},
+        },
+        session: {
+          id: opts.sessionOutcome.id,
+          status: opts.sessionOutcome.status,
+          error: opts.sessionOutcome.error ?? '',
+          duration_s: opts.sessionOutcome.duration_s ?? 0,
+          branch: { name: opts.sessionOutcome.branch_name ?? '' },
+        },
+      });
+    } catch (err) {
+      console.error('[gateway] firePostAction: Handlebars render failed:', err);
+      return;
+    }
+
+    try {
+      await this.emitMessage({
+        gatewayChannelId: opts.postAction.gateway_channel_id,
+        message: renderedMessage,
+        purpose: 'webhook_post_action',
+        emittedByUserId: opts.emittedByUserId,
+      });
+      console.log(
+        `[gateway] Post-action message dispatched via channel ${shortId(opts.postAction.gateway_channel_id)}`
+      );
+    } catch (err) {
+      console.error('[gateway] firePostAction: Failed to dispatch message:', err);
     }
   }
 

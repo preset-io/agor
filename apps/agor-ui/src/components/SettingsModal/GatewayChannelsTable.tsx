@@ -8,15 +8,18 @@ import type {
   GatewayEnvVar,
   MCPServer,
   PermissionMode,
+  PostActionConfig,
   User,
   UUID,
 } from '@agor-live/client';
 import {
+  ApiOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   GithubOutlined,
   KeyOutlined,
+  LinkOutlined,
   LoadingOutlined,
   LockOutlined,
   MessageOutlined,
@@ -48,6 +51,7 @@ import {
   Steps,
   Switch,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -85,6 +89,7 @@ const CHANNEL_TYPE_OPTIONS: { value: ChannelType; label: string; icon: React.Rea
   { value: 'slack', label: 'Slack', icon: <SlackOutlined /> },
   { value: 'github', label: 'GitHub', icon: <GithubOutlined /> },
   { value: 'teams', label: 'Microsoft Teams', icon: <TeamOutlined /> },
+  { value: 'webhook', label: 'Webhook (HTTP)', icon: <ApiOutlined /> },
   { value: 'discord', label: 'Discord', icon: <MessageOutlined /> },
   { value: 'whatsapp', label: 'WhatsApp', icon: <MessageOutlined /> },
   { value: 'telegram', label: 'Telegram', icon: <MessageOutlined /> },
@@ -98,6 +103,8 @@ function getChannelTypeIcon(type: ChannelType): React.ReactNode {
       return <GithubOutlined />;
     case 'teams':
       return <TeamOutlined />;
+    case 'webhook':
+      return <ApiOutlined />;
     default:
       return <MessageOutlined />;
   }
@@ -111,6 +118,8 @@ function getChannelTypeColor(type: ChannelType): string {
       return 'default';
     case 'teams':
       return 'geekblue';
+    case 'webhook':
+      return 'orange';
     case 'discord':
       return 'blue';
     case 'whatsapp':
@@ -328,6 +337,86 @@ const GatewayEnvVarsEditor: React.FC<{
 };
 
 // ============================================================================
+// Webhook Post-Action Form Fields
+// ============================================================================
+
+const POST_ACTION_OPTIONS = [
+  { value: 'none', label: 'Do nothing' },
+  { value: 'channel_message', label: 'Send via channel' },
+];
+
+const TEMPLATE_HELP = `Available variables:
+{{ trigger.prompt }}   — original webhook prompt
+{{ trigger.summary }}  — optional summary field
+{{ trigger.metadata.* }} — any metadata fields
+{{ session.id }}
+{{ session.status }}
+{{ session.error }}    — error message (on fail)
+{{ session.duration_s }}
+{{ session.branch.name }}`;
+
+const WebhookPostActionFields: React.FC<{
+  prefix: string;
+  form: FormInstance;
+  gatewayChannelById: Map<string, GatewayChannel>;
+}> = ({ prefix, form, gatewayChannelById }) => {
+  const action = Form.useWatch(`${prefix}_action`, form) ?? 'none';
+
+  return (
+    <Space orientation="vertical" style={{ width: '100%' }} size="small">
+      <Form.Item
+        label="Action"
+        name={`${prefix}_action`}
+        initialValue="none"
+      >
+        <Select options={POST_ACTION_OPTIONS} style={{ width: 220 }} />
+      </Form.Item>
+
+      {action === 'channel_message' && (
+        <>
+          <Form.Item
+            label="Target channel"
+            name={`${prefix}_gateway_channel_id`}
+            rules={[{ required: true, message: 'Select a gateway channel' }]}
+            tooltip="Gateway channel to send the notification through (must support outbound)"
+          >
+            <Select placeholder="Select a gateway channel" showSearch optionFilterProp="label">
+              {Array.from(gatewayChannelById.values())
+                .filter((ch) => ch.channel_type !== 'webhook')
+                .map((ch) => (
+                  <Select.Option key={ch.id} value={ch.id} label={ch.name}>
+                    <Space size="small">
+                      {ch.name}
+                      <Tag style={{ fontSize: 10 }}>{ch.channel_type}</Tag>
+                    </Space>
+                  </Select.Option>
+                ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            label="Message template"
+            name={`${prefix}_message_template`}
+            rules={[{ required: true, message: 'Enter a message template' }]}
+            tooltip={TEMPLATE_HELP}
+          >
+            <Input.TextArea
+              rows={4}
+              placeholder="Session {{ session.id }} finished in {{ session.duration_s }}s"
+              style={{ fontFamily: 'monospace', fontSize: 12 }}
+            />
+          </Form.Item>
+
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            Handlebars template. Hover the label for available variables.
+          </Typography.Text>
+        </>
+      )}
+    </Space>
+  );
+};
+
+// ============================================================================
 // GitHub App Setup Types & Helpers
 // ============================================================================
 
@@ -353,6 +442,7 @@ const ChannelFormFields: React.FC<{
   branchById: Map<string, Branch>;
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
+  gatewayChannelById: Map<string, GatewayChannel>;
   selectedAgent: string;
   onAgentChange: (agent: string) => void;
   editingChannel?: GatewayChannel | null;
@@ -371,6 +461,7 @@ const ChannelFormFields: React.FC<{
   branchById,
   userById,
   mcpServerById,
+  gatewayChannelById,
   selectedAgent,
   onAgentChange,
   editingChannel,
@@ -456,15 +547,18 @@ const ChannelFormFields: React.FC<{
         <Switch />
       </Form.Item>
 
-      {channelType !== 'slack' && channelType !== 'github' && channelType !== 'teams' && (
-        <Alert
-          title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
-          description="This platform integration is not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-      )}
+      {channelType !== 'slack' &&
+        channelType !== 'github' &&
+        channelType !== 'teams' &&
+        channelType !== 'webhook' && (
+          <Alert
+            title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
+            description="This platform integration is not yet available. Slack, GitHub, Microsoft Teams, and Webhook are currently supported."
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+        )}
 
       {/* ── GitHub App Setup Wizard ── */}
       {channelType === 'github' && (
@@ -873,6 +967,174 @@ const ChannelFormFields: React.FC<{
             />
           )}
         </>
+      )}
+
+      {/* ── Collapsible sections (Webhook) ── */}
+      {channelType === 'webhook' && (
+        <Collapse
+          ghost
+          destroyOnHidden={false}
+          defaultActiveKey={['webhook-config', 'agentic-tool-config']}
+          style={{ marginLeft: -16, marginRight: -16 }}
+          items={[
+            // ── Webhook URL + Security ──
+            {
+              key: 'webhook-config',
+              label: (
+                <SectionLabel
+                  icon={<LinkOutlined />}
+                  title="Webhook Configuration"
+                  subtitle="endpoint & optional HMAC secret"
+                />
+              ),
+              children: (
+                <>
+                  {mode === 'edit' && editingChannel && (
+                    <Form.Item label="Webhook URL">
+                      <Input.Search
+                        value={`${getDaemonUrl()}/v1/gateway/inbound/${editingChannel.channel_key}`}
+                        readOnly
+                        enterButton={<CopyOutlined />}
+                        onSearch={() =>
+                          onCopyKey?.(
+                            `${getDaemonUrl()}/v1/gateway/inbound/${editingChannel.channel_key}`
+                          )
+                        }
+                        style={{ fontFamily: 'monospace', fontSize: 12 }}
+                      />
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: 12, marginTop: 4, display: 'block' }}
+                      >
+                        POST to this URL with{' '}
+                        <code>{'{ "prompt": "..." }'}</code> to trigger an agent session.
+                      </Typography.Text>
+                    </Form.Item>
+                  )}
+
+                  <Form.Item
+                    label="Webhook Secret"
+                    name="webhook_secret"
+                    tooltip="Optional HMAC-SHA256 secret. When set, requests must include X-Agor-Signature: sha256=<hmac> header."
+                  >
+                    <Input.Password
+                      placeholder={
+                        mode === 'edit' ? '••••••••' : 'Optional — leave blank to skip verification'
+                      }
+                    />
+                  </Form.Item>
+
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Request format"
+                    description={
+                      <div style={{ fontSize: 12 }}>
+                        <p style={{ margin: '4px 0' }}>
+                          <strong>Required:</strong> <code>prompt</code> (string)
+                        </p>
+                        <p style={{ margin: '4px 0' }}>
+                          <strong>Optional:</strong> <code>summary</code>, <code>thread_id</code>,{' '}
+                          <code>metadata</code> (object)
+                        </p>
+                        <p style={{ margin: '4px 0' }}>
+                          Reuse the same <code>thread_id</code> to continue an existing session.
+                        </p>
+                      </div>
+                    }
+                  />
+                </>
+              ),
+            },
+
+            // ── Post-actions ──
+            {
+              key: 'post-actions',
+              label: (
+                <SectionLabel
+                  icon={<ThunderboltOutlined />}
+                  title="Post-actions"
+                  subtitle="notify when session completes or fails"
+                />
+              ),
+              children: (
+                <Tabs
+                  defaultActiveKey="success"
+                  items={[
+                    {
+                      key: 'success',
+                      label: 'On success',
+                      children: (
+                        <WebhookPostActionFields
+                          prefix="post_action_success"
+                          form={form}
+                          gatewayChannelById={gatewayChannelById}
+                        />
+                      ),
+                    },
+                    {
+                      key: 'fail',
+                      label: 'On fail',
+                      children: (
+                        <WebhookPostActionFields
+                          prefix="post_action_fail"
+                          form={form}
+                          gatewayChannelById={gatewayChannelById}
+                        />
+                      ),
+                    },
+                  ]}
+                />
+              ),
+            },
+
+            // ── Agent Configuration ──
+            {
+              key: 'agentic-tool-config',
+              label: (
+                <SectionLabel
+                  icon={<ThunderboltOutlined />}
+                  title="Agent Configuration"
+                  subtitle={selectedAgent}
+                />
+              ),
+              children: (
+                <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                  <AgentSelectionGrid
+                    agents={AVAILABLE_AGENTS}
+                    selectedAgentId={selectedAgent}
+                    onSelect={onAgentChange}
+                    columns={2}
+                    showHelperText={false}
+                    showComparisonLink={false}
+                  />
+                  <AgenticToolConfigForm
+                    agenticTool={selectedAgent as AgenticToolName}
+                    mcpServerById={mcpServerById}
+                    showHelpText={false}
+                  />
+                </Space>
+              ),
+            },
+
+            // ── Environment Variables ──
+            {
+              key: 'env-vars',
+              label: (
+                <SectionLabel
+                  icon={<LockOutlined />}
+                  title="Environment Variables"
+                  subtitle="channel-level secrets"
+                />
+              ),
+              children: (
+                <Form.Item name="envVars" noStyle>
+                  <GatewayEnvVarsEditor />
+                </Form.Item>
+              ),
+            },
+          ]}
+        />
       )}
 
       {/* ── Collapsible sections (Teams) ── */}
@@ -1675,6 +1937,26 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           // validateJSON rule handles the error display
         }
       }
+    } else if (values.channel_type === 'webhook') {
+      if (values.webhook_secret) config.webhook_secret = values.webhook_secret;
+      // Build post_actions config
+      const buildPostAction = (prefix: string): PostActionConfig | undefined => {
+        const action = (values[`${prefix}_action`] as string | undefined) ?? 'none';
+        if (action === 'none') return { action: 'none' };
+        return {
+          action: 'channel_message',
+          gateway_channel_id: values[`${prefix}_gateway_channel_id`] as string | undefined,
+          message_template: values[`${prefix}_message_template`] as string | undefined,
+        };
+      };
+      const successAction = buildPostAction('post_action_success');
+      const failAction = buildPostAction('post_action_fail');
+      if (successAction || failAction) {
+        config.post_actions = {
+          ...(successAction ? { success: successAction } : {}),
+          ...(failAction ? { fail: failAction } : {}),
+        };
+      }
     } else if (values.channel_type === 'teams') {
       if (values.teams_app_id) config.app_id = values.teams_app_id;
       if (values.teams_app_password) config.app_password = values.teams_app_password;
@@ -1821,6 +2103,23 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       const userMap = config?.user_map as Record<string, string> | undefined;
       if (userMap && typeof userMap === 'object' && Object.keys(userMap).length > 0) {
         formValues.github_user_map = JSON.stringify(userMap, null, 2);
+      }
+    } else if (channel.channel_type === 'webhook') {
+      // webhook_secret stays blank on edit (server redacts it)
+      const postActions = config?.post_actions as
+        | { success?: PostActionConfig; fail?: PostActionConfig }
+        | undefined;
+      if (postActions?.success) {
+        formValues.post_action_success_action = postActions.success.action ?? 'none';
+        formValues.post_action_success_gateway_channel_id =
+          postActions.success.gateway_channel_id;
+        formValues.post_action_success_message_template =
+          postActions.success.message_template;
+      }
+      if (postActions?.fail) {
+        formValues.post_action_fail_action = postActions.fail.action ?? 'none';
+        formValues.post_action_fail_gateway_channel_id = postActions.fail.gateway_channel_id;
+        formValues.post_action_fail_message_template = postActions.fail.message_template;
       }
     } else if (channel.channel_type === 'teams') {
       formValues.teams_app_id = config?.app_id;
@@ -2100,6 +2399,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             branchById={branchOptionsById}
             userById={userById}
             mcpServerById={mcpServerById}
+            gatewayChannelById={gatewayChannelById}
             selectedAgent={selectedAgent}
             onAgentChange={setSelectedAgent}
             githubStep={githubStep}
@@ -2135,6 +2435,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             branchById={branchOptionsById}
             userById={userById}
             mcpServerById={mcpServerById}
+            gatewayChannelById={gatewayChannelById}
             selectedAgent={selectedAgent}
             onAgentChange={setSelectedAgent}
             editingChannel={editingChannel}
@@ -2173,30 +2474,85 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         <Result
           status="success"
           title="Channel Created"
-          subTitle="Your gateway channel has been created. Use the channel key below to configure your platform integration."
+          subTitle={
+            createdChannelType === 'webhook'
+              ? 'Your webhook channel is ready. Copy the URL below to start receiving triggers.'
+              : 'Your gateway channel has been created. Use the channel key below to configure your platform integration.'
+          }
         />
         {createdChannelKey && createdChannelKey !== 'pending' && (
           <div style={{ padding: '0 24px 16px' }}>
-            <Alert
-              title="Channel Key"
-              description={
-                <Space orientation="vertical" style={{ width: '100%' }}>
-                  <Input.Search
-                    value={createdChannelKey}
-                    readOnly
-                    enterButton={<CopyOutlined />}
-                    onSearch={() => handleCopyKey(createdChannelKey)}
-                    style={{ fontFamily: 'monospace' }}
-                  />
-                  <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                    Keep this key secret — it authenticates messages from the platform to Agor.
-                  </Typography.Text>
-                </Space>
-              }
-              type="warning"
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
+            {createdChannelType === 'webhook' ? (
+              <Alert
+                title="Webhook URL"
+                description={
+                  <Space orientation="vertical" style={{ width: '100%' }}>
+                    <Input.Search
+                      value={`${getDaemonUrl()}/v1/gateway/inbound/${createdChannelKey}`}
+                      readOnly
+                      enterButton={<CopyOutlined />}
+                      onSearch={() =>
+                        handleCopyKey(
+                          `${getDaemonUrl()}/v1/gateway/inbound/${createdChannelKey}`
+                        )
+                      }
+                      style={{ fontFamily: 'monospace', fontSize: 12 }}
+                    />
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      POST with <code>{'{ "prompt": "..." }'}</code> to trigger an agent session.
+                    </Typography.Text>
+                    <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                      Keep this URL secret — the path contains the auth key.
+                    </Typography.Text>
+                  </Space>
+                }
+                type="success"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+            ) : (
+              <Alert
+                title="Channel Key"
+                description={
+                  <Space orientation="vertical" style={{ width: '100%' }}>
+                    <Input.Search
+                      value={createdChannelKey}
+                      readOnly
+                      enterButton={<CopyOutlined />}
+                      onSearch={() => handleCopyKey(createdChannelKey)}
+                      style={{ fontFamily: 'monospace' }}
+                    />
+                    <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                      Keep this key secret — it authenticates messages from the platform to Agor.
+                    </Typography.Text>
+                  </Space>
+                }
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            {createdChannelType === 'webhook' && (
+              <Alert
+                title="Webhook Setup"
+                description={
+                  <div style={{ fontSize: 12 }}>
+                    <p style={{ margin: '0 0 4px' }}>
+                      <strong>Required field:</strong> <code>prompt</code> (string)
+                    </p>
+                    <p style={{ margin: '0 0 4px' }}>
+                      <strong>Optional fields:</strong> <code>summary</code>,{' '}
+                      <code>thread_id</code>, <code>metadata</code>
+                    </p>
+                    <p style={{ margin: 0 }}>
+                      Reuse the same <code>thread_id</code> to continue the same session.
+                    </p>
+                  </div>
+                }
+                type="info"
+                showIcon
+              />
+            )}
             {createdChannelType === 'slack' && (
               <Alert
                 title="Slack Setup"

@@ -19,11 +19,12 @@ import {
   ArtifactRepository,
   BoardObjectRepository,
   BoardRepository,
-  type BranchRepository,
+  BranchRepository,
   type Database,
   ScheduleRepository,
   type SessionRepository,
   shortId,
+  TaskRepository,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
@@ -66,6 +67,7 @@ import {
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
   ROLES,
+  SessionStatus,
 } from '@agor/core/types';
 import { executorRuntimeScopeGuard } from './auth/executor-runtime-scope.js';
 import type {
@@ -2598,6 +2600,109 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 );
               }
             });
+
+            // Webhook post-action dispatch (fire-and-forget).
+            // Fires when a webhook-sourced session reaches a terminal state.
+            const terminalStatus: readonly string[] = [
+              SessionStatus.COMPLETED,
+              SessionStatus.FAILED,
+              SessionStatus.TIMED_OUT,
+            ];
+            if (terminalStatus.includes(session.status)) {
+              setImmediate(async () => {
+                try {
+                  const gatewayService = context.app.service(
+                    'gateway'
+                  ) as unknown as GatewayService;
+                  const gatewaySource =
+                    session.custom_context?.gateway_source as Record<string, unknown> | undefined;
+                  if (!gatewaySource || gatewaySource.channel_type !== 'webhook') return;
+
+                  const channelId = typeof gatewaySource.channel_id === 'string'
+                    ? gatewaySource.channel_id
+                    : null;
+                  if (!channelId) return;
+
+                  const channelRepo = new (await import('@agor/core/db')).GatewayChannelRepository(
+                    db
+                  );
+                  const channel = await channelRepo.findById(channelId);
+                  if (!channel) return;
+
+                  const channelCfg = channel.config as Record<string, unknown>;
+                  const postActions = channelCfg.post_actions as
+                    | { success?: Record<string, unknown>; fail?: Record<string, unknown> }
+                    | undefined;
+                  if (!postActions) return;
+
+                  const outcome =
+                    session.status === SessionStatus.COMPLETED ? 'success' : 'fail';
+                  const postAction = postActions[outcome] as
+                    | { action: string; gateway_channel_id?: string; message_template?: string }
+                    | undefined;
+                  if (!postAction || postAction.action === 'none') return;
+
+                  // Gather trigger context stored at session-creation time
+                  const triggerContext = {
+                    prompt: typeof gatewaySource.webhook_prompt === 'string'
+                      ? gatewaySource.webhook_prompt
+                      : '',
+                    summary: typeof gatewaySource.webhook_summary === 'string'
+                      ? gatewaySource.webhook_summary
+                      : '',
+                    metadata:
+                      gatewaySource.webhook_metadata &&
+                      typeof gatewaySource.webhook_metadata === 'object'
+                        ? (gatewaySource.webhook_metadata as Record<string, unknown>)
+                        : {},
+                  };
+
+                  // Gather session outcome context
+                  const taskRepo = new TaskRepository(db);
+                  const tasks = await taskRepo.findBySession(session.session_id);
+                  const latestTask = tasks.at(-1);
+                  const errorMsg = latestTask?.error_message ?? undefined;
+                  let durationS: number | undefined;
+                  if (latestTask?.started_at && latestTask?.completed_at) {
+                    durationS = Math.round(
+                      (new Date(latestTask.completed_at).getTime() -
+                        new Date(latestTask.started_at).getTime()) /
+                        1000
+                    );
+                  }
+
+                  // Branch name for template
+                  let branchName: string | undefined;
+                  if (session.branch_id) {
+                    const bRepo = new BranchRepository(db);
+                    const branch = await bRepo.findById(session.branch_id);
+                    branchName = branch?.name;
+                  }
+
+                  await gatewayService.firePostAction({
+                    postAction: {
+                      action: postAction.action as 'none' | 'channel_message',
+                      gateway_channel_id: postAction.gateway_channel_id,
+                      message_template: postAction.message_template,
+                    },
+                    triggerContext,
+                    sessionOutcome: {
+                      id: session.session_id,
+                      status: session.status,
+                      error: errorMsg,
+                      duration_s: durationS,
+                      branch_name: branchName,
+                    },
+                    emittedByUserId: session.created_by,
+                  });
+                } catch (err) {
+                  console.warn(
+                    `[gateway] Webhook post-action failed for session ${shortId(session.session_id)}:`,
+                    err
+                  );
+                }
+              });
+            }
 
             if (shouldDrainQueueAfterSessionPostTurnPatch(session, context.params)) {
               // Use setImmediate to avoid blocking the patch response
