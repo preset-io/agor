@@ -558,6 +558,30 @@ export function resolveKnowledgeSpaceAfterNamespacesLoad(
   return namespaces.find((ns) => ns.slug === 'global')?.slug ?? namespaces[0]?.slug ?? 'global';
 }
 
+export function resolveKnowledgeSpaceAfterRouteOrNamespacesLoad(args: {
+  activeSpace: string;
+  routeNamespaceSlug?: string | null;
+  namespaces: KnowledgeNamespaceOptionSource[];
+}): string {
+  if (args.routeNamespaceSlug) return args.routeNamespaceSlug;
+  return resolveKnowledgeSpaceAfterNamespacesLoad(args.activeSpace, args.namespaces);
+}
+
+export function isKnowledgeDocumentsResponseCurrent(args: {
+  requestId: number;
+  currentRequestId: number;
+  requestedActiveSpace: string;
+  currentActiveSpace: string;
+  requestedKindFilter: string;
+  currentKindFilter: string;
+}): boolean {
+  return (
+    args.requestId === args.currentRequestId &&
+    args.requestedActiveSpace === args.currentActiveSpace &&
+    args.requestedKindFilter === args.currentKindFilter
+  );
+}
+
 export function buildKnowledgeNamespaceSelectOptions(namespaces: KnowledgeNamespaceOptionSource[]) {
   return [...namespaces]
     .sort((a, b) => {
@@ -809,6 +833,18 @@ export function KnowledgePage({
   const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
   const sidebarResizeDraggingRef = useRef(false);
   const globalSearchContainerRef = useRef<HTMLDivElement>(null);
+  const documentsRequestSeqRef = useRef(0);
+  const activeSpaceRef = useRef(activeSpace);
+  const kindFilterRef = useRef(kindFilter);
+  const graphRequestSeqRef = useRef(0);
+  const updateActiveSpace = useCallback((space: string) => {
+    activeSpaceRef.current = space;
+    setActiveSpace(space);
+  }, []);
+  const updateKindFilter = useCallback((filter: string) => {
+    kindFilterRef.current = filter;
+    setKindFilter(filter);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -840,6 +876,14 @@ export function KnowledgePage({
   useEffect(() => {
     activeDocIdRef.current = activeDocId;
   }, [activeDocId]);
+
+  useEffect(() => {
+    activeSpaceRef.current = activeSpace;
+  }, [activeSpace]);
+
+  useEffect(() => {
+    kindFilterRef.current = kindFilter;
+  }, [kindFilter]);
 
   const activeDoc = useMemo(
     () =>
@@ -1138,12 +1182,12 @@ export function KnowledgePage({
     );
 
   const loadNamespaces = useCallback(async () => {
-    if (!client) return;
+    if (!client) return [];
     const result = await client.service('kb/namespaces').find({ query: { archived: false } });
     const rows = normalizeFindResult<KnowledgeNamespace>(result as KnowledgeNamespace[]);
     setNamespaces(rows);
-    setActiveSpace(resolveKnowledgeSpaceAfterNamespacesLoad(activeSpace, rows));
-  }, [client, activeSpace]);
+    return rows;
+  }, [client]);
 
   // Load every readable doc (no namespace/kind filter) so `@` can reference
   // docs across spaces. Kept separate from `documents`, which is scoped by the
@@ -1164,13 +1208,28 @@ export function KnowledgePage({
 
   const loadDocuments = useCallback(async () => {
     if (!client) return;
+    const requestId = documentsRequestSeqRef.current + 1;
+    documentsRequestSeqRef.current = requestId;
+    const requestedActiveSpace = activeSpace;
+    const requestedKindFilter = kindFilter;
+    const isCurrent = () =>
+      isKnowledgeDocumentsResponseCurrent({
+        requestId,
+        currentRequestId: documentsRequestSeqRef.current,
+        requestedActiveSpace,
+        currentActiveSpace: activeSpaceRef.current,
+        requestedKindFilter,
+        currentKindFilter: kindFilterRef.current,
+      });
+
     setLoading(true);
     setError(null);
     try {
       await loadNamespaces();
+      if (!isCurrent()) return;
       void loadMentionDocs();
-      const kind = kindForSegment(kindFilter);
-      const namespaceFilter = activeSpace === 'all' ? undefined : activeSpace;
+      const kind = kindForSegment(requestedKindFilter);
+      const namespaceFilter = requestedActiveSpace === 'all' ? undefined : requestedActiveSpace;
       const result = await client.service('kb/documents').find({
         query: {
           namespace_slug: namespaceFilter,
@@ -1179,18 +1238,30 @@ export function KnowledgePage({
           include_indexing: true,
         },
       });
+      if (!isCurrent()) return;
       setDocuments(normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]));
     } catch (err) {
+      if (!isCurrent()) return;
       console.error('Failed to load Knowledge:', err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [client, activeSpace, kindFilter, loadNamespaces, loadMentionDocs]);
 
   useEffect(() => {
     loadDocuments();
   }, [loadDocuments]);
+
+  useEffect(() => {
+    if (!namespaces.length) return;
+    const nextSpace = resolveKnowledgeSpaceAfterRouteOrNamespacesLoad({
+      activeSpace,
+      routeNamespaceSlug,
+      namespaces,
+    });
+    if (nextSpace !== activeSpace) updateActiveSpace(nextSpace);
+  }, [activeSpace, namespaces, routeNamespaceSlug, updateActiveSpace]);
 
   useEffect(() => {
     const query = globalSearchQuery.trim();
@@ -1538,7 +1609,7 @@ export function KnowledgePage({
           try {
             await client.service('kb/namespaces').remove(namespace.namespace_id);
             await loadNamespaces();
-            if (activeSpace === namespace.slug) setActiveSpace('all');
+            if (activeSpace === namespace.slug) updateActiveSpace('all');
           } catch (err) {
             console.error('Failed to archive Knowledge namespace:', err);
             setNamespaceError(err instanceof Error ? err.message : String(err));
@@ -1546,24 +1617,35 @@ export function KnowledgePage({
         },
       });
     },
-    [activeSpace, client, confirm, loadNamespaces]
+    [activeSpace, client, confirm, loadNamespaces, updateActiveSpace]
   );
 
   // The namespace graph is scoped to a single Space; "All Spaces" has no graph.
   const loadGraph = useCallback(async () => {
-    if (!client || activeSpace === 'all') {
+    const requestId = graphRequestSeqRef.current + 1;
+    graphRequestSeqRef.current = requestId;
+    const requestedActiveSpace = activeSpace;
+    const isCurrent = () =>
+      requestId === graphRequestSeqRef.current && requestedActiveSpace === activeSpaceRef.current;
+
+    if (!client || requestedActiveSpace === 'all') {
       setGraphData(null);
+      setGraphLoading(false);
       return;
     }
     setGraphLoading(true);
     try {
-      const result = await client.service('kb/graph').find({ query: { namespace: activeSpace } });
+      const result = await client.service('kb/graph').find({
+        query: { namespace: requestedActiveSpace },
+      });
+      if (!isCurrent()) return;
       setGraphData(result as unknown as KnowledgeNamespaceGraph);
     } catch (err) {
+      if (!isCurrent()) return;
       console.error('Failed to load Knowledge graph:', err);
       setGraphData(null);
     } finally {
-      setGraphLoading(false);
+      if (isCurrent()) setGraphLoading(false);
     }
   }, [client, activeSpace]);
 
@@ -1625,7 +1707,7 @@ export function KnowledgePage({
       setActiveDocId(null);
       setActiveDocSnapshot(null);
     }
-    if (routeNamespaceSlug && nextSpace !== activeSpace) setActiveSpace(nextSpace);
+    if (routeNamespaceSlug && nextSpace !== activeSpace) updateActiveSpace(nextSpace);
     setGlobalSearchQuery((current) => (current === nextQuery ? current : nextQuery));
     const pendingEditMode = pendingEditModeRef.current;
     if (pendingEditMode === null) {
@@ -1642,6 +1724,7 @@ export function KnowledgePage({
     routeNamespaceSlug,
     routeSearchParams,
     draftDocument,
+    updateActiveSpace,
   ]);
 
   useEffect(() => {
@@ -2055,7 +2138,7 @@ export function KnowledgePage({
         change_summary: 'Initial version',
       } as unknown as Partial<CoreKnowledgeDocument>)) as KnowledgeDocument;
       setDocuments((prev) => [created, ...prev]);
-      setActiveSpace(namespaceSlug);
+      updateActiveSpace(namespaceSlug);
       setActiveDocSnapshot(created);
       activeDocIdRef.current = created.document_id;
       setActiveDocId(created.document_id);
@@ -2102,7 +2185,7 @@ export function KnowledgePage({
         setDocuments((prev) => [created, ...prev]);
         setDraftDocument(null);
         setDraftNamespaceSlug(null);
-        setActiveSpace(namespaceSlug);
+        updateActiveSpace(namespaceSlug);
         setActiveDocSnapshot(created);
         activeDocIdRef.current = created.document_id;
         setActiveDocId(created.document_id);
@@ -2397,7 +2480,7 @@ export function KnowledgePage({
     if (!(await confirmDiscardUnsavedChanges())) return;
     const doc = result.document;
     clearDraftDocument();
-    setActiveSpace(result.namespace.slug);
+    updateActiveSpace(result.namespace.slug);
     setActiveDocSnapshot(doc);
     activeDocIdRef.current = doc.document_id;
     setActiveDocId(doc.document_id);
@@ -2437,7 +2520,7 @@ export function KnowledgePage({
     setActiveDocId(null);
     setActiveDocSnapshot(null);
     const slug = namespaceSlugFromUri(node.uri) ?? activeSpace;
-    setKindFilter('All');
+    updateKindFilter('All');
     setSidebarFilterQuery('');
     pendingEditModeRef.current = false;
     setIsEditing(false);
@@ -2447,7 +2530,7 @@ export function KnowledgePage({
   const changeKnowledgeSpace = async (space: string) => {
     if (!(await confirmDiscardUnsavedChanges())) return;
     clearDraftDocument();
-    setActiveSpace(space);
+    updateActiveSpace(space);
     activeDocIdRef.current = null;
     setActiveDocId(null);
     setActiveDocSnapshot(null);
@@ -3074,7 +3157,7 @@ export function KnowledgePage({
                   block
                   size="small"
                   value={kindFilter}
-                  onChange={(value) => setKindFilter(String(value))}
+                  onChange={(value) => updateKindFilter(String(value))}
                   options={['All', 'Pages', 'Skills', 'Memories']}
                 />
                 <Spin spinning={loading}>
