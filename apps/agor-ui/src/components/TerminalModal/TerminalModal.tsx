@@ -1,18 +1,15 @@
-import type { AgorClient, User, UserID, UserRole } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import type { AgorClient, User, UserID } from '@agor-live/client';
+import { hasMinimumRole } from '@agor-live/client';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import { App, Modal } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import '@xterm/xterm/css/xterm.css';
+import { WEB_TERMINAL_MIN_ROLE } from './constants';
 
-/**
- * Minimum role required to open a web terminal when the instance-level
- * `execution.allow_web_terminal` flag is enabled. Shared with the app shell
- * (`components/App/App.tsx`) so the gate only exists in one place.
- */
-export const WEB_TERMINAL_MIN_ROLE: UserRole = ROLES.MEMBER;
+// Re-exported for backward compatibility with existing deep imports.
+export { WEB_TERMINAL_MIN_ROLE };
 
 const OSC_SEQUENCE_START = '\u001B]8;';
 const OSC_SEQUENCE_END = '\u001B]8;;\u0007';

@@ -17,7 +17,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { ConversationView } from '../ConversationView';
-import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminal';
+import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminalLazy';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 import { IssuePill, PullRequestPill } from '../Pill';
 
