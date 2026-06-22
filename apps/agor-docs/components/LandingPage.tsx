@@ -3,12 +3,13 @@ import type { CSSProperties } from 'react';
 import { useEffect, useRef } from 'react';
 import {
   AGOR_CLOUD_DEMO_URL,
-  AGOR_CLOUD_INVITE_URL,
   DISCORD_INVITE_URL,
   GITHUB_REPO_URL,
 } from '../lib/links';
 import { BRAND_NAME, LOGO_PATH } from '../lib/siteMetadata';
 import styles from './LandingPage.module.css';
+
+const LANDING_PRIVATE_BETA_URL = 'https://agor.live/blog/agor-cloud#lets-get-cooking';
 
 const featureCards = [
   {
@@ -254,7 +255,7 @@ export function LandingPage() {
             </p>
             <div className={styles.heroActions}>
               <Link
-                href={AGOR_CLOUD_INVITE_URL}
+                href={LANDING_PRIVATE_BETA_URL}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={styles.primaryButton}
@@ -431,7 +432,7 @@ export function LandingPage() {
         <p>Agor Cloud is opening to teams now. The open-source build is ready when you are.</p>
         <div className={styles.heroActions}>
           <Link
-            href={AGOR_CLOUD_INVITE_URL}
+            href={LANDING_PRIVATE_BETA_URL}
             target="_blank"
             rel="noopener noreferrer"
             className={styles.primaryButton}
@@ -486,7 +487,7 @@ export function LandingPage() {
             <Link href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
               Discord
             </Link>
-            <Link href={AGOR_CLOUD_INVITE_URL} target="_blank" rel="noopener noreferrer">
+            <Link href={LANDING_PRIVATE_BETA_URL} target="_blank" rel="noopener noreferrer">
               Join the private beta
             </Link>
           </div>
