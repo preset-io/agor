@@ -1685,6 +1685,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 'signing_secret',
                 'private_key',
                 'webhook_secret',
+                'app_password',
               ]) {
                 if (config[field]) {
                   config[field] = '••••••••';
