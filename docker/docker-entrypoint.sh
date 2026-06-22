@@ -252,8 +252,12 @@ DAEMON_PID=$!
 sleep 3
 
 # Start UI in foreground (this keeps container alive)
+# VITE_DAEMON_URL (when set by the .agor.yml dev variant) points the browser
+# SPA at the daemon's host:DAEMON_PORT in this split-port env, where vite-dev
+# serves the UI on a different port than the daemon API. Forwarded explicitly
+# so vite exposes it as import.meta.env.VITE_DAEMON_URL.
 echo "🎨 Starting UI on port ${UI_PORT:-5173}..."
-VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" pnpm --filter agor-ui dev --host 0.0.0.0 --port "${UI_PORT:-5173}"
+VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" VITE_DAEMON_URL="${VITE_DAEMON_URL:-}" pnpm --filter agor-ui dev --host 0.0.0.0 --port "${UI_PORT:-5173}"
 
 # If UI exits, kill daemon, executor watch, and core watch
 kill $DAEMON_PID 2>/dev/null || true
