@@ -5,6 +5,7 @@
  */
 
 import { DAEMON } from '@agor-live/client';
+import { daemonUrlForRuntime, resolveUiRuntime } from './urlRuntime';
 
 /**
  * Get daemon URL for UI connections
@@ -32,16 +33,11 @@ export function getDaemonUrl(): string {
   const daemonPort = import.meta.env.VITE_DAEMON_PORT || String(DAEMON.DEFAULT_PORT);
 
   if (typeof window !== 'undefined') {
-    // If served from /ui path, we're on the same host as daemon
-    // Use origin directly (handles forwarded URLs correctly)
-    if (window.location.pathname.startsWith('/ui')) {
-      return window.location.origin;
-    }
-
-    // Dev mode: construct URL with explicit port
-    const origin = window.location.origin;
-    const url = new URL(origin);
-    return `${url.protocol}//${url.hostname}:${daemonPort}`;
+    const runtime = resolveUiRuntime({
+      baseUrl: import.meta.env.BASE_URL,
+      pathname: window.location.pathname,
+    });
+    return daemonUrlForRuntime(runtime, window.location.origin, daemonPort);
   }
 
   // 3. Server-side fallback

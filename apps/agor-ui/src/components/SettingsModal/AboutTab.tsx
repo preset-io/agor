@@ -6,6 +6,7 @@ import type { AgorClient, UnixUserMode } from '@agor-live/client';
 import { Button, Card, Descriptions, Space, Tag, Tooltip, Typography } from 'antd';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
+import { resolveUiRuntime } from '../../config/urlRuntime';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import { isOutOfSync } from '../../hooks/useServerVersion';
 
@@ -87,6 +88,10 @@ export const AboutTab: React.FC<AboutTabProps> = ({
   isAdmin = false,
 }) => {
   const daemonUrl = getDaemonUrl();
+  const uiRuntime = resolveUiRuntime({
+    baseUrl: import.meta.env.BASE_URL,
+    pathname: typeof window === 'undefined' ? '/' : window.location.pathname,
+  });
   const [detectionMethod, setDetectionMethod] = useState<string>('');
   const [healthInfo, setHealthInfo] = useState<HealthInfo | null>(null);
   // Admin-only crash-test toggle: flipping this true makes <CrashTestBomb />
@@ -102,8 +107,10 @@ export const AboutTab: React.FC<AboutTabProps> = ({
       setDetectionMethod('Runtime injection (window.AGOR_DAEMON_URL)');
     } else if (import.meta.env.VITE_DAEMON_URL) {
       setDetectionMethod('Build-time env var (VITE_DAEMON_URL)');
-    } else if (typeof window !== 'undefined' && window.location.pathname.startsWith('/ui')) {
-      setDetectionMethod('Same-host detection (served from /ui)');
+    } else if (uiRuntime.mode === 'bundled-daemon-ui') {
+      setDetectionMethod('Bundled UI (same-origin daemon)');
+    } else if (uiRuntime.mode === 'canonical-dev-deeplink') {
+      setDetectionMethod('Dev canonical /ui deep link (daemon port)');
     } else {
       setDetectionMethod('Dev mode (explicit port)');
     }
@@ -120,7 +127,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
         })
         .catch((err) => console.error('Failed to fetch health info:', err));
     }
-  }, [client]);
+  }, [client, uiRuntime.mode]);
 
   return (
     <div style={{ position: 'relative', minHeight: 500, padding: '24px 0' }}>
@@ -358,11 +365,14 @@ export const AboutTab: React.FC<AboutTabProps> = ({
               >
                 <Descriptions column={1} bordered size="small">
                   <Descriptions.Item label="Mode">
-                    {window.location.pathname.startsWith('/ui') ? (
+                    {uiRuntime.mode === 'bundled-daemon-ui' ? (
                       <span>npm package (agor-live)</span>
                     ) : (
                       <span>Source code (dev)</span>
                     )}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="URL Runtime">
+                    <code>{uiRuntime.mode}</code>
                   </Descriptions.Item>
                   <Descriptions.Item label="UI Location">
                     <code>{window.location.href}</code>

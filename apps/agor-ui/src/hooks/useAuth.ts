@@ -9,7 +9,7 @@ import type { User } from '@agor-live/client';
 import { createRestClient } from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
-import { isTransientConnectionError } from '../utils/authErrors';
+import { isDefiniteAuthFailure, isTransientConnectionError } from '../utils/authErrors';
 import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
 import {
   exchangeLaunchCode,
@@ -118,8 +118,9 @@ export function useAuth(): UseAuthReturn {
           });
 
           return true;
-        } catch (_accessTokenError) {
+        } catch (accessTokenError) {
           // Access token expired or invalid, try refresh token
+          if (!isDefiniteAuthFailure(accessTokenError)) throw accessTokenError;
         }
       }
 
@@ -137,8 +138,14 @@ export function useAuth(): UseAuthReturn {
           });
 
           return true;
-        } catch (_refreshError) {
+        } catch (refreshError) {
           // Refresh token also expired or invalid
+          if (
+            !isDefiniteAuthFailure(refreshError) &&
+            !(refreshError instanceof RefreshUnrecoverableError)
+          ) {
+            throw refreshError;
+          }
         }
       }
 
@@ -226,14 +233,25 @@ export function useAuth(): UseAuthReturn {
       // IMPORTANT: Don't clear tokens for connection errors or for failed
       // launch-code attempts when stored tokens exist. A stale/consumed URL
       // code must not log out a user with an otherwise valid local session.
-      if (!isConnectionError && !(attemptedLaunch && hasStoredTokens)) {
+      if (
+        isDefiniteAuthFailure(error) &&
+        !isConnectionError &&
+        !(attemptedLaunch && hasStoredTokens)
+      ) {
         console.error('Authentication failure, clearing tokens:', error);
         clearTokens();
       }
 
       if (attemptedLaunch && hasStoredTokens) {
-        const client = await createRestClient(getDaemonUrl());
-        if (await authenticateWithStoredTokens(client)) return;
+        try {
+          const client = await createRestClient(getDaemonUrl());
+          if (await authenticateWithStoredTokens(client)) return;
+        } catch (fallbackError) {
+          console.warn(
+            'Stored-token fallback after launch sign-in failure also failed:',
+            fallbackError
+          );
+        }
       }
 
       setState({

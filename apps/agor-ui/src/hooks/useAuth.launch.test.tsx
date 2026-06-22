@@ -5,6 +5,7 @@ import { useAuth } from './useAuth';
 
 const authenticate = vi.fn();
 const launchCreate = vi.fn();
+const refreshCreate = vi.fn();
 
 vi.mock('@agor-live/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor-live/client')>();
@@ -14,6 +15,7 @@ vi.mock('@agor-live/client', async (importOriginal) => {
       authenticate,
       service: vi.fn((name: string) => {
         if (name === 'auth/launch') return { create: launchCreate };
+        if (name === 'authentication/refresh') return { create: refreshCreate };
         throw new Error(`unexpected service: ${name}`);
       }),
     })),
@@ -25,6 +27,7 @@ describe('useAuth launch-code fallback', () => {
     localStorage.clear();
     authenticate.mockReset();
     launchCreate.mockReset();
+    refreshCreate.mockReset();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     window.history.replaceState({}, '', '/ui/?launch_code=stale-code');
@@ -85,5 +88,38 @@ describe('useAuth launch-code fallback', () => {
     expect(result.current.error).toContain('unexpected response');
     expect(result.current.error).toContain('daemon URL');
     expect(result.current.error).not.toContain('JSON parsing error');
+  });
+
+  it('preserves stored tokens when stored-session auth gets a non-auth transport response', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'stored-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'stored-refresh');
+    authenticate.mockRejectedValue(new Error('JSON parsing error'));
+    refreshCreate.mockRejectedValue(new Error('JSON parsing error'));
+
+    const { result } = renderHook(() => useAuth());
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.authenticated).toBe(false);
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('stored-access');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('stored-refresh');
+  });
+
+  it('preserves stored tokens when launch fallback auth gets a non-auth transport response', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'stored-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'stored-refresh');
+    launchCreate.mockRejectedValue(new Error('launch code consumed'));
+    authenticate.mockRejectedValue(new Error('JSON parsing error'));
+    refreshCreate.mockRejectedValue(new Error('JSON parsing error'));
+
+    const { result } = renderHook(() => useAuth());
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.authenticated).toBe(false);
+    expect(result.current.error).toContain('Launch sign-in failed');
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('stored-access');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('stored-refresh');
   });
 });

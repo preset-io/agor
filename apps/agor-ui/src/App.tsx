@@ -23,7 +23,6 @@ import {
   ENTITY_PATH_SEGMENTS,
   getRepoReferenceOptions,
   sessionPath,
-  UI_MOUNT_PATH,
 } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider } from 'antd';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
@@ -61,6 +60,7 @@ import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLife
 import { isMobileDevice } from './utils/deviceDetection';
 import { useThemedMessage } from './utils/message';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
+import { getRouterBasename } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
 
@@ -1793,11 +1793,9 @@ function AppWrapper() {
 }
 
 function App() {
-  // Determine base path: UI_MOUNT_PATH ('/ui') in production (served by
-  // daemon at that prefix), '' in dev mode (vite serves at /). Pulled
-  // from the shared core constant so this stays consistent with the
-  // daemon's static-serving block and the server-side URL builders.
-  const basename = import.meta.env.BASE_URL === `${UI_MOUNT_PATH}/` ? UI_MOUNT_PATH : '';
+  // Determine base path: '/ui' in production (served by daemon at that prefix)
+  // and for branch-dev direct canonical links; '' for normal root-mounted Vite.
+  const basename = getRouterBasename();
 
   return (
     <BrowserRouter basename={basename}>

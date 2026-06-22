@@ -11,4 +11,9 @@ describe('uiRoutes', () => {
     expect(getRouterBasename('/')).toBe('');
     expect(uiRouteHref('a/artifact/fullscreen', '/')).toBe('/a/artifact/fullscreen');
   });
+
+  it('accepts canonical /ui deep links in root-mounted dev environments', () => {
+    expect(getRouterBasename('/', '/ui/kb/global/readme.md')).toBe('/ui');
+    expect(getRouterBasename('/', '/')).toBe('');
+  });
 });
