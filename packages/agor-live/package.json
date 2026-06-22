@@ -87,6 +87,7 @@
     "diff": "^7.0.0",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
+    "emojibase-data": "^17.0.0",
     "express": "^5.2.0",
     "express-rate-limit": "^8.5.2",
     "express-static-gzip": "^3.0.1",
