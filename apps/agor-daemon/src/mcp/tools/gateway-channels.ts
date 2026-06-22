@@ -9,9 +9,9 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
   mcpLimit,
-  mcpOffset,
   mcpOptionalId,
   mcpOptionalNonEmptyString,
+  mcpOptionalNonNegativeInt,
   mcpRequiredId,
   mcpRequiredString,
 } from '../schema.js';
@@ -274,7 +274,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           .optional()
           .describe('Optional platform filter.'),
         limit: mcpLimit(100),
-        skip: mcpOffset(0),
+        skip: mcpOptionalNonNegativeInt('skip', 'Number of gateway channels to skip (default: 0)'),
       }),
     },
     async (args) => {
