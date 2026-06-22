@@ -1364,9 +1364,9 @@ const ChannelFormFields: React.FC<{
                   <Form.Item
                     label="Default outbound target"
                     name="default_outbound_target"
-                    tooltip="Optional. Used when the agent omits a target. Examples: #team-data, channel:C01ABC123, max@example.com."
+                    tooltip="Optional. Used when the agent omits a target. Examples: #project-updates, channel:C01ABC123, user@example.com."
                   >
-                    <Input placeholder="#team-data, channel:C01ABC123, or max@example.com" />
+                    <Input placeholder="#project-updates, channel:C01ABC123, or user@example.com" />
                   </Form.Item>
 
                   <Alert

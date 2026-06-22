@@ -341,9 +341,9 @@ describe('agor_gateway_channels MCP tools', () => {
 
     for (const target of [
       'channel:C123',
-      '#team-data',
-      'channel_name:team-data',
-      'max@example.com',
+      '#project-updates',
+      'channel_name:project-updates',
+      'user@example.com',
     ]) {
       const parsed = tools.agor_gateway_emit_message.cfg.inputSchema.safeParse({
         gatewayChannelId: 'chan-1',

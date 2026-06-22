@@ -458,7 +458,7 @@ describe('SlackConnector outbound target resolution', () => {
             ok: true,
             channels: [
               { id: 'C111', name: 'random' },
-              { id: 'C222', name: 'team-data', name_normalized: 'team-data' },
+              { id: 'C222', name: 'project-updates', name_normalized: 'project-updates' },
             ],
             response_metadata: {},
           };
@@ -466,9 +466,9 @@ describe('SlackConnector outbound target resolution', () => {
       },
     };
 
-    const resolved = await connector.resolveChannelByName('#team-data');
+    const resolved = await connector.resolveChannelByName('#project-updates');
 
-    expect(resolved).toEqual({ channel: 'C222', name: 'team-data' });
+    expect(resolved).toEqual({ channel: 'C222', name: 'project-updates' });
     expect(calls).toEqual([{ types: 'public_channel,private_channel', limit: 1000 }]);
   });
 
@@ -490,11 +490,11 @@ describe('SlackConnector outbound target resolution', () => {
       },
     };
 
-    const resolved = await connector.openDmByEmail('Max@Example.com');
+    const resolved = await connector.openDmByEmail('User@Example.com');
 
     expect(resolved).toEqual({ channel: 'D123', user_id: 'U123' });
     expect(calls).toEqual([
-      { method: 'lookupByEmail', args: { email: 'max@example.com' } },
+      { method: 'lookupByEmail', args: { email: 'user@example.com' } },
       { method: 'open', args: { users: 'U123' } },
     ]);
   });

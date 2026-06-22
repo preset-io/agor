@@ -78,7 +78,7 @@ const outboundTargetSchema = z
     /^(channel:[^:\s]+|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
   )
   .describe(
-    'Slack outbound target for v0: channel:C123, #team-data, channel_name:team-data, or user@example.com. Thread targets are intentionally not supported.'
+    'Slack outbound target for v0: channel:C123, #project-updates, channel_name:project-updates, or user@example.com. Thread targets are intentionally not supported.'
   );
 
 const envVarSchema = z.strictObject({
@@ -458,8 +458,8 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
             : {}),
           accepted_target_formats: [
             'channel:C123',
-            '#team-data',
-            'channel_name:team-data',
+            '#project-updates',
+            'channel_name:project-updates',
             'user@example.com',
           ],
         });
