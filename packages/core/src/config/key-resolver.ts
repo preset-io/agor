@@ -1,6 +1,7 @@
-import { decryptApiKey, eq } from '../db';
+import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client';
 import { select } from '../db/database-wrapper';
+import { decryptApiKey } from '../db/encryption';
 import { users } from '../db/schema';
 import { shortId } from '../lib/ids';
 import type { AgenticToolName, ApiKeyName, StoredAgenticTools, UserID } from '../types';

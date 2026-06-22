@@ -350,6 +350,32 @@ describe('createClient', () => {
       expect(authMock).toHaveBeenCalledWith({ storage: undefined });
     });
 
+    it('should prefer explicit auth storage over localStorage', () => {
+      const mockLocalStorage = {
+        getItem: vi.fn(),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+        clear: vi.fn(),
+        length: 0,
+        key: vi.fn(),
+      };
+      const explicitStorage = {
+        getItem: vi.fn(),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      };
+
+      (globalThis as any).localStorage = mockLocalStorage;
+
+      const authMock = authClient as unknown as MockedFunction<any>;
+
+      createClient('http://localhost:3030', false, { authStorage: explicitStorage });
+
+      expect(authMock).toHaveBeenCalledWith({ storage: explicitStorage });
+
+      delete (globalThis as any).localStorage;
+    });
+
     it('should handle globalThis without localStorage gracefully', () => {
       const _globalThisBackup = globalThis;
 

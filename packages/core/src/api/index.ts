@@ -976,6 +976,12 @@ export function createClient(
     verbose?: boolean;
     /** Limit reconnection attempts (useful for CLI to avoid hanging) */
     reconnectionAttempts?: number;
+    /** Explicit authentication storage for non-browser clients. */
+    authStorage?: {
+      getItem(key: string): string | null | Promise<string | null>;
+      setItem(key: string, value: string): void | Promise<void>;
+      removeItem(key: string): void | Promise<void>;
+    };
   }
 ): AgorClient {
   // Detect if running in browser vs Node.js (CLI)
@@ -1035,7 +1041,9 @@ export function createClient(
   const _ls = (globalThis as { localStorage?: unknown }).localStorage as
     | (Storage & { setItem?: unknown })
     | undefined;
-  const storage = _ls && typeof _ls.setItem === 'function' ? (_ls as Storage) : undefined;
+  const storage =
+    options?.authStorage ??
+    (_ls && typeof _ls.setItem === 'function' ? (_ls as Storage) : undefined);
 
   client.configure(authentication({ storage }));
   client.io = socket;
