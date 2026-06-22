@@ -19,7 +19,9 @@ const ArtifactNodeInner = lazy(() =>
 );
 
 export const ArtifactNode = (props: { data: ArtifactNodeData; selected?: boolean }) => (
-  <Suspense fallback={<NodeLoadingPlaceholder />}>
+  <Suspense
+    fallback={<NodeLoadingPlaceholder width={props.data.width} height={props.data.height} />}
+  >
     <ArtifactNodeInner {...props} />
   </Suspense>
 );

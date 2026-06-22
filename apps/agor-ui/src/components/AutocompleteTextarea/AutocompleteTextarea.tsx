@@ -442,6 +442,26 @@ export const AutocompleteTextarea = React.forwardRef<
     }, []);
 
     /**
+     * Keep the ':' emoji popover in sync with the lazily-loaded emoji dataset.
+     * The change handler fills `emojiResults` synchronously, but the emoji data
+     * now loads on demand: if the user types ':' before it resolves,
+     * `searchEmojis` returns [] and the open popover would stay empty until the
+     * next keystroke. `searchEmojis` gets a new identity once the data loads, so
+     * recompute the current ':' query here to repopulate the popover reactively.
+     */
+    React.useEffect(() => {
+      if (triggerType !== ':') return;
+      const emojis = searchEmojis(query);
+      setEmojiResults(
+        emojis.slice(0, MAX_EMOJI_RESULTS).map((e) => ({
+          emoji: e.emoji,
+          shortcode: e.shortcode,
+          type: 'emoji' as const,
+        }))
+      );
+    }, [triggerType, query, searchEmojis]);
+
+    /**
      * Anchor the popover near the trigger caret. Recomputed when the popover
      * opens, the trigger moves, or the text/scroll reflows. The actual Popover
      * target is a zero-size span at this position so AntD can use its built-in

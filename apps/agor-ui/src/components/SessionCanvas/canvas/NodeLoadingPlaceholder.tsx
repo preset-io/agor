@@ -1,15 +1,26 @@
 /**
  * Neutral fill placeholder shown while a lazily-loaded React Flow node (e.g.
- * the Sandpack-backed AppNode / ArtifactNode) downloads its chunk. Fills the
- * node box so the canvas layout doesn't jump.
+ * the Sandpack-backed AppNode / ArtifactNode) downloads its chunk. Sized to
+ * the node's final width/height so the canvas layout doesn't jump when the
+ * real node mounts — app/artifact nodes don't set explicit React Flow node
+ * dimensions, so without this the node would render at the placeholder's
+ * intrinsic size and then reflow to `data.width`/`data.height`.
  */
-export const NodeLoadingPlaceholder = ({ title }: { title?: string }) => (
+export const NodeLoadingPlaceholder = ({
+  title,
+  width,
+  height,
+}: {
+  title?: string;
+  width?: number;
+  height?: number;
+}) => (
   <div
     style={{
-      width: '100%',
-      height: '100%',
-      minWidth: 120,
-      minHeight: 80,
+      width: width ?? '100%',
+      height: height ?? '100%',
+      minWidth: width ?? 120,
+      minHeight: height ?? 80,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',

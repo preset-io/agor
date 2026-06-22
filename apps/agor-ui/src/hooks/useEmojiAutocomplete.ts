@@ -76,8 +76,11 @@ const loadEmojiOptions = (): Promise<EmojiOption[]> => {
       return options;
     } catch (error) {
       console.error('Failed to load emoji autocomplete data.', error);
-      emojiOptionsCache = [];
-      return emojiOptionsCache;
+      // Don't poison the success cache on a transient chunk-load failure:
+      // leave `emojiOptionsCache` null and clear the in-flight promise so a
+      // later search / idle warm-up can retry the import.
+      emojiOptionsPromise = null;
+      return [];
     }
   })();
 

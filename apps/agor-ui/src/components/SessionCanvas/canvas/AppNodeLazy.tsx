@@ -17,7 +17,15 @@ import { NodeLoadingPlaceholder } from './NodeLoadingPlaceholder';
 const AppNodeInner = lazy(() => import('./AppNode').then((m) => ({ default: m.AppNode })));
 
 export const AppNode = (props: { data: AppNodeData; selected?: boolean }) => (
-  <Suspense fallback={<NodeLoadingPlaceholder title={props.data.title} />}>
+  <Suspense
+    fallback={
+      <NodeLoadingPlaceholder
+        title={props.data.title}
+        width={props.data.width}
+        height={props.data.height}
+      />
+    }
+  >
     <AppNodeInner {...props} />
   </Suspense>
 );
