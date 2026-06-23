@@ -1,11 +1,7 @@
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { useEffect, useRef } from 'react';
-import {
-  AGOR_CLOUD_DEMO_URL,
-  DISCORD_INVITE_URL,
-  GITHUB_REPO_URL,
-} from '../lib/links';
+import { AGOR_CLOUD_DEMO_URL, DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { BRAND_NAME, LOGO_PATH } from '../lib/siteMetadata';
 import styles from './LandingPage.module.css';
 
