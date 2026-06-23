@@ -47,6 +47,7 @@ import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload, FileUploadButton } from '../FileUpload';
+import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import { MCPServerPill } from '../MCPServer';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
@@ -341,6 +342,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
+  const [forkModalOpen, setForkModalOpen] = React.useState(false);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
@@ -647,7 +649,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (!session) return;
     const value = promptRef.current?.getValue() ?? '';
     const promptToSend = value.trim();
-    if (!promptToSend) return;
+    if (!promptToSend) {
+      setForkModalOpen(true);
+      return;
+    }
     try {
       await onFork?.(session.session_id, promptToSend);
       // Only clear the compose box + draft on success, so a failed fork
@@ -656,6 +661,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     } catch (error) {
       console.error('Fork failed — keeping prompt in compose box:', error);
     }
+  };
+
+  const handleForkModalConfirm = async (config: string | Partial<SpawnConfig>) => {
+    if (!session) return;
+    const prompt = typeof config === 'string' ? config : (config.prompt ?? '');
+    if (!prompt) return;
+    await onFork?.(session.session_id, prompt);
   };
 
   const handleBtwSend = async () => {
@@ -1154,6 +1166,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             the user is typing into the REPL directly). */}
         {!(session.agentic_tool === 'claude-code-cli' && cliViewMode === 'terminal') &&
           footerControls}
+
+        {/* Fork modal — opened when Fork button is clicked with an empty textarea */}
+        <ForkSpawnModal
+          open={forkModalOpen}
+          action="fork"
+          session={session}
+          currentUser={currentUserId ? (userById.get(currentUserId) ?? null) : null}
+          onConfirm={handleForkModalConfirm}
+          onCancel={() => setForkModalOpen(false)}
+          client={client}
+          userById={userById}
+        />
 
         {/* File upload modal */}
         {session && (

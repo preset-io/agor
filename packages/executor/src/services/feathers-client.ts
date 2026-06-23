@@ -58,13 +58,8 @@ export async function createExecutorClient(
   const client = createClient(daemonUrl, false, {
     verbose: DEBUG_FEATHERS_CLIENT, // Log connection status for debugging
     reconnectionAttempts: 5, // Allow more retries for transient network hiccups during long-running tasks
+    authStorage: storage,
   });
-
-  // Re-configure authentication with memory storage
-  // This overrides the default `storage: undefined` for Node.js environments
-  // Import authentication client from @agor/core (re-exported from @feathersjs/authentication-client)
-  const { authenticationClient } = await import('@agor/core/api');
-  client.configure(authenticationClient({ storage }));
 
   // Connect the socket
   client.io.connect();

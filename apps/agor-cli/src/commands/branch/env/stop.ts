@@ -8,6 +8,7 @@ import { shortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../../base-command';
+import { requestBranchEnvironmentAction } from './request';
 
 export default class BranchEnvStop extends BaseCommand {
   static description = 'Stop branch environment';
@@ -41,8 +42,7 @@ export default class BranchEnvStop extends BaseCommand {
       this.log(`  ID:   ${chalk.dim(shortId(branch.branch_id))}`);
       this.log('');
 
-      // Call custom stopEnvironment method
-      await branchesService.stopEnvironment(branch.branch_id);
+      await requestBranchEnvironmentAction(client, branch.branch_id, 'stop');
 
       this.log(`${chalk.green('✓')} Environment stop requested`);
       this.log('');

@@ -106,8 +106,16 @@ services:
 
       # UI configuration
       - UI_PORT=${UI_PORT:-5173}
-      # UI connects to daemon via localhost (inside container)
+      # Daemon port the browser-side SPA derives its API origin from when no
+      # explicit VITE_DAEMON_URL is given (root-vite-dev resolution).
       - VITE_DAEMON_PORT=${DAEMON_PORT:-3030}
+      # Browser-facing daemon URL. In a split-port branch env the UI is served
+      # by vite-dev on UI_PORT while the daemon API listens on DAEMON_PORT, so
+      # the SPA must POST /authentication to the daemon — not its own origin.
+      # When set (see .agor.yml dev variants) getDaemonUrl() returns this
+      # verbatim, short-circuiting the same-origin assumption. Left empty for
+      # production, which serves UI + API from one origin under /ui.
+      - VITE_DAEMON_URL=${VITE_DAEMON_URL:-}
       # Public, browser-facing base URL used in Slack/GitHub/email links.
       - AGOR_BASE_URL=${AGOR_BASE_URL:-}
 

@@ -463,3 +463,81 @@ describe('agor_boards_create schema', () => {
     }
   });
 });
+
+describe('board icon shortcode handling at MCP boundary', () => {
+  const baseServiceParams = {
+    authenticated: true,
+    provider: 'mcp',
+    user: { user_id: 'user-1', role: 'member' },
+  };
+
+  it('agor_boards_create returns the repository-normalized icon', async () => {
+    const boardsCreate = vi.fn(async (data: Record<string, unknown>) => ({
+      board_id: 'board-1',
+      name: data.name,
+      icon: '🧭',
+      created_by: data.created_by,
+      created_at: '2026-06-01T00:00:00.000Z',
+      last_updated: '2026-06-01T00:00:00.000Z',
+      archived: false,
+      url: 'http://localhost:5173/ui/b/board-1/',
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'boards') return { create: boardsCreate };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const createBoard = registerAndCaptureHandler('agor_boards_create', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await createBoard({ name: 'Compass Board', icon: ':compass:' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(boardsCreate).toHaveBeenCalledWith(
+      {
+        name: 'Compass Board',
+        created_by: 'user-1',
+        icon: ':compass:',
+      },
+      baseServiceParams
+    );
+    expect(parsed.icon).toBe('🧭');
+  });
+
+  it('agor_boards_update returns the repository-normalized icon', async () => {
+    const normalizedBoard = {
+      board_id: 'board-1',
+      name: 'Compass Board',
+      icon: '🧭',
+      created_by: 'user-1',
+      created_at: '2026-06-01T00:00:00.000Z',
+      last_updated: '2026-06-01T00:00:00.000Z',
+      archived: false,
+      url: 'http://localhost:5173/ui/b/board-1/',
+    };
+    const boardsPatch = vi.fn(async () => normalizedBoard);
+    const boardsGet = vi.fn(async () => normalizedBoard);
+    const app = {
+      service(name: string) {
+        if (name === 'boards') return { patch: boardsPatch, get: boardsGet, emit: vi.fn() };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const updateBoard = registerAndCaptureHandler('agor_boards_update', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await updateBoard({ boardId: 'board-1', icon: ':compass:' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(boardsPatch).toHaveBeenCalledWith('board-1', { icon: ':compass:' }, baseServiceParams);
+    expect(boardsGet).toHaveBeenCalledWith('board-1', baseServiceParams);
+    expect(parsed.board.icon).toBe('🧭');
+  });
+});

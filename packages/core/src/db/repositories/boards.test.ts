@@ -6,9 +6,12 @@
  */
 
 import type { Board, BoardObject, UUID } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
+import { select, update } from '../database-wrapper';
+import { boards as boardsTable } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardRepository } from './boards';
@@ -95,6 +98,11 @@ async function createBranchForBoard(
           }
         : undefined),
   });
+}
+
+async function getStoredBoardIcon(db: Database, boardId: UUID): Promise<string | undefined> {
+  const row = await select(db).from(boardsTable).where(eq(boardsTable.board_id, boardId)).one();
+  return (row?.data as { icon?: string } | undefined)?.icon;
 }
 
 // ============================================================================
@@ -220,6 +228,38 @@ describe('BoardRepository.create', () => {
       sprint: 42,
       deadline: '2025-03-15',
     });
+  });
+
+  dbTest('should normalize exact emoji shortcodes before storing board icons', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const created = await repo.create(createBoardData({ icon: '  :compass:  ' }));
+
+    expect(created.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, created.board_id)).resolves.toBe('🧭');
+  });
+
+  dbTest('should preserve unicode emoji board icons', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const created = await repo.create(createBoardData({ icon: '🧭' }));
+
+    expect(created.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, created.board_id)).resolves.toBe('🧭');
+  });
+
+  dbTest('should trim but preserve unknown board icon text and shortcodes', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const unknownShortcode = await repo.create(createBoardData({ icon: '  :not_real:  ' }));
+    const textIcon = await repo.create(
+      createBoardData({ name: 'Text Icon Board', icon: '  Team Icon  ' })
+    );
+
+    expect(unknownShortcode.icon).toBe(':not_real:');
+    await expect(getStoredBoardIcon(db, unknownShortcode.board_id)).resolves.toBe(':not_real:');
+    expect(textIcon.icon).toBe('Team Icon');
+    await expect(getStoredBoardIcon(db, textIcon.board_id)).resolves.toBe('Team Icon');
   });
 
   dbTest('should preserve timestamps if provided', async ({ db }) => {
@@ -370,6 +410,24 @@ describe('BoardRepository.findById', () => {
 
     expect(found?.objects).toEqual(data.objects);
     expect(found?.custom_context).toEqual(data.custom_context);
+  });
+
+  dbTest('should normalize legacy shortcode board icons when reading rows', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const created = await repo.create(createBoardData({ icon: '🧭' }));
+    const row = await select(db)
+      .from(boardsTable)
+      .where(eq(boardsTable.board_id, created.board_id))
+      .one();
+    await update(db, boardsTable)
+      .set({ data: { ...(row?.data as Record<string, unknown>), icon: ':compass:' } })
+      .where(eq(boardsTable.board_id, created.board_id))
+      .run();
+
+    const found = await repo.findById(created.board_id);
+
+    expect(found?.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, created.board_id)).resolves.toBe(':compass:');
   });
 });
 
@@ -534,6 +592,16 @@ describe('BoardRepository.update', () => {
     expect(updated.description).toBe('New description');
     expect(updated.color).toBe('#ff4d4f');
     expect(updated.icon).toBe('⚡');
+  });
+
+  dbTest('should normalize exact emoji shortcodes when updating board icons', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData({ icon: '📋' }));
+
+    const updated = await repo.update(board.board_id, { icon: ':compass:' });
+
+    expect(updated.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, board.board_id)).resolves.toBe('🧭');
   });
 
   dbTest('should update JSON fields (objects and custom_context)', async ({ db }) => {
@@ -1174,6 +1242,42 @@ describe('BoardRepository.deleteZone', () => {
     const result = await repo.deleteZone(board.board_id, 'zone-1', true);
 
     expect(result.affectedSessions).toEqual([]);
+  });
+});
+
+// ============================================================================
+// Import/export
+// ============================================================================
+
+describe('BoardRepository import/export', () => {
+  dbTest('should normalize exact emoji shortcodes when importing board blobs', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const imported = await repo.fromBlob(
+      {
+        name: 'Imported Blob Board',
+        slug: 'imported-blob-board',
+        icon: ':compass:',
+      },
+      'test-user'
+    );
+
+    expect(imported.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, imported.board_id)).resolves.toBe('🧭');
+  });
+
+  dbTest('should normalize exact emoji shortcodes when importing board YAML', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const imported = await repo.fromYaml(
+      ['name: Imported YAML Board', 'slug: imported-yaml-board', 'icon: ":compass:"', ''].join(
+        '\n'
+      ),
+      'test-user'
+    );
+
+    expect(imported.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, imported.board_id)).resolves.toBe('🧭');
   });
 });
 

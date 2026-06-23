@@ -19,6 +19,7 @@ import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { generateSlug } from '../../lib/slugs';
+import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
@@ -115,6 +116,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
       archived_by: row.archived_by ?? undefined,
       ...data,
+      icon: normalizeExactEmojiShortcode(data.icon),
       access_mode: data.access_mode ?? 'shared',
       default_others_can: data.default_others_can ?? 'session',
       default_others_fs_access: data.default_others_fs_access ?? 'read',
@@ -150,7 +152,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         default_dangerously_allow_session_sharing:
           board.default_dangerously_allow_session_sharing ?? false,
         color: board.color,
-        icon: board.icon,
+        icon: normalizeExactEmojiShortcode(board.icon),
         background_color: board.background_color,
         custom_css: board.custom_css,
         objects: board.objects,
