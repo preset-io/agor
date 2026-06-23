@@ -20,8 +20,9 @@ const StatCard: React.FC<{
   iconColor: string;
   cta: string;
   ctaIcon?: React.ReactNode;
+  subtext?: string;
   onCta: () => void;
-}> = ({ icon, value, label, iconBg, iconColor, cta, ctaIcon, onCta }) => {
+}> = ({ icon, value, label, iconBg, iconColor, cta, ctaIcon, subtext, onCta }) => {
   const { token } = theme.useToken();
   const [hovered, setHovered] = useState(false);
 
@@ -77,9 +78,20 @@ const StatCard: React.FC<{
       </div>
 
       {/* Label */}
-      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
+      <Text
+        type="secondary"
+        style={{ fontSize: 12, display: 'block', marginBottom: subtext ? 2 : 10 }}
+      >
         {label}
       </Text>
+      {subtext && (
+        <Text
+          type="secondary"
+          style={{ fontSize: 11, display: 'block', marginBottom: 10, opacity: 0.7 }}
+        >
+          {subtext}
+        </Text>
+      )}
 
       {/* CTA */}
       <button
@@ -189,6 +201,7 @@ export const HomeStatsBar: React.FC<{
         label="Started this week"
         iconBg={token.colorSuccessBg}
         iconColor={token.colorSuccess}
+        subtext={currentUserId ? `You: ${myThisWeek}` : undefined}
         cta="Start a session"
         onCta={newSession}
       />
