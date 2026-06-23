@@ -87,25 +87,25 @@ export const HomeStatsBar: React.FC<{
     return () => clearInterval(id);
   }, []);
 
-  const { activeTeammates, myThisWeek, runningNow, startedThisWeek } = useMemo(() => {
+  const { activeTeammates, myThisWeek, runningNow, activeThisWeek } = useMemo(() => {
     const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
     const activeUserIds = new Set<string>();
     let myThisWeek = 0;
     let runningNow = 0;
-    let startedThisWeek = 0;
+    let activeThisWeek = 0;
 
     for (const s of sessionById.values()) {
       if (s.archived) continue;
 
-      const createdAt = s.created_at ? new Date(s.created_at).getTime() : Number.NaN;
+      const updatedAt = s.last_updated ? new Date(s.last_updated).getTime() : Number.NaN;
 
       if (s.status === 'running') {
         runningNow++;
       }
 
-      if (!Number.isNaN(createdAt) && createdAt > weekAgo) {
-        startedThisWeek++;
+      if (!Number.isNaN(updatedAt) && updatedAt > weekAgo) {
+        activeThisWeek++;
         if (s.created_by) activeUserIds.add(s.created_by);
         if (s.created_by === currentUserId) {
           myThisWeek++;
@@ -117,18 +117,18 @@ export const HomeStatsBar: React.FC<{
       activeTeammates: activeUserIds.size,
       myThisWeek,
       runningNow,
-      startedThisWeek,
+      activeThisWeek,
     };
   }, [sessionById, currentUserId, now]);
 
   const isMultiUser = (teamSize ?? 0) > 1;
   const weekValue =
-    isMultiUser && currentUserId && startedThisWeek > 0
-      ? `${myThisWeek}/${startedThisWeek}`
-      : startedThisWeek;
+    isMultiUser && currentUserId && activeThisWeek > 0
+      ? `${myThisWeek}/${activeThisWeek}`
+      : activeThisWeek;
   const weekTooltip =
-    isMultiUser && currentUserId && startedThisWeek > 0
-      ? `${myThisWeek} started by you, ${startedThisWeek} by the team`
+    isMultiUser && currentUserId && activeThisWeek > 0
+      ? `${myThisWeek} by you, ${activeThisWeek} by the team`
       : undefined;
 
   return (
@@ -151,7 +151,7 @@ export const HomeStatsBar: React.FC<{
         icon={<RiseOutlined />}
         value={weekValue}
         valueTooltip={weekTooltip}
-        label="Started this week"
+        label="Active this week"
         iconBg={token.colorSuccessBg}
         iconColor={token.colorSuccess}
       />
