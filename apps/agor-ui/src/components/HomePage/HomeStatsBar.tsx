@@ -6,7 +6,7 @@ import {
   RiseOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { Typography, theme } from 'antd';
+import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -14,15 +14,15 @@ const { Text } = Typography;
 
 const StatCard: React.FC<{
   icon: React.ReactNode;
-  value: number;
+  value: number | string;
+  valueTooltip?: string;
   label: string;
   iconBg: string;
   iconColor: string;
   cta: string;
   ctaIcon?: React.ReactNode;
-  subtext?: string;
   onCta: () => void;
-}> = ({ icon, value, label, iconBg, iconColor, cta, ctaIcon, subtext, onCta }) => {
+}> = ({ icon, value, valueTooltip, label, iconBg, iconColor, cta, ctaIcon, onCta }) => {
   const { token } = theme.useToken();
   const [hovered, setHovered] = useState(false);
 
@@ -64,34 +64,26 @@ const StatCard: React.FC<{
       </div>
 
       {/* Number */}
-      <div
-        style={{
-          fontSize: 28,
-          fontWeight: 700,
-          lineHeight: 1,
-          color: token.colorText,
-          marginBottom: 4,
-          paddingRight: 46,
-        }}
-      >
-        {value}
-      </div>
+      <Tooltip title={valueTooltip}>
+        <div
+          style={{
+            fontSize: 28,
+            fontWeight: 700,
+            lineHeight: 1,
+            color: token.colorText,
+            marginBottom: 4,
+            paddingRight: 46,
+            cursor: valueTooltip ? 'default' : undefined,
+          }}
+        >
+          {value}
+        </div>
+      </Tooltip>
 
       {/* Label */}
-      <Text
-        type="secondary"
-        style={{ fontSize: 12, display: 'block', marginBottom: subtext ? 2 : 10 }}
-      >
+      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
         {label}
       </Text>
-      {subtext && (
-        <Text
-          type="secondary"
-          style={{ fontSize: 11, display: 'block', marginBottom: 10, opacity: 0.7 }}
-        >
-          {subtext}
-        </Text>
-      )}
 
       {/* CTA */}
       <button
@@ -163,7 +155,7 @@ export const HomeStatsBar: React.FC<{
 
       if (createdAt > weekAgo) {
         startedThisWeek++;
-        if (!currentUserId || s.created_by === currentUserId) {
+        if (s.created_by === currentUserId) {
           myThisWeek++;
         }
       }
@@ -173,6 +165,13 @@ export const HomeStatsBar: React.FC<{
   }, [sessionById, currentUserId, now]);
 
   const newSession = () => onOpenCreateDialog?.('assistant');
+
+  const weekValue =
+    currentUserId && startedThisWeek > 0 ? `${myThisWeek}/${startedThisWeek}` : startedThisWeek;
+  const weekTooltip =
+    currentUserId && startedThisWeek > 0
+      ? `${myThisWeek} started by you, ${startedThisWeek} by the team`
+      : undefined;
 
   return (
     <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
@@ -203,11 +202,11 @@ export const HomeStatsBar: React.FC<{
       />
       <StatCard
         icon={<RiseOutlined />}
-        value={startedThisWeek}
+        value={weekValue}
+        valueTooltip={weekTooltip}
         label="Started this week"
         iconBg={token.colorSuccessBg}
         iconColor={token.colorSuccess}
-        subtext={currentUserId ? `You: ${myThisWeek}` : undefined}
         cta="New session"
         onCta={newSession}
       />
