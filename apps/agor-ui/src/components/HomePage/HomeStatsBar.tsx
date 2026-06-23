@@ -1,11 +1,5 @@
 import type { Session } from '@agor-live/client';
-import {
-  ArrowRightOutlined,
-  PlusOutlined,
-  RiseOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
+import { RiseOutlined, TeamOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
@@ -19,12 +13,8 @@ const StatCard: React.FC<{
   label: string;
   iconBg: string;
   iconColor: string;
-  cta: string;
-  ctaIcon?: React.ReactNode;
-  onCta: () => void;
-}> = ({ icon, value, valueTooltip, label, iconBg, iconColor, cta, ctaIcon, onCta }) => {
+}> = ({ icon, value, valueTooltip, label, iconBg, iconColor }) => {
   const { token } = theme.useToken();
-  const [hovered, setHovered] = useState(false);
 
   return (
     <div
@@ -37,11 +27,7 @@ const StatCard: React.FC<{
         borderRadius: token.borderRadiusLG,
         minWidth: 0,
         overflow: 'hidden',
-        transition: 'box-shadow 0.15s',
-        boxShadow: hovered ? token.boxShadowTertiary : undefined,
       }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       {/* Icon — top-right corner keeps number + label consistently anchored left */}
       <div
@@ -81,31 +67,9 @@ const StatCard: React.FC<{
       </Tooltip>
 
       {/* Label */}
-      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
+      <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
         {label}
       </Text>
-
-      {/* CTA */}
-      <button
-        type="button"
-        onClick={onCta}
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 4,
-          padding: 0,
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          color: token.colorPrimary,
-          fontSize: 12,
-          fontFamily: 'inherit',
-          fontWeight: 500,
-        }}
-      >
-        {ctaIcon ?? <PlusOutlined style={{ fontSize: 10 }} />}
-        {cta}
-      </button>
     </div>
   );
 };
@@ -113,10 +77,7 @@ const StatCard: React.FC<{
 export const HomeStatsBar: React.FC<{
   sessionById: Map<string, Session>;
   currentUserId?: string;
-  onSessionClick: (sessionId: string) => void;
-  onStartSession?: () => void;
-  onOpenSettings?: (tab: string) => void;
-}> = ({ sessionById, currentUserId, onSessionClick, onStartSession, onOpenSettings }) => {
+}> = ({ sessionById, currentUserId }) => {
   const { token } = theme.useToken();
   const [now, setNow] = useState(() => Date.now());
 
@@ -125,50 +86,39 @@ export const HomeStatsBar: React.FC<{
     return () => clearInterval(id);
   }, []);
 
-  const { activeTeammates, myThisWeek, runningNow, latestRunningId, startedThisWeek } =
-    useMemo(() => {
-      const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const { activeTeammates, myThisWeek, runningNow, startedThisWeek } = useMemo(() => {
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-      const activeUserIds = new Set<string>();
-      let myThisWeek = 0;
-      let runningNow = 0;
-      let latestRunningId: string | undefined;
-      let latestRunningTime = 0;
-      let startedThisWeek = 0;
+    const activeUserIds = new Set<string>();
+    let myThisWeek = 0;
+    let runningNow = 0;
+    let startedThisWeek = 0;
 
-      for (const s of sessionById.values()) {
-        if (s.archived) continue;
+    for (const s of sessionById.values()) {
+      if (s.archived) continue;
 
-        const createdAt = new Date(s.created_at).getTime();
-        const updatedAt = new Date(s.last_updated).getTime();
+      const createdAt = new Date(s.created_at).getTime();
 
-        if (s.status === 'running') {
-          runningNow++;
-          if (updatedAt > latestRunningTime) {
-            latestRunningTime = updatedAt;
-            latestRunningId = s.session_id;
-          }
-        }
-
-        if (createdAt > weekAgo) {
-          startedThisWeek++;
-          if (s.created_by) activeUserIds.add(s.created_by);
-          if (s.created_by === currentUserId) {
-            myThisWeek++;
-          }
-        }
+      if (s.status === 'running') {
+        runningNow++;
       }
 
-      return {
-        activeTeammates: activeUserIds.size,
-        myThisWeek,
-        runningNow,
-        latestRunningId,
-        startedThisWeek,
-      };
-    }, [sessionById, currentUserId, now]);
+      if (createdAt > weekAgo) {
+        startedThisWeek++;
+        if (s.created_by) activeUserIds.add(s.created_by);
+        if (s.created_by === currentUserId) {
+          myThisWeek++;
+        }
+      }
+    }
 
-  const newSession = () => onStartSession?.();
+    return {
+      activeTeammates: activeUserIds.size,
+      myThisWeek,
+      runningNow,
+      startedThisWeek,
+    };
+  }, [sessionById, currentUserId, now]);
 
   const weekValue =
     currentUserId && startedThisWeek > 0 ? `${myThisWeek}/${startedThisWeek}` : startedThisWeek;
@@ -185,8 +135,6 @@ export const HomeStatsBar: React.FC<{
         label="Active teammates this week"
         iconBg={token.colorWarningBg}
         iconColor={token.colorWarning}
-        cta="Invite a teammate"
-        onCta={() => onOpenSettings?.('users')}
       />
       <StatCard
         icon={<ThunderboltOutlined />}
@@ -194,15 +142,6 @@ export const HomeStatsBar: React.FC<{
         label="Running right now"
         iconBg={token.colorPrimaryBg}
         iconColor={token.colorPrimary}
-        cta={runningNow > 0 && latestRunningId ? 'Open latest session' : 'Start session'}
-        ctaIcon={
-          runningNow > 0 && latestRunningId ? (
-            <ArrowRightOutlined style={{ fontSize: 10 }} />
-          ) : undefined
-        }
-        onCta={
-          runningNow > 0 && latestRunningId ? () => onSessionClick(latestRunningId) : newSession
-        }
       />
       <StatCard
         icon={<RiseOutlined />}
@@ -211,8 +150,6 @@ export const HomeStatsBar: React.FC<{
         label="Started this week"
         iconBg={token.colorSuccessBg}
         iconColor={token.colorSuccess}
-        cta="Start session"
-        onCta={newSession}
       />
     </div>
   );

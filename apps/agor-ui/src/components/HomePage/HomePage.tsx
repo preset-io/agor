@@ -268,13 +268,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
             )}
 
             {/* Workspace stats */}
-            <HomeStatsBar
-              sessionById={props.sessionById}
-              currentUserId={props.currentUserId}
-              onSessionClick={props.onSessionClick}
-              onStartSession={handleNewSession}
-              onOpenSettings={props.onOpenSettings}
-            />
+            <HomeStatsBar sessionById={props.sessionById} currentUserId={props.currentUserId} />
 
             {/* My Sessions */}
             <HomeSessionsSection
