@@ -29,7 +29,14 @@ export type GatewayOutboundMessageID = UUID;
 // ============================================================================
 
 /** Supported messaging platform types */
-export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram' | 'github' | 'teams' | 'webhook';
+export type ChannelType =
+  | 'slack'
+  | 'discord'
+  | 'whatsapp'
+  | 'telegram'
+  | 'github'
+  | 'teams'
+  | 'webhook';
 
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';

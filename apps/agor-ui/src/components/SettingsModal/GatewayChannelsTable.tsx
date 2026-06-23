@@ -364,11 +364,7 @@ const WebhookPostActionFields: React.FC<{
 
   return (
     <Space orientation="vertical" style={{ width: '100%' }} size="small">
-      <Form.Item
-        label="Action"
-        name={`${prefix}_action`}
-        initialValue="none"
-      >
+      <Form.Item label="Action" name={`${prefix}_action`} initialValue="none">
         <Select options={POST_ACTION_OPTIONS} style={{ width: 220 }} />
       </Form.Item>
 
@@ -1006,8 +1002,8 @@ const ChannelFormFields: React.FC<{
                         type="secondary"
                         style={{ fontSize: 12, marginTop: 4, display: 'block' }}
                       >
-                        POST to this URL with{' '}
-                        <code>{'{ "prompt": "..." }'}</code> to trigger an agent session.
+                        POST to this URL with <code>{'{ "prompt": "..." }'}</code> to trigger an
+                        agent session.
                       </Typography.Text>
                     </Form.Item>
                   )}
@@ -2111,10 +2107,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         | undefined;
       if (postActions?.success) {
         formValues.post_action_success_action = postActions.success.action ?? 'none';
-        formValues.post_action_success_gateway_channel_id =
-          postActions.success.gateway_channel_id;
-        formValues.post_action_success_message_template =
-          postActions.success.message_template;
+        formValues.post_action_success_gateway_channel_id = postActions.success.gateway_channel_id;
+        formValues.post_action_success_message_template = postActions.success.message_template;
       }
       if (postActions?.fail) {
         formValues.post_action_fail_action = postActions.fail.action ?? 'none';
@@ -2492,9 +2486,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
                       readOnly
                       enterButton={<CopyOutlined />}
                       onSearch={() =>
-                        handleCopyKey(
-                          `${getDaemonUrl()}/v1/gateway/inbound/${createdChannelKey}`
-                        )
+                        handleCopyKey(`${getDaemonUrl()}/v1/gateway/inbound/${createdChannelKey}`)
                       }
                       style={{ fontFamily: 'monospace', fontSize: 12 }}
                     />
@@ -2541,8 +2533,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
                       <strong>Required field:</strong> <code>prompt</code> (string)
                     </p>
                     <p style={{ margin: '0 0 4px' }}>
-                      <strong>Optional fields:</strong> <code>summary</code>,{' '}
-                      <code>thread_id</code>, <code>metadata</code>
+                      <strong>Optional fields:</strong> <code>summary</code>, <code>thread_id</code>
+                      , <code>metadata</code>
                     </p>
                     <p style={{ margin: 0 }}>
                       Reuse the same <code>thread_id</code> to continue the same session.

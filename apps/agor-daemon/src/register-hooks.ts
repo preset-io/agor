@@ -2614,13 +2614,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   const gatewayService = context.app.service(
                     'gateway'
                   ) as unknown as GatewayService;
-                  const gatewaySource =
-                    session.custom_context?.gateway_source as Record<string, unknown> | undefined;
-                  if (!gatewaySource || gatewaySource.channel_type !== 'webhook') return;
+                  const gatewaySource = session.custom_context?.gateway_source as
+                    | Record<string, unknown>
+                    | undefined;
+                  if (!gatewaySource) return;
+                  if (gatewaySource.channel_type !== 'webhook') return;
 
-                  const channelId = typeof gatewaySource.channel_id === 'string'
-                    ? gatewaySource.channel_id
-                    : null;
+                  const channelId =
+                    typeof gatewaySource.channel_id === 'string' ? gatewaySource.channel_id : null;
                   if (!channelId) return;
 
                   const channelRepo = new (await import('@agor/core/db')).GatewayChannelRepository(
@@ -2635,8 +2636,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                     | undefined;
                   if (!postActions) return;
 
-                  const outcome =
-                    session.status === SessionStatus.COMPLETED ? 'success' : 'fail';
+                  const outcome = session.status === SessionStatus.COMPLETED ? 'success' : 'fail';
                   const postAction = postActions[outcome] as
                     | { action: string; gateway_channel_id?: string; message_template?: string }
                     | undefined;

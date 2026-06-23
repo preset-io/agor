@@ -6,6 +6,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import crypto from 'node:crypto';
 import { type AgorConfig, loadConfig, resolveBranchStorageConfig } from '@agor/core/config';
 import {
   BranchRepository,
@@ -65,7 +66,6 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-import crypto from 'node:crypto';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
@@ -3799,9 +3799,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
     // HMAC-SHA256 verification (optional — only when webhook_secret is configured)
     const channelConfig = channel.config as Record<string, unknown>;
-    const webhookSecret = typeof channelConfig.webhook_secret === 'string'
-      ? channelConfig.webhook_secret
-      : null;
+    const webhookSecret =
+      typeof channelConfig.webhook_secret === 'string' ? channelConfig.webhook_secret : null;
 
     if (webhookSecret) {
       const signatureHeader = req.headers['x-agor-signature'] as string | undefined;
@@ -3811,12 +3810,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const providedHex = signatureHeader.slice('sha256='.length);
 
       // Compute HMAC over the raw request body
-      const rawBody: Buffer = (req as unknown as { rawBody?: Buffer }).rawBody ??
-        Buffer.from(JSON.stringify(body));
-      const expectedHmac = crypto
-        .createHmac('sha256', webhookSecret)
-        .update(rawBody)
-        .digest('hex');
+      const rawBody: Buffer =
+        (req as unknown as { rawBody?: Buffer }).rawBody ?? Buffer.from(JSON.stringify(body));
+      const expectedHmac = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
 
       const expectedBuf = Buffer.from(expectedHmac, 'hex');
       const providedBuf = Buffer.from(providedHex, 'hex');

@@ -48,9 +48,9 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import Handlebars from 'handlebars';
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
+import Handlebars from 'handlebars';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 
 /**
