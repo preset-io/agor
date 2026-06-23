@@ -194,6 +194,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       okText="Create Session"
       cancelText="Cancel"
       width={700}
+      maskClosable={false}
       okButtonProps={{
         disabled: !isFormValid || isCreating,
         loading: isCreating,
