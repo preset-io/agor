@@ -1,9 +1,9 @@
 import type { Session } from '@agor-live/client';
 import {
   ArrowRightOutlined,
-  CheckCircleOutlined,
   PlusOutlined,
   RiseOutlined,
+  TeamOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Tooltip, Typography, theme } from 'antd';
@@ -115,7 +115,8 @@ export const HomeStatsBar: React.FC<{
   currentUserId?: string;
   onSessionClick: (sessionId: string) => void;
   onOpenCreateDialog?: (tab: 'assistant' | 'branch' | 'board' | 'repository') => void;
-}> = ({ sessionById, currentUserId, onSessionClick, onOpenCreateDialog }) => {
+  onOpenSettings?: (tab: string) => void;
+}> = ({ sessionById, currentUserId, onSessionClick, onOpenCreateDialog, onOpenSettings }) => {
   const { token } = theme.useToken();
   const [now, setNow] = useState(() => Date.now());
 
@@ -124,64 +125,48 @@ export const HomeStatsBar: React.FC<{
     return () => clearInterval(id);
   }, []);
 
-  const {
-    completedThisWeek,
-    latestCompletedId,
-    myThisWeek,
-    runningNow,
-    latestRunningId,
-    startedThisWeek,
-  } = useMemo(() => {
-    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const { activeTeammates, myThisWeek, runningNow, latestRunningId, startedThisWeek } =
+    useMemo(() => {
+      const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-    let completedThisWeek = 0;
-    let latestCompletedId: string | undefined;
-    let latestCompletedTime = 0;
-    let myThisWeek = 0;
-    let runningNow = 0;
-    let latestRunningId: string | undefined;
-    let latestRunningTime = 0;
-    let startedThisWeek = 0;
+      const activeUserIds = new Set<string>();
+      let myThisWeek = 0;
+      let runningNow = 0;
+      let latestRunningId: string | undefined;
+      let latestRunningTime = 0;
+      let startedThisWeek = 0;
 
-    for (const s of sessionById.values()) {
-      if (s.archived) continue;
+      for (const s of sessionById.values()) {
+        if (s.archived) continue;
 
-      const createdAt = new Date(s.created_at).getTime();
-      const updatedAt = new Date(s.last_updated).getTime();
+        const createdAt = new Date(s.created_at).getTime();
+        const updatedAt = new Date(s.last_updated).getTime();
 
-      if (s.status === 'running') {
-        runningNow++;
-        if (updatedAt > latestRunningTime) {
-          latestRunningTime = updatedAt;
-          latestRunningId = s.session_id;
+        if (s.status === 'running') {
+          runningNow++;
+          if (updatedAt > latestRunningTime) {
+            latestRunningTime = updatedAt;
+            latestRunningId = s.session_id;
+          }
+        }
+
+        if (createdAt > weekAgo) {
+          startedThisWeek++;
+          if (s.created_by) activeUserIds.add(s.created_by);
+          if (s.created_by === currentUserId) {
+            myThisWeek++;
+          }
         }
       }
 
-      if (s.status === 'completed' && updatedAt > weekAgo) {
-        completedThisWeek++;
-        if (updatedAt > latestCompletedTime) {
-          latestCompletedTime = updatedAt;
-          latestCompletedId = s.session_id;
-        }
-      }
-
-      if (createdAt > weekAgo) {
-        startedThisWeek++;
-        if (s.created_by === currentUserId) {
-          myThisWeek++;
-        }
-      }
-    }
-
-    return {
-      completedThisWeek,
-      latestCompletedId,
-      myThisWeek,
-      runningNow,
-      latestRunningId,
-      startedThisWeek,
-    };
-  }, [sessionById, currentUserId, now]);
+      return {
+        activeTeammates: activeUserIds.size,
+        myThisWeek,
+        runningNow,
+        latestRunningId,
+        startedThisWeek,
+      };
+    }, [sessionById, currentUserId, now]);
 
   const newSession = () => onOpenCreateDialog?.('assistant');
 
@@ -195,22 +180,13 @@ export const HomeStatsBar: React.FC<{
   return (
     <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
       <StatCard
-        icon={<CheckCircleOutlined />}
-        value={completedThisWeek}
-        label="Completed this week"
+        icon={<TeamOutlined />}
+        value={activeTeammates}
+        label="Active teammates this week"
         iconBg={token.colorWarningBg}
         iconColor={token.colorWarning}
-        cta={completedThisWeek > 0 && latestCompletedId ? 'Review latest' : 'Start a session'}
-        ctaIcon={
-          completedThisWeek > 0 && latestCompletedId ? (
-            <ArrowRightOutlined style={{ fontSize: 10 }} />
-          ) : undefined
-        }
-        onCta={
-          completedThisWeek > 0 && latestCompletedId
-            ? () => onSessionClick(latestCompletedId)
-            : newSession
-        }
+        cta="Invite a teammate"
+        onCta={() => onOpenSettings?.('users')}
       />
       <StatCard
         icon={<ThunderboltOutlined />}
