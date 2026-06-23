@@ -236,10 +236,10 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                 menu={{
                   items: NEW_MENU_ITEMS,
                   onClick: ({ key }) => {
-                    if (key === 'assistant') {
-                      handleNewSession();
+                    if (key === 'assistant' || key === 'branch') {
+                      handleNewSession(key);
                     } else {
-                      props.onOpenCreateDialog?.(key as 'branch' | 'board');
+                      props.onOpenCreateDialog?.(key as 'board');
                     }
                   },
                 }}
@@ -387,7 +387,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       </div>
 
       <Modal
-        title="Start a session"
+        title={createType === 'branch' ? 'New branch' : 'Start a session'}
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         width={420}
