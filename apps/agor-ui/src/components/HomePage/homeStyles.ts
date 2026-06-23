@@ -26,6 +26,7 @@ export const withAlpha = (color: string, alpha: number): string => {
       .split(',')
       .map((part) => part.trim())
       .slice(0, 3);
+    if (r == null || g == null || b == null) return color;
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 

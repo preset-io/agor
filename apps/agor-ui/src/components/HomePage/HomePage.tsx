@@ -301,12 +301,41 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                 flexDirection: 'column',
               }}
             >
-              {/* Drag handle */}
+              {/* Drag handle — biome-ignore lint/a11y/useSemanticElements: needs position:absolute full-height layout; <hr> can't serve as an interactive resize slider */}
+              {/* biome-ignore lint/a11y/useSemanticElements: interactive resize handle */}
               <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize sidebar"
+                aria-valuenow={Math.round(sidebarWidth)}
+                aria-valuemin={SIDEBAR_MIN}
+                aria-valuemax={Math.round(
+                  typeof window !== 'undefined'
+                    ? window.innerWidth * SIDEBAR_MAX_RATIO
+                    : SIDEBAR_DEFAULT
+                )}
+                tabIndex={0}
                 onMouseDown={handleDragStart}
                 onMouseEnter={() => setDragHandleHovered(true)}
                 onMouseLeave={() => setDragHandleHovered(false)}
-                title="Drag to resize"
+                onKeyDown={(e) => {
+                  const delta = e.key === 'ArrowLeft' ? 8 : e.key === 'ArrowRight' ? -8 : 0;
+                  if (delta) {
+                    e.preventDefault();
+                    setSidebarWidth((w) => {
+                      const maxW =
+                        typeof window !== 'undefined'
+                          ? window.innerWidth * SIDEBAR_MAX_RATIO
+                          : SIDEBAR_DEFAULT;
+                      const newW = Math.max(SIDEBAR_MIN, Math.min(maxW, w + delta));
+                      try {
+                        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(newW)));
+                      } catch {}
+                      return newW;
+                    });
+                  }
+                }}
+                title="Drag or use arrow keys to resize"
                 style={{
                   position: 'absolute',
                   left: 0,

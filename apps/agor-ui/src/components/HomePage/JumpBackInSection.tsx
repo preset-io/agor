@@ -2,6 +2,7 @@ import type { Session } from '@agor-live/client';
 import { ThunderboltOutlined } from '@ant-design/icons';
 import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
+import { useState } from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { StatusDot } from './StatusDot';
@@ -20,11 +21,14 @@ const JumpBackInRow: React.FC<{
   onSessionClick: (id: string) => void;
 }> = ({ session, onSessionClick }) => {
   const { token } = theme.useToken();
+  const [focused, setFocused] = useState(false);
   const title = getSessionDisplayTitle(session, { includeAgentFallback: true });
 
   return (
     <button
       type="button"
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       style={{
         display: 'flex',
         width: '100%',
@@ -37,6 +41,8 @@ const JumpBackInRow: React.FC<{
         borderBottom: `1px solid ${token.colorBorderSecondary}`,
         fontFamily: 'inherit',
         textAlign: 'left',
+        outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
+        outlineOffset: focused ? -2 : undefined,
       }}
       onClick={() => onSessionClick(session.session_id)}
     >

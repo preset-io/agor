@@ -54,10 +54,15 @@ const BoardHomeCard: React.FC<{
 }> = ({ board, branches, sessions, onClick }) => {
   const { token } = theme.useToken();
   const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
   const activeCount = activeSessions(sessions).length;
-  const latestSession = [...sessions].sort(
-    (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
-  )[0];
+  const latestSession = useMemo(
+    () =>
+      [...sessions].sort(
+        (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
+      )[0],
+    [sessions]
+  );
 
   return (
     <button
@@ -65,6 +70,8 @@ const BoardHomeCard: React.FC<{
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       style={{
         display: 'block',
         width: '100%',
@@ -75,6 +82,8 @@ const BoardHomeCard: React.FC<{
         cursor: 'pointer',
         background: token.colorBgContainer,
         boxShadow: hovered ? token.boxShadowSecondary : undefined,
+        outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
+        outlineOffset: focused ? 2 : undefined,
         transition: 'border-color 0.2s, box-shadow 0.2s',
         fontFamily: 'inherit',
       }}
@@ -152,16 +161,6 @@ export const HomeBoardsSection: React.FC<
   const gridRef = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState(4);
 
-  useEffect(() => {
-    if (!gridRef.current) return;
-    const observer = new ResizeObserver(([entry]) => {
-      const w = entry.contentRect.width;
-      setColumns(w < 400 ? 1 : w < 700 ? 2 : 4);
-    });
-    observer.observe(gridRef.current);
-    return () => observer.disconnect();
-  }, []);
-
   const rows = useMemo(() => {
     const visitRank = new Map((recentBoardIds ?? []).map((boardId, index) => [boardId, index]));
     const branchesByBoard = groupBranchesByBoard(branchById);
@@ -195,6 +194,19 @@ export const HomeBoardsSection: React.FC<
       )
       .slice(0, HOME_BOARDS_LIMIT);
   }, [boardById, recentBoardIds, branchById, sessionsByBranch]);
+
+  const hasBoards = rows.length > 0;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: hasBoards is a sentinel dep — re-attaches observer when board count transitions between 0 and >0 (gridRef only mounts with boards)
+  useEffect(() => {
+    if (!gridRef.current) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const w = entry.contentRect.width;
+      setColumns(w < 400 ? 1 : w < 700 ? 2 : 4);
+    });
+    observer.observe(gridRef.current);
+    return () => observer.disconnect();
+  }, [hasBoards]);
 
   return (
     <section aria-label="Boards" style={{ marginBottom: 24 }}>

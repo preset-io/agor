@@ -88,7 +88,9 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
       .find({ query: { archived: false, $limit: HOME_KNOWLEDGE_LIMIT, $sort: { updated_at: -1 } } })
       .then((result) => {
         if (cancelled) return;
-        setDocs(normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]));
+        setDocs(
+          normalizeFindResult(result as KnowledgeDocument[] | { data?: KnowledgeDocument[] })
+        );
       })
       .catch(() => {
         if (!cancelled) setError('Failed to load knowledge docs');
@@ -144,7 +146,7 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
             description={error}
             style={{ padding: '24px 0' }}
           />
-        ) : !connected ? (
+        ) : docs.length === 0 && !connected ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description="Reconnect to refresh Knowledge"
