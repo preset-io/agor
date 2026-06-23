@@ -280,8 +280,14 @@ export async function loadDemoFixtures(
     console.log('4️⃣  Creating demo board with zones...');
     // Zones are `type: "zone"` entries in the board's `data.objects` map.
     const ZONE_W = 420;
-    const ZONE_H = 760;
+    const ZONE_H = 960;
     const ZONE_GAP = 40;
+    // Vertical layout for items stacked inside a zone. Branch cards render
+    // ~280px tall, so use a generous stride to keep stacked branch/kanban cards
+    // from overlapping. Rows resolve to y = 60, 400, 740 — all within ZONE_H.
+    const ROW_Y0 = 60;
+    const ITEM_STRIDE = 340;
+    const rowY = (row: number) => ROW_Y0 + row * ITEM_STRIDE;
     const zoneIds = {
       todo: 'demo-zone-todo',
       inProgress: 'demo-zone-in-progress',
@@ -340,7 +346,7 @@ export async function loadDemoFixtures(
         repoId: webappRepo.repo_id,
         creator: alice.user_id,
         zoneId: zoneIds.inProgress,
-        rel: { x: 20, y: 60 },
+        rel: { x: 20, y: rowY(0) },
         uniqueId: 9001,
       },
       {
@@ -348,7 +354,7 @@ export async function loadDemoFixtures(
         repoId: webappRepo.repo_id,
         creator: bob.user_id,
         zoneId: zoneIds.todo,
-        rel: { x: 20, y: 60 },
+        rel: { x: 20, y: rowY(0) },
         uniqueId: 9002,
       },
       {
@@ -356,7 +362,7 @@ export async function loadDemoFixtures(
         repoId: apiRepo.repo_id,
         creator: carol.user_id,
         zoneId: zoneIds.review,
-        rel: { x: 20, y: 60 },
+        rel: { x: 20, y: rowY(0) },
         uniqueId: 9003,
       },
       {
@@ -364,7 +370,7 @@ export async function loadDemoFixtures(
         repoId: webappRepo.repo_id,
         creator: bob.user_id,
         zoneId: zoneIds.done,
-        rel: { x: 20, y: 60 },
+        rel: { x: 20, y: rowY(0) },
         uniqueId: 9004,
       },
       {
@@ -372,7 +378,7 @@ export async function loadDemoFixtures(
         repoId: webappRepo.repo_id,
         creator: alice.user_id,
         zoneId: zoneIds.todo,
-        rel: { x: 20, y: 320 },
+        rel: { x: 20, y: rowY(1) },
         uniqueId: 9005,
       },
     ];
@@ -640,7 +646,7 @@ export async function loadDemoFixtures(
         type: bugType,
         description: 'The login button overflows on small viewports.',
         zoneId: zoneIds.todo,
-        rel: { x: 20, y: 580 },
+        rel: { x: 20, y: rowY(2) },
         creator: bob.user_id,
       },
       {
@@ -648,7 +654,7 @@ export async function loadDemoFixtures(
         type: featureType,
         description: 'Users want a dark mode switch in settings.',
         zoneId: zoneIds.inProgress,
-        rel: { x: 20, y: 340 },
+        rel: { x: 20, y: rowY(1) },
         creator: carol.user_id,
       },
       {
@@ -656,7 +662,7 @@ export async function loadDemoFixtures(
         type: taskType,
         description: 'Cover the checkout flow with integration tests.',
         zoneId: zoneIds.review,
-        rel: { x: 20, y: 340 },
+        rel: { x: 20, y: rowY(1) },
         creator: alice.user_id,
       },
       {
@@ -664,7 +670,7 @@ export async function loadDemoFixtures(
         type: taskType,
         description: 'Draft and publish the v1.0 release notes.',
         zoneId: zoneIds.done,
-        rel: { x: 20, y: 340 },
+        rel: { x: 20, y: rowY(1) },
         creator: alice.user_id,
       },
     ];

@@ -18,16 +18,44 @@ docker compose up
 
 That gives you SQLite, single-user, no RBAC — the fastest path to a running daemon. For Postgres, multiplayer + RBAC, or the docs site, see the variant system below.
 
+## Seeding test data
+
+Two optional, composable env switches pre-populate the database on first boot:
+
+```bash
+# Real runnable branch (clones the agor repo) + a rich set of demo data
+SEED=true LOAD_FIXTURES=true docker compose up
+```
+
+- **`SEED=true`** — clones the real `agor` repo and creates one runnable `test-branch`.
+- **`LOAD_FIXTURES=true`** — inserts hardcoded, `demo-`-prefixed fake data (pure DB
+  inserts, no git/network): 4 loginable users, 2 repos, a board with 4 zones, 5
+  branches, 4 sessions with fork/spawn genealogy + transcripts, kanban cards, and a
+  live Sandpack artifact. Idempotent and **dev-only**. You can also run it manually
+  with `pnpm load:fixtures`.
+
+Both are off by default and can be enabled independently. With `LOAD_FIXTURES`,
+extra demo logins are available (passwords printed in the seed log):
+
+| Email                  | Password              | Role   |
+| ---------------------- | --------------------- | ------ |
+| `demo.alice@agor.live` | `demo-password-alice` | admin  |
+| `demo.bob@agor.live`   | `demo-password-bob`   | member |
+| `demo.carol@agor.live` | `demo-password-carol` | member |
+| `demo.dave@agor.live`  | `demo-password-dave`  | viewer |
+
+See [`packages/core/src/seed/README.md`](https://github.com/preset-io/agor/blob/main/packages/core/src/seed/README.md) for the full inventory.
+
 ## `.agor.yml` — the variant system
 
 Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.agor.yml) — a declarative schema describing how to spawn an environment for this codebase. The same schema you'd write for any repo you load into Agor: Agor uses it to develop itself. Each variant is a Handlebars-templated `start` / `stop` / `nuke` / `logs` / `health` / `app` block.
 
-| Variant | What you get | Base ports |
-|---|---|---|
-| **`sqlite`** _(default)_ | SQLite, single-user, no RBAC. Fastest to boot. | daemon: `3000 + branch.unique_id`, UI: `5000 + …` |
-| **`postgres`** | Postgres backend (closer to multi-user prod). RBAC off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from pg_catalog). | same as `sqlite` |
-| **`full`** | Postgres + branch RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. Same PG13+ floor as `postgres`. | same as `sqlite` |
-| **`docs`** | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone — no daemon, no DB. | `7000 + branch.unique_id` |
+| Variant                  | What you get                                                                                                                                  | Base ports                                        |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| **`sqlite`** _(default)_ | SQLite, single-user, no RBAC. Fastest to boot.                                                                                                | daemon: `3000 + branch.unique_id`, UI: `5000 + …` |
+| **`postgres`**           | Postgres backend (closer to multi-user prod). RBAC off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from pg_catalog).       | same as `sqlite`                                  |
+| **`full`**               | Postgres + branch RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. Same PG13+ floor as `postgres`. | same as `sqlite`                                  |
+| **`docs`**               | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone — no daemon, no DB.                                   | `7000 + branch.unique_id`                         |
 
 Ports derive from `branch.unique_id` so multiple branches run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host.
 
@@ -42,11 +70,11 @@ sqlite:
     DAEMON_PORT={{add 3000 branch.unique_id}}
     UI_PORT={{add 5000 branch.unique_id}}
     docker compose -p agor-{{branch.name}} up -d
-  stop:   docker compose -p agor-{{branch.name}} down
-  nuke:   docker compose -p agor-{{branch.name}} down -v
-  logs:   docker compose -p agor-{{branch.name}} logs --tail=100
+  stop: docker compose -p agor-{{branch.name}} down
+  nuke: docker compose -p agor-{{branch.name}} down -v
+  logs: docker compose -p agor-{{branch.name}} logs --tail=100
   health: http://localhost:{{add 3000 branch.unique_id}}/health
-  app:    http://localhost:{{add 5000 branch.unique_id}}
+  app: http://localhost:{{add 5000 branch.unique_id}}
 ```
 
 Other variants `extends: sqlite` to inherit the unchanged blocks — the schema enforces single-level extension only (no chains).
