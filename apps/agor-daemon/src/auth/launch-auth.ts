@@ -7,6 +7,8 @@ import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor
 import { normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair } from './runtime-tokens.js';
+import { authTokenIssuedAtClaim } from './token-invalidation.js';
+import { redactUserAuthMetadata } from './user-redaction.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_SERVICE_TOKEN_ENV = 'AGOR_EXTERNAL_LAUNCH_SERVICE_TOKEN';
@@ -441,12 +443,18 @@ function issueRuntimeTokens(
   accessTokenTtl: SignOptions['expiresIn'],
   refreshTokenTtl: SignOptions['expiresIn']
 ): LaunchAuthResult {
-  const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl);
+  const tokens = issueRuntimeTokenPair(
+    user,
+    jwtSecret,
+    accessTokenTtl,
+    refreshTokenTtl,
+    authTokenIssuedAtClaim(Date.now(), user)
+  );
 
   return {
     ...tokens,
     authentication: { strategy: 'launch' },
-    user,
+    user: redactUserAuthMetadata(user),
   };
 }
 

@@ -10,6 +10,7 @@ import type {
   AgenticToolName,
   AgenticToolsConfig,
   EnvVarMetadata,
+  InternalUser,
   StoredAgenticTools,
   User,
   UUID,
@@ -33,7 +34,7 @@ import {
 /**
  * Users repository implementation
  */
-export class UsersRepository implements BaseRepository<User, Partial<User>> {
+export class UsersRepository implements BaseRepository<InternalUser, Partial<InternalUser>> {
   constructor(private db: Database) {}
 
   /**
@@ -41,7 +42,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
    * Converts the encrypted `agentic_tools` blob to a boolean presence DTO so
    * decrypted credentials never leave this repository.
    */
-  private rowToUser(row: UserRow): User {
+  private rowToUser(row: UserRow): InternalUser {
     return {
       user_id: row.user_id as UUID,
       created_at: new Date(row.created_at),
@@ -53,6 +54,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
       unix_username: row.unix_username ?? undefined,
       onboarding_completed: row.onboarding_completed,
       must_change_password: row.must_change_password,
+      tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
       avatar: row.data.avatar,
       preferences: row.data.preferences as User['preferences'],
       // Convert encrypted per-tool credential blobs into boolean presence flags.
@@ -81,7 +83,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
    * For updates, this accepts the current user data from the database row
    */
   private userToInsert(
-    user: Partial<User> & {
+    user: Partial<InternalUser> & {
       password?: string;
       agentic_tools_raw?: StoredAgenticTools;
       env_vars_raw?: SchemaUserInsert['data']['env_vars'];
@@ -105,6 +107,8 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
       role: user.role ?? 'member',
       unix_username: user.unix_username ?? null,
       onboarding_completed: user.onboarding_completed ?? false,
+      must_change_password: user.must_change_password ?? false,
+      tokens_valid_after: user.tokens_valid_after ? new Date(user.tokens_valid_after) : null,
       data: {
         avatar: user.avatar,
         preferences: user.preferences,
@@ -165,7 +169,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
   /**
    * Create a new user
    */
-  async create(data: Partial<User>): Promise<User> {
+  async create(data: Partial<InternalUser>): Promise<InternalUser> {
     // Validate unix_username uniqueness if provided
     if (data.unix_username) {
       const isTaken = await this.isUnixUsernameTaken(data.unix_username);
@@ -195,7 +199,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
   /**
    * Find user by ID (supports short ID resolution)
    */
-  async findById(id: string): Promise<User | null> {
+  async findById(id: string): Promise<InternalUser | null> {
     try {
       const fullId = await this.resolveId(id);
 
@@ -217,7 +221,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
   /**
    * Find user by email
    */
-  async findByEmail(email: string): Promise<User | null> {
+  async findByEmail(email: string): Promise<InternalUser | null> {
     const result = await select(this.db).from(users).where(eq(users.email, email)).one();
 
     if (!result) {
@@ -237,7 +241,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
    * match. Prefer an exact match when present; otherwise return a
    * case-insensitive match only when it is unambiguous.
    */
-  async findByEmailForAlignment(email: string): Promise<User | null> {
+  async findByEmailForAlignment(email: string): Promise<InternalUser | null> {
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail) return null;
 
@@ -269,7 +273,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
   /**
    * Find all users
    */
-  async findAll(): Promise<User[]> {
+  async findAll(): Promise<InternalUser[]> {
     const results = await select(this.db).from(users).all();
 
     return results.map((row: UserRow) => this.rowToUser(row));
@@ -278,7 +282,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
   /**
    * Update user by ID
    */
-  async update(id: string, updates: Partial<User>): Promise<User> {
+  async update(id: string, updates: Partial<InternalUser>): Promise<InternalUser> {
     const fullId = await this.resolveId(id);
 
     // Get current user
@@ -302,7 +306,7 @@ export class UsersRepository implements BaseRepository<User, Partial<User>> {
     // doesn't nuke stored credentials — the boolean projection on `current`
     // can't round-trip back to encrypted bytes.
     const rawRow = await this.getRawRow(fullId);
-    const merged = { ...current, ...updates } as Partial<User> & {
+    const merged = { ...current, ...updates } as Partial<InternalUser> & {
       agentic_tools_raw?: StoredAgenticTools;
       env_vars_raw?: SchemaUserInsert['data']['env_vars'];
     };

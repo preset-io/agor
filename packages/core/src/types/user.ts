@@ -450,6 +450,19 @@ export interface User extends BaseUserFields {
 }
 
 /**
+ * Backend/internal user shape with auth invalidation metadata.
+ *
+ * Public user DTOs returned to browser clients intentionally omit this marker;
+ * auth services use it while validating or issuing browser tokens.
+ */
+export type UserAuthMetadata = object & {
+  /** Tokens issued at or before this timestamp are no longer valid. */
+  tokens_valid_after?: Date;
+};
+
+export type InternalUser = User & UserAuthMetadata;
+
+/**
  * Env var scope values.
  *
  * v0.5 only validates 'global' and 'session'. Other values (repo, mcp_server,

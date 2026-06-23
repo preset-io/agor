@@ -365,6 +365,13 @@
       "when": 1781800000000,
       "tag": "0052_gateway_outbound_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1781900000000,
+      "tag": "0053_user_token_invalidation",
+      "breakpoints": true
     }
   ]
 }

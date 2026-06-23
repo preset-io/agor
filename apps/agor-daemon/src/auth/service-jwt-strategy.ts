@@ -11,8 +11,10 @@
  */
 
 import { JWTStrategy } from '@agor/core/feathers';
-import type { Params } from '@agor/core/types';
+import type { Params, UserAuthMetadata } from '@agor/core/types';
 import type { SessionTokenService } from '../services/session-token-service.js';
+import { markAuthenticationUserLookup } from '../services/users.js';
+import { assertUserTokenNotInvalidated, type UserAuthTokenPayload } from './token-invalidation.js';
 
 /**
  * Extended JWT Strategy that handles service tokens
@@ -43,7 +45,8 @@ export class ServiceJWTStrategy extends JWTStrategy {
       };
     }
 
-    // Regular user token - use standard lookup
+    // Regular user token validation needs backend-only auth metadata.
+    markAuthenticationUserLookup(params);
     return super.getEntity(id, params);
   }
 
@@ -56,19 +59,22 @@ export class ServiceJWTStrategy extends JWTStrategy {
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
   async authenticate(authentication: any, params: any): Promise<any> {
     // Call parent to verify JWT signature and get payload
-    const result = await super.authenticate(authentication, params);
+    const result = (await super.authenticate(authentication, params)) as {
+      accessToken?: string;
+      authentication?: { payload?: unknown };
+      user?: UserAuthMetadata;
+      [key: string]: unknown;
+    };
 
     // Check if this is a service token by looking at the decoded payload
     const payload = result.authentication?.payload as
-      | {
-          sub?: string;
-          type?: string;
+      | (UserAuthTokenPayload & {
           session_id?: string;
           sessionId?: string;
           task_id?: string;
           branch_id?: string;
           purpose?: string;
-        }
+        })
       | undefined;
 
     if (payload?.type === 'service' && payload?.sub === 'executor-service') {
@@ -117,6 +123,10 @@ export class ServiceJWTStrategy extends JWTStrategy {
       !['access', 'service', 'executor-session'].includes(payload.type)
     ) {
       throw new Error('JWT type is not valid for daemon API authentication');
+    }
+
+    if (result.user) {
+      assertUserTokenNotInvalidated(result.user, payload);
     }
 
     return result;

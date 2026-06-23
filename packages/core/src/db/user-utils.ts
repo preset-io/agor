@@ -7,7 +7,7 @@
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { generateId } from '../lib/ids';
-import type { User, UserID } from '../types';
+import type { InternalUser, User, UserID } from '../types';
 import { normalizeRole } from '../types/user';
 import type { Database } from './client';
 import { insert, select } from './database-wrapper';
@@ -36,7 +36,7 @@ export interface CreateUserData {
  * come from `row.data`, role goes through `normalizeRole`, and nullable DB
  * columns become `undefined` rather than `null`.
  */
-export function userRowToUser(row: UserRow): User {
+export function userRowToUser(row: UserRow): InternalUser {
   const userData = (row.data ?? {}) as {
     avatar?: string;
     preferences?: Record<string, unknown>;
@@ -52,6 +52,7 @@ export function userRowToUser(row: UserRow): User {
     preferences: userData.preferences,
     onboarding_completed: !!row.onboarding_completed,
     must_change_password: !!row.must_change_password,
+    tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
     created_at: row.created_at,
     updated_at: row.updated_at ?? undefined,
   };

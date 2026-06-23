@@ -37,6 +37,7 @@ import type {
   AuthenticatedParams,
   EnvVarMetadata,
   EnvVarScope,
+  InternalUser,
   Paginated,
   Params,
   StoredAgenticTools,
@@ -66,19 +67,36 @@ function queryString(value: unknown): string | undefined {
 }
 
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
+export const AUTH_INTERNAL_USER_LOOKUP_PARAM = Symbol('agor.users.auth-internal-lookup');
 
 export interface LocalAuthenticationLookupParams extends Params {
   [LOCAL_AUTH_LOOKUP_PARAM]?: true;
+  [AUTH_INTERNAL_USER_LOOKUP_PARAM]?: true;
 }
 
 export function markLocalAuthenticationLookup(params: Params): void {
   (params as LocalAuthenticationLookupParams)[LOCAL_AUTH_LOOKUP_PARAM] = true;
 }
 
+export function markAuthenticationUserLookup(params: Params): void {
+  (params as LocalAuthenticationLookupParams)[AUTH_INTERNAL_USER_LOOKUP_PARAM] = true;
+}
+
 export function isLocalAuthenticationLookup(params: Params | undefined): boolean {
   return (
     (params as LocalAuthenticationLookupParams | undefined)?.[LOCAL_AUTH_LOOKUP_PARAM] === true
   );
+}
+
+export function isAuthenticationUserLookup(params: Params | undefined): boolean {
+  return (
+    (params as LocalAuthenticationLookupParams | undefined)?.[AUTH_INTERNAL_USER_LOOKUP_PARAM] ===
+    true
+  );
+}
+
+function shouldIncludeAuthMetadata(params: Params | undefined, includePassword = false): boolean {
+  return includePassword || !params?.provider || isAuthenticationUserLookup(params);
 }
 
 function isServiceAccount(params: Params | undefined): boolean {
@@ -263,7 +281,10 @@ export class UsersService {
     const pageRows =
       limit === undefined ? rows.slice(skip) : rows.slice(skip, skip + Math.max(limit, 0));
 
-    const results = pageRows.map((row) => this.rowToUser(row, includePassword, requesterId));
+    const includeAuthMetadata = shouldIncludeAuthMetadata(params, includePassword);
+    const results = pageRows.map((row) =>
+      this.rowToUser(row, includePassword, requesterId, includeAuthMetadata)
+    );
 
     return {
       total,
@@ -286,13 +307,13 @@ export class UsersService {
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
-    return this.rowToUser(row, false, requesterId);
+    return this.rowToUser(row, false, requesterId, shouldIncludeAuthMetadata(params));
   }
 
   /**
    * Create new user
    */
-  async create(data: CreateUserData, _params?: Params): Promise<User> {
+  async create(data: CreateUserData, params?: Params): Promise<User> {
     // Check if email already exists
     const existing = await select(this.db).from(users).where(eq(users.email, data.email)).one();
 
@@ -329,7 +350,7 @@ export class UsersService {
       .returning()
       .one();
 
-    return this.rowToUser(row);
+    return this.rowToUser(row, false, undefined, shouldIncludeAuthMetadata(params));
   }
 
   /**
@@ -342,6 +363,9 @@ export class UsersService {
     // Handle password separately (needs hashing)
     if (data.password) {
       updates.password = await hash(data.password, 10);
+      // Any password change requires fresh browser authentication; previously
+      // issued access and refresh tokens are rejected after this marker.
+      updates.tokens_valid_after = now;
       // Auto-clear must_change_password when password is changed,
       // UNLESS explicitly set in the same request (admin reset + force change scenario)
       // e.g., `user update --password newpass --force-password-change` should keep flag true
@@ -483,14 +507,14 @@ export class UsersService {
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
-    return this.rowToUser(row, false, requesterId);
+    return this.rowToUser(row, false, requesterId, shouldIncludeAuthMetadata(params));
   }
 
   /**
    * Delete user
    */
-  async remove(id: UserID, _params?: Params): Promise<User> {
-    const user = await this.get(id);
+  async remove(id: UserID, params?: Params): Promise<User> {
+    const user = await this.get(id, params);
 
     await deleteFrom(this.db, users).where(eq(users.user_id, id)).run();
 
@@ -650,8 +674,9 @@ export class UsersService {
   private rowToUser(
     row: typeof users.$inferSelect,
     includePassword = false,
-    requesterId?: UserID
-  ): User & { password?: string } {
+    requesterId?: UserID,
+    includeAuthMetadata = true
+  ): (User | InternalUser) & { password?: string } {
     const data = row.data as {
       avatar?: string;
       preferences?: Record<string, unknown>;
@@ -671,7 +696,7 @@ export class UsersService {
           )
         : undefined;
 
-    const user: User & { password?: string } = {
+    const user: (User | InternalUser) & { password?: string } = {
       user_id: row.user_id as UserID,
       email: row.email,
       name: row.name ?? undefined,
@@ -699,6 +724,10 @@ export class UsersService {
       default_agentic_config: data.default_agentic_config,
     };
 
+    if (includeAuthMetadata && row.tokens_valid_after) {
+      (user as InternalUser).tokens_valid_after = new Date(row.tokens_valid_after);
+    }
+
     // Include password for authentication (FeathersJS LocalStrategy needs this)
     if (includePassword) {
       user.password = row.password;
@@ -712,7 +741,7 @@ export class UsersService {
  * User service with password field for authentication
  * This version includes the password field for FeathersJS local strategy
  */
-interface UserWithPassword extends User {
+interface UserWithPassword extends InternalUser {
   password: string;
 }
 
@@ -760,6 +789,7 @@ class UsersServiceWithAuth extends UsersService {
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,
+      tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
       created_at: row.created_at,
       updated_at: row.updated_at ?? undefined,
       agentic_tools: toAgenticToolsStatus(data.agentic_tools),

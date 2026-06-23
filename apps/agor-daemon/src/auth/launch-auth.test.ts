@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import { createDatabase, eq, initializeDatabase, select, users } from '@agor/core/db';
+import { createDatabase, eq, initializeDatabase, select, update, users } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
-import type { User, UserID } from '@agor/core/types';
+import type { InternalUser, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './launch-auth.js';
@@ -64,7 +64,7 @@ async function makeDb(): Promise<{ db: Database; cleanup: () => void }> {
 
 function makeUsersService(db: Database) {
   return {
-    async get(id: UserID): Promise<User> {
+    async get(id: UserID): Promise<InternalUser> {
       const row = await select(db).from(users).where(eq(users.user_id, id)).one();
       if (!row) throw new Error('missing user');
       return {
@@ -75,6 +75,7 @@ function makeUsersService(db: Database) {
         role: row.role as User['role'],
         onboarding_completed: row.onboarding_completed,
         must_change_password: row.must_change_password,
+        tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
         created_at: row.created_at,
         updated_at: row.updated_at ?? undefined,
         avatar: (row.data as { avatar?: string }).avatar,
@@ -200,6 +201,7 @@ describe('one-time launch auth service', () => {
       })
     );
     expect(result.user.email).toBe('person@example.test');
+    expect(result.user).not.toHaveProperty('tokens_valid_after');
     expect(result.refreshToken).toBeTruthy();
 
     const decoded = jwt.verify(result.accessToken, RUNTIME_JWT_SECRET, {
@@ -235,6 +237,26 @@ describe('one-time launch auth service', () => {
 
     expect(second.user.user_id).toBe(first.user.user_id);
     expect(second.user.name).toBe('Updated Name');
+  });
+
+  it('uses token invalidation metadata for launch tokens without returning it', async () => {
+    mockExchange(signClaims());
+    const first = await service().create({ launchCode: 'first' });
+    const marker = new Date(Date.now() + 1_000);
+    await update(db, users)
+      .set({ tokens_valid_after: marker })
+      .where(eq(users.user_id, first.user.user_id))
+      .run();
+
+    mockExchange(signClaims({ name: 'Updated Name' }));
+    const second = await service().create({ launchCode: 'second' });
+
+    expect(second.user).not.toHaveProperty('tokens_valid_after');
+    const decoded = jwt.verify(second.accessToken, RUNTIME_JWT_SECRET, {
+      issuer: 'agor',
+      audience: 'https://agor.dev',
+    }) as jwt.JwtPayload;
+    expect(decoded.auth_time_ms).toBe(marker.getTime() + 1);
   });
 
   it('does not merge a new external identity by email alone', async () => {

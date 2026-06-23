@@ -58,6 +58,7 @@ import {
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import { isMobileDevice } from './utils/deviceDetection';
+import { completeForcedPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
 import { getRouterBasename } from './utils/uiRoutes';
@@ -873,12 +874,22 @@ function AppContent() {
   // Handle forced password change (from ForcePasswordChangeModal)
   const handleForcePasswordChange = async (userId: string, newPassword: string) => {
     if (!client) throw new Error('Not connected');
-    // This will auto-clear must_change_password flag on the backend
-    await client.service('users').patch(userId, { password: newPassword } as Partial<User>);
-    showSuccess('Password changed successfully!');
-    // Re-authenticate to refresh user state with must_change_password: false
-    // This will dismiss the modal and allow the user to continue
-    await reAuthenticate();
+    if (!currentUser?.email) throw new Error('Current user is unavailable');
+
+    const signedIn = await completeForcedPasswordChange({
+      client,
+      userId,
+      email: currentUser.email,
+      newPassword,
+      login,
+      logout,
+    });
+
+    showSuccess(
+      signedIn
+        ? 'Password changed successfully!'
+        : 'Password changed successfully. Please sign in again.'
+    );
   };
 
   // Handle board CRUD

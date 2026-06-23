@@ -67,14 +67,16 @@ import {
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
-import jwt from 'jsonwebtoken';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
+import { createRefreshTokenService } from './auth/refresh-token-service.js';
 import {
   issueRuntimeToken,
   issueRuntimeTokenPair,
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from './auth/runtime-tokens.js';
+import { authTokenIssuedAtClaim } from './auth/token-invalidation.js';
+import { redactUserAuthMetadata } from './auth/user-redaction.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
@@ -92,7 +94,7 @@ import {
 } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
-import { markLocalAuthenticationLookup } from './services/users.js';
+import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
 import { registerProxies } from './setup/proxies.js';
 import { applyTierHooks } from './setup/service-tiers.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
@@ -154,6 +156,14 @@ export class AgorLocalStrategy extends LocalStrategy {
   async findEntity(username: string, params: Params) {
     markLocalAuthenticationLookup(params);
     return super.findEntity(username, params);
+  }
+
+  async getEntity(result: unknown, params: Params) {
+    // Local login's final entity lookup also needs backend-only auth metadata
+    // so freshly issued tokens can be bumped past a just-written invalidation
+    // marker. The authentication hook redacts the metadata before returning.
+    markAuthenticationUserLookup(params);
+    return super.getEntity(result, params);
   }
 }
 
@@ -389,7 +399,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     security: [],
   };
 
-  // Hook: Add refresh token to authentication response.
+  // Hook: Issue browser access + refresh tokens with millisecond issue time.
   // Rate limiting is enforced by express-rate-limit middleware mounted on
   // `/authentication` above — by the time we reach this hook the limiter
   // has already 429'd any over-quota request.
@@ -406,11 +416,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           });
 
           if (context.result?.user) {
-            context.result.refreshToken = issueRuntimeToken(
-              { sub: context.result.user.user_id, type: 'refresh' },
+            const tokens = issueRuntimeTokenPair(
+              context.result.user,
               jwtSecret,
-              REFRESH_TOKEN_TTL
+              ACCESS_TOKEN_TTL,
+              REFRESH_TOKEN_TTL,
+              authTokenIssuedAtClaim(Date.now(), context.result.user)
             );
+            context.result.accessToken = tokens.accessToken;
+            context.result.refreshToken = tokens.refreshToken;
+            context.result.user = redactUserAuthMetadata(context.result.user);
           }
           return context;
         },
@@ -447,51 +462,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Refresh token endpoint
   // ============================================================================
 
-  app.use('/authentication/refresh', {
-    async create(data: { refreshToken: string }, _params?: Params) {
-      // Rate limiting handled by express-rate-limit at the
-      // /authentication mount point (path-prefix match catches /refresh).
-      try {
-        const decoded = jwt.verify(data.refreshToken, jwtSecret, {
-          issuer: RUNTIME_JWT_ISSUER,
-          audience: RUNTIME_JWT_AUDIENCE,
-        }) as { sub: string; type: string };
-
-        if (decoded.type !== 'refresh') {
-          throw new Error('Invalid token type');
-        }
-
-        const user = await usersService.get(decoded.sub as import('@agor/core/types').UUID);
-
-        // Use the SAME ACCESS_TOKEN_TTL as the auth-service config above —
-        // otherwise this endpoint silently downgrades the access-token
-        // hardening. Refresh tokens get the standard 30-day TTL.
-        const tokens = issueRuntimeTokenPair(user, jwtSecret, ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL);
-
-        // Return the full user object — matches what POST /authentication
-        // returns via the FeathersJS auth service. Stripping fields here
-        // (previously: only user_id/email/name/emoji/role) silently dropped
-        // `must_change_password` after every token refresh, breaking the
-        // forced-password-change UI guard in App.tsx and showing the user a
-        // black page with "Failed to load data — Password change required."
-        // instead of the change-password modal. `usersService.get` already
-        // omits secrets (password hash, raw API keys, raw env var values)
-        // via rowToUser — see services/users.ts.
-        return {
-          accessToken: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-          user,
-        };
-      } catch (_error) {
-        // Must throw NotAuthenticated (not plain Error) so the UI's
-        // isDefiniteAuthFailure classifier (apps/agor-ui/src/utils/authErrors.ts)
-        // recognizes a dead refresh token as a 401-class failure and clears
-        // session state. A plain Error has no status/name and gets treated as
-        // transient, leading the single-flight refresh loop to keep retrying.
-        throw new NotAuthenticated('Invalid or expired refresh token');
-      }
-    },
-  });
+  app.use(
+    '/authentication/refresh',
+    createRefreshTokenService({
+      jwtSecret,
+      accessTokenTtl: ACCESS_TOKEN_TTL,
+      refreshTokenTtl: REFRESH_TOKEN_TTL,
+      usersService,
+    })
+  );
 
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
   const refreshService = app.service('authentication/refresh') as any;
@@ -569,6 +548,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           impersonated_by: caller.user_id,
           is_impersonated: true,
           jti,
+          ...authTokenIssuedAtClaim(Date.now(), targetUser),
         },
         jwtSecret,
         Math.ceil(expiryMs / 1000)

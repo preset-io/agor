@@ -35,16 +35,17 @@ export function issueRuntimeTokenPair(
   user: Pick<User, 'user_id'>,
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
-  refreshTokenTtl: SignOptions['expiresIn']
+  refreshTokenTtl: SignOptions['expiresIn'],
+  extraClaims: Record<string, unknown> = {}
 ): RuntimeTokenPair {
   return {
     accessToken: issueRuntimeToken(
-      { sub: user.user_id, type: 'access' },
+      { sub: user.user_id, type: 'access', ...extraClaims },
       jwtSecret,
       accessTokenTtl
     ),
     refreshToken: issueRuntimeToken(
-      { sub: user.user_id, type: 'refresh' },
+      { sub: user.user_id, type: 'refresh', ...extraClaims },
       jwtSecret,
       refreshTokenTtl
     ),
