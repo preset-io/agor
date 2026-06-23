@@ -21,7 +21,7 @@ interface OnboardingCardProps {
 export const OnboardingCard: React.FC<OnboardingCardProps> = ({ steps, onDismiss }) => {
   const { token } = theme.useToken();
   const doneCount = steps.filter((s) => s.done).length;
-  const percent = Math.round((doneCount / steps.length) * 100);
+  const percent = steps.length === 0 ? 0 : Math.round((doneCount / steps.length) * 100);
 
   return (
     <div

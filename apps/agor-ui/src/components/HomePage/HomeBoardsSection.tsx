@@ -1,6 +1,6 @@
 import type { Board, Branch, Session } from '@agor-live/client';
 import { ClockCircleOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Button, Typography, theme } from 'antd';
+import { Button, Empty, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatRelativeTime } from '../../utils/time';
@@ -9,19 +9,6 @@ import type { HomePageProps } from './types';
 const { Text } = Typography;
 
 const HOME_BOARDS_LIMIT = 50;
-
-const PASTEL_BACKGROUNDS = [
-  '#e0e7ff',
-  '#fce7f3',
-  '#dcfce7',
-  '#fef9c3',
-  '#dbeafe',
-  '#ede9fe',
-  '#ffedd5',
-  '#d1fae5',
-];
-
-const getPastelBg = (index: number) => PASTEL_BACKGROUNDS[index % PASTEL_BACKGROUNDS.length];
 
 interface BoardHomeRow {
   board: Board;
@@ -61,11 +48,10 @@ const activeSessions = (sessions: Session[]) =>
 
 const BoardHomeCard: React.FC<{
   board: Board;
-  boardIndex: number;
   branches: Branch[];
   sessions: Session[];
   onClick: () => void;
-}> = ({ board, boardIndex, branches, sessions, onClick }) => {
+}> = ({ board, branches, sessions, onClick }) => {
   const { token } = theme.useToken();
   const [hovered, setHovered] = useState(false);
   const activeCount = activeSessions(sessions).length;
@@ -74,11 +60,15 @@ const BoardHomeCard: React.FC<{
   )[0];
 
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
         border: `1px solid ${hovered ? token.colorPrimary : token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
         padding: '12px 14px',
@@ -86,6 +76,7 @@ const BoardHomeCard: React.FC<{
         background: token.colorBgContainer,
         boxShadow: hovered ? token.boxShadowSecondary : undefined,
         transition: 'border-color 0.2s, box-shadow 0.2s',
+        fontFamily: 'inherit',
       }}
     >
       {/* Icon + name row */}
@@ -95,7 +86,7 @@ const BoardHomeCard: React.FC<{
             width: 36,
             height: 36,
             borderRadius: 8,
-            background: getPastelBg(boardIndex),
+            background: token.colorFillTertiary,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -136,16 +127,28 @@ const BoardHomeCard: React.FC<{
             : 'No sessions yet'}
         </Text>
       </div>
-    </div>
+    </button>
   );
 };
 
 export const HomeBoardsSection: React.FC<
   Pick<
     HomePageProps,
-    'boardById' | 'recentBoardIds' | 'branchById' | 'sessionsByBranch' | 'onBoardClick'
+    | 'boardById'
+    | 'recentBoardIds'
+    | 'branchById'
+    | 'sessionsByBranch'
+    | 'onBoardClick'
+    | 'onOpenCreateDialog'
   >
-> = ({ boardById, recentBoardIds = [], branchById, sessionsByBranch, onBoardClick }) => {
+> = ({
+  boardById,
+  recentBoardIds = [],
+  branchById,
+  sessionsByBranch,
+  onBoardClick,
+  onOpenCreateDialog,
+}) => {
   const gridRef = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState(4);
 
@@ -206,30 +209,47 @@ export const HomeBoardsSection: React.FC<
         <Text strong style={{ fontSize: 14 }}>
           Boards
         </Text>
-        <Button type="link" size="small" icon={<PlusOutlined />} style={{ padding: 0 }}>
+        <Button
+          type="link"
+          size="small"
+          icon={<PlusOutlined />}
+          style={{ padding: 0 }}
+          onClick={() => onOpenCreateDialog?.('board')}
+        >
           New board
         </Button>
       </div>
 
-      <div
-        ref={gridRef}
-        style={{
-          display: 'grid',
-          gridTemplateColumns: `repeat(${columns}, 1fr)`,
-          gap: 12,
-        }}
-      >
-        {rows.map(({ board, branches, sessions }, index) => (
-          <BoardHomeCard
-            key={board.board_id}
-            board={board}
-            boardIndex={index}
-            branches={branches}
-            sessions={sessions}
-            onClick={() => onBoardClick(board.board_id)}
-          />
-        ))}
-      </div>
+      {rows.length === 0 ? (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="No boards yet"
+          style={{ padding: '24px 0' }}
+        >
+          <Button type="primary" onClick={() => onOpenCreateDialog?.('board')}>
+            Create your first board
+          </Button>
+        </Empty>
+      ) : (
+        <div
+          ref={gridRef}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${columns}, 1fr)`,
+            gap: 12,
+          }}
+        >
+          {rows.map(({ board, branches, sessions }) => (
+            <BoardHomeCard
+              key={board.board_id}
+              board={board}
+              branches={branches}
+              sessions={sessions}
+              onClick={() => onBoardClick(board.board_id)}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 };

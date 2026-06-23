@@ -10,6 +10,7 @@ import { HomeActivitySection } from './HomeActivitySection';
 import { HomeBoardsSection } from './HomeBoardsSection';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
 import { HomeSessionsSection } from './HomeSessionsSection';
+import { HomeStatsBar } from './HomeStatsBar';
 import { JumpBackInSection } from './JumpBackInSection';
 import { OnboardingCard } from './OnboardingCard';
 import type { HomePageProps } from './types';
@@ -24,6 +25,12 @@ const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX_RATIO = 0.5;
 
 const AWAITING_STATUSES = new Set<SessionStatus>(['awaiting_permission', 'awaiting_input']);
+
+const NEW_MENU_ITEMS: MenuProps['items'] = [
+  { key: 'assistant', label: 'New session', icon: <RobotOutlined /> },
+  { key: 'branch', label: 'New branch', icon: <BranchesOutlined /> },
+  { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
+];
 
 export const HomePage: React.FC<HomePageProps> = (props) => {
   const { token } = theme.useToken();
@@ -46,9 +53,12 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
     }
   });
   const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 992);
+  const [dragHandleHovered, setDragHandleHovered] = useState(false);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartW = useRef(0);
+  const sidebarWidthRef = useRef(sidebarWidth);
+  sidebarWidthRef.current = sidebarWidth;
 
   useEffect(() => {
     const onResize = () => setSidebarVisible(window.innerWidth >= 992);
@@ -56,42 +66,39 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const handleDragStart = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      isDragging.current = true;
-      dragStartX.current = e.clientX;
-      dragStartW.current = sidebarWidth;
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDragging.current = true;
+    dragStartX.current = e.clientX;
+    dragStartW.current = sidebarWidthRef.current;
 
-      const onMove = (ev: MouseEvent) => {
-        if (!isDragging.current) return;
-        const maxW = window.innerWidth * SIDEBAR_MAX_RATIO;
-        const newW = Math.max(
-          SIDEBAR_MIN,
-          Math.min(maxW, dragStartW.current - (ev.clientX - dragStartX.current))
-        );
-        setSidebarWidth(newW);
-      };
-      const onUp = () => {
-        isDragging.current = false;
-        setSidebarWidth((w) => {
-          try {
-            localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(w)));
-          } catch {}
-          return w;
-        });
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-      };
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    },
-    [sidebarWidth]
-  );
+    const onMove = (ev: MouseEvent) => {
+      if (!isDragging.current) return;
+      const maxW = window.innerWidth * SIDEBAR_MAX_RATIO;
+      const newW = Math.max(
+        SIDEBAR_MIN,
+        Math.min(maxW, dragStartW.current - (ev.clientX - dragStartX.current))
+      );
+      setSidebarWidth(newW);
+    };
+    const onUp = () => {
+      isDragging.current = false;
+      setSidebarWidth((w) => {
+        try {
+          localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(w)));
+        } catch {}
+        return w;
+      });
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
 
   const waitingSessions = useMemo(
     () =>
@@ -190,12 +197,6 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
 
   const showOnboardingCard = !onboardingHidden && onboardingSteps.some((s) => !s.done);
 
-  const newMenuItems: MenuProps['items'] = [
-    { key: 'assistant', label: 'New session', icon: <RobotOutlined /> },
-    { key: 'branch', label: 'New branch', icon: <BranchesOutlined /> },
-    { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
-  ];
-
   return (
     <>
       <div style={{ height: '100%', overflow: 'hidden', background: homeBackground }}>
@@ -217,7 +218,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
               }}
             >
               <div>
-                <Title level={3} style={{ margin: 0, fontWeight: 700, fontSize: 16 }}>
+                <Title level={5} style={{ margin: 0, fontWeight: 700 }}>
                   Hi, {username}! 👋
                 </Title>
                 <Text type="secondary" style={{ fontSize: 14 }}>
@@ -226,7 +227,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
               </div>
               <Dropdown
                 menu={{
-                  items: newMenuItems,
+                  items: NEW_MENU_ITEMS,
                   onClick: ({ key }) => {
                     if (key === 'assistant') {
                       handleNewSession();
@@ -237,7 +238,9 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                 }}
                 trigger={['click']}
               >
-                <Button icon={<PlusOutlined />}>New</Button>
+                <Button type="primary" icon={<PlusOutlined />}>
+                  New
+                </Button>
               </Dropdown>
             </header>
 
@@ -257,6 +260,9 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
               <JumpBackInSection sessions={waitingSessions} onSessionClick={props.onSessionClick} />
             )}
 
+            {/* Workspace stats */}
+            <HomeStatsBar sessionById={props.sessionById} branchById={props.branchById} />
+
             {/* My Sessions */}
             <HomeSessionsSection
               sessionById={props.sessionById}
@@ -274,6 +280,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                 branchById={props.branchById}
                 sessionsByBranch={props.sessionsByBranch}
                 onBoardClick={props.onBoardClick}
+                onOpenCreateDialog={props.onOpenCreateDialog}
               />
             </div>
           </Content>
@@ -295,6 +302,8 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
               {/* Drag handle */}
               <div
                 onMouseDown={handleDragStart}
+                onMouseEnter={() => setDragHandleHovered(true)}
+                onMouseLeave={() => setDragHandleHovered(false)}
                 title="Drag to resize"
                 style={{
                   position: 'absolute',
@@ -304,14 +313,8 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                   width: 4,
                   cursor: 'col-resize',
                   zIndex: 10,
-                  background: 'transparent',
+                  background: dragHandleHovered ? token.colorPrimary : 'transparent',
                   transition: 'background 0.15s',
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.background = token.colorPrimary;
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.background = 'transparent';
                 }}
               />
               <div
@@ -346,32 +349,58 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
         open={boardPickerOpen}
         onCancel={() => setBoardPickerOpen(false)}
         width={400}
-        footer={[
-          <Button key="cancel" onClick={() => setBoardPickerOpen(false)}>
-            Cancel
-          </Button>,
-          <Button
-            key="start"
-            type="primary"
-            disabled={!selectedBoardId}
-            onClick={handleConfirmBoard}
-          >
-            Continue
-          </Button>,
-        ]}
+        footer={
+          boardOptions.length === 0
+            ? [
+                <Button key="cancel" onClick={() => setBoardPickerOpen(false)}>
+                  Cancel
+                </Button>,
+                <Button
+                  key="create"
+                  type="primary"
+                  onClick={() => {
+                    setBoardPickerOpen(false);
+                    props.onOpenCreateDialog?.('board');
+                  }}
+                >
+                  Create a board first
+                </Button>,
+              ]
+            : [
+                <Button key="cancel" onClick={() => setBoardPickerOpen(false)}>
+                  Cancel
+                </Button>,
+                <Button
+                  key="start"
+                  type="primary"
+                  disabled={!selectedBoardId}
+                  onClick={handleConfirmBoard}
+                >
+                  Continue
+                </Button>,
+              ]
+        }
       >
-        <div style={{ padding: '8px 0 4px' }}>
-          <Typography.Text style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
-            Which board should this session live on?
-          </Typography.Text>
-          <Select
-            value={selectedBoardId}
-            onChange={setSelectedBoardId}
-            options={boardOptions}
-            placeholder="Select a board"
-            style={{ width: '100%' }}
-          />
-        </div>
+        {boardOptions.length === 0 ? (
+          <div style={{ padding: '8px 0 4px' }}>
+            <Typography.Text type="secondary" style={{ display: 'block', fontSize: 13 }}>
+              You don't have any boards yet. Create one first to organise your sessions.
+            </Typography.Text>
+          </div>
+        ) : (
+          <div style={{ padding: '8px 0 4px' }}>
+            <Typography.Text style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
+              Which board should this session live on?
+            </Typography.Text>
+            <Select
+              value={selectedBoardId}
+              onChange={setSelectedBoardId}
+              options={boardOptions}
+              placeholder="Select a board"
+              style={{ width: '100%' }}
+            />
+          </div>
+        )}
       </Modal>
     </>
   );

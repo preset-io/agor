@@ -68,6 +68,7 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
   const cardGlassStyle = glassCardStyle(token);
   const [docs, setDocs] = useState<KnowledgeDocument[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
 
   const filteredDocs = useMemo(() => {
@@ -79,24 +80,18 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
   }, [docs, query]);
   useEffect(() => {
     let cancelled = false;
-    if (!client) return;
+    if (!client || !connected) return;
     setLoading(true);
+    setError(null);
     client
       .service('kb/documents')
       .find({ query: { archived: false, $limit: HOME_KNOWLEDGE_LIMIT, $sort: { updated_at: -1 } } })
       .then((result) => {
         if (cancelled) return;
-        const rows = normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[])
-          .sort(
-            (a, b) =>
-              new Date(b.updated_at || b.created_at || 0).getTime() -
-              new Date(a.updated_at || a.created_at || 0).getTime()
-          )
-          .slice(0, HOME_KNOWLEDGE_LIMIT);
-        setDocs(rows);
+        setDocs(normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]));
       })
-      .catch((err) => {
-        if (!cancelled) console.error('Failed to load recent Knowledge:', err);
+      .catch(() => {
+        if (!cancelled) setError('Failed to load knowledge docs');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -104,7 +99,7 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, connected]);
   return (
     <section
       aria-label="Knowledge base"
@@ -143,7 +138,13 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
           },
         }}
       >
-        {!connected ? (
+        {error ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={error}
+            style={{ padding: '24px 0' }}
+          />
+        ) : !connected ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description="Reconnect to refresh Knowledge"

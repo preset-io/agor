@@ -1,12 +1,14 @@
 import type { Session } from '@agor-live/client';
 import { ThunderboltOutlined } from '@ant-design/icons';
-import { Button, Tooltip, Typography, theme } from 'antd';
+import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { StatusDot } from './StatusDot';
 
 const { Text } = Typography;
+
+const JUMP_LIMIT = 5;
 
 interface JumpBackInSectionProps {
   sessions: Session[];
@@ -21,14 +23,20 @@ const JumpBackInRow: React.FC<{
   const title = getSessionDisplayTitle(session, { includeAgentFallback: true });
 
   return (
-    <div
+    <button
+      type="button"
       style={{
         display: 'flex',
+        width: '100%',
         alignItems: 'center',
         gap: 10,
         padding: '8px 12px',
-        borderBottom: `1px solid ${token.colorBorderSecondary}`,
         cursor: 'pointer',
+        background: 'none',
+        border: 'none',
+        borderBottom: `1px solid ${token.colorBorderSecondary}`,
+        fontFamily: 'inherit',
+        textAlign: 'left',
       }}
       onClick={() => onSessionClick(session.session_id)}
     >
@@ -41,18 +49,7 @@ const JumpBackInRow: React.FC<{
       <Text type="secondary" style={{ fontSize: 12, flexShrink: 0, whiteSpace: 'nowrap' }}>
         {formatRelativeTime(session.last_updated)}
       </Text>
-      <Button
-        type="primary"
-        size="small"
-        ghost
-        onClick={(e) => {
-          e.stopPropagation();
-          onSessionClick(session.session_id);
-        }}
-      >
-        Reply
-      </Button>
-    </div>
+    </button>
   );
 };
 
@@ -61,10 +58,13 @@ export const JumpBackInSection: React.FC<JumpBackInSectionProps> = ({
   onSessionClick,
 }) => {
   const { token } = theme.useToken();
+  const visibleSessions = sessions.slice(0, JUMP_LIMIT);
+  const hiddenCount = sessions.length - visibleSessions.length;
+
   return (
     <div style={{ marginBottom: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-        <ThunderboltOutlined style={{ color: '#f97316' }} />
+        <ThunderboltOutlined style={{ color: token.colorWarning }} />
         <Text strong style={{ fontSize: 14 }}>
           Jump back in — {sessions.length} session{sessions.length !== 1 ? 's' : ''} waiting for
           your reply
@@ -77,13 +77,20 @@ export const JumpBackInSection: React.FC<JumpBackInSectionProps> = ({
           overflow: 'hidden',
         }}
       >
-        {sessions.map((session) => (
+        {visibleSessions.map((session) => (
           <JumpBackInRow
             key={session.session_id}
             session={session}
             onSessionClick={onSessionClick}
           />
         ))}
+        {hiddenCount > 0 && (
+          <div style={{ padding: '8px 12px', textAlign: 'center' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              and {hiddenCount} more
+            </Text>
+          </div>
+        )}
       </div>
     </div>
   );

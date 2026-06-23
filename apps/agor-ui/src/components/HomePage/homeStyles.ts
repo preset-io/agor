@@ -37,7 +37,6 @@ export const glassCardStyle = (
   alpha = 0.5
 ): React.CSSProperties => ({
   background: withAlpha(token.colorBgContainer, alpha),
-  backgroundColor: withAlpha(token.colorBgContainer, alpha),
   backdropFilter: 'blur(12px)',
   WebkitBackdropFilter: 'blur(12px)',
 });
