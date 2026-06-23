@@ -129,6 +129,12 @@ services:
       # Creates: Agor repo (https://github.com/preset-io/agor.git) + test-branch
       - SEED=${SEED:-false}
 
+      # Load demo fixtures (optional, set LOAD_FIXTURES=true for hardcoded fake
+      # data: users, branches, sessions+transcripts, boards/zones, cards,
+      # artifacts). Pure DB inserts (no git/network). Composes with SEED; the
+      # recommended combo for instant E2E testing is SEED=true LOAD_FIXTURES=true
+      - LOAD_FIXTURES=${LOAD_FIXTURES:-false}
+
       # Pass through API keys from host (if set)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

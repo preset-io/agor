@@ -1,0 +1,725 @@
+/**
+ * Demo Fixtures
+ *
+ * Lightweight, opt-in seeder that populates the database with a rich set of
+ * hardcoded FAKE data — users, card types, repos, a board with zones, branches,
+ * sessions with conversation transcripts, tasks, cards, and an artifact — so a
+ * fresh dev/test Agor environment is immediately usable for end-to-end testing.
+ *
+ * Unlike {@link seedDevFixtures} (`SEED=true`), this seeder performs PURE DB
+ * inserts: no git clones, no network, no executor. It is gated by the
+ * `LOAD_FIXTURES=true` switch and is orthogonal/composable with `SEED`.
+ *
+ * Everything is prefixed `demo-` / `demo.` so it never collides with the real
+ * `agor` repo (or its `test-branch`) created by {@link seedDevFixtures}. The
+ * seeder is idempotent: a sentinel user (`demo.alice@agor.live`) is checked
+ * first, so re-running is a no-op.
+ *
+ * Usage:
+ *   import { loadDemoFixtures } from '@agor/core/seed/demo-fixtures';
+ *   await loadDemoFixtures({ skipIfExists: true });
+ */
+
+import os from 'node:os';
+import path from 'node:path';
+import type {
+  Artifact,
+  BoardID,
+  BoardObject,
+  Branch,
+  Card,
+  CardType,
+  Message,
+  Task,
+  User,
+  UUID,
+} from '@agor/core/types';
+import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
+import type { Database } from '../db/client';
+import {
+  ArtifactRepository,
+  BoardObjectRepository,
+  BoardRepository,
+  BranchRepository,
+  CardRepository,
+  CardTypeRepository,
+  MessagesRepository,
+  RepoRepository,
+  SessionRepository,
+  TaskRepository,
+  UsersRepository,
+} from '../db/repositories';
+import { generateId } from '../lib/ids';
+
+/**
+ * Options for {@link loadDemoFixtures}.
+ *
+ * Mirrors {@link import('./dev-fixtures').SeedOptions} but `userId` is optional:
+ * demo fixtures create and own their own demo users, so no pre-existing admin
+ * is required. When `userId` IS provided (e.g. the bootstrapped admin passed by
+ * the docker entrypoint) that user is added as an owner of the demo board and
+ * branches so they show up immediately for the real operator too.
+ */
+export interface DemoFixturesOptions {
+  /**
+   * Optional real user to also grant ownership of the demo board/branches.
+   * Demo entities are still attributed to the demo users regardless.
+   */
+  userId?: UUID;
+
+  /**
+   * Skip if demo data already exists (idempotent). Re-running is a no-op.
+   */
+  skipIfExists?: boolean;
+
+  /**
+   * Inject a database instance (used by tests). When omitted, the database is
+   * resolved from `DATABASE_URL` / `AGOR_DB_DIALECT` like {@link seedDevFixtures}.
+   */
+  db?: Database;
+}
+
+export interface DemoFixturesResult {
+  skipped: boolean;
+  counts: {
+    users: number;
+    card_types: number;
+    repos: number;
+    boards: number;
+    branches: number;
+    sessions: number;
+    tasks: number;
+    messages: number;
+    cards: number;
+    artifacts: number;
+  };
+}
+
+const SENTINEL_EMAIL = 'demo.alice@agor.live';
+
+/**
+ * Resolve the database the same way {@link seedDevFixtures} does, honoring
+ * `DATABASE_URL` and `AGOR_DB_DIALECT`. Tests inject `options.db` to bypass this.
+ */
+async function resolveDatabase(options: DemoFixturesOptions): Promise<Database> {
+  if (options.db) return options.db;
+
+  let databaseUrl: string;
+  const dialect = process.env.AGOR_DB_DIALECT;
+  if (dialect === 'postgresql') {
+    databaseUrl = process.env.DATABASE_URL || 'postgresql://localhost:5432/agor';
+  } else {
+    const dbPath = path.join(os.homedir(), '.agor', 'agor.db');
+    databaseUrl = process.env.DATABASE_URL || `file:${dbPath}`;
+  }
+
+  const { createDatabase } = await import('../db/client');
+  return createDatabase({ url: databaseUrl });
+}
+
+/**
+ * Load hardcoded demo fixtures into the database.
+ */
+export async function loadDemoFixtures(
+  options: DemoFixturesOptions = {}
+): Promise<DemoFixturesResult> {
+  const db = await resolveDatabase(options);
+
+  const usersRepo = new UsersRepository(db);
+  const cardTypeRepo = new CardTypeRepository(db);
+  const repoRepo = new RepoRepository(db);
+  const boardRepo = new BoardRepository(db);
+  const branchRepo = new BranchRepository(db);
+  const boardObjectRepo = new BoardObjectRepository(db);
+  const sessionRepo = new SessionRepository(db);
+  const taskRepo = new TaskRepository(db);
+  const messagesRepo = new MessagesRepository(db);
+  const cardRepo = new CardRepository(db);
+  const artifactRepo = new ArtifactRepository(db);
+
+  const emptyCounts: DemoFixturesResult['counts'] = {
+    users: 0,
+    card_types: 0,
+    repos: 0,
+    boards: 0,
+    branches: 0,
+    sessions: 0,
+    tasks: 0,
+    messages: 0,
+    cards: 0,
+    artifacts: 0,
+  };
+
+  // Idempotency sentinel: if the demo admin already exists, do nothing.
+  const sentinel = await usersRepo.findByEmail(SENTINEL_EMAIL);
+  if (sentinel) {
+    console.log('✓ Demo fixtures already exist, skipping...');
+    return { skipped: true, counts: emptyCounts };
+  }
+
+  console.log('🎭 Loading demo fixtures (hardcoded fake data, no git/network)...');
+
+  // ── STEP 1: Users ─────────────────────────────────────────────────────────
+  console.log('1️⃣  Creating demo users...');
+  const userSpecs: Array<Partial<User> & { password: string }> = [
+    {
+      email: SENTINEL_EMAIL,
+      name: 'Alice Demo',
+      emoji: '👩‍💻',
+      role: 'admin',
+      password: 'demo-password-alice',
+      onboarding_completed: true,
+    },
+    {
+      email: 'demo.bob@agor.live',
+      name: 'Bob Demo',
+      emoji: '🧑‍🔧',
+      role: 'member',
+      password: 'demo-password-bob',
+      onboarding_completed: true,
+    },
+    {
+      email: 'demo.carol@agor.live',
+      name: 'Carol Demo',
+      emoji: '👩‍🎨',
+      role: 'member',
+      password: 'demo-password-carol',
+      onboarding_completed: true,
+    },
+    {
+      email: 'demo.dave@agor.live',
+      name: 'Dave Demo',
+      emoji: '🧑‍🚀',
+      role: 'viewer',
+      password: 'demo-password-dave',
+      onboarding_completed: true,
+    },
+  ];
+  const users = await Promise.all(userSpecs.map((spec) => usersRepo.create(spec)));
+  const [alice, bob, carol] = users;
+
+  // ── STEP 2: Card types (global) ───────────────────────────────────────────
+  console.log('2️⃣  Creating demo card types...');
+  const cardTypeSpecs: Array<Partial<CardType>> = [
+    { name: 'Demo Bug', emoji: '🐛', color: '#ff4d4f', created_by: alice.user_id },
+    { name: 'Demo Feature', emoji: '✨', color: '#1677ff', created_by: alice.user_id },
+    { name: 'Demo Task', emoji: '✅', color: '#52c41a', created_by: alice.user_id },
+  ];
+  const cardTypes = await Promise.all(cardTypeSpecs.map((spec) => cardTypeRepo.create(spec)));
+  const [bugType, featureType, taskType] = cardTypes;
+
+  // ── STEP 3: Repos (demo-* slugs, placeholder paths, no git) ───────────────
+  console.log('3️⃣  Creating demo repos...');
+  const webappRepo = await repoRepo.create({
+    slug: 'demo-webapp',
+    name: 'Demo Webapp',
+    repo_type: 'local',
+    local_path: '/tmp/demo-fixtures/demo-webapp',
+    default_branch: 'main',
+  });
+  const apiRepo = await repoRepo.create({
+    slug: 'demo-api',
+    name: 'Demo API',
+    repo_type: 'remote',
+    remote_url: 'https://github.com/demo-org/demo-api.git',
+    local_path: '/tmp/demo-fixtures/demo-api',
+    default_branch: 'main',
+  });
+  const repos = [webappRepo, apiRepo];
+
+  // ── STEP 4: Board with zones ──────────────────────────────────────────────
+  console.log('4️⃣  Creating demo board with zones...');
+  // Zones are `type: "zone"` entries in the board's `data.objects` map.
+  const ZONE_W = 420;
+  const ZONE_H = 760;
+  const ZONE_GAP = 40;
+  const zoneIds = {
+    todo: 'demo-zone-todo',
+    inProgress: 'demo-zone-in-progress',
+    review: 'demo-zone-review',
+    done: 'demo-zone-done',
+  };
+  const zoneDefs: Array<{ id: string; label: string; color: string }> = [
+    { id: zoneIds.todo, label: 'To Do', color: '#8c8c8c' },
+    { id: zoneIds.inProgress, label: 'In Progress', color: '#1677ff' },
+    { id: zoneIds.review, label: 'Review', color: '#faad14' },
+    { id: zoneIds.done, label: 'Done', color: '#52c41a' },
+  ];
+  const boardObjects: Record<string, BoardObject> = {};
+  const zoneOrigins: Record<string, { x: number; y: number }> = {};
+  zoneDefs.forEach((zone, i) => {
+    const x = i * (ZONE_W + ZONE_GAP);
+    const y = 0;
+    zoneOrigins[zone.id] = { x, y };
+    boardObjects[zone.id] = {
+      type: 'zone',
+      x,
+      y,
+      width: ZONE_W,
+      height: ZONE_H,
+      label: zone.label,
+      borderColor: zone.color,
+      backgroundColor: `${zone.color}1a`,
+    };
+  });
+
+  const board = await boardRepo.create({
+    name: 'Demo Board',
+    slug: 'demo-board',
+    description: 'Demo board populated by LOAD_FIXTURES',
+    icon: '🎭',
+    color: '#722ed1',
+    created_by: alice.user_id,
+    objects: boardObjects,
+  });
+  const boardId = board.board_id as BoardID;
+  await boardRepo.addOwner(boardId, alice.user_id);
+  if (options.userId) {
+    await boardRepo.addOwner(boardId, options.userId);
+  }
+
+  // ── STEP 5: Branches (no git ops) ─────────────────────────────────────────
+  console.log('5️⃣  Creating demo branches...');
+  // Use a high, fixed branch_unique_id range so port allocation never collides
+  // with the real seeded branch (which uses a random 1..1000 id).
+  const branchSpecs: Array<{
+    name: string;
+    repoId: UUID;
+    creator: UUID;
+    zoneId: string;
+    rel: { x: number; y: number };
+    uniqueId: number;
+  }> = [
+    {
+      name: 'demo-feature-login',
+      repoId: webappRepo.repo_id,
+      creator: alice.user_id,
+      zoneId: zoneIds.inProgress,
+      rel: { x: 20, y: 60 },
+      uniqueId: 9001,
+    },
+    {
+      name: 'demo-fix-navbar',
+      repoId: webappRepo.repo_id,
+      creator: bob.user_id,
+      zoneId: zoneIds.todo,
+      rel: { x: 20, y: 60 },
+      uniqueId: 9002,
+    },
+    {
+      name: 'demo-refactor-api',
+      repoId: apiRepo.repo_id,
+      creator: carol.user_id,
+      zoneId: zoneIds.review,
+      rel: { x: 20, y: 60 },
+      uniqueId: 9003,
+    },
+    {
+      name: 'demo-docs-update',
+      repoId: webappRepo.repo_id,
+      creator: bob.user_id,
+      zoneId: zoneIds.done,
+      rel: { x: 20, y: 60 },
+      uniqueId: 9004,
+    },
+    {
+      name: 'demo-assistant',
+      repoId: webappRepo.repo_id,
+      creator: alice.user_id,
+      zoneId: zoneIds.todo,
+      rel: { x: 20, y: 320 },
+      uniqueId: 9005,
+    },
+  ];
+
+  const branches: Branch[] = [];
+  for (const spec of branchSpecs) {
+    const branch = await branchRepo.create({
+      repo_id: spec.repoId,
+      name: spec.name,
+      ref: spec.name,
+      path: `/tmp/demo-fixtures/worktrees/${spec.name}`,
+      base_ref: 'main',
+      branch_unique_id: spec.uniqueId,
+      created_by: spec.creator,
+      board_id: boardId,
+      needs_attention: false,
+    });
+    await branchRepo.addOwner(branch.branch_id, spec.creator);
+    if (options.userId) {
+      await branchRepo.addOwner(branch.branch_id, options.userId);
+    }
+
+    // ── STEP 6: Branch placement (board_objects row, pinned to a zone) ──────
+    await boardObjectRepo.create({
+      board_id: boardId,
+      branch_id: branch.branch_id,
+      position: spec.rel,
+      zone_id: spec.zoneId,
+    });
+    branches.push(branch);
+  }
+  const branchByName = new Map(branches.map((b) => [b.name, b]));
+  const loginBranch = branchByName.get('demo-feature-login')!;
+  const navbarBranch = branchByName.get('demo-fix-navbar')!;
+  const refactorBranch = branchByName.get('demo-refactor-api')!;
+
+  // ── STEP 7: Sessions (terminal status + genealogy) ────────────────────────
+  console.log('7️⃣  Creating demo sessions with genealogy...');
+  // Pre-generate ids so genealogy (parent/child, fork points) can be wired in a
+  // single pass without re-fetching/updating.
+  const rootSessionId = generateId() as UUID;
+  const spawnedSessionId = generateId() as UUID;
+  const forkedSessionId = generateId() as UUID;
+  const soloSessionId = generateId() as UUID;
+
+  // Pre-generate the root task id so spawn/fork points can reference it.
+  const rootTaskId = generateId() as UUID;
+
+  const now = Date.now();
+  const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString();
+
+  // Root session — completed, has a spawned child and a forked sibling.
+  const rootSession = await sessionRepo.create({
+    session_id: rootSessionId,
+    branch_id: loginBranch.branch_id as UUID,
+    created_by: alice.user_id,
+    status: SessionStatus.COMPLETED,
+    agentic_tool: 'claude-code',
+    title: 'Implement login form',
+    description: 'Add a login form with validation to the demo webapp',
+    tasks: [rootTaskId],
+    genealogy: {
+      children: [spawnedSessionId],
+      spawn_point_task_id: rootTaskId,
+      spawn_point_message_index: 3,
+      fork_point_task_id: rootTaskId,
+      fork_point_message_index: 3,
+    },
+  });
+
+  // Spawned child — fresh context window, child of root.
+  const spawnedSession = await sessionRepo.create({
+    session_id: spawnedSessionId,
+    branch_id: navbarBranch.branch_id as UUID,
+    created_by: alice.user_id,
+    status: SessionStatus.IDLE,
+    agentic_tool: 'claude-code',
+    title: 'Fix navbar layout (spawned)',
+    description: 'Spawned child of the login session',
+    genealogy: {
+      children: [],
+      parent_session_id: rootSessionId,
+      spawn_point_task_id: rootTaskId,
+      spawn_point_message_index: 3,
+    },
+  });
+
+  // Forked sibling — copies parent context at a fork point.
+  const forkedSession = await sessionRepo.create({
+    session_id: forkedSessionId,
+    branch_id: refactorBranch.branch_id as UUID,
+    created_by: carol.user_id,
+    status: SessionStatus.COMPLETED,
+    agentic_tool: 'codex',
+    title: 'Refactor API client (forked)',
+    description: 'Forked sibling of the login session',
+    genealogy: {
+      children: [],
+      forked_from_session_id: rootSessionId,
+      fork_point_task_id: rootTaskId,
+      fork_point_message_index: 3,
+    },
+  });
+
+  // Independent root session on another branch.
+  const soloSession = await sessionRepo.create({
+    session_id: soloSessionId,
+    branch_id: navbarBranch.branch_id as UUID,
+    created_by: bob.user_id,
+    status: SessionStatus.IDLE,
+    agentic_tool: 'gemini',
+    title: 'Update documentation',
+    description: 'Standalone documentation session',
+    genealogy: { children: [] },
+  });
+  const sessions = [rootSession, spawnedSession, forkedSession, soloSession];
+
+  // ── STEP 8: Tasks (1–2 per session) ───────────────────────────────────────
+  console.log('8️⃣  Creating demo tasks...');
+  const taskSpecs: Array<Partial<Task>> = [
+    {
+      task_id: rootTaskId,
+      session_id: rootSessionId,
+      created_by: alice.user_id,
+      status: TaskStatus.COMPLETED,
+      full_prompt: 'Add a login form with email + password validation.',
+      message_range: { start_index: 0, end_index: 3, start_timestamp: iso(0) },
+      git_state: { ref_at_start: 'demo-feature-login', sha_at_start: 'demo000001' },
+      completed_at: iso(60_000),
+      tool_use_count: 1,
+    },
+    {
+      session_id: spawnedSessionId,
+      created_by: alice.user_id,
+      status: TaskStatus.COMPLETED,
+      full_prompt: 'Fix the navbar so it stays pinned on scroll.',
+      message_range: { start_index: 0, end_index: 3, start_timestamp: iso(120_000) },
+      git_state: { ref_at_start: 'demo-fix-navbar', sha_at_start: 'demo000002' },
+      completed_at: iso(180_000),
+      tool_use_count: 1,
+    },
+    {
+      session_id: forkedSessionId,
+      created_by: carol.user_id,
+      status: TaskStatus.COMPLETED,
+      full_prompt: 'Refactor the API client to use async/await.',
+      message_range: { start_index: 0, end_index: 3, start_timestamp: iso(240_000) },
+      git_state: { ref_at_start: 'demo-refactor-api', sha_at_start: 'demo000003' },
+      completed_at: iso(300_000),
+      tool_use_count: 1,
+    },
+    {
+      session_id: soloSessionId,
+      created_by: bob.user_id,
+      status: TaskStatus.COMPLETED,
+      full_prompt: 'Update the README with setup instructions.',
+      message_range: { start_index: 0, end_index: 3, start_timestamp: iso(360_000) },
+      git_state: { ref_at_start: 'demo-docs-update', sha_at_start: 'demo000004' },
+      completed_at: iso(420_000),
+      tool_use_count: 1,
+    },
+  ];
+  const createdTasks = await Promise.all(taskSpecs.map((spec) => taskRepo.create(spec)));
+
+  // ── STEP 9: Messages (readable transcript per session) ────────────────────
+  console.log('9️⃣  Creating demo message transcripts...');
+  const allMessages: Message[] = [];
+  for (const task of createdTasks) {
+    const sessionId = task.session_id as UUID;
+    const taskId = task.task_id as UUID;
+    const toolUseId = `demo-tool-${generateId()}`;
+    const base = new Date(task.message_range?.start_timestamp ?? iso(0)).getTime();
+    const ts = (i: number) => new Date(base + i * 1000).toISOString();
+
+    const transcript: Message[] = [
+      {
+        message_id: generateId() as UUID,
+        session_id: sessionId,
+        task_id: taskId,
+        type: 'user',
+        role: MessageRole.USER,
+        index: 0,
+        timestamp: ts(0),
+        content_preview: task.full_prompt ?? '',
+        content: task.full_prompt ?? '',
+        metadata: { source: 'agor' },
+      },
+      {
+        message_id: generateId() as UUID,
+        session_id: sessionId,
+        task_id: taskId,
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        index: 1,
+        timestamp: ts(1),
+        content_preview: "I'll make that change now.",
+        content: [
+          { type: 'text', text: "Sure — I'll make that change now." },
+          {
+            type: 'tool_use',
+            id: toolUseId,
+            name: 'Write',
+            input: { file_path: 'src/App.tsx', content: '// demo change\n' },
+          },
+        ],
+        tool_uses: [
+          {
+            id: toolUseId,
+            name: 'Write',
+            input: { file_path: 'src/App.tsx', content: '// demo change\n' },
+          },
+        ],
+        metadata: { model: 'claude-demo', tokens: { input: 120, output: 45 } },
+      },
+      {
+        message_id: generateId() as UUID,
+        session_id: sessionId,
+        task_id: taskId,
+        type: 'user',
+        role: MessageRole.USER,
+        index: 2,
+        timestamp: ts(2),
+        content_preview: 'File written successfully.',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: 'File written successfully (1 file changed).',
+          },
+        ],
+        parent_tool_use_id: toolUseId,
+      },
+      {
+        message_id: generateId() as UUID,
+        session_id: sessionId,
+        task_id: taskId,
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        index: 3,
+        timestamp: ts(3),
+        content_preview: 'Done! The change is in place.',
+        content: 'Done! The change is in place and ready for review.',
+        metadata: { model: 'claude-demo', tokens: { input: 130, output: 30 } },
+      },
+    ];
+    allMessages.push(...transcript);
+  }
+  await messagesRepo.createMany(allMessages);
+
+  // ── STEP 10: Cards (placed via board_objects rows) ────────────────────────
+  console.log('🔟 Creating demo cards...');
+  const cardSpecs: Array<{
+    title: string;
+    type: CardType;
+    description: string;
+    zoneId: string;
+    rel: { x: number; y: number };
+    creator: UUID;
+  }> = [
+    {
+      title: 'Login button misaligned on mobile',
+      type: bugType,
+      description: 'The login button overflows on small viewports.',
+      zoneId: zoneIds.todo,
+      rel: { x: 20, y: 580 },
+      creator: bob.user_id,
+    },
+    {
+      title: 'Add dark mode toggle',
+      type: featureType,
+      description: 'Users want a dark mode switch in settings.',
+      zoneId: zoneIds.inProgress,
+      rel: { x: 20, y: 340 },
+      creator: carol.user_id,
+    },
+    {
+      title: 'Write integration tests',
+      type: taskType,
+      description: 'Cover the checkout flow with integration tests.',
+      zoneId: zoneIds.review,
+      rel: { x: 20, y: 340 },
+      creator: alice.user_id,
+    },
+    {
+      title: 'Ship v1.0 release notes',
+      type: taskType,
+      description: 'Draft and publish the v1.0 release notes.',
+      zoneId: zoneIds.done,
+      rel: { x: 20, y: 340 },
+      creator: alice.user_id,
+    },
+  ];
+  const cards: Card[] = [];
+  for (const spec of cardSpecs) {
+    const card = await cardRepo.create({
+      board_id: boardId,
+      card_type_id: spec.type.card_type_id,
+      title: spec.title,
+      description: spec.description,
+      created_by: spec.creator,
+    });
+    await boardObjectRepo.create({
+      board_id: boardId,
+      card_id: card.card_id as UUID,
+      position: spec.rel,
+      zone_id: spec.zoneId,
+    });
+    cards.push(card);
+  }
+
+  // ── STEP 11: Artifacts (placed via board.data.objects entry) ──────────────
+  console.log('🎨 Creating demo artifact...');
+  // A public, self-owned artifact needs no artifact_trust_grants row.
+  const artifact: Artifact = await artifactRepo.create({
+    board_id: boardId,
+    name: 'Demo Counter App',
+    description: 'A tiny React counter rendered via Sandpack',
+    template: 'react',
+    public: true,
+    created_by: alice.user_id,
+    entry: '/index.js',
+    files: {
+      '/package.json': JSON.stringify(
+        {
+          name: 'demo-counter',
+          version: '1.0.0',
+          dependencies: { react: '^18.0.0', 'react-dom': '^18.0.0' },
+          main: '/index.js',
+        },
+        null,
+        2
+      ),
+      '/index.js': [
+        "import React from 'react';",
+        "import { createRoot } from 'react-dom/client';",
+        "import App from './App';",
+        "createRoot(document.getElementById('root')).render(<App />);",
+        '',
+      ].join('\n'),
+      '/App.js': [
+        "import React, { useState } from 'react';",
+        '',
+        'export default function App() {',
+        '  const [count, setCount] = useState(0);',
+        '  return (',
+        "    <div style={{ fontFamily: 'sans-serif', padding: 24 }}>",
+        '      <h1>Demo Counter</h1>',
+        '      <p>Count: {count}</p>',
+        '      <button onClick={() => setCount((c) => c + 1)}>Increment</button>',
+        '    </div>',
+        '  );',
+        '}',
+        '',
+      ].join('\n'),
+    },
+  });
+
+  // Artifact layout lives as an entry in board.data.objects, keyed
+  // `artifact-<artifactId>`, with type 'artifact' + x/y/width/height + artifact_id.
+  const artifactObjectKey = `artifact-${artifact.artifact_id}`;
+  const artifactsRightEdge = zoneDefs.length * (ZONE_W + ZONE_GAP);
+  await boardRepo.upsertBoardObject(boardId, artifactObjectKey, {
+    type: 'artifact',
+    artifact_id: artifact.artifact_id as UUID,
+    x: artifactsRightEdge,
+    y: 0,
+    width: 600,
+    height: 400,
+  });
+
+  const counts: DemoFixturesResult['counts'] = {
+    users: users.length,
+    card_types: cardTypes.length,
+    repos: repos.length,
+    boards: 1,
+    branches: branches.length,
+    sessions: sessions.length,
+    tasks: createdTasks.length,
+    messages: allMessages.length,
+    cards: cards.length,
+    artifacts: 1,
+  };
+
+  console.log('✅ Demo fixtures loaded successfully!');
+  console.log(`   Users:    ${counts.users}`);
+  console.log(`   Repos:    ${counts.repos}`);
+  console.log(`   Board:    ${board.name} (${board.board_id})`);
+  console.log(`   Branches: ${counts.branches}`);
+  console.log(
+    `   Sessions: ${counts.sessions} (tasks: ${counts.tasks}, messages: ${counts.messages})`
+  );
+  console.log(`   Cards:    ${counts.cards}, Artifacts: ${counts.artifacts}`);
+
+  return { skipped: false, counts };
+}

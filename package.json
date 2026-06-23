@@ -35,6 +35,7 @@
     "cli:unlink": "pnpm -C apps/agor-cli unlink --global",
     "agor": "NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts",
     "seed": "tsx scripts/seed.ts",
+    "load:fixtures": "tsx scripts/load-fixtures.ts",
     "sync:agor-live-deps": "node scripts/sync-agor-live-deps.mjs",
     "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check"
   },

@@ -236,6 +236,21 @@ if [ "$SEED" = "true" ]; then
   fi
 fi
 
+# Load demo fixtures if LOAD_FIXTURES=true (idempotent: skips if demo data
+# exists). Pure DB inserts — no git/network/executor. Orthogonal to SEED and
+# runs AFTER it, so `SEED=true LOAD_FIXTURES=true` yields a real runnable branch
+# plus a rich set of hardcoded fake data for instant end-to-end testing.
+if [ "$LOAD_FIXTURES" = "true" ]; then
+  echo "🎭 Loading demo fixtures..."
+  if [ -n "$ADMIN_USER_ID" ]; then
+    echo "   Using admin user: ${ADMIN_USER_ID}..."
+    pnpm tsx scripts/load-fixtures.ts --skip-if-exists --user-id "$ADMIN_USER_ID"
+  else
+    echo "⚠️  Warning: Could not find admin user, loading demo fixtures without admin owner"
+    pnpm tsx scripts/load-fixtures.ts --skip-if-exists
+  fi
+fi
+
 # Create RBAC test users if enabled (PostgreSQL + RBAC mode)
 if [ "$CREATE_RBAC_TEST_USERS" = "true" ]; then
   echo "👥 Creating RBAC test users and branches..."
