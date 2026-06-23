@@ -1258,10 +1258,18 @@ export const App: React.FC<AppProps> = ({
                             sessionById={sessionById}
                             sessionsByBranch={sessionsByBranch}
                             userById={userById}
+                            mcpServerById={mcpServerById}
                             currentUserId={user?.user_id}
                             onBoardClick={navigation.goToBoard}
                             onBranchClick={navigation.goToBranch}
                             onSessionClick={handleSessionClick}
+                            onOpenCreateDialog={(tab, boardId) => {
+                              if (boardId) navigation.goToBoard(boardId);
+                              setNewBranchDefaultPosition(null);
+                              setCreateDialogDefaultTab(tab);
+                              setCreateDialogOpen(true);
+                            }}
+                            onOpenSettings={openSettings}
                           />
                         ) : (
                           <SessionCanvas
@@ -1306,16 +1314,16 @@ export const App: React.FC<AppProps> = ({
                             onCommentSelect={handleCommentSelect}
                           />
                         )}
-                        <NewSessionButton
-                          onClick={() => {
-                            const center = isHomeSurface
-                              ? null
-                              : sessionCanvasRef.current?.getViewportCenter();
-                            setNewBranchDefaultPosition(center || null);
-                            setCreateDialogDefaultTab('assistant');
-                            setCreateDialogOpen(true);
-                          }}
-                        />
+                        {!isHomeSurface && (
+                          <NewSessionButton
+                            onClick={() => {
+                              const center = sessionCanvasRef.current?.getViewportCenter();
+                              setNewBranchDefaultPosition(center || null);
+                              setCreateDialogDefaultTab('assistant');
+                              setCreateDialogOpen(true);
+                            }}
+                          />
+                        )}
                       </div>
                     </Panel>
                     {(effectiveSelectedSessionId || !eventStreamPanelCollapsed) && (
