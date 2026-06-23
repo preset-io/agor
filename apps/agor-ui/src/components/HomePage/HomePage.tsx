@@ -1,7 +1,7 @@
 import type { SessionStatus } from '@agor-live/client';
 import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme } from 'antd';
+import { Button, Dropdown, Layout, Modal, Select, Typography, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
@@ -27,7 +27,7 @@ const SIDEBAR_MAX_RATIO = 0.5;
 const AWAITING_STATUSES = new Set<SessionStatus>(['awaiting_permission', 'awaiting_input']);
 
 const NEW_MENU_ITEMS: MenuProps['items'] = [
-  { key: 'assistant', label: 'New session', icon: <RobotOutlined /> },
+  { key: 'assistant', label: 'New assistant', icon: <RobotOutlined /> },
   { key: 'branch', label: 'New branch', icon: <BranchesOutlined /> },
   { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
 ];
@@ -392,10 +392,10 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       </div>
 
       <Modal
-        title="Create new"
+        title={createType === 'assistant' ? 'New assistant' : 'New branch'}
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
-        width={420}
+        width={400}
         footer={
           boardOptions.length === 0
             ? [
@@ -423,7 +423,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                   disabled={!selectedBoardId}
                   onClick={handleConfirmCreate}
                 >
-                  {createType === 'assistant' ? 'Start session' : 'Create branch'}
+                  {createType === 'assistant' ? 'Start assistant' : 'Create branch'}
                 </Button>,
               ]
         }
@@ -435,28 +435,17 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
             </Typography.Text>
           </div>
         ) : (
-          <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Segmented
-              value={createType}
-              onChange={(v) => setCreateType(v as 'assistant' | 'branch')}
-              block
-              options={[
-                { value: 'assistant', label: 'AI session', icon: <RobotOutlined /> },
-                { value: 'branch', label: 'Branch / Worktree', icon: <BranchesOutlined /> },
-              ]}
+          <div style={{ padding: '8px 0 4px' }}>
+            <Typography.Text style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
+              Which board?
+            </Typography.Text>
+            <Select
+              value={selectedBoardId}
+              onChange={setSelectedBoardId}
+              options={boardOptions}
+              placeholder="Select a board"
+              style={{ width: '100%' }}
             />
-            <div>
-              <Typography.Text style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
-                Which board?
-              </Typography.Text>
-              <Select
-                value={selectedBoardId}
-                onChange={setSelectedBoardId}
-                options={boardOptions}
-                placeholder="Select a board"
-                style={{ width: '100%' }}
-              />
-            </div>
           </div>
         )}
       </Modal>

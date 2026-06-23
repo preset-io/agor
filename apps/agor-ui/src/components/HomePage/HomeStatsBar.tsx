@@ -194,7 +194,7 @@ export const HomeStatsBar: React.FC<{
         label="Running right now"
         iconBg={token.colorPrimaryBg}
         iconColor={token.colorPrimary}
-        cta={runningNow > 0 && latestRunningId ? 'Open latest session' : 'Start a session'}
+        cta={runningNow > 0 && latestRunningId ? 'Open latest session' : 'New assistant'}
         ctaIcon={
           runningNow > 0 && latestRunningId ? (
             <ArrowRightOutlined style={{ fontSize: 10 }} />
@@ -211,7 +211,7 @@ export const HomeStatsBar: React.FC<{
         label="Started this week"
         iconBg={token.colorSuccessBg}
         iconColor={token.colorSuccess}
-        cta="New session"
+        cta="New assistant"
         onCta={newSession}
       />
     </div>
