@@ -1697,7 +1697,7 @@ export const gatewayChannels = sqliteTable(
     // Materialized for queries
     name: text('name').notNull(),
     channel_type: text('channel_type', {
-      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams'],
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'webhook'],
     }).notNull(),
     target_branch_id: text('target_branch_id', { length: 36 })
       .notNull()
@@ -1784,7 +1784,7 @@ export const gatewayOutboundMessages = sqliteTable(
       .notNull()
       .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
     channel_type: text('channel_type', {
-      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams'],
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'webhook'],
     }).notNull(),
 
     platform_channel_id: text('platform_channel_id').notNull(),
