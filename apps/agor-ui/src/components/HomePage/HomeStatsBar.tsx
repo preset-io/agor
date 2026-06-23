@@ -1,5 +1,11 @@
 import type { Session } from '@agor-live/client';
-import { InboxOutlined, PlusOutlined, RiseOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import {
+  ArrowRightOutlined,
+  PlusOutlined,
+  RiseOutlined,
+  RocketOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
@@ -13,8 +19,9 @@ const StatCard: React.FC<{
   iconBg: string;
   iconColor: string;
   cta: string;
+  ctaIcon?: React.ReactNode;
   onCta: () => void;
-}> = ({ icon, value, label, iconBg, iconColor, cta, onCta }) => {
+}> = ({ icon, value, label, iconBg, iconColor, cta, ctaIcon, onCta }) => {
   const { token } = theme.useToken();
   const [hovered, setHovered] = useState(false);
 
@@ -25,7 +32,7 @@ const StatCard: React.FC<{
         position: 'relative',
         padding: '14px 16px',
         background: token.colorBgContainer,
-        border: `1px solid ${hovered ? token.colorBorderSecondary : token.colorBorderSecondary}`,
+        border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
         minWidth: 0,
         overflow: 'hidden',
@@ -35,7 +42,7 @@ const StatCard: React.FC<{
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* Icon — top-right corner keeps number/label left-aligned consistently */}
+      {/* Icon — top-right corner keeps number + label consistently anchored left */}
       <div
         style={{
           position: 'absolute',
@@ -92,7 +99,7 @@ const StatCard: React.FC<{
           fontWeight: 500,
         }}
       >
-        <PlusOutlined style={{ fontSize: 10 }} />
+        {ctaIcon ?? <PlusOutlined style={{ fontSize: 10 }} />}
         {cta}
       </button>
     </div>
@@ -113,30 +120,38 @@ export const HomeStatsBar: React.FC<{
     return () => clearInterval(id);
   }, []);
 
-  const { waitingCount, firstWaitingId, runningNow, startedThisWeek } = useMemo(() => {
+  const { myThisWeek, runningNow, latestRunningId, startedThisWeek } = useMemo(() => {
     const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-    let waitingCount = 0;
-    let firstWaitingId: string | undefined;
+    let myThisWeek = 0;
     let runningNow = 0;
+    let latestRunningId: string | undefined;
+    let latestRunningTime = 0;
     let startedThisWeek = 0;
 
     for (const s of sessionById.values()) {
       if (s.archived) continue;
-      if (s.status === 'running') runningNow++;
-      if (
-        (s.status === 'awaiting_permission' || s.status === 'awaiting_input') &&
-        (!currentUserId || s.created_by === currentUserId)
-      ) {
-        waitingCount++;
-        if (!firstWaitingId) firstWaitingId = s.session_id;
+
+      const createdAt = new Date(s.created_at).getTime();
+      const updatedAt = new Date(s.last_updated).getTime();
+
+      if (s.status === 'running') {
+        runningNow++;
+        if (updatedAt > latestRunningTime) {
+          latestRunningTime = updatedAt;
+          latestRunningId = s.session_id;
+        }
       }
-      if (new Date(s.created_at).getTime() > weekAgo) {
+
+      if (createdAt > weekAgo) {
         startedThisWeek++;
+        if (!currentUserId || s.created_by === currentUserId) {
+          myThisWeek++;
+        }
       }
     }
 
-    return { waitingCount, firstWaitingId, runningNow, startedThisWeek };
+    return { myThisWeek, runningNow, latestRunningId, startedThisWeek };
   }, [sessionById, currentUserId, now]);
 
   const newSession = () => onOpenCreateDialog?.('assistant');
@@ -144,15 +159,13 @@ export const HomeStatsBar: React.FC<{
   return (
     <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
       <StatCard
-        icon={<InboxOutlined />}
-        value={waitingCount}
-        label="Waiting for reply"
+        icon={<RocketOutlined />}
+        value={myThisWeek}
+        label="My sessions this week"
         iconBg={token.colorWarningBg}
         iconColor={token.colorWarning}
-        cta={waitingCount > 0 && firstWaitingId ? 'Go to session' : 'Start a session'}
-        onCta={
-          waitingCount > 0 && firstWaitingId ? () => onSessionClick(firstWaitingId) : newSession
-        }
+        cta="Start a session"
+        onCta={newSession}
       />
       <StatCard
         icon={<ThunderboltOutlined />}
@@ -160,8 +173,15 @@ export const HomeStatsBar: React.FC<{
         label="Running right now"
         iconBg={token.colorPrimaryBg}
         iconColor={token.colorPrimary}
-        cta="Start a session"
-        onCta={newSession}
+        cta={runningNow > 0 && latestRunningId ? 'Jump to latest' : 'Start a session'}
+        ctaIcon={
+          runningNow > 0 && latestRunningId ? (
+            <ArrowRightOutlined style={{ fontSize: 10 }} />
+          ) : undefined
+        }
+        onCta={
+          runningNow > 0 && latestRunningId ? () => onSessionClick(latestRunningId) : newSession
+        }
       />
       <StatCard
         icon={<RiseOutlined />}
