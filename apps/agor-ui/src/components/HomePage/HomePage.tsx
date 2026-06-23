@@ -129,24 +129,16 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>();
-  const [createType, setCreateType] = useState<'assistant' | 'branch'>('assistant');
 
   const handleNewSession = useCallback(() => {
-    setCreateType('assistant');
-    setSelectedBoardId(defaultBoardId);
-    setCreateOpen(true);
-  }, [defaultBoardId]);
-
-  const handleNewBranch = useCallback(() => {
-    setCreateType('branch');
     setSelectedBoardId(defaultBoardId);
     setCreateOpen(true);
   }, [defaultBoardId]);
 
   const handleConfirmCreate = useCallback(() => {
     setCreateOpen(false);
-    props.onOpenCreateDialog?.(createType, selectedBoardId);
-  }, [props.onOpenCreateDialog, createType, selectedBoardId]);
+    props.onOpenCreateDialog?.('assistant', selectedBoardId);
+  }, [props.onOpenCreateDialog, selectedBoardId]);
 
   const onboardingSteps = useMemo(() => {
     const hasBoards = props.boardById.size > 0;
@@ -241,10 +233,8 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                   onClick: ({ key }) => {
                     if (key === 'assistant') {
                       handleNewSession();
-                    } else if (key === 'branch') {
-                      handleNewBranch();
                     } else {
-                      props.onOpenCreateDialog?.(key as 'board');
+                      props.onOpenCreateDialog?.(key as 'branch' | 'board');
                     }
                   },
                 }}
@@ -392,7 +382,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       </div>
 
       <Modal
-        title={createType === 'assistant' ? 'New assistant' : 'New branch'}
+        title="New assistant"
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         width={400}
@@ -423,7 +413,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                   disabled={!selectedBoardId}
                   onClick={handleConfirmCreate}
                 >
-                  {createType === 'assistant' ? 'Start assistant' : 'Create branch'}
+                  Start assistant
                 </Button>,
               ]
         }
