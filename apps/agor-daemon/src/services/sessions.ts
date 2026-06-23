@@ -41,6 +41,7 @@ import {
   determineSpawnIdentity,
   isSuperAdmin,
   loadUnixUsernameForUser,
+  paginateClientSide,
   resolveChildUnixUsername,
 } from '../utils/branch-authorization.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
@@ -831,6 +832,21 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * Note: Last message is NOT included in list operations - only on single GET.
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
+    // board_id pushdown (non-RBAC path). When RBAC is enabled, scopeSessionQuery
+    // resolves the result in a before-hook and this method never runs; when it's
+    // disabled, this is the only place board_id is honored. We can't lean on
+    // DrizzleService's generic filter: it matches `item.board_id`, but sessions
+    // expose the board as `branch_board_id`, so the generic pass would wipe every
+    // row. Route board_id straight to the indexed branch-join query instead.
+    const boardId = params?.query?.board_id;
+    if (boardId) {
+      const query = params?.query as Record<string, unknown> | undefined;
+      const rows = await this.sessionRepo.findByBoard(boardId);
+      const page = paginateClientSide(rows, query, new Set(['board_id']));
+      const enriched = await this.enrichRemoteRelationships(page.data);
+      return markRemoteRelationshipsEnrichedResult({ ...page, data: enriched });
+    }
+
     const result = await super.find(params);
 
     if (Array.isArray(result)) {

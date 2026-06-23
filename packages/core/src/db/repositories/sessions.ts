@@ -358,18 +358,22 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /**
    * Find sessions by board ID
    *
-   * Uses materialized board_id column for O(1) indexed lookup.
-   * LEFT JOINs with branches to populate url (board_id already known from filter).
+   * A session relates to a board through its branch (session.branch_id →
+   * branch.board_id), so we filter on the JOINed `branches.board_id`. The
+   * `sessions.board_id` column is intentionally never populated (see
+   * `sessionToInsert`), so filtering on it would always return zero rows —
+   * the branch join is the authoritative source. This still pushes the
+   * filter down to SQL (one indexed JOIN), not an in-memory scan.
    */
   async findByBoard(boardId: string): Promise<Session[]> {
     try {
       const baseUrl = await getBaseUrl();
 
-      // Use materialized board_id column for indexed lookup
+      // Filter on the branch's board_id via the JOIN (sessions.board_id is dead).
       const results = await select(this.db)
         .from(sessions)
-        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
-        .where(eq(sessions.board_id, boardId))
+        .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
+        .where(eq(branches.board_id, boardId))
         .all();
 
       return results.map(
@@ -773,13 +777,20 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * (which returns all sessions without filtering).
    *
    * @param userId - User ID to check access for
+   * @param boardId - Optional board filter, pushed down to SQL via the branch
+   *                  join (session → branch → board). Lets callers scope to a
+   *                  single board without an in-memory pass.
    * @returns Array of accessible sessions with urls populated
    */
-  async findAccessibleSessions(userId: UUID): Promise<Session[]> {
+  async findAccessibleSessions(userId: UUID, boardId?: UUID): Promise<Session[]> {
     const baseUrl = await getBaseUrl();
 
     // Join branches for board_id (exposed as Session.branch_board_id).
     // No boards join needed — flat `/s/<short>/` URLs don't carry a slug.
+    const accessCondition = visibleBranchAccessCondition(this.db, userId);
+    const whereCondition = boardId
+      ? and(accessCondition, eq(branches.board_id, boardId))
+      : accessCondition;
     const results = await select(this.db)
       .from(sessions)
       .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
@@ -787,7 +798,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         branchOwners,
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
       )
-      .where(visibleBranchAccessCondition(this.db, userId))
+      .where(whereCondition)
       .all();
 
     const seen = new Set<string>();

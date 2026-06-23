@@ -644,19 +644,27 @@ export function scopeSessionQuery(
     const userRole = context.params.user?.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
 
+    // Push board_id down to SQL via the branch join (session → branch →
+    // board). The client-side pass below CANNOT filter board_id: sessions
+    // expose the board as `branch_board_id`, never `board_id`, so a generic
+    // `item.board_id === value` would wipe every row. We therefore both
+    // push it to SQL here AND skip it in paginateClientSide.
+    const query = context.params.query as Record<string, unknown> | undefined;
+    const boardId = query?.board_id as UUID | undefined;
+
     // Use optimized repository method (single SQL query with JOINs)
     const accessibleSessions = isSuperAdmin(userRole, allowSuperadmin)
-      ? await sessionRepo.findAll()
-      : await sessionRepo.findAccessibleSessions(userId);
+      ? boardId
+        ? await sessionRepo.findByBoard(boardId)
+        : await sessionRepo.findAll()
+      : await sessionRepo.findAccessibleSessions(userId, boardId);
 
     // Apply remaining query filters (branch_id, schedule_id, status, etc.)
     // client-side. Without this pass, `sessions.find({ schedule_id })`
     // silently returns all accessible sessions — which is what the
-    // ScheduleRunsPanel was hitting before this fix.
-    context.result = paginateClientSide(
-      accessibleSessions,
-      context.params.query as Record<string, unknown> | undefined
-    );
+    // ScheduleRunsPanel was hitting before this fix. board_id is already
+    // applied SQL-side above, so it's skipped here.
+    context.result = paginateClientSide(accessibleSessions, query, new Set(['board_id']));
     return context;
   };
 }
