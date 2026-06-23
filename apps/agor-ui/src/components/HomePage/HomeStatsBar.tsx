@@ -1,7 +1,7 @@
-import type { Branch, Session } from '@agor-live/client';
+import type { Session } from '@agor-live/client';
 import {
   ArrowRightOutlined,
-  BranchesOutlined,
+  CheckCircleOutlined,
   PlusOutlined,
   RiseOutlined,
   ThunderboltOutlined,
@@ -112,11 +112,10 @@ const StatCard: React.FC<{
 
 export const HomeStatsBar: React.FC<{
   sessionById: Map<string, Session>;
-  branchById: Map<string, Branch>;
   currentUserId?: string;
   onSessionClick: (sessionId: string) => void;
   onOpenCreateDialog?: (tab: 'assistant' | 'branch' | 'board' | 'repository') => void;
-}> = ({ sessionById, branchById, currentUserId, onSessionClick, onOpenCreateDialog }) => {
+}> = ({ sessionById, currentUserId, onSessionClick, onOpenCreateDialog }) => {
   const { token } = theme.useToken();
   const [now, setNow] = useState(() => Date.now());
 
@@ -125,14 +124,19 @@ export const HomeStatsBar: React.FC<{
     return () => clearInterval(id);
   }, []);
 
-  const openBranches = useMemo(
-    () => Array.from(branchById.values()).filter((b) => !b.archived).length,
-    [branchById]
-  );
-
-  const { myThisWeek, runningNow, latestRunningId, startedThisWeek } = useMemo(() => {
+  const {
+    completedThisWeek,
+    latestCompletedId,
+    myThisWeek,
+    runningNow,
+    latestRunningId,
+    startedThisWeek,
+  } = useMemo(() => {
     const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
+    let completedThisWeek = 0;
+    let latestCompletedId: string | undefined;
+    let latestCompletedTime = 0;
     let myThisWeek = 0;
     let runningNow = 0;
     let latestRunningId: string | undefined;
@@ -153,6 +157,14 @@ export const HomeStatsBar: React.FC<{
         }
       }
 
+      if (s.status === 'completed' && updatedAt > weekAgo) {
+        completedThisWeek++;
+        if (updatedAt > latestCompletedTime) {
+          latestCompletedTime = updatedAt;
+          latestCompletedId = s.session_id;
+        }
+      }
+
       if (createdAt > weekAgo) {
         startedThisWeek++;
         if (s.created_by === currentUserId) {
@@ -161,7 +173,14 @@ export const HomeStatsBar: React.FC<{
       }
     }
 
-    return { myThisWeek, runningNow, latestRunningId, startedThisWeek };
+    return {
+      completedThisWeek,
+      latestCompletedId,
+      myThisWeek,
+      runningNow,
+      latestRunningId,
+      startedThisWeek,
+    };
   }, [sessionById, currentUserId, now]);
 
   const newSession = () => onOpenCreateDialog?.('assistant');
@@ -176,13 +195,22 @@ export const HomeStatsBar: React.FC<{
   return (
     <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
       <StatCard
-        icon={<BranchesOutlined />}
-        value={openBranches}
-        label="Open branches"
+        icon={<CheckCircleOutlined />}
+        value={completedThisWeek}
+        label="Completed this week"
         iconBg={token.colorWarningBg}
         iconColor={token.colorWarning}
-        cta="New branch"
-        onCta={() => onOpenCreateDialog?.('branch')}
+        cta={completedThisWeek > 0 && latestCompletedId ? 'Review latest' : 'Start a session'}
+        ctaIcon={
+          completedThisWeek > 0 && latestCompletedId ? (
+            <ArrowRightOutlined style={{ fontSize: 10 }} />
+          ) : undefined
+        }
+        onCta={
+          completedThisWeek > 0 && latestCompletedId
+            ? () => onSessionClick(latestCompletedId)
+            : newSession
+        }
       />
       <StatCard
         icon={<ThunderboltOutlined />}
@@ -190,7 +218,7 @@ export const HomeStatsBar: React.FC<{
         label="Running right now"
         iconBg={token.colorPrimaryBg}
         iconColor={token.colorPrimary}
-        cta={runningNow > 0 && latestRunningId ? 'Jump to latest' : 'Start a session'}
+        cta={runningNow > 0 && latestRunningId ? 'Open latest session' : 'Start a session'}
         ctaIcon={
           runningNow > 0 && latestRunningId ? (
             <ArrowRightOutlined style={{ fontSize: 10 }} />
