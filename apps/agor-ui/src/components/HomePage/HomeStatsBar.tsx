@@ -1,20 +1,23 @@
 import type { Session } from '@agor-live/client';
-import { CheckCircleOutlined, MessageOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { InboxOutlined, PlusOutlined, RiseOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 
 const { Text } = Typography;
 
-const StatItem: React.FC<{
+const StatCard: React.FC<{
   icon: React.ReactNode;
   value: number;
   label: string;
   iconBg: string;
   iconColor: string;
-  zeroLabel?: string;
-}> = ({ icon, value, label, iconBg, iconColor, zeroLabel }) => {
+  cta: string;
+  onCta: () => void;
+}> = ({ icon, value, label, iconBg, iconColor, cta, onCta }) => {
   const { token } = theme.useToken();
+  const [hovered, setHovered] = useState(false);
+
   return (
     <div
       style={{
@@ -22,13 +25,17 @@ const StatItem: React.FC<{
         position: 'relative',
         padding: '14px 16px',
         background: token.colorBgContainer,
-        border: `1px solid ${token.colorBorderSecondary}`,
+        border: `1px solid ${hovered ? token.colorBorderSecondary : token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
         minWidth: 0,
         overflow: 'hidden',
+        transition: 'box-shadow 0.15s',
+        boxShadow: hovered ? token.boxShadowTertiary : undefined,
       }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
-      {/* Icon — top-right corner so number + label always align consistently */}
+      {/* Icon — top-right corner keeps number/label left-aligned consistently */}
       <div
         style={{
           position: 'absolute',
@@ -47,6 +54,7 @@ const StatItem: React.FC<{
       >
         {icon}
       </div>
+
       {/* Number */}
       <div
         style={{
@@ -54,16 +62,39 @@ const StatItem: React.FC<{
           fontWeight: 700,
           lineHeight: 1,
           color: token.colorText,
-          marginBottom: 5,
+          marginBottom: 4,
           paddingRight: 46,
         }}
       >
         {value}
       </div>
+
       {/* Label */}
-      <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.3 }}>
-        {value === 0 && zeroLabel ? zeroLabel : label}
+      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
+        {label}
       </Text>
+
+      {/* CTA */}
+      <button
+        type="button"
+        onClick={onCta}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: 0,
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          color: token.colorPrimary,
+          fontSize: 12,
+          fontFamily: 'inherit',
+          fontWeight: 500,
+        }}
+      >
+        <PlusOutlined style={{ fontSize: 10 }} />
+        {cta}
+      </button>
     </div>
   );
 };
@@ -71,7 +102,9 @@ const StatItem: React.FC<{
 export const HomeStatsBar: React.FC<{
   sessionById: Map<string, Session>;
   currentUserId?: string;
-}> = ({ sessionById, currentUserId }) => {
+  onSessionClick: (sessionId: string) => void;
+  onOpenCreateDialog?: (tab: 'assistant' | 'branch' | 'board' | 'repository') => void;
+}> = ({ sessionById, currentUserId, onSessionClick, onOpenCreateDialog }) => {
   const { token } = theme.useToken();
   const [now, setNow] = useState(() => Date.now());
 
@@ -80,14 +113,13 @@ export const HomeStatsBar: React.FC<{
     return () => clearInterval(id);
   }, []);
 
-  const { waitingForYou, runningNow, doneToday } = useMemo(() => {
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayMs = todayStart.getTime();
+  const { waitingCount, firstWaitingId, runningNow, startedThisWeek } = useMemo(() => {
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-    let waitingForYou = 0;
+    let waitingCount = 0;
+    let firstWaitingId: string | undefined;
     let runningNow = 0;
-    let doneToday = 0;
+    let startedThisWeek = 0;
 
     for (const s of sessionById.values()) {
       if (s.archived) continue;
@@ -96,44 +128,49 @@ export const HomeStatsBar: React.FC<{
         (s.status === 'awaiting_permission' || s.status === 'awaiting_input') &&
         (!currentUserId || s.created_by === currentUserId)
       ) {
-        waitingForYou++;
+        waitingCount++;
+        if (!firstWaitingId) firstWaitingId = s.session_id;
       }
-      if (
-        (s.status === 'completed' || s.status === 'idle') &&
-        new Date(s.last_updated).getTime() >= todayMs
-      ) {
-        doneToday++;
+      if (new Date(s.created_at).getTime() > weekAgo) {
+        startedThisWeek++;
       }
     }
 
-    return { waitingForYou, runningNow, doneToday };
+    return { waitingCount, firstWaitingId, runningNow, startedThisWeek };
   }, [sessionById, currentUserId, now]);
+
+  const newSession = () => onOpenCreateDialog?.('assistant');
 
   return (
     <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
-      <StatItem
-        icon={<MessageOutlined />}
-        value={waitingForYou}
-        label="Waiting for your reply"
-        zeroLabel="All caught up"
-        iconBg={waitingForYou > 0 ? token.colorWarningBg : token.colorSuccessBg}
-        iconColor={waitingForYou > 0 ? token.colorWarning : token.colorSuccess}
+      <StatCard
+        icon={<InboxOutlined />}
+        value={waitingCount}
+        label="Waiting for reply"
+        iconBg={token.colorWarningBg}
+        iconColor={token.colorWarning}
+        cta={waitingCount > 0 && firstWaitingId ? 'Go to session' : 'Start a session'}
+        onCta={
+          waitingCount > 0 && firstWaitingId ? () => onSessionClick(firstWaitingId) : newSession
+        }
       />
-      <StatItem
+      <StatCard
         icon={<ThunderboltOutlined />}
         value={runningNow}
         label="Running right now"
-        zeroLabel="Nothing running"
         iconBg={token.colorPrimaryBg}
         iconColor={token.colorPrimary}
+        cta="Start a session"
+        onCta={newSession}
       />
-      <StatItem
-        icon={<CheckCircleOutlined />}
-        value={doneToday}
-        label="Sessions done today"
-        zeroLabel="Nothing done yet today"
+      <StatCard
+        icon={<RiseOutlined />}
+        value={startedThisWeek}
+        label="Started this week"
         iconBg={token.colorSuccessBg}
         iconColor={token.colorSuccess}
+        cta="Start a session"
+        onCta={newSession}
       />
     </div>
   );
