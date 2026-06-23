@@ -1,9 +1,9 @@
-import type { Session } from '@agor-live/client';
+import type { Branch, Session } from '@agor-live/client';
 import {
   ArrowRightOutlined,
+  BranchesOutlined,
   PlusOutlined,
   RiseOutlined,
-  RocketOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Typography, theme } from 'antd';
@@ -120,10 +120,11 @@ const StatCard: React.FC<{
 
 export const HomeStatsBar: React.FC<{
   sessionById: Map<string, Session>;
+  branchById: Map<string, Branch>;
   currentUserId?: string;
   onSessionClick: (sessionId: string) => void;
   onOpenCreateDialog?: (tab: 'assistant' | 'branch' | 'board' | 'repository') => void;
-}> = ({ sessionById, currentUserId, onSessionClick, onOpenCreateDialog }) => {
+}> = ({ sessionById, branchById, currentUserId, onSessionClick, onOpenCreateDialog }) => {
   const { token } = theme.useToken();
   const [now, setNow] = useState(() => Date.now());
 
@@ -131,6 +132,11 @@ export const HomeStatsBar: React.FC<{
     const id = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(id);
   }, []);
+
+  const openBranches = useMemo(
+    () => Array.from(branchById.values()).filter((b) => !b.archived).length,
+    [branchById]
+  );
 
   const { myThisWeek, runningNow, latestRunningId, startedThisWeek } = useMemo(() => {
     const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
@@ -171,13 +177,13 @@ export const HomeStatsBar: React.FC<{
   return (
     <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
       <StatCard
-        icon={<RocketOutlined />}
-        value={myThisWeek}
-        label="My sessions this week"
+        icon={<BranchesOutlined />}
+        value={openBranches}
+        label="Open branches"
         iconBg={token.colorWarningBg}
         iconColor={token.colorWarning}
-        cta="Start a session"
-        onCta={newSession}
+        cta="New branch"
+        onCta={() => onOpenCreateDialog?.('branch')}
       />
       <StatCard
         icon={<ThunderboltOutlined />}
@@ -202,7 +208,7 @@ export const HomeStatsBar: React.FC<{
         iconBg={token.colorSuccessBg}
         iconColor={token.colorSuccess}
         subtext={currentUserId ? `You: ${myThisWeek}` : undefined}
-        cta="Start a session"
+        cta="New session"
         onCta={newSession}
       />
     </div>

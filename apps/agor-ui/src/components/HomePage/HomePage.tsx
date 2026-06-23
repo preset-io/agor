@@ -265,6 +265,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
             {/* Workspace stats */}
             <HomeStatsBar
               sessionById={props.sessionById}
+              branchById={props.branchById}
               currentUserId={props.currentUserId}
               onSessionClick={props.onSessionClick}
               onOpenCreateDialog={props.onOpenCreateDialog}
