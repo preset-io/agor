@@ -272,7 +272,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
               sessionById={props.sessionById}
               currentUserId={props.currentUserId}
               onSessionClick={props.onSessionClick}
-              onOpenCreateDialog={props.onOpenCreateDialog}
+              onStartSession={handleNewSession}
               onOpenSettings={props.onOpenSettings}
             />
 

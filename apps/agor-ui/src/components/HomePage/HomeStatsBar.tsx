@@ -114,9 +114,9 @@ export const HomeStatsBar: React.FC<{
   sessionById: Map<string, Session>;
   currentUserId?: string;
   onSessionClick: (sessionId: string) => void;
-  onOpenCreateDialog?: (tab: 'assistant' | 'branch' | 'board' | 'repository') => void;
+  onStartSession?: () => void;
   onOpenSettings?: (tab: string) => void;
-}> = ({ sessionById, currentUserId, onSessionClick, onOpenCreateDialog, onOpenSettings }) => {
+}> = ({ sessionById, currentUserId, onSessionClick, onStartSession, onOpenSettings }) => {
   const { token } = theme.useToken();
   const [now, setNow] = useState(() => Date.now());
 
@@ -168,7 +168,7 @@ export const HomeStatsBar: React.FC<{
       };
     }, [sessionById, currentUserId, now]);
 
-  const newSession = () => onOpenCreateDialog?.('assistant');
+  const newSession = () => onStartSession?.();
 
   const weekValue =
     currentUserId && startedThisWeek > 0 ? `${myThisWeek}/${startedThisWeek}` : startedThisWeek;
