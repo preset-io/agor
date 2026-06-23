@@ -2644,12 +2644,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
                   // Gather trigger context stored at session-creation time
                   const triggerContext = {
-                    prompt: typeof gatewaySource.webhook_prompt === 'string'
-                      ? gatewaySource.webhook_prompt
-                      : '',
-                    summary: typeof gatewaySource.webhook_summary === 'string'
-                      ? gatewaySource.webhook_summary
-                      : '',
+                    prompt:
+                      typeof gatewaySource.webhook_prompt === 'string'
+                        ? gatewaySource.webhook_prompt
+                        : '',
+                    summary:
+                      typeof gatewaySource.webhook_summary === 'string'
+                        ? gatewaySource.webhook_summary
+                        : '',
                     metadata:
                       gatewaySource.webhook_metadata &&
                       typeof gatewaySource.webhook_metadata === 'object'
