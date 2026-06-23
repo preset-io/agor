@@ -1,0 +1,192 @@
+import type {
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  EffortLevel,
+  PermissionMode,
+  Session,
+} from '@agor-live/client';
+import { act, render, renderHook, screen } from '@testing-library/react';
+import { App, ConfigProvider } from 'antd';
+import type React from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useFooterPreferences } from '../../hooks/useFooterPreferences';
+import { SessionFooter } from './SessionFooter';
+
+// ModelSelector makes async network calls — replace with a stub
+vi.mock('../ModelSelector', () => ({
+  ModelSelector: () => <div data-testid="model-selector-stub" />,
+}));
+
+// TimerPill uses complex internal state not needed for footer layout tests
+vi.mock('../Pill', () => ({
+  TimerPill: () => <span data-testid="timer-pill-stub" />,
+}));
+
+const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <ConfigProvider>
+    <App>{children}</App>
+  </ConfigProvider>
+);
+
+const baseSession: Session = {
+  session_id: 'test-session-123',
+  status: 'idle' as Session['status'],
+  agentic_tool: 'claude-code',
+  model_config: undefined,
+} as unknown as Session;
+
+const baseTokenBreakdown = {
+  total: 0,
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheCreation: 0,
+  cost: 0,
+};
+
+const baseProps = {
+  session: baseSession,
+  footerTimerTask: null,
+  tokenBreakdown: baseTokenBreakdown,
+  latestContextWindow: null,
+  footerGradient: undefined,
+  sessionMcpServerIds: [] as string[],
+  unauthedMcpServers: [],
+  mcpServerById: new Map(),
+  isRunning: false,
+  isStopping: false,
+  stopRequestInFlight: false,
+  hasInput: false,
+  connectionDisabled: false,
+  effortLevel: 'high' as EffortLevel,
+  permissionMode: 'default' as PermissionMode,
+  codexSandboxMode: 'on' as CodexSandboxMode,
+  codexApprovalPolicy: 'auto' as CodexApprovalPolicy,
+  queuedTasks: [],
+  client: null,
+  modelLabel: undefined,
+  modelConfig: undefined,
+  onModelConfigChange: vi.fn(),
+  onOpenSessionSettings: undefined,
+  onSendPrompt: vi.fn(),
+  onStop: vi.fn(),
+  onFork: vi.fn(),
+  onBtwSend: vi.fn(),
+  onSpawnOpen: vi.fn(),
+  onUploadOpen: vi.fn(),
+  onEffortChange: vi.fn(),
+  onPermissionModeChange: vi.fn(),
+  onCodexPermissionChange: vi.fn(),
+  promptInputSlot: <div data-testid="prompt-input">prompt-input</div>,
+};
+
+describe('SessionFooter', () => {
+  it('Send button is disabled when there is no input', () => {
+    render(<SessionFooter {...baseProps} hasInput={false} />, { wrapper: Wrapper });
+    const sendBtn = screen.getByRole('button', { name: /send/i });
+    expect(sendBtn).toBeDisabled();
+  });
+
+  it('Send button is enabled when there is input', () => {
+    render(<SessionFooter {...baseProps} hasInput={true} isRunning={false} />, {
+      wrapper: Wrapper,
+    });
+    const sendBtn = screen.getByRole('button', { name: /send/i });
+    expect(sendBtn).not.toBeDisabled();
+  });
+
+  it('Send button shows "Queue" label when session is running and there is input', () => {
+    render(<SessionFooter {...baseProps} hasInput={true} isRunning={true} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByRole('button', { name: /queue/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^send$/i })).not.toBeInTheDocument();
+  });
+
+  it('Stop button is not rendered when session is not running', () => {
+    render(<SessionFooter {...baseProps} isRunning={false} stopRequestInFlight={false} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.queryByRole('button', { name: /stop/i })).not.toBeInTheDocument();
+  });
+
+  it('Stop button is rendered when session is running', () => {
+    render(<SessionFooter {...baseProps} isRunning={true} />, { wrapper: Wrapper });
+    expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
+  });
+
+  it('Stats chip is hidden when there is no model and no tokens', () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={{ ...baseSession, model_config: undefined } as unknown as Session}
+        tokenBreakdown={{ ...baseTokenBreakdown, total: 0 }}
+      />,
+      { wrapper: Wrapper }
+    );
+    expect(screen.queryByTestId('stats-chip')).not.toBeInTheDocument();
+  });
+
+  it('Stats chip shows warning styling when context usage is above 80%', () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        // Need model or tokens so the chip renders
+        session={
+          {
+            ...baseSession,
+            model_config: { model: 'claude-sonnet-4-6', mode: 'alias' },
+          } as unknown as Session
+        }
+        latestContextWindow={{ used: 85_000, limit: 100_000, taskMetadata: {} }}
+      />,
+      { wrapper: Wrapper }
+    );
+    const chip = screen.getByTestId('stats-chip');
+    expect(chip).toBeInTheDocument();
+    expect(chip.getAttribute('data-warning')).toBe('true');
+  });
+
+  it('Tools chip is hidden when no MCP servers are attached', () => {
+    render(<SessionFooter {...baseProps} sessionMcpServerIds={[]} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('tools-chip')).not.toBeInTheDocument();
+  });
+
+  it('Tools chip shows the server count when MCP servers are attached', () => {
+    render(<SessionFooter {...baseProps} sessionMcpServerIds={['a', 'b', 'c']} />, {
+      wrapper: Wrapper,
+    });
+    const chip = screen.getByTestId('tools-chip');
+    expect(chip).toBeInTheDocument();
+    expect(chip.textContent).toContain('3');
+  });
+});
+
+describe('useFooterPreferences', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('returns the default preferences when nothing is stored', () => {
+    const { result } = renderHook(() => useFooterPreferences());
+    const [prefs] = result.current;
+    expect(prefs.showToolsChip).toBe(true);
+    expect(prefs.showStatsChip).toBe(true);
+    expect(prefs.showForkInBar).toBe(true);
+    expect(prefs.showUploadInBar).toBe(true);
+  });
+
+  it('persists updated preferences to localStorage', () => {
+    const { result } = renderHook(() => useFooterPreferences());
+    act(() => {
+      result.current[1]({ showToolsChip: false });
+    });
+    const stored = JSON.parse(localStorage.getItem('agor-footer-prefs') ?? '{}');
+    expect(stored.showToolsChip).toBe(false);
+    // Other prefs remain at their defaults
+    expect(stored.showStatsChip).toBe(true);
+  });
+});
