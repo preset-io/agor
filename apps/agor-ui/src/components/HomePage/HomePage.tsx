@@ -263,7 +263,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
             )}
 
             {/* Workspace stats */}
-            <HomeStatsBar sessionById={props.sessionById} branchById={props.branchById} />
+            <HomeStatsBar sessionById={props.sessionById} currentUserId={props.currentUserId} />
 
             {/* My Sessions */}
             <HomeSessionsSection

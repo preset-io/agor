@@ -1,5 +1,5 @@
-import type { Branch, Session } from '@agor-live/client';
-import { BranchesOutlined, ClockCircleOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import type { Session } from '@agor-live/client';
+import { CheckCircleOutlined, MessageOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
@@ -12,54 +12,66 @@ const StatItem: React.FC<{
   label: string;
   iconBg: string;
   iconColor: string;
-}> = ({ icon, value, label, iconBg, iconColor }) => {
+  zeroLabel?: string;
+}> = ({ icon, value, label, iconBg, iconColor, zeroLabel }) => {
   const { token } = theme.useToken();
   return (
     <div
       style={{
         flex: 1,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '12px 16px',
+        position: 'relative',
+        padding: '14px 16px',
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
         minWidth: 0,
+        overflow: 'hidden',
       }}
     >
+      {/* Icon — top-right corner so number + label always align consistently */}
       <div
         style={{
-          width: 38,
-          height: 38,
+          position: 'absolute',
+          top: 12,
+          right: 12,
+          width: 30,
+          height: 30,
           borderRadius: token.borderRadiusSM,
           background: iconBg,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           color: iconColor,
-          fontSize: 17,
-          flexShrink: 0,
+          fontSize: 14,
         }}
       >
         {icon}
       </div>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.1, color: token.colorText }}>
-          {value}
-        </div>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {label}
-        </Text>
+      {/* Number */}
+      <div
+        style={{
+          fontSize: 28,
+          fontWeight: 700,
+          lineHeight: 1,
+          color: token.colorText,
+          marginBottom: 5,
+          paddingRight: 46,
+        }}
+      >
+        {value}
       </div>
+      {/* Label */}
+      <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.3 }}>
+        {value === 0 && zeroLabel ? zeroLabel : label}
+      </Text>
     </div>
   );
 };
 
 export const HomeStatsBar: React.FC<{
   sessionById: Map<string, Session>;
-  branchById: Map<string, Branch>;
-}> = ({ sessionById, branchById }) => {
+  currentUserId?: string;
+}> = ({ sessionById, currentUserId }) => {
   const { token } = theme.useToken();
   const [now, setNow] = useState(() => Date.now());
 
@@ -68,50 +80,58 @@ export const HomeStatsBar: React.FC<{
     return () => clearInterval(id);
   }, []);
 
-  const { activeCount, weekCount, branchCount } = useMemo(() => {
-    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-    let activeCount = 0;
-    let weekCount = 0;
+  const { waitingForYou, runningNow, doneToday } = useMemo(() => {
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayMs = todayStart.getTime();
+
+    let waitingForYou = 0;
+    let runningNow = 0;
+    let doneToday = 0;
+
     for (const s of sessionById.values()) {
       if (s.archived) continue;
+      if (s.status === 'running') runningNow++;
       if (
-        s.status === 'running' ||
-        s.status === 'awaiting_permission' ||
-        s.status === 'awaiting_input'
+        (s.status === 'awaiting_permission' || s.status === 'awaiting_input') &&
+        (!currentUserId || s.created_by === currentUserId)
       ) {
-        activeCount++;
+        waitingForYou++;
       }
-      if (new Date(s.last_updated).getTime() > weekAgo) {
-        weekCount++;
+      if (
+        (s.status === 'completed' || s.status === 'idle') &&
+        new Date(s.last_updated).getTime() >= todayMs
+      ) {
+        doneToday++;
       }
     }
-    let branchCount = 0;
-    for (const b of branchById.values()) {
-      if (!b.archived) branchCount++;
-    }
-    return { activeCount, weekCount, branchCount };
-  }, [sessionById, branchById, now]);
+
+    return { waitingForYou, runningNow, doneToday };
+  }, [sessionById, currentUserId, now]);
 
   return (
     <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
       <StatItem
-        icon={<ThunderboltOutlined />}
-        value={activeCount}
-        label="Active sessions"
-        iconBg={token.colorWarningBg}
-        iconColor={token.colorWarning}
+        icon={<MessageOutlined />}
+        value={waitingForYou}
+        label="Waiting for your reply"
+        zeroLabel="All caught up"
+        iconBg={waitingForYou > 0 ? token.colorWarningBg : token.colorSuccessBg}
+        iconColor={waitingForYou > 0 ? token.colorWarning : token.colorSuccess}
       />
       <StatItem
-        icon={<ClockCircleOutlined />}
-        value={weekCount}
-        label="Sessions this week"
+        icon={<ThunderboltOutlined />}
+        value={runningNow}
+        label="Running right now"
+        zeroLabel="Nothing running"
         iconBg={token.colorPrimaryBg}
         iconColor={token.colorPrimary}
       />
       <StatItem
-        icon={<BranchesOutlined />}
-        value={branchCount}
-        label="Live branches"
+        icon={<CheckCircleOutlined />}
+        value={doneToday}
+        label="Sessions done today"
+        zeroLabel="Nothing done yet today"
         iconBg={token.colorSuccessBg}
         iconColor={token.colorSuccess}
       />
