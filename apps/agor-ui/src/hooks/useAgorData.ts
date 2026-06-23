@@ -640,6 +640,16 @@ export function useAgorData(
   // touched by async fetch code + event handlers.
   const liveRemovedIdsRef = useRef<Set<string>>(new Set());
 
+  // Subset of `liveRemovedIdsRef`: session IDs tombstoned because their BRANCH
+  // was evicted (archived/removed), not because the session itself was removed.
+  // The sessions+branches hydration suppresses these only while the branch is
+  // STILL gone at apply time — if the branch is unarchived/recreated during the
+  // same hydration window it's overlaid back from `prev`, but its child sessions
+  // were dropped from `prev`, so we must keep them from the snapshot rather than
+  // suppress them. Direct session removes are NOT added here, so they stay
+  // unconditionally suppressed.
+  const liveBranchEvictedSessionIdsRef = useRef<Set<string>>(new Set());
+
   // Fetch all data
   //
   // `silent: true` is used by background refetches (e.g. socket reconnect) that
@@ -1205,13 +1215,33 @@ export function useAgorData(
               ]),
             ([allSessions, allBranches], removedDuringWindow) =>
               setMaps((prev) => {
-                // Sessions: union the full snapshot (minus rows tombstoned during
-                // the fetch — remove wins) with the live sessions we already hold
+                // Branches first (the session pass below checks branch presence):
+                // drop ids tombstoned during the window from the snapshot, then
+                // live-wins overlay so an unarchive/recreate that landed mid-fetch
+                // (present in `prev`) is restored even though it's filtered here.
+                const branchSnapshot = buildById(
+                  allBranches.filter((branch) => !removedDuringWindow.has(branch.branch_id)),
+                  'branch_id'
+                );
+                const branchById = mergeLiveWins(branchSnapshot, prev.branchById);
+
+                // Sessions: union the snapshot (minus rows tombstoned during the
+                // fetch — remove wins) with the live sessions we already hold
                 // (live wins for create/patch), then rebuild both maps (incl.
                 // remote surrogates) from the union so they stay consistent.
                 const mergedSessions = new Map<string, Session>();
                 for (const session of allSessions) {
-                  if (removedDuringWindow.has(session.session_id)) continue;
+                  if (removedDuringWindow.has(session.session_id)) {
+                    // Branch-eviction tombstones are conditional: if the branch is
+                    // back in `branchById` (unarchived/recreated this window), keep
+                    // the session — it was dropped from `prev` so the live overlay
+                    // can't re-add it. Direct session removes (not tagged) stay
+                    // unconditionally suppressed.
+                    const fromBranchEviction = liveBranchEvictedSessionIdsRef.current.has(
+                      session.session_id
+                    );
+                    if (!fromBranchEviction || !branchById.has(session.branch_id)) continue;
+                  }
                   mergedSessions.set(session.session_id, session);
                 }
                 for (const [id, session] of prev.sessionById) {
@@ -1220,16 +1250,11 @@ export function useAgorData(
                 const { sessionById, sessionsByBranch } = buildSessionMaps([
                   ...mergedSessions.values(),
                 ]);
-                // Branches: drop tombstoned ids from the snapshot, then live-wins overlay.
-                const branchSnapshot = buildById(
-                  allBranches.filter((branch) => !removedDuringWindow.has(branch.branch_id)),
-                  'branch_id'
-                );
                 return {
                   ...prev,
                   sessionById,
                   sessionsByBranch,
-                  branchById: mergeLiveWins(branchSnapshot, prev.branchById),
+                  branchById,
                 };
               })
           );
@@ -1764,6 +1789,9 @@ export function useAgorData(
         for (const [sessionId, session] of prev.entries()) {
           if (session.branch_id === branchId) {
             liveRemovedIdsRef.current.add(sessionId);
+            // Tag as branch-eviction (not a direct session remove) so hydration
+            // can un-suppress it if the branch comes back during the window.
+            liveBranchEvictedSessionIdsRef.current.add(sessionId);
             next.delete(sessionId);
             changed = true;
           }

@@ -5,6 +5,7 @@
  * Covers the security invariants introduced by the superadmin role feature.
  */
 
+import type { SessionRepository } from '@agor/core/db';
 import type { Branch, BranchPermissionLevel, HookContext, Session } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,7 @@ import {
   paginateClientSide,
   resolveBranchPermission,
   resolveSessionContext,
+  scopeSessionQuery,
 } from './branch-authorization';
 
 /** Minimal branch fixture for permission tests */
@@ -497,5 +499,76 @@ describe('paginateClientSide', () => {
       expect(result.total).toBe(0);
       expect(result.data).toEqual([]);
     });
+  });
+});
+
+describe('scopeSessionQuery — $sort handling', () => {
+  const SUPERADMIN_USER = {
+    user_id: 'user-super-0001' as import('@agor/core/types').UUID,
+    role: ROLES.SUPERADMIN,
+  };
+
+  function makeSession(id: string, overrides: Partial<Session> = {}): Session {
+    return {
+      session_id: id,
+      branch_id: 'wt-1',
+      status: 'idle',
+      archived: false,
+      created_at: '2026-01-01T00:00:00.000Z',
+      last_updated: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    } as unknown as Session;
+  }
+
+  function makeCtx(query: Record<string, unknown>): HookContext {
+    return {
+      method: 'find',
+      params: { provider: 'socketio', user: SUPERADMIN_USER, query },
+    } as unknown as HookContext;
+  }
+
+  function repoReturning(sessions: Session[]): SessionRepository {
+    return { findAll: vi.fn(async () => sessions) } as unknown as SessionRepository;
+  }
+
+  function resultIds(ctx: HookContext): string[] {
+    const result = ctx.result as { data: Session[] };
+    return result.data.map((s) => s.session_id);
+  }
+
+  it('passes a non-updated_at $sort (created_at) through to the client-side sort', async () => {
+    // REGRESSION GUARD: scopeSessionQuery must NOT strip every $sort — only the
+    // special `updated_at` case it sorts manually. created_at exists on the
+    // Session object, so paginateClientSide can order it.
+    const sessions = [
+      makeSession('s-old', { created_at: '2026-01-01T00:00:00.000Z' }),
+      makeSession('s-new', { created_at: '2026-03-01T00:00:00.000Z' }),
+      makeSession('s-mid', { created_at: '2026-02-01T00:00:00.000Z' }),
+    ];
+    const ctx = makeCtx({ $sort: { created_at: -1 }, $limit: 10 });
+    await scopeSessionQuery(repoReturning(sessions))(ctx);
+    expect(resultIds(ctx)).toEqual(['s-new', 's-mid', 's-old']);
+  });
+
+  it('passes a scheduled_run_at $sort through (ScheduleRunsPanel)', async () => {
+    const sessions = [
+      makeSession('r1', { scheduled_run_at: 100 }),
+      makeSession('r3', { scheduled_run_at: 300 }),
+      makeSession('r2', { scheduled_run_at: 200 }),
+    ];
+    const ctx = makeCtx({ $sort: { scheduled_run_at: -1 }, $limit: 10 });
+    await scopeSessionQuery(repoReturning(sessions))(ctx);
+    expect(resultIds(ctx)).toEqual(['r3', 'r2', 'r1']);
+  });
+
+  it('orders the updated_at $sort on the real last_updated field', async () => {
+    const sessions = [
+      makeSession('u-old', { last_updated: '2026-01-01T00:00:00.000Z' }),
+      makeSession('u-new', { last_updated: '2026-03-01T00:00:00.000Z' }),
+      makeSession('u-mid', { last_updated: '2026-02-01T00:00:00.000Z' }),
+    ];
+    const ctx = makeCtx({ $sort: { updated_at: -1 }, $limit: 10 });
+    await scopeSessionQuery(repoReturning(sessions))(ctx);
+    expect(resultIds(ctx)).toEqual(['u-new', 'u-mid', 'u-old']);
   });
 });
