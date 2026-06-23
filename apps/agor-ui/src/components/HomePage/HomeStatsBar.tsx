@@ -97,13 +97,13 @@ export const HomeStatsBar: React.FC<{
     for (const s of sessionById.values()) {
       if (s.archived) continue;
 
-      const createdAt = new Date(s.created_at).getTime();
+      const createdAt = s.created_at ? new Date(s.created_at).getTime() : Number.NaN;
 
       if (s.status === 'running') {
         runningNow++;
       }
 
-      if (createdAt > weekAgo) {
+      if (!Number.isNaN(createdAt) && createdAt > weekAgo) {
         startedThisWeek++;
         if (s.created_by) activeUserIds.add(s.created_by);
         if (s.created_by === currentUserId) {
