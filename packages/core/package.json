@@ -214,6 +214,12 @@
       "import": "./dist/seed/dev-fixtures.js",
       "require": "./dist/seed/dev-fixtures.cjs"
     },
+    "./seed/demo-fixtures": {
+      "source": "./src/seed/demo-fixtures.ts",
+      "types": "./dist/seed/demo-fixtures.d.ts",
+      "import": "./dist/seed/demo-fixtures.js",
+      "require": "./dist/seed/demo-fixtures.cjs"
+    },
     "./callbacks/child-completion-template": {
       "source": "./src/callbacks/child-completion-template.ts",
       "types": "./dist/callbacks/child-completion-template.d.ts",
