@@ -46,16 +46,29 @@ import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import type { UploadDestination, UploadedFile } from '../FileUpload';
 import { FileUpload } from '../FileUpload';
+import { uploadFilesToSession } from '../FileUpload/upload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
+import {
+  buildPromptWithImageAttachments,
+  type ComposerImageAttachment,
+  getComposerImageAccept,
+  getLatestComposerPromptText,
+  isBlockingComposerImageAttachment,
+  isSupportedComposerImage,
+} from './imageAttachments';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
+import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
+import { SessionImageAttachmentTray } from './SessionImageAttachmentTray';
 import { SessionPanelContent } from './SessionPanelContent';
+import { SessionUploadControls } from './SessionUploadControls';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -81,14 +94,18 @@ interface PromptInputProps {
   onHasInputChange: (hasInput: boolean) => void;
   /** Kept in sync so memoized children can read the latest value */
   inputValueRef: React.MutableRefObject<string>;
-  /** Called on Enter (without Shift) when there is non-empty text */
+  /** Called on Enter (without Shift) when there is sendable composer content */
   onSubmit: () => void;
+  hasExternalInput?: boolean;
   // Forwarded to AutocompleteTextarea
   placeholder?: string;
   autoSize?: { minRows?: number; maxRows?: number };
   client: AgorClient | null;
   userById: Map<string, User>;
   onFilesDrop?: (files: File[]) => void;
+  filesDropDisabled?: boolean;
+  showFilesDropOverlay?: boolean;
+  suppressEmptyHighlight?: boolean;
   slashCommands?: string[];
   skills?: string[];
 }
@@ -103,11 +120,15 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       onHasInputChange,
       inputValueRef,
       onSubmit,
+      hasExternalInput = false,
       placeholder,
       autoSize,
       client,
       userById,
       onFilesDrop,
+      filesDropDisabled = false,
+      showFilesDropOverlay = true,
+      suppressEmptyHighlight = false,
       slashCommands,
       skills,
     },
@@ -115,10 +136,20 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
   ) => {
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
+    const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
 
     // Keep refs in sync (zero-cost, no re-render)
     valueRef.current = value;
     inputValueRef.current = value;
+
+    const handlePromptChange = React.useCallback(
+      (nextValue: string) => {
+        valueRef.current = nextValue;
+        inputValueRef.current = nextValue;
+        setValue(nextValue);
+      },
+      [inputValueRef]
+    );
 
     // Track empty↔non-empty transitions → notify parent (minimal re-renders)
     const prevHasInput = React.useRef(!!value.trim());
@@ -134,8 +165,13 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     React.useImperativeHandle(
       ref,
       () => ({
-        getValue: () => valueRef.current,
+        getValue: () => textareaElementRef.current?.value ?? valueRef.current,
         clear: () => {
+          valueRef.current = '';
+          inputValueRef.current = '';
+          if (textareaElementRef.current) {
+            textareaElementRef.current.value = '';
+          }
           setValue('');
           deleteDraft(sessionId);
         },
@@ -143,11 +179,14 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
           setValue((prev) => {
             const trimmed = prev.trim();
             const separator = trimmed ? ' ' : '';
-            return `${trimmed}${separator}${text}`;
+            const nextValue = `${trimmed}${separator}${text}`;
+            valueRef.current = nextValue;
+            inputValueRef.current = nextValue;
+            return nextValue;
           });
         },
       }),
-      [sessionId, deleteDraft]
+      [sessionId, deleteDraft, inputValueRef]
     );
 
     // Session switch: save old draft, load new one
@@ -181,18 +220,19 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
-          if (valueRef.current.trim()) {
+          if (valueRef.current.trim() || hasExternalInput) {
             onSubmit();
           }
         }
       },
-      [onSubmit]
+      [hasExternalInput, onSubmit]
     );
 
     return (
       <AutocompleteTextarea
+        ref={textareaElementRef}
         value={value}
-        onChange={setValue}
+        onChange={handlePromptChange}
         placeholder={placeholder}
         autoSize={autoSize}
         onKeyPress={handleKeyPress}
@@ -200,6 +240,9 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         sessionId={sessionId}
         userById={userById}
         onFilesDrop={onFilesDrop}
+        filesDropDisabled={filesDropDisabled}
+        showFilesDropOverlay={showFilesDropOverlay}
+        suppressEmptyHighlight={suppressEmptyHighlight}
         slashCommands={slashCommands}
         skills={skills}
         enableKnowledgeMentions
@@ -343,7 +386,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [forkModalOpen, setForkModalOpen] = React.useState(false);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
-  const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
+  const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
+  const [composerImageDestination, setComposerImageDestination] =
+    React.useState<UploadDestination>('branch');
+  const [composerImageAttachments, setComposerImageAttachments] = React.useState<
+    ComposerImageAttachment[]
+  >([]);
+  const [composerImageUploading, setComposerImageUploading] = React.useState(false);
+  const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
@@ -352,6 +402,51 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   });
 
   const tasks = reactiveSessionState?.tasks || [];
+  const imageInputRef = React.useRef<HTMLInputElement>(null);
+  const previousSessionIdRef = React.useRef(session?.session_id);
+  const composerSessionIdentityRef = React.useRef<{
+    sessionId: SessionID | null;
+    generation: number;
+  }>({
+    sessionId: session?.session_id ?? null,
+    generation: 0,
+  });
+  const currentComposerSessionId = session?.session_id ?? null;
+  if (composerSessionIdentityRef.current.sessionId !== currentComposerSessionId) {
+    composerSessionIdentityRef.current = {
+      sessionId: currentComposerSessionId,
+      generation: composerSessionIdentityRef.current.generation + 1,
+    };
+  }
+  const composerImageAttachmentsRef = React.useRef<ComposerImageAttachment[]>([]);
+  const composerImageUploadingRef = React.useRef(false);
+  composerImageAttachmentsRef.current = composerImageAttachments;
+  composerImageUploadingRef.current = composerImageUploading;
+
+  const revokeComposerImagePreview = React.useCallback((attachment: ComposerImageAttachment) => {
+    if (attachment.previewUrl?.startsWith('blob:')) {
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+  }, []);
+
+  const clearComposerImages = React.useCallback(() => {
+    composerImageAttachmentsRef.current.forEach(revokeComposerImagePreview);
+    setComposerImageAttachments([]);
+  }, [revokeComposerImagePreview]);
+
+  React.useEffect(
+    () => () => {
+      composerImageAttachmentsRef.current.forEach(revokeComposerImagePreview);
+    },
+    [revokeComposerImagePreview]
+  );
+
+  React.useEffect(() => {
+    if (previousSessionIdRef.current === session?.session_id) return;
+    clearComposerImages();
+    setComposerImageDestination('branch');
+    previousSessionIdRef.current = session?.session_id;
+  }, [session?.session_id, clearComposerImages]);
 
   // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
@@ -606,22 +701,215 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     session.status === SessionStatus.RUNNING || session.status === SessionStatus.STOPPING;
   const isStopping = session.status === SessionStatus.STOPPING;
 
+  const openAdvancedUpload = (initialFiles: File[] = []) => {
+    if (composerImageUploadingRef.current) return;
+    setAdvancedUploadInitialFiles(initialFiles);
+    setUploadModalOpen(true);
+  };
+
+  const addComposerImages = (files: File[]) => {
+    if (composerImageUploadingRef.current) return;
+
+    if (files.length === 0) return;
+
+    setComposerImageAttachments((prev) => [
+      ...prev,
+      ...files.map((file) => {
+        const supported = isSupportedComposerImage(file);
+        return {
+          id:
+            typeof crypto !== 'undefined' && 'randomUUID' in crypto
+              ? crypto.randomUUID()
+              : `${Date.now()}-${file.name}`,
+          file,
+          previewUrl: supported ? URL.createObjectURL(file) : undefined,
+          destination: composerImageDestination,
+          status: 'pending' as const,
+        };
+      }),
+    ]);
+  };
+
+  const removeComposerImage = (id: string) => {
+    if (composerImageUploadingRef.current) return;
+
+    setComposerImageAttachments((prev) => {
+      const removed = prev.find((attachment) => attachment.id === id);
+      if (removed) revokeComposerImagePreview(removed);
+      return prev.filter((attachment) => attachment.id !== id);
+    });
+  };
+
+  const handleComposerImageDestinationChange = (destination: UploadDestination) => {
+    if (composerImageUploadingRef.current) return;
+
+    setComposerImageDestination(destination);
+    setComposerImageAttachments((prev) =>
+      prev.map((attachment) =>
+        attachment.status === 'uploaded' ? attachment : { ...attachment, destination }
+      )
+    );
+  };
+
+  const uploadComposerImages = async (
+    attachmentsAtUploadStart: ComposerImageAttachment[] = composerImageAttachmentsRef.current,
+    uploadSessionId: SessionID = session.session_id
+  ): Promise<UploadedFile[]> => {
+    const current = attachmentsAtUploadStart;
+    if (current.length === 0) return [];
+
+    const blockingAttachment = current.find(isBlockingComposerImageAttachment);
+    if (blockingAttachment) {
+      throw new Error(
+        `${blockingAttachment.file.name} failed or cannot be uploaded. Remove failed files before sending.`
+      );
+    }
+
+    const reusableUploaded = current.flatMap((attachment) =>
+      attachment.uploadedFile ? [attachment.uploadedFile] : []
+    );
+    const uploadable = current.filter((attachment) => attachment.status !== 'uploaded');
+
+    if (uploadable.length === 0) {
+      return reusableUploaded;
+    }
+
+    setComposerImageUploading(true);
+    composerImageUploadingRef.current = true;
+    setComposerImageAttachments((prev) =>
+      prev.map((attachment) =>
+        uploadable.some((candidate) => candidate.id === attachment.id)
+          ? { ...attachment, status: 'uploading', error: undefined }
+          : attachment
+      )
+    );
+
+    const uploadedById = new Map<string, UploadedFile>();
+    const groups = new Map<UploadDestination, ComposerImageAttachment[]>();
+    for (const attachment of uploadable) {
+      const group = groups.get(attachment.destination) ?? [];
+      group.push(attachment);
+      groups.set(attachment.destination, group);
+    }
+
+    try {
+      for (const [destination, attachments] of groups.entries()) {
+        const result = await uploadFilesToSession({
+          sessionId: uploadSessionId,
+          daemonUrl: getDaemonUrl(),
+          files: attachments.map((attachment) => attachment.file),
+          destination,
+          notifyAgent: false,
+        });
+
+        if (result.files.length !== attachments.length) {
+          throw new Error('Upload response did not include every selected image');
+        }
+
+        attachments.forEach((attachment, index) => {
+          const uploaded = result.files[index];
+          if (uploaded) uploadedById.set(attachment.id, uploaded);
+        });
+      }
+
+      setComposerImageAttachments((prev) =>
+        prev.map((attachment) => {
+          const uploadedFile = uploadedById.get(attachment.id);
+          return uploadedFile
+            ? { ...attachment, status: 'uploaded', uploadedFile, error: undefined }
+            : attachment;
+        })
+      );
+
+      const uploadedFileById = new Map<string, UploadedFile>();
+      current.forEach((attachment) => {
+        if (attachment.uploadedFile) uploadedFileById.set(attachment.id, attachment.uploadedFile);
+      });
+      uploadedById.forEach((uploadedFile, attachmentId) => {
+        uploadedFileById.set(attachmentId, uploadedFile);
+      });
+
+      return current.flatMap((attachment) => {
+        const uploaded = uploadedFileById.get(attachment.id);
+        return uploaded ? [uploaded] : [];
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to upload images';
+      setComposerImageAttachments((prev) =>
+        prev.map((attachment) =>
+          uploadable.some((candidate) => candidate.id === attachment.id)
+            ? { ...attachment, status: 'failed', error: message }
+            : attachment
+        )
+      );
+      throw error;
+    } finally {
+      composerImageUploadingRef.current = false;
+      setComposerImageUploading(false);
+    }
+  };
+
   const handleSendPrompt = async () => {
+    const sendStartSessionId = session.session_id;
+    const sendStartComposerIdentity = composerSessionIdentityRef.current;
     const value = promptRef.current?.getValue() ?? '';
-    if (!value.trim() || connectionDisabled) return;
+    const attachmentsAtSendStart = composerImageAttachmentsRef.current;
+    const hasImages = attachmentsAtSendStart.length > 0;
+    if ((!value.trim() && !hasImages) || connectionDisabled || composerImageUploading) return;
 
-    const promptToSend = value.trim();
+    const blockingAttachment = attachmentsAtSendStart.find(isBlockingComposerImageAttachment);
+    if (blockingAttachment) {
+      showError(
+        `${blockingAttachment.file.name} failed or cannot be uploaded. Remove failed files before sending.`
+      );
+      return;
+    }
 
-    // Single entry point: /prompt. The daemon decides run-vs-queue based on
-    // session state and reports it back via `task.status`. The 'queued'
-    // WebSocket event populates the queue panel for queued prompts.
-    promptRef.current?.clear();
-    onSendPrompt?.(session.session_id, promptToSend, permissionMode);
+    try {
+      const uploadedImages = await uploadComposerImages(attachmentsAtSendStart, sendStartSessionId);
+      const imagePaths = uploadedImages.map((file) => file.path);
+      const composerStillOwnsSend =
+        composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
+        composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;
+      // Re-read from the imperative textarea handle after upload only if the
+      // same composer instance still owns this send. When the user switches
+      // sessions during a delayed upload, promptRef points at the newly active
+      // composer; reading/clearing it would mix the new prompt into the old
+      // session. In that case we send the original snapshot to the original
+      // session and preserve the active composer's text/attachments.
+      const latestValue = composerStillOwnsSend
+        ? getLatestComposerPromptText({
+            promptHandle: promptRef.current,
+            inputValueRefValue: inputValueRef.current,
+            sendStartValue: value,
+          })
+        : value;
+      const promptToSend = buildPromptWithImageAttachments(latestValue, imagePaths);
+      if (!promptToSend.trim()) return;
 
-    // Re-engage the bottom lock so a scrolled-up user follows their just-sent
-    // message and the streaming reply (behavior 3). `scrollToBottom` is the
-    // function ConversationView exposed via onScrollRef.
-    scrollToBottom?.();
+      // Single entry point: /prompt. The daemon decides run-vs-queue based on
+      // session state and reports it back via `task.status`. The 'queued'
+      // WebSocket event populates the queue panel for queued prompts.
+      if (composerStillOwnsSend) {
+        promptRef.current?.clear();
+        clearComposerImages();
+      } else {
+        // The old composer is no longer live; clear only its saved draft so the
+        // successfully sent snapshot does not reappear when the user returns.
+        // Never call promptRef.current?.clear() here because it now belongs to
+        // a different active session.
+        deleteDraft(sendStartSessionId);
+      }
+      onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
+
+      // Re-engage the bottom lock so a scrolled-up user follows their just-sent
+      // message and the streaming reply (behavior 3). `scrollToBottom` is the
+      // function ConversationView exposed via onScrollRef.
+      if (composerStillOwnsSend) scrollToBottom?.();
+    } catch (error) {
+      console.error('Image upload failed — keeping prompt and images in composer:', error);
+      showError(error instanceof Error ? error.message : 'Failed to upload images');
+    }
   };
 
   const handleStop = async () => {
@@ -834,7 +1122,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       isRunning={isRunning}
       isStopping={isStopping}
       stopRequestInFlight={stopRequestInFlight}
-      hasInput={hasInput}
+      hasInput={hasInput || composerImageAttachments.length > 0}
       connectionDisabled={connectionDisabled}
       toolCaps={toolCaps}
       effortLevel={effortLevel}
@@ -852,41 +1140,75 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onFork={handleFork}
       onBtwSend={handleBtwSend}
       onSpawnOpen={() => setSpawnModalOpen(true)}
-      onUploadOpen={() => setUploadModalOpen(true)}
+      onUploadOpen={() => openAdvancedUpload()}
       onEffortChange={handleEffortChange}
       onPermissionModeChange={handlePermissionModeChange}
       onCodexPermissionChange={handleCodexPermissionChange}
       promptInputSlot={
-        <PromptInput
-          ref={promptRef}
-          sessionId={session.session_id}
-          getDraft={getDraft}
-          saveDraft={saveDraft}
-          deleteDraft={deleteDraft}
-          onHasInputChange={handleHasInputChange}
-          inputValueRef={inputValueRef}
-          onSubmit={handleSendPrompt}
-          placeholder={
-            isRunning
-              ? 'Queue here… @ for mentions, : for emoji'
-              : 'Prompt here… @ for mentions, : for emoji'
-          }
-          autoSize={{ minRows: 1, maxRows: 10 }}
-          client={client}
-          userById={userById}
-          onFilesDrop={(files) => {
-            setDroppedFiles(files);
-            setUploadModalOpen(true);
-          }}
-          slashCommands={(() => {
-            const ctx = session?.custom_context as Record<string, unknown> | undefined;
-            return Array.isArray(ctx?.slash_commands) ? ctx.slash_commands : undefined;
-          })()}
-          skills={(() => {
-            const ctx = session?.custom_context as Record<string, unknown> | undefined;
-            return Array.isArray(ctx?.skills) ? ctx.skills : undefined;
-          })()}
-        />
+        <SessionComposerDropZone
+          disabled={composerImageUploading}
+          onDragActiveChange={setComposerDropActive}
+          onFilesDrop={addComposerImages}
+        >
+          <SessionImageAttachmentTray
+            attachments={composerImageAttachments}
+            destination={composerImageDestination}
+            disabled={composerImageUploading}
+            onDestinationChange={handleComposerImageDestinationChange}
+            onRemove={removeComposerImage}
+          />
+          <PromptInput
+            ref={promptRef}
+            sessionId={session.session_id}
+            getDraft={getDraft}
+            saveDraft={saveDraft}
+            deleteDraft={deleteDraft}
+            onHasInputChange={handleHasInputChange}
+            inputValueRef={inputValueRef}
+            onSubmit={handleSendPrompt}
+            hasExternalInput={composerImageAttachments.length > 0}
+            placeholder={
+              isRunning
+                ? 'Queue here… @ for mentions, : for emoji'
+                : 'Prompt here… @ for mentions, : for emoji'
+            }
+            autoSize={{ minRows: 1, maxRows: 10 }}
+            client={client}
+            userById={userById}
+            onFilesDrop={addComposerImages}
+            filesDropDisabled={composerImageUploading}
+            showFilesDropOverlay={false}
+            suppressEmptyHighlight={composerDropActive}
+            slashCommands={(() => {
+              const ctx = session?.custom_context as Record<string, unknown> | undefined;
+              return Array.isArray(ctx?.slash_commands) ? ctx.slash_commands : undefined;
+            })()}
+            skills={(() => {
+              const ctx = session?.custom_context as Record<string, unknown> | undefined;
+              return Array.isArray(ctx?.skills) ? ctx.skills : undefined;
+            })()}
+          />
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept={getComposerImageAccept()}
+            multiple
+            disabled={composerImageUploading}
+            style={{ display: 'none' }}
+            onChange={(event) => {
+              addComposerImages(Array.from(event.target.files ?? []));
+              event.target.value = '';
+            }}
+          />
+          <div style={{ display: 'flex', gap: token.sizeUnit, marginTop: token.sizeUnit }}>
+            <SessionUploadControls
+              connectionDisabled={connectionDisabled}
+              composerImageUploading={composerImageUploading}
+              onAttachFiles={() => imageInputRef.current?.click()}
+              onOpenAdvancedUpload={() => openAdvancedUpload()}
+            />
+          </div>
+        </SessionComposerDropZone>
       }
     />
   );
@@ -1002,6 +1324,25 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         {!(session.agentic_tool === 'claude-code-cli' && cliViewMode === 'terminal') &&
           sessionFooter}
 
+        {/* Advanced upload modal — preserves the existing file upload flow for
+            non-image files and Branch/Temp/Global + notify-agent options. */}
+        <FileUpload
+          sessionId={session.session_id}
+          daemonUrl={getDaemonUrl()}
+          open={uploadModalOpen}
+          onClose={() => {
+            setUploadModalOpen(false);
+            setAdvancedUploadInitialFiles([]);
+          }}
+          initialFiles={advancedUploadInitialFiles}
+          onUploadComplete={(files) => {
+            showSuccess(`Uploaded ${files.length} file(s)`);
+          }}
+          onInsertMention={(filepath) => {
+            promptRef.current?.insertText(`@${filepath}`);
+          }}
+        />
+
         {/* Fork modal — opened when Fork button is clicked with an empty textarea */}
         <ForkSpawnModal
           open={forkModalOpen}
@@ -1013,27 +1354,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           client={client}
           userById={userById}
         />
-
-        {/* File upload modal */}
-        {session && (
-          <FileUpload
-            sessionId={session.session_id}
-            daemonUrl={getDaemonUrl()}
-            open={uploadModalOpen}
-            onClose={() => {
-              setUploadModalOpen(false);
-              setDroppedFiles([]); // Clear dropped files when modal closes
-            }}
-            initialFiles={droppedFiles}
-            onUploadComplete={(files) => {
-              showSuccess(`Uploaded ${files.length} file(s)`);
-            }}
-            onInsertMention={(filepath) => {
-              // Insert @filepath mention into the textarea
-              promptRef.current?.insertText(`@${filepath}`);
-            }}
-          />
-        )}
       </div>
     </div>
   );

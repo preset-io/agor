@@ -1,10 +1,11 @@
 import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
-import { Button, Checkbox, Input, Modal, Space, Typography, Upload } from 'antd';
+import { Button, Checkbox, Input, Modal, Radio, Space, Typography, Upload } from 'antd';
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
-import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
+import type { UploadDestination, UploadedFile } from './upload';
+import { uploadFilesToSession } from './upload';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -12,12 +13,7 @@ const { Text } = Typography;
 const DEFAULT_AGENT_UPLOAD_MESSAGE =
   'Note: the user uploaded file(s): {filepath}\n\nPlease review and use them as context for this task.';
 
-export interface UploadedFile {
-  filename: string;
-  path: string;
-  size: number;
-  mimeType: string;
-}
+export type { UploadDestination, UploadedFile } from './upload';
 
 export interface FileUploadProps {
   sessionId: string;
@@ -40,6 +36,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 }) => {
   const { showSuccess, showWarning, showError } = useThemedMessage();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
+  const [destination, setDestination] = useState<UploadDestination>('branch');
   const [notifyAgent, setNotifyAgent] = useState(true);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_UPLOAD_MESSAGE);
   const [uploading, setUploading] = useState(false);
@@ -94,52 +91,20 @@ export const FileUpload: React.FC<FileUploadProps> = ({
     setUploading(true);
 
     try {
-      const formData = new FormData();
-
-      fileList.forEach((file) => {
-        if (file.originFileObj) {
-          formData.append('files', file.originFileObj);
-        } else {
-          console.warn('[FileUpload] File missing originFileObj:', file.name);
-        }
-      });
-      formData.append('notifyAgent', String(notifyAgent));
-      formData.append('message', agentMessage);
-
-      const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload`;
-
-      // Get JWT token from localStorage (same as Feathers client)
-      const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
-      const headers: HeadersInit = {};
-
-      if (accessToken) {
-        headers.Authorization = `Bearer ${accessToken}`;
-      } else {
-        console.warn('[FileUpload] No access token found in localStorage');
-      }
-
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        headers,
-        body: formData,
-        // No `credentials: 'include'` — the upload endpoint is Bearer-only
-        // (cookie auth was removed to avoid CSRF). Sending credentials would
-        // also force a non-wildcard Access-Control-Allow-Origin, which the
-        // daemon's CORS layer answers with '*', breaking the preflight.
+      const files = fileList.flatMap((file) => {
+        if (file.originFileObj) return [file.originFileObj as File];
+        console.warn('[FileUpload] File missing originFileObj:', file.name);
+        return [];
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        let error: { error?: string } = {};
-        try {
-          error = JSON.parse(errorText);
-        } catch {
-          error = { error: errorText || 'Upload failed' };
-        }
-        throw new Error(error.error || 'Upload failed');
-      }
-
-      const result = await response.json();
+      const result = await uploadFilesToSession({
+        sessionId,
+        daemonUrl,
+        files,
+        destination,
+        notifyAgent,
+        message: agentMessage,
+      });
 
       // Show success message with final filename(s) so user knows what to reference
       if (result.files.length === 1) {
@@ -211,10 +176,42 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           <Button icon={<UploadOutlined />}>Select Files</Button>
         </Upload>
 
-        <Text type="secondary" style={{ fontSize: '12px' }}>
-          Files are uploaded to <Text code>~/.agor/uploads/</Text>. When notified, the agent
-          receives the full file path and can copy or move it into the branch if needed.
-        </Text>
+        {/* Destination selector */}
+        <div>
+          <Text strong>Destination:</Text>
+          <Radio.Group
+            value={destination}
+            onChange={(e) => setDestination(e.target.value)}
+            style={{ marginTop: 8, display: 'block' }}
+          >
+            <Space orientation="vertical">
+              <Radio value="branch">
+                <Space orientation="vertical" size={0}>
+                  <Text>Branch (.agor/uploads/)</Text>
+                  <Text type="secondary" style={{ fontSize: '12px' }}>
+                    Default - Agent-accessible, can be committed
+                  </Text>
+                </Space>
+              </Radio>
+              <Radio value="temp">
+                <Space orientation="vertical" size={0}>
+                  <Text>Temp folder</Text>
+                  <Text type="secondary" style={{ fontSize: '12px' }}>
+                    Ephemeral, auto-cleanup
+                  </Text>
+                </Space>
+              </Radio>
+              <Radio value="global">
+                <Space orientation="vertical" size={0}>
+                  <Text>Global (~/.agor/uploads/)</Text>
+                  <Text type="secondary" style={{ fontSize: '12px' }}>
+                    Shared across sessions
+                  </Text>
+                </Space>
+              </Radio>
+            </Space>
+          </Radio.Group>
+        </div>
 
         {/* Notify agent option */}
         <div>
@@ -248,10 +245,11 @@ export interface FileUploadButtonProps {
   onClick: () => void;
   disabled?: boolean;
   size?: 'small' | 'middle' | 'large';
+  title?: string;
 }
 
 export const FileUploadButton = forwardRef<HTMLButtonElement, FileUploadButtonProps>(
-  ({ onClick, disabled, size = 'middle' }, ref) => {
+  ({ onClick, disabled, size = 'middle', title = 'Upload files' }, ref) => {
     return (
       <Button
         ref={ref}
@@ -259,7 +257,7 @@ export const FileUploadButton = forwardRef<HTMLButtonElement, FileUploadButtonPr
         onClick={onClick}
         disabled={disabled}
         size={size}
-        title="Upload files"
+        title={title}
       />
     );
   }
