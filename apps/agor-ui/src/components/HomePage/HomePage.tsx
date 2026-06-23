@@ -41,7 +41,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
   );
 
   const currentUser = props.currentUserId ? props.userById.get(props.currentUserId) : null;
-  const username = currentUser?.name || currentUser?.email?.split('@')[0] || 'there';
+  const username = currentUser?.name || 'there';
 
   // Resizable sidebar
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -229,7 +229,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                   Hi, {username}! 👋
                 </Title>
                 <Text type="secondary" style={{ fontSize: 14 }}>
-                  Here's what's happening across your boards.
+                  Here's an overview of your workspace.
                 </Text>
               </div>
               <Dropdown
@@ -268,7 +268,11 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
             )}
 
             {/* Workspace stats */}
-            <HomeStatsBar sessionById={props.sessionById} currentUserId={props.currentUserId} />
+            <HomeStatsBar
+              sessionById={props.sessionById}
+              currentUserId={props.currentUserId}
+              teamSize={props.userById.size}
+            />
 
             {/* My Sessions */}
             <HomeSessionsSection

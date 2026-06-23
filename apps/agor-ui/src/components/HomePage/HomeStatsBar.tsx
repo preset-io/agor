@@ -77,7 +77,8 @@ const StatCard: React.FC<{
 export const HomeStatsBar: React.FC<{
   sessionById: Map<string, Session>;
   currentUserId?: string;
-}> = ({ sessionById, currentUserId }) => {
+  teamSize?: number;
+}> = ({ sessionById, currentUserId, teamSize }) => {
   const { token } = theme.useToken();
   const [now, setNow] = useState(() => Date.now());
 
@@ -120,10 +121,13 @@ export const HomeStatsBar: React.FC<{
     };
   }, [sessionById, currentUserId, now]);
 
+  const isMultiUser = (teamSize ?? 0) > 1;
   const weekValue =
-    currentUserId && startedThisWeek > 0 ? `${myThisWeek}/${startedThisWeek}` : startedThisWeek;
+    isMultiUser && currentUserId && startedThisWeek > 0
+      ? `${myThisWeek}/${startedThisWeek}`
+      : startedThisWeek;
   const weekTooltip =
-    currentUserId && startedThisWeek > 0
+    isMultiUser && currentUserId && startedThisWeek > 0
       ? `${myThisWeek} started by you, ${startedThisWeek} by the team`
       : undefined;
 
@@ -132,7 +136,7 @@ export const HomeStatsBar: React.FC<{
       <StatCard
         icon={<TeamOutlined />}
         value={activeTeammates}
-        label="Active teammates this week"
+        label="Teammates active this week"
         iconBg={token.colorWarningBg}
         iconColor={token.colorWarning}
       />
