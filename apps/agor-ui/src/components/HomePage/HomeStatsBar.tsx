@@ -2,7 +2,7 @@ import type { Branch, Session } from '@agor-live/client';
 import { BranchesOutlined, ClockCircleOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import type React from 'react';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 const { Text } = Typography;
 
@@ -61,9 +61,15 @@ export const HomeStatsBar: React.FC<{
   branchById: Map<string, Branch>;
 }> = ({ sessionById, branchById }) => {
   const { token } = theme.useToken();
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const { activeCount, weekCount, branchCount } = useMemo(() => {
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
     let activeCount = 0;
     let weekCount = 0;
     for (const s of sessionById.values()) {
@@ -84,7 +90,7 @@ export const HomeStatsBar: React.FC<{
       if (!b.archived) branchCount++;
     }
     return { activeCount, weekCount, branchCount };
-  }, [sessionById, branchById]);
+  }, [sessionById, branchById, now]);
 
   return (
     <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>

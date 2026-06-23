@@ -52,7 +52,9 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       return SIDEBAR_DEFAULT;
     }
   });
-  const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 992);
+  const [sidebarVisible, setSidebarVisible] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth >= 992
+  );
   const [dragHandleHovered, setDragHandleHovered] = useState(false);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);

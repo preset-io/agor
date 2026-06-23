@@ -75,7 +75,9 @@ export const OnboardingCard: React.FC<OnboardingCardProps> = ({ steps, onDismiss
                 border: step.done ? 'none' : `1.5px solid ${token.colorBorderSecondary}`,
               }}
             >
-              {step.done && <CheckOutlined style={{ fontSize: 9, color: '#fff' }} />}
+              {step.done && (
+                <CheckOutlined style={{ fontSize: 9, color: token.colorTextLightSolid }} />
+              )}
             </span>
 
             {/* Label */}
