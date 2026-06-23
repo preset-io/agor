@@ -397,6 +397,75 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }
 
   /**
+   * Paginated session listing with SQL-side filtering, recency sort, and
+   * limit/offset. Powers the bounded first-paint slices (recent-N and the
+   * board-scoped set) so the cap, the recency ordering, and the board filter all
+   * run in SQL.
+   *
+   * Why SQL and not the generic in-memory path: the Session object exposes its
+   * last-updated time as `last_updated`, but callers sort by the DB column name
+   * `updated_at`. `DrizzleService.sortData` / `paginateClientSide` would look up
+   * `item.updated_at` (undefined) and no-op the sort, then slice an arbitrary
+   * page. Ordering here on the real `sessions.updated_at` column makes the
+   * recent-N slice actually recent. board_id is matched via the branches JOIN
+   * (`sessions.board_id` is never populated — see `sessionToInsert`).
+   *
+   * @returns `{ data, total }` where `total` is the full match count (so Feathers
+   *          pagination and the client `findAll` loop behave correctly).
+   */
+  async findPage(opts: {
+    boardId?: string;
+    archived?: boolean;
+    sortUpdatedAt?: 1 | -1;
+    limit?: number;
+    skip?: number;
+  }): Promise<{ data: Session[]; total: number }> {
+    try {
+      const baseUrl = await getBaseUrl();
+
+      const conditions = [];
+      if (opts.boardId !== undefined) conditions.push(eq(branches.board_id, opts.boardId));
+      if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+      // Total matching rows — drives Feathers pagination + the findAll loop.
+      const countQuery = select(this.db, { count: sql<number>`count(*)` })
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      const countRow = await (whereClause ? countQuery.where(whereClause) : countQuery).one();
+      const total = Number(countRow?.count ?? 0);
+
+      // Page of rows, recency-sorted in SQL on the real `updated_at` column.
+      let dataQuery = select(this.db)
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      if (whereClause) dataQuery = dataQuery.where(whereClause);
+      if (opts.sortUpdatedAt !== undefined) {
+        dataQuery = dataQuery.orderBy(
+          opts.sortUpdatedAt === -1 ? desc(sessions.updated_at) : sessions.updated_at
+        );
+      }
+      if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
+      if (opts.skip) dataQuery = dataQuery.offset(opts.skip);
+
+      const results = await dataQuery.all();
+      const data = results.map(
+        (result: { sessions: SessionRow; branches?: { board_id?: string } | null }) => {
+          const boardId = (result.branches?.board_id ?? null) as UUID | null;
+          return this.rowToSession(result.sessions, boardId, baseUrl);
+        }
+      );
+
+      return { data, total };
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find sessions page: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find child sessions (forked or spawned from this session)
    *
    * LEFT JOINs with branches to populate board_id and url.

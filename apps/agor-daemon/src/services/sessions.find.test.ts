@@ -86,6 +86,12 @@ function ids(result: Awaited<ReturnType<SessionsService['find']>>): string[] {
   return data.map((s) => s.session_id).sort();
 }
 
+// Like `ids` but preserves result order — for asserting $sort behaviour.
+function orderedIds(result: Awaited<ReturnType<SessionsService['find']>>): string[] {
+  const data = Array.isArray(result) ? result : result.data;
+  return data.map((s) => s.session_id);
+}
+
 describe('SessionsService.find — board_id pushdown', () => {
   dbTest('returns only sessions whose branch is on the requested board', async ({ db }) => {
     const service = new SessionsService(db, STUB_APP);
@@ -151,5 +157,87 @@ describe('SessionsService.find — board_id pushdown', () => {
     const paged = await service.find({ query: { board_id: boardA, $limit: 1, $skip: 1 } });
     expect(Array.isArray(paged) ? paged.length : paged.data.length).toBe(1);
     expect(Array.isArray(paged) ? 3 : paged.total).toBe(3);
+  });
+});
+
+describe('SessionsService.find — recency sort + pagination (SQL pushdown)', () => {
+  // oldest → newest by updated_at (driven via `last_updated`, which the repo
+  // persists to the `updated_at` column).
+  const T_OLD = '2026-01-01T00:00:00.000Z';
+  const T_MID = '2026-02-01T00:00:00.000Z';
+  const T_NEW = '2026-03-01T00:00:00.000Z';
+
+  dbTest('orders board-scoped sessions by updated_at desc', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const boardA = await createBoard(db);
+    const branchA = await createBranchOnBoard(db, boardA);
+
+    const old = await createSession(db, branchA, { last_updated: T_OLD });
+    const mid = await createSession(db, branchA, { last_updated: T_MID });
+    const recent = await createSession(db, branchA, { last_updated: T_NEW });
+
+    const result = await service.find({
+      query: { board_id: boardA, $sort: { updated_at: -1 }, $limit: 100 },
+    });
+    // Most-recent first — would be a no-op (insertion order) without SQL sort.
+    expect(orderedIds(result)).toEqual([recent, mid, old]);
+  });
+
+  dbTest('recency sort composes with $limit/$skip (board-scoped)', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const boardA = await createBoard(db);
+    const branchA = await createBranchOnBoard(db, boardA);
+
+    const old = await createSession(db, branchA, { last_updated: T_OLD });
+    const mid = await createSession(db, branchA, { last_updated: T_MID });
+    const recent = await createSession(db, branchA, { last_updated: T_NEW });
+
+    // The first page is the single most-recent session…
+    const page1 = await service.find({
+      query: { board_id: boardA, $sort: { updated_at: -1 }, $limit: 1 },
+    });
+    expect(orderedIds(page1)).toEqual([recent]);
+    expect(Array.isArray(page1) ? 3 : page1.total).toBe(3);
+
+    // …and skipping it yields the next two in recency order.
+    const page2 = await service.find({
+      query: { board_id: boardA, $sort: { updated_at: -1 }, $limit: 2, $skip: 1 },
+    });
+    expect(orderedIds(page2)).toEqual([mid, old]);
+  });
+
+  dbTest('orders the global recent-N slice by updated_at desc across boards', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const boardA = await createBoard(db);
+    const boardB = await createBoard(db);
+    const branchA = await createBranchOnBoard(db, boardA);
+    const branchB = await createBranchOnBoard(db, boardB);
+
+    await createSession(db, branchA, { last_updated: T_OLD });
+    const mid = await createSession(db, branchB, { last_updated: T_MID });
+    const recent = await createSession(db, branchA, { last_updated: T_NEW });
+
+    // Bounded recent-N (no board filter) — must be the genuinely most recent.
+    const result = await service.find({
+      query: { archived: false, $sort: { updated_at: -1 }, $limit: 2 },
+    });
+    expect(orderedIds(result)).toEqual([recent, mid]);
+  });
+
+  dbTest('board_id composes with the $in operator (generic pipeline)', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const boardA = await createBoard(db);
+    const branchA = await createBranchOnBoard(db, boardA);
+
+    const s1 = await createSession(db, branchA);
+    await createSession(db, branchA);
+    const s3 = await createSession(db, branchA);
+
+    // board_id + $in routes through the operator-capable fallback (not the
+    // strict-equality client paginator), so $in must actually filter.
+    const result = await service.find({
+      query: { board_id: boardA, session_id: { $in: [s1, s3] }, $limit: 100 },
+    });
+    expect(ids(result)).toEqual([s1, s3].sort());
   });
 });

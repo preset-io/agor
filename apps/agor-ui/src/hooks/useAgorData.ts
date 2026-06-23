@@ -628,6 +628,18 @@ export function useAgorData(
   // event handlers, never in render.
   const liveWriteRevisionRef = useRef(0);
 
+  // Entity IDs deleted/archived by a realtime handler. A background hydration
+  // snapshots this set before its fetch and, on apply, drops any ID that was
+  // tombstoned DURING the fetch window from the incoming snapshot — otherwise the
+  // live-wins overlay (which only re-adds create/patch entries) would RESURRECT a
+  // row the snapshot still contains but that was removed mid-flight (the row is
+  // already gone from `prev`, so the overlay can't delete it). "Live wins" must
+  // mean create/patch overlay AND remove suppression. Window-scoped (snapshot the
+  // set at fetch start, diff at apply) so a legitimate later re-create/unarchive
+  // of the same id isn't permanently suppressed. Same ref (not state): only
+  // touched by async fetch code + event handlers.
+  const liveRemovedIdsRef = useRef<Set<string>>(new Set());
+
   // Fetch all data
   //
   // `silent: true` is used by background refetches (e.g. socket reconnect) that
@@ -685,31 +697,47 @@ export function useAgorData(
           return incoming;
         };
 
+        // IDs tombstoned (removed/archived) between `since` and now. The apply
+        // uses this to drop resurrected rows from the snapshot — see
+        // `liveRemovedIdsRef`. Window-scoped: only ids removed DURING this fetch.
+        const removedSince = (since: ReadonlySet<string>): Set<string> => {
+          const out = new Set<string>();
+          for (const id of liveRemovedIdsRef.current) {
+            if (!since.has(id)) out.add(id);
+          }
+          return out;
+        };
+
         // Run a BACKGROUND (non-gated) fetch and apply it clobber-safely.
         // - Silent reconnect refetches are authoritative resyncs → apply once.
         // - Otherwise, if a realtime write to one of these slices landed during
         //   the fetch (liveWriteRevisionRef changed), refetch — bounded — for a
         //   fresh snapshot before applying. The appliers additionally merge live
-        //   entries on top of the snapshot, so an in-flight create/patch is never
-        //   lost even when the retry cap is hit under a continuous write stream.
+        //   entries on top of the snapshot (live wins for create/patch) and drop
+        //   the tombstoned-during-window ids (`removedDuringWindow`, remove wins),
+        //   so neither an in-flight create/patch nor an in-flight remove is lost
+        //   even when the retry cap is hit under a continuous write stream.
         const runBackgroundFetch = async <T>(
           label: string,
           fetchFn: () => Promise<T>,
-          apply: (result: T) => void
+          apply: (result: T, removedDuringWindow: ReadonlySet<string>) => void
         ): Promise<void> => {
           try {
             if (silent) {
-              apply(await fetchFn());
+              const removedBefore = new Set(liveRemovedIdsRef.current);
+              const result = await fetchFn();
+              apply(result, removedSince(removedBefore));
               return;
             }
             for (let attempt = 0; attempt < MAX_BACKGROUND_REFETCH; attempt++) {
               const revBefore = liveWriteRevisionRef.current;
+              const removedBefore = new Set(liveRemovedIdsRef.current);
               const result = await fetchFn();
               if (
                 liveWriteRevisionRef.current === revBefore ||
                 attempt === MAX_BACKGROUND_REFETCH - 1
               ) {
-                apply(result);
+                apply(result, removedSince(removedBefore));
                 return;
               }
               // A realtime write landed mid-fetch; loop to refetch a fresh snapshot.
@@ -837,13 +865,31 @@ export function useAgorData(
         const [sessionsList, boardsList, cardTypesList, reposList, usersList] = await Promise.all([
           track(
             'sessions',
-            client.service('sessions').findAll({
-              query: silent
-                ? // Reconnect resyncs must fully repopulate every board, so they
-                  // stay GLOBAL/full (mirrors the heavy + hydration paths below).
-                  { archived: false, $limit: PAGINATION.DEFAULT_LIMIT, $sort: { updated_at: -1 } }
-                : { archived: false, $limit: RECENT_SESSIONS_LIMIT, $sort: { updated_at: -1 } },
-            })
+            silent
+              ? // Reconnect resyncs must fully repopulate every board, so they stay
+                // GLOBAL/full (mirrors the heavy + hydration paths below).
+                client.service('sessions').findAll({
+                  query: {
+                    archived: false,
+                    $limit: PAGINATION.DEFAULT_LIMIT,
+                    $sort: { updated_at: -1 },
+                  },
+                })
+              : // Bounded recent slice for first paint. Use find() (a SINGLE page),
+                // NOT findAll(): findAll loops until it has `total` rows, so a small
+                // $limit would still walk the whole table and defeat the cap. The
+                // daemon orders by `updated_at` in SQL (findPage), so this is the
+                // genuinely most-recent N. The FULL set is hydrated below.
+                client
+                  .service('sessions')
+                  .find({
+                    query: {
+                      archived: false,
+                      $limit: RECENT_SESSIONS_LIMIT,
+                      $sort: { updated_at: -1 },
+                    },
+                  })
+                  .then((result) => (Array.isArray(result) ? result : result.data))
           ),
           track(
             'boards',
@@ -1131,10 +1177,11 @@ export function useAgorData(
         //
         // Clobber-safety: this runs WHILE the app is interactive, so a realtime
         // create/patch/remove can land during a global fetch. `runBackgroundFetch`
-        // refetches if `liveWriteRevisionRef` changed mid-flight, and each apply
-        // MERGES the live entries on top of the snapshot (live wins) so an
-        // in-flight edit is never reverted by the snapshot. Removes are covered by
-        // the refetch (the fresh snapshot omits them).
+        // refetches if `liveWriteRevisionRef` changed mid-flight; each apply then
+        // MERGES the live entries on top of the snapshot (live wins, so an
+        // in-flight create/patch is never reverted) AND drops ids tombstoned
+        // during the fetch window (`removedDuringWindow`, so an in-flight
+        // remove/archive isn't resurrected by a snapshot taken before it).
 
         // Sessions + branches: now ALWAYS bounded at first paint (recent-N /
         // board-scoped), so hydrate them on every non-silent load (silent
@@ -1156,14 +1203,15 @@ export function useAgorData(
                   .service('branches')
                   .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
               ]),
-            ([allSessions, allBranches]) =>
+            ([allSessions, allBranches], removedDuringWindow) =>
               setMaps((prev) => {
-                // Sessions: union the full snapshot with the live sessions we
-                // already hold (live wins) so an in-flight create/patch isn't
-                // reverted, then rebuild both maps (incl. remote surrogates) from
-                // the union so they stay internally consistent.
+                // Sessions: union the full snapshot (minus rows tombstoned during
+                // the fetch — remove wins) with the live sessions we already hold
+                // (live wins for create/patch), then rebuild both maps (incl.
+                // remote surrogates) from the union so they stay consistent.
                 const mergedSessions = new Map<string, Session>();
                 for (const session of allSessions) {
+                  if (removedDuringWindow.has(session.session_id)) continue;
                   mergedSessions.set(session.session_id, session);
                 }
                 for (const [id, session] of prev.sessionById) {
@@ -1172,12 +1220,16 @@ export function useAgorData(
                 const { sessionById, sessionsByBranch } = buildSessionMaps([
                   ...mergedSessions.values(),
                 ]);
+                // Branches: drop tombstoned ids from the snapshot, then live-wins overlay.
+                const branchSnapshot = buildById(
+                  allBranches.filter((branch) => !removedDuringWindow.has(branch.branch_id)),
+                  'branch_id'
+                );
                 return {
                   ...prev,
                   sessionById,
                   sessionsByBranch,
-                  // Branches: live-wins overlay of the full snapshot.
-                  branchById: mergeLiveWins(buildById(allBranches, 'branch_id'), prev.branchById),
+                  branchById: mergeLiveWins(branchSnapshot, prev.branchById),
                 };
               })
           );
@@ -1199,19 +1251,32 @@ export function useAgorData(
                   .service('board-comments')
                   .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
               ]),
-            ([allBoardObjects, allCards, allComments]) =>
+            ([allBoardObjects, allCards, allComments], removedDuringWindow) =>
               setMaps((prev) => {
-                // Start from the global snapshot…
-                const base = buildBoardObjectMaps(allBoardObjects);
+                // Start from the global snapshot, dropping any rows tombstoned
+                // during the fetch window (remove wins — otherwise a board-object/
+                // card/comment removed mid-flight would be resurrected here)…
+                const base = buildBoardObjectMaps(
+                  allBoardObjects.filter((o) => !removedDuringWindow.has(o.object_id))
+                );
                 let next: DataMaps = {
                   ...prev,
                   boardObjectById: base.boardObjectById,
                   boardObjectsByBoardId: base.boardObjectsByBoardId,
                   boardObjectByBranchId: base.boardObjectByBranchId,
                   boardObjectByCardId: base.boardObjectByCardId,
-                  cardById: mergeLiveWins(buildById(allCards, 'card_id'), prev.cardById),
+                  cardById: mergeLiveWins(
+                    buildById(
+                      allCards.filter((c) => !removedDuringWindow.has(c.card_id)),
+                      'card_id'
+                    ),
+                    prev.cardById
+                  ),
                   commentById: mergeLiveWins(
-                    buildById(allComments, 'comment_id'),
+                    buildById(
+                      allComments.filter((c) => !removedDuringWindow.has(c.comment_id)),
+                      'comment_id'
+                    ),
                     prev.commentById
                   ),
                 };
@@ -1391,6 +1456,9 @@ export function useAgorData(
     const handleSessionPatched = (session: Session) => {
       liveWriteRevisionRef.current += 1;
       const isArchived = session.archived === true;
+      // Archive is a removal from the active maps — tombstone it so a background
+      // hydration whose snapshot predates the archive can't resurrect it.
+      if (isArchived) liveRemovedIdsRef.current.add(session.session_id);
       // Track old branch_id for migration detection
       let oldBranchId: string | null = null;
 
@@ -1545,6 +1613,7 @@ export function useAgorData(
     };
     const handleSessionRemoved = (session: Session) => {
       liveWriteRevisionRef.current += 1;
+      liveRemovedIdsRef.current.add(session.session_id);
       // Update sessionById — bail out when the id isn't tracked so the
       // wrapper short-circuit prevents the spurious `maps` update.
       setSessionById((prev) => {
@@ -1617,6 +1686,7 @@ export function useAgorData(
     };
     const handleBoardObjectRemoved = (boardObject: BoardEntityObject) => {
       liveWriteRevisionRef.current += 1;
+      liveRemovedIdsRef.current.add(boardObject.object_id);
       setMaps((prev) => removeBoardObjectFromMaps(prev, boardObject));
     };
 
@@ -1672,6 +1742,10 @@ export function useAgorData(
     // `archived: true` patch path and the hard-delete `removed` path —
     // either way we never want an orphan session card to linger.
     const evictBranchAndSessions = (branchId: string) => {
+      // Tombstone the branch AND every session that lived on it, so a background
+      // sessions/branches hydration whose snapshot predates this eviction can't
+      // resurrect them.
+      liveRemovedIdsRef.current.add(branchId);
       setBranchById((prev) => {
         if (!prev.has(branchId)) return prev;
         const next = new Map(prev);
@@ -1689,6 +1763,7 @@ export function useAgorData(
         const next = new Map(prev);
         for (const [sessionId, session] of prev.entries()) {
           if (session.branch_id === branchId) {
+            liveRemovedIdsRef.current.add(sessionId);
             next.delete(sessionId);
             changed = true;
           }
@@ -1822,6 +1897,7 @@ export function useAgorData(
     };
     const handleCardRemoved = (card: CardWithType) => {
       liveWriteRevisionRef.current += 1;
+      liveRemovedIdsRef.current.add(card.card_id);
       setCardById((prev) => {
         if (!prev.has(card.card_id)) return prev;
         const next = new Map(prev);
@@ -1978,6 +2054,7 @@ export function useAgorData(
     };
     const handleCommentRemoved = (comment: BoardComment) => {
       liveWriteRevisionRef.current += 1;
+      liveRemovedIdsRef.current.add(comment.comment_id);
       setCommentById((prev) => {
         if (!prev.has(comment.comment_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);

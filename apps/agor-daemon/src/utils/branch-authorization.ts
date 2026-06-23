@@ -659,12 +659,31 @@ export function scopeSessionQuery(
         : await sessionRepo.findAll()
       : await sessionRepo.findAccessibleSessions(userId, boardId);
 
+    // Recency sort. Callers sort by the DB column name `updated_at`, but the
+    // Session object exposes that timestamp as `last_updated` — so
+    // paginateClientSide's `$sort` (which reads `item.updated_at`) is a silent
+    // no-op. Sort here on the real field, then strip `$sort` below so
+    // paginateClientSide doesn't reorder (and undo) it.
+    const sortSpec = query?.$sort as Record<string, 1 | -1> | undefined;
+    const updatedAtDir = sortSpec?.updated_at;
+    if (updatedAtDir === 1 || updatedAtDir === -1) {
+      accessibleSessions.sort((a, b) => {
+        const av = a.last_updated ?? '';
+        const bv = b.last_updated ?? '';
+        if (av < bv) return updatedAtDir === -1 ? 1 : -1;
+        if (av > bv) return updatedAtDir === -1 ? -1 : 1;
+        return 0;
+      });
+    }
+
     // Apply remaining query filters (branch_id, schedule_id, status, etc.)
     // client-side. Without this pass, `sessions.find({ schedule_id })`
     // silently returns all accessible sessions — which is what the
     // ScheduleRunsPanel was hitting before this fix. board_id is already
-    // applied SQL-side above, so it's skipped here.
-    context.result = paginateClientSide(accessibleSessions, query, new Set(['board_id']));
+    // applied SQL-side above; `$sort` is applied above on the real field, so
+    // both are excluded from the client-side pass.
+    const { $sort: _ignoredSort, ...filterQuery } = query ?? {};
+    context.result = paginateClientSide(accessibleSessions, filterQuery, new Set(['board_id']));
     return context;
   };
 }

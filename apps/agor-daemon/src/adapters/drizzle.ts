@@ -102,7 +102,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   /**
    * Apply filters to data array (client-side filtering)
    */
-  private filterData(data: T[], query: Query): T[] {
+  protected filterData(data: T[], query: Query): T[] {
     let filtered = [...data];
 
     // Filter by field values
@@ -147,7 +147,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   /**
    * Sort data array
    */
-  private sortData(data: T[], sortSpec?: Record<string, 1 | -1>): T[] {
+  protected sortData(data: T[], sortSpec?: Record<string, 1 | -1>): T[] {
     if (!sortSpec) return data;
 
     const sorted = [...data];
@@ -171,7 +171,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   /**
    * Select specific fields from data
    */
-  private selectFields(data: T[], fields?: string[]): Partial<T>[] {
+  protected selectFields(data: T[], fields?: string[]): Partial<T>[] {
     if (!fields || fields.length === 0) return data;
 
     // biome-ignore lint/suspicious/noExplicitAny: Field selection requires dynamic property access
@@ -190,7 +190,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   /**
    * Apply pagination to data
    */
-  private paginateData(data: T[], query: Query, total: number): Paginated<T> | T[] {
+  protected paginateData(data: T[], query: Query, total: number): Paginated<T> | T[] {
     const limit = query.$limit ?? this.paginate?.default ?? data.length;
     const skip = query.$skip ?? 0;
 

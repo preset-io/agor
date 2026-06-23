@@ -36,12 +36,11 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
-import { DrizzleService } from '../adapters/drizzle';
+import { DrizzleService, type Query } from '../adapters/drizzle';
 import {
   determineSpawnIdentity,
   isSuperAdmin,
   loadUnixUsernameForUser,
-  paginateClientSide,
   resolveChildUnixUsername,
 } from '../utils/branch-authorization.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
@@ -93,6 +92,37 @@ export type SessionParams = QueryParams<{
     /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
     _include_last_message?: boolean | 'true' | 'false';
   };
+
+/**
+ * Whether a sessions `find` query should be served by `SessionRepository.findPage`
+ * (SQL board filter + recency sort + limit/offset) rather than the generic
+ * in-memory path. We only divert the loader's bounded list queries — those that
+ * sort by `updated_at` and/or scope to a `board_id` — and only when the rest of
+ * the query is a shape findPage fully models (archived + pagination). Anything
+ * with extra filters, operators, or `$select` falls through to the existing path
+ * so we never silently drop semantics findPage doesn't implement.
+ */
+function shouldSqlPageSessionQuery(query?: Record<string, unknown>): boolean {
+  if (!query) return false;
+
+  const sort = query.$sort as Record<string, unknown> | undefined;
+  const wantsRecency = !!sort && sort.updated_at !== undefined;
+  const wantsBoard = query.board_id !== undefined;
+  if (!wantsRecency && !wantsBoard) return false;
+
+  const allowedKeys = new Set(['archived', 'board_id', '$sort', '$limit', '$skip']);
+  for (const key of Object.keys(query)) {
+    if (!allowedKeys.has(key)) return false;
+  }
+  if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (wantsBoard && typeof query.board_id !== 'string') return false;
+  if (sort) {
+    const sortKeys = Object.keys(sort);
+    if (sortKeys.length !== 1 || sortKeys[0] !== 'updated_at') return false;
+    if (sort.updated_at !== 1 && sort.updated_at !== -1) return false;
+  }
+  return true;
+}
 
 const remoteRelationshipsEnrichedResults = new WeakSet<object>();
 
@@ -832,19 +862,59 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * Note: Last message is NOT included in list operations - only on single GET.
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
-    // board_id pushdown (non-RBAC path). When RBAC is enabled, scopeSessionQuery
-    // resolves the result in a before-hook and this method never runs; when it's
-    // disabled, this is the only place board_id is honored. We can't lean on
-    // DrizzleService's generic filter: it matches `item.board_id`, but sessions
-    // expose the board as `branch_board_id`, so the generic pass would wipe every
-    // row. Route board_id straight to the indexed branch-join query instead.
+    // SQL-pushdown path for the recency-sorted / board-scoped list queries the
+    // first-paint loader issues. When RBAC is enabled, scopeSessionQuery resolves
+    // the result in a before-hook and this method never runs; when it's disabled,
+    // this is where board_id + `$sort:{updated_at}` are honored.
+    //
+    // We can't lean on DrizzleService's generic path: (1) its filter matches
+    // `item.board_id`, but sessions expose the board as `branch_board_id`, so a
+    // board_id filter would wipe every row; (2) its sort looks up `item.updated_at`
+    // (the field is `last_updated`), so a `$sort:{updated_at}` is a silent no-op
+    // and the bounded slice wouldn't be ordered by recency. findPage does the
+    // filter + recency sort + limit/offset in SQL instead.
+    const query = params?.query as Record<string, unknown> | undefined;
+    if (shouldSqlPageSessionQuery(query)) {
+      const sortSpec = query?.$sort as { updated_at?: 1 | -1 } | undefined;
+      const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
+      const skip = (query?.$skip as number | undefined) ?? 0;
+      const { data, total } = await this.sessionRepo.findPage({
+        boardId: query?.board_id as string | undefined,
+        archived: query?.archived as boolean | undefined,
+        sortUpdatedAt: sortSpec?.updated_at,
+        limit,
+        skip,
+      });
+      const enriched = await this.enrichRemoteRelationships(data);
+      return markRemoteRelationshipsEnrichedResult({ total, limit, skip, data: enriched });
+    }
+
+    // board_id present but with a shape findPage doesn't model (Feathers
+    // operators like $in/$ne/$gt, $select, extra filters): push the board filter
+    // to SQL via the branch join, then run the FULL generic DrizzleService
+    // pipeline on the board-scoped rows so operators / $select / $sort / pagination
+    // all behave exactly as on the unscoped path. (paginateClientSide would only
+    // do strict equality and silently mishandle operators.)
     const boardId = params?.query?.board_id;
     if (boardId) {
-      const query = params?.query as Record<string, unknown> | undefined;
+      const { board_id: _scopedBoardId, ...residualQuery } = (params?.query ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const residual = residualQuery as Query;
       const rows = await this.sessionRepo.findByBoard(boardId);
-      const page = paginateClientSide(rows, query, new Set(['board_id']));
-      const enriched = await this.enrichRemoteRelationships(page.data);
-      return markRemoteRelationshipsEnrichedResult({ ...page, data: enriched });
+      const filtered = this.filterData(rows, residual);
+      const total = filtered.length;
+      const sorted = this.sortData(filtered, residual.$sort);
+      const selected = this.selectFields(sorted, residual.$select);
+      const paged = this.paginateData(selected as Session[], residual, total);
+
+      if (Array.isArray(paged)) {
+        const enriched = await this.enrichRemoteRelationships(paged);
+        return markRemoteRelationshipsEnrichedResult(enriched);
+      }
+      const enrichedData = await this.enrichRemoteRelationships(paged.data);
+      return markRemoteRelationshipsEnrichedResult({ ...paged, data: enrichedData });
     }
 
     const result = await super.find(params);
