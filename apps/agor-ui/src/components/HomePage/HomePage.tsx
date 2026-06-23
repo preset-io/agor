@@ -1,7 +1,7 @@
 import type { SessionStatus } from '@agor-live/client';
 import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Dropdown, Layout, Modal, Select, Typography, theme } from 'antd';
+import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
@@ -127,18 +127,26 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
     [props.boardById]
   );
 
-  const [boardPickerOpen, setBoardPickerOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>();
+  const [createType, setCreateType] = useState<'assistant' | 'branch'>('assistant');
 
   const handleNewSession = useCallback(() => {
+    setCreateType('assistant');
     setSelectedBoardId(defaultBoardId);
-    setBoardPickerOpen(true);
+    setCreateOpen(true);
   }, [defaultBoardId]);
 
-  const handleConfirmBoard = useCallback(() => {
-    setBoardPickerOpen(false);
-    props.onOpenCreateDialog?.('assistant', selectedBoardId);
-  }, [props.onOpenCreateDialog, selectedBoardId]);
+  const handleNewBranch = useCallback(() => {
+    setCreateType('branch');
+    setSelectedBoardId(defaultBoardId);
+    setCreateOpen(true);
+  }, [defaultBoardId]);
+
+  const handleConfirmCreate = useCallback(() => {
+    setCreateOpen(false);
+    props.onOpenCreateDialog?.(createType, selectedBoardId);
+  }, [props.onOpenCreateDialog, createType, selectedBoardId]);
 
   const onboardingSteps = useMemo(() => {
     const hasBoards = props.boardById.size > 0;
@@ -233,8 +241,10 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                   onClick: ({ key }) => {
                     if (key === 'assistant') {
                       handleNewSession();
+                    } else if (key === 'branch') {
+                      handleNewBranch();
                     } else {
-                      props.onOpenCreateDialog?.(key as 'branch' | 'board');
+                      props.onOpenCreateDialog?.(key as 'board');
                     }
                   },
                 }}
@@ -382,21 +392,21 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       </div>
 
       <Modal
-        title="Start a session"
-        open={boardPickerOpen}
-        onCancel={() => setBoardPickerOpen(false)}
-        width={400}
+        title="Create new"
+        open={createOpen}
+        onCancel={() => setCreateOpen(false)}
+        width={420}
         footer={
           boardOptions.length === 0
             ? [
-                <Button key="cancel" onClick={() => setBoardPickerOpen(false)}>
+                <Button key="cancel" onClick={() => setCreateOpen(false)}>
                   Cancel
                 </Button>,
                 <Button
                   key="create"
                   type="primary"
                   onClick={() => {
-                    setBoardPickerOpen(false);
+                    setCreateOpen(false);
                     props.onOpenCreateDialog?.('board');
                   }}
                 >
@@ -404,16 +414,16 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                 </Button>,
               ]
             : [
-                <Button key="cancel" onClick={() => setBoardPickerOpen(false)}>
+                <Button key="cancel" onClick={() => setCreateOpen(false)}>
                   Cancel
                 </Button>,
                 <Button
                   key="start"
                   type="primary"
                   disabled={!selectedBoardId}
-                  onClick={handleConfirmBoard}
+                  onClick={handleConfirmCreate}
                 >
-                  Continue
+                  {createType === 'assistant' ? 'Start session' : 'Create branch'}
                 </Button>,
               ]
         }
@@ -421,21 +431,32 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
         {boardOptions.length === 0 ? (
           <div style={{ padding: '8px 0 4px' }}>
             <Typography.Text type="secondary" style={{ display: 'block', fontSize: 13 }}>
-              You don't have any boards yet. Create one first to organise your sessions.
+              You don't have any boards yet. Create one first to organise your work.
             </Typography.Text>
           </div>
         ) : (
-          <div style={{ padding: '8px 0 4px' }}>
-            <Typography.Text style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
-              Which board should this session live on?
-            </Typography.Text>
-            <Select
-              value={selectedBoardId}
-              onChange={setSelectedBoardId}
-              options={boardOptions}
-              placeholder="Select a board"
-              style={{ width: '100%' }}
+          <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <Segmented
+              value={createType}
+              onChange={(v) => setCreateType(v as 'assistant' | 'branch')}
+              block
+              options={[
+                { value: 'assistant', label: 'AI session', icon: <RobotOutlined /> },
+                { value: 'branch', label: 'Branch / Worktree', icon: <BranchesOutlined /> },
+              ]}
             />
+            <div>
+              <Typography.Text style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
+                Which board?
+              </Typography.Text>
+              <Select
+                value={selectedBoardId}
+                onChange={setSelectedBoardId}
+                options={boardOptions}
+                placeholder="Select a board"
+                style={{ width: '100%' }}
+              />
+            </div>
           </div>
         )}
       </Modal>
