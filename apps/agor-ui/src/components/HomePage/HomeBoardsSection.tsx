@@ -1,6 +1,6 @@
 import type { Board, Branch, Session } from '@agor-live/client';
 import { ClockCircleOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Button, Empty, Typography, theme } from 'antd';
+import { Button, Empty, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatRelativeTime } from '../../utils/time';
@@ -111,9 +111,20 @@ const BoardHomeCard: React.FC<{
 
         {/* Name + meta — all aligned under each other, to the right of the icon */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Text strong ellipsis={{ tooltip: board.name }} style={{ fontSize: 14, minWidth: 0 }}>
-            {board.name}
-          </Text>
+          <Tooltip title={board.name}>
+            <Text
+              strong
+              style={{
+                fontSize: 14,
+                display: 'block',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {board.name}
+            </Text>
+          </Tooltip>
           <div style={{ display: 'flex', gap: 10 }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
               {branches.length} branch{branches.length !== 1 ? 'es' : ''}
