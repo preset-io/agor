@@ -9,6 +9,21 @@ export interface CliSessionControlParams extends McpTokenAuthorizationParams {
   sessionCreatedBy: string | null | undefined;
 }
 
+function hasExplicitMinimumRole(
+  userRole: string | undefined,
+  minimumRole: typeof ROLES.MEMBER
+): boolean;
+function hasExplicitMinimumRole(
+  userRole: string | undefined,
+  minimumRole: typeof ROLES.SUPERADMIN
+): boolean;
+function hasExplicitMinimumRole(
+  userRole: string | undefined,
+  minimumRole: typeof ROLES.MEMBER | typeof ROLES.SUPERADMIN
+): boolean {
+  return !!userRole && hasMinimumRole(userRole, minimumRole);
+}
+
 /**
  * Authorization predicate for handing an Agor MCP token to a caller.
  *
@@ -23,7 +38,7 @@ export interface CliSessionControlParams extends McpTokenAuthorizationParams {
 export function canReceiveMcpTokenForSession(params: McpTokenAuthorizationParams): boolean {
   const { callerUserId, callerRole } = params;
   const isServiceExecutor = callerRole === 'service';
-  const isAuthenticatedMember = !!callerUserId && hasMinimumRole(callerRole, ROLES.MEMBER);
+  const isAuthenticatedMember = !!callerUserId && hasExplicitMinimumRole(callerRole, ROLES.MEMBER);
   return isAuthenticatedMember || isServiceExecutor;
 }
 
@@ -39,9 +54,11 @@ export function canReceiveMcpTokenForSession(params: McpTokenAuthorizationParams
  */
 export function canControlCliSession(params: CliSessionControlParams): boolean {
   const { callerUserId, callerRole, sessionCreatedBy } = params;
-  const isSuperadmin = hasMinimumRole(callerRole, ROLES.SUPERADMIN);
+  const isSuperadmin = hasExplicitMinimumRole(callerRole, ROLES.SUPERADMIN);
   const isServiceExecutor = callerRole === 'service';
   const isCreatorMember =
-    !!callerUserId && callerUserId === sessionCreatedBy && hasMinimumRole(callerRole, ROLES.MEMBER);
+    !!callerUserId &&
+    callerUserId === sessionCreatedBy &&
+    hasExplicitMinimumRole(callerRole, ROLES.MEMBER);
   return isCreatorMember || isSuperadmin || isServiceExecutor;
 }

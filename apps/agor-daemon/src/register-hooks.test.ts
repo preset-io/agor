@@ -295,6 +295,15 @@ describe('canReceiveMcpTokenForSession', () => {
     ).toBe(false);
   });
 
+  it('denies callers with user_id but no explicit role', () => {
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: CREATOR,
+        callerRole: undefined,
+      })
+    ).toBe(false);
+  });
+
   it('denies empty-string caller user_id even with member role', () => {
     expect(
       canReceiveMcpTokenForSession({

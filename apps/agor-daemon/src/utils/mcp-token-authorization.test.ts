@@ -44,6 +44,15 @@ describe('session actor authorization', () => {
     expect(canReceiveMcpTokenForSession(params)).toBe(false);
   });
 
+  it('denies MCP tokens when a caller id is present but role is missing', () => {
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: creatorId,
+        callerRole: undefined,
+      })
+    ).toBe(false);
+  });
+
   it('keeps CLI control limited to the creator, superadmin, or service identity', () => {
     expect(
       canControlCliSession({
@@ -73,5 +82,12 @@ describe('session actor authorization', () => {
         sessionCreatedBy: creatorId,
       })
     ).toBe(true);
+    expect(
+      canControlCliSession({
+        callerUserId: creatorId,
+        callerRole: undefined,
+        sessionCreatedBy: creatorId,
+      })
+    ).toBe(false);
   });
 });
