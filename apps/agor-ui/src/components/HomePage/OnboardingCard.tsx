@@ -31,7 +31,7 @@ export const OnboardingCard: React.FC<OnboardingCardProps> = ({ steps, onDismiss
         borderRadius: token.borderRadiusLG,
         padding: '16px 20px',
         marginBottom: 24,
-        ...glassCardStyle(token, 0.65),
+        ...glassCardStyle(token, 0.3),
       }}
     >
       {/* Header row */}

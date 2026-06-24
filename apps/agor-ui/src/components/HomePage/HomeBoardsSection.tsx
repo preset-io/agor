@@ -81,7 +81,7 @@ const BoardHomeCard: React.FC<{
         borderRadius: token.borderRadiusLG,
         padding: '12px 14px',
         cursor: 'pointer',
-        ...glassCardStyle(token, 0.65),
+        ...glassCardStyle(token, 0.3),
         boxShadow: hovered ? token.boxShadowSecondary : undefined,
         outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
         outlineOffset: focused ? 2 : undefined,

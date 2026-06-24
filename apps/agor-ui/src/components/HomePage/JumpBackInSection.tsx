@@ -82,7 +82,7 @@ export const JumpBackInSection: React.FC<JumpBackInSectionProps> = ({
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
           overflow: 'hidden',
-          ...glassCardStyle(token, 0.65),
+          ...glassCardStyle(token, 0.3),
         }}
       >
         {visibleSessions.map((session) => (

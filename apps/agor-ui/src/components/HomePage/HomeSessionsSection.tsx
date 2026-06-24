@@ -153,7 +153,7 @@ export const HomeSessionsSection: React.FC<
         style={{
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
-          ...glassCardStyle(token, 0.65),
+          ...glassCardStyle(token, 0.3),
         }}
       >
         {displaySessions.length === 0 ? (

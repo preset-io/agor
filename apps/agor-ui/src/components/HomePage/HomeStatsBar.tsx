@@ -23,7 +23,7 @@ const StatCard: React.FC<{
         flex: 1,
         position: 'relative',
         padding: '14px 16px',
-        ...glassCardStyle(token, 0.65),
+        ...glassCardStyle(token, 0.3),
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
         minWidth: 0,

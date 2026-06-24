@@ -11,6 +11,7 @@ import { HomeBoardsSection } from './HomeBoardsSection';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
 import { HomeSessionsSection } from './HomeSessionsSection';
 import { HomeStatsBar } from './HomeStatsBar';
+import { glassCardStyle } from './homeStyles';
 import { JumpBackInSection } from './JumpBackInSection';
 import { OnboardingCard } from './OnboardingCard';
 import type { HomePageProps } from './types';
@@ -304,7 +305,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                 flexShrink: 0,
                 position: 'relative',
                 borderLeft: `1px solid ${token.colorBorderSecondary}`,
-                background: token.colorBgContainer,
+                ...glassCardStyle(token, 0.5),
                 overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
