@@ -106,6 +106,65 @@ function applyGatewayMcpStartupGuard(config: CodexConfigObject, requireMcpServer
   config.startup_timeout_ms = GATEWAY_MCP_STARTUP_TIMEOUT_MS;
 }
 
+function getCodexHome(): string {
+  return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+}
+
+async function findCodexRolloutFile(threadId: string): Promise<string | undefined> {
+  const sessionsDir = path.join(getCodexHome(), 'sessions');
+
+  async function walk(dir: string): Promise<string | undefined> {
+    let entries: Array<import('node:fs').Dirent>;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return undefined;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes(threadId)) {
+        return fullPath;
+      }
+      if (entry.isDirectory()) {
+        const found = await walk(fullPath);
+        if (found) return found;
+      }
+    }
+
+    return undefined;
+  }
+
+  return walk(sessionsDir);
+}
+
+async function extractLatestContextUsageFromRollout(
+  threadId: string
+): Promise<ContextUsageSnapshot | undefined> {
+  const rolloutPath = await findCodexRolloutFile(threadId);
+  if (!rolloutPath) return undefined;
+
+  let contents: string;
+  try {
+    contents = await fs.readFile(rolloutPath, 'utf8');
+  } catch {
+    return undefined;
+  }
+
+  let latest: ContextUsageSnapshot | undefined;
+  for (const line of contents.split('\n')) {
+    if (!line.includes('token_count')) continue;
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      latest = extractCodexContextSnapshotFromEvent(parsed) ?? latest;
+    } catch {
+      // Ignore malformed / partially-written JSONL lines.
+    }
+  }
+
+  return latest;
+}
+
 export interface CodexPromptResult {
   /** Complete assistant response from Codex */
   messages: Array<{
@@ -1318,6 +1377,8 @@ export class CodexPromptService {
             // Turn complete, emit final message
             threadId = thread.id || '';
             const mappedUsage = extractCodexTokenUsage((event as { usage?: unknown }).usage);
+            const contextUsage =
+              latestContextUsage ?? (await extractLatestContextUsageFromRollout(thread.id || ''));
 
             // Yield complete message with all tool uses
             yield {
@@ -1328,7 +1389,7 @@ export class CodexPromptService {
               resolvedModel,
               usage: mappedUsage,
               rawSdkEvent: event, // Pass through the actual SDK event (UNMUTATED)
-              rawContextUsage: latestContextUsage,
+              rawContextUsage: contextUsage,
             };
 
             // Exit the event loop after turn completion
