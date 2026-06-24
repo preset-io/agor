@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { isBranchRbacEnabled } from '@agor/core/config';
+import { isBranchRbacEnabled, loadConfig } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
 import type { BoardID, Branch, BranchID, Repo, UUID, ZoneBoardObject } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, getAssistantConfig, isAssistant } from '@agor/core/types';
@@ -9,6 +9,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BranchesServiceImpl, ReposServiceImpl } from '../../declarations.js';
 import type { BranchParams } from '../../services/branches.js';
+import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -100,6 +101,15 @@ function notesPreview(notes: string | undefined, maxLength = 200): string | null
   const singleLine = notes.replace(/\s+/g, ' ').trim();
   if (singleLine.length <= maxLength) return singleLine;
   return `${singleLine.slice(0, maxLength - 1)}…`;
+}
+
+async function shouldScopeAssistantDiscoveryToUser(ctx: McpContext): Promise<boolean> {
+  if (!isBranchRbacEnabled()) return false;
+  if (ctx.authenticatedUser?._isServiceAccount) return false;
+
+  const config = await loadConfig();
+  const allowSuperadmin = config.execution?.allow_superadmin === true;
+  return !isSuperAdmin(ctx.authenticatedUser?.role, allowSuperadmin);
 }
 
 async function findAllArchivedBranchesForCleanup(
@@ -1256,16 +1266,16 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const query: Record<string, unknown> = { archived: false, $limit: args.limit || 200 };
-      if (args.repoId) query.repo_id = await resolveRepoId(ctx, args.repoId);
+      const limit = args.limit || 200;
+      const repoId = args.repoId ? await resolveRepoId(ctx, args.repoId) : undefined;
 
-      const result = await ctx.app.service('branches').find({ query, ...ctx.baseServiceParams });
-
-      // Filter to assistants only and shape the response
-      const branches: Branch[] = Array.isArray(result)
-        ? result
-        : (result as { data: Branch[] }).data;
-      const assistants = branches.filter((w) => isAssistant(w));
+      const branchRepo = new BranchRepository(ctx.db);
+      const assistants = await branchRepo.findAssistantBranches({
+        archived: false,
+        ...(repoId ? { repo_id: repoId as UUID } : {}),
+        ...((await shouldScopeAssistantDiscoveryToUser(ctx)) ? { userId: ctx.userId as UUID } : {}),
+        limit,
+      });
 
       // Per-branch schedule fields are now in the first-class `schedules`
       // table; consumers should call `agor_schedules_list({branchId})`

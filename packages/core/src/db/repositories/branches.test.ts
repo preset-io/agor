@@ -15,6 +15,7 @@ import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
 import { GroupRepository } from './groups';
 import { RepoRepository } from './repos';
+import { ScheduleRepository } from './schedules';
 import { UsersRepository } from './users';
 
 /**
@@ -1068,4 +1069,170 @@ describe('BranchRepository findExplicitFsAccessUserIds', () => {
       );
     }
   );
+});
+
+describe('BranchRepository.findAssistantBranches', () => {
+  dbTest(
+    'finds marker assistants and enabled-schedule legacy assistants without scanning all branches',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const repos = new RepoRepository(db);
+      const branches = new BranchRepository(db);
+      const schedules = new ScheduleRepository(db);
+
+      const user = await users.create({
+        email: `assistant-discovery-${Date.now()}@example.com`,
+        name: 'Assistant Discovery',
+      });
+      const repo = await repos.create(
+        createRepoData({ slug: `assistant-discovery-${Date.now()}` })
+      );
+
+      const markedCloneAssistant = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          created_by: user.user_id as UUID,
+          branch_unique_id: 1,
+          name: 'private-hodor-like',
+          storage_mode: 'clone',
+          custom_context: {
+            assistant: {
+              kind: 'assistant',
+              displayName: 'Hodor-like',
+              kb: {
+                primary_namespace_id: generateId(),
+                primary_namespace_slug: 'team-kb',
+                memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
+                default_visibility: 'public',
+              },
+            },
+          },
+        })
+      );
+      await schedules.create({
+        schedule_id: generateId(),
+        branch_id: markedCloneAssistant.branch_id,
+        created_by: user.user_id as UUID,
+        name: 'Daily brief',
+        cron_expression: '0 15 * * 1-5',
+        timezone_mode: 'utc',
+        prompt: 'Run the daily brief',
+        agentic_tool_config: { agentic_tool: 'codex' },
+        enabled: true,
+        allow_concurrent_runs: false,
+        retention: 5,
+      });
+
+      const legacyScheduledAssistant = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          created_by: user.user_id as UUID,
+          branch_unique_id: 2,
+          name: 'datagor-like',
+          storage_mode: 'clone',
+        })
+      );
+      await schedules.create({
+        schedule_id: generateId(),
+        branch_id: legacyScheduledAssistant.branch_id,
+        created_by: user.user_id as UUID,
+        name: 'Heartbeat',
+        cron_expression: '0 * * * *',
+        timezone_mode: 'utc',
+        prompt: 'Heartbeat',
+        agentic_tool_config: { agentic_tool: 'claude-code' },
+        enabled: true,
+        allow_concurrent_runs: false,
+        retention: 5,
+      });
+
+      const disabledScheduledBranch = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          created_by: user.user_id as UUID,
+          branch_unique_id: 3,
+          name: 'disabled-scheduled-branch',
+          storage_mode: 'clone',
+        })
+      );
+      await schedules.create({
+        schedule_id: generateId(),
+        branch_id: disabledScheduledBranch.branch_id,
+        created_by: user.user_id as UUID,
+        name: 'Disabled heartbeat',
+        cron_expression: '0 * * * *',
+        timezone_mode: 'utc',
+        prompt: 'Heartbeat',
+        agentic_tool_config: { agentic_tool: 'claude-code' },
+        enabled: false,
+        allow_concurrent_runs: false,
+        retention: 5,
+      });
+
+      const result = await branches.findAssistantBranches({
+        archived: false,
+        repo_id: repo.repo_id as UUID,
+        limit: 10,
+      });
+
+      expect(result.map((branch) => branch.branch_id)).toEqual(
+        expect.arrayContaining([markedCloneAssistant.branch_id, legacyScheduledAssistant.branch_id])
+      );
+      expect(result.map((branch) => branch.branch_id)).not.toContain(
+        disabledScheduledBranch.branch_id
+      );
+    }
+  );
+
+  dbTest('applies branch visibility when a userId is provided', async ({ db }) => {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branches = new BranchRepository(db);
+
+    const owner = await users.create({
+      email: `assistant-owner-${Date.now()}@example.com`,
+      name: 'Assistant Owner',
+    });
+    const outsider = await users.create({
+      email: `assistant-outsider-${Date.now()}@example.com`,
+      name: 'Assistant Outsider',
+    });
+    const repo = await repos.create(createRepoData({ slug: `assistant-rbac-${Date.now()}` }));
+
+    const privateAssistant = await branches.create(
+      createBranchData({
+        repo_id: repo.repo_id as UUID,
+        created_by: owner.user_id as UUID,
+        branch_unique_id: 4,
+        name: 'private-assistant',
+        permission_source: 'override',
+        others_can: 'none',
+        custom_context: {
+          assistant: {
+            kind: 'assistant',
+            displayName: 'Private Assistant',
+          },
+        },
+      })
+    );
+    await branches.addOwner(privateAssistant.branch_id, owner.user_id as UUID);
+
+    const ownerResult = await branches.findAssistantBranches({
+      archived: false,
+      repo_id: repo.repo_id as UUID,
+      userId: owner.user_id as UUID,
+      limit: 10,
+    });
+    const outsiderResult = await branches.findAssistantBranches({
+      archived: false,
+      repo_id: repo.repo_id as UUID,
+      userId: outsider.user_id as UUID,
+      limit: 10,
+    });
+
+    expect(ownerResult.map((branch) => branch.branch_id)).toContain(privateAssistant.branch_id);
+    expect(outsiderResult.map((branch) => branch.branch_id)).not.toContain(
+      privateAssistant.branch_id
+    );
+  });
 });

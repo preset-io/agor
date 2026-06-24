@@ -15,7 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
-import { and, desc, eq, getTableColumns, inArray, like, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, getTableColumns, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getBranchUrl } from '../../utils/url';
@@ -41,6 +41,7 @@ import {
   branchOwners,
   groupMemberships,
   groups,
+  schedules,
 } from '../schema';
 import {
   type BaseRepository,
@@ -358,6 +359,66 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
     const baseUrl = await getBaseUrl();
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
+  }
+
+  /**
+   * Find active assistant branches without paginating the whole branch list first.
+   *
+   * A branch is discoverable as an assistant when it has the canonical assistant
+   * marker in custom_context (new or legacy key), or as a read-time backfill for
+   * older hand-bootstrapped assistants, when it has at least one enabled
+   * first-class schedule.
+   */
+  async findAssistantBranches(filter?: {
+    repo_id?: UUID;
+    archived?: boolean;
+    userId?: UUID;
+    limit?: number;
+  }): Promise<Branch[]> {
+    const assistantKindConditions = [
+      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`, 'assistant'),
+      eq(
+        sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`,
+        'persisted-agent'
+      ),
+      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.agent.kind')}`, 'assistant'),
+      eq(
+        sql`${jsonExtract(this.db, branches.data, 'custom_context.agent.kind')}`,
+        'persisted-agent'
+      ),
+    ];
+
+    const hasEnabledSchedule = exists(
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+      (this.db as any)
+        .select({ _: sql`1` })
+        .from(schedules)
+        .where(and(eq(schedules.branch_id, branches.branch_id), eq(schedules.enabled, true)))
+    );
+
+    const conditions = [or(...assistantKindConditions, hasEnabledSchedule) ?? sql`false`];
+    if (filter?.repo_id) conditions.push(eq(branches.repo_id, filter.repo_id));
+    if (filter?.archived !== undefined) conditions.push(eq(branches.archived, filter.archived));
+    if (filter?.userId) conditions.push(visibleBranchAccessCondition(this.db, filter.userId));
+
+    const baseQuery = select(this.db, getTableColumns(branches)).from(branches);
+    const query = filter?.userId
+      ? baseQuery.leftJoin(
+          branchOwners,
+          and(
+            eq(branchOwners.branch_id, branches.branch_id),
+            eq(branchOwners.user_id, filter.userId)
+          )
+        )
+      : baseQuery;
+
+    const rows = await query
+      .where(and(...conditions))
+      .limit(filter?.limit ?? 200)
+      .all();
+
+    const baseUrl = await getBaseUrl();
+    return (rows as BranchRow[]).map((row) => this.rowToBranch(row, baseUrl));
   }
 
   /**

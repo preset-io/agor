@@ -1,3 +1,5 @@
+import * as configModule from '@agor/core/config';
+import { BranchRepository } from '@agor/core/db';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerBranchTools } from './branches.js';
@@ -24,6 +26,12 @@ function registerAndCaptureHandler(
     userId: string;
     sessionId?: string;
     baseServiceParams?: Record<string, unknown>;
+    authenticatedUser?: {
+      user_id: string;
+      role: string;
+      email?: string;
+      _isServiceAccount?: boolean;
+    };
   }
 ): ToolHandler {
   let handler: ToolHandler | undefined;
@@ -38,9 +46,11 @@ function registerAndCaptureHandler(
     db: {} as Parameters<typeof registerBranchTools>[1]['db'],
     userId: ctx.userId as Parameters<typeof registerBranchTools>[1]['userId'],
     sessionId: ctx.sessionId as Parameters<typeof registerBranchTools>[1]['sessionId'],
-    authenticatedUser: { user_id: ctx.userId, role: 'member' } as Parameters<
-      typeof registerBranchTools
-    >[1]['authenticatedUser'],
+    authenticatedUser: (ctx.authenticatedUser ?? {
+      user_id: ctx.userId,
+      email: 'user@example.test',
+      role: 'member',
+    }) as Parameters<typeof registerBranchTools>[1]['authenticatedUser'],
     baseServiceParams: (ctx.baseServiceParams ?? {}) as Parameters<
       typeof registerBranchTools
     >[1]['baseServiceParams'],
@@ -57,6 +67,12 @@ function registerAndCaptureConfig(
     userId: string;
     sessionId?: string;
     baseServiceParams?: Record<string, unknown>;
+    authenticatedUser?: {
+      user_id: string;
+      role: string;
+      email?: string;
+      _isServiceAccount?: boolean;
+    };
   }
 ): ToolConfig {
   let config: ToolConfig | undefined;
@@ -71,9 +87,11 @@ function registerAndCaptureConfig(
     db: {} as Parameters<typeof registerBranchTools>[1]['db'],
     userId: ctx.userId as Parameters<typeof registerBranchTools>[1]['userId'],
     sessionId: ctx.sessionId as Parameters<typeof registerBranchTools>[1]['sessionId'],
-    authenticatedUser: { user_id: ctx.userId, role: 'member' } as Parameters<
-      typeof registerBranchTools
-    >[1]['authenticatedUser'],
+    authenticatedUser: (ctx.authenticatedUser ?? {
+      user_id: ctx.userId,
+      email: 'user@example.test',
+      role: 'member',
+    }) as Parameters<typeof registerBranchTools>[1]['authenticatedUser'],
     baseServiceParams: (ctx.baseServiceParams ?? {}) as Parameters<
       typeof registerBranchTools
     >[1]['baseServiceParams'],
@@ -93,6 +111,7 @@ function registerAndCaptureUpdate(ctx: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -782,5 +801,178 @@ describe('agor_branches_cleanup_candidates', () => {
     await expect(cleanupCandidates({ archivedBefore: '2026-06-04T00:00:00.000Z' })).rejects.toThrow(
       /must not be in the future/i
     );
+  });
+});
+
+describe('agor_assistants_list', () => {
+  it('delegates to the targeted assistant repository query instead of paginating branches first', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const hodorLikeBranch = {
+      branch_id: 'assistant-branch-1',
+      repo_id: 'repo-1',
+      name: 'private-hodor-like',
+      board_id: 'board-1',
+      last_used: '2026-06-24T00:00:00.000Z',
+      archived: false,
+      storage_mode: 'clone',
+      custom_context: {
+        assistant: {
+          kind: 'assistant',
+          displayName: 'Hodor-like',
+          emoji: '🚪',
+          kb: {
+            primary_namespace_id: 'namespace-1',
+            primary_namespace_slug: 'team-kb',
+            memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
+            default_visibility: 'public',
+            global_access: 'write',
+          },
+        },
+      },
+    };
+    const findAssistantBranches = vi
+      .spyOn(BranchRepository.prototype, 'findAssistantBranches')
+      .mockResolvedValue([hodorLikeBranch] as Awaited<
+        ReturnType<BranchRepository['findAssistantBranches']>
+      >);
+    const app = {
+      service(name: string) {
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const listAssistants = registerAndCaptureHandler('agor_assistants_list', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await listAssistants({ limit: 200 });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(findAssistantBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
+    expect(parsed.total).toBe(1);
+    expect(parsed.assistants).toEqual([
+      expect.objectContaining({
+        branch_id: 'assistant-branch-1',
+        name: 'private-hodor-like',
+        display_name: 'Hodor-like',
+        emoji: '🚪',
+        board_id: 'board-1',
+      }),
+    ]);
+  });
+
+  it('shapes schedule-only legacy assistant backfill rows returned by the repository', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const scheduledLegacyBranch = {
+      branch_id: 'legacy-scheduled-branch',
+      repo_id: 'repo-1',
+      name: 'datagor-like',
+      notes: 'Legacy assistant bootstrapped before custom_context marker backfill.',
+      board_id: 'board-1',
+      last_used: '2026-06-24T00:00:00.000Z',
+      archived: false,
+      storage_mode: 'clone',
+    };
+    vi.spyOn(BranchRepository.prototype, 'findAssistantBranches').mockResolvedValue([
+      scheduledLegacyBranch,
+    ] as Awaited<ReturnType<BranchRepository['findAssistantBranches']>>);
+    const app = {
+      service(name: string) {
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const listAssistants = registerAndCaptureHandler('agor_assistants_list', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await listAssistants({});
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.total).toBe(1);
+    expect(parsed.assistants[0]).toEqual(
+      expect.objectContaining({
+        branch_id: 'legacy-scheduled-branch',
+        name: 'datagor-like',
+        display_name: 'datagor-like',
+        description: 'Legacy assistant bootstrapped before custom_context marker backfill.',
+      })
+    );
+  });
+
+  it('does not scope assistant discovery for superadmins when superadmin bypass is enabled', async () => {
+    vi.spyOn(configModule, 'isBranchRbacEnabled').mockReturnValue(true);
+    vi.spyOn(configModule, 'loadConfig').mockResolvedValue({
+      execution: { allow_superadmin: true },
+    } as Awaited<ReturnType<typeof configModule.loadConfig>>);
+
+    const findAssistantBranches = vi
+      .spyOn(BranchRepository.prototype, 'findAssistantBranches')
+      .mockResolvedValue([]);
+    const app = {
+      service(name: string) {
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const listAssistants = registerAndCaptureHandler('agor_assistants_list', {
+      app,
+      userId: 'superadmin-1',
+      authenticatedUser: {
+        user_id: 'superadmin-1',
+        email: 'superadmin@example.test',
+        role: 'superadmin',
+      },
+    });
+
+    await listAssistants({});
+
+    expect(findAssistantBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
+  });
+
+  it('scopes assistant discovery for superadmins when superadmin bypass is disabled', async () => {
+    vi.spyOn(configModule, 'isBranchRbacEnabled').mockReturnValue(true);
+    vi.spyOn(configModule, 'loadConfig').mockResolvedValue({
+      execution: { allow_superadmin: false },
+    } as Awaited<ReturnType<typeof configModule.loadConfig>>);
+
+    const findAssistantBranches = vi
+      .spyOn(BranchRepository.prototype, 'findAssistantBranches')
+      .mockResolvedValue([]);
+    const app = {
+      service(name: string) {
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const listAssistants = registerAndCaptureHandler('agor_assistants_list', {
+      app,
+      userId: 'superadmin-1',
+      authenticatedUser: {
+        user_id: 'superadmin-1',
+        email: 'superadmin@example.test',
+        role: 'superadmin',
+      },
+    });
+
+    await listAssistants({});
+
+    expect(findAssistantBranches).toHaveBeenCalledWith({
+      archived: false,
+      userId: 'superadmin-1',
+      limit: 200,
+    });
   });
 });
