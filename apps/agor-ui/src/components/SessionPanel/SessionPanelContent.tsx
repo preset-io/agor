@@ -19,7 +19,7 @@ import { BranchHeaderPill } from '../BranchHeaderPill';
 import { ConversationView } from '../ConversationView';
 import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminalLazy';
 import { ForkSpawnModal } from '../ForkSpawnModal';
-import { IssuePill, PullRequestPill } from '../Pill';
+import { IssuePill, KnowledgePagePill, PullRequestPill } from '../Pill';
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;
@@ -44,6 +44,8 @@ export interface SessionPanelContentProps {
    *  Tabs bar inline above the panel; when omitted, the parent is
    *  expected to render the bar itself (legacy header-level placement). */
   setCliViewMode?: (mode: 'terminal' | 'conversation') => void;
+  /** Called when the user clicks "+N more" in the pills overflow. */
+  onShowMoreAttachments?: () => void;
 }
 
 export const SessionPanelContent = React.memo<SessionPanelContentProps>(
@@ -65,6 +67,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     isOpen,
     cliViewMode = 'terminal',
     setCliViewMode,
+    onShowMoreAttachments,
   }) => {
     const { token } = theme.useToken();
     const { showSuccess, showError } = useThemedMessage();
@@ -132,6 +135,33 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               {branch?.pull_request_url && (
                 <PullRequestPill prUrl={branch.pull_request_url} currentRepo={repo ?? undefined} />
               )}
+              {/* Knowledge pills (branch KB + session-linked pages), capped at 3 */}
+              {(() => {
+                const seenUrls = new Set<string>();
+                const knowledgePills: { url: string; name: string }[] = [];
+                const addPill = (url: string, name: string) => {
+                  if (!seenUrls.has(url)) { seenUrls.add(url); knowledgePills.push({ url, name }); }
+                };
+                if (branch?.knowledge_base_url) addPill(branch.knowledge_base_url, 'Knowledge Base');
+                for (const page of session.linked_knowledge_pages ?? []) addPill(page.url, page.name);
+                const visible = knowledgePills.slice(0, 3);
+                const overflow = knowledgePills.length - visible.length;
+                return (
+                  <>
+                    {visible.map((p) => (
+                      <KnowledgePagePill key={p.url} url={p.url} name={p.name} />
+                    ))}
+                    {overflow > 0 && (
+                      <Typography.Link
+                        onClick={onShowMoreAttachments}
+                        style={{ fontSize: 12, whiteSpace: 'nowrap' }}
+                      >
+                        +{overflow} more
+                      </Typography.Link>
+                    )}
+                  </>
+                );
+              })()}
             </Space>
           )}
           {/* Spacer if no pills */}

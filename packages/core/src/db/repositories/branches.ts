@@ -210,6 +210,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         new_branch: branch.new_branch ?? false,
         issue_url: branch.issue_url,
         pull_request_url: branch.pull_request_url,
+        knowledge_base_url: branch.knowledge_base_url,
         notes: branch.notes,
         error_message: branch.error_message,
         environment_instance: branch.environment_instance,

@@ -506,6 +506,14 @@ export interface Session {
     source_branch_id: BranchID;
     target_branch_id: BranchID;
   };
+
+  /**
+   * Knowledge pages linked to this session by agents during work.
+   *
+   * Agents call `agor_session_link_knowledge_page` / `agor_session_unlink_knowledge_page`
+   * to manage this list. Users can remove entries via session settings.
+   */
+  linked_knowledge_pages?: { url: string; name: string }[];
 }
 
 /**

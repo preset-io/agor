@@ -342,6 +342,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
+  const [attachmentsDropdownOpen, setAttachmentsDropdownOpen] = React.useState(false);
   const [forkModalOpen, setForkModalOpen] = React.useState(false);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
@@ -483,8 +484,29 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         url: branch.pull_request_url,
       });
     }
+    if (branch?.knowledge_base_url) {
+      acc.push({
+        key: 'knowledge-base',
+        name: `Knowledge Base: ${getUrlDisplayLabel(branch.knowledge_base_url)}`,
+        url: branch.knowledge_base_url,
+        kind: 'knowledge',
+      });
+    }
+    for (const page of session?.linked_knowledge_pages ?? []) {
+      acc.push({
+        key: `knowledge-${page.url}`,
+        name: page.name,
+        url: page.url,
+        kind: 'knowledge',
+      });
+    }
     return acc;
-  }, [branch?.issue_url, branch?.pull_request_url]);
+  }, [
+    branch?.issue_url,
+    branch?.pull_request_url,
+    branch?.knowledge_base_url,
+    session?.linked_knowledge_pages,
+  ]);
 
   const footerGradient = React.useMemo(() => {
     if (!latestContextWindow) return undefined;
@@ -1109,7 +1131,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </Space>
           <Space size={4}>
-            <SessionAttachmentsDropdown items={attachmentItems} />
+            <SessionAttachmentsDropdown
+              items={attachmentItems}
+              open={attachmentsDropdownOpen}
+              onOpenChange={setAttachmentsDropdownOpen}
+            />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
                 <Button type="text" icon={<EllipsisOutlined />} />
@@ -1156,6 +1182,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           isOpen={open}
           cliViewMode={cliViewMode}
           setCliViewMode={setCliViewMode}
+          onShowMoreAttachments={() => setAttachmentsDropdownOpen(true)}
         />
 
         {/* Footer Controls — rendered outside SessionPanelContent so that

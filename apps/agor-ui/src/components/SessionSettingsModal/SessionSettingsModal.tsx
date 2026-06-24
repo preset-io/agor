@@ -25,9 +25,17 @@ import type {
   User,
 } from '@agor-live/client';
 import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
-import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  DownOutlined,
+  KeyOutlined,
+  PlusOutlined,
+  ReadOutlined,
+  SettingOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
-import { Collapse, Divider, Form, Modal, Typography } from 'antd';
+import { Button, Collapse, Divider, Form, Input, Modal, Space, Typography } from 'antd';
 import React from 'react';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
@@ -178,6 +186,11 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   );
   const [envSelections, setEnvSelections] = React.useState<string[]>([]);
   const [initialEnvSelections, setInitialEnvSelections] = React.useState<string[]>([]);
+  const [knowledgePages, setKnowledgePages] = React.useState<{ url: string; name: string }[]>(
+    () => session.linked_knowledge_pages ?? []
+  );
+  const [newPageUrl, setNewPageUrl] = React.useState('');
+  const [newPageName, setNewPageName] = React.useState('');
   const prevOpenRef = React.useRef(false);
   const prevSessionIdRef = React.useRef(session.session_id);
 
@@ -201,6 +214,9 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       const values = buildInitialValues(session, sessionMcpServerIds);
       setInitialValues(values);
       form.setFieldsValue(values);
+      setKnowledgePages(session.linked_knowledge_pages ?? []);
+      setNewPageUrl('');
+      setNewPageName('');
     }
   }, [open, session, sessionMcpServerIds, form]);
 
@@ -233,11 +249,28 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     };
   }, [open, client, canEditEnvSelections, session.session_id]);
 
+  const handleAddKnowledgePage = () => {
+    const url = newPageUrl.trim();
+    const name = newPageName.trim();
+    if (!url || !name) return;
+    if (!/^https?:\/\//i.test(url)) return;
+    if (knowledgePages.some((p) => p.url === url)) return;
+    setKnowledgePages((prev) => [...prev, { url, name }]);
+    setNewPageUrl('');
+    setNewPageName('');
+  };
+
   const handleOk = () => {
     form.validateFields().then(() => {
       // Use getFieldsValue(true) to include values from collapsed panels
       const values = form.getFieldsValue(true) as FormValues;
       const updates = buildUpdates(values, session);
+
+      const pagesChanged =
+        JSON.stringify(knowledgePages) !== JSON.stringify(session.linked_knowledge_pages ?? []);
+      if (pagesChanged) {
+        updates.linked_knowledge_pages = knowledgePages;
+      }
 
       if (Object.keys(updates).length > 0 && onUpdate) {
         onUpdate(session.session_id, updates);
@@ -262,6 +295,9 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
 
   const handleCancel = () => {
     form.resetFields();
+    setKnowledgePages(session.linked_knowledge_pages ?? []);
+    setNewPageUrl('');
+    setNewPageName('');
     onClose();
   };
 
@@ -360,6 +396,52 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           compact
           client={client}
         />
+
+        {/* Knowledge Pages */}
+        <Form.Item
+          label={
+            <Space size={4}>
+              <ReadOutlined />
+              <span>Knowledge Pages</span>
+            </Space>
+          }
+        >
+          <Space direction="vertical" style={{ width: '100%' }} size={4}>
+            {knowledgePages.map((page) => (
+              <Space key={page.url} style={{ width: '100%' }} align="start">
+                <Typography.Link href={page.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1 }}>
+                  {page.name}
+                </Typography.Link>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  onClick={() => setKnowledgePages((prev) => prev.filter((p) => p.url !== page.url))}
+                />
+              </Space>
+            ))}
+            <Space.Compact style={{ width: '100%' }}>
+              <Input
+                placeholder="Name"
+                value={newPageName}
+                onChange={(e) => setNewPageName(e.target.value)}
+                style={{ width: '40%' }}
+              />
+              <Input
+                placeholder="URL"
+                value={newPageUrl}
+                onChange={(e) => setNewPageUrl(e.target.value)}
+                onPressEnter={handleAddKnowledgePage}
+                style={{ width: '50%' }}
+              />
+              <Button
+                icon={<PlusOutlined />}
+                onClick={handleAddKnowledgePage}
+                disabled={!newPageUrl.trim() || !newPageName.trim()}
+              />
+            </Space.Compact>
+          </Space>
+        </Form.Item>
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}
         <Divider dashed style={{ margin: '8px 0 16px' }} />

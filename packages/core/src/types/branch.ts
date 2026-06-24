@@ -197,6 +197,16 @@ export interface Branch {
   pull_request_url?: string;
 
   /**
+   * Knowledge base URL associated with this branch.
+   *
+   * A single link to an external knowledge base, wiki, or documentation site
+   * relevant to this branch's work context.
+   *
+   * Example: "https://docs.example.com/api-reference"
+   */
+  knowledge_base_url?: string;
+
+  /**
    * Freeform notes about this branch
    *
    * User can document:

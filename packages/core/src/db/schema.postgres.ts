@@ -214,6 +214,9 @@ export const sessions = pgTable(
         // - 'api-key': ANTHROPIC_API_KEY was set at spawn → per-token billing.
         // - 'unknown': legacy rows or pre-flag detection.
         billing_mode?: 'subscription' | 'api-key' | 'unknown';
+
+        // Knowledge pages linked by agents during work
+        linked_knowledge_pages?: { url: string; name: string }[];
       }>()
       .notNull(),
   },
@@ -706,6 +709,7 @@ export const branches = pgTable(
         // Work context (persistent across sessions)
         issue_url?: string; // GitHub/GitLab issue
         pull_request_url?: string; // PR link
+        knowledge_base_url?: string; // External knowledge base / docs URL
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed'
 

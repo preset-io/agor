@@ -33,11 +33,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 /** Patchable subset of `Branch` writable from the modal form. */
 export type BranchUpdate = Omit<
   Partial<Branch>,
-  'issue_url' | 'pull_request_url' | 'notes' | 'board_id'
+  'issue_url' | 'pull_request_url' | 'knowledge_base_url' | 'notes' | 'board_id'
 > & {
   board_id?: string | null | undefined;
   issue_url?: string | null | undefined;
   pull_request_url?: string | null | undefined;
+  knowledge_base_url?: string | null | undefined;
   notes?: string | null | undefined;
 };
 
@@ -48,6 +49,7 @@ export interface GeneralFormState {
   boardId: string | undefined;
   issueUrl: string;
   prUrl: string;
+  knowledgeBaseUrl: string;
   notes: string;
   mcpServerIds: string[];
 }
@@ -133,6 +135,7 @@ const buildGeneralDefaults = (branch: Branch | null): GeneralFormState => ({
   boardId: branch?.board_id || undefined,
   issueUrl: branch?.issue_url || '',
   prUrl: branch?.pull_request_url || '',
+  knowledgeBaseUrl: branch?.knowledge_base_url || '',
   notes: branch?.notes || '',
   mcpServerIds: branch?.mcp_server_ids || [],
 });
@@ -399,6 +402,7 @@ export function useBranchModalForm({
       general.boardId !== (branch.board_id || undefined) ||
       general.issueUrl !== (branch.issue_url || '') ||
       general.prUrl !== (branch.pull_request_url || '') ||
+      general.knowledgeBaseUrl !== (branch.knowledge_base_url || '') ||
       notesChanged ||
       sortedJson(general.mcpServerIds) !== sortedJson(branch.mcp_server_ids || [])
     );
@@ -531,6 +535,8 @@ export function useBranchModalForm({
         updates.board_id = general.boardId || undefined;
         updates.issue_url = general.issueUrl.trim() === '' ? null : general.issueUrl;
         updates.pull_request_url = general.prUrl.trim() === '' ? null : general.prUrl;
+        updates.knowledge_base_url =
+          general.knowledgeBaseUrl.trim() === '' ? null : general.knowledgeBaseUrl;
         if (!isAssistantBranch) {
           updates.notes = general.notes.trim() === '' ? null : general.notes;
         }

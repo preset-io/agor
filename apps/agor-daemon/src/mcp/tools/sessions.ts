@@ -1711,4 +1711,86 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       return textResult(all);
     }
   );
+
+  // Tool: agor_session_link_knowledge_page
+  server.registerTool(
+    'agor_session_link_knowledge_page',
+    {
+      description:
+        'Link a knowledge page to the current session. The page will appear as a pill in the session header and in the attachments dropdown. Call this when you discover a relevant doc, wiki, or reference page while working.',
+      inputSchema: z.object({
+        sessionId: mcpOptionalId(
+          'sessionId',
+          'Session',
+          'Session to link the page to (defaults to the current MCP session)'
+        ),
+        url: mcpRequiredString('url', 'URL of the knowledge page to link'),
+        name: mcpRequiredString('name', 'Display name for the knowledge page (e.g., "API Reference")'),
+      }),
+    },
+    async (args) => {
+      const url = args.url.trim();
+      const name = args.name.trim();
+      if (!/^https?:\/\//i.test(url)) {
+        return textResult({ ok: false, error: 'URL must start with http:// or https://' });
+      }
+
+      const sessionId = args.sessionId
+        ? await resolveSessionId(ctx, args.sessionId)
+        : ctx.sessionId;
+      if (!sessionId) return sessionContextRequiredResult();
+
+      const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
+      // Read-then-write: concurrent calls from different agents can race and
+      // silently drop each other's pages. Acceptable for low-frequency writes;
+      // use optimistic locking if this becomes a problem.
+      const session = await sessionsService.get(sessionId, ctx.baseServiceParams);
+      const existing = session.linked_knowledge_pages ?? [];
+
+      if (!existing.some((p) => p.url === url)) {
+        await sessionsService.patch(
+          sessionId,
+          { linked_knowledge_pages: [...existing, { url, name }] },
+          ctx.baseServiceParams
+        );
+      }
+
+      return textResult({ ok: true, url, name });
+    }
+  );
+
+  // Tool: agor_session_unlink_knowledge_page
+  server.registerTool(
+    'agor_session_unlink_knowledge_page',
+    {
+      description: 'Remove a previously linked knowledge page from the current session.',
+      inputSchema: z.object({
+        sessionId: mcpOptionalId(
+          'sessionId',
+          'Session',
+          'Session to unlink the page from (defaults to the current MCP session)'
+        ),
+        url: mcpRequiredString('url', 'URL of the knowledge page to remove'),
+      }),
+    },
+    async (args) => {
+      const url = args.url.trim();
+      const sessionId = args.sessionId
+        ? await resolveSessionId(ctx, args.sessionId)
+        : ctx.sessionId;
+      if (!sessionId) return sessionContextRequiredResult();
+
+      const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
+      const session = await sessionsService.get(sessionId, ctx.baseServiceParams);
+      const existing = session.linked_knowledge_pages ?? [];
+
+      await sessionsService.patch(
+        sessionId,
+        { linked_knowledge_pages: existing.filter((p) => p.url !== url) },
+        ctx.baseServiceParams
+      );
+
+      return textResult({ ok: true, url });
+    }
+  );
 }

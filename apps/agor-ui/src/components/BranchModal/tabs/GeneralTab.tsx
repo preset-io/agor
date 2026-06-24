@@ -151,6 +151,16 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
+            <Form.Item label="Knowledge Base" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+              <Input
+                value={state.knowledgeBaseUrl}
+                onChange={(e) => setField('knowledgeBaseUrl', e.target.value)}
+                placeholder="https://docs.example.com/reference"
+                prefix={<LinkOutlined />}
+                disabled={!canEdit}
+              />
+            </Form.Item>
+
             {/* Hide Notes for assistants — edited as "Description" in the Assistant tab */}
             {!isAssistantBranch && (
               <Form.Item

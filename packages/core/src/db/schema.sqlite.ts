@@ -216,6 +216,9 @@ export const sessions = sqliteTable(
         // Drives the cost-UI caption ("Estimated; covered by your subscription")
         // and any future 5h-billing-window banner.
         billing_mode?: 'subscription' | 'api-key' | 'unknown';
+
+        // Knowledge pages linked by agents during work
+        linked_knowledge_pages?: { url: string; name: string }[];
       }>()
       .notNull(),
   },
@@ -717,6 +720,7 @@ export const branches = sqliteTable(
         // Work context (persistent across sessions)
         issue_url?: string; // GitHub/GitLab issue
         pull_request_url?: string; // PR link
+        knowledge_base_url?: string; // External knowledge base / docs URL
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed'
 

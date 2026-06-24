@@ -14,6 +14,7 @@ export {
   GitStatePill,
   IssuePill,
   KnowledgeNamespacePill,
+  KnowledgePagePill,
   MessageCountPill,
   ModelPill,
   PILL_COLORS,
