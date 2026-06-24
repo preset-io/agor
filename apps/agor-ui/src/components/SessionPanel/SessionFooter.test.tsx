@@ -81,6 +81,13 @@ const baseProps = {
 };
 
 describe('SessionFooter', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
   it('Send button is disabled when there is no input', () => {
     render(<SessionFooter {...baseProps} hasInput={false} />, { wrapper: Wrapper });
     const sendBtn = screen.getByRole('button', { name: /send/i });
@@ -115,7 +122,7 @@ describe('SessionFooter', () => {
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
-  it('Stats chip is hidden when there is no model and no tokens', () => {
+  it('Model chip is hidden when no model is present', () => {
     render(
       <SessionFooter
         {...baseProps}
@@ -124,27 +131,56 @@ describe('SessionFooter', () => {
       />,
       { wrapper: Wrapper }
     );
+    expect(screen.queryByTestId('model-chip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tokens-chip')).not.toBeInTheDocument();
     expect(screen.queryByTestId('stats-chip')).not.toBeInTheDocument();
   });
 
-  it('Stats chip shows warning styling when context usage is above 80%', () => {
+  it('Context chip shows warning styling when context usage is above 80%', () => {
     render(
       <SessionFooter
         {...baseProps}
-        // Need model or tokens so the chip renders
+        latestContextWindow={{ used: 85_000, limit: 100_000, taskMetadata: {} }}
+      />,
+      { wrapper: Wrapper }
+    );
+    const chip = screen.getByTestId('context-chip');
+    expect(chip).toBeInTheDocument();
+    expect(chip.getAttribute('data-warning')).toBe('true');
+  });
+
+  it('Individual model chip renders when model is present', () => {
+    render(
+      <SessionFooter
+        {...baseProps}
         session={
           {
             ...baseSession,
             model_config: { model: 'claude-sonnet-4-6', mode: 'alias' },
           } as unknown as Session
         }
-        latestContextWindow={{ used: 85_000, limit: 100_000, taskMetadata: {} }}
       />,
       { wrapper: Wrapper }
     );
-    const chip = screen.getByTestId('stats-chip');
-    expect(chip).toBeInTheDocument();
-    expect(chip.getAttribute('data-warning')).toBe('true');
+    expect(screen.getByTestId('model-chip')).toBeInTheDocument();
+  });
+
+  it('Timer chip renders as a plain div when footerTimerTask is present', () => {
+    const timerTask = {
+      task_id: 't1',
+      status: 'running',
+      created_at: new Date().toISOString(),
+      message_range: null,
+      duration_ms: null,
+      last_executor_heartbeat_at: null,
+      completed_at: null,
+    };
+    render(<SessionFooter {...baseProps} footerTimerTask={timerTask as never} />, {
+      wrapper: Wrapper,
+    });
+    const timerChip = screen.getByTestId('timer-chip');
+    expect(timerChip).toBeInTheDocument();
+    expect(timerChip.tagName.toLowerCase()).toBe('div');
   });
 
   it('Tools chip shows "No tools" when no MCP servers are attached', () => {
@@ -185,6 +221,12 @@ describe('useFooterPreferences', () => {
     const { result } = renderHook(() => useFooterPreferences());
     const [prefs] = result.current;
     expect(prefs.pinnedItems).toEqual([]);
+  });
+
+  it('defaults include pinnedChips with all chips visible', () => {
+    const { result } = renderHook(() => useFooterPreferences());
+    const [prefs] = result.current;
+    expect(prefs.pinnedChips).toEqual(['timer', 'tools', 'model', 'tokens', 'context']);
   });
 
   it('persists updated preferences to localStorage', () => {

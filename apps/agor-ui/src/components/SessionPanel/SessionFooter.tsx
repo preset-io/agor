@@ -11,10 +11,10 @@ import type {
 import {
   BranchesOutlined,
   ClockCircleOutlined,
-  DollarOutlined,
   EllipsisOutlined,
   ForkOutlined,
   LockOutlined,
+  NumberOutlined,
   PaperClipOutlined,
   PercentageOutlined,
   PushpinFilled,
@@ -134,8 +134,16 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         : [...pinnedItems, id],
     });
   };
+  const pinnedChips = prefs.pinnedChips;
+  const toggleChip = (id: string) => {
+    setPref({
+      pinnedChips: pinnedChips.includes(id)
+        ? pinnedChips.filter((c) => c !== id)
+        : [...pinnedChips, id],
+    });
+  };
 
-  // Stats chip: show when model or tokens are present
+  // Model name + token counts for individual chips
   const modelName = session.model_config?.model
     ? getModelDisplayName(
         session.model_config.provider
@@ -144,7 +152,6 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       )
     : null;
   const tokensK = tokenBreakdown.total > 0 ? Math.round(tokenBreakdown.total / 1000) : 0;
-  const showStatsChip = !!(modelName || tokenBreakdown.total > 0);
 
   // Context window usage percentage (for warning styling)
   const contextPct =
@@ -153,7 +160,6 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       : 0;
   const contextWarning = contextPct > 0.8;
 
-  const showToolsChip = true;
   const hasUnauthedMcp = unauthedMcpServers.length > 0;
 
   // Tools chip popover: list server names
@@ -192,79 +198,6 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               MCP settings
             </Button>
           </>
-        )}
-      </Space>
-    </div>
-  );
-
-  // Stats chip popover: model, tokens, context window, cost, effort, timer
-  const statsPopoverContent = (
-    <div style={{ width: 260 }}>
-      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-        {modelName && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Space size={4}>
-              <RobotOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Model
-              </Typography.Text>
-            </Space>
-            <Typography.Text style={{ fontSize: 12 }}>{modelName}</Typography.Text>
-          </div>
-        )}
-        {tokenBreakdown.total > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Tokens
-            </Typography.Text>
-            <Typography.Text style={{ fontSize: 12 }}>
-              {tokenBreakdown.total.toLocaleString()}
-            </Typography.Text>
-          </div>
-        )}
-        {latestContextWindow && latestContextWindow.limit > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Space size={4}>
-              <PercentageOutlined
-                style={{
-                  fontSize: 12,
-                  color: contextWarning ? token.colorWarning : token.colorTextSecondary,
-                }}
-              />
-              <Typography.Text
-                type={contextWarning ? 'warning' : 'secondary'}
-                style={{ fontSize: 12 }}
-              >
-                Context
-              </Typography.Text>
-            </Space>
-            <Typography.Text type={contextWarning ? 'warning' : undefined} style={{ fontSize: 12 }}>
-              {Math.round(contextPct * 100)}%
-            </Typography.Text>
-          </div>
-        )}
-        {tokenBreakdown.cost > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Space size={4}>
-              <DollarOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Est. cost
-              </Typography.Text>
-            </Space>
-            <Typography.Text style={{ fontSize: 12 }}>
-              ${tokenBreakdown.cost.toFixed(4)}
-            </Typography.Text>
-          </div>
-        )}
-        {effortLevel && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Effort
-            </Typography.Text>
-            <Typography.Text style={{ fontSize: 12, textTransform: 'capitalize' }}>
-              {effortLevel}
-            </Typography.Text>
-          </div>
         )}
       </Space>
     </div>
@@ -487,6 +420,150 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
       <Divider style={{ margin: '6px 0' }} />
 
+      {/* === Section: Chips === */}
+      <div style={sectionHeaderStyle}>Info bar</div>
+
+      {footerTimerTask && (
+        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+          <ClockCircleOutlined
+            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+          />
+          <Typography.Text style={{ fontSize: 13, flex: 1 }}>Timer</Typography.Text>
+          <button
+            type="button"
+            aria-label={pinnedChips.includes('timer') ? 'Hide timer' : 'Show timer'}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: pinnedChips.includes('timer') ? token.colorPrimary : token.colorTextTertiary,
+              lineHeight: 1,
+              padding: 2,
+              flexShrink: 0,
+            }}
+            onClick={() => toggleChip('timer')}
+          >
+            {pinnedChips.includes('timer') ? (
+              <PushpinFilled style={{ fontSize: 12 }} />
+            ) : (
+              <PushpinOutlined style={{ fontSize: 12 }} />
+            )}
+          </button>
+        </div>
+      )}
+
+      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+        <ToolOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
+        <Typography.Text style={{ fontSize: 13, flex: 1 }}>Tools</Typography.Text>
+        <button
+          type="button"
+          aria-label={pinnedChips.includes('tools') ? 'Hide tools' : 'Show tools'}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: pinnedChips.includes('tools') ? token.colorPrimary : token.colorTextTertiary,
+            lineHeight: 1,
+            padding: 2,
+            flexShrink: 0,
+          }}
+          onClick={() => toggleChip('tools')}
+        >
+          {pinnedChips.includes('tools') ? (
+            <PushpinFilled style={{ fontSize: 12 }} />
+          ) : (
+            <PushpinOutlined style={{ fontSize: 12 }} />
+          )}
+        </button>
+      </div>
+
+      {modelName && (
+        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+          <RobotOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
+          <Typography.Text style={{ fontSize: 13, flex: 1 }}>Model</Typography.Text>
+          <button
+            type="button"
+            aria-label={pinnedChips.includes('model') ? 'Hide model' : 'Show model'}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: pinnedChips.includes('model') ? token.colorPrimary : token.colorTextTertiary,
+              lineHeight: 1,
+              padding: 2,
+              flexShrink: 0,
+            }}
+            onClick={() => toggleChip('model')}
+          >
+            {pinnedChips.includes('model') ? (
+              <PushpinFilled style={{ fontSize: 12 }} />
+            ) : (
+              <PushpinOutlined style={{ fontSize: 12 }} />
+            )}
+          </button>
+        </div>
+      )}
+
+      {tokensK > 0 && (
+        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+          <NumberOutlined
+            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+          />
+          <Typography.Text style={{ fontSize: 13, flex: 1 }}>Tokens</Typography.Text>
+          <button
+            type="button"
+            aria-label={pinnedChips.includes('tokens') ? 'Hide tokens' : 'Show tokens'}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: pinnedChips.includes('tokens') ? token.colorPrimary : token.colorTextTertiary,
+              lineHeight: 1,
+              padding: 2,
+              flexShrink: 0,
+            }}
+            onClick={() => toggleChip('tokens')}
+          >
+            {pinnedChips.includes('tokens') ? (
+              <PushpinFilled style={{ fontSize: 12 }} />
+            ) : (
+              <PushpinOutlined style={{ fontSize: 12 }} />
+            )}
+          </button>
+        </div>
+      )}
+
+      {latestContextWindow && latestContextWindow.limit > 0 && (
+        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+          <PercentageOutlined
+            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+          />
+          <Typography.Text style={{ fontSize: 13, flex: 1 }}>Context %</Typography.Text>
+          <button
+            type="button"
+            aria-label={pinnedChips.includes('context') ? 'Hide context' : 'Show context'}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: pinnedChips.includes('context') ? token.colorPrimary : token.colorTextTertiary,
+              lineHeight: 1,
+              padding: 2,
+              flexShrink: 0,
+            }}
+            onClick={() => toggleChip('context')}
+          >
+            {pinnedChips.includes('context') ? (
+              <PushpinFilled style={{ fontSize: 12 }} />
+            ) : (
+              <PushpinOutlined style={{ fontSize: 12 }} />
+            )}
+          </button>
+        </div>
+      )}
+
+      <Divider style={{ margin: '6px 0' }} />
+
       {/* Session IDs */}
       <div style={{ padding: `0 ${token.sizeUnit * 2}px 4px` }}>
         <SessionIdsButton session={session} />
@@ -539,7 +616,13 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
       <div style={{ position: 'relative', zIndex: 1 }}>
         {/* Row 1 — Info bar */}
-        {(showToolsChip || showStatsChip || footerTimerTask) && (
+        {(pinnedChips.includes('tools') ||
+          (footerTimerTask && pinnedChips.includes('timer')) ||
+          (modelName && pinnedChips.includes('model')) ||
+          (tokensK > 0 && pinnedChips.includes('tokens')) ||
+          (latestContextWindow &&
+            latestContextWindow.limit > 0 &&
+            pinnedChips.includes('context'))) && (
           <div
             style={{
               display: 'flex',
@@ -549,16 +632,9 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               flexWrap: 'wrap',
             }}
           >
-            {footerTimerTask && (
-              <Tag
-                icon={<ClockCircleOutlined />}
-                color="default"
-                style={{
-                  cursor: 'default',
-                  height: 22,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                }}
+            {footerTimerTask && pinnedChips.includes('timer') && (
+              <div
+                style={{ display: 'inline-flex', alignItems: 'center', height: 22 }}
                 data-testid="timer-chip"
               >
                 <TimerPill
@@ -572,9 +648,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   durationMs={footerTimerTask.duration_ms}
                   lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
                 />
-              </Tag>
+              </div>
             )}
-            {showToolsChip && (
+
+            {pinnedChips.includes('tools') && (
               <Popover
                 trigger="click"
                 placement="topLeft"
@@ -609,31 +686,62 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               </Popover>
             )}
 
-            {showStatsChip && (
-              <Popover
-                trigger="click"
-                placement="topLeft"
-                content={statsPopoverContent}
-                title={null}
+            {/* Model chip */}
+            {modelName && pinnedChips.includes('model') && (
+              <Tag
+                icon={<RobotOutlined />}
+                color="default"
+                style={{
+                  cursor: 'default',
+                  height: 22,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                }}
+                data-testid="model-chip"
               >
+                {modelName}
+              </Tag>
+            )}
+
+            {/* Tokens chip */}
+            {tokensK > 0 && pinnedChips.includes('tokens') && (
+              <Tag
+                color="default"
+                style={{
+                  cursor: 'default',
+                  height: 22,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                }}
+                data-testid="tokens-chip"
+              >
+                {tokensK}k tokens
+              </Tag>
+            )}
+
+            {/* Context % chip */}
+            {latestContextWindow &&
+              latestContextWindow.limit > 0 &&
+              pinnedChips.includes('context') && (
                 <Tag
-                  icon={<RobotOutlined />}
+                  icon={
+                    <PercentageOutlined
+                      style={{ color: contextWarning ? token.colorWarning : undefined }}
+                    />
+                  }
                   color={contextWarning ? 'warning' : 'default'}
                   style={{
-                    cursor: 'pointer',
+                    cursor: 'default',
                     height: 22,
                     display: 'inline-flex',
                     alignItems: 'center',
                   }}
-                  data-testid="stats-chip"
+                  data-testid="context-chip"
                   data-warning={contextWarning ? 'true' : undefined}
                 >
-                  {modelName && <span>{modelName}</span>}
-                  {modelName && tokensK > 0 && <span>&nbsp;·&nbsp;</span>}
-                  {tokensK > 0 && <span>{tokensK}k</span>}
+                  {Math.round(contextPct * 100)}%
                 </Tag>
-              </Popover>
-            )}
+              )}
           </div>
         )}
 

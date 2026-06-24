@@ -6,6 +6,7 @@ const DEFAULTS = {
   showForkInBar: true,
   showUploadInBar: true,
   pinnedItems: [] as string[],
+  pinnedChips: ['timer', 'tools', 'model', 'tokens', 'context'] as string[],
 };
 
 export type FooterPreferences = typeof DEFAULTS;
