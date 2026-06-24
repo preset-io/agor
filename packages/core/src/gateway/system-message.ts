@@ -27,14 +27,14 @@ export function formatGatewaySessionCreatedMessage(
 ): string {
   return sessionUrl
     ? `Session created: ${sessionUrl}`
-    : `Session ${shortId(sessionId)} created, sending prompt to agent...`;
+    : `Session ${shortId(sessionId)} created, sending prompt to agent.`;
 }
 
 export function formatGatewayFollowUpRoutingMessage(
   sessionId: SessionID | string,
   sessionUrl?: string | null
 ): string {
-  return `Follow-up received — routing to ${formatGatewayMarkdownSessionReference(sessionId, sessionUrl)} ...`;
+  return `Mention received — routing to ${formatGatewayMarkdownSessionReference(sessionId, sessionUrl)}.`;
 }
 
 /**
@@ -47,11 +47,16 @@ export function formatGatewayFollowUpRoutingMessage(
  */
 export function formatGatewaySystemMessage(channelType: ChannelType, text: string): string {
   const sessionCreatedMatch = text.match(/^Session created: (https?:\/\/\S+)$/);
+  const slackMentionGuidance = 'Mention me again to follow up.';
 
   if (channelType === 'slack') {
     const markdown = sessionCreatedMatch
-      ? `${GATEWAY_SYSTEM_PREFIX} Session created: [View session](${sessionCreatedMatch[1]})`
-      : `${GATEWAY_SYSTEM_PREFIX} ${text}`;
+      ? `${GATEWAY_SYSTEM_PREFIX} Session created: [View session](${sessionCreatedMatch[1]}). ${slackMentionGuidance}`
+      : text.startsWith('Session ') && text.includes(' created, sending prompt to agent.')
+        ? `${GATEWAY_SYSTEM_PREFIX} ${text} ${slackMentionGuidance}`
+        : text.startsWith('Mention received')
+          ? `${GATEWAY_SYSTEM_PREFIX} ${text} ${slackMentionGuidance}`
+          : `${GATEWAY_SYSTEM_PREFIX} ${text}`;
 
     return markdownToMrkdwn(markdown);
   }

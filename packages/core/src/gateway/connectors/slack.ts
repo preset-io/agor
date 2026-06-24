@@ -12,8 +12,8 @@
  *     enable_channels?: boolean,                    // Listen in public channels
  *     enable_groups?: boolean,                      // Listen in private channels
  *     enable_mpim?: boolean,                        // Listen in group DMs
- *     require_mention?: boolean,                    // Require @mention in channels
- *     allow_thread_replies_without_mention?: boolean, // Allow thread replies without @mention (default: true)
+ *     require_mention?: boolean,                    // Legacy; Slack channel-like prompts now always require @mention
+ *     allow_thread_replies_without_mention?: boolean, // Legacy; ignored for Slack channel-like prompts
  *     allowed_channel_ids?: string[]                // Channel ID whitelist
  *   }
  *
@@ -84,6 +84,26 @@ interface SlackConfig {
   align_slack_users?: boolean;
 }
 
+export interface SlackThreadHistoryMessage {
+  ts: string;
+  iso_time: string;
+  user_id?: string;
+  user_name?: string;
+  actor_label: string;
+  text: string;
+  is_bot: boolean;
+  is_trigger: boolean;
+  is_mention: boolean;
+}
+
+export interface SlackThreadHistoryResult {
+  threadId: string;
+  channel: string;
+  thread_ts: string;
+  messages: SlackThreadHistoryMessage[];
+  has_more?: boolean;
+}
+
 /**
  * Parse a composite thread ID into Slack channel + thread_ts
  *
@@ -127,6 +147,12 @@ function hasActiveMention(text: string, mentionPattern: RegExp): boolean {
   // Reset lastIndex in case the pattern has global/sticky flags (defensive)
   mentionPattern.lastIndex = 0;
   return mentionPattern.test(stripped);
+}
+
+function slackTsToIso(ts: string): string {
+  const seconds = Number(ts.split('.')[0]);
+  if (!Number.isFinite(seconds)) return new Date().toISOString();
+  return new Date(seconds * 1000).toISOString();
 }
 
 interface Segment {
@@ -1002,6 +1028,96 @@ export class SlackConnector implements GatewayConnector {
     return { channel: dmResult.channel.id, user_id: userResult.user.id };
   }
 
+  async fetchThreadHistory(req: {
+    threadId: string;
+    oldestTs?: string;
+    latestTs?: string;
+    inclusive?: boolean;
+    limit?: number;
+    includeBotMessages?: boolean;
+    triggerTs?: string;
+  }): Promise<SlackThreadHistoryResult> {
+    const { channel, thread_ts } = parseThreadId(req.threadId);
+    const requestedLimit = Math.min(Math.max(req.limit ?? 50, 1), 200);
+    const messages: SlackThreadHistoryMessage[] = [];
+    let cursor: string | undefined;
+    let hasMore = false;
+
+    do {
+      const rawLimit = req.includeBotMessages
+        ? requestedLimit
+        : Math.min(Math.max(requestedLimit * 4, requestedLimit), 200);
+      const result = await this.web.conversations.replies({
+        channel,
+        ts: thread_ts,
+        limit: rawLimit,
+        ...(cursor ? { cursor } : {}),
+        ...(req.oldestTs ? { oldest: req.oldestTs } : {}),
+        ...(req.latestTs ? { latest: req.latestTs } : {}),
+        ...(req.inclusive !== undefined ? { inclusive: req.inclusive } : {}),
+      });
+
+      if (!result.ok) {
+        throw new Error(`Slack thread history error: ${result.error ?? 'unknown error'}`);
+      }
+
+      const rawMessages = (result.messages ?? []) as Array<Record<string, unknown>>;
+      let stoppedAtRequestedLimitWithMoreRaw = false;
+      for (let i = 0; i < rawMessages.length; i++) {
+        const raw = rawMessages[i];
+        if (!raw) continue;
+        const ts = typeof raw.ts === 'string' ? raw.ts : undefined;
+        if (!ts) continue;
+        const botId = typeof raw.bot_id === 'string' ? raw.bot_id : undefined;
+        const subtype = typeof raw.subtype === 'string' ? raw.subtype : undefined;
+        const isBot = !!botId || subtype === 'bot_message';
+        if (isBot && !req.includeBotMessages) continue;
+
+        const userId = typeof raw.user === 'string' ? raw.user : undefined;
+        let userName: string | undefined;
+        if (userId) {
+          const profile = await this.lookupUserProfile(userId);
+          userName = profile.displayName ?? undefined;
+        }
+        const botProfile = raw.bot_profile as Record<string, unknown> | undefined;
+        const botName =
+          typeof botProfile?.name === 'string'
+            ? botProfile.name
+            : typeof raw.username === 'string'
+              ? raw.username
+              : undefined;
+        const actorLabel = userName ?? botName ?? userId ?? botId ?? 'unknown';
+        const text = typeof raw.text === 'string' ? raw.text : '';
+        messages.push({
+          ts,
+          iso_time: slackTsToIso(ts),
+          ...(userId ? { user_id: userId } : {}),
+          ...(userName ? { user_name: userName } : {}),
+          actor_label: actorLabel,
+          text,
+          is_bot: isBot,
+          is_trigger: req.triggerTs === ts,
+          is_mention: this.botUserId ? text.includes(`<@${this.botUserId}>`) : false,
+        });
+        if (messages.length >= requestedLimit) {
+          stoppedAtRequestedLimitWithMoreRaw = i < rawMessages.length - 1;
+          break;
+        }
+      }
+
+      cursor = result.response_metadata?.next_cursor || undefined;
+      hasMore = result.has_more === true || !!cursor || stoppedAtRequestedLimitWithMoreRaw;
+    } while (!req.includeBotMessages && messages.length < requestedLimit && cursor);
+
+    return {
+      threadId: req.threadId,
+      channel,
+      thread_ts,
+      messages: messages.slice(0, requestedLimit),
+      has_more: hasMore,
+    };
+  }
+
   async startStream(req: {
     threadId: string;
     text?: string;
@@ -1109,7 +1225,7 @@ export class SlackConnector implements GatewayConnector {
    * - Public channels (if enable_channels = true)
    * - Private channels (if enable_groups = true)
    * - Group DMs (if enable_mpim = true)
-   * - Mention requirement (if require_mention = true)
+   * - Explicit mention requirement for channel-like conversations
    * - Channel whitelist (if allowed_channel_ids is set)
    */
   async startListening(callback: (msg: InboundMessage) => void): Promise<void> {
@@ -1141,12 +1257,11 @@ export class SlackConnector implements GatewayConnector {
     const enableChannels = this.config.enable_channels ?? false;
     const enableGroups = this.config.enable_groups ?? false;
     const enableMpim = this.config.enable_mpim ?? false;
-    const requireMention = this.config.require_mention ?? true;
-    // Default to true: once a user @mentions the bot to start a thread,
-    // they can continue the conversation without re-tagging. The gateway
-    // service's mapping verification prevents abuse in unmapped threads.
-    const allowThreadRepliesWithoutMention =
-      this.config.allow_thread_replies_without_mention ?? true;
+    // Slack gateway now treats channel/group/MPIM mentions as the only trigger.
+    // The legacy require_mention=false and allow_thread_replies_without_mention
+    // knobs are intentionally ignored for channel-like conversations; ordinary
+    // thread replies are picked up via catch-up the next time the bot is mentioned.
+    const requireMention = true;
 
     // Normalize allowed_channel_ids to string[] (handle malformed config)
     let allowedChannelIds: string[] | undefined;
@@ -1250,44 +1365,52 @@ export class SlackConnector implements GatewayConnector {
       // This happens for top-level messages AND thread replies.
       //
       // Strategy:
-      // - Process whichever event arrives first for an active mention (`message`
-      //   or `app_mention`) and dedupe by channel+ts. Relying only on
-      //   `app_mention` makes Socket Mode multi-connection/lost-event behavior
-      //   look like missed prompts.
-      // - Use `message` for DMs, non-mention messages, and code-block-only mentions.
-      // - Skip `app_mention` events where the mention is only inside code blocks
-      //   (those are not "real" mentions and should be handled as plain messages).
+      // - Use `app_mention` as the only trigger for channel-like Slack surfaces.
+      //   Slack `message` events include thread bookkeeping (`message_replied`) and
+      //   can carry root-message text from the originally mentioned message.
+      // - Use `message` events for direct messages, where Slack does not dispatch
+      //   app_mention events.
+      // - Skip `app_mention` events where the mention is only inside code blocks.
       const isThreadReply = !!event.thread_ts;
-      const isChannelMessage = channelType === 'channel' || channelType === 'group';
+      const isChannelLikeMessage =
+        channelType === 'channel' || channelType === 'group' || channelType === 'mpim';
 
-      // CRITICAL: Prevent duplicates in channels/groups when bot ID unavailable
-      // Strategy depends on require_mention setting:
-      // - If require_mention=true: prefer app_mention (Slack guarantees mention), skip message
-      // - If require_mention=false: prefer message (app_mention won't fire for non-mentions), skip app_mention
-      if (isChannelMessage && !botMentionPattern) {
+      if (isChannelLikeMessage && eventType !== 'app_mention') {
+        console.debug(
+          `[slack] Skipping non-app_mention event in channel-like conversation type=${eventType} channel=${event.channel} ts=${event.ts}`
+        );
+        return;
+      }
+
+      // CRITICAL: Prevent duplicates in channel-like conversations when bot ID unavailable.
+      // Since channel-like conversations always require mentions, prefer app_mention
+      // when we cannot verify mentions in raw message events.
+      if (isChannelLikeMessage && !botMentionPattern) {
         if (eventType === 'message' && requireMention) {
           // Can't detect mentions - let app_mention handle (which Slack guarantees is a mention)
           return;
         }
-        if (eventType === 'app_mention' && !requireMention) {
-          // Avoid duplicates - prefer message events when mentions not required
-          return;
-        }
       }
 
-      if (isChannelMessage && botMentionPattern) {
+      if (isChannelLikeMessage && botMentionPattern) {
         const mentionOutsideCodeBlock = hasActiveMention(event.text ?? '', botMentionPattern);
 
         if (eventType === 'app_mention' && !mentionOutsideCodeBlock) {
           // app_mention fired but the mention is only inside a code block.
           // Skip — the parallel message event will handle it as a non-mention
-          // (correctly rejected or routed via thread reply exception).
+          // (correctly rejected).
           return;
         }
       }
 
-      // Channel type filtering based on config
-      if (!channelType || channelType === 'im') {
+      // Channel type filtering based on config. Fail closed when channel type
+      // cannot be resolved; otherwise unknown channel-like messages could be
+      // mistaken for DMs and bypass mention enforcement.
+      if (!channelType) {
+        console.warn(`[slack] Cannot determine channel_type for channel=${event.channel}`);
+        return;
+      }
+      if (channelType === 'im') {
         // Direct messages are always allowed
       } else if (channelType === 'channel' && !enableChannels) {
         return; // Public channels not enabled
@@ -1315,50 +1438,31 @@ export class SlackConnector implements GatewayConnector {
       // Mention requirement handling
       let messageText = event.text ?? '';
       let hasMention = false;
-      let allowedViaThreadReplyException = false;
+      const allowedViaThreadReplyException = false;
 
-      if (requireMention) {
+      const requiresExplicitMention = channelType !== 'im';
+      if (requireMention && requiresExplicitMention) {
         if (!botMentionPattern || !botMentionReplacePattern) {
-          // app_mention events are inherently mentions (Slack guarantees this)
-          // Allow them even without bot ID pattern
+          // app_mention events are inherently mentions (Slack guarantees this).
           if (eventType === 'app_mention') {
-            // Mention is implied by event type - allow without pattern validation
-            // We can't strip the mention without the pattern, but that's acceptable
-            // (messageText stays as-is since we don't have botMentionReplacePattern)
             hasMention = true;
           } else {
-            // SECURITY: Fail closed - if we can't verify mentions on message events, reject
             console.warn(
               '[slack] Cannot enforce mention requirement (bot user ID not available). Rejecting message event.'
             );
             return;
           }
         } else {
-          // Bot ID available - perform normal mention validation.
-          // Only count mentions outside code blocks as active mentions.
-          // Code-block mentions (e.g. `@bot`) are not "real" mentions and
-          // should not trigger a response.
           hasMention = hasActiveMention(messageText, botMentionPattern);
-
           if (!hasMention) {
-            // Check if this is a thread reply that's allowed without mention
-            if (isThreadReply && allowThreadRepliesWithoutMention) {
-              // Thread reply without mention - allow for conversation flow
-              // SECURITY: Gateway service verifies a mapping exists before creating sessions.
-              // Unmapped threads (where bot was never mentioned) will be rejected.
-              // Set allow_thread_replies_without_mention: true only if you want to allow
-              // continuing conversations in existing threads without requiring @mentions.
-              allowedViaThreadReplyException = true;
-            } else {
-              // Reject: top-level message or thread reply not allowed without mention
-              return;
-            }
+            return;
           }
-
-          // Strip mention if present
-          if (hasMention) {
-            messageText = messageText.replace(botMentionReplacePattern, '').trim();
-          }
+          messageText = messageText.replace(botMentionReplacePattern, '').trim();
+        }
+      } else if (botMentionPattern && botMentionReplacePattern) {
+        hasMention = hasActiveMention(messageText, botMentionPattern);
+        if (hasMention) {
+          messageText = messageText.replace(botMentionReplacePattern, '').trim();
         }
       }
 
@@ -1405,6 +1509,16 @@ export class SlackConnector implements GatewayConnector {
           ...(event.user ? { slack_user_id: event.user } : {}),
           ...(slackTeamId ? { slack_team_id: slackTeamId } : {}),
           requires_mapping_verification: allowedViaThreadReplyException,
+          ...(this.botUserId ? { slack_bot_user_id: this.botUserId } : {}),
+          ...(typeof event.ts === 'string' ? { slack_message_ts: event.ts } : {}),
+          ...(typeof event.thread_ts === 'string'
+            ? { slack_thread_ts: event.thread_ts }
+            : typeof event.ts === 'string'
+              ? { slack_thread_ts: event.ts }
+              : {}),
+          slack_is_thread_reply: isThreadReply,
+          slack_has_mention: hasMention,
+          slack_event_type: eventType,
           ...(slackUserEmail ? { slack_user_email: slackUserEmail } : {}),
           ...(slackUserDisplayName ? { slack_user_name: slackUserDisplayName } : {}),
           ...(slackChannelName ? { slack_channel_name: slackChannelName } : {}),

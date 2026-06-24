@@ -127,6 +127,13 @@ export const gatewayRouteHook = async (context: HookContext) => {
     }
     // Always route assistant messages
     shouldRoute = true;
+  } else if (message.role === 'system') {
+    // Route low-volume structured system messages to gateway surfaces when the
+    // producer explicitly marks them for external context-style rendering.
+    const systemMeta = message.metadata?.system as Record<string, unknown> | undefined;
+    if (systemMeta?.render_hint === 'context' || /^\[system\]/i.test(messageText.trim())) {
+      shouldRoute = true;
+    }
   } else if (message.role === 'user') {
     // Route user messages that originated from Agor (not from gateway)
     const source = message.metadata?.source;
@@ -173,6 +180,7 @@ export const gatewayRouteHook = async (context: HookContext) => {
       .routeMessage({
         session_id: message.session_id,
         message: messageText,
+        metadata: message.metadata,
       })
       .catch((error: unknown) => {
         console.warn('[gateway-route] Failed to route message:', error);

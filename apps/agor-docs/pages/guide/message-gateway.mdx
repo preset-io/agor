@@ -26,13 +26,13 @@ Things that still warrant caution:
 - **Use dedicated branches.** Don't point channels at branches holding production secrets. Create isolated branches scoped to gateway use.
 - **Pick the right permission mode.** `supervised` or `manual` modes preserve human-in-the-loop on tool calls; `trust` is fine for bounded, well-understood automations but removes that gate.
 - **Mind the [Unix isolation mode](/guide/multiplayer-unix-isolation).** In `simple` mode the agent runs as the daemon user; in `strict` mode it runs as the matched Agor user's Unix identity, which is what you want when channels span teams.
-- **Rotate tokens.** Bot/app tokens and channel keys should be rotated like any other secret.
+- **Rotate tokens.** Bot tokens, app tokens, private keys, and webhook secrets should be rotated like any other secret.
 
 > **The mental model:** a gateway channel is a remote terminal into an agent that holds the same authority as a human prompting that branch. Configure who can reach it, what it can do, and which identity it runs as — and the rest is normal Agor surface area.
 
 </div>
 
-The Message Gateway connects external messaging platforms to Agor's agent sessions. Message your Slack bot or mention `@agor` on a GitHub PR, and Agor spins up a coding session on the right branch with the right agent — then routes responses back to the platform. Follow-up messages continue the conversation in the same session.
+The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack bot in a channel thread or mention `@agor` on a GitHub PR, and Agor spins up a coding session on the right branch with the right agent — then routes responses back to the platform. In Slack channels, every prompt requires an explicit bot mention; Agor catches the bot up on intervening thread replies when it is mentioned again.
 
 > Currently supports **Slack** and **GitHub**. Discord, WhatsApp, and Telegram connectors are planned.
 
@@ -56,18 +56,18 @@ You can create multiple channels for the same or different branches. For example
 - **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review branch, trust mode, no MCP servers
 - **"Codex Runner"** — Codex on a `superset-frontend` branch for quick JS tasks
 
-Each channel gets a unique **channel key** (a UUID) that authenticates inbound messages. The Slack integration uses Socket Mode and the GitHub integration uses API polling — both are outbound-only, so no public webhook URLs are needed.
+Gateway channels keep an internal per-channel key for Agor's generic inbound endpoint, but supported integrations usually do not require you to copy it anywhere. The Slack integration uses Socket Mode and the GitHub integration uses API polling — both are outbound-only, so no public webhook URLs are needed.
 
 ## How It Works
 
-When a message arrives from a platform (e.g., a Slack DM or a GitHub `@agor` mention), the gateway processes it through a simple pipeline:
+When a message arrives from a platform (e.g., a Slack bot mention or a GitHub `@agor` mention), the gateway processes it through a simple pipeline:
 
 1. **Authenticate.** The gateway looks up the channel by its key and verifies it's enabled.
-2. **Map thread to session.** If this is a new thread, create a fresh Agor session on the channel's target branch with the channel's agentic tool configuration. If this thread has been seen before, route to the existing session.
+2. **Map thread to session.** If this is a new platform thread, create a fresh Agor session on the channel's target branch with the channel's agentic tool configuration. If this thread has been seen before for this gateway channel, route the mention to the existing session. Multiple Slack bots can participate in the same Slack thread; each bot gets its own mapping.
 3. **Send prompt.** The message text is sent to the session via Agor's standard prompt flow — task creation, executor spawn, the full pipeline.
 4. **Agent runs.** The coding agent (Claude Code, Codex, etc.) processes the prompt with full access to the branch, MCP servers, and any configured tools.
 5. **Route response back.** When the agent produces a response, Agor's outbound routing hook intercepts it and posts it back into the same platform thread. Formatting is adapted per platform (Slack mrkdwn conversion, GitHub markdown pass-through).
-6. **Repeat.** Follow-up messages in the same thread continue the same session — the agent has full conversation history.
+6. **Repeat.** Slack follow-ups require another explicit mention. When mentioned again, Agor fetches intervening Slack thread replies and includes them as catch-up context before prompting the agent.
 
 ```
 Slack DM                    Agor Daemon                    Agent
@@ -94,6 +94,17 @@ Slack DM                    Agor Daemon                    Agent
 ```
 
 The outbound routing is a lightweight after-hook on message creation. For sessions without a gateway mapping (the vast majority), it's a single database lookup that returns immediately — effectively a no-op.
+
+## Slack thread behavior
+
+In Slack channels, Agor uses a hard mention rule:
+
+- A Slack channel or group thread only starts an Agor session when the bot is explicitly `@mentioned`.
+- Later prompts in that Slack thread also require an explicit mention. Ordinary human replies do not wake the agent.
+- On each mention, Agor looks up Slack thread replies since the bot last received a prompt and includes them as catch-up context.
+- The same Slack thread can involve multiple Agor/Slack bots. Each explicitly mentioned bot maps the thread to its own Agor session.
+
+This keeps normal team discussions from turning into implicit agent prompts while still making late mentions feel natural.
 
 ## Setting Up Slack Integration
 
@@ -333,7 +344,7 @@ The `blocks` field is opaque platform-specific data — currently only the Slack
 
 - **Bot doesn't respond to `@agor` mentions.** Check daemon logs for `[github] Watching N repos` and `[github] Starting poll loop`. Verify the App ID, private key, and installation ID are correct. Ensure the app is installed on the org with the right repos selected.
 - **"GitHub App authentication failed."** The private key or app ID may be wrong. Re-check credentials. If you regenerated the private key on GitHub, update it in the channel config.
-- **Mentions detected but no session created.** The `require_mention` setting may be filtering incorrectly. Check that `mention_name` matches your app's slug (default: `agor`). Mentions inside code blocks are ignored by design.
+- **Mentions detected but no session created.** Check that `mention_name` matches your app's slug (default: `agor`). Mentions inside code blocks are ignored by design.
 - **Response posted as wrong user.** GitHub comments should appear as the app's bot identity (e.g., `agor[bot]`). If comments appear as a human user, something is bypassing the connector and using a personal `GITHUB_TOKEN` instead.
 - **Rate limit errors.** At 15s polling with 5 repos, you use ~1,200 req/hour out of 5,000. If you're monitoring many repos, increase `poll_interval_ms` or use `watch_repos` to narrow scope.
 
@@ -341,7 +352,7 @@ The `blocks` field is opaque platform-specific data — currently only the Slack
 
 - **Bot doesn't receive messages.** Confirm the Azure Bot's **Messaging endpoint** points at `https://<your-daemon-host>/api/messages` and that the host is reachable from Azure. Check daemon logs for `[teams] Webhook server listening on port ...`.
 - **"Authentication failed" or replies never send.** Verify the **App ID**, **App Password** (the secret _value_), and **Tenant ID** are correct. A wrong or expired client secret blocks the bot from acquiring a token to reply.
-- **Bot doesn't respond to channel mentions.** In channels and group chats the bot only responds when `@mentioned` unless `require_mention` is disabled. Make sure the app is installed with the `team`/`groupChat` scope.
+- **Bot doesn't respond to channel mentions.** In channels and group chats the bot only responds when `@mentioned`. Make sure the app is installed with the `team`/`groupChat` scope.
 - **Port already in use.** The default webhook port is `3978`. Change **Webhook Port** in the channel config if it collides with another service.
 
 ### General

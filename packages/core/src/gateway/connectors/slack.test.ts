@@ -500,6 +500,135 @@ describe('SlackConnector outbound target resolution', () => {
   });
 });
 
+describe('SlackConnector.fetchThreadHistory', () => {
+  it('normalizes Slack thread replies and filters bot messages by default', async () => {
+    const calls: Array<{ method: string; args: unknown }> = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { botUserId: string }).botUserId = 'U_BOT';
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        replies: async (args: unknown) => {
+          calls.push({ method: 'replies', args });
+          return {
+            ok: true,
+            has_more: true,
+            messages: [
+              { ts: '1700000000.000000', user: 'U1', text: 'hello' },
+              { ts: '1700000001.000000', bot_id: 'B1', text: 'bot output' },
+              { ts: '1700000002.000000', user: 'U2', text: '<@U_BOT> help' },
+            ],
+          };
+        },
+      },
+      users: {
+        info: async ({ user }: { user: string }) => {
+          calls.push({ method: 'users.info', args: { user } });
+          return {
+            ok: true,
+            user: {
+              real_name: user,
+              profile: {
+                display_name: user === 'U1' ? 'Alice' : 'Bob',
+                email: `${user.toLowerCase()}@example.com`,
+              },
+            },
+          };
+        },
+      },
+    };
+
+    const history = await connector.fetchThreadHistory({
+      threadId: 'C123-1700000000.000000',
+      oldestTs: '1699999999.000000',
+      latestTs: '1700000002.000000',
+      inclusive: true,
+      triggerTs: '1700000002.000000',
+      limit: 999,
+    });
+
+    expect(calls[0]).toEqual({
+      method: 'replies',
+      args: {
+        channel: 'C123',
+        ts: '1700000000.000000',
+        limit: 200,
+        oldest: '1699999999.000000',
+        latest: '1700000002.000000',
+        inclusive: true,
+      },
+    });
+    expect(history).toMatchObject({
+      threadId: 'C123-1700000000.000000',
+      channel: 'C123',
+      thread_ts: '1700000000.000000',
+      has_more: true,
+      messages: [
+        {
+          ts: '1700000000.000000',
+          iso_time: '2023-11-14T22:13:20.000Z',
+          user_id: 'U1',
+          user_name: 'Alice',
+          actor_label: 'Alice',
+          text: 'hello',
+          is_bot: false,
+          is_trigger: false,
+          is_mention: false,
+        },
+        {
+          ts: '1700000002.000000',
+          iso_time: '2023-11-14T22:13:22.000Z',
+          user_id: 'U2',
+          user_name: 'Bob',
+          actor_label: 'Bob',
+          text: '<@U_BOT> help',
+          is_bot: false,
+          is_trigger: true,
+          is_mention: true,
+        },
+      ],
+    });
+  });
+
+  it('applies the requested limit after bot-message filtering when possible', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        replies: async (args: unknown) => {
+          calls.push(args);
+          return {
+            ok: true,
+            has_more: false,
+            messages: [
+              { ts: '1700000000.000000', bot_id: 'B1', text: 'lifecycle' },
+              { ts: '1700000001.000000', bot_id: 'B1', text: 'still lifecycle' },
+              { ts: '1700000002.000000', user: 'U1', text: 'human one' },
+              { ts: '1700000003.000000', bot_id: 'B1', text: 'bot output' },
+              { ts: '1700000004.000000', user: 'U2', text: 'human two' },
+            ],
+          };
+        },
+      },
+      users: {
+        info: async ({ user }: { user: string }) => ({
+          ok: true,
+          user: { profile: { display_name: user } },
+        }),
+      },
+    };
+
+    const history = await connector.fetchThreadHistory({
+      threadId: 'C123-1700000000.000000',
+      limit: 2,
+      includeBotMessages: false,
+    });
+
+    expect(calls[0]).toMatchObject({ limit: 8 });
+    expect(history.messages.map((message) => message.text)).toEqual(['human one', 'human two']);
+    expect(history.has_more).toBe(false);
+  });
+});
+
 // Mirrors SECTION_MAX_CHARS in slack.ts; kept in the test as a lower-bound
 // sanity check (we expect the legacy mrkdwn fallback to carry more than this).
 const SECTION_MAX_CHARS_TEST = 3000;

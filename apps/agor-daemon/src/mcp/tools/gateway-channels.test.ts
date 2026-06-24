@@ -1,5 +1,19 @@
+import {
+  BranchRepository,
+  GatewayChannelRepository,
+  ThreadSessionMapRepository,
+} from '@agor/core/db';
+import { getConnector } from '@agor/core/gateway';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@agor/core/gateway', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/gateway')>();
+  return {
+    ...actual,
+    getConnector: vi.fn(),
+  };
+});
 
 type ServiceStub = Record<string, (...args: unknown[]) => unknown>;
 function makeFakeApp(services: Record<string, ServiceStub>) {
@@ -35,6 +49,50 @@ async function captureTools(role: 'admin' | 'member' = 'admin', app = makeFakeAp
   });
   return tools;
 }
+
+const slackChannel = {
+  id: 'chan-1',
+  created_by: 'admin-1',
+  name: 'Eng Slack',
+  channel_type: 'slack',
+  target_branch_id: 'branch-1',
+  agor_user_id: 'user-1',
+  channel_key: 'raw-channel-key',
+  config: { bot_token: 'xoxb-secret', app_token: 'xapp-secret' },
+  agentic_config: null,
+  enabled: true,
+  created_at: '2026-06-22T00:00:00.000Z',
+  updated_at: '2026-06-22T00:00:00.000Z',
+  last_message_at: null,
+};
+
+const branch = {
+  branch_id: 'branch-1',
+  name: 'slack-work',
+  others_can: 'view',
+};
+
+const threadMapping = {
+  id: 'map-1',
+  channel_id: 'chan-1',
+  thread_id: 'C123-171234.000100',
+  session_id: 'sess-42',
+  branch_id: 'branch-1',
+  created_at: '2026-06-22T00:00:00.000Z',
+  last_message_at: '2026-06-22T00:01:00.000Z',
+  status: 'active',
+  metadata: {
+    slack_last_delivered_ts: '171233.000099',
+    slack_last_summon_ts: '171234.000100',
+    slack_active_thread_id: 'C123-171234.000100',
+    slack_bot_user_id: 'U_BOT',
+  },
+};
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.mocked(getConnector).mockReset();
+});
 
 describe('agor_gateway_channels MCP tools', () => {
   it('validates Slack Socket Mode config on create', async () => {
@@ -292,6 +350,208 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(services.find).not.toHaveBeenCalled();
     expect(services.create).not.toHaveBeenCalled();
     expect(services.patch).not.toHaveBeenCalled();
+  });
+
+  it('validates Slack thread history lookup inputs', async () => {
+    const tools = await captureTools('member');
+
+    expect(
+      tools.agor_gateway_slack_thread_history_get.cfg.inputSchema.safeParse({
+        sessionId: 'sess-42',
+      }).success
+    ).toBe(true);
+    expect(
+      tools.agor_gateway_slack_thread_history_get.cfg.inputSchema.safeParse({
+        gatewayChannelId: 'chan-1',
+        threadId: 'C123-171234.000100',
+      }).success
+    ).toBe(true);
+    const missingExplicit = tools.agor_gateway_slack_thread_history_get.cfg.inputSchema.safeParse({
+      gatewayChannelId: 'chan-1',
+    });
+    expect(missingExplicit.success).toBe(false);
+    expect(String(missingExplicit.error)).toContain('threadId is required');
+  });
+
+  it('fetches Slack thread history by session mapping without exposing tokens', async () => {
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: 'C123-171234.000100',
+      channel: 'C123',
+      thread_ts: '171234.000100',
+      has_more: true,
+      messages: [
+        {
+          ts: '171234.000100',
+          iso_time: '2026-06-22T00:00:00.000Z',
+          user_id: 'U1',
+          user_name: 'alice',
+          actor_label: 'Alice',
+          text: '<@U_BOT> please review',
+          is_bot: false,
+          is_trigger: true,
+          is_mention: true,
+        },
+      ],
+    }));
+    vi.mocked(getConnector).mockReturnValue({ fetchThreadHistory } as any);
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findBySession').mockResolvedValue(
+      threadMapping as any
+    );
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const sessionsGet = vi.fn(async () => ({ session_id: 'sess-42', branch_id: 'branch-1' }));
+    const tools = await captureTools('member', makeFakeApp({ sessions: { get: sessionsGet } }));
+    const result = await tools.agor_gateway_slack_thread_history_get.handler({
+      sessionId: 'sess-42',
+      oldestTs: '171233.000099',
+      latestTs: '171234.000100',
+      inclusive: true,
+      limit: 999,
+      includeBotMessages: true,
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(sessionsGet).toHaveBeenCalledWith('sess-42', {
+      authenticated: true,
+      user: { user_id: 'user-1', role: 'member' },
+    });
+    expect(fetchThreadHistory).toHaveBeenCalledWith({
+      threadId: 'C123-171234.000100',
+      oldestTs: '171233.000099',
+      latestTs: '171234.000100',
+      inclusive: true,
+      limit: 200,
+      includeBotMessages: true,
+      triggerTs: '171234.000100',
+    });
+    expect(payload.warning).toContain('untrusted external content');
+    expect(payload.gateway_channel).toMatchObject({
+      id: 'chan-1',
+      name: 'Eng Slack',
+      channel_type: 'slack',
+      target_branch_id: 'branch-1',
+      target_branch_name: 'slack-work',
+    });
+    expect(payload.thread).toMatchObject({
+      thread_id: 'C123-171234.000100',
+      session_id: 'sess-42',
+      mapping_id: 'map-1',
+      slack_last_delivered_ts: '171233.000099',
+      slack_bot_user_id: 'U_BOT',
+    });
+    expect(payload.pagination).toMatchObject({
+      requested_limit: 200,
+      returned: 1,
+      has_more: true,
+      truncated: true,
+    });
+    expect(payload.messages[0]).toMatchObject({
+      actor_label: 'Alice',
+      text: '<@U_BOT> please review',
+      is_mention: true,
+      is_trigger: true,
+    });
+    expect(JSON.stringify(payload)).not.toContain('xoxb-secret');
+    expect(JSON.stringify(payload)).not.toContain('xapp-secret');
+    expect(JSON.stringify(payload)).not.toContain('channel_key');
+  });
+
+  it('fetches explicit Slack thread history for callers with branch all permission', async () => {
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: 'C123-171234.000100',
+      channel: 'C123',
+      thread_ts: '171234.000100',
+      has_more: false,
+      messages: [
+        {
+          ts: '171234.000200',
+          iso_time: '2026-06-22T00:00:01.000Z',
+          actor_label: 'bob',
+          text: 'more context',
+          is_bot: false,
+          is_trigger: true,
+          is_mention: false,
+        },
+      ],
+    }));
+    vi.mocked(getConnector).mockReturnValue({ fetchThreadHistory } as any);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+    vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
+    vi.spyOn(BranchRepository.prototype, 'resolveUserPermission').mockResolvedValue('all');
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread').mockResolvedValue(
+      null
+    );
+
+    const tools = await captureTools('member');
+    const result = await tools.agor_gateway_slack_thread_history_get.handler({
+      gatewayChannelId: 'chan-1',
+      threadId: 'C123-171234.000100',
+      latestTs: '171234.000200',
+      format: 'markdown',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(fetchThreadHistory).toHaveBeenCalledWith({
+      threadId: 'C123-171234.000100',
+      latestTs: '171234.000200',
+      limit: 50,
+      includeBotMessages: false,
+      triggerTs: '171234.000200',
+    });
+    expect(payload.thread).toMatchObject({
+      source: 'explicit',
+      thread_id: 'C123-171234.000100',
+    });
+    expect(payload.markdown).toContain('# Slack thread C123-171234.000100');
+    expect(payload.markdown).toContain('more context');
+    expect(payload.messages).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toContain('xoxb-secret');
+  });
+
+  it('denies explicit Slack thread history without branch all permission', async () => {
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+    vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
+    vi.spyOn(BranchRepository.prototype, 'resolveUserPermission').mockResolvedValue('view');
+    const findByChannelAndThread = vi.spyOn(
+      ThreadSessionMapRepository.prototype,
+      'findByChannelAndThread'
+    );
+
+    const tools = await captureTools('member');
+    await expect(
+      tools.agor_gateway_slack_thread_history_get.handler({
+        gatewayChannelId: 'chan-1',
+        threadId: 'C123-171234.000100',
+      })
+    ).rejects.toThrow("'all' branch permission");
+
+    expect(getConnector).not.toHaveBeenCalled();
+    expect(findByChannelAndThread).not.toHaveBeenCalled();
+  });
+
+  it('rejects Slack history for non-Slack gateway mappings before connector use', async () => {
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findBySession').mockResolvedValue(
+      threadMapping as any
+    );
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue({
+      ...slackChannel,
+      channel_type: 'github',
+      config: { private_key: 'secret' },
+    } as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools(
+      'member',
+      makeFakeApp({ sessions: { get: vi.fn(async () => ({ session_id: 'sess-42' })) } })
+    );
+    await expect(
+      tools.agor_gateway_slack_thread_history_get.handler({ sessionId: 'sess-42' })
+    ).rejects.toThrow('not slack');
+
+    expect(getConnector).not.toHaveBeenCalled();
   });
 
   it('emits outbound messages through the gateway service without returning secrets', async () => {

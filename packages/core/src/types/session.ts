@@ -586,6 +586,12 @@ export interface GatewaySource {
   github_issue_number?: number;
   /** GitHub-specific: only post last message */
   last_message_only?: boolean;
+  /** Slack-specific provenance */
+  slack_team_id?: string;
+  slack_channel_id?: string;
+  slack_channel_name?: string;
+  slack_root_ts?: string;
+  slack_trigger_ts?: string;
 }
 
 /**

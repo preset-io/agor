@@ -13,9 +13,11 @@ const sessionUrl = 'https://agor.sandbox.preset.zone/ui/s/019e6fca/';
 
 describe('formatGatewaySystemMessage', () => {
   it('formats Slack session-created messages without markdown emphasis wrappers', () => {
-    expect(formatGatewaySystemMessage('slack', `Session created: ${sessionUrl}`)).toBe(
-      `Agor: Session created: <${sessionUrl}|View session>`
-    );
+    const formatted = formatGatewaySystemMessage('slack', `Session created: ${sessionUrl}`);
+
+    expect(formatted).toContain(`Agor: Session created: <${sessionUrl}|View session>.`);
+    expect(formatted).toContain('Mention me again to follow up.');
+    expect(formatted).toContain('Mention me again to follow up.');
   });
 
   it('keeps generic Slack system messages plain', () => {
@@ -31,10 +33,10 @@ describe('formatGatewaySystemMessage', () => {
   it('formats Slack follow-up routing messages with a clickable session link', () => {
     const text = formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl);
 
-    expect(text).toBe(`Follow-up received — routing to [session](${sessionUrl}) ...`);
-    expect(formatGatewaySystemMessage('slack', text)).toBe(
-      `Agor: Follow-up received — routing to <${sessionUrl}|session> ...`
-    );
+    expect(text).toBe(`Mention received — routing to [session](${sessionUrl}).`);
+    const formatted = formatGatewaySystemMessage('slack', text);
+    expect(formatted).toContain(`Agor: Mention received — routing to <${sessionUrl}|session>.`);
+    expect(formatted).toContain('Mention me again to follow up.');
   });
 
   it('formats Slack system messages as muted context-block payloads', () => {
@@ -54,7 +56,7 @@ describe('formatGatewaySystemMessage', () => {
       `session ${sessionShortId}`
     );
     expect(formatGatewayFollowUpRoutingMessage(sessionId, null)).toBe(
-      `Follow-up received — routing to session ${sessionShortId} ...`
+      `Mention received — routing to session ${sessionShortId}.`
     );
   });
 
@@ -63,7 +65,7 @@ describe('formatGatewaySystemMessage', () => {
       `Session created: ${sessionUrl}`
     );
     expect(formatGatewaySessionCreatedMessage(sessionId, null)).toBe(
-      `Session ${sessionShortId} created, sending prompt to agent...`
+      `Session ${sessionShortId} created, sending prompt to agent.`
     );
   });
 
