@@ -88,6 +88,15 @@ function renderWizard(overrides: Partial<ComponentProps<typeof OnboardingWizard>
   return { ...render(<OnboardingWizard {...props} />), props, client, boardsService };
 }
 
+async function continueWithCodexCliAuth() {
+  const codexOption = Array.from(
+    document.querySelectorAll<HTMLInputElement>('input[name="recommended-agent"]')
+  ).find((option) => option.value === 'codex');
+  if (!codexOption) throw new Error('Codex provider option was not found');
+  fireEvent.click(codexOption);
+  fireEvent.click(await screen.findByRole('button', { name: /continue with codex cli auth/i }));
+}
+
 describe('OnboardingWizard', () => {
   it('starts on assistant name and emoji only, then advances to LLM setup', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
@@ -141,6 +150,7 @@ describe('OnboardingWizard', () => {
     const codexOption = providerOptions.find((option) => option.value === 'codex');
     expect(claudeOption).toBeChecked();
     expect(screen.getAllByText(/ANTHROPIC_API_KEY/).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: /continue without key/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Subscription'));
     expect(screen.getByText(/claude setup-token/)).toBeInTheDocument();
@@ -186,7 +196,7 @@ describe('OnboardingWizard', () => {
     expect(document.querySelector('.ant-modal-body')).toBe(body);
     expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
 
-    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+    await continueWithCodexCliAuth();
     expect(await screen.findByText(/Setting up Agor/i)).toBeInTheDocument();
     expect(screen.getByText(/Cloning assistant framework/i)).toBeInTheDocument();
     expect(document.querySelector('.ant-modal-body')).toBe(body);
@@ -208,7 +218,7 @@ describe('OnboardingWizard', () => {
     const view = renderWizard({ repoById, onCreateRepo });
 
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+    await continueWithCodexCliAuth();
 
     await waitFor(() => expect(onCreateRepo).toHaveBeenCalled());
     expect(screen.getByText(/Cloning assistant framework/i)).toBeInTheDocument();
@@ -237,7 +247,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ repoById, onCreateRepo, onCreateBranch });
 
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+    await continueWithCodexCliAuth();
 
     await waitFor(() => expect(onCreateBranch).toHaveBeenCalled());
     expect(onCreateRepo).not.toHaveBeenCalled();

@@ -940,7 +940,6 @@ export function OnboardingWizard({
                   Test Connection
                 </Button>
               )}
-              {!usesCodexCliAuth && <Button onClick={startSetup}>Continue without key</Button>}
             </Space>
           </>
         )}
