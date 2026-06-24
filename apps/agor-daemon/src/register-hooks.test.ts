@@ -255,7 +255,6 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: OTHER,
         callerRole: 'member',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(true);
   });
@@ -265,7 +264,6 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: OTHER,
         callerRole: 'superadmin',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(true);
   });
@@ -275,7 +273,6 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: 'executor-service',
         callerRole: 'service',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(true);
   });
@@ -285,7 +282,6 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: CREATOR,
         callerRole: 'viewer',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(false);
   });
@@ -295,7 +291,6 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: undefined,
         callerRole: undefined,
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(false);
   });
@@ -305,7 +300,6 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: '',
         callerRole: 'member',
-        sessionCreatedBy: '',
       })
     ).toBe(false);
   });

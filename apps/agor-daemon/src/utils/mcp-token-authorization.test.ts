@@ -8,7 +8,6 @@ describe('session actor authorization', () => {
     const params = {
       callerUserId: 'user-collaborator',
       callerRole: 'member',
-      sessionCreatedBy: creatorId,
     };
     expect(canReceiveMcpTokenForSession(params)).toBe(true);
   });
@@ -17,7 +16,6 @@ describe('session actor authorization', () => {
     const params = {
       callerUserId: creatorId,
       callerRole: 'viewer',
-      sessionCreatedBy: creatorId,
     };
     expect(canReceiveMcpTokenForSession(params)).toBe(false);
   });
@@ -26,7 +24,6 @@ describe('session actor authorization', () => {
     const params = {
       callerUserId: 'user-admin',
       callerRole: 'superadmin',
-      sessionCreatedBy: creatorId,
     };
     expect(canReceiveMcpTokenForSession(params)).toBe(true);
   });
@@ -35,7 +32,6 @@ describe('session actor authorization', () => {
     const params = {
       callerUserId: undefined,
       callerRole: 'service',
-      sessionCreatedBy: creatorId,
     };
     expect(canReceiveMcpTokenForSession(params)).toBe(true);
   });
@@ -44,7 +40,6 @@ describe('session actor authorization', () => {
     const params = {
       callerUserId: undefined,
       callerRole: undefined,
-      sessionCreatedBy: creatorId,
     };
     expect(canReceiveMcpTokenForSession(params)).toBe(false);
   });

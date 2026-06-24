@@ -2396,7 +2396,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             !canReceiveMcpTokenForSession({
               callerUserId: callerUser?.user_id,
               callerRole: callerUser?.role,
-              sessionCreatedBy: session.created_by,
             })
           ) {
             return context;
@@ -2470,10 +2469,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             return context;
           }
 
-          // Gate MCP token issuance on member+ role (see `after: get` note).
+          // Gate MCP token issuance through the same caller-scoped policy as `after:get`.
           const callerUser = (context.params as AuthenticatedParams).user;
-          const callerRole = callerUser?.role;
-          if (!hasMinimumRole(callerRole, ROLES.MEMBER)) {
+          if (
+            !canReceiveMcpTokenForSession({
+              callerUserId: callerUser?.user_id,
+              callerRole: callerUser?.role,
+            })
+          ) {
             return context;
           }
 

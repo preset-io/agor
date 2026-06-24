@@ -1252,7 +1252,7 @@ export async function writeClaudeCliMcpConfigForSession(
     })
   ) {
     console.warn(
-      `[claude-cli-integration] not writing owner-scoped MCP config for session ${shortId(session.session_id)}: caller ${opts.actor.user_id ?? 'anonymous'} cannot receive session creator token`
+      `[claude-cli-integration] not writing owner-scoped MCP config for session ${shortId(session.session_id)}: caller ${opts.actor.user_id ?? 'anonymous'} is not allowed to control the owner-scoped CLI MCP config`
     );
     return undefined;
   }
