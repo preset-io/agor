@@ -3,8 +3,6 @@
 // https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
 import modelPrices from './litellm-openai-model-prices.json' with { type: 'json' };
 
-const LONG_CONTEXT_INPUT_THRESHOLD_TOKENS = 272_000;
-
 interface LiteLlmModelPricing {
   input_cost_per_token?: number;
   input_cost_per_token_above_272k_tokens?: number;
@@ -25,18 +23,6 @@ export function getLiteLlmPricingForModel(modelId: string): LiteLlmModelPricing 
   return prices[normalized] ?? prices[modelId];
 }
 
-function selectPrice(
-  pricing: LiteLlmModelPricing,
-  baseKey: keyof LiteLlmModelPricing,
-  longContextKey: keyof LiteLlmModelPricing,
-  useLongContextPricing: boolean
-): number | undefined {
-  if (useLongContextPricing) {
-    return pricing[longContextKey] ?? pricing[baseKey];
-  }
-  return pricing[baseKey];
-}
-
 export interface CodexEstimatedCostInput {
   modelId: string;
   inputTokens: number;
@@ -49,6 +35,10 @@ export interface CodexEstimatedCostInput {
  *
  * This is deliberately an estimate:
  * - Codex SDK does not provide per-turn cost.
+ * - Codex `turn.completed.usage` is cumulative across the agent loop, so it
+ *   cannot tell us whether any single model request crossed a long-context
+ *   pricing tier. Use base per-token prices until a per-request tier signal is
+ *   available.
  * - ChatGPT subscription/native-auth Codex billing may not equal API pricing.
  * - Service tiers, batch/flex/priority, regional uplifts, and non-token tool
  *   charges are not inferred from `turn.completed.usage`.
@@ -61,27 +51,10 @@ export function estimateCodexCostUsd(input: CodexEstimatedCostInput): number | u
   const outputTokens = Math.max(0, input.outputTokens || 0);
   const cacheReadTokens = Math.min(Math.max(0, input.cacheReadTokens || 0), inputTokens);
   const uncachedInputTokens = Math.max(0, inputTokens - cacheReadTokens);
-  const useLongContextPricing = inputTokens > LONG_CONTEXT_INPUT_THRESHOLD_TOKENS;
 
-  const inputCostPerToken = selectPrice(
-    pricing,
-    'input_cost_per_token',
-    'input_cost_per_token_above_272k_tokens',
-    useLongContextPricing
-  );
-  const outputCostPerToken = selectPrice(
-    pricing,
-    'output_cost_per_token',
-    'output_cost_per_token_above_272k_tokens',
-    useLongContextPricing
-  );
-  const cacheReadCostPerToken =
-    selectPrice(
-      pricing,
-      'cache_read_input_token_cost',
-      'cache_read_input_token_cost_above_272k_tokens',
-      useLongContextPricing
-    ) ?? inputCostPerToken;
+  const inputCostPerToken = pricing.input_cost_per_token;
+  const outputCostPerToken = pricing.output_cost_per_token;
+  const cacheReadCostPerToken = pricing.cache_read_input_token_cost ?? inputCostPerToken;
 
   if (uncachedInputTokens > 0 && inputCostPerToken === undefined) return undefined;
   if (cacheReadTokens > 0 && cacheReadCostPerToken === undefined) return undefined;

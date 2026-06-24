@@ -111,6 +111,8 @@ function getCodexHome(): string {
 }
 
 async function findCodexRolloutFile(threadId: string): Promise<string | undefined> {
+  if (!threadId) return undefined;
+
   const sessionsDir = path.join(getCodexHome(), 'sessions');
 
   async function walk(dir: string): Promise<string | undefined> {

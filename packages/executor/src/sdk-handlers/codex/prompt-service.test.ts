@@ -48,6 +48,7 @@ let mockInstanceBaseUrls: Array<string | undefined> = [];
 let mockInstanceConfigs: Array<unknown> = [];
 let mockClosedInstanceIds: number[] = [];
 let mockStreamEvents: Array<Record<string, unknown>> = [];
+let mockStartThreadId: string | undefined = 'mock-thread-id';
 
 async function* streamMockEvents() {
   for (const event of mockStreamEvents) {
@@ -81,7 +82,7 @@ vi.mock('@agor/core/sdk', () => {
 
     startThread() {
       return {
-        id: 'mock-thread-id',
+        id: mockStartThreadId,
         run: vi.fn(),
         runStreamed: vi.fn().mockResolvedValue({ events: streamMockEvents() }),
       };
@@ -124,6 +125,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockInstanceConfigs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
+    mockStartThreadId = 'mock-thread-id';
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -873,6 +875,99 @@ describe('CodexPromptService - tool payload mapping', () => {
         maxTokens: 258_400,
         percentage: 6,
       });
+    } finally {
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      await fs.rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('does not scan rollout JSONL files when the SDK thread id is missing', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-rollout-missing-thread',
+      branch_id: 'branch-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: null,
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    });
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
+      path: process.cwd(),
+    });
+
+    const previousCodexHome = process.env.CODEX_HOME;
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-codex-home-'));
+    mockStartThreadId = undefined;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const rolloutDir = path.join(codexHome, 'sessions', '2026', '06', '24');
+      await fs.mkdir(rolloutDir, { recursive: true });
+      await fs.writeFile(
+        path.join(rolloutDir, 'rollout-2026-06-24T00-00-00-unrelated-thread.jsonl'),
+        `${JSON.stringify({
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              last_token_usage: { total_tokens: 99_999 },
+              model_context_window: 258_400,
+            },
+          },
+        })}
+`,
+        'utf8'
+      );
+
+      mockStreamEvents = [
+        { type: 'turn.started' },
+        {
+          type: 'turn.completed',
+          usage: {
+            input_tokens: 1_000,
+            cached_input_tokens: 500,
+            output_tokens: 300,
+          },
+        },
+      ];
+
+      const emitted: Array<Record<string, unknown>> = [];
+      for await (const event of service.promptSessionStreaming(
+        'session-rollout-missing-thread' as any,
+        'review'
+      )) {
+        emitted.push(event as Record<string, unknown>);
+      }
+
+      const completeEvent = emitted.find((event) => event.type === 'complete');
+      expect(completeEvent?.rawContextUsage).toBeUndefined();
     } finally {
       if (previousCodexHome === undefined) {
         delete process.env.CODEX_HOME;

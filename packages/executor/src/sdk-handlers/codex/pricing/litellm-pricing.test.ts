@@ -23,7 +23,7 @@ describe('LiteLLM Codex pricing snapshot', () => {
     expect(cost).toBeCloseTo(0.062, 8);
   });
 
-  it('uses long-context pricing above 272k input tokens', () => {
+  it('does not infer long-context pricing from cumulative Codex input tokens', () => {
     const cost = estimateCodexCostUsd({
       modelId: 'gpt-5.5',
       inputTokens: 300_000,
@@ -31,9 +31,12 @@ describe('LiteLLM Codex pricing snapshot', () => {
       outputTokens: 10_000,
     });
 
-    // gpt-5.5 long-context snapshot: 200k uncached input * $0.00001 +
-    // 100k cached input * $0.000001 + 10k output * $0.000045.
-    expect(cost).toBeCloseTo(2.55, 8);
+    // Codex SDK input usage is cumulative across the agent loop; 300k here
+    // does not prove any single model request crossed the 272k tier. Use base
+    // prices until Codex exposes per-request pricing-tier information:
+    // 200k uncached input * $0.000005 +
+    // 100k cached input * $0.0000005 + 10k output * $0.00003.
+    expect(cost).toBeCloseTo(1.35, 8);
   });
 
   it('returns undefined for unknown explicit models instead of guessing', () => {
