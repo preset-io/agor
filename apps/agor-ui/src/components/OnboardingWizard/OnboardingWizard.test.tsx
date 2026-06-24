@@ -141,6 +141,17 @@ describe('OnboardingWizard', () => {
     expect(onCreateRepo).not.toHaveBeenCalled();
   });
 
+  it('keeps onboarding open when skip confirmation is cancelled', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete });
+
+    fireEvent.click(screen.getByRole('button', { name: /skip setup/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /go back/i }));
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByText(/Welcome to Agor/i)).toBeInTheDocument();
+  });
+
   it('shows recommended provider cards plus a secondary selector', async () => {
     const { baseElement } = renderWizard();
 
