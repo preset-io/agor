@@ -135,6 +135,14 @@ services:
       # recommended combo for instant E2E testing is SEED=true LOAD_FIXTURES=true
       - LOAD_FIXTURES=${LOAD_FIXTURES:-false}
 
+      # Perf-testing tooling (opt-in scale knobs for the LOAD_FIXTURES seeder).
+      # Both default to NO behavior change. FIXTURE_SCALE=N creates N copies of
+      # the demo workspace (N boards, N×branches/sessions) to stress initial
+      # load; FIXTURE_BIG_BOARD_NODES=N adds one "Perf Big Board" with N canvas
+      # nodes to stress pan/drag. e.g. FIXTURE_SCALE=50 LOAD_FIXTURES=true ... up
+      - FIXTURE_SCALE=${FIXTURE_SCALE:-1}
+      - FIXTURE_BIG_BOARD_NODES=${FIXTURE_BIG_BOARD_NODES:-0}
+
       # Pass through API keys from host (if set)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
