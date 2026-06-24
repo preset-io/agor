@@ -22,11 +22,11 @@ type ShortcodeMap = Record<string, string | string[]>;
 
 /**
  * Module-level cache shared by every hook instance. The emojibase data
- * (`emojibase-data/en/compact.json` + shortcodes, ~1.2MB raw) used to be a
- * static import that landed in the initial bundle and was parsed on first
- * render of the always-mounted AutocompleteTextarea. We now pull it in via a
- * dynamic `import()` gated on first need (idle warm-up or first `:` trigger),
- * memoizing the built option list so it's parsed at most once.
+ * (`emojibase-data/en/compact.json` + shortcodes, ~1.2MB raw) is heavy, so we
+ * keep it off the initial bundle and out of the always-mounted
+ * AutocompleteTextarea's first render by pulling it in via a dynamic `import()`
+ * gated on first need (idle warm-up or first `:` trigger), memoizing the built
+ * option list so it's parsed at most once.
  */
 let emojiOptionsCache: EmojiOption[] | null = null;
 let emojiOptionsPromise: Promise<EmojiOption[]> | null = null;

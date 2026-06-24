@@ -1,10 +1,10 @@
 /**
  * Lazy-loaded wrapper around AppNode (a React Flow node type).
  *
- * AppNode statically imports `@codesandbox/sandpack-react` (~200KB). It used
- * to be imported eagerly by SessionCanvas, so Sandpack landed in the board
- * chunk even for boards that have no app nodes. Wrapping it in React.lazy
- * means Sandpack is fetched only when a board actually renders an app node.
+ * AppNode statically imports `@codesandbox/sandpack-react` (~200KB). Wrapping
+ * it in React.lazy keeps Sandpack off the board chunk so it is fetched only
+ * when a board actually renders an app node, rather than for every board
+ * regardless of whether it has app nodes.
  *
  * The fallback is a small neutral placeholder sized to fill the node so the
  * canvas doesn't jump while the Sandpack chunk downloads. The exported
