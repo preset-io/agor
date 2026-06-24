@@ -13,6 +13,7 @@ import {
   ClockCircleOutlined,
   EllipsisOutlined,
   ForkOutlined,
+  IdcardOutlined,
   LockOutlined,
   NumberOutlined,
   PaperClipOutlined,
@@ -35,7 +36,7 @@ import { ModelSelector } from '../ModelSelector';
 import { PermissionModeSelector } from '../PermissionModeSelector';
 import { TimerPill } from '../Pill';
 import { getModelDisplayName } from '../Pill/modelDisplay';
-import { SessionIdsButton } from '../SessionIds';
+import { SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 
 export interface SessionFooterProps {
@@ -254,7 +255,18 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 <QuestionCircleOutlined
                   style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
                 />
-                <Typography.Text style={{ fontSize: 13, flex: 1 }}>BTW fork</Typography.Text>
+                <Typography.Text
+                  style={{
+                    fontSize: 13,
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
+                  }}
+                >
+                  BTW fork
+                </Typography.Text>
                 <Tooltip
                   title={pinnedItems.includes('btw-fork') ? 'Unpin from bar' : 'Pin to bar'}
                   placement="right"
@@ -319,7 +331,16 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 <BranchesOutlined
                   style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
                 />
-                <Typography.Text style={{ fontSize: 13, flex: 1 }}>
+                <Typography.Text
+                  style={{
+                    fontSize: 13,
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
+                  }}
+                >
                   Spawn subsession
                 </Typography.Text>
                 <Tooltip
@@ -428,7 +449,18 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           <ClockCircleOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
           />
-          <Typography.Text style={{ fontSize: 13, flex: 1 }}>Timer</Typography.Text>
+          <Typography.Text
+            style={{
+              fontSize: 13,
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            Timer
+          </Typography.Text>
           <button
             type="button"
             aria-label={pinnedChips.includes('timer') ? 'Hide timer' : 'Show timer'}
@@ -454,7 +486,18 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
       <div style={{ ...overflowRowStyle, cursor: 'default' }}>
         <ToolOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
-        <Typography.Text style={{ fontSize: 13, flex: 1 }}>Tools</Typography.Text>
+        <Typography.Text
+          style={{
+            fontSize: 13,
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            minWidth: 0,
+          }}
+        >
+          Tools
+        </Typography.Text>
         <button
           type="button"
           aria-label={pinnedChips.includes('tools') ? 'Hide tools' : 'Show tools'}
@@ -480,7 +523,18 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       {modelName && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
           <RobotOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
-          <Typography.Text style={{ fontSize: 13, flex: 1 }}>Model</Typography.Text>
+          <Typography.Text
+            style={{
+              fontSize: 13,
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            Model
+          </Typography.Text>
           <button
             type="button"
             aria-label={pinnedChips.includes('model') ? 'Hide model' : 'Show model'}
@@ -509,7 +563,18 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           <NumberOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
           />
-          <Typography.Text style={{ fontSize: 13, flex: 1 }}>Tokens</Typography.Text>
+          <Typography.Text
+            style={{
+              fontSize: 13,
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            Tokens
+          </Typography.Text>
           <button
             type="button"
             aria-label={pinnedChips.includes('tokens') ? 'Hide tokens' : 'Show tokens'}
@@ -538,7 +603,18 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           <PercentageOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
           />
-          <Typography.Text style={{ fontSize: 13, flex: 1 }}>Context %</Typography.Text>
+          <Typography.Text
+            style={{
+              fontSize: 13,
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            Context %
+          </Typography.Text>
           <button
             type="button"
             aria-label={pinnedChips.includes('context') ? 'Hide context' : 'Show context'}
@@ -564,10 +640,40 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
       <Divider style={{ margin: '6px 0' }} />
 
-      {/* Session IDs */}
-      <div style={{ padding: `0 ${token.sizeUnit * 2}px 4px` }}>
-        <SessionIdsButton session={session} />
-      </div>
+      {/* Session IDs row */}
+      <Popover
+        trigger="click"
+        placement="topLeft"
+        title={
+          <span>
+            <IdcardOutlined style={{ marginRight: 8 }} />
+            Session IDs
+          </span>
+        }
+        content={
+          <div style={{ width: 400, maxWidth: '90vw' }}>
+            <SessionIdsList session={session} />
+          </div>
+        }
+      >
+        <div style={{ ...overflowRowStyle, cursor: 'pointer' }}>
+          <IdcardOutlined
+            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+          />
+          <Typography.Text
+            style={{
+              fontSize: 13,
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            Session IDs
+          </Typography.Text>
+        </div>
+      </Popover>
     </div>
   );
 
@@ -696,10 +802,19 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   height: 22,
                   display: 'inline-flex',
                   alignItems: 'center',
+                  maxWidth: 180,
                 }}
                 data-testid="model-chip"
               >
-                {modelName}
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {modelName}
+                </span>
               </Tag>
             )}
 
