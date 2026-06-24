@@ -61,13 +61,27 @@ export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 // its full-set snapshot ONLY if no live write to the target collection(s)
 // raced the fetch (proven via the per-collection `liveRevisionsRef` counters);
 // if one did, the snapshot is DISCARDED and refetched from a fresh revision
-// baseline — never overlaid/reconciled. The first few retries are immediate
-// (the race window is ~one fetch RTT), then a couple of backoff retries give a
-// short live-write burst time to settle. If it never goes quiet we skip the
-// apply entirely (leave the collection as-is; live subscriptions + the next
-// reconnect/board-switch reconcile) rather than clobber live state.
+// baseline — never overlaid/reconciled.
+//
+// It retries UNTIL it lands a quiet window, and NEVER gives up: skipping the
+// apply forever would leave Home empty/incomplete indefinitely on a busy
+// workspace, because live subscriptions deliver only CHANGES, not a backfill of
+// existing rows (board switching doesn't refetch, and a reconnect may never
+// fire). The first few retries are immediate (the race window is ~one fetch RTT,
+// so a single transient race converges instantly), then capped exponential
+// backoff lets a sustained live-write burst settle without busy-looping. Each
+// retry RE-snapshots the revision and RE-fetches; a racy snapshot is never
+// force-applied. Per-collection quiet windows are short, so this converges fast
+// (branches almost immediately; sessions once their write churn quiets).
+//
+// Delays PRECEDE the attempt they guard (the delay for attempt N runs before
+// fetch N, not after it). Loops are cancelled — not abandoned mid-flight — via
+// the per-collection generation tokens (`hydrationGenerationRef`): a newer
+// hydration (reconnect) or an unmount/reset supersedes older loops so they stop
+// retrying and never apply a stale snapshot or leak a timer.
 const HYDRATION_IMMEDIATE_RETRIES = 4;
-const HYDRATION_BACKOFF_DELAYS_MS = [100, 400] as const;
+const HYDRATION_BACKOFF_BASE_MS = 200;
+const HYDRATION_BACKOFF_CAP_MS = 5000;
 
 // Hydrated collections that the background hydration replaces wholesale. Each
 // has its own live-write revision counter (`liveRevisionsRef`) so a write to
@@ -668,6 +682,26 @@ export function useAgorData(
     liveRevisionsRef.current[collection] += 1;
   }, []);
 
+  // Per-collection hydration generation tokens. Each `runHydration` call bumps
+  // the generation for the collection(s) it owns and captures it; its retry loop
+  // stops (without applying a snapshot or scheduling another timer) the moment a
+  // newer hydration supersedes it (a reconnect-triggered refetch), the component
+  // unmounts, or a logout reset fires — all of which bump these counters. This
+  // is CANCELLATION, not race reconciliation: clobber-safety still comes entirely
+  // from the quiet-window check against `liveRevisionsRef`.
+  const hydrationGenerationRef = useRef<Record<HydratedCollection, number>>({
+    sessions: 0,
+    branches: 0,
+    boardObjects: 0,
+    cards: 0,
+    comments: 0,
+    mcpServers: 0,
+    sessionMcp: 0,
+    gatewayChannels: 0,
+    artifacts: 0,
+    oauth: 0,
+  });
+
   // Fetch all data
   //
   // `silent: true` is used by background refetches (e.g. socket reconnect) that
@@ -720,44 +754,67 @@ export function useAgorData(
         // collection's revision counter before the fetch and re-checking after.
         // If a write raced, the (potentially stale) snapshot is DISCARDED and
         // refetched from a fresh baseline; we NEVER overlay or reconcile a racy
-        // snapshot. After a few immediate retries we back off briefly to let a
-        // write burst settle; if it still never goes quiet we skip the apply
-        // entirely rather than clobber live state (the collection stays as-is —
-        // first paint already rendered it, and live events + the next
-        // reconnect/board-switch reconcile any cross-board gaps).
+        // snapshot. It retries until it lands a quiet window — a few immediate
+        // retries then capped exponential backoff — and never gives up (skipping
+        // forever could leave Home empty/incomplete indefinitely; live events
+        // only deliver changes, not backfill). The loop is cancelled — not
+        // abandoned — on supersession (reconnect), unmount, or logout reset.
         const runHydration = async <T>(
           label: string,
           collections: readonly HydratedCollection[],
           fetchFn: () => Promise<T>,
           apply: (result: T) => void
         ): Promise<void> => {
-          const totalAttempts = HYDRATION_IMMEDIATE_RETRIES + HYDRATION_BACKOFF_DELAYS_MS.length;
-          for (let attempt = 0; attempt < totalAttempts; attempt++) {
+          // Supersede any older loop for these collections and capture our
+          // generation token. The loop bails the instant a newer hydration
+          // (reconnect), an unmount, or a logout reset bumps the generation — so
+          // it never applies a stale snapshot or schedules another timer after
+          // it's been cancelled.
+          const myGeneration = collections.map((c) => (hydrationGenerationRef.current[c] += 1));
+          const isCurrent = () =>
+            collections.every((c, i) => hydrationGenerationRef.current[c] === myGeneration[i]);
+          // Delay PRECEDING attempt N: the first HYDRATION_IMMEDIATE_RETRIES
+          // attempts fire back-to-back (delay 0) so a single transient race
+          // converges instantly; after that, capped exponential backoff lets a
+          // sustained write burst settle.
+          const delayBeforeAttempt = (attempt: number) =>
+            attempt < HYDRATION_IMMEDIATE_RETRIES
+              ? 0
+              : Math.min(
+                  HYDRATION_BACKOFF_BASE_MS * 2 ** (attempt - HYDRATION_IMMEDIATE_RETRIES),
+                  HYDRATION_BACKOFF_CAP_MS
+                );
+
+          // Retry until a quiet-window apply SUCCEEDS (or the loop is cancelled).
+          // We never force-apply a racy snapshot — we just keep re-snapshotting
+          // and re-fetching until no live write races a fetch.
+          for (let attempt = 0; ; attempt++) {
+            const delayMs = delayBeforeAttempt(attempt);
+            if (delayMs > 0) {
+              await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+              if (!isCurrent()) return; // superseded while waiting
+            }
             const before = collections.map((c) => liveRevisionsRef.current[c]);
             let result: T;
             try {
               result = await fetchFn();
             } catch (err) {
               console.warn(`[useAgorData] background ${label} fetch failed:`, err);
-              return;
+              if (!isCurrent()) return; // superseded while fetching
+              // A failed fetch leaves the collection un-hydrated; retrying (with
+              // backoff) is exactly what keeps Home from staying empty forever.
+              continue;
             }
+            if (!isCurrent()) return; // superseded while fetching
             const raced = collections.some((c, i) => liveRevisionsRef.current[c] !== before[i]);
             if (!raced) {
               apply(result);
               return;
             }
             // A live write to one of these collections raced the fetch — discard
-            // this snapshot and retry from a fresh revision baseline.
-            const backoffIndex = attempt - HYDRATION_IMMEDIATE_RETRIES;
-            const delayMs = backoffIndex >= 0 ? HYDRATION_BACKOFF_DELAYS_MS[backoffIndex] : 0;
-            if (delayMs > 0) {
-              await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-            }
+            // this snapshot and retry from a fresh revision baseline (the next
+            // iteration's delay precedes its fetch).
           }
-          console.debug(
-            `[useAgorData] ${label} hydration kept racing across ${totalAttempts} attempts; ` +
-              'skipped apply (live state preserved)'
-          );
         };
 
         // ── Background (non-gated) fetches ──────────────────────────────
@@ -1154,6 +1211,17 @@ export function useAgorData(
           branchById: branchesMap,
           userById: usersMap,
         }));
+        // This wholesale replace is NOT a `runHydration` apply, so it must bump
+        // the revisions of every collection it overwrites — exactly like the
+        // per-mutation realtime handlers do. Critical on the SILENT reconnect
+        // resync: an in-flight hydration whose snapshot predates the disconnect
+        // would otherwise pass its quiet check and clobber this newer reconnect
+        // snapshot (resurrecting data that changed while we were disconnected).
+        // The background hydrations kicked off below re-snapshot AFTER this bump,
+        // so they're unaffected.
+        for (const c of ['sessions', 'branches', 'boardObjects', 'cards', 'comments'] as const) {
+          liveRevisionsRef.current[c] += 1;
+        }
         debugTimer?.endIndexing();
         debugFinishStatus = 'success';
 
@@ -1177,31 +1245,29 @@ export function useAgorData(
         // board-scoped), so hydrate them on every non-silent load (silent
         // reconnect already fetched them full above). repos / users / boards /
         // card-types stay global at first paint, so they need no top-up.
+        //
+        // Sessions and branches hydrate on INDEPENDENT loops (separate fetches,
+        // separate revision guards, separate generation tokens). They were
+        // previously coupled in one runHydration, which meant high-frequency
+        // session-write churn (common when agents stream) could starve the
+        // branch apply indefinitely — and on Home, branches start empty and are
+        // filled ONLY by this hydration, so coupling could leave the board empty
+        // forever. Decoupled, branches apply on their own quiet window (almost
+        // immediately) regardless of session churn.
         if (!silent) {
           void runHydration(
-            'sessions+branches',
-            ['sessions', 'branches'],
+            'sessions',
+            ['sessions'],
             () =>
-              Promise.all([
-                client.service('sessions').findAll({
-                  query: {
-                    archived: false,
-                    $limit: PAGINATION.DEFAULT_LIMIT,
-                    $sort: { updated_at: -1 },
-                  },
-                }),
-                client
-                  .service('branches')
-                  .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
-              ]),
-            ([allSessions, allBranches]) =>
+              client.service('sessions').findAll({
+                query: {
+                  archived: false,
+                  $limit: PAGINATION.DEFAULT_LIMIT,
+                  $sort: { updated_at: -1 },
+                },
+              }),
+            (allSessions) =>
               setMaps((prev) => {
-                // Quiet window proven by runHydration → apply wholesale. Branches
-                // are active-only (the snapshot query is archived:false and the
-                // handlers never keep an archived branch), so a wholesale replace
-                // is complete.
-                const branchById = buildById(allBranches, 'branch_id');
-
                 // The hydration fetches active sessions only. Deep-link-healed
                 // archived sessions (added to `sessionById` so a direct /s/<id>
                 // archived link can open the drawer) are OUT of that query's
@@ -1215,34 +1281,43 @@ export function useAgorData(
                   if (session.archived && !sessions.has(id)) sessions.set(id, session);
                 }
                 const { sessionById, sessionsByBranch } = buildSessionMaps([...sessions.values()]);
-                return { ...prev, sessionById, sessionsByBranch, branchById };
+                return { ...prev, sessionById, sessionsByBranch };
               })
+          );
+          void runHydration(
+            'branches',
+            ['branches'],
+            () =>
+              client
+                .service('branches')
+                .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allBranches) =>
+              // Quiet window proven by runHydration → apply wholesale. Branches
+              // are active-only (the snapshot query is archived:false and the
+              // handlers never keep an archived branch), so a wholesale replace
+              // is complete.
+              setMaps((prev) => ({ ...prev, branchById: buildById(allBranches, 'branch_id') }))
           );
         }
 
         // Board objects / cards / comments: only board-scoped at first paint when
         // a board was resolved (`boardScope` set, non-silent only — silent
         // reconnect already refetches everything global). Top up to the global set.
+        //
+        // Board objects / cards / comments also hydrate on INDEPENDENT loops so
+        // churn in one (e.g. rapid card moves) can't starve another's apply. Each
+        // global snapshot is a superset of its board-scoped first-paint slice, so
+        // no overlay is needed; the quiet-window guard prevents clobber/resurrect.
         if (boardScope) {
           void runHydration(
-            'board-objects+cards+comments',
-            ['boardObjects', 'cards', 'comments'],
+            'board-objects',
+            ['boardObjects'],
             () =>
-              Promise.all([
-                client
-                  .service('board-objects')
-                  .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-                client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-                client
-                  .service('board-comments')
-                  .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-              ]),
-            ([allBoardObjects, allCards, allComments]) =>
+              client
+                .service('board-objects')
+                .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allBoardObjects) =>
               setMaps((prev) => {
-                // Quiet window proven by runHydration → apply the global snapshot
-                // wholesale. It is a superset of the board-scoped first-paint
-                // slice, so no overlay is needed; nothing live raced, so nothing
-                // is clobbered or resurrected.
                 const base = buildBoardObjectMaps(allBoardObjects);
                 return {
                   ...prev,
@@ -1250,10 +1325,24 @@ export function useAgorData(
                   boardObjectsByBoardId: base.boardObjectsByBoardId,
                   boardObjectByBranchId: base.boardObjectByBranchId,
                   boardObjectByCardId: base.boardObjectByCardId,
-                  cardById: buildById(allCards, 'card_id'),
-                  commentById: buildById(allComments, 'comment_id'),
                 };
               })
+          );
+          void runHydration(
+            'cards',
+            ['cards'],
+            () => client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allCards) => setMaps((prev) => ({ ...prev, cardById: buildById(allCards, 'card_id') }))
+          );
+          void runHydration(
+            'board-comments',
+            ['comments'],
+            () =>
+              client
+                .service('board-comments')
+                .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allComments) =>
+              setMaps((prev) => ({ ...prev, commentById: buildById(allComments, 'comment_id') }))
           );
         }
 
@@ -1303,9 +1392,32 @@ export function useAgorData(
   // includes it here without any extra code.
   useEffect(() => {
     if (client) return;
+    // Cancel every in-flight hydration loop (bump generations) AND fail any
+    // quiet check it might still reach (bump revisions) so an unresolved
+    // hydration can't repopulate the Maps AFTER logout (post-logout data leak).
+    // Bumping the generation is the real stop — without it, a revision bump alone
+    // would only make the loop discard-and-RE-FETCH from the stale client and
+    // eventually apply into freshly-cleared Maps. Same lynchpin as the
+    // per-mutation revision bumps.
+    for (const c of Object.keys(liveRevisionsRef.current) as HydratedCollection[]) {
+      hydrationGenerationRef.current[c] += 1;
+      liveRevisionsRef.current[c] += 1;
+    }
     setMaps(EMPTY_MAPS);
     setHasInitiallyFetched(false);
   }, [client]);
+
+  // On unmount, supersede every in-flight per-collection hydration loop so it
+  // stops retrying and never applies a snapshot (or schedules another timer)
+  // after teardown. Generation bump = cancellation; see `runHydration`.
+  useEffect(() => {
+    const generations = hydrationGenerationRef.current;
+    return () => {
+      for (const c of Object.keys(generations) as HydratedCollection[]) {
+        generations[c] += 1;
+      }
+    };
+  }, []);
 
   // If the user navigates to /s/<id>/ after the initial active-session fetch,
   // load that one session by ID as well. This keeps direct links to archived

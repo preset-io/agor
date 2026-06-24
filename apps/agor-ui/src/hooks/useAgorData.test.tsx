@@ -43,18 +43,26 @@ type Listener = (payload: unknown) => void;
 function makeMockClient(seed: Record<string, unknown[]> = {}) {
   const serviceListeners = new Map<string, Map<string, Listener[]>>();
   const ioListeners = new Map<string, Listener[]>();
-  // Synchronous side effects fired at call time of `service(name)[method]()` —
-  // used by the skip-apply-on-race tests to inject a live write mid-fetch.
-  const fetchHooks = new Map<string, (call: number) => void>();
+  // Side effects fired at call time of `service(name)[method]()` — used by the
+  // skip-apply-on-race tests to inject a live write mid-fetch. If the hook
+  // returns a thenable, `respond` AWAITS it before resolving, which lets a test
+  // hold a fetch in-flight (e.g. to fire a reconnect / logout while a hydration
+  // is pending). The response data is the array reference captured at CALL time
+  // (before the await), so a test can swap `seed[key]` to make a later call see
+  // a different set than an earlier deferred one.
+  const fetchHooks = new Map<string, (call: number) => unknown>();
   const fetchCounts = new Map<string, number>();
 
-  const respond = (name: string, method: 'findAll' | 'find') => {
+  const respond = async (name: string, method: 'findAll' | 'find') => {
     const key = `${name}:${method}`;
     const call = (fetchCounts.get(key) ?? 0) + 1;
     fetchCounts.set(key, call);
-    fetchHooks.get(key)?.(call);
+    const gate = fetchHooks.get(key)?.(call);
     const data = seed[key] ?? seed[name] ?? [];
-    return Promise.resolve(data);
+    if (gate && typeof (gate as { then?: unknown }).then === 'function') {
+      await gate;
+    }
+    return data;
   };
 
   const service = (name: string) => ({
@@ -103,11 +111,16 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     emit: (svc: string, event: string, payload: unknown) => {
       for (const fn of serviceListeners.get(svc)?.get(event) ?? []) fn(payload);
     },
+    // Fire an `io` event (e.g. `connect`) so tests can drive the reconnect
+    // refetch path.
+    emitIo: (event: string) => {
+      for (const fn of ioListeners.get(event) ?? []) fn(undefined);
+    },
     // Register a synchronous side effect that runs every time `service(name)`'s
     // `method` is invoked (receives the 1-based call count). The hook fires
     // BEFORE the returned promise resolves, so emitting a live event here lands
     // a write DURING the fetch window — exactly the race the hydration guards.
-    onFetch: (name: string, method: 'findAll' | 'find', fn: (call: number) => void) =>
+    onFetch: (name: string, method: 'findAll' | 'find', fn: (call: number) => unknown) =>
       fetchHooks.set(`${name}:${method}`, fn),
     fetchCount: (name: string, method: 'findAll' | 'find') =>
       fetchCounts.get(`${name}:${method}`) ?? 0,
@@ -165,6 +178,25 @@ async function waitForInitialLoad(result: { current: ReturnType<typeof useAgorDa
   await act(async () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   });
+}
+
+// Flush pending microtasks + a macrotask inside `act`, so background hydration
+// retries / applies (and reconnect / reset effects) settle before assertions.
+async function flush() {
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+// A promise a test can resolve on demand — returned from an `onFetch` hook to
+// hold a fetch in-flight (so a reconnect / logout can land while a hydration is
+// still pending).
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 describe('useAgorData — socket-event bailouts', () => {
@@ -570,13 +602,37 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     expect(result.current.sessionById.has('s-2')).toBe(true);
   });
 
-  it('skips the apply when the race never settles, so a removed session is not resurrected', async () => {
+  it('retries after races until a quiet window, then applies the fresh snapshot (never gives up)', async () => {
+    const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
+    const s2 = makeSession({ session_id: 's-2', branch_id: 'b-1' });
+    const { client, emit, onFetch, fetchCount } = makeMockClient({
+      'sessions:find': [s1],
+      'sessions:findAll': [s1, s2],
+      'branches:findAll': [],
+    });
+    // Race the first two fetches, then go quiet — the third (immediate) retry
+    // sees a clean window and applies. The OLD code would have started skipping
+    // toward a permanent give-up; the new loop converges.
+    onFetch('sessions', 'findAll', (call) => {
+      if (call <= 2) emit('sessions', 'patched', { ...s1, status: `v${call}` });
+    });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    await waitFor(() => expect(result.current.sessionById.has('s-2')).toBe(true), {
+      timeout: 4000,
+    });
+    // Applied on the first quiet window (3rd attempt) — not skipped forever.
+    expect(fetchCount('sessions', 'findAll')).toBe(3);
+  });
+
+  it('keeps retrying past the old bounded cap without resurrecting a removed session (never skips)', async () => {
     const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
     const s2 = makeSession({ session_id: 's-2', branch_id: 'b-1' });
     const { client, emit, onFetch, fetchCount } = makeMockClient({
       'sessions:find': [s1, s2],
-      // The snapshot ALWAYS still contains s-2 (stale backend): if it were ever
-      // applied it would resurrect the removed session.
+      // Stale backend snapshot ALWAYS still contains s-2: if it were ever applied
+      // it would resurrect the removed session.
       'sessions:findAll': [s1, s2],
       'branches:findAll': [],
     });
@@ -588,20 +644,25 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     });
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
-    // Every attempt races → 4 immediate + 2 backoff = 6 fetches, then skip.
-    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(6), { timeout: 4000 });
+    // The OLD code stopped after 6 fetches and skipped forever. The new loop
+    // never gives up — it keeps re-fetching past that cap (proving "retry until
+    // quiet", not "skip after N").
+    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBeGreaterThanOrEqual(7), {
+      timeout: 5000,
+    });
 
     expect(result.current.sessionById.has('s-1')).toBe(true);
-    // The stale snapshot was never applied, so s-2 stays removed.
+    // The stale snapshot was never applied (it never went quiet), so s-2 stays
+    // removed — a racy snapshot is never force-applied.
     expect(result.current.sessionById.has('s-2')).toBe(false);
   });
 
-  it('hydrates an unrelated collection even while another keeps racing (per-collection revisions)', async () => {
+  it('applies an unrelated collection while another keeps racing (per-collection revisions)', async () => {
     const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
     const s2 = makeSession({ session_id: 's-2', branch_id: 'b-1' });
     const m1 = { mcp_server_id: 'm-1', name: 'one' };
     const m2 = { mcp_server_id: 'm-2', name: 'two' };
-    const { client, emit, onFetch, fetchCount } = makeMockClient({
+    const { client, emit, onFetch } = makeMockClient({
       'sessions:find': [s1],
       'sessions:findAll': [s1, s2],
       'branches:findAll': [],
@@ -613,12 +674,150 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     );
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
-    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(6), { timeout: 4000 });
 
     // …the mcp-servers hydration is independent of `sessions`, so it applied.
-    expect(result.current.mcpServerById.has('m-1')).toBe(true);
+    await waitFor(() => expect(result.current.mcpServerById.has('m-1')).toBe(true));
     expect(result.current.mcpServerById.has('m-2')).toBe(true);
-    // …while the racing sessions hydration was skipped (s-2 never filled in).
+    // …while the still-racing sessions hydration has not applied (s-2 absent).
     expect(result.current.sessionById.has('s-2')).toBe(false);
+  });
+
+  it('decouples per-collection hydration: session churn does not block the branch apply', async () => {
+    const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
+    const s2 = makeSession({ session_id: 's-2', branch_id: 'b-1' });
+    const b1 = makeBranch({ branch_id: 'b-1' });
+    const { client, emit, onFetch } = makeMockClient({
+      'sessions:find': [s1],
+      'sessions:findAll': [s1, s2],
+      // Branches are filled ONLY by hydration on Home (the first-paint heavy
+      // batch resolves to [] with no board scope), so this proves the branch
+      // apply does not wait on the sessions quiet window.
+      'branches:findAll': [b1],
+    });
+    // Sessions race forever; branches never race.
+    onFetch('sessions', 'findAll', (call) =>
+      emit('sessions', 'patched', { ...s1, status: `v${call}` })
+    );
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    // Branches hydrated on their own quiet window despite perpetual session churn.
+    await waitFor(() => expect(result.current.branchById.has('b-1')).toBe(true));
+    // Sessions still racing → not applied (coupling would have blocked branches).
+    expect(result.current.sessionById.has('s-2')).toBe(false);
+  });
+
+  it('runs backoff retries with delays preceding attempts (off-by-one)', async () => {
+    const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
+    const s2 = makeSession({ session_id: 's-2', branch_id: 'b-1' });
+    const { client, emit, onFetch, fetchCount } = makeMockClient({
+      'sessions:find': [s1],
+      'sessions:findAll': [s1, s2],
+      'branches:findAll': [],
+    });
+    // Race the first five fetches — pushing PAST the immediate-retry phase into
+    // the backoff phase (attempts 5 & 6 are delayed) — then go quiet. The 6th
+    // fetch must still run (its backoff delay PRECEDES it) and apply. If the
+    // off-by-one delayed-after-the-attempt bug were present, the schedule would
+    // be wrong; here the delayed attempts run and converge.
+    onFetch('sessions', 'findAll', (call) => {
+      if (call <= 5) emit('sessions', 'patched', { ...s1, status: `v${call}` });
+    });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    await waitFor(() => expect(result.current.sessionById.has('s-2')).toBe(true), {
+      timeout: 4000,
+    });
+    expect(fetchCount('sessions', 'findAll')).toBe(6);
+  });
+});
+
+/**
+ * Bulk Map replacements that are NOT a `runHydration` apply — the reconnect
+ * resync's wholesale `setMaps`, and the logout reset — MUST bump the
+ * per-collection revisions (and, for the reset, the hydration generations) so an
+ * in-flight hydration whose snapshot predates them cannot clobber the newer
+ * state or repopulate the Maps after teardown. These tests pin BLOCKING-1.
+ */
+describe('useAgorData — bulk-write revision bumps', () => {
+  it('reconnect bulk-replace bumps revisions so an in-flight hydration discards (no clobber)', async () => {
+    const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
+    const sNew = makeSession({ session_id: 's-new', branch_id: 'b-1' });
+    // Initial hydration sees only the stale set (no s-new); the reconnect sees
+    // the newer set after we swap the seed reference.
+    const seed: Record<string, unknown[]> = {
+      'sessions:find': [s1],
+      'sessions:findAll': [s1],
+      'branches:findAll': [],
+    };
+    const gate = deferred();
+    const { client, onFetch, fetchCount, emitIo } = makeMockClient(seed);
+    // Defer the FIRST sessions hydration fetch so it's still in-flight when the
+    // reconnect lands.
+    onFetch('sessions', 'findAll', (call) => (call === 1 ? gate.promise : undefined));
+
+    const { result } = renderHook(() => useAgorData(client));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
+
+    // Reconnect delivers the NEWER full set: swap the seed so the reconnect's
+    // findAll (call 2) returns it (call 1 already captured the stale reference).
+    seed['sessions:findAll'] = [s1, sNew];
+    seed['sessions:find'] = [s1, sNew];
+    await act(async () => {
+      emitIo('connect');
+      await new Promise<void>((r) => setTimeout(r, 0));
+    });
+    // Reconnect applied the newer snapshot and bumped revisions.
+    expect(result.current.sessionById.has('s-new')).toBe(true);
+
+    // Release the stale in-flight hydration. Its snapshot ([s-1] only) would, if
+    // applied, drop s-new — but the reconnect's revision bump fails its quiet
+    // check, so it discards and re-fetches (now also returning s-new).
+    await act(async () => {
+      gate.resolve();
+      await new Promise<void>((r) => setTimeout(r, 0));
+    });
+    await flush();
+    expect(result.current.sessionById.has('s-new')).toBe(true);
+    expect(result.current.sessionById.has('s-1')).toBe(true);
+  });
+
+  it('logout reset bumps generation/revisions so an in-flight hydration cannot repopulate after logout', async () => {
+    const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
+    const seed: Record<string, unknown[]> = {
+      'sessions:find': [s1],
+      'sessions:findAll': [s1],
+      'branches:findAll': [],
+    };
+    const gate = deferred();
+    const { client, onFetch, fetchCount } = makeMockClient(seed);
+    onFetch('sessions', 'findAll', (call) => (call === 1 ? gate.promise : undefined));
+
+    const { result, rerender } = renderHook(
+      ({ c }: { c: Parameters<typeof useAgorData>[0] }) => useAgorData(c),
+      { initialProps: { c: client as Parameters<typeof useAgorData>[0] } }
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
+
+    // Logout: client → null fires the reset (clears Maps, cancels hydrations).
+    await act(async () => {
+      rerender({ c: null });
+      await new Promise<void>((r) => setTimeout(r, 0));
+    });
+    expect(result.current.sessionById.size).toBe(0);
+
+    // Release the in-flight hydration. Its snapshot ([s-1]) must NOT repopulate
+    // the cleared Maps: the reset bumped the generation (cancels the loop) and
+    // the revision (fails the quiet check).
+    await act(async () => {
+      gate.resolve();
+      await new Promise<void>((r) => setTimeout(r, 0));
+    });
+    await flush();
+    expect(result.current.sessionById.size).toBe(0);
+    expect(result.current.sessionById.has('s-1')).toBe(false);
   });
 });
