@@ -115,6 +115,8 @@ export interface AppProps {
   openNewBranchModal?: boolean; // Open new branch modal
   onNewBranchModalClose?: () => void; // Called when new branch modal closes
   suppressLeftPanel?: boolean; // Temporarily hide the assistant/comments panel behind modal-first flows
+  /** Rendered between AppHeader and main content (used for onboarding banners). */
+  topBanner?: React.ReactNode;
   onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
@@ -242,6 +244,7 @@ export const App: React.FC<AppProps> = ({
   openNewBranchModal,
   onNewBranchModalClose,
   suppressLeftPanel = false,
+  topBanner,
   onCreateSession,
   onForkSession,
   onBtwForkSession,
@@ -1076,6 +1079,7 @@ export const App: React.FC<AppProps> = ({
               artifactById={artifactById}
               mcpServerById={mcpServerById}
             />
+            {topBanner}
             <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
               <PanelGroup
                 id="main-layout"

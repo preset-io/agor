@@ -1,76 +1,212 @@
 /**
- * OnboardingWizard - streamlined two-input setup for new users.
+ * OnboardingWizard — redesigned 5-step first-run flow.
  *
- * Flow:
- * 1. Assistant identity (name + emoji)
- * 2. LLM/provider configuration
- * 3. One progress screen while Agor creates the default assistant workspace
+ * Steps: persona → llm → workspace → integrations → done
  */
 
 import type {
   AgenticToolName,
-  AssistantConfig,
   AuthCheckResult,
   Board,
   Branch,
-  CodexApprovalPolicy,
-  CodexSandboxMode,
   CreateLocalRepoRequest,
   CreateRepoRequest,
-  DefaultModelConfig,
-  PermissionMode,
   Repo,
   UpdateUserInput,
   User,
   UserPreferences,
 } from '@agor-live/client';
-import {
-  getDefaultPermissionMode,
-  mapToCodexPermissionConfig,
-  TOOL_API_KEY_NAMES,
-} from '@agor-live/client';
-import { CheckCircleOutlined, KeyOutlined } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Card,
-  Checkbox,
-  Form,
-  Input,
-  Modal,
-  Popconfirm,
-  Radio,
-  Result,
-  Select,
-  Space,
-  Spin,
-  Tag,
-  Typography,
-  theme,
-} from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  FRAMEWORK_REPO_SLUG,
-  FRAMEWORK_REPO_URL,
-  findFrameworkRepo,
-} from '../../hooks/useFrameworkRepo';
-import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
-import { ensureAssistantWelcomeNote } from '../../utils/assistantWelcomeNote';
-import { slugify } from '../../utils/repoSlug';
-import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
-import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
+import { TOOL_API_KEY_NAMES } from '@agor-live/client';
+import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Alert, Button, Input, Modal, Spin, Typography, theme } from 'antd';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
-import { ToolIcon } from '../ToolIcon';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
 
-const CLONE_TIMEOUT_MS = 120_000;
+// ─── Types ──────────────────────────────────────────────────────────────────
 
+export type WizardStep = 'persona' | 'llm' | 'workspace' | 'integrations' | 'done';
 type WizardPath = 'assistant';
-type WizardStep = 'identity' | 'llm' | 'loading';
 type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth';
-type SetupStage = 'idle' | 'cloning' | 'board' | 'branch' | 'session' | 'done' | 'error';
+type IntegrationId = 'slack' | 'github' | 'linear' | 'jira' | 'notion';
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const STEPS: WizardStep[] = ['persona', 'llm', 'workspace', 'integrations', 'done'];
+
+const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
+  persona: { number: 1, label: 'You', skippable: true },
+  llm: { number: 2, label: 'AI', skippable: true },
+  workspace: { number: 3, label: 'Workspace', skippable: true },
+  integrations: { number: 4, label: 'Integrations', skippable: true },
+  done: { number: 5, label: "You're ready", skippable: false },
+};
+
+const PERSONAS = [
+  {
+    id: 'developer',
+    emoji: '🔨',
+    title: 'I write code',
+    role: 'Developer',
+    desc: 'I want AI to handle parts of my work',
+  },
+  {
+    id: 'pm',
+    emoji: '📋',
+    title: 'I manage the work',
+    role: 'PM / designer',
+    desc: 'I coordinate teams, not the code',
+  },
+  {
+    id: 'lead',
+    emoji: '🎯',
+    title: 'I lead a team',
+    role: 'Engineering lead',
+    desc: 'Running multiple AI agents',
+  },
+  {
+    id: 'solo',
+    emoji: '⚡',
+    title: 'Just ship it',
+    role: 'Solo builder',
+    desc: 'Minimal setup, maximum output',
+  },
+];
+
+interface LlmOption {
+  id: string;
+  agent: AgenticToolName;
+  symbol: string;
+  provider: string;
+  title: string;
+  description: string;
+  placeholder: string;
+  keyLink: string | null;
+  keyLinkLabel: string | null;
+}
+
+const LLM_OPTIONS: LlmOption[] = [
+  {
+    id: 'claude',
+    agent: 'claude-code',
+    symbol: '✦',
+    provider: 'Anthropic',
+    title: 'Claude',
+    description: 'Best for complex coding, long context, and nuanced reasoning',
+    placeholder: 'sk-ant-api03-…',
+    keyLink: 'https://console.anthropic.com/',
+    keyLinkLabel: 'console.anthropic.com',
+  },
+  {
+    id: 'openai',
+    agent: 'codex',
+    symbol: '⬡',
+    provider: 'OpenAI',
+    title: 'GPT-4o',
+    description: 'Fast and strong at structured reasoning and code generation',
+    placeholder: 'sk-proj-…',
+    keyLink: 'https://platform.openai.com/api-keys',
+    keyLinkLabel: 'platform.openai.com/api-keys',
+  },
+  {
+    id: 'gemini',
+    agent: 'gemini',
+    symbol: '◈',
+    provider: 'Google',
+    title: 'Gemini',
+    description: 'Excellent at multimodal tasks and very long context windows',
+    placeholder: 'AIzaSy…',
+    keyLink: 'https://aistudio.google.com/',
+    keyLinkLabel: 'aistudio.google.com',
+  },
+  {
+    id: 'custom',
+    agent: 'opencode',
+    symbol: '⚙',
+    provider: '',
+    title: 'Custom',
+    description: 'Use any model with an OpenAI-compatible API endpoint',
+    placeholder: 'https://…',
+    keyLink: null,
+    keyLinkLabel: null,
+  },
+];
+
+interface IntegrationConfig {
+  id: IntegrationId;
+  name: string;
+  emoji: string;
+  description: string;
+  valueProp: string;
+  featured?: boolean;
+}
+
+const INTEGRATIONS: IntegrationConfig[] = [
+  {
+    id: 'slack',
+    name: 'Slack',
+    emoji: '💬',
+    description: 'Post updates, get notifications, and trigger workflows',
+    valueProp:
+      'Your AI can post session summaries, alert you on blockers, and let you send prompts from Slack.',
+    featured: true,
+  },
+  {
+    id: 'github',
+    name: 'GitHub',
+    emoji: '🐙',
+    description: 'Create PRs, review code, and sync issues automatically',
+    valueProp: 'Your AI can open pull requests, push commits, and respond to review comments.',
+  },
+  {
+    id: 'linear',
+    name: 'Linear',
+    emoji: '🎯',
+    description: 'Link sessions to issues and update status automatically',
+    valueProp: 'Your AI can pick up Linear issues and mark them done when sessions complete.',
+  },
+  {
+    id: 'jira',
+    name: 'Jira',
+    emoji: '📋',
+    description: 'Create and update Jira issues from your AI sessions',
+    valueProp: 'Your AI can create tickets, update status, and log work automatically.',
+  },
+  {
+    id: 'notion',
+    name: 'Notion',
+    emoji: '📝',
+    description: 'Sync notes and documentation to Notion automatically',
+    valueProp: 'Your AI can write docs, update pages, and keep your knowledge base current.',
+  },
+];
+
+function hasAnyLlmKey(user: User | null | undefined): boolean {
+  if (!user) return false;
+  const claude = user.agentic_tools?.['claude-code'];
+  const codex = user.agentic_tools?.codex;
+  const gemini = user.agentic_tools?.gemini;
+  return !!(
+    claude?.ANTHROPIC_API_KEY ||
+    claude?.CLAUDE_CODE_OAUTH_TOKEN ||
+    codex?.OPENAI_API_KEY ||
+    gemini?.GEMINI_API_KEY ||
+    user.env_vars?.ANTHROPIC_API_KEY ||
+    user.env_vars?.OPENAI_API_KEY ||
+    user.env_vars?.GEMINI_API_KEY
+  );
+}
+
+function keyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-key'): string {
+  if (agent === 'claude-code' && authMethod === 'claude-subscription-token') {
+    return 'CLAUDE_CODE_OAUTH_TOKEN';
+  }
+  return TOOL_API_KEY_NAMES[agent] ?? 'ANTHROPIC_API_KEY';
+}
+
+// ─── Props ────────────────────────────────────────────────────────────────────
 
 export interface OnboardingWizardProps {
   open: boolean;
@@ -85,7 +221,7 @@ export interface OnboardingWizardProps {
   branchById: Map<string, Branch>;
   boardById: Map<string, Board>;
   user?: User | null;
-  // biome-ignore lint/suspicious/noExplicitAny: AgorClient type varies across package boundaries in tests/apps.
+  // biome-ignore lint/suspicious/noExplicitAny: AgorClient type varies across package boundaries.
   client: any;
 
   onCreateRepo: (data: CreateRepoRequest) => Promise<void>;
@@ -108,945 +244,1270 @@ export interface OnboardingWizardProps {
   onCreateSession: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => Promise<void>;
+
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
   assistantPending?: boolean;
   frameworkRepoUrl?: string;
+
+  /** Re-open wizard starting at a specific step (used by persistent banners). */
+  initialStep?: WizardStep;
 }
 
-function sanitizeBranchName(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-|-$/g, '');
-}
+// ─── Glass styles ─────────────────────────────────────────────────────────────
 
-function defaultAssistantBranchName(displayName: string): string {
-  const slug = slugify(displayName.trim() || 'My Assistant') || 'my-assistant';
-  return sanitizeBranchName(`private-${slug}`);
-}
+const MODAL_BG = '#0d1426';
+const GLASS_CARD_BG = 'rgba(255,255,255,0.04)';
+const GLASS_CARD_BORDER = '1px solid rgba(255,255,255,0.08)';
+const GLASS_CARD_SELECTED_BG = 'rgba(99,102,241,0.12)';
+const GLASS_CARD_SELECTED_BORDER = '1px solid rgba(99,102,241,0.6)';
+const TEXT_PRIMARY = '#f1f5f9';
+const TEXT_SECONDARY = '#94a3b8';
+const TEXT_MUTED = '#64748b';
+const INDIGO = '#6366f1';
+const SUCCESS_GREEN = '#10b981';
 
-function findReadyFrameworkRepo(repoById: Map<string, Repo>): [string, Repo] | undefined {
-  return findFrameworkRepo(repoById, { readyOnly: true });
-}
-
-function apiKeyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-key'): string {
-  if (agent === 'claude-code' && authMethod === 'claude-subscription-token') {
-    return 'CLAUDE_CODE_OAUTH_TOKEN';
-  }
-  return TOOL_API_KEY_NAMES[agent] ?? 'ANTHROPIC_API_KEY';
-}
-
-function apiKeyPlaceholder(agent: AgenticToolName, authMethod: AuthMethod = 'api-key'): string {
-  if (agent === 'claude-code' && authMethod === 'claude-subscription-token')
-    return 'sk-ant-oat01-...';
-  if (agent === 'codex') return 'sk-...';
-  if (agent === 'gemini') return 'AIza...';
-  if (agent === 'copilot') return 'ghp_...';
-  if (agent === 'cursor') return 'key_...';
-  return 'sk-ant-...';
-}
-
-const AGENT_LABELS: Record<AgenticToolName, string> = {
-  'claude-code': 'Claude Code',
-  'claude-code-cli': 'Claude Code CLI',
-  codex: 'Codex',
-  gemini: 'Gemini',
-  opencode: 'OpenCode',
-  copilot: 'GitHub Copilot',
-  cursor: 'Cursor SDK',
-};
-
-const RECOMMENDED_AGENT_OPTIONS: Array<{ value: AgenticToolName; title: string; eyebrow: string }> =
-  [
-    { value: 'claude-code', title: 'Claude Code', eyebrow: 'Recommended' },
-    { value: 'codex', title: 'Codex', eyebrow: 'Recommended' },
-  ];
-
-const OTHER_AGENT_OPTIONS: Array<{ value: AgenticToolName; label: string }> = [
-  { value: 'gemini', label: 'Gemini' },
-  { value: 'copilot', label: 'GitHub Copilot' },
-  { value: 'opencode', label: 'OpenCode' },
-  { value: 'cursor', label: 'Cursor SDK (Beta)' },
-];
-
-const RECOMMENDED_AGENT_VALUES = new Set<AgenticToolName>(
-  RECOMMENDED_AGENT_OPTIONS.map((option) => option.value)
-);
-
-const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
-  'claude-code': {
-    label: 'platform.claude.com/settings/keys',
-    url: 'https://platform.claude.com/settings/keys',
-  },
-  'claude-code-cli': {
-    label: 'platform.claude.com/settings/keys',
-    url: 'https://platform.claude.com/settings/keys',
-  },
-  codex: { label: 'platform.openai.com/api-keys', url: 'https://platform.openai.com/api-keys' },
-  gemini: { label: 'aistudio.google.com', url: 'https://aistudio.google.com/apikey' },
-  copilot: { label: 'github.com/features/copilot', url: 'https://github.com/features/copilot' },
-  cursor: { label: 'cursor.com', url: 'https://cursor.com' },
-  opencode: null,
-};
-
-function defaultAuthMethodForAgent(agent: AgenticToolName): AuthMethod {
-  return agent === 'codex' ? 'codex-cli-auth' : 'api-key';
-}
-
-function toSessionModelConfig(
-  config?: DefaultModelConfig
-): NewSessionConfig['modelConfig'] | undefined {
-  if (!config?.model) return undefined;
-  return {
-    mode: config.mode ?? 'exact',
-    model: config.model,
-    ...(config.advisorModel ? { advisorModel: config.advisorModel } : {}),
-  };
-}
-
-function authMethodOptionsForAgent(agent: AgenticToolName) {
-  if (agent === 'claude-code') {
-    return [
-      { value: 'claude-subscription-token' as const, label: 'Subscription' },
-      { value: 'api-key' as const, label: 'API key' },
-    ];
-  }
-  if (agent === 'codex') {
-    return [
-      { value: 'codex-cli-auth' as const, label: 'CLI sign-in' },
-      { value: 'api-key' as const, label: 'API key' },
-    ];
-  }
-  return null;
-}
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export function OnboardingWizard({
   open,
   onComplete,
-  repoById,
-  branchById: _branchById,
   boardById,
   user,
   client,
-  onCreateRepo,
-  onCreateBranch,
-  onCreateSession,
+  onCreateRepo: _onCreateRepo,
+  onCreateBranch: _onCreateBranch,
+  onCreateSession: _onCreateSession,
   onUpdateUser,
-  onCheckAuth,
-  frameworkRepoUrl,
+  onCheckAuth: _onCheckAuth,
+  initialStep,
 }: OnboardingWizardProps) {
-  void _branchById;
+  void _onCreateRepo;
+  void _onCreateBranch;
+  void _onCreateSession;
+  void _onCheckAuth;
 
-  const { token } = useToken();
-  const [currentStep, setCurrentStep] = useState<WizardStep>('identity');
-  const [assistantDisplayName, setAssistantDisplayName] = useState('My Assistant');
-  const [assistantEmoji, setAssistantEmoji] = useState('🤖');
-  const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
-  const [lastRecommendedAgent, setLastRecommendedAgent] = useState<AgenticToolName>('claude-code');
-  const [useDifferentProvider, setUseDifferentProvider] = useState(false);
-  const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
+  useToken();
+
+  // ── Step state ──────────────────────────────────────────────────────────
+  const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'persona');
+
+  // ── Step 1: persona ─────────────────────────────────────────────────────
+  const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
+
+  // ── Step 2: LLM ─────────────────────────────────────────────────────────
+  const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
   const [apiKey, setApiKey] = useState('');
-  const [overrideDetectedAuth, setOverrideDetectedAuth] = useState(false);
-  const [manualTestResult, setManualTestResult] = useState<AuthCheckResult | null>(null);
-  const [testAuthLoading, setTestAuthLoading] = useState(false);
-  const [setupStage, setSetupStage] = useState<SetupStage>('idle');
-  const [operationText, setOperationText] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [authMethod] = useState<AuthMethod>('api-key');
+  const [llmSaving, setLlmSaving] = useState(false);
+  const [llmError, setLlmError] = useState<string | null>(null);
 
-  const cloneTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const completingRepoRef = useRef<string | null>(null);
-  const knownFailedRepoIdsRef = useRef<Set<string>>(new Set());
-  const effectiveFrameworkUrl = frameworkRepoUrl || FRAMEWORK_REPO_URL;
+  // ── Step 3: workspace ───────────────────────────────────────────────────
+  const [boardName, setBoardName] = useState('My project board');
+  const [repoUrl, setRepoUrl] = useState('');
+  const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
+  const [boardCreating, setBoardCreating] = useState(false);
+  const [boardError, setBoardError] = useState<string | null>(null);
 
-  const defaultBranchName = useMemo(
-    () => defaultAssistantBranchName(assistantDisplayName),
-    [assistantDisplayName]
+  // ── Step 4: integrations ─────────────────────────────────────────────────
+  const [activeIntegration, setActiveIntegration] = useState<IntegrationId | null>(null);
+  const [integrationInputs, setIntegrationInputs] = useState<Record<string, string>>({});
+  const [slackConnecting, setSlackConnecting] = useState(false);
+  const [slackConnected, setSlackConnected] = useState(false);
+
+  // ── Reset on open ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (open) {
+      const startStep = initialStep || 'persona';
+      setCurrentStep(startStep);
+      setSelectedPersona(null);
+      setApiKey('');
+      setLlmError(null);
+      setLlmSaving(false);
+      setBoardError(null);
+      setBoardCreating(false);
+      setActiveIntegration(null);
+      setIntegrationInputs({});
+      setSlackConnecting(false);
+      setSlackConnected(false);
+      // Pre-select LLM if user already has one configured
+      if (hasAnyLlmKey(user)) {
+        const claude = user?.agentic_tools?.['claude-code'];
+        const codex = user?.agentic_tools?.codex;
+        const gemini = user?.agentic_tools?.gemini;
+        if (
+          claude?.ANTHROPIC_API_KEY ||
+          claude?.CLAUDE_CODE_OAUTH_TOKEN ||
+          user?.env_vars?.ANTHROPIC_API_KEY
+        ) {
+          setSelectedAgent('claude-code');
+        } else if (codex?.OPENAI_API_KEY || user?.env_vars?.OPENAI_API_KEY) {
+          setSelectedAgent('codex');
+        } else if (gemini?.GEMINI_API_KEY || user?.env_vars?.GEMINI_API_KEY) {
+          setSelectedAgent('gemini');
+        }
+      } else {
+        setSelectedAgent(null);
+      }
+      // Preserve board name from user preferences if exists
+      const existingBoardId = user?.preferences?.mainBoardId;
+      if (!existingBoardId) {
+        setBoardName('My project board');
+        setRepoUrl('');
+        setCreatedBoardId(null);
+      } else {
+        setCreatedBoardId(existingBoardId);
+      }
+    }
+  }, [open, initialStep, user]);
+
+  // ─── Derived values ──────────────────────────────────────────────────────
+
+  const stepIndex = STEPS.indexOf(currentStep);
+  const meta = STEP_META[currentStep];
+
+  const selectedLlmOption = useMemo(
+    () => LLM_OPTIONS.find((o) => o.agent === selectedAgent) ?? null,
+    [selectedAgent]
   );
 
-  const saveOnboardingProgress = useCallback(
-    (updates: {
-      path?: WizardPath;
-      repoId?: string;
-      boardId?: string;
-      branchId?: string;
-      assistantDisplayName?: string;
-      assistantEmoji?: string;
-    }) => {
-      if (!user) return;
-      const current = user.preferences?.onboarding || {};
-      const prefs: Record<string, unknown> = {
-        ...user.preferences,
-        onboarding: { ...current, ...updates },
-      };
-      if (updates.boardId) prefs.mainBoardId = updates.boardId;
-      onUpdateUser(user.user_id, { preferences: prefs as UserPreferences });
-    },
-    [onUpdateUser, user]
-  );
-
-  useEffect(() => {
-    if (!open || !user) return;
-    const onboarding = user.preferences?.onboarding;
-    if (typeof onboarding?.assistantDisplayName === 'string') {
-      setAssistantDisplayName(onboarding.assistantDisplayName || 'My Assistant');
-    }
-    if (typeof onboarding?.assistantEmoji === 'string') {
-      setAssistantEmoji(onboarding.assistantEmoji || '🤖');
-    }
-  }, [open, user]);
-
-  useEffect(() => {
-    return () => {
-      if (cloneTimeoutRef.current) clearTimeout(cloneTimeoutRef.current);
-    };
-  }, []);
-
-  const hasKeyForAgent = useCallback(
+  const agentHasKey = useCallback(
     (agent: AgenticToolName): boolean => {
-      const claudeFields = user?.agentic_tools?.['claude-code'];
-      const codexFields = user?.agentic_tools?.codex;
-      const geminiFields = user?.agentic_tools?.gemini;
-      const copilotFields = user?.agentic_tools?.copilot;
-      const cursorFields = user?.agentic_tools?.cursor;
-      const hasAnthropicKey = !!(
-        claudeFields?.ANTHROPIC_API_KEY ||
-        claudeFields?.CLAUDE_CODE_OAUTH_TOKEN ||
-        user?.env_vars?.ANTHROPIC_API_KEY
-      );
-      const hasOpenAIKey = !!(codexFields?.OPENAI_API_KEY || user?.env_vars?.OPENAI_API_KEY);
-      const hasGeminiKey = !!(geminiFields?.GEMINI_API_KEY || user?.env_vars?.GEMINI_API_KEY);
-      const hasCopilotToken = !!(
-        copilotFields?.COPILOT_GITHUB_TOKEN || user?.env_vars?.COPILOT_GITHUB_TOKEN
-      );
-      const hasCursorKey = !!(cursorFields?.CURSOR_API_KEY || user?.env_vars?.CURSOR_API_KEY);
-
-      if (agent === 'claude-code') return hasAnthropicKey;
-      if (agent === 'codex') return hasOpenAIKey;
-      if (agent === 'gemini') return hasGeminiKey;
-      if (agent === 'copilot') return hasCopilotToken;
-      if (agent === 'cursor') return hasCursorKey;
-      if (agent === 'opencode') return hasAnthropicKey || hasOpenAIKey || hasGeminiKey;
+      if (!user) return false;
+      const claude = user.agentic_tools?.['claude-code'];
+      const codex = user.agentic_tools?.codex;
+      const gemini = user.agentic_tools?.gemini;
+      if (agent === 'claude-code') {
+        return !!(
+          claude?.ANTHROPIC_API_KEY ||
+          claude?.CLAUDE_CODE_OAUTH_TOKEN ||
+          user.env_vars?.ANTHROPIC_API_KEY
+        );
+      }
+      if (agent === 'codex') return !!(codex?.OPENAI_API_KEY || user.env_vars?.OPENAI_API_KEY);
+      if (agent === 'gemini') return !!(gemini?.GEMINI_API_KEY || user.env_vars?.GEMINI_API_KEY);
+      if (agent === 'opencode') return hasAnyLlmKey(user);
       return false;
     },
     [user]
   );
 
-  const resetProviderAuthState = useCallback(() => {
-    setApiKey('');
-    setError(null);
-    setManualTestResult(null);
-    setOverrideDetectedAuth(false);
+  const existingBoardId = user?.preferences?.mainBoardId || null;
+  const existingBoard = existingBoardId ? boardById.get(existingBoardId) : null;
+  const hasExistingBoard = !!(existingBoard || createdBoardId);
+
+  const primaryEnabled = useMemo(() => {
+    switch (currentStep) {
+      case 'persona':
+        return selectedPersona !== null;
+      case 'llm': {
+        if (!selectedAgent) return false;
+        if (agentHasKey(selectedAgent)) return true;
+        return apiKey.length > 8;
+      }
+      case 'workspace':
+        return boardName.trim().length > 0;
+      case 'integrations':
+        return true;
+      case 'done':
+        return true;
+    }
+  }, [currentStep, selectedPersona, selectedAgent, agentHasKey, apiKey, boardName]);
+
+  const primaryLabel = useMemo(() => {
+    switch (currentStep) {
+      case 'persona':
+        return 'This is me →';
+      case 'llm':
+        return 'Connect →';
+      case 'workspace':
+        return hasExistingBoard ? 'Keep going →' : 'Create board →';
+      case 'integrations':
+        return 'Continue →';
+      case 'done':
+        return 'Open my board →';
+    }
+  }, [currentStep, hasExistingBoard]);
+
+  const canGoBack = stepIndex > 0 && currentStep !== 'done';
+  const isSkippable = meta.skippable && currentStep !== 'done';
+
+  // ─── Handlers ────────────────────────────────────────────────────────────
+
+  const saveOnboardingProgress = useCallback(
+    (updates: Record<string, unknown>) => {
+      if (!user) return;
+      const current = (user.preferences?.onboarding ?? {}) as Record<string, unknown>;
+      const prefs: UserPreferences = {
+        ...user.preferences,
+        onboarding: { ...current, ...updates },
+      } as UserPreferences;
+      onUpdateUser(user.user_id, { preferences: prefs });
+    },
+    [onUpdateUser, user]
+  );
+
+  const goToStep = useCallback((step: WizardStep) => {
+    setCurrentStep(step);
+    setActiveIntegration(null);
   }, []);
 
-  const selectAgent = useCallback(
-    (agent: AgenticToolName, options: { useDifferentProvider?: boolean } = {}) => {
-      setSelectedAgent(agent);
-      setAuthMethod(defaultAuthMethodForAgent(agent));
-      if (RECOMMENDED_AGENT_VALUES.has(agent)) setLastRecommendedAgent(agent);
-      setUseDifferentProvider(options.useDifferentProvider ?? !RECOMMENDED_AGENT_VALUES.has(agent));
-      resetProviderAuthState();
-    },
-    [resetProviderAuthState]
-  );
-
-  const buildSessionConfig = useCallback(
-    (branchId: string): NewSessionConfig => {
-      const agentDefaults = user?.default_agentic_config?.[selectedAgent];
-      const permissionMode: PermissionMode =
-        agentDefaults?.permissionMode ?? getDefaultPermissionMode(selectedAgent);
-      const sessionConfig: NewSessionConfig = {
-        branch_id: branchId,
-        agent: selectedAgent,
-        initialPrompt: buildAssistantBootstrapPrompt({
-          displayName: assistantDisplayName.trim() || 'My Assistant',
-          emoji: assistantEmoji || '🤖',
-          userName: user?.name,
-          userEmail: user?.email,
-        }),
-        modelConfig: toSessionModelConfig(agentDefaults?.modelConfig),
-        effort: agentDefaults?.modelConfig?.effort,
-        mcpServerIds: agentDefaults?.mcpServerIds,
-        permissionMode,
-      };
-
-      if (selectedAgent === 'codex') {
-        const codexDefaults = mapToCodexPermissionConfig(permissionMode);
-        sessionConfig.codexSandboxMode =
-          (agentDefaults?.codexSandboxMode as CodexSandboxMode | undefined) ??
-          codexDefaults.sandboxMode;
-        sessionConfig.codexApprovalPolicy =
-          (agentDefaults?.codexApprovalPolicy as CodexApprovalPolicy | undefined) ??
-          codexDefaults.approvalPolicy;
-        sessionConfig.codexNetworkAccess =
-          agentDefaults?.codexNetworkAccess ?? codexDefaults.networkAccess;
-      }
-
-      return sessionConfig;
-    },
-    [assistantDisplayName, assistantEmoji, selectedAgent, user]
-  );
-
-  const finishSetupFromRepo = useCallback(
-    async (repoId: string) => {
-      if (completingRepoRef.current === repoId) return;
-      completingRepoRef.current = repoId;
-      if (cloneTimeoutRef.current) {
-        clearTimeout(cloneTimeoutRef.current);
-        cloneTimeoutRef.current = null;
-      }
-
-      try {
-        setError(null);
-        saveOnboardingProgress({ repoId });
-
-        setSetupStage('board');
-        setOperationText('Creating your assistant board…');
-        const existingBoardId = user?.preferences?.mainBoardId;
-        let boardId =
-          existingBoardId && user && boardById.get(existingBoardId)?.created_by === user.user_id
-            ? existingBoardId
-            : null;
-
-        if (!boardId) {
-          const board = await client?.service('boards').create({
-            name: `${assistantDisplayName.trim() || 'My Assistant'}'s Board`,
-            icon: assistantEmoji || '🤖',
-          });
-          boardId = board?.board_id ?? null;
-        }
-        if (!boardId) throw new Error('Failed to create assistant board.');
-        saveOnboardingProgress({ boardId });
-        await ensureAssistantWelcomeNote({
-          client,
-          boardId,
-          assistantName: assistantDisplayName.trim() || 'My Assistant',
-          assistantEmoji,
-        });
-
-        setSetupStage('branch');
-        setOperationText('Creating the default assistant branch…');
-        const sourceBranch = repoById.get(repoId)?.default_branch || 'main';
-        const assistantConfig: AssistantConfig = {
-          kind: 'assistant',
-          displayName: assistantDisplayName.trim() || 'My Assistant',
-          emoji: assistantEmoji || undefined,
-          frameworkRepo: FRAMEWORK_REPO_SLUG,
-          createdViaOnboarding: true,
-        };
-        const branch = await onCreateBranch(repoId, {
-          name: defaultBranchName,
-          ref: defaultBranchName,
-          createBranch: true,
-          sourceBranch,
-          pullLatest: true,
-          boardId,
-          custom_context: { assistant: assistantConfig },
-        });
-        if (!branch?.branch_id) throw new Error('Failed to create assistant branch.');
-        saveOnboardingProgress({ branchId: branch.branch_id });
-        await client
-          ?.service('boards')
-          .setPrimaryAssistant({ boardId, branchId: branch.branch_id });
-
-        setSetupStage('session');
-        setOperationText('Starting your assistant…');
-        const sessionId = await startAssistantBootstrapSession({
-          client,
-          branchId: branch.branch_id,
-          boardId,
-          sessionConfig: buildSessionConfig(branch.branch_id),
-          onCreateSession,
-          onStatusChange: setOperationText,
-        });
-
-        setSetupStage('done');
-        setOperationText('Opening your assistant…');
-        onComplete({ branchId: branch.branch_id, sessionId, boardId, path: 'assistant' });
-      } catch (err) {
-        completingRepoRef.current = null;
-        setSetupStage('error');
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [
-      assistantDisplayName,
-      assistantEmoji,
-      boardById,
-      buildSessionConfig,
-      client,
-      defaultBranchName,
-      onComplete,
-      onCreateBranch,
-      onCreateSession,
-      repoById,
-      saveOnboardingProgress,
-      user,
-    ]
-  );
-
-  const startSetup = useCallback(async () => {
-    setCurrentStep('loading');
-    setSetupStage('cloning');
-    setOperationText('Cloning assistant framework…');
-    setError(null);
-    completingRepoRef.current = null;
-
-    const readyRepo = findReadyFrameworkRepo(repoById);
-    if (readyRepo) {
-      setOperationText('Preparing assistant workspace…');
-      void finishSetupFromRepo(readyRepo[0]);
-      return;
-    }
-
-    knownFailedRepoIdsRef.current = new Set(
-      Array.from(repoById.values())
-        .filter((repo) => repo.clone_status === 'failed')
-        .map((repo) => repo.repo_id)
-    );
-
-    try {
-      await onCreateRepo({
-        url: effectiveFrameworkUrl,
-        slug: FRAMEWORK_REPO_SLUG,
-        default_branch: 'main',
-      });
-      cloneTimeoutRef.current = setTimeout(() => {
-        setSetupStage('error');
-        setError(
-          'Clone is taking longer than expected. Please check the repository connection and try again.'
-        );
-      }, CLONE_TIMEOUT_MS);
-    } catch (err) {
-      setSetupStage('error');
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, [effectiveFrameworkUrl, finishSetupFromRepo, onCreateRepo, repoById]);
-
-  useEffect(() => {
-    if (currentStep !== 'loading' || setupStage !== 'cloning') return;
-    const readyRepo = findReadyFrameworkRepo(repoById);
-    if (readyRepo) void finishSetupFromRepo(readyRepo[0]);
-  }, [currentStep, finishSetupFromRepo, repoById, setupStage]);
-
-  useEffect(() => {
-    if (currentStep !== 'loading' || setupStage !== 'cloning') return;
-    for (const repo of repoById.values()) {
-      if (repo.clone_status !== 'failed') continue;
-      if (knownFailedRepoIdsRef.current.has(repo.repo_id)) continue;
-      if (repo.slug !== FRAMEWORK_REPO_SLUG && !repo.remote_url?.includes('agor-assistant'))
-        continue;
-      setSetupStage('error');
-      setError(
-        repo.clone_error?.message ?? `Clone failed (exit ${repo.clone_error?.exit_code ?? '?'}).`
-      );
-      if (cloneTimeoutRef.current) {
-        clearTimeout(cloneTimeoutRef.current);
-        cloneTimeoutRef.current = null;
-      }
-      return;
-    }
-  }, [currentStep, repoById, setupStage]);
-
-  useEffect(() => {
-    if (!client?.io) return;
-    const handleCloneError = (data: { slug?: string; url?: string; error: string }) => {
-      if (currentStep !== 'loading' || setupStage !== 'cloning') return;
-      if (data.slug !== FRAMEWORK_REPO_SLUG && !data.url?.includes('agor-assistant')) return;
-      setSetupStage('error');
-      setError(data.error);
-      if (cloneTimeoutRef.current) {
-        clearTimeout(cloneTimeoutRef.current);
-        cloneTimeoutRef.current = null;
-      }
-    };
-    client.io.on('repo:cloneError', handleCloneError);
-    return () => client.io.off('repo:cloneError', handleCloneError);
-  }, [client, currentStep, setupStage]);
-
-  const handleAssistantIdentityContinue = useCallback(() => {
-    const trimmedName = assistantDisplayName.trim() || 'My Assistant';
-    setAssistantDisplayName(trimmedName);
-    saveOnboardingProgress({
-      path: 'assistant',
-      assistantDisplayName: trimmedName,
-      assistantEmoji: assistantEmoji || '🤖',
-    });
-    setError(null);
-    setCurrentStep('llm');
-  }, [assistantDisplayName, assistantEmoji, saveOnboardingProgress]);
-
-  const handleSaveApiKey = useCallback(async () => {
-    if (!user || !apiKey.trim()) return;
-    setError(null);
-    const keyName = apiKeyNameForAgent(selectedAgent, authMethod);
-    const targetTool: AgenticToolName =
-      selectedAgent === 'opencode' ? 'claude-code' : selectedAgent;
-    try {
-      await onUpdateUser(user.user_id, {
-        agentic_tools: {
-          [targetTool]: { [keyName]: apiKey.trim() },
-        } as UpdateUserInput['agentic_tools'],
-      });
-      await startSetup();
-    } catch (err) {
-      setError(`Failed to save API key: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }, [apiKey, authMethod, onUpdateUser, selectedAgent, startSetup, user]);
-
-  const handleTestAuth = useCallback(async () => {
-    if (!onCheckAuth) return;
-    setTestAuthLoading(true);
-    setManualTestResult(null);
-    const result = await onCheckAuth(
-      selectedAgent,
-      authMethod === 'codex-cli-auth' ? undefined : apiKey.trim() || undefined
-    );
-    setTestAuthLoading(false);
-    setManualTestResult(result);
-  }, [apiKey, authMethod, onCheckAuth, selectedAgent]);
+  const handleBack = useCallback(() => {
+    if (stepIndex > 0) goToStep(STEPS[stepIndex - 1]);
+  }, [stepIndex, goToStep]);
 
   const handleSkip = useCallback(() => {
-    if (!user) return;
-    onComplete({ branchId: '', sessionId: '', boardId: '', path: 'assistant' });
-  }, [onComplete, user]);
+    if (currentStep === 'done') return;
+    goToStep(STEPS[stepIndex + 1]);
+  }, [currentStep, stepIndex, goToStep]);
 
-  const renderIdentity = () => (
+  const handlePrimary = useCallback(async () => {
+    switch (currentStep) {
+      case 'persona': {
+        if (selectedPersona) {
+          saveOnboardingProgress({ persona: selectedPersona });
+        }
+        goToStep('llm');
+        break;
+      }
+      case 'llm': {
+        if (!selectedAgent) return;
+        if (agentHasKey(selectedAgent)) {
+          goToStep('workspace');
+          return;
+        }
+        if (!user || !apiKey.trim()) return;
+        setLlmSaving(true);
+        setLlmError(null);
+        const keyName = keyNameForAgent(selectedAgent, authMethod);
+        const targetTool: AgenticToolName =
+          selectedAgent === 'opencode' ? 'claude-code' : selectedAgent;
+        try {
+          await onUpdateUser(user.user_id, {
+            agentic_tools: {
+              [targetTool]: { [keyName]: apiKey.trim() },
+            } as UpdateUserInput['agentic_tools'],
+          });
+          goToStep('workspace');
+        } catch (err) {
+          setLlmError(
+            `Failed to save API key: ${err instanceof Error ? err.message : String(err)}`
+          );
+        } finally {
+          setLlmSaving(false);
+        }
+        break;
+      }
+      case 'workspace': {
+        if (hasExistingBoard) {
+          goToStep('integrations');
+          return;
+        }
+        if (!client || !boardName.trim()) return;
+        setBoardCreating(true);
+        setBoardError(null);
+        try {
+          const board = await client.service('boards').create({
+            name: boardName.trim(),
+          });
+          const newBoardId = board?.board_id ?? null;
+          setCreatedBoardId(newBoardId);
+          if (newBoardId && user) {
+            saveOnboardingProgress({ boardId: newBoardId });
+          }
+          goToStep('integrations');
+        } catch (err) {
+          setBoardError(err instanceof Error ? err.message : 'Failed to create board');
+        } finally {
+          setBoardCreating(false);
+        }
+        break;
+      }
+      case 'integrations': {
+        if (activeIntegration) {
+          setActiveIntegration(null);
+        } else {
+          goToStep('done');
+        }
+        break;
+      }
+      case 'done': {
+        const boardIdToUse = createdBoardId || existingBoardId || '';
+        onComplete({ branchId: '', sessionId: '', boardId: boardIdToUse, path: 'assistant' });
+        break;
+      }
+    }
+  }, [
+    currentStep,
+    selectedPersona,
+    selectedAgent,
+    agentHasKey,
+    user,
+    apiKey,
+    authMethod,
+    onUpdateUser,
+    hasExistingBoard,
+    client,
+    boardName,
+    saveOnboardingProgress,
+    activeIntegration,
+    createdBoardId,
+    existingBoardId,
+    onComplete,
+    goToStep,
+  ]);
+
+  const handleSlackOAuth = useCallback(async () => {
+    setSlackConnecting(true);
+    // TODO: Wire to real Slack OAuth flow (MCP server creation)
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    setSlackConnecting(false);
+    setSlackConnected(true);
+  }, []);
+
+  // ─── Progress dots ────────────────────────────────────────────────────────
+
+  const renderProgressDots = () => (
+    <div style={{ textAlign: 'center', marginBottom: 6 }}>
+      <div
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        {STEPS.map((step, index) => {
+          const isCompleted = index < stepIndex;
+          const isCurrent = index === stepIndex;
+          return (
+            <div
+              key={step}
+              style={{
+                width: isCurrent ? 12 : 8,
+                height: isCurrent ? 12 : 8,
+                borderRadius: '50%',
+                background: isCompleted || isCurrent ? INDIGO : 'rgba(255,255,255,0.2)',
+                boxShadow: isCurrent ? `0 0 8px rgba(99,102,241,0.7)` : undefined,
+                transition: 'all 0.2s ease',
+                flexShrink: 0,
+              }}
+            />
+          );
+        })}
+      </div>
+      <div>
+        <Text style={{ fontSize: 12, color: TEXT_MUTED }}>
+          {meta.number} / 5 — {meta.label}
+          {meta.skippable && <span style={{ color: TEXT_MUTED }}> · optional</span>}
+        </Text>
+      </div>
+    </div>
+  );
+
+  // ─── Step renderers ───────────────────────────────────────────────────────
+
+  const renderPersona = () => (
     <div>
-      <Title level={4} style={{ marginBottom: 8 }}>
-        Welcome to Agor ✨
+      <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
+        Let's make this yours.
       </Title>
-      <Paragraph style={{ marginBottom: 14 }}>
-        Start by creating your{' '}
-        <Typography.Link
-          strong
-          href="https://agor.live/guide/assistants"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Agor assistant
-        </Typography.Link>
-        : a persistent agent that can help set up your workspace and keep things moving.
+      <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
+        How do you work? This helps us understand who's using Agor and what to build next.
       </Paragraph>
 
       <div
         style={{
-          background: token.colorPrimaryBg,
-          border: `1px solid ${token.colorPrimaryBorder}`,
-          borderRadius: 8,
-          padding: '12px 14px',
-          marginBottom: 16,
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 12,
         }}
       >
-        <Text strong>Your assistant can help:</Text>
-        <ul style={{ margin: '8px 0 0', paddingLeft: 20, color: token.colorTextSecondary }}>
-          <li>🧰 Connect tools and credentials</li>
-          <li>🗺️ Set up your board and workflow</li>
-          <li>🤝 Coordinate agents and sessions</li>
-          <li>💬 Show you around and answer questions</li>
-        </ul>
+        {PERSONAS.map((persona) => {
+          const isSelected = selectedPersona === persona.id;
+          return (
+            <button
+              key={persona.id}
+              type="button"
+              onClick={() => setSelectedPersona(persona.id)}
+              style={{
+                background: isSelected ? GLASS_CARD_SELECTED_BG : GLASS_CARD_BG,
+                border: isSelected ? GLASS_CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                borderRadius: 12,
+                padding: '16px',
+                cursor: 'pointer',
+                textAlign: 'left',
+                boxShadow: isSelected ? `0 0 0 2px rgba(99,102,241,0.2)` : undefined,
+                transition: 'all 0.15s ease',
+                width: '100%',
+              }}
+            >
+              <div style={{ fontSize: 24, marginBottom: 8 }}>{persona.emoji}</div>
+              <div style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14, marginBottom: 2 }}>
+                {persona.title}
+              </div>
+              <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginBottom: 4 }}>
+                {persona.role}
+              </div>
+              <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{persona.desc}</div>
+            </button>
+          );
+        })}
       </div>
-
-      <Form layout="vertical">
-        <Form.Item label="Name and emoji" required>
-          <Space.Compact style={{ display: 'flex' }}>
-            <EmojiPickerInput
-              value={assistantEmoji}
-              onChange={setAssistantEmoji}
-              defaultEmoji="🤖"
-            />
-            <Input
-              placeholder="My Assistant"
-              value={assistantDisplayName}
-              onChange={(event) => setAssistantDisplayName(event.target.value)}
-              autoFocus
-              style={{ flex: 1 }}
-            />
-          </Space.Compact>
-        </Form.Item>
-      </Form>
-      {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
-      <Button
-        type="primary"
-        onClick={handleAssistantIdentityContinue}
-        disabled={!assistantDisplayName.trim()}
-      >
-        Continue
-      </Button>
     </div>
   );
 
-  const renderAuthHint = () => {
-    if (selectedAgent === 'claude-code') {
-      if (authMethod === 'claude-subscription-token') {
-        return (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16, textAlign: 'left' }}
-            description={
-              <span>
-                Run <Text code>claude setup-token</Text>, then paste the token below.
-              </span>
-            }
-          />
-        );
-      }
-      return (
-        <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-          Paste an <Text code>ANTHROPIC_API_KEY</Text> from{' '}
-          <Typography.Link href="https://platform.claude.com/settings/keys" target="_blank">
-            Claude Console
-          </Typography.Link>
-          .
-        </Paragraph>
-      );
-    }
-
-    if (selectedAgent === 'codex') {
-      if (authMethod === 'codex-cli-auth') {
-        return (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16, textAlign: 'left' }}
-            description={
-              <span>
-                Run <Text code>codex login --device-auth</Text>; Agor will use that local auth.
-              </span>
-            }
-          />
-        );
-      }
-      return (
-        <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-          Paste an <Text code>OPENAI_API_KEY</Text> from{' '}
-          <Typography.Link href="https://platform.openai.com/api-keys" target="_blank">
-            OpenAI Platform
-          </Typography.Link>
-          .
-        </Paragraph>
-      );
-    }
-
-    const consoleInfo = AGENT_KEY_CONSOLES[selectedAgent];
-    if (!consoleInfo) return null;
-    return (
-      <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        Paste your {apiKeyNameForAgent(selectedAgent, authMethod)} from{' '}
-        <Typography.Link href={consoleInfo.url} target="_blank" rel="noopener noreferrer">
-          {consoleInfo.label}
-        </Typography.Link>
-        .
-      </Paragraph>
-    );
-  };
-
   const renderLlm = () => {
-    const hasKey = hasKeyForAgent(selectedAgent);
-    const isAuthenticated = hasKey && !overrideDetectedAuth;
-    const authMethodOptions = authMethodOptionsForAgent(selectedAgent);
-    const usesCodexCliAuth = selectedAgent === 'codex' && authMethod === 'codex-cli-auth';
-    const currentKeyName = apiKeyNameForAgent(selectedAgent, authMethod);
+    const selectedOption = selectedLlmOption;
+    const currentAgentHasKey = selectedAgent ? agentHasKey(selectedAgent) : false;
+    const keyName = selectedAgent ? keyNameForAgent(selectedAgent, authMethod) : '';
 
     return (
       <div>
-        <Title level={4}>Choose your LLM</Title>
-        <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-          Pick what powers your assistant.
+        <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
+          Choose your AI.
+        </Title>
+        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
+          Agor works with multiple AI models. Pick one — you can add more later in Settings.
         </Paragraph>
 
-        <Space orientation="vertical" size="middle" style={{ width: '100%', marginBottom: 16 }}>
-          <div
-            role="radiogroup"
-            aria-label="Recommended LLM providers"
-            style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}
-          >
-            {RECOMMENDED_AGENT_OPTIONS.map((option) => {
-              const selected = selectedAgent === option.value;
-              return (
-                <Card
-                  key={option.value}
-                  size="small"
-                  style={{
-                    borderColor: selected ? token.colorPrimary : token.colorBorder,
-                    background: selected ? token.colorPrimaryBg : undefined,
-                  }}
-                  styles={{ body: { padding: 0 } }}
-                >
-                  <label style={{ display: 'block', cursor: 'pointer', padding: 14 }}>
-                    <Space align="center" size={10} style={{ width: '100%' }}>
-                      <ToolIcon tool={option.value} size={32} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <Text strong>{option.title}</Text>
-                        <div>
-                          <Tag color={selected ? 'blue' : 'default'}>{option.eyebrow}</Tag>
-                        </div>
-                      </div>
-                      <input
-                        type="radio"
-                        name="recommended-agent"
-                        value={option.value}
-                        checked={selected}
-                        onChange={() => selectAgent(option.value, { useDifferentProvider: false })}
-                        style={{ accentColor: token.colorPrimary }}
-                      />
-                    </Space>
-                  </label>
-                </Card>
-              );
-            })}
-          </div>
-
-          <Checkbox
-            checked={useDifferentProvider}
-            onChange={(event) => {
-              const checked = event.target.checked;
-              selectAgent(checked ? OTHER_AGENT_OPTIONS[0].value : lastRecommendedAgent, {
-                useDifferentProvider: checked,
-              });
-            }}
-          >
-            Use a different provider
-          </Checkbox>
-
-          {useDifferentProvider && (
-            <Form layout="vertical">
-              <Form.Item label="Other LLM providers" style={{ marginBottom: 0 }}>
-                <Select
-                  value={RECOMMENDED_AGENT_VALUES.has(selectedAgent) ? undefined : selectedAgent}
-                  onChange={(value) => selectAgent(value, { useDifferentProvider: true })}
-                  options={OTHER_AGENT_OPTIONS}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Form>
-          )}
-        </Space>
-
-        {isAuthenticated ? (
-          <div style={{ textAlign: 'center' }}>
-            <Result
-              style={{ padding: '8px 0 12px' }}
-              icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
-              title={`${AGENT_LABELS[selectedAgent]} is configured`}
-              subTitle={`You're all set to use ${AGENT_LABELS[selectedAgent]}.`}
-            />
-            <Space orientation="vertical" size="small">
-              <Button type="primary" onClick={startSetup}>
-                Continue
-              </Button>
-              <Button type="link" onClick={() => setOverrideDetectedAuth(true)}>
-                Use a different API key instead
-              </Button>
-            </Space>
-          </div>
-        ) : (
-          <>
-            {overrideDetectedAuth && (
-              <Button
-                type="link"
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+          {LLM_OPTIONS.map((option) => {
+            const isSelected = selectedAgent === option.agent;
+            const hasKey = agentHasKey(option.agent);
+            return (
+              <button
+                key={option.id}
+                type="button"
                 onClick={() => {
-                  setOverrideDetectedAuth(false);
+                  setSelectedAgent(option.agent);
                   setApiKey('');
+                  setLlmError(null);
                 }}
-                style={{ padding: 0, marginBottom: 12 }}
-              >
-                ← Back to detected authentication
-              </Button>
-            )}
-
-            {authMethodOptions && (
-              <Radio.Group
-                value={authMethod}
-                onChange={(event) => {
-                  setAuthMethod(event.target.value);
-                  setApiKey('');
-                  setManualTestResult(null);
+                style={{
+                  background: isSelected ? GLASS_CARD_SELECTED_BG : GLASS_CARD_BG,
+                  border: isSelected ? GLASS_CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                  borderRadius: 10,
+                  padding: '14px 16px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  boxShadow: isSelected ? `0 0 0 2px rgba(99,102,241,0.2)` : undefined,
+                  transition: 'all 0.15s ease',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 12,
+                  width: '100%',
                 }}
-                style={{ width: '100%', marginBottom: 16 }}
               >
+                <span
+                  style={{
+                    fontSize: 20,
+                    flexShrink: 0,
+                    color: isSelected ? INDIGO : TEXT_SECONDARY,
+                  }}
+                >
+                  {option.symbol}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14 }}>
+                      {option.title}
+                    </span>
+                    {option.provider && (
+                      <span style={{ color: TEXT_MUTED, fontSize: 12 }}>by {option.provider}</span>
+                    )}
+                    {hasKey && (
+                      <span
+                        style={{
+                          background: 'rgba(16,185,129,0.15)',
+                          border: '1px solid rgba(16,185,129,0.4)',
+                          borderRadius: 4,
+                          padding: '1px 6px',
+                          fontSize: 11,
+                          color: SUCCESS_GREEN,
+                        }}
+                      >
+                        Connected
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
+                    {option.description}
+                  </div>
+                </div>
                 <div
                   style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                    gap: 8,
+                    width: 16,
+                    height: 16,
+                    borderRadius: '50%',
+                    border: isSelected ? `2px solid ${INDIGO}` : '2px solid rgba(255,255,255,0.2)',
+                    background: isSelected ? INDIGO : 'transparent',
+                    flexShrink: 0,
+                    marginTop: 2,
                   }}
+                />
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedOption && !currentAgentHasKey && (
+          <div
+            style={{
+              background: GLASS_CARD_BG,
+              border: GLASS_CARD_BORDER,
+              borderRadius: 10,
+              padding: '16px',
+              marginTop: 4,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 8,
+              }}
+            >
+              <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>{keyName}</Text>
+              {selectedOption.keyLink && (
+                <Typography.Link
+                  href={selectedOption.keyLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: 12, color: INDIGO }}
                 >
-                  {authMethodOptions.map((option) => (
-                    <Radio
-                      key={option.value}
-                      value={option.value}
-                      style={{
-                        border: `1px solid ${token.colorBorder}`,
-                        borderRadius: 8,
-                        marginInlineEnd: 0,
-                        padding: '8px 12px',
-                      }}
-                    >
-                      <Text strong={authMethod === option.value}>{option.label}</Text>
-                    </Radio>
-                  ))}
-                </div>
-              </Radio.Group>
-            )}
-
-            {renderAuthHint()}
-
-            {selectedAgent === 'opencode' && (
-              <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                OpenCode supports many LLM providers. Configure the key for your provider below.
-              </Paragraph>
-            )}
-
-            {!usesCodexCliAuth && (
-              <Form layout="vertical">
-                <Form.Item label={currentKeyName}>
-                  <Input.Password
-                    placeholder={apiKeyPlaceholder(selectedAgent, authMethod)}
-                    value={apiKey}
-                    onChange={(event) => {
-                      setApiKey(event.target.value);
-                      setManualTestResult(null);
-                    }}
-                  />
-                </Form.Item>
-              </Form>
-            )}
-
-            {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
-            {manualTestResult && (
-              <Alert
-                type={manualTestResult.authenticated ? 'success' : 'warning'}
-                showIcon
-                style={{ marginBottom: 16, textAlign: 'left' }}
-                message={manualTestResult.authenticated ? 'Connection works' : 'Not authenticated'}
-                description={manualTestResult.hint}
-              />
-            )}
-
-            <Space wrap>
-              {usesCodexCliAuth ? (
-                <Button type="primary" onClick={startSetup}>
-                  Continue with Codex CLI auth
-                </Button>
-              ) : (
-                <Button
-                  type="primary"
-                  onClick={handleSaveApiKey}
-                  disabled={!apiKey.trim()}
-                  icon={<KeyOutlined />}
-                >
-                  Save & Continue
-                </Button>
+                  Get your key at {selectedOption.keyLinkLabel} →
+                </Typography.Link>
               )}
-              {onCheckAuth && (
-                <Button onClick={handleTestAuth} loading={testAuthLoading}>
-                  Test Connection
-                </Button>
-              )}
-              {!usesCodexCliAuth && <Button onClick={startSetup}>Continue without key</Button>}
-            </Space>
-          </>
+            </div>
+            <Input.Password
+              placeholder={selectedOption.placeholder}
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                setLlmError(null);
+              }}
+              style={{
+                background: 'rgba(0,0,0,0.3)',
+                borderColor: 'rgba(255,255,255,0.12)',
+                fontFamily: 'monospace',
+                fontSize: 13,
+              }}
+            />
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginTop: 8,
+              }}
+            >
+              <Text style={{ fontSize: 11, color: TEXT_MUTED }}>
+                🔒 Stored securely — never shared or logged.
+              </Text>
+            </div>
+          </div>
         )}
+
+        {selectedOption && currentAgentHasKey && (
+          <div
+            style={{
+              background: 'rgba(16,185,129,0.08)',
+              border: '1px solid rgba(16,185,129,0.25)',
+              borderRadius: 10,
+              padding: '14px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+            }}
+          >
+            <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 18 }} />
+            <div>
+              <Text style={{ color: SUCCESS_GREEN, fontWeight: 500, fontSize: 14 }}>
+                {selectedOption.title} is already connected
+              </Text>
+              <div>
+                <Text style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
+                  You're all set. Click Connect → to continue.
+                </Text>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {llmError && <Alert type="error" message={llmError} showIcon style={{ marginTop: 16 }} />}
       </div>
     );
   };
 
-  const renderLoading = () => (
-    <div style={{ textAlign: 'center', padding: '48px 0' }}>
-      {setupStage === 'error' ? (
-        <>
-          <Alert
-            type="error"
-            message="Setup failed"
-            description={error}
-            showIcon
-            style={{ marginBottom: 16, textAlign: 'left' }}
-          />
-          <Button type="primary" onClick={startSetup}>
-            Retry
-          </Button>
-        </>
+  const renderWorkspace = () => (
+    <div>
+      <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
+        Set up your workspace.
+      </Title>
+      <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
+        Connect a repo and name your board. Both can be changed anytime.
+      </Paragraph>
+
+      {/* Concept pills */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 24 }}>
+        {[
+          { emoji: '🌿', term: 'Branch', def: 'isolated workspace per task' },
+          { emoji: '💬', term: 'Session', def: 'conversation with your AI' },
+          { emoji: '📋', term: 'Board', def: 'kanban view of all branches' },
+        ].map(({ emoji, term, def }) => (
+          <div
+            key={term}
+            style={{
+              background: 'rgba(99,102,241,0.08)',
+              border: '1px solid rgba(99,102,241,0.2)',
+              borderRadius: 20,
+              padding: '4px 12px',
+              fontSize: 12,
+              color: TEXT_SECONDARY,
+            }}
+          >
+            {emoji} <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> — {def}
+          </div>
+        ))}
+      </div>
+
+      {hasExistingBoard ? (
+        <div
+          style={{
+            background: 'rgba(16,185,129,0.08)',
+            border: '1px solid rgba(16,185,129,0.25)',
+            borderRadius: 10,
+            padding: '14px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 18 }} />
+          <div>
+            <Text style={{ color: SUCCESS_GREEN, fontWeight: 500, fontSize: 14 }}>
+              Board already set up
+            </Text>
+            <div>
+              <Text style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
+                {existingBoard?.name || 'Your board is ready.'}
+              </Text>
+            </div>
+          </div>
+        </div>
       ) : (
-        <>
-          <Spin size="large" />
-          <Title level={4} style={{ marginTop: 20, marginBottom: 8 }}>
-            Setting up Agor
-          </Title>
-          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            {operationText}
-          </Paragraph>
-        </>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div>
+            <Text
+              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
+            >
+              Repo URL <span style={{ color: TEXT_MUTED, fontSize: 12 }}>optional</span>
+            </Text>
+            <Input
+              placeholder="https://github.com/you/your-repo"
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+              style={{
+                background: 'rgba(0,0,0,0.3)',
+                borderColor: 'rgba(255,255,255,0.12)',
+              }}
+            />
+          </div>
+          <div>
+            <Text
+              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
+            >
+              Board name
+            </Text>
+            <Input
+              placeholder="My project board"
+              value={boardName}
+              onChange={(e) => setBoardName(e.target.value)}
+              style={{
+                background: 'rgba(0,0,0,0.3)',
+                borderColor: 'rgba(255,255,255,0.12)',
+              }}
+            />
+          </div>
+        </div>
       )}
+
+      {boardError && <Alert type="error" message={boardError} showIcon style={{ marginTop: 16 }} />}
     </div>
   );
 
-  const footer =
-    currentStep === 'loading' ? null : (
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          width: '100%',
-          textAlign: 'left',
-        }}
-      >
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          Step {currentStep === 'identity' ? '1' : '2'} of 2
-        </Text>
-        <Space size="small">
-          {currentStep === 'llm' && (
-            <Button type="link" onClick={() => setCurrentStep('identity')}>
-              ← Back
-            </Button>
-          )}
-          <Popconfirm
-            title="Skip setup?"
-            description={
-              <div style={{ maxWidth: 250 }}>
-                Are you sure? Your assistant has been waiting their whole life to meet you.
-                <br />
-                <br />
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  (You can always come back via Settings)
+  const renderIntegrationSubPanel = (integration: IntegrationConfig) => {
+    const inputKey = `${integration.id}-input`;
+    const inputValue = integrationInputs[inputKey] || '';
+
+    const subPrimaryEnabled = integration.id === 'slack' ? slackConnected : inputValue.length > 0;
+
+    return (
+      <div>
+        {/* Value prop callout */}
+        <div
+          style={{
+            background: 'rgba(99,102,241,0.08)',
+            border: '1px solid rgba(99,102,241,0.2)',
+            borderRadius: 10,
+            padding: '12px 14px',
+            marginBottom: 20,
+          }}
+        >
+          <Text style={{ color: TEXT_SECONDARY, fontSize: 13 }}>{integration.valueProp}</Text>
+        </div>
+
+        {integration.id === 'slack' && (
+          <div style={{ textAlign: 'center', padding: '8px 0' }}>
+            {slackConnected ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 10,
+                  padding: '14px 0',
+                }}
+              >
+                <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 20 }} />
+                <Text style={{ color: SUCCESS_GREEN, fontWeight: 500 }}>
+                  Slack connected successfully!
                 </Text>
               </div>
-            }
-            okText="Skip anyway"
-            cancelText="Go back"
-            onConfirm={handleSkip}
+            ) : (
+              <Button
+                onClick={handleSlackOAuth}
+                loading={slackConnecting}
+                style={{
+                  background: '#4A154B',
+                  borderColor: '#4A154B',
+                  color: '#fff',
+                  height: 44,
+                  paddingLeft: 24,
+                  paddingRight: 24,
+                  fontSize: 15,
+                }}
+                size="large"
+              >
+                {slackConnecting ? 'Connecting…' : '💬 Connect with Slack'}
+              </Button>
+            )}
+          </div>
+        )}
+
+        {integration.id === 'github' && (
+          <div>
+            <Text
+              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 8 }}
+            >
+              Personal access token{' '}
+              <Typography.Link
+                href="https://github.com/settings/tokens"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: 12, color: INDIGO }}
+              >
+                github.com/settings/tokens →
+              </Typography.Link>
+            </Text>
+            <Input.Password
+              placeholder="ghp_…"
+              value={inputValue}
+              onChange={(e) => setIntegrationInputs((p) => ({ ...p, [inputKey]: e.target.value }))}
+              style={{
+                background: 'rgba(0,0,0,0.3)',
+                borderColor: 'rgba(255,255,255,0.12)',
+                fontFamily: 'monospace',
+              }}
+            />
+            <Text style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 6, display: 'block' }}>
+              Needs: repo, read:org permissions
+            </Text>
+          </div>
+        )}
+
+        {integration.id === 'linear' && (
+          <div>
+            <Text
+              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 8 }}
+            >
+              API key{' '}
+              <Typography.Link
+                href="https://linear.app/settings/api"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: 12, color: INDIGO }}
+              >
+                linear.app/settings/api →
+              </Typography.Link>
+            </Text>
+            <Input.Password
+              placeholder="lin_api_…"
+              value={inputValue}
+              onChange={(e) => setIntegrationInputs((p) => ({ ...p, [inputKey]: e.target.value }))}
+              style={{
+                background: 'rgba(0,0,0,0.3)',
+                borderColor: 'rgba(255,255,255,0.12)',
+                fontFamily: 'monospace',
+              }}
+            />
+          </div>
+        )}
+
+        {integration.id === 'jira' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <Text
+                style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
+              >
+                Domain (e.g. yourco.atlassian.net)
+              </Text>
+              <Input
+                placeholder="yourco.atlassian.net"
+                value={integrationInputs[`${integration.id}-domain`] || ''}
+                onChange={(e) =>
+                  setIntegrationInputs((p) => ({
+                    ...p,
+                    [`${integration.id}-domain`]: e.target.value,
+                  }))
+                }
+                style={{ background: 'rgba(0,0,0,0.3)', borderColor: 'rgba(255,255,255,0.12)' }}
+              />
+            </div>
+            <div>
+              <Text
+                style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
+              >
+                Email
+              </Text>
+              <Input
+                placeholder="you@yourco.com"
+                value={integrationInputs[`${integration.id}-email`] || ''}
+                onChange={(e) =>
+                  setIntegrationInputs((p) => ({
+                    ...p,
+                    [`${integration.id}-email`]: e.target.value,
+                  }))
+                }
+                style={{ background: 'rgba(0,0,0,0.3)', borderColor: 'rgba(255,255,255,0.12)' }}
+              />
+            </div>
+            <div>
+              <Text
+                style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
+              >
+                API token{' '}
+                <Typography.Link
+                  href="https://id.atlassian.com/manage-profile/security/api-tokens"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: 12, color: INDIGO }}
+                >
+                  id.atlassian.com →
+                </Typography.Link>
+              </Text>
+              <Input.Password
+                placeholder="ATATT3x…"
+                value={inputValue}
+                onChange={(e) =>
+                  setIntegrationInputs((p) => ({ ...p, [inputKey]: e.target.value }))
+                }
+                style={{
+                  background: 'rgba(0,0,0,0.3)',
+                  borderColor: 'rgba(255,255,255,0.12)',
+                  fontFamily: 'monospace',
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {integration.id === 'notion' && (
+          <div>
+            <Text
+              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 8 }}
+            >
+              Integration token{' '}
+              <Typography.Link
+                href="https://www.notion.so/my-integrations"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: 12, color: INDIGO }}
+              >
+                notion.so/my-integrations →
+              </Typography.Link>
+            </Text>
+            <Input.Password
+              placeholder="secret_…"
+              value={inputValue}
+              onChange={(e) => setIntegrationInputs((p) => ({ ...p, [inputKey]: e.target.value }))}
+              style={{
+                background: 'rgba(0,0,0,0.3)',
+                borderColor: 'rgba(255,255,255,0.12)',
+                fontFamily: 'monospace',
+              }}
+            />
+          </div>
+        )}
+
+        {/* Sub-panel footer */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginTop: 24,
+            paddingTop: 16,
+            borderTop: '1px solid rgba(255,255,255,0.06)',
+          }}
+        >
+          <Button
+            type="text"
+            onClick={() => setActiveIntegration(null)}
+            style={{ color: TEXT_SECONDARY, padding: 0 }}
           >
-            <Button type="text" size="small" style={{ color: token.colorTextTertiary }}>
-              Skip setup
-            </Button>
-          </Popconfirm>
-        </Space>
+            ← Back to tools
+          </Button>
+          <Button
+            type="primary"
+            disabled={!subPrimaryEnabled}
+            onClick={() => {
+              // TODO: Wire to real MCP server creation via onCreateMCPServer prop
+              setActiveIntegration(null);
+            }}
+          >
+            Connect {integration.name}
+          </Button>
+        </div>
       </div>
     );
+  };
+
+  const renderIntegrations = () => {
+    const slackConfig = INTEGRATIONS.find((i) => i.id === 'slack')!;
+    const gridIntegrations = INTEGRATIONS.filter((i) => i.id !== 'slack');
+
+    if (activeIntegration) {
+      const config = INTEGRATIONS.find((i) => i.id === activeIntegration);
+      if (!config) return null;
+      return (
+        <div>
+          <div style={{ marginBottom: 20 }}>
+            <Text style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 16 }}>
+              {config.emoji} Connect {config.name}
+            </Text>
+          </div>
+          {renderIntegrationSubPanel(config)}
+        </div>
+      );
+    }
+
+    return (
+      <div>
+        <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
+          Give your AI superpowers.
+        </Title>
+        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
+          Connect your tools and your AI can take real action across your entire workflow.
+        </Paragraph>
+
+        {/* Slack featured card */}
+        <div
+          style={{
+            background: 'rgba(99,102,241,0.08)',
+            border: '1px solid rgba(99,102,241,0.35)',
+            borderRadius: 12,
+            padding: '16px 18px',
+            marginBottom: 14,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 16,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 28 }}>💬</span>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+                <Text style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14 }}>Slack</Text>
+                <span
+                  style={{
+                    background: `rgba(99,102,241,0.2)`,
+                    border: `1px solid ${INDIGO}`,
+                    borderRadius: 4,
+                    padding: '1px 6px',
+                    fontSize: 11,
+                    color: INDIGO,
+                    fontWeight: 600,
+                  }}
+                >
+                  Recommended
+                </span>
+              </div>
+              <Text style={{ color: TEXT_SECONDARY, fontSize: 12 }}>{slackConfig.description}</Text>
+            </div>
+          </div>
+          <Button
+            type="primary"
+            size="small"
+            onClick={() => setActiveIntegration('slack')}
+            style={{ flexShrink: 0 }}
+          >
+            Connect Slack
+          </Button>
+        </div>
+
+        {/* 2x2 grid */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 10,
+            marginBottom: 16,
+          }}
+        >
+          {gridIntegrations.map((integration) => (
+            <div
+              key={integration.id}
+              style={{
+                background: GLASS_CARD_BG,
+                border: GLASS_CARD_BORDER,
+                borderRadius: 10,
+                padding: '14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+              }}
+            >
+              <div
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 18 }}>{integration.emoji}</span>
+                  <Text style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
+                    {integration.name}
+                  </Text>
+                </div>
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={() => setActiveIntegration(integration.id as IntegrationId)}
+                  style={{ color: INDIGO, padding: '2px 8px', fontSize: 12 }}
+                >
+                  Connect
+                </Button>
+              </div>
+              <Text style={{ color: TEXT_MUTED, fontSize: 11 }}>{integration.description}</Text>
+            </div>
+          ))}
+        </div>
+
+        <Text style={{ color: TEXT_MUTED, fontSize: 12 }}>
+          There are many more integrations available in{' '}
+          <span style={{ color: TEXT_SECONDARY }}>Settings → Integrations</span>
+        </Text>
+      </div>
+    );
+  };
+
+  const renderDone = () => {
+    const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.length > 8);
+    const workspaceReady = hasExistingBoard;
+    const integrationsConnected = slackConnected;
+
+    return (
+      <div style={{ textAlign: 'center', padding: '8px 0' }}>
+        {/* Success icon */}
+        <div
+          style={{
+            width: 72,
+            height: 72,
+            borderRadius: '50%',
+            background: 'rgba(16,185,129,0.15)',
+            border: '2px solid rgba(16,185,129,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 20px',
+          }}
+        >
+          <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 36 }} />
+        </div>
+
+        <Title level={2} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
+          You're ready to build.
+        </Title>
+        <Paragraph
+          style={{ color: TEXT_SECONDARY, marginBottom: 28, maxWidth: 380, margin: '0 auto 28px' }}
+        >
+          Your board is set up. Start your first AI session — that's where the real work happens.
+        </Paragraph>
+
+        {/* Summary checklist */}
+        <div
+          style={{
+            background: GLASS_CARD_BG,
+            border: GLASS_CARD_BORDER,
+            borderRadius: 10,
+            padding: '16px 20px',
+            textAlign: 'left',
+            marginBottom: 8,
+          }}
+        >
+          {[
+            {
+              label: 'AI connected',
+              done: aiConnected,
+              hint: 'Add in Settings → AI & Agents',
+            },
+            {
+              label: 'Workspace ready',
+              done: workspaceReady,
+              hint: 'Create a board in Settings',
+            },
+            {
+              label: 'Integrations',
+              done: integrationsConnected,
+              hint: 'Add in Settings → Integrations',
+            },
+          ].map(({ label, done, hint }) => (
+            <div
+              key={label}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '6px 0',
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 14,
+                  color: done ? SUCCESS_GREEN : TEXT_MUTED,
+                  fontWeight: 600,
+                  width: 16,
+                  textAlign: 'center',
+                }}
+              >
+                {done ? '✓' : '·'}
+              </span>
+              <Text style={{ color: done ? TEXT_PRIMARY : TEXT_SECONDARY, flex: 1, fontSize: 13 }}>
+                {label}
+              </Text>
+              {!done && <Text style={{ color: TEXT_MUTED, fontSize: 11 }}>{hint}</Text>}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // ─── Footer ───────────────────────────────────────────────────────────────
+
+  const isPrimaryLoading = llmSaving || boardCreating;
+  const effectivePrimaryEnabled = primaryEnabled && !isPrimaryLoading;
+
+  // When in a sub-panel, the sub-panel has its own footer buttons
+  const showMainFooter = !(currentStep === 'integrations' && activeIntegration !== null);
+
+  const footer = showMainFooter ? (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '14px 32px',
+        borderTop: '1px solid rgba(255,255,255,0.06)',
+      }}
+    >
+      <div>
+        {canGoBack && (
+          <Button
+            type="text"
+            onClick={handleBack}
+            style={{ color: TEXT_SECONDARY, padding: '4px 0' }}
+          >
+            ← Back
+          </Button>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        {isSkippable && (
+          <Button
+            type="text"
+            onClick={handleSkip}
+            style={{
+              color: TEXT_MUTED,
+              textDecoration: 'underline',
+              padding: '4px 0',
+              fontSize: 13,
+            }}
+          >
+            Skip for now
+          </Button>
+        )}
+        <Button
+          type="primary"
+          disabled={!effectivePrimaryEnabled}
+          onClick={handlePrimary}
+          icon={
+            isPrimaryLoading ? <Spin indicator={<LoadingOutlined />} size="small" /> : undefined
+          }
+        >
+          {primaryLabel}
+        </Button>
+      </div>
+    </div>
+  ) : null;
+
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <Modal
       open={open}
       closable={false}
-      mask={{ closable: false }}
+      mask={true}
       keyboard={false}
-      footer={footer}
-      width={680}
+      footer={null}
+      width={600}
       styles={{
+        mask: {
+          backdropFilter: 'blur(6px)',
+          WebkitBackdropFilter: 'blur(6px)',
+          background: 'rgba(0,0,0,0.6)',
+        },
         body: {
-          minHeight: 440,
-          maxHeight: 640,
-          overflowY: 'auto',
-          padding: '28px 36px',
+          padding: 0,
+          background: MODAL_BG,
+        },
+        wrapper: {
+          overflow: 'hidden',
         },
       }}
     >
-      {currentStep === 'identity' && renderIdentity()}
-      {currentStep === 'llm' && renderLlm()}
-      {currentStep === 'loading' && renderLoading()}
+      {/* Progress indicator */}
+      <div style={{ padding: '24px 32px 0' }}>{renderProgressDots()}</div>
+
+      {/* Step content */}
+      <div
+        style={{
+          padding: '20px 32px',
+          minHeight: 360,
+          maxHeight: 520,
+          overflowY: 'auto',
+        }}
+      >
+        {currentStep === 'persona' && renderPersona()}
+        {currentStep === 'llm' && renderLlm()}
+        {currentStep === 'workspace' && renderWorkspace()}
+        {currentStep === 'integrations' && renderIntegrations()}
+        {currentStep === 'done' && renderDone()}
+      </div>
+
+      {/* Footer */}
+      {footer}
     </Modal>
   );
 }

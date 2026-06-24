@@ -33,7 +33,8 @@ import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
-import { OnboardingWizard } from './components/OnboardingWizard';
+import { OnboardingBanners } from './components/OnboardingBanners';
+import { OnboardingWizard, type WizardStep } from './components/OnboardingWizard';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
@@ -434,6 +435,7 @@ function AppContent() {
   // Onboarding wizard state
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
   const [onboardingWizardInstance, setOnboardingWizardInstance] = useState(0);
+  const [onboardingStartStep, setOnboardingStartStep] = useState<WizardStep | undefined>(undefined);
 
   // Trigger wizard when user is loaded and hasn't completed onboarding
   useEffect(() => {
@@ -855,6 +857,13 @@ function AppContent() {
     }
 
     setOpenUserSettings(false);
+    setOnboardingStartStep(undefined);
+    setOnboardingWizardInstance((value) => value + 1);
+    setOnboardingWizardOpen(true);
+  };
+
+  const handleOpenWizardAtStep = (step: WizardStep) => {
+    setOnboardingStartStep(step);
     setOnboardingWizardInstance((value) => value + 1);
     setOnboardingWizardOpen(true);
   };
@@ -1609,6 +1618,13 @@ function AppContent() {
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
       onRestartOnboarding={handleRestartOnboarding}
+      topBanner={
+        <OnboardingBanners
+          user={currentUser}
+          mcpServerCount={mcpServerById.size}
+          onOpenWizardAtStep={handleOpenWizardAtStep}
+        />
+      }
     />
   );
 
@@ -1682,6 +1698,7 @@ function AppContent() {
             onboardingConfig?.assistantPending ?? onboardingConfig?.persistedAgentPending
           }
           frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
+          initialStep={onboardingStartStep}
         />
 
         <DeviceRouter />
