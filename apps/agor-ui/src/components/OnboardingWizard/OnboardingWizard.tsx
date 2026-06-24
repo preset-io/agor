@@ -985,7 +985,15 @@ export function OnboardingWizard({
 
   const footer =
     currentStep === 'loading' ? null : (
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          width: '100%',
+          textAlign: 'left',
+        }}
+      >
         <Text type="secondary" style={{ fontSize: 12 }}>
           Step {currentStep === 'identity' ? '1' : '2'} of 2
         </Text>
