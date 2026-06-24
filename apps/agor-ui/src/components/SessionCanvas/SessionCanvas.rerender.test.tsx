@@ -8,6 +8,7 @@ import type {
   Session,
 } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
@@ -161,6 +162,20 @@ const boardObjects: BoardEntityObject[] = [
   } as unknown as BoardEntityObject,
 ];
 
+// Stable references for the parent-re-render guard below. When a parent
+// re-renders, React.memo only bails out if EVERY prop kept its identity, so
+// these have to be module-level constants (a fresh inline array / context value
+// per render would itself break memo and mask whether handler stabilization is
+// what's protecting the canvas).
+const BRANCHES: Branch[] = [branchA, branchB];
+const CONNECTION_VALUE = {
+  connected: true,
+  connecting: false,
+  outOfSync: false,
+  capturedSha: null,
+  currentSha: null,
+};
+
 function seedStore() {
   agorStore.setState({
     ...EMPTY_MAPS,
@@ -279,5 +294,114 @@ describe('SessionCanvas store-selector re-render isolation', () => {
     expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
     expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
     expect(cardNodeRenders).toBe(cardNodeBaseline);
+  });
+});
+
+// Mirror of AppContent's `useStableCallback`: freeze a handler's identity across
+// renders while delegating to the latest impl via a ref. This is the exact
+// mechanism AppContent uses to keep SessionCanvas's action handlers stable, so
+// reproducing it here exercises the real prop-stabilization contract.
+function useStableCallback<TFn extends (...args: never[]) => unknown>(
+  callback: TFn | undefined
+): TFn | undefined {
+  const callbackRef = useRef(callback);
+  useLayoutEffect(() => {
+    callbackRef.current = callback;
+  });
+  const stable = useCallback(((...args: never[]) => callbackRef.current?.(...args)) as TFn, []);
+  return callback ? stable : undefined;
+}
+
+// Lets a test trigger a parent re-render without touching SessionCanvas's props.
+let triggerParentRerender: () => void = () => {};
+
+// Parent harness that renders the REAL memo'd SessionCanvas the way AppContent
+// does: action handlers flow through `useStableCallback` so their identity is
+// frozen. A `useState` bump (driven from the test) re-renders THIS parent; the
+// `stabilize` flag toggles whether the fork handler is stabilized, so the same
+// harness can prove both halves of the guard.
+function ParentHarness({ stabilize }: { stabilize: boolean }) {
+  const [, setTick] = useState(0);
+  triggerParentRerender = () => setTick((tick) => tick + 1);
+
+  // Fresh identity on every parent render (mirrors AppContent's plain-const
+  // handlers). When `stabilize` is true we freeze it through useStableCallback;
+  // when false we pass it straight through so memo sees a new prop each render.
+  const forkImpl = (_sessionId: string, _prompt: string) => Promise.resolve();
+  const stableForkSession = useStableCallback(forkImpl);
+  const onForkSession = stabilize ? stableForkSession : forkImpl;
+
+  return (
+    <ConnectionProvider value={CONNECTION_VALUE}>
+      <SessionCanvas
+        board={board}
+        client={null}
+        branches={BRANCHES}
+        onForkSession={onForkSession}
+      />
+    </ConnectionProvider>
+  );
+}
+
+describe('SessionCanvas memo + handler-stabilization re-render bailout', () => {
+  beforeEach(() => {
+    branchCardRenders.clear();
+    cardNodeRenders = 0;
+    sessionCanvasRenders = 0;
+    triggerParentRerender = () => {};
+    agorStore.setState({ ...EMPTY_MAPS });
+    seedStore();
+  });
+
+  it('a parent re-render does not re-render the memo’d SessionCanvas when handlers are stabilized', async () => {
+    render(<ParentHarness stabilize={true} />);
+
+    // Let the initial node-sync effects settle so the render count is stable.
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+      expect(sessionCanvasRenders).toBeGreaterThanOrEqual(1);
+    });
+
+    const canvasBaseline = sessionCanvasRenders;
+    const branchABaseline = branchCardRenders.get('A') ?? 0;
+    const branchBBaseline = branchCardRenders.get('B') ?? 0;
+
+    // Re-render the PARENT. Every SessionCanvas prop kept its identity (board,
+    // branches, the stabilized fork handler), so React.memo bails out and the
+    // canvas — plus its leaf cards — stays put.
+    act(() => {
+      triggerParentRerender();
+    });
+
+    // This is the regression guard: it FAILS if `React.memo(SessionCanvasInner)`
+    // is removed (parent re-render always re-renders the canvas) OR if the fork
+    // handler is destabilized (a fresh prop identity defeats the shallow memo).
+    expect(sessionCanvasRenders).toBe(canvasBaseline);
+    expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
+    expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
+  });
+
+  it('a parent re-render DOES re-render the canvas when a handler identity is not stabilized', async () => {
+    // Contrast case: proves the guard above is meaningful. The same parent,
+    // passing a fresh-identity fork handler each render, breaks the memo shallow
+    // compare — so the bailout asserted above genuinely depends on stabilization.
+    render(<ParentHarness stabilize={false} />);
+
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+      expect(sessionCanvasRenders).toBeGreaterThanOrEqual(1);
+    });
+
+    const canvasBaseline = sessionCanvasRenders;
+
+    act(() => {
+      triggerParentRerender();
+    });
+
+    await waitFor(() => {
+      expect(sessionCanvasRenders).toBeGreaterThan(canvasBaseline);
+    });
   });
 });
