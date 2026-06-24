@@ -52,22 +52,7 @@ beforeEach(() => {
 
 describe('SessionCanvas zoom shortcuts', () => {
   it('uses Command or Control plus scroll to zoom while preserving scroll panning', () => {
-    render(
-      <SessionCanvas
-        board={null}
-        client={null}
-        sessionById={new Map()}
-        sessionsByBranch={new Map()}
-        userById={new Map()}
-        repoById={new Map()}
-        branches={[]}
-        branchById={new Map()}
-        boardObjectById={new Map()}
-        boardObjectsByBoardId={new Map()}
-        commentById={new Map()}
-        cardById={new Map()}
-      />
-    );
+    render(<SessionCanvas board={null} client={null} branches={[]} />);
 
     expect(reactFlowProps?.panOnScroll).toBe(true);
     expect(reactFlowProps?.zoomActivationKeyCode).toEqual(['Meta', 'Control']);
@@ -110,16 +95,7 @@ describe('SessionCanvas zoom shortcuts', () => {
             } as unknown as Board
           }
           client={null}
-          sessionById={new Map()}
-          sessionsByBranch={new Map()}
-          userById={new Map()}
-          repoById={new Map()}
           branches={[]}
-          branchById={new Map()}
-          boardObjectById={new Map()}
-          boardObjectsByBoardId={new Map()}
-          commentById={new Map()}
-          cardById={new Map()}
         />
       </ConnectionProvider>
     );

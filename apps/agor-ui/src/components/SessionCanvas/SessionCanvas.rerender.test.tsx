@@ -1,0 +1,226 @@
+import type {
+  Board,
+  BoardEntityObject,
+  Branch,
+  CardWithType,
+  Repo,
+  Session,
+} from '@agor-live/client';
+import { act, render, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { sessionPatched } from '../../store/agorRealtimeActions';
+import { agorStore } from '../../store/agorStore';
+import SessionCanvas from './SessionCanvas';
+
+// ── Render counters ──────────────────────────────────────────────────────────
+// Leaf node components are mocked to count renders per entity. This isolates the
+// memo boundaries the store migration is meant to protect: a `session:patched`
+// for one branch must not re-render the other branch's card, nor the
+// board-object-derived card node.
+const branchCardRenders = new Map<string, number>();
+let cardNodeRenders = 0;
+
+vi.mock('../BranchCard', () => ({
+  __esModule: true,
+  default: ({ branch }: { branch: Branch }) => {
+    branchCardRenders.set(branch.branch_id, (branchCardRenders.get(branch.branch_id) ?? 0) + 1);
+    return <div data-testid={`branch-card-${branch.branch_id}`} />;
+  },
+}));
+
+vi.mock('../CardNode', () => ({
+  __esModule: true,
+  default: () => {
+    cardNodeRenders += 1;
+    return <div data-testid="card-node" />;
+  },
+}));
+
+// Render real node components through `nodeTypes` so the in-component React.memo
+// boundaries (BranchNode's custom areEqual, CardNodeWrapper's shallow compare)
+// are exercised. We deliberately pass ONLY `data` (mirroring how React Flow
+// re-renders a node component) so the assertions reflect data-reference
+// stability rather than node-object churn from the sync effects.
+vi.mock('reactflow', async () => {
+  const React = await import('react');
+  return {
+    Background: () => null,
+    Controls: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+    ControlButton: ({ children }: { children?: React.ReactNode }) => (
+      <button type="button">{children}</button>
+    ),
+    MiniMap: () => null,
+    useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+    useNodesState: (initial: unknown[]) => {
+      const [nodes, setNodes] = React.useState(initial);
+      const onNodesChange = React.useCallback(() => {}, []);
+      return [nodes, setNodes, onNodesChange];
+    },
+    useEdgesState: (initial: unknown[]) => {
+      const [edges, setEdges] = React.useState(initial);
+      const onEdgesChange = React.useCallback(() => {}, []);
+      return [edges, setEdges, onEdgesChange];
+    },
+    ReactFlow: (props: {
+      nodes?: Array<{ id: string; type: string; data: unknown }>;
+      nodeTypes?: Record<string, React.ComponentType<{ data: unknown }>>;
+      children?: React.ReactNode;
+    }) => (
+      <div data-testid="react-flow">
+        {props.nodes?.map((node) => {
+          const NodeComponent = props.nodeTypes?.[node.type];
+          return NodeComponent ? <NodeComponent key={node.id} data={node.data} /> : null;
+        })}
+        {props.children}
+      </div>
+    ),
+  };
+});
+
+const BOARD_ID = 'board-1';
+const REPO_ID = 'repo-1';
+
+const board = {
+  board_id: BOARD_ID,
+  name: 'Board',
+  slug: 'board',
+  objects: {},
+  created_at: '2026-06-24T00:00:00.000Z',
+  last_updated: '2026-06-24T00:00:00.000Z',
+  created_by: 'user-1',
+  url: 'http://localhost/ui/b/board/',
+  archived: false,
+} as unknown as Board;
+
+const repo = { repo_id: REPO_ID, name: 'repo', slug: 'repo' } as unknown as Repo;
+
+const makeBranch = (id: string): Branch =>
+  ({
+    branch_id: id,
+    repo_id: REPO_ID,
+    board_id: BOARD_ID,
+    name: id,
+    archived: false,
+    others_can: 'session',
+  }) as unknown as Branch;
+
+const makeSession = (id: string, branchId: string, status: string): Session =>
+  ({
+    session_id: id,
+    branch_id: branchId,
+    status,
+    archived: false,
+    created_at: '2026-06-24T00:00:00.000Z',
+    last_updated: '2026-06-24T00:00:00.000Z',
+  }) as unknown as Session;
+
+const card = {
+  card_id: 'card-1',
+  board_id: BOARD_ID,
+  title: 'Card',
+  archived: false,
+} as unknown as CardWithType;
+
+const branchA = makeBranch('A');
+const branchB = makeBranch('B');
+const sessionA = makeSession('sA', 'A', 'running');
+const sessionB = makeSession('sB', 'B', 'running');
+
+const boardObjects: BoardEntityObject[] = [
+  {
+    object_id: 'bo-A',
+    board_id: BOARD_ID,
+    branch_id: 'A',
+    entity_type: 'branch',
+    position: { x: 0, y: 0 },
+  } as unknown as BoardEntityObject,
+  {
+    object_id: 'bo-B',
+    board_id: BOARD_ID,
+    branch_id: 'B',
+    entity_type: 'branch',
+    position: { x: 0, y: 600 },
+  } as unknown as BoardEntityObject,
+  {
+    object_id: 'bo-card',
+    board_id: BOARD_ID,
+    card_id: 'card-1',
+    entity_type: 'card',
+    position: { x: 800, y: 0 },
+  } as unknown as BoardEntityObject,
+];
+
+function seedStore() {
+  agorStore.setState({
+    ...EMPTY_MAPS,
+    repoById: new Map([[REPO_ID, repo]]),
+    branchById: new Map([
+      ['A', branchA],
+      ['B', branchB],
+    ]),
+    sessionById: new Map([
+      ['sA', sessionA],
+      ['sB', sessionB],
+    ]),
+    sessionsByBranch: new Map([
+      ['A', [sessionA]],
+      ['B', [sessionB]],
+    ]),
+    cardById: new Map([['card-1', card]]),
+    boardObjectsByBoardId: new Map([[BOARD_ID, boardObjects]]),
+  });
+}
+
+describe('SessionCanvas store-selector re-render isolation', () => {
+  beforeEach(() => {
+    branchCardRenders.clear();
+    cardNodeRenders = 0;
+    agorStore.setState({ ...EMPTY_MAPS });
+    seedStore();
+  });
+
+  it('a session:patched for branch A does not re-render branch B card nor the board-object card node', async () => {
+    render(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <SessionCanvas board={board} client={null} branches={[branchA, branchB]} />
+      </ConnectionProvider>
+    );
+
+    // Wait until both branch cards and the card node have rendered from the
+    // node-sync effects.
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+      expect(cardNodeRenders).toBeGreaterThanOrEqual(1);
+    });
+
+    const branchBBaseline = branchCardRenders.get('B') ?? 0;
+    const branchABaseline = branchCardRenders.get('A') ?? 0;
+    const cardNodeBaseline = cardNodeRenders;
+
+    // Patch session A only.
+    act(() => {
+      sessionPatched(makeSession('sA', 'A', 'completed'));
+    });
+
+    await waitFor(() => {
+      expect(branchCardRenders.get('A') ?? 0).toBeGreaterThan(branchABaseline);
+    });
+
+    // The win: branch B's card and the board-object-derived card node are
+    // untouched because their selector inputs (branch B's session bucket; this
+    // board's board-object array) kept the same reference across the patch.
+    expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
+    expect(cardNodeRenders).toBe(cardNodeBaseline);
+  });
+});
