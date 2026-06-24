@@ -5,7 +5,7 @@ const DEFAULTS = {
   showStatsChip: true,
   showForkInBar: true,
   showUploadInBar: true,
-  pinnedItems: [] as string[],
+  pinnedItems: ['fork', 'upload'] as string[],
   pinnedChips: ['timer', 'tools', 'model', 'tokens', 'context'] as string[],
 };
 

@@ -217,10 +217,10 @@ describe('useFooterPreferences', () => {
     expect(prefs.showUploadInBar).toBe(true);
   });
 
-  it('defaults include pinnedItems as empty array', () => {
+  it('defaults include pinnedItems with fork and upload pinned', () => {
     const { result } = renderHook(() => useFooterPreferences());
     const [prefs] = result.current;
-    expect(prefs.pinnedItems).toEqual([]);
+    expect(prefs.pinnedItems).toEqual(['fork', 'upload']);
   });
 
   it('defaults include pinnedChips with all chips visible', () => {

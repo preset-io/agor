@@ -224,162 +224,6 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
   const moreContent = (
     <div style={{ width: 248 }}>
-      {/* === Section: Actions === */}
-      {(toolCaps?.supportsSessionFork !== false || toolCaps?.supportsChildSpawn !== false) && (
-        <>
-          <div style={sectionHeaderStyle}>Actions</div>
-          {toolCaps?.supportsSessionFork !== false && (
-            <Tooltip
-              title={
-                connectionDisabled || !hasInput
-                  ? 'Needs input and a live connection'
-                  : 'Ask a side question via an ephemeral fork'
-              }
-              placement="left"
-            >
-              <div
-                style={{
-                  ...overflowRowStyle,
-                  opacity: connectionDisabled || !hasInput ? 0.4 : 1,
-                  cursor: connectionDisabled || !hasInput ? 'not-allowed' : 'pointer',
-                }}
-                onClick={
-                  connectionDisabled || !hasInput
-                    ? undefined
-                    : () => {
-                        setMoreOpen(false);
-                        onBtwSend();
-                      }
-                }
-              >
-                <QuestionCircleOutlined
-                  style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-                />
-                <Typography.Text
-                  style={{
-                    fontSize: 13,
-                    flex: 1,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    minWidth: 0,
-                  }}
-                >
-                  BTW fork
-                </Typography.Text>
-                <Tooltip
-                  title={pinnedItems.includes('btw-fork') ? 'Unpin from bar' : 'Pin to bar'}
-                  placement="right"
-                >
-                  <button
-                    type="button"
-                    aria-label={
-                      pinnedItems.includes('btw-fork') ? 'Unpin BTW fork' : 'Pin BTW fork'
-                    }
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: pinnedItems.includes('btw-fork')
-                        ? token.colorPrimary
-                        : token.colorTextTertiary,
-                      lineHeight: 1,
-                      padding: 2,
-                      flexShrink: 0,
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      togglePin('btw-fork');
-                    }}
-                  >
-                    {pinnedItems.includes('btw-fork') ? (
-                      <PushpinFilled style={{ fontSize: 12 }} />
-                    ) : (
-                      <PushpinOutlined style={{ fontSize: 12 }} />
-                    )}
-                  </button>
-                </Tooltip>
-              </div>
-            </Tooltip>
-          )}
-          {toolCaps?.supportsChildSpawn !== false && (
-            <Tooltip
-              title={
-                connectionDisabled
-                  ? 'Disconnected'
-                  : isRunning
-                    ? 'Session is running'
-                    : 'Spawn a child subsession'
-              }
-              placement="left"
-            >
-              <div
-                style={{
-                  ...overflowRowStyle,
-                  opacity: connectionDisabled || isRunning ? 0.4 : 1,
-                  cursor: connectionDisabled || isRunning ? 'not-allowed' : 'pointer',
-                }}
-                onClick={
-                  connectionDisabled || isRunning
-                    ? undefined
-                    : () => {
-                        setMoreOpen(false);
-                        onSpawnOpen();
-                      }
-                }
-              >
-                <BranchesOutlined
-                  style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-                />
-                <Typography.Text
-                  style={{
-                    fontSize: 13,
-                    flex: 1,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    minWidth: 0,
-                  }}
-                >
-                  Spawn subsession
-                </Typography.Text>
-                <Tooltip
-                  title={pinnedItems.includes('spawn') ? 'Unpin from bar' : 'Pin to bar'}
-                  placement="right"
-                >
-                  <button
-                    type="button"
-                    aria-label={pinnedItems.includes('spawn') ? 'Unpin Spawn' : 'Pin Spawn'}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: pinnedItems.includes('spawn')
-                        ? token.colorPrimary
-                        : token.colorTextTertiary,
-                      lineHeight: 1,
-                      padding: 2,
-                      flexShrink: 0,
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      togglePin('spawn');
-                    }}
-                  >
-                    {pinnedItems.includes('spawn') ? (
-                      <PushpinFilled style={{ fontSize: 12 }} />
-                    ) : (
-                      <PushpinOutlined style={{ fontSize: 12 }} />
-                    )}
-                  </button>
-                </Tooltip>
-              </div>
-            </Tooltip>
-          )}
-          <Divider style={{ margin: '6px 0' }} />
-        </>
-      )}
-
       {/* === Section: Settings === */}
       <div style={sectionHeaderStyle}>Settings</div>
 
@@ -441,7 +285,300 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
       <Divider style={{ margin: '6px 0' }} />
 
-      {/* === Section: Chips === */}
+      {/* === Section: Actions === */}
+      <div style={sectionHeaderStyle}>Actions</div>
+
+      {/* Upload */}
+      <Tooltip
+        title={connectionDisabled ? 'Disconnected from daemon' : 'Attach files to prompt'}
+        placement="left"
+      >
+        <div
+          style={{
+            ...overflowRowStyle,
+            opacity: connectionDisabled ? 0.4 : 1,
+            cursor: connectionDisabled ? 'not-allowed' : 'pointer',
+          }}
+          onClick={
+            connectionDisabled
+              ? undefined
+              : () => {
+                  setMoreOpen(false);
+                  onUploadOpen();
+                }
+          }
+        >
+          <PaperClipOutlined
+            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+          />
+          <Typography.Text
+            style={{
+              fontSize: 13,
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            Attach files
+          </Typography.Text>
+          <Tooltip
+            title={pinnedItems.includes('upload') ? 'Unpin from bar' : 'Pin to bar'}
+            placement="right"
+          >
+            <button
+              type="button"
+              aria-label={pinnedItems.includes('upload') ? 'Unpin Upload' : 'Pin Upload'}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: pinnedItems.includes('upload')
+                  ? token.colorPrimary
+                  : token.colorTextTertiary,
+                lineHeight: 1,
+                padding: 2,
+                flexShrink: 0,
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePin('upload');
+              }}
+            >
+              {pinnedItems.includes('upload') ? (
+                <PushpinFilled style={{ fontSize: 12 }} />
+              ) : (
+                <PushpinOutlined style={{ fontSize: 12 }} />
+              )}
+            </button>
+          </Tooltip>
+        </div>
+      </Tooltip>
+
+      {/* Fork */}
+      {toolCaps?.supportsSessionFork !== false && (
+        <Tooltip
+          title={connectionDisabled ? 'Disconnected from daemon' : 'Fork this session'}
+          placement="left"
+        >
+          <div
+            style={{
+              ...overflowRowStyle,
+              opacity: connectionDisabled ? 0.4 : 1,
+              cursor: connectionDisabled ? 'not-allowed' : 'pointer',
+            }}
+            onClick={
+              connectionDisabled
+                ? undefined
+                : () => {
+                    setMoreOpen(false);
+                    onFork();
+                  }
+            }
+          >
+            <ForkOutlined
+              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+            />
+            <Typography.Text
+              style={{
+                fontSize: 13,
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                minWidth: 0,
+              }}
+            >
+              Fork session
+            </Typography.Text>
+            <Tooltip
+              title={pinnedItems.includes('fork') ? 'Unpin from bar' : 'Pin to bar'}
+              placement="right"
+            >
+              <button
+                type="button"
+                aria-label={pinnedItems.includes('fork') ? 'Unpin Fork' : 'Pin Fork'}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: pinnedItems.includes('fork')
+                    ? token.colorPrimary
+                    : token.colorTextTertiary,
+                  lineHeight: 1,
+                  padding: 2,
+                  flexShrink: 0,
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePin('fork');
+                }}
+              >
+                {pinnedItems.includes('fork') ? (
+                  <PushpinFilled style={{ fontSize: 12 }} />
+                ) : (
+                  <PushpinOutlined style={{ fontSize: 12 }} />
+                )}
+              </button>
+            </Tooltip>
+          </div>
+        </Tooltip>
+      )}
+
+      {/* BTW fork */}
+      {toolCaps?.supportsSessionFork !== false && (
+        <Tooltip
+          title={
+            connectionDisabled || !hasInput
+              ? 'Needs input and a live connection'
+              : 'Ask a side question via an ephemeral fork'
+          }
+          placement="left"
+        >
+          <div
+            style={{
+              ...overflowRowStyle,
+              opacity: connectionDisabled || !hasInput ? 0.4 : 1,
+              cursor: connectionDisabled || !hasInput ? 'not-allowed' : 'pointer',
+            }}
+            onClick={
+              connectionDisabled || !hasInput
+                ? undefined
+                : () => {
+                    setMoreOpen(false);
+                    onBtwSend();
+                  }
+            }
+          >
+            <QuestionCircleOutlined
+              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+            />
+            <Typography.Text
+              style={{
+                fontSize: 13,
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                minWidth: 0,
+              }}
+            >
+              BTW fork
+            </Typography.Text>
+            <Tooltip
+              title={pinnedItems.includes('btw-fork') ? 'Unpin from bar' : 'Pin to bar'}
+              placement="right"
+            >
+              <button
+                type="button"
+                aria-label={pinnedItems.includes('btw-fork') ? 'Unpin BTW fork' : 'Pin BTW fork'}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: pinnedItems.includes('btw-fork')
+                    ? token.colorPrimary
+                    : token.colorTextTertiary,
+                  lineHeight: 1,
+                  padding: 2,
+                  flexShrink: 0,
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePin('btw-fork');
+                }}
+              >
+                {pinnedItems.includes('btw-fork') ? (
+                  <PushpinFilled style={{ fontSize: 12 }} />
+                ) : (
+                  <PushpinOutlined style={{ fontSize: 12 }} />
+                )}
+              </button>
+            </Tooltip>
+          </div>
+        </Tooltip>
+      )}
+
+      {/* Spawn */}
+      {toolCaps?.supportsChildSpawn !== false && (
+        <Tooltip
+          title={
+            connectionDisabled
+              ? 'Disconnected'
+              : isRunning
+                ? 'Session is running'
+                : 'Spawn a child subsession'
+          }
+          placement="left"
+        >
+          <div
+            style={{
+              ...overflowRowStyle,
+              opacity: connectionDisabled || isRunning ? 0.4 : 1,
+              cursor: connectionDisabled || isRunning ? 'not-allowed' : 'pointer',
+            }}
+            onClick={
+              connectionDisabled || isRunning
+                ? undefined
+                : () => {
+                    setMoreOpen(false);
+                    onSpawnOpen();
+                  }
+            }
+          >
+            <BranchesOutlined
+              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+            />
+            <Typography.Text
+              style={{
+                fontSize: 13,
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                minWidth: 0,
+              }}
+            >
+              Spawn subsession
+            </Typography.Text>
+            <Tooltip
+              title={pinnedItems.includes('spawn') ? 'Unpin from bar' : 'Pin to bar'}
+              placement="right"
+            >
+              <button
+                type="button"
+                aria-label={pinnedItems.includes('spawn') ? 'Unpin Spawn' : 'Pin Spawn'}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: pinnedItems.includes('spawn')
+                    ? token.colorPrimary
+                    : token.colorTextTertiary,
+                  lineHeight: 1,
+                  padding: 2,
+                  flexShrink: 0,
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePin('spawn');
+                }}
+              >
+                {pinnedItems.includes('spawn') ? (
+                  <PushpinFilled style={{ fontSize: 12 }} />
+                ) : (
+                  <PushpinOutlined style={{ fontSize: 12 }} />
+                )}
+              </button>
+            </Tooltip>
+          </div>
+        </Tooltip>
+      )}
+
+      <Divider style={{ margin: '6px 0' }} />
+
+      {/* === Section: Info bar chips === */}
       <div style={sectionHeaderStyle}>Info bar</div>
 
       {footerTimerTask && (
@@ -672,6 +809,38 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           >
             Session IDs
           </Typography.Text>
+          <Tooltip
+            title={pinnedChips.includes('session-ids') ? 'Unpin from info bar' : 'Pin to info bar'}
+            placement="right"
+          >
+            <button
+              type="button"
+              aria-label={
+                pinnedChips.includes('session-ids') ? 'Unpin Session IDs' : 'Pin Session IDs'
+              }
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: pinnedChips.includes('session-ids')
+                  ? token.colorPrimary
+                  : token.colorTextTertiary,
+                lineHeight: 1,
+                padding: 2,
+                flexShrink: 0,
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleChip('session-ids');
+              }}
+            >
+              {pinnedChips.includes('session-ids') ? (
+                <PushpinFilled style={{ fontSize: 12 }} />
+              ) : (
+                <PushpinOutlined style={{ fontSize: 12 }} />
+              )}
+            </button>
+          </Tooltip>
         </div>
       </Popover>
     </div>
@@ -728,7 +897,8 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           (tokensK > 0 && pinnedChips.includes('tokens')) ||
           (latestContextWindow &&
             latestContextWindow.limit > 0 &&
-            pinnedChips.includes('context'))) && (
+            pinnedChips.includes('context')) ||
+          pinnedChips.includes('session-ids')) && (
           <div
             style={{
               display: 'flex',
@@ -794,28 +964,44 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
             {/* Model chip */}
             {modelName && pinnedChips.includes('model') && (
-              <Tag
-                icon={<RobotOutlined />}
-                color="default"
-                style={{
-                  cursor: 'default',
-                  height: 22,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  maxWidth: 180,
-                }}
-                data-testid="model-chip"
+              <Popover
+                trigger="click"
+                placement="topLeft"
+                title="Model"
+                content={
+                  <div style={{ width: 280 }}>
+                    <ModelSelector
+                      value={modelConfig}
+                      onChange={onModelConfigChange}
+                      agentic_tool={session.agentic_tool}
+                      client={client}
+                    />
+                  </div>
+                }
               >
-                <span
+                <Tag
+                  icon={<RobotOutlined />}
+                  color="default"
                   style={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
+                    cursor: 'pointer',
+                    height: 22,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    maxWidth: 180,
                   }}
+                  data-testid="model-chip"
                 >
-                  {modelName}
-                </span>
-              </Tag>
+                  <span
+                    style={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {modelName}
+                  </span>
+                </Tag>
+              </Popover>
             )}
 
             {/* Tokens chip */}
@@ -857,6 +1043,39 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   {Math.round(contextPct * 100)}%
                 </Tag>
               )}
+
+            {/* Session IDs chip */}
+            {pinnedChips.includes('session-ids') && (
+              <Popover
+                trigger="click"
+                placement="topLeft"
+                title={
+                  <span>
+                    <IdcardOutlined style={{ marginRight: 8 }} />
+                    Session IDs
+                  </span>
+                }
+                content={
+                  <div style={{ width: 400, maxWidth: '90vw' }}>
+                    <SessionIdsList session={session} />
+                  </div>
+                }
+              >
+                <Tag
+                  icon={<IdcardOutlined />}
+                  color="default"
+                  style={{
+                    cursor: 'pointer',
+                    height: 22,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                  }}
+                  data-testid="session-ids-chip"
+                >
+                  IDs
+                </Tag>
+              </Popover>
+            )}
           </div>
         )}
 
@@ -874,16 +1093,19 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         >
           {/* Left group */}
           <Space size={4}>
-            <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Upload Files'}>
-              <Button
-                size="small"
-                type="text"
-                icon={<PaperClipOutlined />}
-                onClick={onUploadOpen}
-                disabled={connectionDisabled}
-              />
-            </Tooltip>
-            {toolCaps?.supportsSessionFork !== false && (
+            {pinnedItems.includes('upload') && (
+              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Upload Files'}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<PaperClipOutlined />}
+                  onClick={onUploadOpen}
+                  disabled={connectionDisabled}
+                  data-testid="upload-bar-btn"
+                />
+              </Tooltip>
+            )}
+            {pinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
               <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
                 <Button
                   size="small"
@@ -891,6 +1113,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   icon={<ForkOutlined />}
                   onClick={onFork}
                   disabled={connectionDisabled}
+                  data-testid="fork-bar-btn"
                 />
               </Tooltip>
             )}
