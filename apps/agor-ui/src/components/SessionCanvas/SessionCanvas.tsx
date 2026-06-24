@@ -1389,6 +1389,18 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return () => clearTimeout(timer);
     }, [isReactFlowReady, nodes.length, board?.board_id, consumePendingRecenter, recenterOnNode]);
 
+    // O(1) lookup map of the current nodes, keyed by id. Derived from the same
+    // `nodes` array that drives the canvas, so it always reflects the current
+    // state at lookup time. Replaces per-event linear scans in onNodesChange,
+    // which fires rapidly during pan/drag/zoom (was O(n) per change → O(1)).
+    const nodeById = useMemo(() => {
+      const map = new Map<string, (typeof nodes)[number]>();
+      for (const n of nodes) {
+        map.set(n.id, n);
+      }
+      return map;
+    }, [nodes]);
+
     // Intercept onNodesChange to detect resize events
     const onNodesChange = useCallback(
       // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
@@ -1397,7 +1409,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
         changes.forEach((change: any) => {
           if (change.type === 'dimensions' && change.dimensions) {
-            const node = nodes.find((n) => n.id === change.id);
+            const node = nodeById.get(change.id);
             if (node?.type === 'zone') {
               // Check if dimensions actually changed (to avoid infinite loop from React Flow emitting unchanged dimensions)
               const currentWidth = node.style?.width;
@@ -1462,7 +1474,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Call the original handler
         onNodesChangeInternal(changes);
       },
-      [nodes, board, client, onNodesChangeInternal]
+      [nodeById, board, client, onNodesChangeInternal]
     );
 
     // Handle node drag start

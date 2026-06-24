@@ -138,4 +138,71 @@ describe('SessionCanvas zoom shortcuts', () => {
 
     expect(await screen.findByText('Add Markdown Note')).toBeInTheDocument();
   });
+
+  it('handles onNodesChange dimensions events via O(1) node lookup', () => {
+    render(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <SessionCanvas
+          board={
+            {
+              board_id: 'board-1',
+              name: 'Board',
+              slug: 'board',
+              objects: {
+                'zone-1': {
+                  type: 'zone',
+                  x: 0,
+                  y: 0,
+                  width: 1200,
+                  height: 900,
+                  label: 'Large Zone',
+                  borderColor: '#d9d9d9',
+                  backgroundColor: '#d9d9d91a',
+                },
+              },
+              created_at: '2026-06-18T00:00:00.000Z',
+              last_updated: '2026-06-18T00:00:00.000Z',
+              created_by: 'user-1',
+              url: 'http://localhost/ui/b/board/',
+              archived: false,
+            } as unknown as Board
+          }
+          client={null}
+          sessionById={new Map()}
+          sessionsByBranch={new Map()}
+          userById={new Map()}
+          repoById={new Map()}
+          branches={[]}
+          branchById={new Map()}
+          boardObjectById={new Map()}
+          boardObjectsByBoardId={new Map()}
+          commentById={new Map()}
+          cardById={new Map()}
+        />
+      </ConnectionProvider>
+    );
+
+    const onNodesChange = reactFlowProps?.onNodesChange as (changes: unknown[]) => void;
+    expect(typeof onNodesChange).toBe('function');
+
+    // A dimensions change for an existing zone node resolves through the O(1)
+    // map; one for an unknown id must be a safe no-op (map miss).
+    expect(() => {
+      act(() => {
+        onNodesChange([
+          { type: 'dimensions', id: 'zone-1', dimensions: { width: 1000, height: 700 } },
+          { type: 'dimensions', id: 'missing-node', dimensions: { width: 10, height: 10 } },
+          { type: 'position', id: 'zone-1', position: { x: 5, y: 5 } },
+        ]);
+      });
+    }).not.toThrow();
+  });
 });
