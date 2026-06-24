@@ -3,6 +3,7 @@ import { RiseOutlined, TeamOutlined, ThunderboltOutlined } from '@ant-design/ico
 import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import { glassCardStyle } from './homeStyles';
 
 const { Text } = Typography;
 
@@ -22,7 +23,7 @@ const StatCard: React.FC<{
         flex: 1,
         position: 'relative',
         padding: '14px 16px',
-        background: token.colorBgContainer,
+        ...glassCardStyle(token, 0.65),
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
         minWidth: 0,

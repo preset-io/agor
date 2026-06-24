@@ -1,6 +1,7 @@
 import { CheckOutlined } from '@ant-design/icons';
 import { Button, Progress, Typography, theme } from 'antd';
 import type React from 'react';
+import { glassCardStyle } from './homeStyles';
 
 const { Text } = Typography;
 
@@ -30,7 +31,7 @@ export const OnboardingCard: React.FC<OnboardingCardProps> = ({ steps, onDismiss
         borderRadius: token.borderRadiusLG,
         padding: '16px 20px',
         marginBottom: 24,
-        background: token.colorBgContainer,
+        ...glassCardStyle(token, 0.65),
       }}
     >
       {/* Header row */}
