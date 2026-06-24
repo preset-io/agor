@@ -541,10 +541,12 @@ describe('useAgorData — socket-event bailouts', () => {
  * Background hydration uses a "skip-apply-on-race" rule (see `runHydration` /
  * `liveRevisionsRef` in useAgorData.ts): the full-set snapshot is applied
  * WHOLESALE only when no live write to the target collection raced the fetch.
- * If one did, the snapshot is discarded and refetched — never overlaid — and if
- * the race never settles the apply is skipped entirely. These tests pin that
- * contract (apply-on-quiet, retry-on-race, skip-without-resurrect, and
- * per-collection independence) using `onFetch` to land a live write mid-fetch.
+ * If one did, the snapshot is discarded and refetched — never overlaid — and a
+ * persistent race triggers repeated discard+refetch with capped exponential
+ * backoff until a quiet window allows a wholesale apply: the apply is deferred,
+ * never permanently skipped. These tests pin that contract (apply-on-quiet,
+ * retry-until-quiet, no-resurrect, and per-collection independence) using
+ * `onFetch` to land a live write mid-fetch.
  *
  * jsdom's pathname is `/`, so no board scope resolves: only the sessions+branches
  * (and the always-on mcp/gateway/artifact/oauth) hydrations run, while the gated
