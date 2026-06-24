@@ -57,10 +57,32 @@ const INITIAL_LOAD_ITEMS = [
 
 export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 
-// Max times a background fetch refetches when a realtime write races its
-// in-flight request before falling back to a live-wins merge apply. Small: the
-// race window is one fetch RTT and a startup write storm is rare.
-const MAX_BACKGROUND_REFETCH = 3;
+// Skip-apply-on-race background hydration retry schedule. A hydration applies
+// its full-set snapshot ONLY if no live write to the target collection(s)
+// raced the fetch (proven via the per-collection `liveRevisionsRef` counters);
+// if one did, the snapshot is DISCARDED and refetched from a fresh revision
+// baseline — never overlaid/reconciled. The first few retries are immediate
+// (the race window is ~one fetch RTT), then a couple of backoff retries give a
+// short live-write burst time to settle. If it never goes quiet we skip the
+// apply entirely (leave the collection as-is; live subscriptions + the next
+// reconnect/board-switch reconcile) rather than clobber live state.
+const HYDRATION_IMMEDIATE_RETRIES = 4;
+const HYDRATION_BACKOFF_DELAYS_MS = [100, 400] as const;
+
+// Hydrated collections that the background hydration replaces wholesale. Each
+// has its own live-write revision counter (`liveRevisionsRef`) so a write to
+// one collection never blocks another's hydration from applying.
+type HydratedCollection =
+  | 'sessions'
+  | 'branches'
+  | 'boardObjects'
+  | 'cards'
+  | 'comments'
+  | 'mcpServers'
+  | 'sessionMcp'
+  | 'gatewayChannels'
+  | 'artifacts'
+  | 'oauth';
 
 // First-paint bound for the global (non-board-scoped) sessions slice. Covers
 // Home's "My Sessions" + "Team activity" feeds (both show only recent items)
@@ -615,40 +637,36 @@ export function useAgorData(
   // we only consume it in event handlers, never in render.
   const lastSilentFetchFailedRef = useRef(false);
 
-  // Monotonic counter bumped by every realtime handler that mutates a slice a
-  // BACKGROUND fetch later replaces wholesale (board-objects / cards / comments
-  // for full hydration, plus the optional mcp / gateway / artifact / session-mcp
-  // / oauth slices). A background apply snapshots this before its fetch; if it
-  // changed by the time the fetch resolves, a live create/patch/remove landed
-  // mid-flight and the snapshot is potentially stale — so we refetch for a
-  // consistent snapshot rather than clobbering the live write. As a final
-  // backstop the apply merges live entries on top of the snapshot (live wins),
-  // so an in-flight create/patch is never lost even at the retry cap. We use a
-  // ref (not state) since it's only read/written from async fetch code and
-  // event handlers, never in render.
-  const liveWriteRevisionRef = useRef(0);
-
-  // Entity IDs deleted/archived by a realtime handler. A background hydration
-  // snapshots this set before its fetch and, on apply, drops any ID that was
-  // tombstoned DURING the fetch window from the incoming snapshot — otherwise the
-  // live-wins overlay (which only re-adds create/patch entries) would RESURRECT a
-  // row the snapshot still contains but that was removed mid-flight (the row is
-  // already gone from `prev`, so the overlay can't delete it). "Live wins" must
-  // mean create/patch overlay AND remove suppression. Window-scoped (snapshot the
-  // set at fetch start, diff at apply) so a legitimate later re-create/unarchive
-  // of the same id isn't permanently suppressed. Same ref (not state): only
-  // touched by async fetch code + event handlers.
-  const liveRemovedIdsRef = useRef<Set<string>>(new Set());
-
-  // Subset of `liveRemovedIdsRef`: session IDs tombstoned because their BRANCH
-  // was evicted (archived/removed), not because the session itself was removed.
-  // The sessions+branches hydration suppresses these only while the branch is
-  // STILL gone at apply time — if the branch is unarchived/recreated during the
-  // same hydration window it's overlaid back from `prev`, but its child sessions
-  // were dropped from `prev`, so we must keep them from the snapshot rather than
-  // suppress them. Direct session removes are NOT added here, so they stay
-  // unconditionally suppressed.
-  const liveBranchEvictedSessionIdsRef = useRef<Set<string>>(new Set());
+  // Per-collection live-write revision counters — the core of the
+  // skip-apply-on-race background hydration. EVERY realtime handler that
+  // mutates one of these collection Maps bumps the matching counter
+  // (created / patched / removed, INCLUDING cascade removes such as branch
+  // eviction dropping its sessions, the deep-link-healing effect, and
+  // reconnect-driven writes). A background hydration snapshots the counters for
+  // the collections it replaces, fetches the full set, then applies the
+  // snapshot WHOLESALE only if those counters are unchanged when the fetch
+  // resolves — proving no live write raced. If any raced, the snapshot is
+  // discarded and refetched (never overlaid/reconciled). This makes a wholesale
+  // apply provably unable to clobber a live write OR resurrect a removed entity:
+  // a remove would have bumped the counter, so no apply happens. A ref (not
+  // state): only touched by async fetch code + event handlers, never in render.
+  const liveRevisionsRef = useRef<Record<HydratedCollection, number>>({
+    sessions: 0,
+    branches: 0,
+    boardObjects: 0,
+    cards: 0,
+    comments: 0,
+    mcpServers: 0,
+    sessionMcp: 0,
+    gatewayChannels: 0,
+    artifacts: 0,
+    oauth: 0,
+  });
+  // Stable bump helper (identity never changes — only mutates the ref) so it's
+  // safe to reference from the subscribe effect's handlers without churning deps.
+  const bumpRevision = useCallback((collection: HydratedCollection) => {
+    liveRevisionsRef.current[collection] += 1;
+  }, []);
 
   // Fetch all data
   //
@@ -696,65 +714,50 @@ export function useAgorData(
           });
         };
 
-        // Merge fetched snapshot entries with live ones, LIVE WINS: prevMap
-        // entries (delivered by realtime while the fetch was in flight)
-        // overwrite the snapshot. Mutates and returns `incoming`.
-        const mergeLiveWins = <V>(
-          incoming: Map<string, V>,
-          prevMap: Map<string, V>
-        ): Map<string, V> => {
-          for (const [key, value] of prevMap) incoming.set(key, value);
-          return incoming;
-        };
-
-        // IDs tombstoned (removed/archived) between `since` and now. The apply
-        // uses this to drop resurrected rows from the snapshot — see
-        // `liveRemovedIdsRef`. Window-scoped: only ids removed DURING this fetch.
-        const removedSince = (since: ReadonlySet<string>): Set<string> => {
-          const out = new Set<string>();
-          for (const id of liveRemovedIdsRef.current) {
-            if (!since.has(id)) out.add(id);
-          }
-          return out;
-        };
-
-        // Run a BACKGROUND (non-gated) fetch and apply it clobber-safely.
-        // - Silent reconnect refetches are authoritative resyncs → apply once.
-        // - Otherwise, if a realtime write to one of these slices landed during
-        //   the fetch (liveWriteRevisionRef changed), refetch — bounded — for a
-        //   fresh snapshot before applying. The appliers additionally merge live
-        //   entries on top of the snapshot (live wins for create/patch) and drop
-        //   the tombstoned-during-window ids (`removedDuringWindow`, remove wins),
-        //   so neither an in-flight create/patch nor an in-flight remove is lost
-        //   even when the retry cap is hit under a continuous write stream.
-        const runBackgroundFetch = async <T>(
+        // Run a BACKGROUND (non-gated) hydration with skip-apply-on-race. The
+        // fetched full-set snapshot is applied WHOLESALE only if no live write
+        // to any of `collections` raced the fetch — proven by snapshotting each
+        // collection's revision counter before the fetch and re-checking after.
+        // If a write raced, the (potentially stale) snapshot is DISCARDED and
+        // refetched from a fresh baseline; we NEVER overlay or reconcile a racy
+        // snapshot. After a few immediate retries we back off briefly to let a
+        // write burst settle; if it still never goes quiet we skip the apply
+        // entirely rather than clobber live state (the collection stays as-is —
+        // first paint already rendered it, and live events + the next
+        // reconnect/board-switch reconcile any cross-board gaps).
+        const runHydration = async <T>(
           label: string,
+          collections: readonly HydratedCollection[],
           fetchFn: () => Promise<T>,
-          apply: (result: T, removedDuringWindow: ReadonlySet<string>) => void
+          apply: (result: T) => void
         ): Promise<void> => {
-          try {
-            if (silent) {
-              const removedBefore = new Set(liveRemovedIdsRef.current);
-              const result = await fetchFn();
-              apply(result, removedSince(removedBefore));
+          const totalAttempts = HYDRATION_IMMEDIATE_RETRIES + HYDRATION_BACKOFF_DELAYS_MS.length;
+          for (let attempt = 0; attempt < totalAttempts; attempt++) {
+            const before = collections.map((c) => liveRevisionsRef.current[c]);
+            let result: T;
+            try {
+              result = await fetchFn();
+            } catch (err) {
+              console.warn(`[useAgorData] background ${label} fetch failed:`, err);
               return;
             }
-            for (let attempt = 0; attempt < MAX_BACKGROUND_REFETCH; attempt++) {
-              const revBefore = liveWriteRevisionRef.current;
-              const removedBefore = new Set(liveRemovedIdsRef.current);
-              const result = await fetchFn();
-              if (
-                liveWriteRevisionRef.current === revBefore ||
-                attempt === MAX_BACKGROUND_REFETCH - 1
-              ) {
-                apply(result, removedSince(removedBefore));
-                return;
-              }
-              // A realtime write landed mid-fetch; loop to refetch a fresh snapshot.
+            const raced = collections.some((c, i) => liveRevisionsRef.current[c] !== before[i]);
+            if (!raced) {
+              apply(result);
+              return;
             }
-          } catch (err) {
-            console.warn(`[useAgorData] background ${label} fetch failed:`, err);
+            // A live write to one of these collections raced the fetch — discard
+            // this snapshot and retry from a fresh revision baseline.
+            const backoffIndex = attempt - HYDRATION_IMMEDIATE_RETRIES;
+            const delayMs = backoffIndex >= 0 ? HYDRATION_BACKOFF_DELAYS_MS[backoffIndex] : 0;
+            if (delayMs > 0) {
+              await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+            }
           }
+          console.debug(
+            `[useAgorData] ${label} hydration kept racing across ${totalAttempts} attempts; ` +
+              'skipped apply (live state preserved)'
+          );
         };
 
         // ── Background (non-gated) fetches ──────────────────────────────
@@ -762,54 +765,42 @@ export function useAgorData(
         // never block the first-paint gate. Fire-and-forget: each populates its
         // own map slice on resolve. Their realtime subscriptions are attached in
         // the subscribe effect BEFORE this fetch runs, so live events land even
-        // while these fetches are in flight — and `runBackgroundFetch` keeps the
-        // apply from clobbering them. We deliberately do NOT `track()` them —
-        // they're absent from INITIAL_LOAD_ITEMS, so the loading checklist /
-        // `initialLoadComplete` gate ignores them. We merge through the stable
-        // `setMaps` (not the per-render setMapSlice setters, which would
-        // destabilize this useCallback's deps and re-fire the subscribe effect).
-        void runBackgroundFetch(
+        // while these fetches are in flight — and `runHydration` only applies a
+        // snapshot when no live write to that collection raced (else it refetches
+        // a fresh one). We deliberately do NOT `track()` them — they're absent
+        // from INITIAL_LOAD_ITEMS, so the loading checklist / `initialLoadComplete`
+        // gate ignores them. We apply through the stable `setMaps` (not the
+        // per-render setMapSlice setters, which would destabilize this
+        // useCallback's deps and re-fire the subscribe effect).
+        void runHydration(
           'mcp-servers',
+          ['mcpServers'],
           () =>
             client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
           (list) =>
-            setMaps((prev) => ({
-              ...prev,
-              mcpServerById: silent
-                ? buildById(list, 'mcp_server_id')
-                : mergeLiveWins(buildById(list, 'mcp_server_id'), prev.mcpServerById),
-            }))
+            setMaps((prev) => ({ ...prev, mcpServerById: buildById(list, 'mcp_server_id') }))
         );
-        void runBackgroundFetch(
+        void runHydration(
           'session-mcp-servers',
+          ['sessionMcp'],
           () =>
             client
               .service('session-mcp-servers')
               .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) =>
-            setMaps((prev) => ({
-              ...prev,
-              sessionMcpServerIds: silent
-                ? buildSessionMcpMap(list)
-                : mergeLiveWins(buildSessionMcpMap(list), prev.sessionMcpServerIds),
-            }))
+          (list) => setMaps((prev) => ({ ...prev, sessionMcpServerIds: buildSessionMcpMap(list) }))
         );
-        void runBackgroundFetch(
+        void runHydration(
           'gateway-channels',
+          ['gatewayChannels'],
           () =>
             client
               .service('gateway-channels')
               .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) =>
-            setMaps((prev) => ({
-              ...prev,
-              gatewayChannelById: silent
-                ? buildById(list, 'id')
-                : mergeLiveWins(buildById(list, 'id'), prev.gatewayChannelById),
-            }))
+          (list) => setMaps((prev) => ({ ...prev, gatewayChannelById: buildById(list, 'id') }))
         );
-        void runBackgroundFetch(
+        void runHydration(
           'artifacts',
+          ['artifacts'],
           () =>
             client.service('artifacts').findAll({
               query: {
@@ -837,28 +828,16 @@ export function useAgorData(
                 ],
               },
             }),
-          (list) =>
-            setMaps((prev) => ({
-              ...prev,
-              artifactById: silent
-                ? buildById(list, 'artifact_id')
-                : mergeLiveWins(buildById(list, 'artifact_id'), prev.artifactById),
-            }))
+          (list) => setMaps((prev) => ({ ...prev, artifactById: buildById(list, 'artifact_id') }))
         );
-        void runBackgroundFetch(
+        void runHydration(
           'oauth-status',
+          ['oauth'],
           () => client.service('mcp-servers/oauth-status').find(),
           (res) => {
             const ids =
               (res as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
-            setMaps((prev) => ({
-              ...prev,
-              // Non-silent: union snapshot with live additions so an OAuth
-              // completion that landed mid-fetch isn't dropped. Silent: replace.
-              userAuthenticatedMcpServerIds: silent
-                ? new Set(ids)
-                : new Set([...ids, ...prev.userAuthenticatedMcpServerIds]),
-            }));
+            setMaps((prev) => ({ ...prev, userAuthenticatedMcpServerIds: new Set(ids) }));
           }
         );
 
@@ -1178,28 +1157,30 @@ export function useAgorData(
         debugTimer?.endIndexing();
         debugFinishStatus = 'success';
 
-        // ── Background full hydration ───────────────────────────────────
+        // ── Background full hydration (skip-apply-on-race) ──────────────
         // First paint is now open with ONLY the recent sessions + the displayed
         // board's branches/sessions/objects/cards/comments. Pull the FULL sets so
         // per-board counts, the board switcher, GlobalSearch, the branch-list
         // drawer, facepiles and session genealogy (which can span boards) see
         // everything a beat later.
         //
-        // Clobber-safety: this runs WHILE the app is interactive, so a realtime
-        // create/patch/remove can land during a global fetch. `runBackgroundFetch`
-        // refetches if `liveWriteRevisionRef` changed mid-flight; each apply then
-        // MERGES the live entries on top of the snapshot (live wins, so an
-        // in-flight create/patch is never reverted) AND drops ids tombstoned
-        // during the fetch window (`removedDuringWindow`, so an in-flight
-        // remove/archive isn't resurrected by a snapshot taken before it).
+        // Correctness: this runs WHILE the app is interactive, so a realtime
+        // create/patch/remove can land during a global fetch. `runHydration`
+        // applies the fetched snapshot WHOLESALE only when no live write to the
+        // listed collection(s) raced the fetch (revision counters unchanged) —
+        // a wholesale apply of a quiet snapshot can neither clobber a live
+        // create/patch (none happened) nor resurrect a live remove (a remove
+        // would have bumped the counter → no apply). If a write raced, the
+        // snapshot is discarded and refetched; we never overlay a racy snapshot.
 
         // Sessions + branches: now ALWAYS bounded at first paint (recent-N /
         // board-scoped), so hydrate them on every non-silent load (silent
         // reconnect already fetched them full above). repos / users / boards /
         // card-types stay global at first paint, so they need no top-up.
         if (!silent) {
-          void runBackgroundFetch(
-            'sessions+branches hydration',
+          void runHydration(
+            'sessions+branches',
+            ['sessions', 'branches'],
             () =>
               Promise.all([
                 client.service('sessions').findAll({
@@ -1213,49 +1194,28 @@ export function useAgorData(
                   .service('branches')
                   .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
               ]),
-            ([allSessions, allBranches], removedDuringWindow) =>
+            ([allSessions, allBranches]) =>
               setMaps((prev) => {
-                // Branches first (the session pass below checks branch presence):
-                // drop ids tombstoned during the window from the snapshot, then
-                // live-wins overlay so an unarchive/recreate that landed mid-fetch
-                // (present in `prev`) is restored even though it's filtered here.
-                const branchSnapshot = buildById(
-                  allBranches.filter((branch) => !removedDuringWindow.has(branch.branch_id)),
-                  'branch_id'
-                );
-                const branchById = mergeLiveWins(branchSnapshot, prev.branchById);
+                // Quiet window proven by runHydration → apply wholesale. Branches
+                // are active-only (the snapshot query is archived:false and the
+                // handlers never keep an archived branch), so a wholesale replace
+                // is complete.
+                const branchById = buildById(allBranches, 'branch_id');
 
-                // Sessions: union the snapshot (minus rows tombstoned during the
-                // fetch — remove wins) with the live sessions we already hold
-                // (live wins for create/patch), then rebuild both maps (incl.
-                // remote surrogates) from the union so they stay consistent.
-                const mergedSessions = new Map<string, Session>();
-                for (const session of allSessions) {
-                  if (removedDuringWindow.has(session.session_id)) {
-                    // Branch-eviction tombstones are conditional: if the branch is
-                    // back in `branchById` (unarchived/recreated this window), keep
-                    // the session — it was dropped from `prev` so the live overlay
-                    // can't re-add it. Direct session removes (not tagged) stay
-                    // unconditionally suppressed.
-                    const fromBranchEviction = liveBranchEvictedSessionIdsRef.current.has(
-                      session.session_id
-                    );
-                    if (!fromBranchEviction || !branchById.has(session.branch_id)) continue;
-                  }
-                  mergedSessions.set(session.session_id, session);
-                }
+                // The hydration fetches active sessions only. Deep-link-healed
+                // archived sessions (added to `sessionById` so a direct /s/<id>
+                // archived link can open the drawer) are OUT of that query's
+                // domain — never in branch buckets, so they don't affect board
+                // rendering — so carry them over rather than dropping them. This
+                // is domain-completion, NOT race reconciliation: the race
+                // correctness comes entirely from the quiet-window guarantee.
+                const sessions = new Map<string, Session>();
+                for (const session of allSessions) sessions.set(session.session_id, session);
                 for (const [id, session] of prev.sessionById) {
-                  mergedSessions.set(id, session);
+                  if (session.archived && !sessions.has(id)) sessions.set(id, session);
                 }
-                const { sessionById, sessionsByBranch } = buildSessionMaps([
-                  ...mergedSessions.values(),
-                ]);
-                return {
-                  ...prev,
-                  sessionById,
-                  sessionsByBranch,
-                  branchById,
-                };
+                const { sessionById, sessionsByBranch } = buildSessionMaps([...sessions.values()]);
+                return { ...prev, sessionById, sessionsByBranch, branchById };
               })
           );
         }
@@ -1264,8 +1224,9 @@ export function useAgorData(
         // a board was resolved (`boardScope` set, non-silent only — silent
         // reconnect already refetches everything global). Top up to the global set.
         if (boardScope) {
-          void runBackgroundFetch(
-            'full hydration',
+          void runHydration(
+            'board-objects+cards+comments',
+            ['boardObjects', 'cards', 'comments'],
             () =>
               Promise.all([
                 client
@@ -1276,42 +1237,22 @@ export function useAgorData(
                   .service('board-comments')
                   .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
               ]),
-            ([allBoardObjects, allCards, allComments], removedDuringWindow) =>
+            ([allBoardObjects, allCards, allComments]) =>
               setMaps((prev) => {
-                // Start from the global snapshot, dropping any rows tombstoned
-                // during the fetch window (remove wins — otherwise a board-object/
-                // card/comment removed mid-flight would be resurrected here)…
-                const base = buildBoardObjectMaps(
-                  allBoardObjects.filter((o) => !removedDuringWindow.has(o.object_id))
-                );
-                let next: DataMaps = {
+                // Quiet window proven by runHydration → apply the global snapshot
+                // wholesale. It is a superset of the board-scoped first-paint
+                // slice, so no overlay is needed; nothing live raced, so nothing
+                // is clobbered or resurrected.
+                const base = buildBoardObjectMaps(allBoardObjects);
+                return {
                   ...prev,
                   boardObjectById: base.boardObjectById,
                   boardObjectsByBoardId: base.boardObjectsByBoardId,
                   boardObjectByBranchId: base.boardObjectByBranchId,
                   boardObjectByCardId: base.boardObjectByCardId,
-                  cardById: mergeLiveWins(
-                    buildById(
-                      allCards.filter((c) => !removedDuringWindow.has(c.card_id)),
-                      'card_id'
-                    ),
-                    prev.cardById
-                  ),
-                  commentById: mergeLiveWins(
-                    buildById(
-                      allComments.filter((c) => !removedDuringWindow.has(c.comment_id)),
-                      'comment_id'
-                    ),
-                    prev.commentById
-                  ),
+                  cardById: buildById(allCards, 'card_id'),
+                  commentById: buildById(allComments, 'comment_id'),
                 };
-                // …then overlay every live board-object (current-board first-paint
-                // rows + any realtime edits) so live state wins over the snapshot
-                // across all four derived board-object maps.
-                for (const boardObject of prev.boardObjectById.values()) {
-                  next = upsertBoardObjectInMaps(next, boardObject, 'patch');
-                }
-                return next;
               })
           );
         }
@@ -1382,6 +1323,10 @@ export function useAgorData(
         const directSession = (await client.service('sessions').get(directSessionId)) as Session;
         if (cancelled) return;
 
+        // This is a live write to the sessions maps — bump so a sessions
+        // hydration in flight discards its (session-missing) snapshot rather
+        // than clobbering this deep-link heal.
+        bumpRevision('sessions');
         setSessionById((prev) => {
           if (prev.has(directSession.session_id)) return prev;
           const next = new Map(prev);
@@ -1408,6 +1353,7 @@ export function useAgorData(
               .service('branches')
               .get(directSession.branch_id)) as Branch;
             if (cancelled) return;
+            bumpRevision('branches');
             setBranchById((prev) => {
               if (directBranch.archived) return prev;
               if (prev.has(directBranch.branch_id)) return prev;
@@ -1429,6 +1375,7 @@ export function useAgorData(
       cancelled = true;
     };
   }, [
+    bumpRevision,
     client,
     directSessionId,
     enabled,
@@ -1453,10 +1400,9 @@ export function useAgorData(
     // Subscribe to session events
     const sessionsService = client.service('sessions');
     const handleSessionCreated = (session: Session) => {
-      // Signal liveness so the background sessions+branches hydration refetches
-      // (or live-wins-merges) instead of clobbering this write — same contract
-      // as the board-object/card/comment handlers.
-      liveWriteRevisionRef.current += 1;
+      // Bump the sessions revision so an in-flight sessions hydration discards
+      // its snapshot and refetches instead of clobbering this write.
+      bumpRevision('sessions');
       if (session.archived) return;
 
       // Update sessionById - only create new Map if session doesn't exist
@@ -1479,11 +1425,11 @@ export function useAgorData(
       });
     };
     const handleSessionPatched = (session: Session) => {
-      liveWriteRevisionRef.current += 1;
+      // Patch (incl. archive, which removes the session from the active maps)
+      // counts as a live write — bump so an in-flight sessions hydration can't
+      // clobber it or resurrect an archive with a pre-archive snapshot.
+      bumpRevision('sessions');
       const isArchived = session.archived === true;
-      // Archive is a removal from the active maps — tombstone it so a background
-      // hydration whose snapshot predates the archive can't resurrect it.
-      if (isArchived) liveRemovedIdsRef.current.add(session.session_id);
       // Track old branch_id for migration detection
       let oldBranchId: string | null = null;
 
@@ -1637,8 +1583,7 @@ export function useAgorData(
       });
     };
     const handleSessionRemoved = (session: Session) => {
-      liveWriteRevisionRef.current += 1;
-      liveRemovedIdsRef.current.add(session.session_id);
+      bumpRevision('sessions');
       // Update sessionById — bail out when the id isn't tracked so the
       // wrapper short-circuit prevents the spurious `maps` update.
       setSessionById((prev) => {
@@ -1702,16 +1647,15 @@ export function useAgorData(
     // Subscribe to board object events
     const boardObjectsService = client.service('board-objects');
     const handleBoardObjectCreated = (boardObject: BoardEntityObject) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('boardObjects');
       setMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'create'));
     };
     const handleBoardObjectPatched = (boardObject: BoardEntityObject) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('boardObjects');
       setMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'patch'));
     };
     const handleBoardObjectRemoved = (boardObject: BoardEntityObject) => {
-      liveWriteRevisionRef.current += 1;
-      liveRemovedIdsRef.current.add(boardObject.object_id);
+      bumpRevision('boardObjects');
       setMaps((prev) => removeBoardObjectFromMaps(prev, boardObject));
     };
 
@@ -1750,9 +1694,9 @@ export function useAgorData(
     // Subscribe to branch events
     const branchesService = client.service('branches');
     const handleBranchCreated = (branch: Branch) => {
-      // Signal liveness for the background sessions+branches hydration (mirrors
-      // the session handlers): refetch / live-wins-merge instead of clobbering.
-      liveWriteRevisionRef.current += 1;
+      // Bump the branches revision so an in-flight branches hydration can't
+      // clobber this write (mirrors the session handlers).
+      bumpRevision('branches');
       if (branch.archived) return;
 
       setBranchById((prev) => {
@@ -1767,10 +1711,11 @@ export function useAgorData(
     // `archived: true` patch path and the hard-delete `removed` path —
     // either way we never want an orphan session card to linger.
     const evictBranchAndSessions = (branchId: string) => {
-      // Tombstone the branch AND every session that lived on it, so a background
-      // sessions/branches hydration whose snapshot predates this eviction can't
-      // resurrect them.
-      liveRemovedIdsRef.current.add(branchId);
+      // This cascade mutates BOTH the branches map (caller already bumped) and
+      // the sessions maps, so bump the sessions revision too — otherwise a
+      // sessions hydration in flight could resurrect the evicted sessions with a
+      // pre-eviction snapshot.
+      bumpRevision('sessions');
       setBranchById((prev) => {
         if (!prev.has(branchId)) return prev;
         const next = new Map(prev);
@@ -1788,10 +1733,6 @@ export function useAgorData(
         const next = new Map(prev);
         for (const [sessionId, session] of prev.entries()) {
           if (session.branch_id === branchId) {
-            liveRemovedIdsRef.current.add(sessionId);
-            // Tag as branch-eviction (not a direct session remove) so hydration
-            // can un-suppress it if the branch comes back during the window.
-            liveBranchEvictedSessionIdsRef.current.add(sessionId);
             next.delete(sessionId);
             changed = true;
           }
@@ -1801,7 +1742,7 @@ export function useAgorData(
     };
 
     const handleBranchPatched = (branch: Branch) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('branches');
       if (branch.archived) {
         evictBranchAndSessions(branch.branch_id);
         return;
@@ -1810,7 +1751,7 @@ export function useAgorData(
       setBranchById((prev) => replaceIfChanged(prev, branch.branch_id, branch));
     };
     const handleBranchRemoved = (branch: Branch) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('branches');
       // Mirror the archive path: a hard delete should also evict any
       // sessions we still track on that branch.
       evictBranchAndSessions(branch.branch_id);
@@ -1851,7 +1792,7 @@ export function useAgorData(
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
     const handleMCPServerCreated = (server: MCPServer) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('mcpServers');
       setMcpServerById((prev) => {
         if (prev.has(server.mcp_server_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
@@ -1860,11 +1801,11 @@ export function useAgorData(
       });
     };
     const handleMCPServerPatched = (server: MCPServer) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('mcpServers');
       setMcpServerById((prev) => replaceIfChanged(prev, server.mcp_server_id, server));
     };
     const handleMCPServerRemoved = (server: MCPServer) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('mcpServers');
       setMcpServerById((prev) => {
         if (!prev.has(server.mcp_server_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
@@ -1881,7 +1822,7 @@ export function useAgorData(
     // Subscribe to gateway channel events
     const gatewayChannelsService = client.service('gateway-channels');
     const handleGatewayChannelCreated = (channel: GatewayChannel) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('gatewayChannels');
       setGatewayChannelById((prev) => {
         if (prev.has(channel.id)) return prev;
         const next = new Map(prev);
@@ -1890,11 +1831,11 @@ export function useAgorData(
       });
     };
     const handleGatewayChannelPatched = (channel: GatewayChannel) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('gatewayChannels');
       setGatewayChannelById((prev) => replaceIfChanged(prev, channel.id, channel));
     };
     const handleGatewayChannelRemoved = (channel: GatewayChannel) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('gatewayChannels');
       setGatewayChannelById((prev) => {
         if (!prev.has(channel.id)) return prev;
         const next = new Map(prev);
@@ -1911,7 +1852,7 @@ export function useAgorData(
     // Subscribe to card events
     const cardsService = client.service('cards');
     const handleCardCreated = (card: CardWithType) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('cards');
       setCardById((prev) => {
         if (prev.has(card.card_id)) return prev; // Duplicate event — bail.
         const next = new Map(prev);
@@ -1920,12 +1861,11 @@ export function useAgorData(
       });
     };
     const handleCardPatched = (card: CardWithType) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('cards');
       setCardById((prev) => replaceIfChanged(prev, card.card_id, card));
     };
     const handleCardRemoved = (card: CardWithType) => {
-      liveWriteRevisionRef.current += 1;
-      liveRemovedIdsRef.current.add(card.card_id);
+      bumpRevision('cards');
       setCardById((prev) => {
         if (!prev.has(card.card_id)) return prev;
         const next = new Map(prev);
@@ -1969,7 +1909,7 @@ export function useAgorData(
     // Subscribe to artifact events
     const artifactsService = client.service('artifacts');
     const handleArtifactCreated = (artifact: Artifact) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('artifacts');
       setArtifactById((prev) => {
         if (prev.has(artifact.artifact_id)) return prev;
         const next = new Map(prev);
@@ -1978,7 +1918,7 @@ export function useAgorData(
       });
     };
     const handleArtifactPatched = (artifact: Artifact) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('artifacts');
       setArtifactById((prev) => replaceIfChanged(prev, artifact.artifact_id, artifact));
       // Notify ArtifactNode components that payload may have changed. The
       // consumer (apps/agor-ui/src/components/SessionCanvas/canvas/ArtifactNode.tsx)
@@ -1993,7 +1933,7 @@ export function useAgorData(
       );
     };
     const handleArtifactRemoved = (artifact: Artifact) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('artifacts');
       setArtifactById((prev) => {
         if (!prev.has(artifact.artifact_id)) return prev;
         const next = new Map(prev);
@@ -2028,7 +1968,7 @@ export function useAgorData(
       session_id: string;
       mcp_server_id: string;
     }) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('sessionMcp');
       setSessionMcpServerIds((prev) => {
         const sessionMcpIds = prev.get(relationship.session_id) || [];
         // Check if relationship already exists (duplicate event)
@@ -2043,7 +1983,7 @@ export function useAgorData(
       session_id: string;
       mcp_server_id: string;
     }) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('sessionMcp');
       setSessionMcpServerIds((prev) => {
         const sessionMcpIds = prev.get(relationship.session_id) || [];
         const filtered = sessionMcpIds.filter((id) => id !== relationship.mcp_server_id);
@@ -2068,7 +2008,7 @@ export function useAgorData(
     // Subscribe to board comment events
     const commentsService = client.service('board-comments');
     const handleCommentCreated = (comment: BoardComment) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('comments');
       setCommentById((prev) => {
         if (prev.has(comment.comment_id)) return prev; // Already exists, shouldn't happen
         const next = new Map(prev);
@@ -2077,12 +2017,11 @@ export function useAgorData(
       });
     };
     const handleCommentPatched = (comment: BoardComment) => {
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('comments');
       setCommentById((prev) => replaceIfChanged(prev, comment.comment_id, comment));
     };
     const handleCommentRemoved = (comment: BoardComment) => {
-      liveWriteRevisionRef.current += 1;
-      liveRemovedIdsRef.current.add(comment.comment_id);
+      bumpRevision('comments');
       setCommentById((prev) => {
         if (!prev.has(comment.comment_id)) return prev; // Doesn't exist, nothing to remove
         const next = new Map(prev);
@@ -2110,7 +2049,7 @@ export function useAgorData(
       oauth_mode?: string;
     }) => {
       if (!event.success || !event.mcp_server_id) return;
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('oauth');
       const mode = event.oauth_mode || 'per_user';
       if (mode === 'per_user') {
         setUserAuthenticatedMcpServerIds((prev) => {
@@ -2130,6 +2069,7 @@ export function useAgorData(
       // `apps/agor-daemon/src/register-hooks.ts`), so a single `get` is enough.
       try {
         const fresh = (await client.service('mcp-servers').get(event.mcp_server_id)) as MCPServer;
+        bumpRevision('mcpServers');
         setMcpServerById((prev) => replaceIfChanged(prev, fresh.mcp_server_id, fresh));
       } catch (err) {
         console.warn('[OAuth] Failed to refetch MCP server after re-auth:', err);
@@ -2143,7 +2083,8 @@ export function useAgorData(
     // reload.
     const handleOAuthDisconnected = async (event: { mcp_server_id: string }) => {
       if (!event.mcp_server_id) return;
-      liveWriteRevisionRef.current += 1;
+      bumpRevision('oauth');
+      bumpRevision('mcpServers');
       setUserAuthenticatedMcpServerIds((prev) => {
         if (!prev.has(event.mcp_server_id)) return prev;
         const next = new Set(prev);
@@ -2224,8 +2165,8 @@ export function useAgorData(
     // Initial fetch (only once — WebSocket events keep us synced after that).
     // Kicked off AFTER every `.on()` above is attached so realtime
     // created/patched/removed events that fire while fetchData's requests are
-    // in flight are captured (and bump liveWriteRevisionRef) instead of being
-    // dropped in the gap between fetch-start and listener-attach.
+    // in flight are captured (and bump the per-collection revision counters)
+    // instead of being dropped in the gap between fetch-start and listener-attach.
     if (!hasInitiallyFetched) {
       fetchData().then(() => setHasInitiallyFetched(true));
     }
