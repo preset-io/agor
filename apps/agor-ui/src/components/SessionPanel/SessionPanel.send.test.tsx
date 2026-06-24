@@ -61,9 +61,16 @@ function makeClient(): AgorClient {
 
 function renderSessionPanel({
   onSendPrompt = vi.fn(),
+  onFork = vi.fn(),
+  onBtwFork = vi.fn(),
   session = makeSession(),
 }: {
-  onSendPrompt?: (sessionId: string, prompt: string) => void;
+  onSendPrompt?: (
+    sessionId: string,
+    prompt: string
+  ) => boolean | undefined | Promise<boolean | undefined>;
+  onFork?: (sessionId: string, prompt: string) => Promise<void>;
+  onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;
   session?: Session;
 } = {}) {
   const renderTree = (nextSession: Session) => (
@@ -77,7 +84,7 @@ function renderSessionPanel({
           currentSha: null,
         }}
       >
-        <AppActionsProvider value={{ onSendPrompt }}>
+        <AppActionsProvider value={{ onSendPrompt, onFork, onBtwFork }}>
           <AppUserDataProvider value={{ userById: new Map() }}>
             <AppMcpDataProvider
               value={{ mcpServerById: new Map(), userAuthenticatedMcpServerIds: new Set() }}
@@ -92,6 +99,8 @@ function renderSessionPanel({
   const renderResult = render(renderTree(session));
   return {
     onSendPrompt,
+    onFork,
+    onBtwFork,
     rerenderSession: (nextSession: Session) => renderResult.rerender(renderTree(nextSession)),
     ...renderResult,
   };
@@ -279,5 +288,91 @@ describe('SessionPanel composer send', () => {
     );
     await waitFor(() => expect(textarea).toHaveValue(''));
     expect(screen.queryByLabelText('Preview rapid-chart.png')).not.toBeInTheDocument();
+  });
+
+  it('preserves prompt and uploaded attachments when prompt submission fails after upload', async () => {
+    uploadMockState.uploadFilesToSession.mockResolvedValue({
+      success: true,
+      files: [
+        {
+          filename: 'preserve-chart.png',
+          path: '.agor/uploads/preserve-chart.png',
+          size: 12,
+          mimeType: 'image/png',
+        },
+      ],
+    });
+    const onSendPrompt = vi.fn().mockResolvedValue(false);
+    const { container } = renderSessionPanel({ onSendPrompt });
+
+    const dropZone = screen.getByLabelText('Composer attachments and input drop zone');
+    const file = new File(['preserve image'], 'preserve-chart.png', { type: 'image/png' });
+    fireEvent.drop(dropZone, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [file],
+      },
+    });
+
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'Keep this prompt if submit fails' } });
+
+    const sendButton = container.querySelector('button.ant-btn-primary');
+    expect(sendButton).toBeInstanceOf(HTMLButtonElement);
+    fireEvent.click(sendButton as HTMLButtonElement);
+
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+    expect(onSendPrompt).toHaveBeenCalledWith(
+      'session-1',
+      'Attached files:\n- .agor/uploads/preserve-chart.png\n\nKeep this prompt if submit fails',
+      expect.any(String)
+    );
+    expect(textarea).toHaveValue('Keep this prompt if submit fails');
+    expect(screen.getByLabelText('Preview preserve-chart.png')).toBeInTheDocument();
+  });
+
+  it('disables fork and BTW while composer attachments are present', async () => {
+    const onFork = vi.fn().mockResolvedValue(undefined);
+    const onBtwFork = vi.fn().mockResolvedValue(undefined);
+    renderSessionPanel({ onFork, onBtwFork });
+
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['notes'], 'notes.txt', { type: 'text/plain' })],
+      },
+    });
+
+    const forkButton = await screen.findByLabelText('Fork session');
+    const btwButton = screen.getByLabelText('Ask side question via BTW fork');
+    expect(forkButton).toBeDisabled();
+    expect(btwButton).toBeDisabled();
+
+    fireEvent.click(forkButton);
+    fireEvent.click(btwButton);
+    expect(onFork).not.toHaveBeenCalled();
+    expect(onBtwFork).not.toHaveBeenCalled();
+  });
+
+  it('shows unsupported file intake errors before upload/send', async () => {
+    const onSendPrompt = vi.fn();
+    renderSessionPanel({ onSendPrompt });
+
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['<script>'], 'unsafe.html', { type: 'text/html' })],
+      },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/unsafe.html: Unsupported file type: text\/html/)
+      ).toBeInTheDocument();
+    });
+
+    expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Preview unsafe.html')).not.toBeInTheDocument();
   });
 });

@@ -29,7 +29,10 @@ interface MobileAppProps {
   repoById: Map<string, Repo>;
   branchById: Map<string, Branch>;
   userById: Map<string, User>;
-  onSendPrompt?: (sessionId: string, prompt: string) => void;
+  onSendPrompt?: (
+    sessionId: string,
+    prompt: string
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onSendComment: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;

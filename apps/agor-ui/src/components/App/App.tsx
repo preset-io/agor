@@ -119,7 +119,11 @@ export interface AppProps {
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
-  onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
+  onSendPrompt?: (
+    sessionId: string,
+    prompt: string,
+    permissionMode?: PermissionMode
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;
   onCreateBoard?: (board: Partial<Board>) => Promise<Board | null>;

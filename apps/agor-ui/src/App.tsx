@@ -763,8 +763,8 @@ function AppContent() {
     sessionId: string,
     prompt: string,
     permissionMode?: PermissionMode
-  ) => {
-    if (!client) return;
+  ): Promise<boolean> => {
+    if (!client) return false;
 
     try {
       await client.sessions.prompt(sessionId, prompt, {
@@ -774,9 +774,11 @@ function AppContent() {
 
       // Clear the draft after sending
       handleClearDraft(sessionId);
+      return true;
     } catch (error) {
       showError(`Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`);
       console.error('Prompt error:', error);
+      return false;
     }
   };
 

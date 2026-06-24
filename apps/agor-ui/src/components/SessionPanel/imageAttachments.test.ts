@@ -4,6 +4,8 @@ import {
   getLatestComposerPromptText,
   isBlockingComposerImageAttachment,
   isSupportedComposerImage,
+  isSupportedComposerUploadFile,
+  validateComposerFileIntake,
 } from './imageAttachments';
 
 describe('imageAttachments', () => {
@@ -51,6 +53,45 @@ describe('imageAttachments', () => {
     expect(isSupportedComposerImage(new File(['x'], 'chart.svg', { type: 'image/svg+xml' }))).toBe(
       false
     );
+  });
+
+  it('validates composer upload file types before send', () => {
+    expect(
+      isSupportedComposerUploadFile(new File(['x'], 'notes.txt', { type: 'text/plain' }))
+    ).toBe(true);
+    expect(
+      isSupportedComposerUploadFile(new File(['x'], 'chart.svg', { type: 'image/svg+xml' }))
+    ).toBe(false);
+
+    const { acceptedFiles, rejections } = validateComposerFileIntake([
+      new File(['x'], 'notes.txt', { type: 'text/plain' }),
+      new File(['x'], 'unsafe.svg', { type: 'image/svg+xml' }),
+    ]);
+
+    expect(acceptedFiles.map((file) => file.name)).toEqual(['notes.txt']);
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        file: expect.objectContaining({ name: 'unsafe.svg' }),
+        reason: 'Unsupported file type: image/svg+xml',
+      }),
+    ]);
+  });
+
+  it('limits composer uploads to one backend request batch', () => {
+    const files = Array.from(
+      { length: 11 },
+      (_, index) => new File(['x'], `note-${index}.txt`, { type: 'text/plain' })
+    );
+
+    const { acceptedFiles, rejections } = validateComposerFileIntake(files);
+
+    expect(acceptedFiles).toHaveLength(10);
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        file: expect.objectContaining({ name: 'note-10.txt' }),
+        reason: 'Composer supports up to 10 pending files per destination',
+      }),
+    ]);
   });
 
   it('only blocks failed composer attachments from send until removed', () => {

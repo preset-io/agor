@@ -61,6 +61,8 @@ import {
   getLatestComposerPromptText,
   isBlockingComposerImageAttachment,
   isSupportedComposerImage,
+  summarizeComposerFileRejections,
+  validateComposerFileIntake,
 } from './imageAttachments';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
@@ -701,6 +703,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const isRunning =
     session.status === SessionStatus.RUNNING || session.status === SessionStatus.STOPPING;
   const isStopping = session.status === SessionStatus.STOPPING;
+  const hasComposerAttachments = composerImageAttachments.length > 0;
 
   const openAdvancedUpload = (initialFiles: File[] = []) => {
     if (composerImageUploadingRef.current) return;
@@ -713,9 +716,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     if (files.length === 0) return;
 
+    const { acceptedFiles, rejections } = validateComposerFileIntake(
+      files,
+      composerImageAttachmentsRef.current,
+      composerImageDestination
+    );
+    if (rejections.length > 0) {
+      showError(summarizeComposerFileRejections(rejections));
+    }
+    if (acceptedFiles.length === 0) return;
+
     setComposerImageAttachments((prev) => [
       ...prev,
-      ...files.map((file) => {
+      ...acceptedFiles.map((file) => {
         const supported = isSupportedComposerImage(file);
         return {
           id:
@@ -876,6 +889,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         return;
       }
 
+      if (!onSendPrompt) {
+        showError('Cannot send prompt from this view.');
+        return;
+      }
+
       const uploadedImages = await uploadComposerImages(attachmentsAtSendStart, sendStartSessionId);
       const imagePaths = uploadedImages.map((file) => file.path);
       const composerStillOwnsSend =
@@ -900,6 +918,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // Single entry point: /prompt. The daemon decides run-vs-queue based on
       // session state and reports it back via `task.status`. The 'queued'
       // WebSocket event populates the queue panel for queued prompts.
+      const sendResult = await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
+      if (sendResult === false) return;
+
       if (composerStillOwnsSend) {
         promptRef.current?.clear();
         clearComposerImages();
@@ -910,15 +931,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         // a different active session.
         deleteDraft(sendStartSessionId);
       }
-      onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
 
       // Re-engage the bottom lock so a scrolled-up user follows their just-sent
       // message and the streaming reply (behavior 3). `scrollToBottom` is the
       // function ConversationView exposed via onScrollRef.
       if (composerStillOwnsSend) scrollToBottom?.();
     } catch (error) {
-      console.error('Image upload failed — keeping prompt and images in composer:', error);
-      showError(error instanceof Error ? error.message : 'Failed to upload images');
+      console.error('Composer send failed — keeping prompt and files in composer:', error);
+      showError(error instanceof Error ? error.message : 'Failed to send prompt');
     } finally {
       composerSendInFlightRef.current = false;
     }
@@ -945,6 +965,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleFork = async () => {
     if (!session) return;
+    if (composerImageAttachmentsRef.current.length > 0) {
+      showError(
+        'Attachments are only supported for normal Send for now. Remove attachments to fork.'
+      );
+      return;
+    }
     const value = promptRef.current?.getValue() ?? '';
     const promptToSend = value.trim();
     if (!promptToSend) {
@@ -969,6 +995,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleBtwSend = async () => {
+    if (composerImageAttachmentsRef.current.length > 0) {
+      showError(
+        'Attachments are only supported for normal Send for now. Remove attachments to send BTW.'
+      );
+      return;
+    }
     const value = promptRef.current?.getValue() ?? '';
     if (!value.trim() || connectionDisabled) return;
     const promptToSend = value.trim();
@@ -1134,7 +1166,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       isRunning={isRunning}
       isStopping={isStopping}
       stopRequestInFlight={stopRequestInFlight}
-      hasInput={hasInput || composerImageAttachments.length > 0}
+      hasInput={hasInput || hasComposerAttachments}
       connectionDisabled={connectionDisabled}
       toolCaps={toolCaps}
       effortLevel={effortLevel}
@@ -1178,7 +1210,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             onHasInputChange={handleHasInputChange}
             inputValueRef={inputValueRef}
             onSubmit={handleSendPrompt}
-            hasExternalInput={composerImageAttachments.length > 0}
+            hasExternalInput={hasComposerAttachments}
             placeholder={
               isRunning
                 ? 'Queue here… @ for mentions, : for emoji'
