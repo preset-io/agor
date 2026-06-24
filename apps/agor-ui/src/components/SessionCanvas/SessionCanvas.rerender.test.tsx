@@ -1,4 +1,5 @@
 import type {
+  Artifact,
   Board,
   BoardEntityObject,
   Branch,
@@ -21,6 +22,11 @@ import SessionCanvas from './SessionCanvas';
 // board-object-derived card node.
 const branchCardRenders = new Map<string, number>();
 let cardNodeRenders = 0;
+// SessionCanvas's own render count. The mocked ReactFlow below renders exactly
+// once per SessionCanvas render, so its invocation count is a faithful proxy —
+// it lets us assert the memo+selector boundary protects the WHOLE canvas, not
+// just the leaf node components.
+let sessionCanvasRenders = 0;
 
 vi.mock('../BranchCard', () => ({
   __esModule: true,
@@ -67,15 +73,18 @@ vi.mock('reactflow', async () => {
       nodes?: Array<{ id: string; type: string; data: unknown }>;
       nodeTypes?: Record<string, React.ComponentType<{ data: unknown }>>;
       children?: React.ReactNode;
-    }) => (
-      <div data-testid="react-flow">
-        {props.nodes?.map((node) => {
-          const NodeComponent = props.nodeTypes?.[node.type];
-          return NodeComponent ? <NodeComponent key={node.id} data={node.data} /> : null;
-        })}
-        {props.children}
-      </div>
-    ),
+    }) => {
+      sessionCanvasRenders += 1;
+      return (
+        <div data-testid="react-flow">
+          {props.nodes?.map((node) => {
+            const NodeComponent = props.nodeTypes?.[node.type];
+            return NodeComponent ? <NodeComponent key={node.id} data={node.data} /> : null;
+          })}
+          {props.children}
+        </div>
+      );
+    },
   };
 });
 
@@ -177,6 +186,7 @@ describe('SessionCanvas store-selector re-render isolation', () => {
   beforeEach(() => {
     branchCardRenders.clear();
     cardNodeRenders = 0;
+    sessionCanvasRenders = 0;
     agorStore.setState({ ...EMPTY_MAPS });
     seedStore();
   });
@@ -220,6 +230,53 @@ describe('SessionCanvas store-selector re-render isolation', () => {
     // The win: branch B's card and the board-object-derived card node are
     // untouched because their selector inputs (branch B's session bucket; this
     // board's board-object array) kept the same reference across the patch.
+    expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
+    expect(cardNodeRenders).toBe(cardNodeBaseline);
+  });
+
+  it('a patch to a slice SessionCanvas does not select leaves the whole canvas un-rendered', async () => {
+    render(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <SessionCanvas board={board} client={null} branches={[branchA, branchB]} />
+      </ConnectionProvider>
+    );
+
+    // Let the initial node-sync effects settle so the render count is stable.
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+      expect(sessionCanvasRenders).toBeGreaterThanOrEqual(1);
+    });
+
+    const canvasBaseline = sessionCanvasRenders;
+    const branchABaseline = branchCardRenders.get('A') ?? 0;
+    const branchBBaseline = branchCardRenders.get('B') ?? 0;
+    const cardNodeBaseline = cardNodeRenders;
+
+    // Patch a slice SessionCanvas never subscribes to (artifacts). zustand
+    // notifies every subscriber, but each of SessionCanvas's selector slices
+    // keeps its reference, so its `useSyncExternalStore` subscriptions stay
+    // quiet and the component does not re-render at all.
+    act(() => {
+      agorStore.setState({
+        artifactById: new Map<string, Artifact>([
+          ['artifact-1', { artifact_id: 'artifact-1' } as unknown as Artifact],
+        ]),
+      });
+    });
+
+    // The memo+selector boundary holds: SessionCanvas itself — not just the leaf
+    // node memos — was insulated from the unrelated store change.
+    expect(sessionCanvasRenders).toBe(canvasBaseline);
+    expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
     expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
     expect(cardNodeRenders).toBe(cardNodeBaseline);
   });

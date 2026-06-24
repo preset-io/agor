@@ -14,7 +14,7 @@ import type {
 } from '@agor-live/client';
 import { SessionStatus, shortId } from '@agor-live/client';
 import { App as AntdApp, ConfigProvider, Layout, theme } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { ReactFlowProvider } from 'reactflow';
 import { AppHeader } from '../components/AppHeader';
 import { SessionCanvas } from '../components/SessionCanvas';
@@ -622,7 +622,9 @@ export const MarketingScreenshotPage = () => {
   // Seed the global store with the demo fixtures so SessionCanvas's selector
   // subscriptions resolve against them — the canvas reads entity state from the
   // store, not props. This standalone demo route owns the store for its lifetime.
-  useState(() => {
+  // Seeding runs in an effect (not during render) so the external singleton is
+  // mutated as a commit side effect rather than mid-render.
+  useEffect(() => {
     agorStore.setState({
       boardById: maps.boardById,
       repoById: maps.repoById,
@@ -635,7 +637,7 @@ export const MarketingScreenshotPage = () => {
       userById: maps.userById,
       commentById: maps.commentById,
     });
-  });
+  }, [maps]);
 
   return (
     <ConfigProvider
