@@ -38,6 +38,7 @@ import {
   Form,
   Input,
   Modal,
+  Popconfirm,
   Radio,
   Result,
   Select,
@@ -606,6 +607,11 @@ export function OnboardingWizard({
     setManualTestResult(result);
   }, [apiKey, authMethod, onCheckAuth, selectedAgent]);
 
+  const handleSkip = useCallback(() => {
+    if (!user) return;
+    onComplete({ branchId: '', sessionId: '', boardId: '', path: 'assistant' });
+  }, [onComplete, user]);
+
   const renderIdentity = () => (
     <div>
       <Title level={4} style={{ marginBottom: 8 }}>
@@ -940,6 +946,7 @@ export function OnboardingWizard({
                   Test Connection
                 </Button>
               )}
+              {!usesCodexCliAuth && <Button onClick={startSetup}>Continue without key</Button>}
             </Space>
           </>
         )}
@@ -982,11 +989,33 @@ export function OnboardingWizard({
         <Text type="secondary" style={{ fontSize: 12 }}>
           Step {currentStep === 'identity' ? '1' : '2'} of 2
         </Text>
-        {currentStep === 'llm' && (
-          <Button type="link" onClick={() => setCurrentStep('identity')}>
-            ← Back
-          </Button>
-        )}
+        <Space size="small">
+          {currentStep === 'llm' && (
+            <Button type="link" onClick={() => setCurrentStep('identity')}>
+              ← Back
+            </Button>
+          )}
+          <Popconfirm
+            title="Skip setup?"
+            description={
+              <div style={{ maxWidth: 250 }}>
+                Are you sure? Your assistant has been waiting their whole life to meet you.
+                <br />
+                <br />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  (You can always come back via Settings)
+                </Text>
+              </div>
+            }
+            okText="Skip anyway"
+            cancelText="Go back"
+            onConfirm={handleSkip}
+          >
+            <Button type="text" size="small" style={{ color: token.colorTextTertiary }}>
+              Skip setup
+            </Button>
+          </Popconfirm>
+        </Space>
       </div>
     );
 
