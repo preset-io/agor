@@ -5,6 +5,7 @@ import type React from 'react';
 import { useState } from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
+import { glassCardStyle } from './homeStyles';
 import { StatusDot } from './StatusDot';
 
 const { Text } = Typography;
@@ -81,6 +82,7 @@ export const JumpBackInSection: React.FC<JumpBackInSectionProps> = ({
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
           overflow: 'hidden',
+          ...glassCardStyle(token, 0.65),
         }}
       >
         {visibleSessions.map((session) => (

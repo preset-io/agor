@@ -99,7 +99,11 @@ export const HomeStatsBar: React.FC<{
     for (const s of sessionById.values()) {
       if (s.archived) continue;
 
-      const updatedAt = s.last_updated ? new Date(s.last_updated).getTime() : Number.NaN;
+      const updatedAt = s.last_updated
+        ? new Date(s.last_updated).getTime()
+        : s.created_at
+          ? new Date(s.created_at).getTime()
+          : Number.NaN;
 
       if (s.status === 'running') {
         runningNow++;

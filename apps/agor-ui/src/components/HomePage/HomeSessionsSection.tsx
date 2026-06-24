@@ -14,6 +14,7 @@ import {
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { SessionSearchToolbar } from '../SessionSearchControls';
+import { glassCardStyle } from './homeStyles';
 import { StatusDot } from './StatusDot';
 import type { HomePageProps } from './types';
 
@@ -152,6 +153,7 @@ export const HomeSessionsSection: React.FC<
         style={{
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
+          ...glassCardStyle(token, 0.65),
         }}
       >
         {displaySessions.length === 0 ? (

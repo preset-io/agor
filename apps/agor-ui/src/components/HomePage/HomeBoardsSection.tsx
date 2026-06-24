@@ -4,6 +4,7 @@ import { Button, Empty, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatRelativeTime } from '../../utils/time';
+import { glassCardStyle } from './homeStyles';
 import type { HomePageProps } from './types';
 
 const { Text } = Typography;
@@ -80,7 +81,7 @@ const BoardHomeCard: React.FC<{
         borderRadius: token.borderRadiusLG,
         padding: '12px 14px',
         cursor: 'pointer',
-        background: token.colorBgContainer,
+        ...glassCardStyle(token, 0.65),
         boxShadow: hovered ? token.boxShadowSecondary : undefined,
         outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
         outlineOffset: focused ? 2 : undefined,
