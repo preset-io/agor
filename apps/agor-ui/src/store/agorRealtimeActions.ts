@@ -1,28 +1,26 @@
 // @ts-nocheck - Complex WebSocket event handling with dynamic types
 /**
- * Per-collection realtime entity actions for the Agor store (Phase 4, PR2).
+ * Per-collection realtime entity actions for the Agor store.
  *
- * Each function is one socket handler ported VERBATIM out of `useAgorData` —
- * same `replaceIfChanged` / cascade / index-rebuild logic, same `Object.is`
- * bail-outs, same per-collection `bumpRevision` calls — rewritten only to write
- * through the store primitives (`setMap` / `applyMaps` / `evictBranchAndSessions`)
- * instead of the hook's local `useState` setters. The hook's subscribe effect
- * wires socket events straight to these. See `~/.claude/plans/zustand-migration.md`.
+ * Each function is one socket handler — `replaceIfChanged` / cascade /
+ * index-rebuild logic, `Object.is` bail-outs, per-collection `bumpRevision`
+ * calls — writing through the store primitives (`setMap` / `applyMaps` /
+ * `evictBranchAndSessions`). `useAgorData`'s subscribe effect wires socket
+ * events straight to these.
  *
- * Phase-1.5 hydration: each handler bumps the matching per-collection revision
+ * Background hydration: each handler bumps the matching per-collection revision
  * counter (`bumpRevision`, from `agorHydration`) so an in-flight background
  * hydration discards its snapshot rather than clobbering this live write —
  * INCLUDING the branch-eviction cascade, which mutates the sessions maps and so
- * bumps `sessions` too (mirrors the inline `evictBranchAndSessions` in the base).
+ * bumps `sessions` too.
  *
  * IMMER breadth/depth rule applied here:
  *  - HOT single-entity `*:patched` writes → RAW reducer via `setMap`
  *    (`new Map(prev); next.set(id, e)` through `replaceIfChanged`). No immer
  *    proxy on the hot path.
- *  - multi-map board-object index maintenance → the existing verbatim pure
- *    reducers (`upsertBoardObjectInMaps` / `removeBoardObjectFromMaps`) via
- *    `applyMaps` — kept byte-identical so the reference-stability contract the
- *    tests pin holds exactly.
+ *  - multi-map board-object index maintenance → the pure reducers
+ *    (`upsertBoardObjectInMaps` / `removeBoardObjectFromMaps`) via `applyMaps`
+ *    — reference-stable so the contract the tests pin holds exactly.
  *  - the branch-eviction CASCADE → the store's immer action
  *    (`evictBranchAndSessions`).
  */

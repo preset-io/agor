@@ -1,12 +1,8 @@
 /**
- * Zustand store for the Agor frontend state layer (Phase 4).
- *
- * PR1 scaffolded this as an inert, typed container. PR2 makes it the SINGLE
- * SOURCE OF TRUTH: `useAgorData` drives it internally (fetch effect + socket
- * subscriptions dispatch the actions here) while keeping its own return
- * signature byte-for-byte identical, so `App.tsx`, the prop-drilling chain, and
- * the context providers are unaffected. Later PRs peel consumers onto narrow
- * selector subscriptions. See `~/.claude/plans/zustand-migration.md`.
+ * Vanilla zustand store that is the single source of truth for Agor's
+ * normalized entity state. `useAgorData` drives it (its fetch effect + socket
+ * subscriptions dispatch the actions here) and reads full state back via
+ * `useStore`; React consumers can also bind to narrow selector subscriptions.
  *
  * Design notes:
  * - State shape reuses the canonical `DataMaps` type (17 maps + 1 set) from
@@ -21,10 +17,10 @@
  *   on the hot path). Object-form `set` + early-return mirror today's
  *   `setMapSlice` `Object.is` short-circuit so idempotent writes don't allocate
  *   a fresh state object (and don't notify subscribers).
- * - Per-collection realtime entity mutations live in `agorRealtimeActions.ts`
- *   (ported verbatim from `useAgorData`); they write through the primitives
- *   here. The Phase-1.5 hydration bookkeeping (per-collection revision counters,
- *   generation tokens, `runHydration`) lives in `agorHydration.ts`.
+ * - Per-collection realtime entity mutations live in `agorRealtimeActions.ts`;
+ *   they write through the primitives here. The background-hydration bookkeeping
+ *   (per-collection revision counters, generation tokens, `runHydration`) lives
+ *   in `agorHydration.ts`.
  */
 import { enableMapSet } from 'immer';
 import { useStore } from 'zustand';

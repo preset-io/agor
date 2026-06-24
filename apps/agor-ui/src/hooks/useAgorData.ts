@@ -4,17 +4,13 @@
  *
  * Manages sessions, tasks, boards with real-time WebSocket updates.
  *
- * Phase 4, PR2: state OWNERSHIP now lives in the zustand store (`agorStore`).
- * This hook is the single DRIVER of that store — the fetch effect and socket
- * subscriptions dispatch store actions, and the hook reads full state back via
- * `useStore` and returns the SAME `UseAgorDataResult`. `App.tsx`, the
- * prop-drilling chain, and the context providers are byte-for-byte unaffected;
- * later PRs peel consumers onto narrow selector subscriptions. The realtime
- * entity reducers + index/merge helpers moved to `../store/agorRealtimeActions`
- * and `../store/agorMaps`, and the Phase-1.5 hydration bookkeeping
- * (per-collection revision counters, generation tokens, `runHydration`) to
- * `../store/agorHydration` — all ported VERBATIM. See
- * `~/.claude/plans/zustand-migration.md`.
+ * State ownership lives in the zustand store (`agorStore`); this hook is the
+ * single DRIVER of that store — the fetch effect and socket subscriptions
+ * dispatch store actions, and the hook reads full state back via `useStore` and
+ * returns `UseAgorDataResult`. The realtime entity reducers + index/merge
+ * helpers live in `../store/agorRealtimeActions` and `../store/agorMaps`, and
+ * the background-hydration bookkeeping (per-collection revision counters,
+ * generation tokens, `runHydration`) in `../store/agorHydration`.
  */
 
 import type {
@@ -756,13 +752,13 @@ export function useAgorData(
         // card-types stay global at first paint, so they need no top-up.
         //
         // Sessions and branches hydrate on INDEPENDENT loops (separate fetches,
-        // separate revision guards, separate generation tokens). They were
-        // previously coupled in one runHydration, which meant high-frequency
-        // session-write churn (common when agents stream) could starve the
-        // branch apply indefinitely — and on Home, branches start empty and are
-        // filled ONLY by this hydration, so coupling could leave the board empty
-        // forever. Decoupled, branches apply on their own quiet window (almost
-        // immediately) regardless of session churn.
+        // separate revision guards, separate generation tokens). Coupling them
+        // in a single runHydration would let high-frequency session-write churn
+        // (common when agents stream) starve the branch apply indefinitely — and
+        // on Home, branches start empty and are filled ONLY by this hydration, so
+        // coupling could leave the board empty forever. On independent loops,
+        // branches apply on their own quiet window (almost immediately)
+        // regardless of session churn.
         if (!silent) {
           void runHydration(
             'sessions',
@@ -1009,10 +1005,10 @@ export function useAgorData(
   //
   // Every socket event is wired straight to the matching store action in
   // `agorRealtimeActions` (module singletons → stable references, so cleanup
-  // `removeListener` matches). The store action does the same
-  // `replaceIfChanged` / cascade / index-rebuild + per-collection `bumpRevision`
-  // the hook used to do inline. OAuth + agor-query handlers stay local: they need
-  // `client` (async refetch) or are pure window side-effects.
+  // `removeListener` matches). The store action does the
+  // `replaceIfChanged` / cascade / index-rebuild + per-collection `bumpRevision`.
+  // OAuth + agor-query handlers stay local: they need `client` (async refetch)
+  // or are pure window side-effects.
   useEffect(() => {
     if (!client || !enabled) {
       // No client or disabled = not ready for data fetch, set loading to false

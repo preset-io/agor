@@ -1,25 +1,22 @@
 /**
- * Phase-1.5 background-hydration bookkeeping for the Agor store (Phase 4, PR2).
+ * Background-hydration bookkeeping for the Agor store.
  *
- * Ported VERBATIM out of `useAgorData` (the `liveRevisionsRef` /
- * `hydrationGenerationRef` / `runHydration` it used to own as per-instance refs)
- * into NON-REACTIVE module-level state living alongside the store. Two reasons it
- * is module-level rather than zustand state:
+ * The `liveRevisions` / `hydrationGeneration` counters and `runHydration` live
+ * as NON-REACTIVE module-level state alongside the store. Two reasons it is
+ * module-level rather than zustand state:
  *  1. The realtime entity actions (`agorRealtimeActions`) are module singletons —
  *     they MUST be able to bump the per-collection counter without a React hook.
  *  2. These counters bump on EVERY socket event (the hot path); making them
  *     subscribable store fields would re-render every `useStore(agorStore)`
- *     consumer on each bump. Plan §4: "internal hydration bookkeeping (not
- *     UI-subscribed)". So they stay plain mutable module vars — exactly the
- *     `useRef` semantics they replace.
+ *     consumer on each bump. So they stay plain mutable module vars with
+ *     `useRef` semantics — internal bookkeeping, not UI-subscribed.
  *
  * `useAgorData` is mounted once (App.tsx), so in production the module singleton
  * IS the single instance. Tests re-`renderHook` the singleton, so the hook
  * resets the revision baseline on (re)mount (`resetHydrationRevisions`) and
  * cancels any straggler loop (`cancelAllHydrations`). Generation tokens are kept
  * strictly MONOTONIC (never reset to 0) so a stale loop from a prior mount can
- * never collide with a fresh loop's generation. See
- * `~/.claude/plans/zustand-migration.md` §2/§4.
+ * never collide with a fresh loop's generation.
  */
 
 // Skip-apply-on-race background hydration retry schedule. A hydration applies
@@ -176,7 +173,7 @@ export const cancelAndFailAllHydrations = (): void => {
  * never gives up (skipping forever could leave Home empty/incomplete
  * indefinitely; live events only deliver changes, not backfill). The loop is
  * cancelled — not abandoned — on supersession (reconnect), unmount, or logout
- * reset. Ported verbatim from `useAgorData`; `fetchFn` closes over the client and
+ * reset. `fetchFn` closes over the client and
  * `apply` over the store, so this helper itself touches neither.
  */
 export async function runHydration<T>(

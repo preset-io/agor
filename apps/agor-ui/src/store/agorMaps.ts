@@ -1,15 +1,13 @@
-// @ts-nocheck - ported verbatim from useAgorData (complex dynamic entity typing)
+// @ts-nocheck - complex dynamic entity typing
 /**
  * Normalized data-map shape + the pure index/merge helpers that maintain it.
  *
- * Extracted from `useAgorData` (Phase 4, PR2) so BOTH the zustand store
- * (`agorStore` / `agorRealtimeActions`) and the hook's `fetchData` can share
- * the exact same reducers — and so the store can import `EMPTY_MAPS` at module
- * load without an import cycle back through the hook (the hook imports the
- * store). Nothing here touches React or the store; these are the same
- * reference-preserving immutable updaters the hook used to inline, moved
- * byte-for-byte (incl. the Phase-1.5 `buildSessionMaps`). See
- * `~/.claude/plans/zustand-migration.md`.
+ * Lives here (rather than in `useAgorData`) so BOTH the zustand store
+ * (`agorStore` / `agorRealtimeActions`) and the hook's `fetchData` share the
+ * exact same reducers — and so the store can import `EMPTY_MAPS` at module load
+ * without an import cycle back through the hook (the hook imports the store).
+ * Nothing here touches React or the store; these are reference-preserving
+ * immutable updaters (incl. `buildSessionMaps`).
  */
 import type {
   Artifact,
