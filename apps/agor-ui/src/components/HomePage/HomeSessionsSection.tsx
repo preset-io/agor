@@ -151,7 +151,6 @@ export const HomeSessionsSection: React.FC<
             padding: 0,
             flex: 1,
             minHeight: 240,
-            maxHeight: 'clamp(240px, calc(100vh - 380px), 700px)',
             overflowY: 'auto',
           },
         }}
