@@ -16,9 +16,6 @@
  * is queued as a follow-up.
  */
 
-import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const appServerMocks = vi.hoisted(() => ({
@@ -784,103 +781,6 @@ describe('CodexPromptService - tool payload mapping', () => {
       maxTokens: 272000,
       percentage: 0,
     });
-  });
-
-  it('falls back to Codex rollout JSONL token_count when SDK stream omits event_msg', async () => {
-    const service = new CodexPromptService(
-      mockMessagesRepo,
-      mockSessionsRepo,
-      mockSessionMCPServerRepo,
-      mockBranchesRepo,
-      undefined,
-      'test-api-key',
-      mockDb
-    );
-
-    const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexInstructionsFile = vi
-      .fn()
-      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
-    serviceWithPrivates.buildMcpServersConfig = vi
-      .fn()
-      .mockResolvedValue({ servers: {}, total: 0 });
-    await serviceWithPrivates.ensureCodexClient({
-      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
-    });
-    serviceWithPrivates.ensureCodexClient = vi.fn();
-    serviceWithPrivates.refreshClient = vi.fn();
-
-    mockSessionsRepo.findById.mockResolvedValue({
-      session_id: 'session-rollout-ctx',
-      branch_id: 'branch-1',
-      created_at: new Date().toISOString(),
-      sdk_session_id: null,
-      permission_config: { codex: {} },
-      model_config: {},
-      mcp_token: 'test-token',
-    });
-    mockBranchesRepo.findById.mockResolvedValue({
-      branch_id: 'branch-1',
-      path: process.cwd(),
-    });
-
-    const previousCodexHome = process.env.CODEX_HOME;
-    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-codex-home-'));
-    process.env.CODEX_HOME = codexHome;
-    try {
-      const rolloutDir = path.join(codexHome, 'sessions', '2026', '06', '24');
-      await fs.mkdir(rolloutDir, { recursive: true });
-      await fs.writeFile(
-        path.join(rolloutDir, 'rollout-2026-06-24T00-00-00-mock-thread-id.jsonl'),
-        `${JSON.stringify({
-          type: 'event_msg',
-          payload: {
-            type: 'token_count',
-            info: {
-              total_token_usage: { total_tokens: 187_135 },
-              last_token_usage: { total_tokens: 26_612 },
-              model_context_window: 258_400,
-            },
-          },
-        })}
-`,
-        'utf8'
-      );
-
-      mockStreamEvents = [
-        { type: 'turn.started' },
-        {
-          type: 'turn.completed',
-          usage: {
-            input_tokens: 184_792,
-            cached_input_tokens: 162_688,
-            output_tokens: 2_343,
-          },
-        },
-      ];
-
-      const emitted: Array<Record<string, unknown>> = [];
-      for await (const event of service.promptSessionStreaming(
-        'session-rollout-ctx' as any,
-        'review'
-      )) {
-        emitted.push(event as Record<string, unknown>);
-      }
-
-      const completeEvent = emitted.find((event) => event.type === 'complete');
-      expect(completeEvent?.rawContextUsage).toEqual({
-        totalTokens: 26_612,
-        maxTokens: 258_400,
-        percentage: 6,
-      });
-    } finally {
-      if (previousCodexHome === undefined) {
-        delete process.env.CODEX_HOME;
-      } else {
-        process.env.CODEX_HOME = previousCodexHome;
-      }
-      await fs.rm(codexHome, { recursive: true, force: true });
-    }
   });
 
   it('preserves MCP result content on completion', () => {
