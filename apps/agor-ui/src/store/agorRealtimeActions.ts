@@ -1,4 +1,3 @@
-// @ts-nocheck - Complex WebSocket event handling with dynamic types
 /**
  * Per-collection realtime entity actions for the Agor store.
  *
@@ -48,13 +47,17 @@ import {
   replaceIfChanged,
   upsertBoardObjectInMaps,
 } from './agorMaps';
-import { agorStore } from './agorStore';
+import { type AgorState, agorStore } from './agorStore';
 
 // Thin bindings to the store primitives. The vanilla store and its actions are
-// stable module singletons, so these resolve the live action each call.
-const setMap = (key, value) => agorStore.getState().setMap(key, value);
-const applyMaps = (updater) => agorStore.getState().applyMaps(updater);
-const evictBranchAndSessions = (branchId) => agorStore.getState().evictBranchAndSessions(branchId);
+// stable module singletons, so these resolve the live action each call. The
+// signatures are pulled straight off `AgorState` so the generic `setMap` key→
+// value inference (and the `applyMaps` reducer / `evictBranchAndSessions`
+// shapes) carry through to every callback below.
+const setMap: AgorState['setMap'] = (key, value) => agorStore.getState().setMap(key, value);
+const applyMaps: AgorState['applyMaps'] = (updater) => agorStore.getState().applyMaps(updater);
+const evictBranchAndSessions: AgorState['evictBranchAndSessions'] = (branchId) =>
+  agorStore.getState().evictBranchAndSessions(branchId);
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 export function sessionCreated(session: Session) {

@@ -124,6 +124,7 @@ export const agorStore = createStore<AgorState>()(
         typeof value === 'function'
           ? (value as (prev: ItemCounts) => ItemCounts)(get().itemCounts)
           : value;
+      if (Object.is(next, get().itemCounts)) return;
       set({ itemCounts: next });
     },
 

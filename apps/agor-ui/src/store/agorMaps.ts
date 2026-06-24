@@ -1,4 +1,3 @@
-// @ts-nocheck - complex dynamic entity typing
 /**
  * Normalized data-map shape + the pure index/merge helpers that maintain it.
  *
