@@ -31,11 +31,11 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
   const iframeContainerRef = useRef<HTMLDivElement>(null);
 
   const handleResize = useCallback(
-    (_event: unknown, params: { width: number; height: number }) => {
+    (_event: unknown, params: { x: number; y: number; width: number; height: number }) => {
       const objectData: AppBoardObject = {
         type: 'app',
-        x: 0, // Position managed by React Flow, not relevant for resize
-        y: 0,
+        x: params.x,
+        y: params.y,
         width: Math.max(params.width, MIN_WIDTH),
         height: Math.max(params.height, MIN_HEIGHT),
         title: data.title,

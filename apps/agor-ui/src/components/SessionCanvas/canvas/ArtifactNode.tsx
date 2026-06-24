@@ -212,11 +212,11 @@ export const ArtifactNode = ({
   }, [data.artifactId, fetchPayload]);
 
   const handleResize = useCallback(
-    (_event: unknown, params: { width: number; height: number }) => {
+    (_event: unknown, params: { x: number; y: number; width: number; height: number }) => {
       const objectData: ArtifactBoardObject = {
         type: 'artifact',
-        x: 0,
-        y: 0,
+        x: params.x,
+        y: params.y,
         width: Math.max(params.width, MIN_WIDTH),
         height: Math.max(params.height, MIN_HEIGHT),
         artifact_id: data.artifactId as ArtifactID,
