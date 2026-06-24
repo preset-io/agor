@@ -1,6 +1,6 @@
 import type { Board, Branch, Session } from '@agor-live/client';
 import { ForkOutlined } from '@ant-design/icons';
-import { Card, Empty, List, Tooltip, Typography, theme } from 'antd';
+import { Card, Empty, List, Space, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useMemo, useState } from 'react';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
@@ -13,6 +13,7 @@ import {
 } from '../../utils/sessionSearch';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
+import { BoardPill, BranchPill } from '../Pill';
 import { SessionSearchToolbar } from '../SessionSearchControls';
 import { glassCardStyle } from './homeStyles';
 import { StatusDot } from './StatusDot';
@@ -34,6 +35,8 @@ const HomeSessionRow: React.FC<{
     session.genealogy.parent_session_id || session.genealogy.forked_from_session_id
   );
 
+  const hasTags = !!(board || branch);
+
   return (
     <List.Item
       onClick={onClick}
@@ -42,50 +45,49 @@ const HomeSessionRow: React.FC<{
         padding: '8px 14px',
         borderBlockEnd: `1px solid ${token.colorBorderSecondary}`,
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 8,
       }}
     >
-      <StatusDot status={session.status} />
-
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <Tooltip title={title}>
-          <Text ellipsis style={{ fontSize: 14, fontWeight: 500, maxWidth: '60%', minWidth: 0 }}>
-            {title}
-          </Text>
-        </Tooltip>
-        {isForked && (
-          <ForkOutlined style={{ fontSize: 12, color: token.colorTextTertiary, flexShrink: 0 }} />
-        )}
-        {board && (
-          <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
-            {board.name}
-          </Text>
-        )}
-        {branch && (
-          <span
-            style={{
-              fontFamily: 'monospace',
-              fontSize: 12,
-              background: token.colorFillTertiary,
-              borderRadius: 3,
-              padding: '0 4px',
-              flexShrink: 0,
-              whiteSpace: 'nowrap',
-              maxWidth: 120,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: 'inline-block',
-            }}
-          >
-            {branch.name}
-          </span>
-        )}
+      <div style={{ paddingTop: 3, flexShrink: 0 }}>
+        <StatusDot status={session.status} />
       </div>
 
-      <Text type="secondary" style={{ fontSize: 12, flexShrink: 0, whiteSpace: 'nowrap' }}>
-        {formatRelativeTime(session.last_updated)}
-      </Text>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {/* Title + time row */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: 1 }}>
+            {isForked && (
+              <ForkOutlined
+                style={{ fontSize: 11, color: token.colorTextTertiary, flexShrink: 0 }}
+              />
+            )}
+            <Tooltip title={title}>
+              <Text ellipsis style={{ fontSize: 13, fontWeight: 500, flex: 1, minWidth: 0 }}>
+                {title}
+              </Text>
+            </Tooltip>
+          </div>
+          <Text type="secondary" style={{ fontSize: 12, flexShrink: 0, whiteSpace: 'nowrap' }}>
+            {formatRelativeTime(session.last_updated)}
+          </Text>
+        </div>
+
+        {/* Pills row */}
+        {hasTags && (
+          <Space size={4}>
+            {board && <BoardPill board={board} compact />}
+            {branch && <BranchPill branch={branch.name} compact />}
+          </Space>
+        )}
+      </div>
     </List.Item>
   );
 };
