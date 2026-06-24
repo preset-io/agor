@@ -5,6 +5,7 @@ const DEFAULTS = {
   showStatsChip: true,
   showForkInBar: true,
   showUploadInBar: true,
+  pinnedItems: [] as string[],
 };
 
 export type FooterPreferences = typeof DEFAULTS;

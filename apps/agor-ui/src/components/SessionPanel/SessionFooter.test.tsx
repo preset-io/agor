@@ -179,6 +179,12 @@ describe('useFooterPreferences', () => {
     expect(prefs.showUploadInBar).toBe(true);
   });
 
+  it('defaults include pinnedItems as empty array', () => {
+    const { result } = renderHook(() => useFooterPreferences());
+    const [prefs] = result.current;
+    expect(prefs.pinnedItems).toEqual([]);
+  });
+
   it('persists updated preferences to localStorage', () => {
     const { result } = renderHook(() => useFooterPreferences());
     act(() => {
@@ -188,5 +194,29 @@ describe('useFooterPreferences', () => {
     expect(stored.showToolsChip).toBe(false);
     // Other prefs remain at their defaults
     expect(stored.showStatsChip).toBe(true);
+  });
+
+  it('persists pinnedItems to localStorage', () => {
+    const { result } = renderHook(() => useFooterPreferences());
+    act(() => {
+      result.current[1]({ pinnedItems: ['btw-fork'] });
+    });
+    const stored = JSON.parse(localStorage.getItem('agor-footer-prefs') ?? '{}');
+    expect(stored.pinnedItems).toEqual(['btw-fork']);
+  });
+});
+
+describe('SessionFooter pinned items', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('shows BTW fork button in action bar when pinned', () => {
+    localStorage.setItem('agor-footer-prefs', JSON.stringify({ pinnedItems: ['btw-fork'] }));
+    render(<SessionFooter {...baseProps} hasInput={true} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('btw-fork-bar-btn')).toBeInTheDocument();
   });
 });

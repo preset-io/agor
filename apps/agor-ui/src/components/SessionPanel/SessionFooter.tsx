@@ -14,8 +14,11 @@ import {
   DollarOutlined,
   EllipsisOutlined,
   ForkOutlined,
+  LockOutlined,
   PaperClipOutlined,
   PercentageOutlined,
+  PushpinFilled,
+  PushpinOutlined,
   QuestionCircleOutlined,
   RobotOutlined,
   SendOutlined,
@@ -25,6 +28,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Divider, Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
+import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { EffortSelector } from '../EffortSelector';
 import type { ModelConfig } from '../ModelSelector';
 import { ModelSelector } from '../ModelSelector';
@@ -121,6 +125,15 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 }) => {
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
+  const [prefs, setPref] = useFooterPreferences();
+  const pinnedItems = prefs.pinnedItems;
+  const togglePin = (id: string) => {
+    setPref({
+      pinnedItems: pinnedItems.includes(id)
+        ? pinnedItems.filter((p) => p !== id)
+        : [...pinnedItems, id],
+    });
+  };
 
   // Stats chip: show when model or tokens are present
   const modelName = session.model_config?.model
@@ -277,121 +290,227 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
     </div>
   );
 
-  // ··· more panel content (Popover with settings + overflow actions)
+  const sectionHeaderStyle: React.CSSProperties = {
+    padding: `4px ${token.sizeUnit * 2}px 2px`,
+    fontSize: 11,
+    fontWeight: 500,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.5px',
+    color: token.colorTextTertiary,
+    userSelect: 'none',
+  };
+
+  const overflowRowStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: token.sizeUnit,
+    padding: `${token.sizeUnit * 0.5}px ${token.sizeUnit * 2}px`,
+    minHeight: 32,
+  };
+
   const moreContent = (
-    <div style={{ width: 280 }}>
-      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-        {/* Overflow actions */}
-        {(toolCaps?.supportsSessionFork !== false || toolCaps?.supportsChildSpawn !== false) && (
-          <>
-            <Space size={4} wrap>
-              {toolCaps?.supportsSessionFork !== false && (
-                <Tooltip title="Ask a side question via ephemeral BTW fork">
-                  <Button
-                    size="small"
-                    type="default"
-                    icon={<QuestionCircleOutlined />}
-                    disabled={connectionDisabled || !hasInput}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      onBtwSend();
-                    }}
-                  >
-                    BTW fork
-                  </Button>
-                </Tooltip>
-              )}
-              {toolCaps?.supportsChildSpawn !== false && (
+    <div style={{ width: 248 }}>
+      {/* === Section: Actions === */}
+      {(toolCaps?.supportsSessionFork !== false || toolCaps?.supportsChildSpawn !== false) && (
+        <>
+          <div style={sectionHeaderStyle}>Actions</div>
+          {toolCaps?.supportsSessionFork !== false && (
+            <Tooltip
+              title={
+                connectionDisabled || !hasInput
+                  ? 'Needs input and a live connection'
+                  : 'Ask a side question via an ephemeral fork'
+              }
+              placement="left"
+            >
+              <div
+                style={{
+                  ...overflowRowStyle,
+                  opacity: connectionDisabled || !hasInput ? 0.4 : 1,
+                  cursor: connectionDisabled || !hasInput ? 'not-allowed' : 'pointer',
+                }}
+                onClick={
+                  connectionDisabled || !hasInput
+                    ? undefined
+                    : () => {
+                        setMoreOpen(false);
+                        onBtwSend();
+                      }
+                }
+              >
+                <QuestionCircleOutlined
+                  style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+                />
+                <Typography.Text style={{ fontSize: 13, flex: 1 }}>BTW fork</Typography.Text>
                 <Tooltip
-                  title={
-                    connectionDisabled
-                      ? 'Disconnected from daemon'
-                      : isRunning
-                        ? 'Session is running'
-                        : 'Spawn subsession'
-                  }
+                  title={pinnedItems.includes('btw-fork') ? 'Unpin from bar' : 'Pin to bar'}
+                  placement="right"
                 >
-                  <Button
-                    size="small"
-                    type="default"
-                    icon={<BranchesOutlined />}
-                    disabled={connectionDisabled || isRunning}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      onSpawnOpen();
+                  <button
+                    type="button"
+                    aria-label={
+                      pinnedItems.includes('btw-fork') ? 'Unpin BTW fork' : 'Pin BTW fork'
+                    }
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: pinnedItems.includes('btw-fork')
+                        ? token.colorPrimary
+                        : token.colorTextTertiary,
+                      lineHeight: 1,
+                      padding: 2,
+                      flexShrink: 0,
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      togglePin('btw-fork');
                     }}
                   >
-                    Spawn
-                  </Button>
+                    {pinnedItems.includes('btw-fork') ? (
+                      <PushpinFilled style={{ fontSize: 12 }} />
+                    ) : (
+                      <PushpinOutlined style={{ fontSize: 12 }} />
+                    )}
+                  </button>
                 </Tooltip>
-              )}
-            </Space>
-            <Divider style={{ margin: '4px 0' }} />
-          </>
-        )}
+              </div>
+            </Tooltip>
+          )}
+          {toolCaps?.supportsChildSpawn !== false && (
+            <Tooltip
+              title={
+                connectionDisabled
+                  ? 'Disconnected'
+                  : isRunning
+                    ? 'Session is running'
+                    : 'Spawn a child subsession'
+              }
+              placement="left"
+            >
+              <div
+                style={{
+                  ...overflowRowStyle,
+                  opacity: connectionDisabled || isRunning ? 0.4 : 1,
+                  cursor: connectionDisabled || isRunning ? 'not-allowed' : 'pointer',
+                }}
+                onClick={
+                  connectionDisabled || isRunning
+                    ? undefined
+                    : () => {
+                        setMoreOpen(false);
+                        onSpawnOpen();
+                      }
+                }
+              >
+                <BranchesOutlined
+                  style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+                />
+                <Typography.Text style={{ fontSize: 13, flex: 1 }}>
+                  Spawn subsession
+                </Typography.Text>
+                <Tooltip
+                  title={pinnedItems.includes('spawn') ? 'Unpin from bar' : 'Pin to bar'}
+                  placement="right"
+                >
+                  <button
+                    type="button"
+                    aria-label={pinnedItems.includes('spawn') ? 'Unpin Spawn' : 'Pin Spawn'}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: pinnedItems.includes('spawn')
+                        ? token.colorPrimary
+                        : token.colorTextTertiary,
+                      lineHeight: 1,
+                      padding: 2,
+                      flexShrink: 0,
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      togglePin('spawn');
+                    }}
+                  >
+                    {pinnedItems.includes('spawn') ? (
+                      <PushpinFilled style={{ fontSize: 12 }} />
+                    ) : (
+                      <PushpinOutlined style={{ fontSize: 12 }} />
+                    )}
+                  </button>
+                </Tooltip>
+              </div>
+            </Tooltip>
+          )}
+          <Divider style={{ margin: '6px 0' }} />
+        </>
+      )}
 
-        {/* Model selector */}
-        <div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Model
-          </Typography.Text>
-          <div style={{ marginTop: token.sizeUnit }}>
-            <ModelSelector
-              value={modelConfig}
-              onChange={onModelConfigChange}
-              agentic_tool={session.agentic_tool}
-              client={client}
-              compact
-            />
-          </div>
+      {/* === Section: Settings === */}
+      <div style={sectionHeaderStyle}>Settings</div>
+
+      {/* Model */}
+      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+        <RobotOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
+        <Typography.Text style={{ fontSize: 12, flex: 1, color: token.colorTextSecondary }}>
+          Model
+        </Typography.Text>
+        <div style={{ maxWidth: 120, flexShrink: 0 }}>
+          <ModelSelector
+            value={modelConfig}
+            onChange={onModelConfigChange}
+            agentic_tool={session.agentic_tool}
+            client={client}
+            compact
+          />
         </div>
+      </div>
 
-        {/* Effort selector — only for claude-code */}
-        {session.agentic_tool === 'claude-code' && (
-          <div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Reasoning effort
-            </Typography.Text>
-            <div style={{ marginTop: token.sizeUnit }}>
-              <EffortSelector
-                value={effortLevel}
-                onChange={onEffortChange}
-                size="small"
-                compact
-                plain
-                fullWidth
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Permission mode */}
-        <div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Permissions
+      {/* Effort — only for claude-code */}
+      {session.agentic_tool === 'claude-code' && (
+        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+          <PercentageOutlined
+            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+          />
+          <Typography.Text style={{ fontSize: 12, flex: 1, color: token.colorTextSecondary }}>
+            Effort
           </Typography.Text>
-          <div style={{ marginTop: token.sizeUnit }}>
-            <PermissionModeSelector
-              value={permissionMode}
-              onChange={onPermissionModeChange}
-              agentic_tool={session.agentic_tool}
-              codexSandboxMode={codexSandboxMode}
-              codexApprovalPolicy={codexApprovalPolicy}
-              onCodexChange={onCodexPermissionChange}
-              compact
-              iconOnly={false}
-              plain
-              fullWidth
-              size="small"
-            />
-          </div>
+          <EffortSelector
+            value={effortLevel}
+            onChange={onEffortChange}
+            size="small"
+            compact
+            plain
+          />
         </div>
+      )}
 
-        <Divider style={{ margin: '4px 0' }} />
+      {/* Permissions */}
+      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+        <LockOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
+        <Typography.Text style={{ fontSize: 12, flex: 1, color: token.colorTextSecondary }}>
+          Permissions
+        </Typography.Text>
+        <PermissionModeSelector
+          value={permissionMode}
+          onChange={onPermissionModeChange}
+          agentic_tool={session.agentic_tool}
+          codexSandboxMode={codexSandboxMode}
+          codexApprovalPolicy={codexApprovalPolicy}
+          onCodexChange={onCodexPermissionChange}
+          compact
+          iconOnly={false}
+          plain
+          size="small"
+        />
+      </div>
 
-        {/* Session IDs */}
+      <Divider style={{ margin: '6px 0' }} />
+
+      {/* Session IDs */}
+      <div style={{ padding: `0 ${token.sizeUnit * 2}px 4px` }}>
         <SessionIdsButton session={session} />
-      </Space>
+      </div>
     </div>
   );
 
@@ -537,6 +656,30 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   icon={<ForkOutlined />}
                   onClick={onFork}
                   disabled={connectionDisabled}
+                />
+              </Tooltip>
+            )}
+            {/* Dynamically pinned items */}
+            {pinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
+              <Tooltip title="BTW fork">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<QuestionCircleOutlined />}
+                  onClick={onBtwSend}
+                  disabled={connectionDisabled || !hasInput}
+                  data-testid="btw-fork-bar-btn"
+                />
+              </Tooltip>
+            )}
+            {pinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
+              <Tooltip title="Spawn subsession">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<BranchesOutlined />}
+                  onClick={onSpawnOpen}
+                  disabled={connectionDisabled || isRunning}
                 />
               </Tooltip>
             )}
