@@ -209,6 +209,51 @@ describe('GatewayService Slack thread catch-up', () => {
     );
   });
 
+  it('does not advance the Slack delivered cursor when catch-up history fetch fails', async () => {
+    const fetchThreadHistory = vi.fn(async () => {
+      throw new Error('slack unavailable');
+    });
+    const mapping = makeMapping({
+      thread_id: 'C123-100.000000',
+      metadata: {
+        slack_last_delivered_ts: '101.000000',
+        slack_active_thread_id: 'C123-200.000000',
+      },
+    });
+    const { service, promptCreate, threadMapRepo } = makeGatewayHarness({
+      existingMapping: mapping,
+      connector: { fetchThreadHistory },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C123-200.000000',
+      text: 'please answer',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '103.000000',
+        slack_thread_ts: '100.000000',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, sessionId: 'sess-1', created: false });
+    expect(promptCreate.mock.calls[0][0].prompt).toBe('please answer');
+    expect(threadMapRepo.updateMetadata).not.toHaveBeenCalledWith(
+      'map-1',
+      expect.objectContaining({
+        slack_last_delivered_ts: '103.000000',
+      })
+    );
+    expect(warn).toHaveBeenCalledWith(
+      '[gateway] Failed to fetch Slack thread catch-up context:',
+      expect.any(Error)
+    );
+    warn.mockRestore();
+  });
+
   it('does not reserve a Slack thread globally across gateway channels', async () => {
     const sendMessage = vi.fn(async () => '100.000001');
     const fetchThreadHistory = vi.fn(async () => ({

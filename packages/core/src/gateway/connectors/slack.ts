@@ -96,6 +96,16 @@ export interface SlackThreadHistoryMessage {
   is_mention: boolean;
 }
 
+export interface SlackThreadHistoryRequest {
+  threadId: string;
+  oldestTs?: string;
+  latestTs?: string;
+  inclusive?: boolean;
+  limit?: number;
+  includeBotMessages?: boolean;
+  triggerTs?: string;
+}
+
 export interface SlackThreadHistoryResult {
   threadId: string;
   channel: string;
@@ -1028,15 +1038,7 @@ export class SlackConnector implements GatewayConnector {
     return { channel: dmResult.channel.id, user_id: userResult.user.id };
   }
 
-  async fetchThreadHistory(req: {
-    threadId: string;
-    oldestTs?: string;
-    latestTs?: string;
-    inclusive?: boolean;
-    limit?: number;
-    includeBotMessages?: boolean;
-    triggerTs?: string;
-  }): Promise<SlackThreadHistoryResult> {
+  async fetchThreadHistory(req: SlackThreadHistoryRequest): Promise<SlackThreadHistoryResult> {
     const { channel, thread_ts } = parseThreadId(req.threadId);
     const requestedLimit = Math.min(Math.max(req.limit ?? 50, 1), 200);
     const messages: SlackThreadHistoryMessage[] = [];

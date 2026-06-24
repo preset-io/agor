@@ -9,6 +9,11 @@ export type { GatewayConnector, InboundMessage, OutboundPayload } from './connec
 export { normalizeOutbound } from './connector';
 export { getConnector, hasConnector, registerConnector } from './connector-registry';
 export { GitHubConnector, parseThreadId as parseGitHubThreadId } from './connectors/github';
+export type {
+  SlackThreadHistoryMessage,
+  SlackThreadHistoryRequest,
+  SlackThreadHistoryResult,
+} from './connectors/slack';
 export { markdownToMrkdwn, SlackConnector } from './connectors/slack';
 export {
   extractQuotedReplyText,

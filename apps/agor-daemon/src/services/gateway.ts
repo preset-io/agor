@@ -19,7 +19,13 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { GatewayConnector, GatewayContext, InboundMessage } from '@agor/core/gateway';
+import type {
+  GatewayConnector,
+  GatewayContext,
+  InboundMessage,
+  SlackThreadHistoryRequest,
+  SlackThreadHistoryResult,
+} from '@agor/core/gateway';
 import {
   formatGatewayContext,
   formatGatewayFollowUpRoutingMessage,
@@ -130,31 +136,8 @@ interface SlackDirectConnector extends GatewayConnector {
   openDmByEmail?(email: string): Promise<{ channel: string; user_id: string }>;
 }
 
-interface SlackHistoryMessage {
-  ts: string;
-  iso_time: string;
-  actor_label: string;
-  text: string;
-  is_bot: boolean;
-  is_trigger: boolean;
-}
-
 interface SlackHistoryConnector extends GatewayConnector {
-  fetchThreadHistory(req: {
-    threadId: string;
-    oldestTs?: string;
-    latestTs?: string;
-    inclusive?: boolean;
-    limit?: number;
-    includeBotMessages?: boolean;
-    triggerTs?: string;
-  }): Promise<{
-    threadId: string;
-    channel: string;
-    thread_ts: string;
-    messages: SlackHistoryMessage[];
-    has_more?: boolean;
-  }>;
+  fetchThreadHistory(req: SlackThreadHistoryRequest): Promise<SlackThreadHistoryResult>;
 }
 
 export type GatewayProgressState = 'queued' | 'working' | 'done' | 'failed';
@@ -292,7 +275,7 @@ function formatSlackCatchUpPrompt(args: {
   threadId: string;
   currentText: string;
   metadata?: Record<string, unknown>;
-  messages: SlackHistoryMessage[];
+  messages: SlackThreadHistoryResult['messages'];
   hasMore?: boolean;
   reason: 'initial_thread_context' | 'missed_since_last_mention' | 'current_message';
 }): string {
@@ -2111,7 +2094,6 @@ export class GatewayService {
             slackCursorTsToWrite = currentTs;
           } catch (error) {
             console.warn('[gateway] Failed to fetch Slack thread catch-up context:', error);
-            slackCursorTsToWrite = currentTs;
           }
         } else if (currentTs) {
           slackCursorTsToWrite = currentTs;

@@ -481,7 +481,7 @@ describe('agor_gateway_channels MCP tools', () => {
     vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
     vi.spyOn(BranchRepository.prototype, 'resolveUserPermission').mockResolvedValue('all');
     vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread').mockResolvedValue(
-      null
+      threadMapping as any
     );
 
     const tools = await captureTools('member');
@@ -498,11 +498,13 @@ describe('agor_gateway_channels MCP tools', () => {
       latestTs: '171234.000200',
       limit: 50,
       includeBotMessages: false,
-      triggerTs: '171234.000200',
+      triggerTs: '171234.000100',
     });
     expect(payload.thread).toMatchObject({
       source: 'explicit',
       thread_id: 'C123-171234.000100',
+      session_id: 'sess-42',
+      mapping_id: 'map-1',
     });
     expect(payload.markdown).toContain('# Slack thread C123-171234.000100');
     expect(payload.markdown).toContain('more context');
@@ -510,15 +512,14 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(JSON.stringify(payload)).not.toContain('xoxb-secret');
   });
 
-  it('denies explicit Slack thread history without branch all permission', async () => {
+  it('denies mapped explicit Slack thread history without branch all permission', async () => {
     vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread').mockResolvedValue(
+      threadMapping as any
+    );
     vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
     vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
     vi.spyOn(BranchRepository.prototype, 'resolveUserPermission').mockResolvedValue('view');
-    const findByChannelAndThread = vi.spyOn(
-      ThreadSessionMapRepository.prototype,
-      'findByChannelAndThread'
-    );
 
     const tools = await captureTools('member');
     await expect(
@@ -529,7 +530,59 @@ describe('agor_gateway_channels MCP tools', () => {
     ).rejects.toThrow("'all' branch permission");
 
     expect(getConnector).not.toHaveBeenCalled();
-    expect(findByChannelAndThread).not.toHaveBeenCalled();
+  });
+
+  it('denies unmapped explicit Slack thread history to non-admins even with branch all permission', async () => {
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread').mockResolvedValue(
+      null
+    );
+    vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
+    vi.spyOn(BranchRepository.prototype, 'resolveUserPermission').mockResolvedValue('all');
+
+    const tools = await captureTools('member');
+    await expect(
+      tools.agor_gateway_slack_thread_history_get.handler({
+        gatewayChannelId: 'chan-1',
+        threadId: 'C123-171234.000100',
+      })
+    ).rejects.toThrow('admin role required to read unmapped Slack thread history');
+
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('allows admins to fetch unmapped explicit Slack thread history', async () => {
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: 'C123-171234.000100',
+      channel: 'C123',
+      thread_ts: '171234.000100',
+      has_more: false,
+      messages: [],
+    }));
+    vi.mocked(getConnector).mockReturnValue({ fetchThreadHistory } as any);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread').mockResolvedValue(
+      null
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_thread_history_get.handler({
+      gatewayChannelId: 'chan-1',
+      threadId: 'C123-171234.000100',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(fetchThreadHistory).toHaveBeenCalledWith({
+      threadId: 'C123-171234.000100',
+      limit: 50,
+      includeBotMessages: false,
+    });
+    expect(payload.thread).toMatchObject({
+      source: 'explicit',
+      thread_id: 'C123-171234.000100',
+    });
+    expect(payload.thread.mapping_id).toBeUndefined();
   });
 
   it('rejects Slack history for non-Slack gateway mappings before connector use', async () => {
