@@ -91,8 +91,8 @@ const BoardHomeCard: React.FC<{
         fontFamily: 'inherit',
       }}
     >
-      {/* Icon + name row */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        {/* Board icon */}
         <div
           style={{
             width: 36,
@@ -108,36 +108,32 @@ const BoardHomeCard: React.FC<{
         >
           {board.icon || '📋'}
         </div>
-        <Text
-          strong
-          ellipsis={{ tooltip: board.name }}
-          style={{ fontSize: 14, minWidth: 0, flex: 1, paddingTop: 2 }}
-        >
-          {board.name}
-        </Text>
-      </div>
 
-      {/* Counts */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 6 }}>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {branches.length} branch{branches.length !== 1 ? 'es' : ''}
-        </Text>
-        {activeCount > 0 && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            <ThunderboltOutlined style={{ marginRight: 2 }} />
-            {activeCount} active
+        {/* Name + meta — all aligned under each other, to the right of the icon */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <Text strong ellipsis={{ tooltip: board.name }} style={{ fontSize: 14, minWidth: 0 }}>
+            {board.name}
           </Text>
-        )}
-      </div>
-
-      {/* Last session */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <ClockCircleOutlined style={{ color: 'inherit', fontSize: 11 }} />
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {latestSession
-            ? `Last session ${formatRelativeTime(latestSession.last_updated)}`
-            : 'No sessions yet'}
-        </Text>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {branches.length} branch{branches.length !== 1 ? 'es' : ''}
+            </Text>
+            {activeCount > 0 && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <ThunderboltOutlined style={{ marginRight: 2 }} />
+                {activeCount} active
+              </Text>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <ClockCircleOutlined style={{ fontSize: 11, color: 'inherit' }} />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {latestSession
+                ? `Last session ${formatRelativeTime(latestSession.last_updated)}`
+                : 'No sessions yet'}
+            </Text>
+          </div>
+        </div>
       </div>
     </button>
   );
