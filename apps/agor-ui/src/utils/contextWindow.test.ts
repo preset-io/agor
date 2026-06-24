@@ -22,6 +22,11 @@ describe('contextWindow utils', () => {
     );
   });
 
+  it('does not build a gradient when context usage is unavailable despite a known limit', () => {
+    expect(getContextWindowGradient(undefined, 1_000_000)).toBeUndefined();
+    expect(getContextWindowGradient(0, 1_000_000)).toBeUndefined();
+  });
+
   it('prefers the snapshot percentage over raw used/limit when provided', () => {
     // Authoritative snapshot says 0% (e.g. Codex baseline-adjusted) — must
     // win over the raw 50% the ratio would produce.

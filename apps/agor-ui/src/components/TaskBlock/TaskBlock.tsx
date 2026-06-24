@@ -425,13 +425,15 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
     // Use computed context window from database (already summed across tasks since last compaction)
     // If undefined, it means the backend computation failed or hasn't run yet
-    const contextWindowUsed = task.computed_context_window ?? 0;
-    const contextWindowLimit = normalized?.contextWindowLimit ?? 200000;
-    const taskHeaderGradient = getContextWindowGradient(
-      contextWindowUsed,
-      contextWindowLimit,
-      normalized?.contextUsageSnapshot
-    );
+    const contextSnapshot = normalized?.contextUsageSnapshot;
+    const hasContextWindowUsage =
+      !!contextSnapshot ||
+      (typeof task.computed_context_window === 'number' && task.computed_context_window > 0);
+    const contextWindowUsed = task.computed_context_window ?? contextSnapshot?.totalTokens ?? 0;
+    const contextWindowLimit = contextSnapshot?.maxTokens ?? normalized?.contextWindowLimit ?? 0;
+    const taskHeaderGradient = hasContextWindowUsage
+      ? getContextWindowGradient(contextWindowUsed, contextWindowLimit, contextSnapshot)
+      : undefined;
 
     // Task header shows when collapsed
     const taskHeader = (
@@ -510,7 +512,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
               />
             )}
-            {(task.computed_context_window || normalized) && (
+            {hasContextWindowUsage && (
               <ContextWindowPill
                 used={contextWindowUsed}
                 limit={contextWindowLimit || 0}
