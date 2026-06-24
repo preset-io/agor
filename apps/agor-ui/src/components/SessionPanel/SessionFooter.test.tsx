@@ -147,9 +147,11 @@ describe('SessionFooter', () => {
     expect(chip.getAttribute('data-warning')).toBe('true');
   });
 
-  it('Tools chip is hidden when no MCP servers are attached', () => {
+  it('Tools chip shows "No tools" when no MCP servers are attached', () => {
     render(<SessionFooter {...baseProps} sessionMcpServerIds={[]} />, { wrapper: Wrapper });
-    expect(screen.queryByTestId('tools-chip')).not.toBeInTheDocument();
+    const chip = screen.getByTestId('tools-chip');
+    expect(chip).toBeInTheDocument();
+    expect(chip.textContent).toContain('No tools');
   });
 
   it('Tools chip shows the server count when MCP servers are attached', () => {

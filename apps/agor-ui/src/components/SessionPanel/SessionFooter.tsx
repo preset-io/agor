@@ -153,8 +153,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       : 0;
   const contextWarning = contextPct > 0.8;
 
-  // Tools chip: show when MCP servers are attached
-  const showToolsChip = sessionMcpServerIds.length > 0;
+  const showToolsChip = true;
   const hasUnauthedMcp = unauthedMcpServers.length > 0;
 
   // Tools chip popover: list server names
@@ -265,25 +264,6 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             <Typography.Text style={{ fontSize: 12, textTransform: 'capitalize' }}>
               {effortLevel}
             </Typography.Text>
-          </div>
-        )}
-        {footerTimerTask && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Space size={4}>
-              <ClockCircleOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Elapsed
-              </Typography.Text>
-            </Space>
-            <TimerPill
-              status={footerTimerTask.status}
-              startedAt={
-                footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at
-              }
-              endedAt={footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at}
-              durationMs={footerTimerTask.duration_ms}
-              lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
-            />
           </div>
         )}
       </Space>
@@ -559,7 +539,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
       <div style={{ position: 'relative', zIndex: 1 }}>
         {/* Row 1 — Info bar */}
-        {(showToolsChip || showStatsChip) && (
+        {(showToolsChip || showStatsChip || footerTimerTask) && (
           <div
             style={{
               display: 'flex',
@@ -569,6 +549,31 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               flexWrap: 'wrap',
             }}
           >
+            {footerTimerTask && (
+              <Tag
+                icon={<ClockCircleOutlined />}
+                color="default"
+                style={{
+                  cursor: 'default',
+                  height: 22,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                }}
+                data-testid="timer-chip"
+              >
+                <TimerPill
+                  status={footerTimerTask.status}
+                  startedAt={
+                    footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at
+                  }
+                  endedAt={
+                    footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at
+                  }
+                  durationMs={footerTimerTask.duration_ms}
+                  lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
+                />
+              </Tag>
+            )}
             {showToolsChip && (
               <Popover
                 trigger="click"
@@ -584,14 +589,21 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                     height: 22,
                     display: 'inline-flex',
                     alignItems: 'center',
+                    opacity: sessionMcpServerIds.length === 0 ? 0.45 : 1,
                   }}
                   data-testid="tools-chip"
                 >
-                  Tools&nbsp;·&nbsp;{sessionMcpServerIds.length}
-                  {hasUnauthedMcp && (
-                    <WarningOutlined
-                      style={{ marginLeft: token.sizeUnit, color: token.colorWarning }}
-                    />
+                  {sessionMcpServerIds.length === 0 ? (
+                    'No tools'
+                  ) : (
+                    <>
+                      Tools&nbsp;·&nbsp;{sessionMcpServerIds.length}
+                      {hasUnauthedMcp && (
+                        <WarningOutlined
+                          style={{ marginLeft: token.sizeUnit, color: token.colorWarning }}
+                        />
+                      )}
+                    </>
                   )}
                 </Tag>
               </Popover>
