@@ -215,85 +215,90 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
               padding: 'clamp(16px, 3vw, 28px) clamp(16px, 3vw, 32px) 80px',
             }}
           >
-            {/* Greeting */}
-            <header
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                justifyContent: 'space-between',
-                gap: 16,
-                marginBottom: 24,
-              }}
-            >
-              <div>
-                <Title level={5} style={{ margin: 0, fontWeight: 700 }}>
-                  Hi, {username}! 👋
-                </Title>
-                <Text type="secondary" style={{ fontSize: 14 }}>
-                  Here's an overview of your workspace.
-                </Text>
-              </div>
-              <Dropdown
-                menu={{
-                  items: NEW_MENU_ITEMS,
-                  onClick: ({ key }) => {
-                    if (key === 'assistant' || key === 'branch') {
-                      handleNewSession(key);
-                    } else {
-                      props.onOpenCreateDialog?.(key as 'board');
-                    }
-                  },
+            <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
+              {/* Greeting */}
+              <header
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  gap: 16,
+                  marginBottom: 24,
                 }}
-                trigger={['click']}
               >
-                <Button type="primary" icon={<PlusOutlined />}>
-                  New
-                </Button>
-              </Dropdown>
-            </header>
+                <div>
+                  <Title level={5} style={{ margin: 0, fontWeight: 700 }}>
+                    Hi, {username}! 👋
+                  </Title>
+                  <Text type="secondary" style={{ fontSize: 14 }}>
+                    Here's an overview of your workspace.
+                  </Text>
+                </div>
+                <Dropdown
+                  menu={{
+                    items: NEW_MENU_ITEMS,
+                    onClick: ({ key }) => {
+                      if (key === 'assistant' || key === 'branch') {
+                        handleNewSession(key);
+                      } else {
+                        props.onOpenCreateDialog?.(key as 'board');
+                      }
+                    },
+                  }}
+                  trigger={['click']}
+                >
+                  <Button type="primary" icon={<PlusOutlined />}>
+                    New
+                  </Button>
+                </Dropdown>
+              </header>
 
-            {/* Get started onboarding card */}
-            {showOnboardingCard && (
-              <OnboardingCard
-                steps={onboardingSteps}
-                onDismiss={() => {
-                  localStorage.setItem(ONBOARDING_HIDDEN_KEY, 'true');
-                  setOnboardingHidden(true);
-                }}
+              {/* Get started onboarding card */}
+              {showOnboardingCard && (
+                <OnboardingCard
+                  steps={onboardingSteps}
+                  onDismiss={() => {
+                    localStorage.setItem(ONBOARDING_HIDDEN_KEY, 'true');
+                    setOnboardingHidden(true);
+                  }}
+                />
+              )}
+
+              {/* Jump back in — awaiting sessions */}
+              {waitingSessions.length > 0 && (
+                <JumpBackInSection
+                  sessions={waitingSessions}
+                  onSessionClick={props.onSessionClick}
+                />
+              )}
+
+              {/* Workspace stats */}
+              <HomeStatsBar
+                sessionById={props.sessionById}
+                currentUserId={props.currentUserId}
+                teamSize={props.userById.size}
               />
-            )}
 
-            {/* Jump back in — awaiting sessions */}
-            {waitingSessions.length > 0 && (
-              <JumpBackInSection sessions={waitingSessions} onSessionClick={props.onSessionClick} />
-            )}
-
-            {/* Workspace stats */}
-            <HomeStatsBar
-              sessionById={props.sessionById}
-              currentUserId={props.currentUserId}
-              teamSize={props.userById.size}
-            />
-
-            {/* My Sessions */}
-            <HomeSessionsSection
-              sessionById={props.sessionById}
-              branchById={props.branchById}
-              boardById={props.boardById}
-              currentUserId={props.currentUserId}
-              onSessionClick={props.onSessionClick}
-            />
-
-            {/* Boards grid */}
-            <div style={{ marginTop: 24 }}>
-              <HomeBoardsSection
-                boardById={props.boardById}
-                recentBoardIds={props.recentBoardIds}
+              {/* My Sessions — flex: 1 fills remaining viewport height */}
+              <HomeSessionsSection
+                sessionById={props.sessionById}
                 branchById={props.branchById}
-                sessionsByBranch={props.sessionsByBranch}
-                onBoardClick={props.onBoardClick}
-                onOpenCreateDialog={props.onOpenCreateDialog}
+                boardById={props.boardById}
+                currentUserId={props.currentUserId}
+                onSessionClick={props.onSessionClick}
               />
+
+              {/* Boards grid */}
+              <div style={{ marginTop: 24 }}>
+                <HomeBoardsSection
+                  boardById={props.boardById}
+                  recentBoardIds={props.recentBoardIds}
+                  branchById={props.branchById}
+                  sessionsByBranch={props.sessionsByBranch}
+                  onBoardClick={props.onBoardClick}
+                  onOpenCreateDialog={props.onOpenCreateDialog}
+                />
+              </div>
             </div>
           </Content>
 

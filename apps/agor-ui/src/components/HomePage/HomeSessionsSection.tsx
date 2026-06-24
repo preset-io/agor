@@ -116,7 +116,10 @@ export const HomeSessionsSection: React.FC<
   }, [allSessions, searching, trimmed, sort]);
 
   return (
-    <section aria-label={currentUserId ? 'My sessions' : 'Sessions'}>
+    <section
+      aria-label={currentUserId ? 'My sessions' : 'Sessions'}
+      style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+    >
       {/* Section header */}
       <div
         style={{
@@ -146,11 +149,16 @@ export const HomeSessionsSection: React.FC<
         styles={{
           body: {
             padding: 0,
-            maxHeight: 300,
+            flex: 1,
+            minHeight: 240,
+            maxHeight: 'clamp(240px, calc(100vh - 380px), 700px)',
             overflowY: 'auto',
           },
         }}
         style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
           ...glassCardStyle(token, 0.3),
