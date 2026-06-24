@@ -125,7 +125,7 @@ export type InitialLoadingStage = 'idle' | 'fetching' | 'indexing';
  * Adding a new map here + to EMPTY_MAPS is all that's required —
  * `setMaps(EMPTY_MAPS)` in the reset effect covers every field automatically.
  */
-type DataMaps = {
+export type DataMaps = {
   sessionById: Map<string, Session>;
   sessionsByBranch: Map<string, Session[]>;
   boardById: Map<string, Board>;
@@ -151,7 +151,7 @@ type DataMaps = {
   userAuthenticatedMcpServerIds: Set<string>;
 };
 
-const EMPTY_MAPS: DataMaps = {
+export const EMPTY_MAPS: DataMaps = {
   sessionById: new Map(),
   sessionsByBranch: new Map(),
   boardById: new Map(),
