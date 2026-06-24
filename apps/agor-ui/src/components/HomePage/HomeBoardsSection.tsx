@@ -126,7 +126,7 @@ const BoardHomeCard: React.FC<{
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <ClockCircleOutlined style={{ fontSize: 11, color: 'inherit' }} />
+            <ClockCircleOutlined style={{ fontSize: 11, color: token.colorTextSecondary }} />
             <Text type="secondary" style={{ fontSize: 12 }}>
               {latestSession
                 ? `Last session ${formatRelativeTime(latestSession.last_updated)}`
