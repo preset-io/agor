@@ -1,3 +1,6 @@
+// Filtered vendored snapshot from LiteLLM's pricing catalog. When OpenAI ships
+// new Codex models or prices change, refresh this file from:
+// https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
 import modelPrices from './litellm-openai-model-prices.json' with { type: 'json' };
 
 const LONG_CONTEXT_INPUT_THRESHOLD_TOKENS = 272_000;
