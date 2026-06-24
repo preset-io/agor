@@ -148,7 +148,7 @@ export const HomeStatsBar: React.FC<{
       <StatCard
         icon={<ThunderboltOutlined />}
         value={runningNow}
-        label="Running right now"
+        label="Sessions running now"
         iconBg={token.colorPrimaryBg}
         iconColor={token.colorPrimary}
       />
@@ -156,7 +156,7 @@ export const HomeStatsBar: React.FC<{
         icon={<RiseOutlined />}
         value={weekValue}
         valueTooltip={weekTooltip}
-        label="Active this week"
+        label="Sessions active this week"
         iconBg={token.colorSuccessBg}
         iconColor={token.colorSuccess}
       />

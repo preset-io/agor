@@ -1,4 +1,4 @@
-import { theme } from 'antd';
+import { Tooltip, theme } from 'antd';
 import type React from 'react';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -41,18 +41,20 @@ export const StatusDot: React.FC<{ status: string; size?: number }> = ({ status,
   const cls = STATUS_ANIMATION[status] ?? '';
   const label = STATUS_LABELS[status] ?? status.replaceAll('_', ' ');
   return (
-    <span
-      role="img"
-      aria-label={`Status: ${label}`}
-      className={cls}
-      style={{
-        display: 'inline-block',
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        background: statusColor,
-        flexShrink: 0,
-      }}
-    />
+    <Tooltip title={label}>
+      <span
+        role="img"
+        aria-label={`Status: ${label}`}
+        className={cls}
+        style={{
+          display: 'inline-block',
+          width: size,
+          height: size,
+          borderRadius: '50%',
+          background: statusColor,
+          flexShrink: 0,
+        }}
+      />
+    </Tooltip>
   );
 };

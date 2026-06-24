@@ -45,49 +45,34 @@ const HomeSessionRow: React.FC<{
         padding: '8px 14px',
         borderBlockEnd: `1px solid ${token.colorBorderSecondary}`,
         display: 'flex',
-        alignItems: 'flex-start',
-        gap: 8,
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        gap: 4,
       }}
     >
-      <div style={{ paddingTop: 3, flexShrink: 0 }}>
+      {/* Title + time row — dot lives here so it aligns with the text */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <StatusDot status={session.status} />
-      </div>
-
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {/* Title + time row */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 8,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: 1 }}>
-            {isForked && (
-              <ForkOutlined
-                style={{ fontSize: 11, color: token.colorTextTertiary, flexShrink: 0 }}
-              />
-            )}
-            <Tooltip title={title}>
-              <Text ellipsis style={{ fontSize: 13, fontWeight: 500, flex: 1, minWidth: 0 }}>
-                {title}
-              </Text>
-            </Tooltip>
-          </div>
-          <Text type="secondary" style={{ fontSize: 12, flexShrink: 0, whiteSpace: 'nowrap' }}>
-            {formatRelativeTime(session.last_updated)}
-          </Text>
-        </div>
-
-        {/* Pills row */}
-        {hasTags && (
-          <Space size={4}>
-            {board && <BoardPill board={board} compact />}
-            {branch && <BranchPill branch={branch.name} compact />}
-          </Space>
+        {isForked && (
+          <ForkOutlined style={{ fontSize: 11, color: token.colorTextTertiary, flexShrink: 0 }} />
         )}
+        <Tooltip title={title}>
+          <Text ellipsis style={{ fontSize: 13, fontWeight: 500, flex: 1, minWidth: 0 }}>
+            {title}
+          </Text>
+        </Tooltip>
+        <Text type="secondary" style={{ fontSize: 12, flexShrink: 0, whiteSpace: 'nowrap' }}>
+          {formatRelativeTime(session.last_updated)}
+        </Text>
       </div>
+
+      {/* Pills row — indented to align under the title text */}
+      {hasTags && (
+        <Space size={4} style={{ paddingLeft: 13 }}>
+          {board && <BoardPill board={board} compact />}
+          {branch && <BranchPill branch={branch.name} compact />}
+        </Space>
+      )}
     </List.Item>
   );
 };
