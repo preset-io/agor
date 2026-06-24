@@ -218,4 +218,66 @@ describe('SessionPanel composer send', () => {
     );
     expect(textarea).toHaveValue('New session prompt must stay local');
   });
+
+  it('ignores a rapid second send while the first attachment upload is still in flight', async () => {
+    const upload = deferred<UploadFilesToSessionResult>();
+    const onSendPrompt = vi.fn();
+    const { container } = renderSessionPanel({ onSendPrompt });
+
+    const dropZone = screen.getByLabelText('Composer attachments and input drop zone');
+    const file = new File(['rapid image'], 'rapid-chart.png', { type: 'image/png' });
+    fireEvent.drop(dropZone, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [file],
+      },
+    });
+
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'Summarize this rapid chart' } });
+
+    const sendButton = container.querySelector('button.ant-btn-primary');
+    expect(sendButton).toBeInstanceOf(HTMLButtonElement);
+
+    let attemptedSecondSend = false;
+    uploadMockState.uploadFilesToSession.mockImplementation(() => {
+      if (!attemptedSecondSend) {
+        attemptedSecondSend = true;
+        fireEvent.click(sendButton as HTMLButtonElement);
+      }
+      return upload.promise;
+    });
+
+    fireEvent.click(sendButton as HTMLButtonElement);
+
+    await waitFor(() => expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1));
+    expect(attemptedSecondSend).toBe(true);
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue('Summarize this rapid chart');
+    expect(screen.getByLabelText('Preview rapid-chart.png')).toBeInTheDocument();
+
+    upload.resolve({
+      success: true,
+      files: [
+        {
+          filename: 'rapid-chart.png',
+          path: '.agor/uploads/rapid-chart.png',
+          size: 11,
+          mimeType: 'image/png',
+        },
+      ],
+    });
+
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+    expect(onSendPrompt).toHaveBeenCalledWith(
+      'session-1',
+      'Attached files:\n- .agor/uploads/rapid-chart.png\n\nSummarize this rapid chart',
+      expect.any(String)
+    );
+    expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
+      expect.objectContaining({ files: [file], notifyAgent: false })
+    );
+    await waitFor(() => expect(textarea).toHaveValue(''));
+    expect(screen.queryByLabelText('Preview rapid-chart.png')).not.toBeInTheDocument();
+  });
 });

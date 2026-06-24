@@ -420,6 +420,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }
   const composerImageAttachmentsRef = React.useRef<ComposerImageAttachment[]>([]);
   const composerImageUploadingRef = React.useRef(false);
+  const composerSendInFlightRef = React.useRef(false);
   composerImageAttachmentsRef.current = composerImageAttachments;
   composerImageUploadingRef.current = composerImageUploading;
 
@@ -850,22 +851,31 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleSendPrompt = async () => {
-    const sendStartSessionId = session.session_id;
-    const sendStartComposerIdentity = composerSessionIdentityRef.current;
-    const value = promptRef.current?.getValue() ?? '';
-    const attachmentsAtSendStart = composerImageAttachmentsRef.current;
-    const hasImages = attachmentsAtSendStart.length > 0;
-    if ((!value.trim() && !hasImages) || connectionDisabled || composerImageUploading) return;
-
-    const blockingAttachment = attachmentsAtSendStart.find(isBlockingComposerImageAttachment);
-    if (blockingAttachment) {
-      showError(
-        `${blockingAttachment.file.name} failed or cannot be uploaded. Remove failed files before sending.`
-      );
+    if (
+      composerSendInFlightRef.current ||
+      composerImageUploadingRef.current ||
+      connectionDisabled
+    ) {
       return;
     }
 
+    composerSendInFlightRef.current = true;
     try {
+      const sendStartSessionId = session.session_id;
+      const sendStartComposerIdentity = composerSessionIdentityRef.current;
+      const value = promptRef.current?.getValue() ?? '';
+      const attachmentsAtSendStart = composerImageAttachmentsRef.current;
+      const hasImages = attachmentsAtSendStart.length > 0;
+      if (!value.trim() && !hasImages) return;
+
+      const blockingAttachment = attachmentsAtSendStart.find(isBlockingComposerImageAttachment);
+      if (blockingAttachment) {
+        showError(
+          `${blockingAttachment.file.name} failed or cannot be uploaded. Remove failed files before sending.`
+        );
+        return;
+      }
+
       const uploadedImages = await uploadComposerImages(attachmentsAtSendStart, sendStartSessionId);
       const imagePaths = uploadedImages.map((file) => file.path);
       const composerStillOwnsSend =
@@ -909,6 +919,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     } catch (error) {
       console.error('Image upload failed — keeping prompt and images in composer:', error);
       showError(error instanceof Error ? error.message : 'Failed to upload images');
+    } finally {
+      composerSendInFlightRef.current = false;
     }
   };
 
