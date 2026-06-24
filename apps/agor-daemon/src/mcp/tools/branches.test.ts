@@ -146,6 +146,55 @@ describe('agor_branches_update', () => {
   });
 });
 
+describe('agor_branches_create', () => {
+  it('passes acting MCP user params through to branch creation so ownership resolves to the prompter', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-b', role: 'member' },
+    };
+    const createBranch = vi.fn(async (_repoId: string, data: unknown, params: unknown) => {
+      expect(params).toBe(baseServiceParams);
+      return {
+        branch_id: 'branch-new',
+        created_by: 'user-b',
+        ...(data as Record<string, unknown>),
+      };
+    });
+    const reposGet = vi.fn(async (_repoId: string) => ({
+      repo_id: 'repo-1',
+      default_branch: 'main',
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'repos') return { get: reposGet, createBranch };
+        if (name === 'boards') return { get: vi.fn(async () => ({ board_id: 'board-1' })) };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app,
+      userId: 'user-b',
+      sessionId: 'sess-owned-by-a',
+      baseServiceParams,
+    });
+
+    await create({
+      repoId: 'repo-1',
+      branchName: 'user-b-feature',
+      boardId: 'board-1',
+      autoSuffix: false,
+    });
+
+    expect(createBranch).toHaveBeenCalledWith(
+      'repo-1',
+      expect.objectContaining({ name: 'user-b-feature', boardId: 'board-1' }),
+      baseServiceParams
+    );
+  });
+});
+
 describe('branch MCP input schemas', () => {
   it('rejects empty required IDs/names with field-specific messages', () => {
     const config = registerAndCaptureConfig('agor_branches_create', {

@@ -7,20 +7,21 @@ export interface SessionActorAuthorizationParams {
 }
 
 /**
- * Authorization predicate for handing a session-scoped MCP token to a caller.
+ * Authorization predicate for handing an Agor MCP token to a caller.
  *
- * The token binds `uid = session.created_by` and lets the bearer act as the
- * session creator on the MCP channel. It must therefore only be returned to
- * callers who are already allowed to act as that creator: the creator (member+),
- * a superadmin, or the executor/service identity.
+ * The token is minted for the *current authenticated caller* (not necessarily
+ * `session.created_by`) and is bound to the requested session context. Normal
+ * session/branch RBAC has already run before the after-hook calls this helper;
+ * this gate only prevents anonymous/viewer contexts from receiving a bearer
+ * credential. Returning caller-scoped tokens is important for gateway/aligned
+ * user prompts: a collaborator prompting someone else's session must execute
+ * MCP tools as themselves, not as the original session creator.
  */
 export function canReceiveMcpTokenForSession(params: SessionActorAuthorizationParams): boolean {
-  const { callerUserId, callerRole, sessionCreatedBy } = params;
-  const isSuperadmin = hasMinimumRole(callerRole, ROLES.SUPERADMIN);
+  const { callerUserId, callerRole } = params;
   const isServiceExecutor = callerRole === 'service';
-  const isCreatorMember =
-    !!callerUserId && callerUserId === sessionCreatedBy && hasMinimumRole(callerRole, ROLES.MEMBER);
-  return isCreatorMember || isSuperadmin || isServiceExecutor;
+  const isAuthenticatedMember = !!callerUserId && hasMinimumRole(callerRole, ROLES.MEMBER);
+  return isAuthenticatedMember || isServiceExecutor;
 }
 
 /**
@@ -34,5 +35,10 @@ export function canReceiveMcpTokenForSession(params: SessionActorAuthorizationPa
  * delivery unless the CLI ownership model is redesigned explicitly.
  */
 export function canControlCliSession(params: SessionActorAuthorizationParams): boolean {
-  return canReceiveMcpTokenForSession(params);
+  const { callerUserId, callerRole, sessionCreatedBy } = params;
+  const isSuperadmin = hasMinimumRole(callerRole, ROLES.SUPERADMIN);
+  const isServiceExecutor = callerRole === 'service';
+  const isCreatorMember =
+    !!callerUserId && callerUserId === sessionCreatedBy && hasMinimumRole(callerRole, ROLES.MEMBER);
+  return isCreatorMember || isSuperadmin || isServiceExecutor;
 }

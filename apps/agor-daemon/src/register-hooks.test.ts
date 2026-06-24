@@ -250,10 +250,10 @@ describe('canReceiveMcpTokenForSession', () => {
   const CREATOR = 'user-creator';
   const OTHER = 'user-other';
 
-  it('allows the session creator (matching user_id)', () => {
+  it('allows any authenticated member+ caller to receive a caller-scoped MCP token', () => {
     expect(
       canReceiveMcpTokenForSession({
-        callerUserId: CREATOR,
+        callerUserId: OTHER,
         callerRole: 'member',
         sessionCreatedBy: CREATOR,
       })
@@ -271,8 +271,6 @@ describe('canReceiveMcpTokenForSession', () => {
   });
 
   it('allows the executor service identity (role=service)', () => {
-    // role 'service' is not in ROLE_RANK, so hasMinimumRole returns false for
-    // it — the predicate must match it explicitly.
     expect(
       canReceiveMcpTokenForSession({
         callerUserId: 'executor-service',
@@ -282,29 +280,7 @@ describe('canReceiveMcpTokenForSession', () => {
     ).toBe(true);
   });
 
-  it('denies a member+ viewer who is NOT the creator (the bypass we fixed)', () => {
-    expect(
-      canReceiveMcpTokenForSession({
-        callerUserId: OTHER,
-        callerRole: 'member',
-        sessionCreatedBy: CREATOR,
-      })
-    ).toBe(false);
-  });
-
-  it('denies a plain admin who is NOT the creator (only superadmin gets through)', () => {
-    expect(
-      canReceiveMcpTokenForSession({
-        callerUserId: OTHER,
-        callerRole: 'admin',
-        sessionCreatedBy: CREATOR,
-      })
-    ).toBe(false);
-  });
-
   it('denies a creator who has been demoted to viewer', () => {
-    // Viewers never receive MCP tokens per docs — the creator match alone
-    // isn't enough, they must also be at least a member.
     expect(
       canReceiveMcpTokenForSession({
         callerUserId: CREATOR,
@@ -324,19 +300,7 @@ describe('canReceiveMcpTokenForSession', () => {
     ).toBe(false);
   });
 
-  it('denies when session has no created_by and caller is not privileged', () => {
-    expect(
-      canReceiveMcpTokenForSession({
-        callerUserId: OTHER,
-        callerRole: 'member',
-        sessionCreatedBy: null,
-      })
-    ).toBe(false);
-  });
-
-  it('does NOT match empty-string caller user_id against empty-string created_by', () => {
-    // Empty-string coincidence must not count as "creator match" — this is
-    // why the predicate guards with `!!callerUserId` before comparing.
+  it('denies empty-string caller user_id even with member role', () => {
     expect(
       canReceiveMcpTokenForSession({
         callerUserId: '',
