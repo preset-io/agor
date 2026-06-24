@@ -9,6 +9,7 @@ import type { CodexSdkResponse } from '../../types/sdk-response.js';
 import type { INormalizer, NormalizedSdkData } from '../base/normalizer.interface.js';
 import type { NormalizeOptions } from '../normalizer-factory.js';
 import { DEFAULT_CODEX_MODEL, getCodexContextWindowLimit } from './models.js';
+import { estimateCodexCostUsd } from './pricing/litellm-pricing.js';
 
 export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
   normalize(event: CodexSdkResponse, options?: NormalizeOptions): NormalizedSdkData {
@@ -33,15 +34,25 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
 
     const inputTokens = usage.input_tokens || 0;
     const outputTokens = usage.output_tokens || 0;
+    const cacheReadTokens = usage.cached_input_tokens || 0;
+    const modelForPricing = options?.modelHint || DEFAULT_CODEX_MODEL;
+    const estimatedCostUsd = estimateCodexCostUsd({
+      modelId: modelForPricing,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+    });
+
     return {
       tokenUsage: {
         inputTokens,
         outputTokens,
         totalTokens: inputTokens + outputTokens,
-        cacheReadTokens: usage.cached_input_tokens || 0,
+        cacheReadTokens,
         cacheCreationTokens: 0,
       },
       contextWindowLimit,
+      costUsd: estimatedCostUsd,
       durationMs: undefined,
     };
   }
