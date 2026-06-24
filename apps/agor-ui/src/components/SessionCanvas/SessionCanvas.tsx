@@ -350,7 +350,7 @@ const EMPTY_BOARD_ENTITY_OBJECTS: BoardEntityObject[] = Object.freeze(
   [] as BoardEntityObject[]
 ) as BoardEntityObject[];
 
-const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
+const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   (
     {
       board,
@@ -2899,6 +2899,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   }
 );
 
-SessionCanvas.displayName = 'SessionCanvas';
+SessionCanvasInner.displayName = 'SessionCanvas';
+
+// Memoized so the canvas is insulated from its parent's top-down re-renders:
+// AgorApp re-renders on every live store patch, but SessionCanvas re-renders only
+// when one of its own props actually changes OR one of its `useAgorStore`
+// selector slices fires. The bailout holds only while the parent keeps every
+// prop referentially stable (see the stabilized handlers at the App render site).
+const SessionCanvas = React.memo(SessionCanvasInner);
 
 export default SessionCanvas;
