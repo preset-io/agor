@@ -40,6 +40,34 @@ describe('useAuth launch-code fallback', () => {
     window.history.replaceState({}, '', '/ui/');
   });
 
+  it('notifies socket clients when launch sign-in stores fresh tokens', async () => {
+    launchCreate.mockResolvedValue({
+      accessToken: 'launch-access',
+      refreshToken: 'launch-refresh',
+      user: { user_id: 'u1', email: 'person@example.test' },
+    });
+
+    const listener = vi.fn();
+    window.addEventListener(TOKENS_REFRESHED_EVENT, listener);
+
+    try {
+      const { result } = renderHook(() => useAuth());
+
+      await waitFor(() => expect(result.current.authenticated).toBe(true));
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect((listener.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+        accessToken: 'launch-access',
+        refreshToken: 'launch-refresh',
+        user: { user_id: 'u1', email: 'person@example.test' },
+      });
+      expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('launch-access');
+      expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('launch-refresh');
+    } finally {
+      window.removeEventListener(TOKENS_REFRESHED_EVENT, listener);
+    }
+  });
+
   it('preserves stored tokens and restores the normal session when launch sign-in fails', async () => {
     localStorage.setItem(ACCESS_TOKEN_KEY, 'stored-access');
     localStorage.setItem(REFRESH_TOKEN_KEY, 'stored-refresh');
