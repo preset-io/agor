@@ -17,7 +17,7 @@ import type {
   SessionID,
   UUID,
 } from '@agor/core/types';
-import { and, eq, like, or } from 'drizzle-orm';
+import { and, eq, inArray, like, or } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getArtifactFullscreenUrl, getArtifactUrl } from '../../utils/url';
@@ -160,9 +160,48 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
     }
   }
 
-  async findAll(): Promise<Artifact[]> {
+  /**
+   * Find all artifacts (with optional filters).
+   *
+   * The `board_id`, `archived`, and `branchIds` filters let the list read path
+   * (`ArtifactsService.find`) push its high-selectivity predicates — including
+   * the accessible-branch set injected by RBAC scoping — into SQL so it no
+   * longer materializes the whole table before filtering in memory. Rows with a
+   * null `branch_id` (orphaned artifacts) are excluded by a `branchIds` filter,
+   * matching the in-memory `{ $in }` semantics.
+   *
+   * @param filter - Optional filters
+   * @param filter.board_id - Filter to a single board
+   * @param filter.archived - Filter to an exact archived state
+   * @param filter.branchIds - Restrict to a set of branch IDs (empty set yields
+   *   no rows, matching an `{ $in: [] }` filter)
+   */
+  async findAll(filter?: {
+    board_id?: BoardID;
+    archived?: boolean;
+    branchIds?: BranchID[];
+  }): Promise<Artifact[]> {
     try {
-      const rows = await select(this.db).from(artifacts).all();
+      // An explicit empty id set can never match a row; short-circuit so we skip
+      // the read entirely and avoid emitting an empty `IN ()` predicate.
+      if (filter?.branchIds !== undefined && filter.branchIds.length === 0) {
+        return [];
+      }
+
+      const conditions = [];
+      if (filter?.board_id) {
+        conditions.push(eq(artifacts.board_id, filter.board_id));
+      }
+      if (filter?.archived !== undefined) {
+        conditions.push(eq(artifacts.archived, filter.archived));
+      }
+      if (filter?.branchIds !== undefined) {
+        conditions.push(inArray(artifacts.branch_id, filter.branchIds));
+      }
+
+      const query = select(this.db).from(artifacts);
+      const rows =
+        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
       const baseUrl = await getBaseUrl();
       return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {

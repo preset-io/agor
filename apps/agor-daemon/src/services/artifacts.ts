@@ -61,7 +61,7 @@ import {
   proxyGrantEnvName,
   ROLES,
 } from '@agor/core/types';
-import { DrizzleService } from '../adapters/drizzle.js';
+import { DrizzleService, type Query } from '../adapters/drizzle.js';
 import { ARTIFACT_RUNTIME_JWT_AUDIENCE, issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import {
@@ -348,6 +348,39 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     this.boardRepo = new BoardRepository(db);
     this.app = app;
     this.dbRef = db;
+  }
+
+  /**
+   * Push the list read's high-selectivity predicates into SQL.
+   *
+   * The generic adapter would read the entire artifacts table and filter in
+   * memory. Artifacts are fetched on initial app load, so we narrow the read to
+   * the board, archived state, and the accessible-branch set (injected by RBAC
+   * scoping via `scopeFindToAccessibleBranches`) before rows leave the database.
+   * The per-row `rowToArtifact` / `getBaseUrl` enrichment runs inside
+   * `artifactRepo.findAll` on the reduced set, and `find` still re-applies every
+   * query filter in memory, so this only ever returns a superset of the matching
+   * rows.
+   *
+   * Artifacts are not query-validated, so values arrive uncoerced: only push
+   * when the value already has the column's type (string `board_id`, boolean
+   * `archived`, string / `{ $in }` `branch_id`). Anything else falls through to
+   * the unchanged in-memory filter, preserving current behavior exactly.
+   */
+  protected async fetchData(query: Query): Promise<Artifact[]> {
+    const filter: { board_id?: BoardID; archived?: boolean; branchIds?: BranchID[] } = {};
+
+    if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
+    if (typeof query.archived === 'boolean') filter.archived = query.archived;
+
+    const branchId = query.branch_id;
+    if (typeof branchId === 'string') {
+      filter.branchIds = [branchId as BranchID];
+    } else if (branchId && typeof branchId === 'object' && Array.isArray(branchId.$in)) {
+      filter.branchIds = branchId.$in as BranchID[];
+    }
+
+    return this.artifactRepo.findAll(filter);
   }
 
   // Direct Feathers create is intentionally rejected — artifacts require
