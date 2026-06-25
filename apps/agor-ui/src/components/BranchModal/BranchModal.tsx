@@ -163,6 +163,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
           boards={mapToArray(boardById)}
           mcpServers={mapToArray(mcpServerById)}
           client={client}
+          open={open}
           canEdit={form.canEditGeneral}
           state={form.general}
           setField={form.setGeneral}

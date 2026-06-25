@@ -31,6 +31,7 @@ interface GeneralTabProps {
   boards?: Board[];
   mcpServers?: MCPServer[];
   client: AgorClient | null;
+  open: boolean;
   canEdit: boolean;
   state: GeneralFormState;
   setField: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
@@ -50,13 +51,14 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   boards = [],
   mcpServers = [],
   client,
+  open,
   canEdit,
   state,
   setField,
   onArchiveOrDelete,
 }) => {
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
-  const knowledgeDocuments = useReadableKnowledgeDocuments(client);
+  const knowledgeDocuments = useReadableKnowledgeDocuments(client, open);
 
   const handleArchiveOrDelete = (options: {
     metadataAction: 'archive' | 'delete';

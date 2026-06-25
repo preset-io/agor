@@ -2464,6 +2464,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureBranchPermission('all', 'update session metadata', superadminOpts),
             ]
           : []),
+        async (context) => {
+          const params = context.params as AuthenticatedParams & { session?: Session };
+          if (!params.session) {
+            await resolveSessionContext()(context);
+            await loadSession(sessionsService)(context);
+          }
+          return context;
+        },
         validateLinkedKnowledgeDocumentIds(
           (context) =>
             (context.params as AuthenticatedParams & { session?: Session }).session
@@ -2498,6 +2506,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               },
             ]
           : []),
+        async (context) => {
+          const params = context.params as AuthenticatedParams & { session?: Session };
+          if (!params.session) {
+            await resolveSessionContext()(context);
+            await loadSession(sessionsService)(context);
+          }
+          return context;
+        },
         validateLinkedKnowledgeDocumentIds(
           (context) =>
             (context.params as AuthenticatedParams & { session?: Session }).session
