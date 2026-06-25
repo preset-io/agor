@@ -131,10 +131,10 @@ export function requiredBotEvents(opts: SlackWizardOptions): string[] {
 /**
  * Build the complete Slack app manifest for the selected capabilities.
  *
- * Socket Mode is enabled (so no request URLs or signing secret are emitted),
- * interactivity is disabled (v1 is a plain App-Home bot), and the assistant
- * view is intentionally omitted because the connector does not handle
- * assistant lifecycle events.
+ * Socket Mode is enabled, so no request URLs or signing secret are emitted.
+ * Interactivity is disabled because the connector uses no interactive components.
+ * The assistant view is omitted because the connector does not handle assistant
+ * lifecycle events.
  */
 export function buildSlackManifest(opts: SlackWizardOptions): SlackAppManifest {
   return {
