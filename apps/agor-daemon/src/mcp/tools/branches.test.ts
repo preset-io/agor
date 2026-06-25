@@ -257,6 +257,23 @@ describe('agor_branches_create', () => {
 });
 
 describe('branch MCP input schemas', () => {
+  it('accepts boolean branch attention updates and rejects non-booleans', () => {
+    const config = registerAndCaptureConfig('agor_branches_update', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', needsAttention: false }).success
+    ).toBe(true);
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', needsAttention: true }).success
+    ).toBe(true);
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', needsAttention: 'false' }).success
+    ).toBe(false);
+  });
+
   it('rejects empty required IDs/names with field-specific messages', () => {
     const config = registerAndCaptureConfig('agor_branches_create', {
       app: {},
