@@ -27,12 +27,13 @@
  *    reconnect fallback in useAgorClient and the 401-retry hook on the
  *    same client. Extracted here so the two paths stay in lockstep.
  *
- * The single-flight helper also emits a `TOKENS_REFRESHED_EVENT` on `window`
- * after a successful refresh so that React state (useAuth) can sync even when
- * the refresh was initiated by a non-React code path (e.g. the Feathers hook).
- * On unrecoverable failure it emits `TOKENS_REFRESH_UNRECOVERABLE_EVENT` so
- * useAuth can clear tokens and bounce the user to login exactly once,
- * instead of every call site duplicating that cleanup.
+ * Successful token replacement emits `TOKENS_REFRESHED_EVENT` on `window` so
+ * React state (useAuth), socket clients, and data hooks can sync even when the
+ * token replacement was initiated by a non-React code path (e.g. the Feathers
+ * hook). Refresh failures that make the session unrecoverable emit
+ * `TOKENS_REFRESH_UNRECOVERABLE_EVENT` so useAuth can clear tokens and bounce
+ * the user to login exactly once, instead of every call site duplicating that
+ * cleanup.
  */
 
 import type { AgorClient } from '@agor-live/client';

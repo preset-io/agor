@@ -644,8 +644,8 @@ export function useAgorData(
 
   // Tracks whether the most recent silent refetch failed. Set by the silent
   // catch branch in `fetchData`, cleared on success. Read by the
-  // TOKENS_REFRESHED_EVENT listener below so a token refresh that lands AFTER
-  // a failed reconnect refetch (auth race during socket re-auth) gets to
+  // TOKENS_REFRESHED_EVENT listener below so a token replacement that lands
+  // AFTER a failed reconnect refetch (auth race during socket re-auth) gets to
   // retry — without this, the byId maps would stay stale until the next
   // physical reconnect or page refresh. We use a ref rather than state since
   // we only consume it in event handlers, never in render.
@@ -711,7 +711,7 @@ export function useAgorData(
   // reconnect-time 401 (auth race with the re-auth handler in useAgorClient)
   // bubbled up. Silent failures are logged for observability; the UI continues
   // to render whatever byId state was last successfully fetched, and the next
-  // reconnect or token refresh gets another shot.
+  // reconnect or token replacement gets another shot.
   const fetchData = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
       if (!client || !enabled) {
@@ -2264,10 +2264,10 @@ export function useAgorData(
 
     // If the prior reconnect refetch failed silently — typical scenario: the
     // socket reconnected, the around-hook hadn't refreshed the access token
-    // yet, fetchData hit a 401 that bubbled up — retry once a token refresh
-    // lands. Without this, byId state stays stale until the next physical
-    // reconnect or a page refresh. We gate on the latch so we don't refetch
-    // 14 services on every routine token rotation.
+    // yet, fetchData hit a 401 that bubbled up — retry once a token
+    // replacement lands. Without this, byId state stays stale until the next
+    // physical reconnect or a page refresh. We gate on the latch so we don't
+    // refetch 14 services on every routine token rotation.
     const handleTokensRefreshed = () => {
       if (!lastSilentFetchFailedRef.current) return;
       void refetchSilently();
