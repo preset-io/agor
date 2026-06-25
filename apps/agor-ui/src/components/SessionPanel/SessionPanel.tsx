@@ -394,6 +394,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [composerImageAttachments, setComposerImageAttachments] = React.useState<
     ComposerImageAttachment[]
   >([]);
+  const [composerAttachmentValidationError, setComposerAttachmentValidationError] = React.useState<
+    string | null
+  >(null);
   const [composerImageUploading, setComposerImageUploading] = React.useState(false);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
@@ -447,6 +450,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   React.useEffect(() => {
     if (previousSessionIdRef.current === session?.session_id) return;
     clearComposerImages();
+    setComposerAttachmentValidationError(null);
     setComposerImageDestination('branch');
     previousSessionIdRef.current = session?.session_id;
   }, [session?.session_id, clearComposerImages]);
@@ -722,7 +726,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       composerImageDestination
     );
     if (rejections.length > 0) {
-      showError(summarizeComposerFileRejections(rejections));
+      const validationMessage = summarizeComposerFileRejections(rejections);
+      setComposerAttachmentValidationError(validationMessage);
+      showError(validationMessage);
+    } else {
+      setComposerAttachmentValidationError(null);
     }
     if (acceptedFiles.length === 0) return;
 
@@ -746,6 +754,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const removeComposerImage = (id: string) => {
     if (composerImageUploadingRef.current) return;
+    setComposerAttachmentValidationError(null);
 
     setComposerImageAttachments((prev) => {
       const removed = prev.find((attachment) => attachment.id === id);
@@ -924,6 +933,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       if (composerStillOwnsSend) {
         promptRef.current?.clear();
         clearComposerImages();
+        setComposerAttachmentValidationError(null);
       } else {
         // The old composer is no longer live; clear only its saved draft so the
         // successfully sent snapshot does not reappear when the user returns.
@@ -1194,6 +1204,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onDragActiveChange={setComposerDropActive}
           onFilesDrop={addComposerImages}
         >
+          {composerAttachmentValidationError && (
+            <Alert
+              type="error"
+              showIcon
+              message={composerAttachmentValidationError}
+              style={{ marginBottom: 0, borderRadius: token.borderRadius }}
+            />
+          )}
           <SessionImageAttachmentTray
             attachments={composerImageAttachments}
             destination={composerImageDestination}

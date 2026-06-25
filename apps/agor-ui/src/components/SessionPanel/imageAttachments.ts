@@ -24,6 +24,7 @@ export const COMPOSER_UPLOAD_MIME_TYPES = new Set([
 export const MAX_COMPOSER_UPLOAD_FILES = 10;
 export const MAX_COMPOSER_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
 export const MAX_COMPOSER_UPLOAD_TOTAL_SIZE = 100 * 1024 * 1024;
+export const MAX_COMPOSER_UPLOAD_FILES_MESSAGE = `Composer supports up to ${MAX_COMPOSER_UPLOAD_FILES} pending files per destination`;
 
 export type ComposerImageAttachmentStatus = 'pending' | 'uploading' | 'uploaded' | 'failed';
 
@@ -60,13 +61,12 @@ export function validateComposerFileIntake(
   currentAttachments: ComposerImageAttachment[] = [],
   destination: UploadDestination = 'branch'
 ): { acceptedFiles: File[]; rejections: ComposerFileRejection[] } {
-  const acceptedFiles: File[] = [];
   const rejections: ComposerFileRejection[] = [];
   const currentUploadBatch = currentAttachments.filter(
     (attachment) => attachment.destination === destination && attachment.status !== 'uploaded'
   );
   let totalSize = currentUploadBatch.reduce((sum, attachment) => sum + attachment.file.size, 0);
-  let remainingSlots = Math.max(0, MAX_COMPOSER_UPLOAD_FILES - currentUploadBatch.length);
+  const candidates: File[] = [];
 
   for (const file of files) {
     if (!isSupportedComposerUploadFile(file)) {
@@ -85,14 +85,21 @@ export function validateComposerFileIntake(
       continue;
     }
 
-    if (remainingSlots <= 0) {
-      rejections.push({
-        file,
-        reason: `Composer supports up to ${MAX_COMPOSER_UPLOAD_FILES} pending files per destination`,
-      });
-      continue;
-    }
+    candidates.push(file);
+  }
 
+  if (currentUploadBatch.length + candidates.length > MAX_COMPOSER_UPLOAD_FILES) {
+    rejections.push(
+      ...candidates.map((file) => ({
+        file,
+        reason: MAX_COMPOSER_UPLOAD_FILES_MESSAGE,
+      }))
+    );
+    return { acceptedFiles: [], rejections };
+  }
+
+  const acceptedFiles: File[] = [];
+  for (const file of candidates) {
     if (totalSize + file.size > MAX_COMPOSER_UPLOAD_TOTAL_SIZE) {
       rejections.push({
         file,
@@ -103,7 +110,6 @@ export function validateComposerFileIntake(
 
     acceptedFiles.push(file);
     totalSize += file.size;
-    remainingSlots -= 1;
   }
 
   return { acceptedFiles, rejections };

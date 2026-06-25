@@ -367,12 +367,43 @@ describe('SessionPanel composer send', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/unsafe.html: Unsupported file type: text\/html/)
-      ).toBeInTheDocument();
+        screen.getAllByText(/unsafe.html: Unsupported file type: text\/html/).length
+      ).toBeGreaterThan(0);
     });
 
     expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();
     expect(onSendPrompt).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Preview unsafe.html')).not.toBeInTheDocument();
+  });
+
+  it('shows a visible cap error and rejects an incoming batch over 10 files', async () => {
+    const onSendPrompt = vi.fn();
+    renderSessionPanel({ onSendPrompt });
+
+    const files = Array.from(
+      { length: 11 },
+      (_, index) =>
+        new File(['x'], `pending-${String(index).padStart(2, '0')}.txt`, { type: 'text/plain' })
+    );
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files,
+      },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          /pending-00.txt: Composer supports up to 10 pending files per destination \(\+10 more\)/
+        ).length
+      ).toBeGreaterThan(0);
+    });
+
+    expect(screen.queryByLabelText('Preview pending-00.txt')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Preview pending-09.txt')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Preview pending-10.txt')).not.toBeInTheDocument();
+    expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();
+    expect(onSendPrompt).not.toHaveBeenCalled();
   });
 });

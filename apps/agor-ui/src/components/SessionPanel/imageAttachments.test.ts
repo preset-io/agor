@@ -77,7 +77,7 @@ describe('imageAttachments', () => {
     ]);
   });
 
-  it('limits composer uploads to one backend request batch', () => {
+  it('rejects a supported incoming batch that exceeds one backend request batch', () => {
     const files = Array.from(
       { length: 11 },
       (_, index) => new File(['x'], `note-${index}.txt`, { type: 'text/plain' })
@@ -85,10 +85,48 @@ describe('imageAttachments', () => {
 
     const { acceptedFiles, rejections } = validateComposerFileIntake(files);
 
-    expect(acceptedFiles).toHaveLength(10);
+    expect(acceptedFiles).toHaveLength(0);
+    expect(rejections).toHaveLength(11);
+    expect(rejections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          file: expect.objectContaining({ name: 'note-0.txt' }),
+          reason: 'Composer supports up to 10 pending files per destination',
+        }),
+        expect.objectContaining({
+          file: expect.objectContaining({ name: 'note-10.txt' }),
+          reason: 'Composer supports up to 10 pending files per destination',
+        }),
+      ])
+    );
+  });
+
+  it('preserves existing pending files and rejects a new batch that would exceed the cap', () => {
+    const currentAttachments = Array.from({ length: 9 }, (_, index) => ({
+      id: `current-${index}`,
+      file: new File(['x'], `current-${index}.txt`, { type: 'text/plain' }),
+      destination: 'branch' as const,
+      status: 'pending' as const,
+    }));
+    const incomingFiles = [
+      new File(['x'], 'incoming-0.txt', { type: 'text/plain' }),
+      new File(['x'], 'incoming-1.txt', { type: 'text/plain' }),
+    ];
+
+    const { acceptedFiles, rejections } = validateComposerFileIntake(
+      incomingFiles,
+      currentAttachments,
+      'branch'
+    );
+
+    expect(acceptedFiles).toHaveLength(0);
     expect(rejections).toEqual([
       expect.objectContaining({
-        file: expect.objectContaining({ name: 'note-10.txt' }),
+        file: expect.objectContaining({ name: 'incoming-0.txt' }),
+        reason: 'Composer supports up to 10 pending files per destination',
+      }),
+      expect.objectContaining({
+        file: expect.objectContaining({ name: 'incoming-1.txt' }),
         reason: 'Composer supports up to 10 pending files per destination',
       }),
     ]);
