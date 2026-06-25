@@ -1045,6 +1045,39 @@ export const App: React.FC<AppProps> = ({
   const stableOnStopEnvironment = useStableCallback(onStopEnvironment);
   const stableOnNukeEnvironment = useStableCallback(onNukeEnvironment);
 
+  // Header action handlers, frozen so the memoized AppHeader's React.memo bailout
+  // isn't defeated by a fresh inline-arrow identity on every App re-render. Each
+  // delegates to the latest impl via useStableCallback, so they read current
+  // state (selection, panel, board) at call time without re-rendering the header.
+  const handleHomeClick = useStableCallback(() => {
+    setPendingHomeNavigation(true);
+    navigation.goHome();
+  });
+  const handleEventStreamClick = useStableCallback(() => {
+    // If a session is open, close it and reveal the event stream; otherwise
+    // toggle the event stream panel.
+    if (effectiveSelectedSessionId) {
+      if (currentBoardId) navigation.goToBoard(currentBoardId);
+      setEventStreamPanelCollapsed(false);
+    } else {
+      setEventStreamPanelCollapsed(!eventStreamPanelCollapsed);
+    }
+  });
+  const handleOpenSettingsClick = useStableCallback(() => openSettings());
+  const handleOpenUserSettings = useStableCallback(() => setUserSettingsOpen(true));
+  const handleOpenThemeEditor = useStableCallback(() => setThemeEditorOpen(true));
+  const handleHeaderUserClick = useStableCallback(
+    (_userId: string, boardId?: BoardID, _cursor?: { x: number; y: number }) => {
+      // Navigate to the user's board (pushes history, so the back button
+      // returns to the previous board).
+      if (boardId) {
+        navigation.goToBoard(boardId);
+      }
+    }
+  );
+  const stableOnLogout = useStableCallback(onLogout);
+  const stableOnRetryConnection = useStableCallback(onRetryConnection);
+
   return (
     <AppEntityDataProvider value={appEntityDataValue}>
       <AppLiveDataProvider value={appLiveDataValue}>
@@ -1054,27 +1087,17 @@ export const App: React.FC<AppProps> = ({
             <AppHeader
               user={user}
               presenceClient={client}
-              presenceUsers={mapToArray(userById)}
               currentUserId={user?.user_id}
               connected={connected}
               connecting={connecting}
               onMenuClick={handleToggleBoardPanel}
               onCommentsClick={handleOpenCommentsPanel}
-              onEventStreamClick={() => {
-                // If session is open, close it and show event stream
-                if (effectiveSelectedSessionId) {
-                  if (currentBoardId) navigation.goToBoard(currentBoardId);
-                  setEventStreamPanelCollapsed(false);
-                } else {
-                  // Toggle event stream panel
-                  setEventStreamPanelCollapsed(!eventStreamPanelCollapsed);
-                }
-              }}
-              onSettingsClick={() => openSettings()}
-              onUserSettingsClick={() => setUserSettingsOpen(true)}
-              onThemeEditorClick={() => setThemeEditorOpen(true)}
-              onLogout={onLogout}
-              onRetryConnection={onRetryConnection}
+              onEventStreamClick={handleEventStreamClick}
+              onSettingsClick={handleOpenSettingsClick}
+              onUserSettingsClick={handleOpenUserSettings}
+              onThemeEditorClick={handleOpenThemeEditor}
+              onLogout={stableOnLogout}
+              onRetryConnection={stableOnRetryConnection}
               currentBoardName={headerBoard?.name}
               currentBoardIcon={headerBoard?.icon}
               unreadCommentsCount={
@@ -1082,34 +1105,13 @@ export const App: React.FC<AppProps> = ({
               }
               eventStreamEnabled={eventStreamEnabled}
               hasUserMentions={hasUserMentions}
-              boards={mapToArray(boardById)}
               currentBoardId={headerBoardId}
               onBoardChange={navigation.goToBoard}
-              onHomeClick={() => {
-                setPendingHomeNavigation(true);
-                navigation.goHome();
-              }}
-              branchById={branchById}
-              boardById={boardById}
-              onUserClick={(
-                userId: string,
-                boardId?: BoardID,
-                cursor?: { x: number; y: number }
-              ) => {
-                // Navigate to the user's board (pushes history, so back
-                // button returns to the previous board)
-                if (boardId) {
-                  navigation.goToBoard(boardId);
-                  // TODO: If cursor position is provided, we could pan to that position
-                  // This would require exposing a method on SessionCanvasRef
-                }
-              }}
+              onHomeClick={handleHomeClick}
+              onUserClick={handleHeaderUserClick}
               instanceLabel={instanceLabel}
               recentBoards={recentBoards}
               instanceDescription={instanceDescription}
-              sessionById={sessionById}
-              artifactById={artifactById}
-              mcpServerById={mcpServerById}
             />
             <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
               <PanelGroup

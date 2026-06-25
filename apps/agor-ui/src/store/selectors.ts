@@ -14,15 +14,18 @@
 import type { BoardEntityObject, Session } from '@agor-live/client';
 import type { AgorState } from './agorStore';
 
+export const selectSessionById = (s: AgorState) => s.sessionById;
 export const selectSessionsByBranch = (s: AgorState) => s.sessionsByBranch;
 export const selectRepoById = (s: AgorState) => s.repoById;
 export const selectBranchById = (s: AgorState) => s.branchById;
+export const selectBoardById = (s: AgorState) => s.boardById;
 export const selectCommentById = (s: AgorState) => s.commentById;
 export const selectCardById = (s: AgorState) => s.cardById;
 export const selectUserById = (s: AgorState) => s.userById;
 export const selectMcpServerById = (s: AgorState) => s.mcpServerById;
 export const selectUserAuthenticatedMcpServerIds = (s: AgorState) =>
   s.userAuthenticatedMcpServerIds;
+export const selectArtifactById = (s: AgorState) => s.artifactById;
 
 /**
  * Select a single board's board-object array. Curried so callers can memoize

@@ -7,7 +7,6 @@ import type {
   Branch,
   BranchID,
   CardWithType,
-  MCPServer,
   Repo,
   Session,
   User,
@@ -665,7 +664,6 @@ export const MarketingScreenshotPage = () => {
             <AppHeader
               user={users[0]}
               presenceClient={null}
-              presenceUsers={users}
               currentUserId={users[0].user_id}
               staticActiveUsers={activeUsers}
               connected={true}
@@ -675,14 +673,8 @@ export const MarketingScreenshotPage = () => {
               unreadCommentsCount={comments.length}
               eventStreamEnabled={true}
               hasUserMentions={true}
-              boards={[board]}
               currentBoardId={boardId}
-              branchById={maps.branchById}
-              boardById={maps.boardById}
               recentBoards={[]}
-              sessionById={maps.sessionById}
-              artifactById={new Map()}
-              mcpServerById={new Map<string, MCPServer>()}
             />
             <main className="marketing-product-canvas">
               <ReactFlowProvider>
