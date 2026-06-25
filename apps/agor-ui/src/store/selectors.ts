@@ -21,6 +21,8 @@ export const selectCommentById = (s: AgorState) => s.commentById;
 export const selectCardById = (s: AgorState) => s.cardById;
 export const selectUserById = (s: AgorState) => s.userById;
 export const selectMcpServerById = (s: AgorState) => s.mcpServerById;
+export const selectUserAuthenticatedMcpServerIds = (s: AgorState) =>
+  s.userAuthenticatedMcpServerIds;
 
 /**
  * Select a single board's board-object array. Curried so callers can memoize

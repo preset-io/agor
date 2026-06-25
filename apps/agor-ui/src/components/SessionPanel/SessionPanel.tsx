@@ -36,11 +36,16 @@ import { Alert, App, Badge, Button, Dropdown, Space, Spin, Tooltip, Typography, 
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppMcpData, useAppUserData } from '../../contexts/AppDataContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectMcpServerById,
+  selectUserAuthenticatedMcpServerIds,
+  selectUserById,
+} from '../../store/selectors';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -245,12 +250,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
 
-  // Subscribe only to the entity families this panel needs. SessionPanel
-  // intentionally does NOT subscribe to live (sessions / branches / boards)
-  // data here, so streaming session patches don't trigger re-renders through
-  // context; user and MCP updates are also isolated from repo edits.
-  const { userById } = useAppUserData();
-  const { mcpServerById, userAuthenticatedMcpServerIds } = useAppMcpData();
+  // Subscribe only to the entity families this panel needs via narrow store
+  // selectors. SessionPanel intentionally does NOT subscribe to live (sessions
+  // / branches / boards) slices here, so streaming session patches don't
+  // re-render it; each whole-map selector is a stable module-level reference, so
+  // user and MCP updates are isolated from each other and from repo edits.
+  const userById = useAgorStore(selectUserById);
+  const mcpServerById = useAgorStore(selectMcpServerById);
+  const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
 
   // Get actions from context
   const { onSendPrompt, onFork, onBtwFork, onOpenSettings, onUpdateSession, onOpenTerminal } =
