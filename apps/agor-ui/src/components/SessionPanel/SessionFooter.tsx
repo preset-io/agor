@@ -29,7 +29,7 @@ import {
   ToolOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Button, Divider, Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { Badge, Button, Divider, Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { EffortSelector } from '../EffortSelector';
@@ -106,6 +106,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   hasInput,
   connectionDisabled,
   toolCaps,
+  queuedTasks,
   effortLevel,
   permissionMode,
   codexSandboxMode,
@@ -1369,15 +1370,22 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               </Tooltip>
             )}
             <Tooltip title={sendTooltip}>
-              <Button
-                type="primary"
+              <Badge
+                count={queuedTasks.length > 0 ? queuedTasks.length : 0}
                 size="small"
-                icon={<SendOutlined />}
-                onClick={onSendPrompt}
-                disabled={connectionDisabled || !hasInput}
+                offset={[-2, 2]}
+                style={{ boxShadow: 'none' }}
               >
-                {sendLabel}
-              </Button>
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<SendOutlined />}
+                  onClick={onSendPrompt}
+                  disabled={connectionDisabled || !hasInput}
+                >
+                  {sendLabel}
+                </Button>
+              </Badge>
             </Tooltip>
           </Space>
         </div>
