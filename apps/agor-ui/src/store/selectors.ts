@@ -11,7 +11,7 @@
  * one board's bucket: a patch to another board's objects leaves this board's
  * array reference untouched, so the subscription doesn't fire.
  */
-import type { BoardEntityObject } from '@agor-live/client';
+import type { BoardEntityObject, Session } from '@agor-live/client';
 import type { AgorState } from './agorStore';
 
 export const selectSessionsByBranch = (s: AgorState) => s.sessionsByBranch;
@@ -32,4 +32,17 @@ export function makeBoardObjectsForBoardSelector(
   boardId: string | undefined
 ): (s: AgorState) => BoardEntityObject[] | undefined {
   return (s) => (boardId ? s.boardObjectsByBoardId.get(boardId) : undefined);
+}
+
+/**
+ * Select a single branch's session array by id. Curried so a card can memoize
+ * the selector per `branchId` (stable reference while the branch doesn't
+ * change) — a `session:patched` for another branch leaves THIS branch's array
+ * reference untouched, so the subscription stays quiet and only the affected
+ * card re-renders. Mirrors the canvas's prior `sessionsByBranch.get(id)` read.
+ */
+export function makeSessionsForBranchSelector(
+  branchId: string
+): (s: AgorState) => Session[] | undefined {
+  return (s) => s.sessionsByBranch.get(branchId);
 }

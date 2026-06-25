@@ -64,6 +64,7 @@ import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { useAgorStore } from '../../store/agorStore';
 import {
   makeBoardObjectsForBoardSelector,
+  makeSessionsForBranchSelector,
   selectBranchById,
   selectCardById,
   selectCommentById,
@@ -173,10 +174,10 @@ interface SessionNodeData {
   zoneColor?: string;
 }
 
-// Shared empty array for branches that have no sessions. Without this,
-// `sessionsByBranch.get(id) || []` produces a new `[]` on every render,
-// breaking referential equality and forcing memoized children to re-render
-// on every unrelated socket event.
+// Shared empty array for branches that have no sessions. Without this, a
+// per-branch session selector returning `undefined` would fall back to a fresh
+// `[]` on every render, breaking referential equality and forcing memoized
+// children to re-render on every unrelated socket event.
 const EMPTY_SESSIONS: Session[] = [];
 
 // Custom node component that renders SessionCard (memoized to prevent re-renders on unrelated node changes)
@@ -204,7 +205,6 @@ const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
 interface BranchNodeData {
   branch: Branch;
   repo: Repo;
-  sessions: Session[];
   userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
@@ -256,17 +256,29 @@ const CardNodeWrapper = React.memo(({ data }: { data: CardNodeData }) => {
 // — even unrelated ones. We supply a custom areEqual that compares the
 // individual fields of `data` shallowly so unrelated socket events don't
 // invalidate this node. This is the primary fix for board jank during
-// streaming socket traffic. (The empty-sessions array is stabilized in
-// `initialNodes` via EMPTY_SESSIONS so unrelated patches keep
-// `data.sessions` referentially equal too.)
+// streaming socket traffic.
+//
+// This branch's session list — the highest-frequency entity read (a
+// `session:patched` arrives on every streaming token batch) — is sourced
+// directly from the store by branch id rather than carried in `data`. A patch
+// to another branch's sessions leaves this branch's array reference untouched,
+// so this card's subscription stays quiet; a patch to this branch re-renders
+// only this card without rebuilding (and re-allocating) every branch's node
+// `data` in the parent `initialNodes` memo. EMPTY_SESSIONS keeps the prop
+// referentially stable for branches with no sessions.
 const BranchNode = React.memo(
   ({ data }: { data: BranchNodeData }) => {
+    const sessionsSelector = useMemo(
+      () => makeSessionsForBranchSelector(data.branch.branch_id),
+      [data.branch.branch_id]
+    );
+    const sessions = useAgorStore(sessionsSelector) ?? EMPTY_SESSIONS;
     return (
       <div className="branch-node">
         <BranchCard
           branch={data.branch}
           repo={data.repo}
-          sessions={data.sessions}
+          sessions={sessions}
           userById={data.userById}
           currentUserId={data.currentUserId}
           selectedSessionId={data.selectedSessionId}
@@ -305,7 +317,6 @@ const BranchNode = React.memo(
     return (
       p.branch === n.branch &&
       p.repo === n.repo &&
-      p.sessions === n.sessions &&
       p.userById === n.userById &&
       p.currentUserId === n.currentUserId &&
       p.selectedSessionId === n.selectedSessionId &&
@@ -721,11 +732,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             ? zoneObj.borderColor || zoneObj.color // Backwards compat: borderColor first, then fall back to deprecated color
             : undefined;
 
-        // Get sessions for this branch. Use EMPTY_SESSIONS (shared
-        // constant) instead of inline `|| []` so branches without sessions
-        // keep a referentially stable `sessions` prop across renders.
-        const branchSessions = sessionsByBranch.get(branch.branch_id) || EMPTY_SESSIONS;
-
         // Get repo for this branch
         const repo = repoById.get(branch.repo_id);
         if (!repo) {
@@ -750,7 +756,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           data: {
             branch,
             repo,
-            sessions: branchSessions,
             userById,
             currentUserId,
             selectedSessionId,
@@ -786,7 +791,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       primaryAssistantId,
       boardObjectByBranch,
       repoById,
-      sessionsByBranch,
       currentUserId,
       selectedSessionId,
       activeUrlTargetBranchId,
