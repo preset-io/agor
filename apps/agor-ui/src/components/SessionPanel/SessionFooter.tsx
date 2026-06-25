@@ -205,32 +205,32 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   );
 
   const sectionHeaderStyle: React.CSSProperties = {
-    padding: `4px ${token.sizeUnit * 2}px 2px`,
+    padding: '6px 12px 3px',
     fontSize: 11,
-    fontWeight: 500,
+    fontWeight: 600,
     textTransform: 'uppercase' as const,
-    letterSpacing: '0.5px',
+    letterSpacing: '0.4px',
     color: token.colorTextTertiary,
-    userSelect: 'none',
+    userSelect: 'none' as const,
   };
 
   const overflowRowStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
-    gap: token.sizeUnit,
-    padding: `${token.sizeUnit * 0.5}px ${token.sizeUnit * 2}px`,
-    minHeight: 32,
+    gap: 8,
+    padding: '0 6px 0 12px',
+    height: 32,
   };
 
   const moreContent = (
-    <div style={{ width: 248 }}>
+    <div style={{ width: 260, paddingTop: 6, paddingBottom: 6 }}>
       {/* === Section: Settings === */}
       <div style={sectionHeaderStyle}>Settings</div>
 
       {/* Model */}
       <div style={{ ...overflowRowStyle, alignItems: 'flex-start', cursor: 'default' }}>
         <RobotOutlined
-          style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0, paddingTop: 6 }}
+          style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0, marginTop: 7 }}
         />
         <Typography.Text
           style={{
@@ -241,7 +241,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             minWidth: 0,
-            paddingTop: 6,
+            marginTop: 7,
           }}
         >
           Model
@@ -263,7 +263,17 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           <PercentageOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
           />
-          <Typography.Text style={{ fontSize: 12, flex: 1, color: token.colorTextSecondary }}>
+          <Typography.Text
+            style={{
+              fontSize: 12,
+              flex: 1,
+              color: token.colorTextSecondary,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
             Effort
           </Typography.Text>
           <EffortSelector
@@ -279,7 +289,17 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       {/* Permissions */}
       <div style={{ ...overflowRowStyle, cursor: 'default' }}>
         <LockOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
-        <Typography.Text style={{ fontSize: 12, flex: 1, color: token.colorTextSecondary }}>
+        <Typography.Text
+          style={{
+            fontSize: 12,
+            flex: 1,
+            color: token.colorTextSecondary,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            minWidth: 0,
+          }}
+        >
           Permissions
         </Typography.Text>
         <PermissionModeSelector
@@ -296,7 +316,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         />
       </div>
 
-      <Divider style={{ margin: '6px 0' }} />
+      <Divider style={{ margin: '4px 0' }} />
 
       {/* === Section: Actions === */}
       <div style={sectionHeaderStyle}>Actions</div>
@@ -325,7 +345,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: token.sizeUnit,
+              gap: 8,
               flex: 1,
               minWidth: 0,
               overflow: 'hidden',
@@ -359,8 +379,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               cursor: 'pointer',
               color: pinnedItems.includes('upload') ? token.colorPrimary : token.colorTextTertiary,
               lineHeight: 1,
-              padding: 2,
+              padding: '4px',
               flexShrink: 0,
+              borderRadius: token.borderRadiusSM,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
             onClick={(e) => {
               e.stopPropagation();
@@ -401,7 +425,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: token.sizeUnit,
+                gap: 8,
                 flex: 1,
                 minWidth: 0,
                 overflow: 'hidden',
@@ -435,8 +459,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 cursor: 'pointer',
                 color: pinnedItems.includes('fork') ? token.colorPrimary : token.colorTextTertiary,
                 lineHeight: 1,
-                padding: 2,
+                padding: '4px',
                 flexShrink: 0,
+                borderRadius: token.borderRadiusSM,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -482,7 +510,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: token.sizeUnit,
+                gap: 8,
                 flex: 1,
                 minWidth: 0,
                 overflow: 'hidden',
@@ -518,8 +546,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   ? token.colorPrimary
                   : token.colorTextTertiary,
                 lineHeight: 1,
-                padding: 2,
+                padding: '4px',
                 flexShrink: 0,
+                borderRadius: token.borderRadiusSM,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -567,7 +599,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: token.sizeUnit,
+                gap: 8,
                 flex: 1,
                 minWidth: 0,
                 overflow: 'hidden',
@@ -601,8 +633,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 cursor: 'pointer',
                 color: pinnedItems.includes('spawn') ? token.colorPrimary : token.colorTextTertiary,
                 lineHeight: 1,
-                padding: 2,
+                padding: '4px',
                 flexShrink: 0,
+                borderRadius: token.borderRadiusSM,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -619,7 +655,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         </div>
       )}
 
-      <Divider style={{ margin: '6px 0' }} />
+      <Divider style={{ margin: '4px 0' }} />
 
       {/* === Section: Info bar chips === */}
       <div style={sectionHeaderStyle}>Info bar</div>
@@ -654,8 +690,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 cursor: 'pointer',
                 color: pinnedChips.includes('timer') ? token.colorPrimary : token.colorTextTertiary,
                 lineHeight: 1,
-                padding: 2,
+                padding: '4px',
                 flexShrink: 0,
+                borderRadius: token.borderRadiusSM,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
               onClick={() => toggleChip('timer')}
             >
@@ -696,8 +736,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               cursor: 'pointer',
               color: pinnedChips.includes('tools') ? token.colorPrimary : token.colorTextTertiary,
               lineHeight: 1,
-              padding: 2,
+              padding: '4px',
               flexShrink: 0,
+              borderRadius: token.borderRadiusSM,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
             onClick={() => toggleChip('tools')}
           >
@@ -738,8 +782,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 cursor: 'pointer',
                 color: pinnedChips.includes('model') ? token.colorPrimary : token.colorTextTertiary,
                 lineHeight: 1,
-                padding: 2,
+                padding: '4px',
                 flexShrink: 0,
+                borderRadius: token.borderRadiusSM,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
               onClick={() => toggleChip('model')}
             >
@@ -785,8 +833,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   ? token.colorPrimary
                   : token.colorTextTertiary,
                 lineHeight: 1,
-                padding: 2,
+                padding: '4px',
                 flexShrink: 0,
+                borderRadius: token.borderRadiusSM,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
               onClick={() => toggleChip('tokens')}
             >
@@ -832,8 +884,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   ? token.colorPrimary
                   : token.colorTextTertiary,
                 lineHeight: 1,
-                padding: 2,
+                padding: '4px',
                 flexShrink: 0,
+                borderRadius: token.borderRadiusSM,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
               onClick={() => toggleChip('context')}
             >
@@ -847,7 +903,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         </div>
       )}
 
-      <Divider style={{ margin: '6px 0' }} />
+      <Divider style={{ margin: '4px 0' }} />
 
       {/* Session IDs row */}
       <Popover
@@ -898,8 +954,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   ? token.colorPrimary
                   : token.colorTextTertiary,
                 lineHeight: 1,
-                padding: 2,
+                padding: '4px',
                 flexShrink: 0,
+                borderRadius: token.borderRadiusSM,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
               onClick={(e) => {
                 e.stopPropagation();
