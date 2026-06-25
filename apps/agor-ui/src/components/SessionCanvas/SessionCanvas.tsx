@@ -1399,24 +1399,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const onNodesChange = useCallback(
       // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
       (changes: any) => {
-        // Raise/lower a zone's zIndex when it becomes selected/deselected so its
-        // toolbar clears neighboring zone nodes. zIndex 101 beats sibling zones
-        // (100) while staying below notes (300), artifacts (400), and branches (500).
-        // We do this in the external nodes state (not via useReactFlow().setNodes)
-        // so the board sync effect's currentNodes snapshot reflects the change and
-        // doesn't overwrite it on the next board data update.
         // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
         const selectChanges = changes.filter((c: any) => c.type === 'select');
         if (selectChanges.length > 0) {
           setNodes((currentNodes) => {
-            // onNodesChange is hot (fires on drag, resize, selection). Guard against
-            // re-renders when no zone is involved: `map` always allocates a new array,
-            // so returning currentNodes unchanged lets React bail out.
             // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
             const zoneIds = new Set(selectChanges.map((c: any) => c.id));
-            const hasZoneChange = currentNodes.some(
-              (n) => n.type === 'zone' && zoneIds.has(n.id)
-            );
+            const hasZoneChange = currentNodes.some((n) => n.type === 'zone' && zoneIds.has(n.id));
             if (!hasZoneChange) return currentNodes;
             return currentNodes.map((n) => {
               if (n.type !== 'zone') return n;
