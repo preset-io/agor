@@ -17,7 +17,12 @@ import type {
   UserPreferences,
 } from '@agor-live/client';
 import { TOOL_API_KEY_NAMES } from '@agor-live/client';
-import { CheckCircleOutlined, LeftOutlined, LoadingOutlined } from '@ant-design/icons';
+import {
+  CheckCircleOutlined,
+  CheckOutlined,
+  LeftOutlined,
+  LoadingOutlined,
+} from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
@@ -373,11 +378,6 @@ export function OnboardingWizard({
   const stepIndex = STEPS.indexOf(currentStep);
   const meta = STEP_META[currentStep];
 
-  const selectedLlmOption = useMemo(
-    () => LLM_OPTIONS.find((o) => o.agent === selectedAgent) ?? null,
-    [selectedAgent]
-  );
-
   const agentHasKey = useCallback(
     (agent: AgenticToolName): boolean => {
       if (!user) return false;
@@ -669,10 +669,6 @@ export function OnboardingWizard({
   );
 
   const renderLlm = () => {
-    const selectedOption = selectedLlmOption;
-    const currentAgentHasKey = selectedAgent ? agentHasKey(selectedAgent) : false;
-    const keyName = selectedAgent ? keyNameForAgent(selectedAgent, authMethod) : '';
-
     return (
       <div>
         <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
@@ -686,172 +682,186 @@ export function OnboardingWizard({
           {LLM_OPTIONS.map((option) => {
             const isSelected = selectedAgent === option.agent;
             const hasKey = agentHasKey(option.agent);
+            const optionKeyName = keyNameForAgent(option.agent, authMethod);
             return (
-              <button
+              <div
                 key={option.id}
-                type="button"
-                onClick={() => {
-                  setSelectedAgent(option.agent);
-                  setApiKey('');
-                  setLlmError(null);
-                }}
                 style={{
                   background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
                   border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
                   backdropFilter: 'blur(8px)',
                   WebkitBackdropFilter: 'blur(8px)',
                   borderRadius: 10,
-                  padding: '14px 16px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
                   boxShadow: isSelected
                     ? CARD_SELECTED_SHADOW
                     : 'inset 0 1px 0 rgba(255,255,255,0.06)',
                   transition: 'all 0.15s ease',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 12,
-                  width: '100%',
+                  overflow: 'hidden',
                 }}
               >
-                <span
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAgent(option.agent);
+                    setApiKey('');
+                    setLlmError(null);
+                  }}
                   style={{
-                    fontSize: 20,
-                    flexShrink: 0,
-                    color: isSelected ? PRIMARY : TEXT_SECONDARY,
+                    width: '100%',
+                    background: 'transparent',
+                    border: 'none',
+                    padding: '14px 16px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 12,
                   }}
                 >
-                  {option.symbol}
-                </span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14 }}>
-                      {option.title}
-                    </span>
-                    {option.provider && (
-                      <span style={{ color: TEXT_MUTED, fontSize: 12 }}>by {option.provider}</span>
-                    )}
-                    {option.recommended && (
-                      <Tag
-                        color="processing"
-                        style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
-                      >
-                        Recommended
-                      </Tag>
-                    )}
-                    {hasKey && (
-                      <Tag
-                        color="success"
-                        style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
-                      >
-                        Connected
-                      </Tag>
-                    )}
+                  <span
+                    style={{
+                      fontSize: 20,
+                      flexShrink: 0,
+                      color: isSelected ? PRIMARY : TEXT_SECONDARY,
+                    }}
+                  >
+                    {option.symbol}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+                    >
+                      <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14 }}>
+                        {option.title}
+                      </span>
+                      {option.provider && (
+                        <span style={{ color: TEXT_MUTED, fontSize: 12 }}>
+                          by {option.provider}
+                        </span>
+                      )}
+                      {option.recommended && (
+                        <Tag
+                          color="processing"
+                          style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
+                        >
+                          Recommended
+                        </Tag>
+                      )}
+                      {hasKey && (
+                        <Tag
+                          color="success"
+                          style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
+                        >
+                          Connected
+                        </Tag>
+                      )}
+                    </div>
+                    <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
+                      {option.description}
+                    </div>
                   </div>
-                  <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
-                    {option.description}
+                  {isSelected ? (
+                    <div
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: '50%',
+                        background: PRIMARY,
+                        flexShrink: 0,
+                        marginTop: 2,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <CheckOutlined style={{ color: '#fff', fontSize: 10 }} />
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: '50%',
+                        border: '1.5px solid rgba(255,255,255,0.2)',
+                        flexShrink: 0,
+                        marginTop: 2,
+                      }}
+                    />
+                  )}
+                </button>
+
+                {isSelected && !hasKey && (
+                  <div
+                    style={{
+                      padding: '0 16px 16px',
+                      borderTop: '1px solid rgba(255,255,255,0.06)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginTop: 12,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
+                        {optionKeyName}
+                      </Text>
+                      {option.keyLink && (
+                        <Typography.Link
+                          href={option.keyLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ fontSize: 12, color: PRIMARY }}
+                        >
+                          Get your key at {option.keyLinkLabel} →
+                        </Typography.Link>
+                      )}
+                    </div>
+                    <Input.Password
+                      placeholder={option.placeholder}
+                      value={apiKey}
+                      onChange={(e) => {
+                        setApiKey(e.target.value);
+                        setLlmError(null);
+                      }}
+                      style={{
+                        background: 'rgba(0,0,0,0.3)',
+                        borderColor: 'rgba(255,255,255,0.12)',
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                      }}
+                    />
+                    <Text
+                      style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 8, display: 'block' }}
+                    >
+                      🔒 Stored securely — never shared or logged.
+                    </Text>
                   </div>
-                </div>
-                <div
-                  style={{
-                    width: 16,
-                    height: 16,
-                    borderRadius: '50%',
-                    border: isSelected ? `2px solid ${PRIMARY}` : '2px solid rgba(255,255,255,0.2)',
-                    background: isSelected ? PRIMARY : 'transparent',
-                    flexShrink: 0,
-                    marginTop: 2,
-                  }}
-                />
-              </button>
+                )}
+
+                {isSelected && hasKey && (
+                  <div
+                    style={{
+                      padding: '10px 16px 14px',
+                      borderTop: '1px solid rgba(255,255,255,0.06)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 14 }} />
+                    <Text style={{ color: SUCCESS_GREEN, fontSize: 13 }}>
+                      {option.title} is already connected — you&apos;re all set.
+                    </Text>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
-
-        {selectedOption && !currentAgentHasKey && (
-          <div
-            style={{
-              background: GLASS_CARD_BG,
-              border: GLASS_CARD_BORDER,
-              borderRadius: 10,
-              padding: '16px',
-              marginTop: 4,
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: 8,
-              }}
-            >
-              <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>{keyName}</Text>
-              {selectedOption.keyLink && (
-                <Typography.Link
-                  href={selectedOption.keyLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ fontSize: 12, color: PRIMARY }}
-                >
-                  Get your key at {selectedOption.keyLinkLabel} →
-                </Typography.Link>
-              )}
-            </div>
-            <Input.Password
-              placeholder={selectedOption.placeholder}
-              value={apiKey}
-              onChange={(e) => {
-                setApiKey(e.target.value);
-                setLlmError(null);
-              }}
-              style={{
-                background: 'rgba(0,0,0,0.3)',
-                borderColor: 'rgba(255,255,255,0.12)',
-                fontFamily: 'monospace',
-                fontSize: 13,
-              }}
-            />
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginTop: 8,
-              }}
-            >
-              <Text style={{ fontSize: 11, color: TEXT_MUTED }}>
-                🔒 Stored securely — never shared or logged.
-              </Text>
-            </div>
-          </div>
-        )}
-
-        {selectedOption && currentAgentHasKey && (
-          <div
-            style={{
-              background: 'rgba(16,185,129,0.08)',
-              border: '1px solid rgba(16,185,129,0.25)',
-              borderRadius: 10,
-              padding: '14px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-            }}
-          >
-            <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 18 }} />
-            <div>
-              <Text style={{ color: SUCCESS_GREEN, fontWeight: 500, fontSize: 14 }}>
-                {selectedOption.title} is already connected
-              </Text>
-              <div>
-                <Text style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
-                  You're all set. Click Connect → to continue.
-                </Text>
-              </div>
-            </div>
-          </div>
-        )}
 
         {llmError && <Alert type="error" message={llmError} showIcon style={{ marginTop: 16 }} />}
       </div>
