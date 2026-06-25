@@ -406,7 +406,7 @@ export function OnboardingWizard({
   const primaryEnabled = useMemo(() => {
     switch (currentStep) {
       case 'persona':
-        return selectedPersona !== null;
+        return true; // persona is optional — never block navigation
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentHasKey(selectedAgent)) return true;
@@ -419,12 +419,12 @@ export function OnboardingWizard({
       case 'done':
         return true;
     }
-  }, [currentStep, selectedPersona, selectedAgent, agentHasKey, apiKey, boardName]);
+  }, [currentStep, selectedAgent, agentHasKey, apiKey, boardName]);
 
   const primaryLabel = useMemo(() => {
     switch (currentStep) {
       case 'persona':
-        return 'This is me →';
+        return selectedPersona ? 'This is me →' : 'Continue →';
       case 'llm':
         return 'Connect →';
       case 'workspace':
@@ -434,7 +434,7 @@ export function OnboardingWizard({
       case 'done':
         return 'Open my board →';
     }
-  }, [currentStep, hasExistingBoard]);
+  }, [currentStep, hasExistingBoard, selectedPersona]);
 
   const canGoBack = stepIndex > 0 && currentStep !== 'done';
   const isSkippable = meta.skippable && currentStep !== 'done';
@@ -640,11 +640,15 @@ export function OnboardingWizard({
               style={{
                 background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
                 border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
                 borderRadius: 12,
                 padding: '16px',
                 cursor: 'pointer',
                 textAlign: 'left',
-                boxShadow: isSelected ? CARD_SELECTED_SHADOW : undefined,
+                boxShadow: isSelected
+                  ? CARD_SELECTED_SHADOW
+                  : 'inset 0 1px 0 rgba(255,255,255,0.06)',
                 transition: 'all 0.15s ease',
                 width: '100%',
               }}
@@ -694,11 +698,15 @@ export function OnboardingWizard({
                 style={{
                   background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
                   border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                  backdropFilter: 'blur(8px)',
+                  WebkitBackdropFilter: 'blur(8px)',
                   borderRadius: 10,
                   padding: '14px 16px',
                   cursor: 'pointer',
                   textAlign: 'left',
-                  boxShadow: isSelected ? CARD_SELECTED_SHADOW : undefined,
+                  boxShadow: isSelected
+                    ? CARD_SELECTED_SHADOW
+                    : 'inset 0 1px 0 rgba(255,255,255,0.06)',
                   transition: 'all 0.15s ease',
                   display: 'flex',
                   alignItems: 'flex-start',
@@ -1492,9 +1500,12 @@ export function OnboardingWizard({
         },
         content: {
           background: MODAL_BG,
+          backdropFilter: 'blur(20px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
           borderRadius: 16,
           padding: 0,
-          boxShadow: '0 32px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.07)',
+          boxShadow:
+            '0 32px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.07), inset 0 1px 0 rgba(255,255,255,0.1)',
           overflow: 'hidden',
         },
         body: { padding: 0 },
