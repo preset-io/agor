@@ -37,8 +37,9 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden } from '@agor/core/feathers';
-import type { AuthenticatedParams, BranchID, UserID } from '@agor/core/types';
+import type { AuthenticatedParams, Branch, BranchID, UserID } from '@agor/core/types';
 import {
+  getBranchSymlinkPath,
   resolveUnixUserForImpersonation,
   type UnixUserMode,
   UnixUserNotFoundError,
@@ -85,6 +86,50 @@ interface CreateTerminalData {
    * deterministically from the session id.
    */
   ensureCliSessionId?: string;
+}
+
+/**
+ * Build the Zellij tab identity for a branch shell.
+ *
+ * Zellij tab operations are keyed only by tab title. A user has one shared
+ * Zellij session, so plain `branch.name` collides when two branches with the
+ * same display name exist on different boards or repos. Keep the title readable
+ * while making the operational identity stable by branch id.
+ */
+export function buildBranchShellTabName(branch: Pick<Branch, 'branch_id' | 'name'>): string {
+  return `${branch.name} · ${shortId(branch.branch_id)}`;
+}
+
+function safeRealpath(pathToResolve: string): string | null {
+  try {
+    return fs.realpathSync(pathToResolve);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the cwd for a branch shell.
+ *
+ * In Unix impersonation modes users get convenience symlinks under
+ * ~/agor/worktrees/<branch-name>. Those links are name-keyed, so same-name
+ * branches can collide. Only use the symlink when canonical resolution proves
+ * it targets the requested branch path; otherwise fall back to branch.path.
+ */
+export function resolveBranchShellCwd(
+  branch: Pick<Branch, 'name' | 'path'>,
+  finalUnixUser: string | null
+): string {
+  if (!finalUnixUser) return branch.path;
+
+  const symlinkPath = getBranchSymlinkPath(finalUnixUser, branch.name);
+  const symlinkRealpath = safeRealpath(symlinkPath);
+  if (!symlinkRealpath) return branch.path;
+
+  const branchRealpath = safeRealpath(branch.path);
+  if (!branchRealpath) return branch.path;
+
+  return symlinkRealpath === branchRealpath ? symlinkPath : branch.path;
 }
 
 /**
@@ -591,11 +636,12 @@ export class TerminalsService {
         const branchRepo = new BranchRepository(this.db);
         const branch = await branchRepo.findById(data.branchId);
         if (branch) {
+          const branchTabName = buildBranchShellTabName(branch);
           // Emit tab command via channel - executor will handle it
           this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
             userId,
             action: 'create',
-            tabName: branch.name,
+            tabName: branchTabName,
             cwd: branch.path,
           });
 
@@ -616,7 +662,7 @@ export class TerminalsService {
           //
           // Falls back to the old plain-focus behavior when the caller
           // provided a `focusTabName` without an `ensureCliSessionId`.
-          if (data.cliEnsure && data.cliEnsure.tabName !== branch.name) {
+          if (data.cliEnsure && data.cliEnsure.tabName !== branchTabName) {
             const ensure = data.cliEnsure;
             const alive = await isClaudeRunningFor(
               ensure.sessionId as unknown as import('@agor/core/types').SessionID
@@ -640,7 +686,7 @@ export class TerminalsService {
                 });
               }
             }, 300);
-          } else if (data.focusTabName && data.focusTabName !== branch.name) {
+          } else if (data.focusTabName && data.focusTabName !== branchTabName) {
             setTimeout(() => {
               this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
                 userId,
@@ -731,18 +777,15 @@ export class TerminalsService {
       // Determine cwd and branch info
       let cwd = os.homedir();
       let branchName: string | undefined;
+      let branchTabName: string | undefined;
 
       if (data.branchId) {
         const branchRepo = new BranchRepository(this.db);
         const branch = await branchRepo.findById(data.branchId);
         if (branch) {
           branchName = branch.name;
-          if (finalUnixUser) {
-            const symlinkPath = `/home/${finalUnixUser}/agor/worktrees/${branch.name}`;
-            cwd = fs.existsSync(symlinkPath) ? symlinkPath : branch.path;
-          } else {
-            cwd = branch.path;
-          }
+          branchTabName = buildBranchShellTabName(branch);
+          cwd = resolveBranchShellCwd(branch, finalUnixUser);
         }
       }
 
@@ -777,7 +820,7 @@ export class TerminalsService {
             userId,
             sessionName,
             cwd,
-            tabName: branchName,
+            tabName: branchTabName,
             cols: data.cols || 160,
             rows: data.rows || 40,
             envFile, // Pass env file path for shell to source
