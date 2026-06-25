@@ -5,6 +5,7 @@ import {
   isBlockingComposerImageAttachment,
   isSupportedComposerImage,
   isSupportedComposerUploadFile,
+  summarizeComposerFileRejections,
   validateComposerFileIntake,
 } from './imageAttachments';
 
@@ -98,6 +99,24 @@ describe('imageAttachments', () => {
           reason: 'Composer supports up to 10 pending files per destination',
         }),
       ])
+    );
+  });
+
+  it('prioritizes the cap message when mixed invalid and supported files exceed the cap', () => {
+    const files = [
+      new File(['<svg />'], 'bad.svg', { type: 'image/svg+xml' }),
+      ...Array.from(
+        { length: 11 },
+        (_, index) => new File(['x'], `note-${index}.txt`, { type: 'text/plain' })
+      ),
+    ];
+
+    const { acceptedFiles, rejections } = validateComposerFileIntake(files);
+
+    expect(acceptedFiles).toHaveLength(0);
+    expect(rejections).toHaveLength(12);
+    expect(summarizeComposerFileRejections(rejections)).toBe(
+      'note-0.txt: Composer supports up to 10 pending files per destination (+11 more)'
     );
   });
 

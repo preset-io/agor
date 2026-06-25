@@ -118,7 +118,9 @@ export function validateComposerFileIntake(
 export function summarizeComposerFileRejections(rejections: ComposerFileRejection[]): string {
   if (rejections.length === 0) return '';
 
-  const [first] = rejections;
+  const first =
+    rejections.find((rejection) => rejection.reason === MAX_COMPOSER_UPLOAD_FILES_MESSAGE) ??
+    rejections[0];
   const suffix = rejections.length > 1 ? ` (+${rejections.length - 1} more)` : '';
   return `${first.file.name}: ${first.reason}${suffix}`;
 }

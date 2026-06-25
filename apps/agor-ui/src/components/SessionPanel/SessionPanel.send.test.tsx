@@ -406,4 +406,40 @@ describe('SessionPanel composer send', () => {
     expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();
     expect(onSendPrompt).not.toHaveBeenCalled();
   });
+
+  it('prioritizes the visible cap error for mixed invalid and over-cap batches', async () => {
+    const onSendPrompt = vi.fn();
+    renderSessionPanel({ onSendPrompt });
+
+    const files = [
+      new File(['<svg />'], 'bad.svg', { type: 'image/svg+xml' }),
+      ...Array.from(
+        { length: 11 },
+        (_, index) =>
+          new File(['x'], `pending-${String(index).padStart(2, '0')}.txt`, {
+            type: 'text/plain',
+          })
+      ),
+    ];
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files,
+      },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          /pending-00.txt: Composer supports up to 10 pending files per destination \(\+11 more\)/
+        ).length
+      ).toBeGreaterThan(0);
+    });
+
+    expect(screen.queryByText(/bad.svg: Unsupported file type/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Preview pending-00.txt')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Preview pending-10.txt')).not.toBeInTheDocument();
+    expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();
+    expect(onSendPrompt).not.toHaveBeenCalled();
+  });
 });
