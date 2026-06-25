@@ -628,26 +628,31 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           >
             Timer
           </Typography.Text>
-          <button
-            type="button"
-            aria-label={pinnedChips.includes('timer') ? 'Hide timer' : 'Show timer'}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: pinnedChips.includes('timer') ? token.colorPrimary : token.colorTextTertiary,
-              lineHeight: 1,
-              padding: 2,
-              flexShrink: 0,
-            }}
-            onClick={() => toggleChip('timer')}
+          <Tooltip
+            title={pinnedChips.includes('timer') ? 'Hide from info bar' : 'Show in info bar'}
+            placement="right"
           >
-            {pinnedChips.includes('timer') ? (
-              <PushpinFilled style={{ fontSize: 12 }} />
-            ) : (
-              <PushpinOutlined style={{ fontSize: 12 }} />
-            )}
-          </button>
+            <button
+              type="button"
+              aria-label={pinnedChips.includes('timer') ? 'Hide timer' : 'Show timer'}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: pinnedChips.includes('timer') ? token.colorPrimary : token.colorTextTertiary,
+                lineHeight: 1,
+                padding: 2,
+                flexShrink: 0,
+              }}
+              onClick={() => toggleChip('timer')}
+            >
+              {pinnedChips.includes('timer') ? (
+                <PushpinFilled style={{ fontSize: 12 }} />
+              ) : (
+                <PushpinOutlined style={{ fontSize: 12 }} />
+              )}
+            </button>
+          </Tooltip>
         </div>
       )}
 
@@ -665,26 +670,31 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         >
           Tools
         </Typography.Text>
-        <button
-          type="button"
-          aria-label={pinnedChips.includes('tools') ? 'Hide tools' : 'Show tools'}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            color: pinnedChips.includes('tools') ? token.colorPrimary : token.colorTextTertiary,
-            lineHeight: 1,
-            padding: 2,
-            flexShrink: 0,
-          }}
-          onClick={() => toggleChip('tools')}
+        <Tooltip
+          title={pinnedChips.includes('tools') ? 'Hide from info bar' : 'Show in info bar'}
+          placement="right"
         >
-          {pinnedChips.includes('tools') ? (
-            <PushpinFilled style={{ fontSize: 12 }} />
-          ) : (
-            <PushpinOutlined style={{ fontSize: 12 }} />
-          )}
-        </button>
+          <button
+            type="button"
+            aria-label={pinnedChips.includes('tools') ? 'Hide tools' : 'Show tools'}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: pinnedChips.includes('tools') ? token.colorPrimary : token.colorTextTertiary,
+              lineHeight: 1,
+              padding: 2,
+              flexShrink: 0,
+            }}
+            onClick={() => toggleChip('tools')}
+          >
+            {pinnedChips.includes('tools') ? (
+              <PushpinFilled style={{ fontSize: 12 }} />
+            ) : (
+              <PushpinOutlined style={{ fontSize: 12 }} />
+            )}
+          </button>
+        </Tooltip>
       </div>
 
       {modelName && (
@@ -702,26 +712,31 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           >
             Model
           </Typography.Text>
-          <button
-            type="button"
-            aria-label={pinnedChips.includes('model') ? 'Hide model' : 'Show model'}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: pinnedChips.includes('model') ? token.colorPrimary : token.colorTextTertiary,
-              lineHeight: 1,
-              padding: 2,
-              flexShrink: 0,
-            }}
-            onClick={() => toggleChip('model')}
+          <Tooltip
+            title={pinnedChips.includes('model') ? 'Hide from info bar' : 'Show in info bar'}
+            placement="right"
           >
-            {pinnedChips.includes('model') ? (
-              <PushpinFilled style={{ fontSize: 12 }} />
-            ) : (
-              <PushpinOutlined style={{ fontSize: 12 }} />
-            )}
-          </button>
+            <button
+              type="button"
+              aria-label={pinnedChips.includes('model') ? 'Hide model' : 'Show model'}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: pinnedChips.includes('model') ? token.colorPrimary : token.colorTextTertiary,
+                lineHeight: 1,
+                padding: 2,
+                flexShrink: 0,
+              }}
+              onClick={() => toggleChip('model')}
+            >
+              {pinnedChips.includes('model') ? (
+                <PushpinFilled style={{ fontSize: 12 }} />
+              ) : (
+                <PushpinOutlined style={{ fontSize: 12 }} />
+              )}
+            </button>
+          </Tooltip>
         </div>
       )}
 
@@ -742,26 +757,33 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           >
             Tokens
           </Typography.Text>
-          <button
-            type="button"
-            aria-label={pinnedChips.includes('tokens') ? 'Hide tokens' : 'Show tokens'}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: pinnedChips.includes('tokens') ? token.colorPrimary : token.colorTextTertiary,
-              lineHeight: 1,
-              padding: 2,
-              flexShrink: 0,
-            }}
-            onClick={() => toggleChip('tokens')}
+          <Tooltip
+            title={pinnedChips.includes('tokens') ? 'Hide from info bar' : 'Show in info bar'}
+            placement="right"
           >
-            {pinnedChips.includes('tokens') ? (
-              <PushpinFilled style={{ fontSize: 12 }} />
-            ) : (
-              <PushpinOutlined style={{ fontSize: 12 }} />
-            )}
-          </button>
+            <button
+              type="button"
+              aria-label={pinnedChips.includes('tokens') ? 'Hide tokens' : 'Show tokens'}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: pinnedChips.includes('tokens')
+                  ? token.colorPrimary
+                  : token.colorTextTertiary,
+                lineHeight: 1,
+                padding: 2,
+                flexShrink: 0,
+              }}
+              onClick={() => toggleChip('tokens')}
+            >
+              {pinnedChips.includes('tokens') ? (
+                <PushpinFilled style={{ fontSize: 12 }} />
+              ) : (
+                <PushpinOutlined style={{ fontSize: 12 }} />
+              )}
+            </button>
+          </Tooltip>
         </div>
       )}
 
@@ -782,26 +804,33 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           >
             Context %
           </Typography.Text>
-          <button
-            type="button"
-            aria-label={pinnedChips.includes('context') ? 'Hide context' : 'Show context'}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: pinnedChips.includes('context') ? token.colorPrimary : token.colorTextTertiary,
-              lineHeight: 1,
-              padding: 2,
-              flexShrink: 0,
-            }}
-            onClick={() => toggleChip('context')}
+          <Tooltip
+            title={pinnedChips.includes('context') ? 'Hide from info bar' : 'Show in info bar'}
+            placement="right"
           >
-            {pinnedChips.includes('context') ? (
-              <PushpinFilled style={{ fontSize: 12 }} />
-            ) : (
-              <PushpinOutlined style={{ fontSize: 12 }} />
-            )}
-          </button>
+            <button
+              type="button"
+              aria-label={pinnedChips.includes('context') ? 'Hide context' : 'Show context'}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: pinnedChips.includes('context')
+                  ? token.colorPrimary
+                  : token.colorTextTertiary,
+                lineHeight: 1,
+                padding: 2,
+                flexShrink: 0,
+              }}
+              onClick={() => toggleChip('context')}
+            >
+              {pinnedChips.includes('context') ? (
+                <PushpinFilled style={{ fontSize: 12 }} />
+              ) : (
+                <PushpinOutlined style={{ fontSize: 12 }} />
+              )}
+            </button>
+          </Tooltip>
         </div>
       )}
 
@@ -840,7 +869,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             Session IDs
           </Typography.Text>
           <Tooltip
-            title={pinnedChips.includes('session-ids') ? 'Unpin from info bar' : 'Pin to info bar'}
+            title={pinnedChips.includes('session-ids') ? 'Hide from info bar' : 'Show in info bar'}
             placement="right"
           >
             <button
