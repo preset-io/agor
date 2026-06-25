@@ -233,7 +233,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         <Typography.Text style={{ fontSize: 12, flex: 1, color: token.colorTextSecondary }}>
           Model
         </Typography.Text>
-        <div style={{ maxWidth: 120, flexShrink: 0 }}>
+        <div style={{ maxWidth: 160, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
           <ModelSelector
             value={modelConfig}
             onChange={onModelConfigChange}
@@ -289,10 +289,82 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       <div style={sectionHeaderStyle}>Actions</div>
 
       {/* Upload */}
-      <Tooltip
-        title={connectionDisabled ? 'Disconnected from daemon' : 'Attach files to prompt'}
-        placement="left"
+      <div
+        style={{
+          ...overflowRowStyle,
+          opacity: connectionDisabled ? 0.4 : 1,
+          cursor: connectionDisabled ? 'not-allowed' : 'pointer',
+        }}
+        onClick={
+          connectionDisabled
+            ? undefined
+            : () => {
+                setMoreOpen(false);
+                onUploadOpen();
+              }
+        }
       >
+        <Tooltip
+          title={connectionDisabled ? 'Disconnected from daemon' : 'Attach files to prompt'}
+          placement="left"
+        >
+          <span
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: token.sizeUnit,
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <PaperClipOutlined
+              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+            />
+            <Typography.Text
+              style={{
+                fontSize: 13,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Attach files
+            </Typography.Text>
+          </span>
+        </Tooltip>
+        <Tooltip
+          title={pinnedItems.includes('upload') ? 'Unpin from bar' : 'Pin to bar'}
+          placement="right"
+        >
+          <button
+            type="button"
+            aria-label={pinnedItems.includes('upload') ? 'Unpin Upload' : 'Pin Upload'}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: pinnedItems.includes('upload') ? token.colorPrimary : token.colorTextTertiary,
+              lineHeight: 1,
+              padding: 2,
+              flexShrink: 0,
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePin('upload');
+            }}
+          >
+            {pinnedItems.includes('upload') ? (
+              <PushpinFilled style={{ fontSize: 12 }} />
+            ) : (
+              <PushpinOutlined style={{ fontSize: 12 }} />
+            )}
+          </button>
+        </Tooltip>
+      </div>
+
+      {/* Fork */}
+      {toolCaps?.supportsSessionFork !== false && (
         <div
           style={{
             ...overflowRowStyle,
@@ -304,37 +376,132 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               ? undefined
               : () => {
                   setMoreOpen(false);
-                  onUploadOpen();
+                  onFork();
                 }
           }
         >
-          <PaperClipOutlined
-            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-          />
-          <Typography.Text
-            style={{
-              fontSize: 13,
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}
-          >
-            Attach files
-          </Typography.Text>
           <Tooltip
-            title={pinnedItems.includes('upload') ? 'Unpin from bar' : 'Pin to bar'}
+            title={connectionDisabled ? 'Disconnected from daemon' : 'Fork this session'}
+            placement="left"
+          >
+            <span
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: token.sizeUnit,
+                flex: 1,
+                minWidth: 0,
+                overflow: 'hidden',
+              }}
+            >
+              <ForkOutlined
+                style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+              />
+              <Typography.Text
+                style={{
+                  fontSize: 13,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Fork session
+              </Typography.Text>
+            </span>
+          </Tooltip>
+          <Tooltip
+            title={pinnedItems.includes('fork') ? 'Unpin from bar' : 'Pin to bar'}
             placement="right"
           >
             <button
               type="button"
-              aria-label={pinnedItems.includes('upload') ? 'Unpin Upload' : 'Pin Upload'}
+              aria-label={pinnedItems.includes('fork') ? 'Unpin Fork' : 'Pin Fork'}
               style={{
                 background: 'none',
                 border: 'none',
                 cursor: 'pointer',
-                color: pinnedItems.includes('upload')
+                color: pinnedItems.includes('fork') ? token.colorPrimary : token.colorTextTertiary,
+                lineHeight: 1,
+                padding: 2,
+                flexShrink: 0,
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePin('fork');
+              }}
+            >
+              {pinnedItems.includes('fork') ? (
+                <PushpinFilled style={{ fontSize: 12 }} />
+              ) : (
+                <PushpinOutlined style={{ fontSize: 12 }} />
+              )}
+            </button>
+          </Tooltip>
+        </div>
+      )}
+
+      {/* BTW fork */}
+      {toolCaps?.supportsSessionFork !== false && (
+        <div
+          style={{
+            ...overflowRowStyle,
+            opacity: connectionDisabled || !hasInput ? 0.4 : 1,
+            cursor: connectionDisabled || !hasInput ? 'not-allowed' : 'pointer',
+          }}
+          onClick={
+            connectionDisabled || !hasInput
+              ? undefined
+              : () => {
+                  setMoreOpen(false);
+                  onBtwSend();
+                }
+          }
+        >
+          <Tooltip
+            title={
+              connectionDisabled || !hasInput
+                ? 'Needs input and a live connection'
+                : 'Ask a side question via an ephemeral fork'
+            }
+            placement="left"
+          >
+            <span
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: token.sizeUnit,
+                flex: 1,
+                minWidth: 0,
+                overflow: 'hidden',
+              }}
+            >
+              <QuestionCircleOutlined
+                style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+              />
+              <Typography.Text
+                style={{
+                  fontSize: 13,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                BTW fork
+              </Typography.Text>
+            </span>
+          </Tooltip>
+          <Tooltip
+            title={pinnedItems.includes('btw-fork') ? 'Unpin from bar' : 'Pin to bar'}
+            placement="right"
+          >
+            <button
+              type="button"
+              aria-label={pinnedItems.includes('btw-fork') ? 'Unpin BTW fork' : 'Pin BTW fork'}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: pinnedItems.includes('btw-fork')
                   ? token.colorPrimary
                   : token.colorTextTertiary,
                 lineHeight: 1,
@@ -343,10 +510,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                togglePin('upload');
+                togglePin('btw-fork');
               }}
             >
-              {pinnedItems.includes('upload') ? (
+              {pinnedItems.includes('btw-fork') ? (
                 <PushpinFilled style={{ fontSize: 12 }} />
               ) : (
                 <PushpinOutlined style={{ fontSize: 12 }} />
@@ -354,226 +521,89 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             </button>
           </Tooltip>
         </div>
-      </Tooltip>
-
-      {/* Fork */}
-      {toolCaps?.supportsSessionFork !== false && (
-        <Tooltip
-          title={connectionDisabled ? 'Disconnected from daemon' : 'Fork this session'}
-          placement="left"
-        >
-          <div
-            style={{
-              ...overflowRowStyle,
-              opacity: connectionDisabled ? 0.4 : 1,
-              cursor: connectionDisabled ? 'not-allowed' : 'pointer',
-            }}
-            onClick={
-              connectionDisabled
-                ? undefined
-                : () => {
-                    setMoreOpen(false);
-                    onFork();
-                  }
-            }
-          >
-            <ForkOutlined
-              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-            />
-            <Typography.Text
-              style={{
-                fontSize: 13,
-                flex: 1,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                minWidth: 0,
-              }}
-            >
-              Fork session
-            </Typography.Text>
-            <Tooltip
-              title={pinnedItems.includes('fork') ? 'Unpin from bar' : 'Pin to bar'}
-              placement="right"
-            >
-              <button
-                type="button"
-                aria-label={pinnedItems.includes('fork') ? 'Unpin Fork' : 'Pin Fork'}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: pinnedItems.includes('fork')
-                    ? token.colorPrimary
-                    : token.colorTextTertiary,
-                  lineHeight: 1,
-                  padding: 2,
-                  flexShrink: 0,
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  togglePin('fork');
-                }}
-              >
-                {pinnedItems.includes('fork') ? (
-                  <PushpinFilled style={{ fontSize: 12 }} />
-                ) : (
-                  <PushpinOutlined style={{ fontSize: 12 }} />
-                )}
-              </button>
-            </Tooltip>
-          </div>
-        </Tooltip>
-      )}
-
-      {/* BTW fork */}
-      {toolCaps?.supportsSessionFork !== false && (
-        <Tooltip
-          title={
-            connectionDisabled || !hasInput
-              ? 'Needs input and a live connection'
-              : 'Ask a side question via an ephemeral fork'
-          }
-          placement="left"
-        >
-          <div
-            style={{
-              ...overflowRowStyle,
-              opacity: connectionDisabled || !hasInput ? 0.4 : 1,
-              cursor: connectionDisabled || !hasInput ? 'not-allowed' : 'pointer',
-            }}
-            onClick={
-              connectionDisabled || !hasInput
-                ? undefined
-                : () => {
-                    setMoreOpen(false);
-                    onBtwSend();
-                  }
-            }
-          >
-            <QuestionCircleOutlined
-              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-            />
-            <Typography.Text
-              style={{
-                fontSize: 13,
-                flex: 1,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                minWidth: 0,
-              }}
-            >
-              BTW fork
-            </Typography.Text>
-            <Tooltip
-              title={pinnedItems.includes('btw-fork') ? 'Unpin from bar' : 'Pin to bar'}
-              placement="right"
-            >
-              <button
-                type="button"
-                aria-label={pinnedItems.includes('btw-fork') ? 'Unpin BTW fork' : 'Pin BTW fork'}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: pinnedItems.includes('btw-fork')
-                    ? token.colorPrimary
-                    : token.colorTextTertiary,
-                  lineHeight: 1,
-                  padding: 2,
-                  flexShrink: 0,
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  togglePin('btw-fork');
-                }}
-              >
-                {pinnedItems.includes('btw-fork') ? (
-                  <PushpinFilled style={{ fontSize: 12 }} />
-                ) : (
-                  <PushpinOutlined style={{ fontSize: 12 }} />
-                )}
-              </button>
-            </Tooltip>
-          </div>
-        </Tooltip>
       )}
 
       {/* Spawn */}
       {toolCaps?.supportsChildSpawn !== false && (
-        <Tooltip
-          title={
-            connectionDisabled
-              ? 'Disconnected'
-              : isRunning
-                ? 'Session is running'
-                : 'Spawn a child subsession'
+        <div
+          style={{
+            ...overflowRowStyle,
+            opacity: connectionDisabled || isRunning ? 0.4 : 1,
+            cursor: connectionDisabled || isRunning ? 'not-allowed' : 'pointer',
+          }}
+          onClick={
+            connectionDisabled || isRunning
+              ? undefined
+              : () => {
+                  setMoreOpen(false);
+                  onSpawnOpen();
+                }
           }
-          placement="left"
         >
-          <div
-            style={{
-              ...overflowRowStyle,
-              opacity: connectionDisabled || isRunning ? 0.4 : 1,
-              cursor: connectionDisabled || isRunning ? 'not-allowed' : 'pointer',
-            }}
-            onClick={
-              connectionDisabled || isRunning
-                ? undefined
-                : () => {
-                    setMoreOpen(false);
-                    onSpawnOpen();
-                  }
+          <Tooltip
+            title={
+              connectionDisabled
+                ? 'Disconnected'
+                : isRunning
+                  ? 'Session is running'
+                  : 'Spawn a child subsession'
             }
+            placement="left"
           >
-            <BranchesOutlined
-              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-            />
-            <Typography.Text
+            <span
               style={{
-                fontSize: 13,
+                display: 'flex',
+                alignItems: 'center',
+                gap: token.sizeUnit,
                 flex: 1,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
                 minWidth: 0,
+                overflow: 'hidden',
               }}
             >
-              Spawn subsession
-            </Typography.Text>
-            <Tooltip
-              title={pinnedItems.includes('spawn') ? 'Unpin from bar' : 'Pin to bar'}
-              placement="right"
-            >
-              <button
-                type="button"
-                aria-label={pinnedItems.includes('spawn') ? 'Unpin Spawn' : 'Pin Spawn'}
+              <BranchesOutlined
+                style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+              />
+              <Typography.Text
                 style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: pinnedItems.includes('spawn')
-                    ? token.colorPrimary
-                    : token.colorTextTertiary,
-                  lineHeight: 1,
-                  padding: 2,
-                  flexShrink: 0,
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  togglePin('spawn');
+                  fontSize: 13,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
               >
-                {pinnedItems.includes('spawn') ? (
-                  <PushpinFilled style={{ fontSize: 12 }} />
-                ) : (
-                  <PushpinOutlined style={{ fontSize: 12 }} />
-                )}
-              </button>
-            </Tooltip>
-          </div>
-        </Tooltip>
+                Spawn subsession
+              </Typography.Text>
+            </span>
+          </Tooltip>
+          <Tooltip
+            title={pinnedItems.includes('spawn') ? 'Unpin from bar' : 'Pin to bar'}
+            placement="right"
+          >
+            <button
+              type="button"
+              aria-label={pinnedItems.includes('spawn') ? 'Unpin Spawn' : 'Pin Spawn'}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: pinnedItems.includes('spawn') ? token.colorPrimary : token.colorTextTertiary,
+                lineHeight: 1,
+                padding: 2,
+                flexShrink: 0,
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePin('spawn');
+              }}
+            >
+              {pinnedItems.includes('spawn') ? (
+                <PushpinFilled style={{ fontSize: 12 }} />
+              ) : (
+                <PushpinOutlined style={{ fontSize: 12 }} />
+              )}
+            </button>
+          </Tooltip>
+        </div>
       )}
 
       <Divider style={{ margin: '6px 0' }} />
@@ -969,7 +999,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 placement="topLeft"
                 title="Model"
                 content={
-                  <div style={{ width: 280 }}>
+                  <div style={{ width: 360 }}>
                     <ModelSelector
                       value={modelConfig}
                       onChange={onModelConfigChange}
