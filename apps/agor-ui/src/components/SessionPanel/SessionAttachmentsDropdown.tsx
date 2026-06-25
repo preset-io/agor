@@ -27,11 +27,7 @@ function getIcon(item: SessionAttachmentItem): React.ReactNode {
   return <GlobalOutlined />;
 }
 
-export const SessionAttachmentsDropdown: React.FC<Props> = ({
-  items,
-  open,
-  onOpenChange,
-}) => {
+export const SessionAttachmentsDropdown: React.FC<Props> = ({ items, open, onOpenChange }) => {
   const { token } = theme.useToken();
 
   if (items.length === 0) return null;

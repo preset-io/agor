@@ -5,7 +5,7 @@
  * genealogy tracking, and JSON field handling.
  */
 
-import type { Session, UUID } from '@agor/core/types';
+import type { KnowledgeDocumentID, Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
@@ -847,6 +847,7 @@ describe('SessionRepository.update', () => {
 
     const task1 = generateId();
     const task2 = generateId();
+    const knowledgeDocumentId = generateId() as KnowledgeDocumentID;
     const updated = await repo.update(data.session_id!, {
       permission_config: {
         mode: 'bypassPermissions',
@@ -858,6 +859,7 @@ describe('SessionRepository.update', () => {
         current_sha: 'uvw456',
       },
       custom_context: { foo: 'baz', newField: 123 },
+      linked_knowledge_page_ids: [knowledgeDocumentId],
     });
 
     expect(updated.permission_config?.mode).toBe('bypassPermissions');
@@ -868,6 +870,7 @@ describe('SessionRepository.update', () => {
       current_sha: 'uvw456',
     });
     expect(updated.custom_context).toEqual({ foo: 'baz', newField: 123 });
+    expect(updated.linked_knowledge_page_ids).toEqual([knowledgeDocumentId]);
   });
 
   dbTest('should update last_updated timestamp', async ({ db }) => {

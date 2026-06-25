@@ -1,4 +1,11 @@
-import type { AgorClient, Branch, Session, SpawnConfig, Task } from '@agor-live/client';
+import type {
+  AgorClient,
+  Branch,
+  KnowledgeDocument,
+  Session,
+  SpawnConfig,
+  Task,
+} from '@agor-live/client';
 import { getAssistantConfig, isAssistant, sessionPath, shortId } from '@agor-live/client';
 import {
   CodeOutlined,
@@ -25,6 +32,7 @@ export interface SessionPanelContentProps {
   client: AgorClient | null;
   session: Session;
   branch?: Branch | null;
+  knowledgeDocumentsById?: Map<string, KnowledgeDocument>;
   currentUserId?: string;
   sessionMcpServerIds?: string[];
   scrollToBottom: (() => void) | null;
@@ -53,6 +61,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     client,
     session,
     branch = null,
+    knowledgeDocumentsById = new Map(),
     currentUserId,
     scrollToBottom,
     scrollToTop,
@@ -135,21 +144,25 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               {branch?.pull_request_url && (
                 <PullRequestPill prUrl={branch.pull_request_url} currentRepo={repo ?? undefined} />
               )}
-              {/* Knowledge pills (branch KB + session-linked pages), capped at 3 */}
+              {/* Knowledge pills (branch + session links), capped at 3 */}
               {(() => {
-                const seenUrls = new Set<string>();
-                const knowledgePills: { url: string; name: string }[] = [];
-                const addPill = (url: string, name: string) => {
-                  if (!seenUrls.has(url)) { seenUrls.add(url); knowledgePills.push({ url, name }); }
-                };
-                if (branch?.knowledge_base_url) addPill(branch.knowledge_base_url, 'Knowledge Base');
-                for (const page of session.linked_knowledge_pages ?? []) addPill(page.url, page.name);
+                const seenIds = new Set<string>();
+                const knowledgePills: Array<KnowledgeDocument & { url: string }> = [];
+                for (const documentId of [
+                  ...(branch?.linked_knowledge_page_id ? [branch.linked_knowledge_page_id] : []),
+                  ...(session.linked_knowledge_page_ids ?? []),
+                ]) {
+                  if (seenIds.has(documentId)) continue;
+                  seenIds.add(documentId);
+                  const document = knowledgeDocumentsById.get(documentId);
+                  if (document?.url) knowledgePills.push({ ...document, url: document.url });
+                }
                 const visible = knowledgePills.slice(0, 3);
                 const overflow = knowledgePills.length - visible.length;
                 return (
                   <>
                     {visible.map((p) => (
-                      <KnowledgePagePill key={p.url} url={p.url} name={p.name} />
+                      <KnowledgePagePill key={p.document_id} url={p.url} name={p.title} />
                     ))}
                     {overflow > 0 && (
                       <Typography.Link

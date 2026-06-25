@@ -215,8 +215,9 @@ export const sessions = pgTable(
         // - 'unknown': legacy rows or pre-flag detection.
         billing_mode?: 'subscription' | 'api-key' | 'unknown';
 
-        // Knowledge pages linked by agents during work
-        linked_knowledge_pages?: { url: string; name: string }[];
+        // Stable Knowledge document IDs linked by agents during work.
+        // Titles and URLs are resolved from kb_documents at read/render time.
+        linked_knowledge_page_ids?: import('@agor/core/types').KnowledgeDocumentID[];
       }>()
       .notNull(),
   },
@@ -709,7 +710,8 @@ export const branches = pgTable(
         // Work context (persistent across sessions)
         issue_url?: string; // GitHub/GitLab issue
         pull_request_url?: string; // PR link
-        knowledge_base_url?: string; // External knowledge base / docs URL
+        // One stable Knowledge document ID; title/URL is resolved at render time.
+        linked_knowledge_page_id?: import('@agor/core/types').KnowledgeDocumentID;
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed'
 

@@ -39,6 +39,7 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAppMcpData, useAppUserData } from '../../contexts/AppDataContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useKnowledgeDocumentsById } from '../../hooks/useKnowledgeDocuments';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { getContextWindowGradient } from '../../utils/contextWindow';
@@ -257,6 +258,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     useAppActions();
 
   const { archiveSession } = useSessionActions(client);
+  const linkedKnowledgeDocumentIds = React.useMemo(
+    () => [
+      ...(branch?.linked_knowledge_page_id ? [branch.linked_knowledge_page_id] : []),
+      ...(session?.linked_knowledge_page_ids ?? []),
+    ],
+    [branch?.linked_knowledge_page_id, session?.linked_knowledge_page_ids]
+  );
+  const knowledgeDocumentsById = useKnowledgeDocumentsById(client, linkedKnowledgeDocumentIds);
 
   // Tool capabilities — drives which buttons are shown
   const toolCaps = session?.agentic_tool
@@ -484,19 +493,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         url: branch.pull_request_url,
       });
     }
-    if (branch?.knowledge_base_url) {
+    const seenKnowledgeIds = new Set<string>();
+    for (const documentId of linkedKnowledgeDocumentIds) {
+      if (seenKnowledgeIds.has(documentId)) continue;
+      seenKnowledgeIds.add(documentId);
+      const document = knowledgeDocumentsById.get(documentId);
+      if (!document?.url) continue;
       acc.push({
-        key: 'knowledge-base',
-        name: `Knowledge Base: ${getUrlDisplayLabel(branch.knowledge_base_url)}`,
-        url: branch.knowledge_base_url,
-        kind: 'knowledge',
-      });
-    }
-    for (const page of session?.linked_knowledge_pages ?? []) {
-      acc.push({
-        key: `knowledge-${page.url}`,
-        name: page.name,
-        url: page.url,
+        key: `knowledge-${document.document_id}`,
+        name: document.title,
+        url: document.url,
         kind: 'knowledge',
       });
     }
@@ -504,8 +510,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }, [
     branch?.issue_url,
     branch?.pull_request_url,
-    branch?.knowledge_base_url,
-    session?.linked_knowledge_pages,
+    linkedKnowledgeDocumentIds,
+    knowledgeDocumentsById,
   ]);
 
   const footerGradient = React.useMemo(() => {
@@ -1167,6 +1173,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           client={client}
           session={session}
           branch={branch}
+          knowledgeDocumentsById={knowledgeDocumentsById}
           currentUserId={currentUserId}
           sessionMcpServerIds={sessionMcpServerIds}
           scrollToBottom={scrollToBottom}

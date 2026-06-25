@@ -4,7 +4,7 @@
  * Tests for type-safe CRUD operations on branches with short ID support.
  */
 
-import type { BranchID, UUID } from '@agor/core/types';
+import type { BranchID, KnowledgeDocumentID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
 import { boards } from '../schema';
@@ -55,6 +55,7 @@ function createBranchData(overrides?: {
   new_branch?: boolean;
   issue_url?: string;
   pull_request_url?: string;
+  linked_knowledge_page_id?: KnowledgeDocumentID;
   notes?: string;
   environment_instance?: any;
   last_used?: string;
@@ -88,6 +89,7 @@ function createBranchData(overrides?: {
     new_branch: overrides?.new_branch,
     issue_url: overrides?.issue_url,
     pull_request_url: overrides?.pull_request_url,
+    linked_knowledge_page_id: overrides?.linked_knowledge_page_id,
     notes: overrides?.notes,
     environment_instance: overrides?.environment_instance,
     last_used: overrides?.last_used,
@@ -192,6 +194,7 @@ describe('BranchRepository.create', () => {
       new_branch: true,
       issue_url: 'https://github.com/test/repo/issues/123',
       pull_request_url: 'https://github.com/test/repo/pull/456',
+      linked_knowledge_page_id: generateId() as KnowledgeDocumentID,
       notes: 'Test notes',
       environment_instance: { status: 'running' as const },
       custom_context: { note: 'Custom context data' },
@@ -215,6 +218,7 @@ describe('BranchRepository.create', () => {
     expect(created.new_branch).toBe(true);
     expect(created.issue_url).toBe('https://github.com/test/repo/issues/123');
     expect(created.pull_request_url).toBe('https://github.com/test/repo/pull/456');
+    expect(created.linked_knowledge_page_id).toBe(data.linked_knowledge_page_id);
     expect(created.notes).toBe('Test notes');
     expect(created.environment_instance).toEqual({ status: 'running' });
     expect(created.custom_context).toEqual({ note: 'Custom context data' });

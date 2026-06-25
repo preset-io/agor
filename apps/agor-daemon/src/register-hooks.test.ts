@@ -22,6 +22,9 @@ import { describe, expect, it } from 'vitest';
 import {
   enrichSessionFindResultWithRemoteRelationships,
   isPromptFlowPatchOnly,
+  MAX_LINKED_KNOWLEDGE_PAGES,
+  normalizeLinkedKnowledgeDocumentId,
+  normalizeLinkedKnowledgeDocumentIds,
   PROMPT_FLOW_PATCH_FIELDS,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
@@ -196,6 +199,14 @@ describe('isPromptFlowPatchOnly', () => {
       // packages/executor/src/handlers/sdk/opencode.ts patches the SDK session handle
       expect(isPromptFlowPatchOnly({ sdk_session_id: 'opencode-sess-123' })).toBe(true);
     });
+
+    it('accepts Knowledge link updates at prompt permission', () => {
+      expect(
+        isPromptFlowPatchOnly({
+          linked_knowledge_page_ids: ['01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f'],
+        })
+      ).toBe(true);
+    });
   });
 
   describe('rejects mixed or metadata patches', () => {
@@ -236,6 +247,48 @@ describe('isPromptFlowPatchOnly', () => {
       expect(isPromptFlowPatchOnly(42)).toBe(false);
       expect(isPromptFlowPatchOnly(true)).toBe(false);
     });
+  });
+});
+
+describe('normalizeLinkedKnowledgeDocumentIds', () => {
+  const idA = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f';
+  const idB = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a70';
+
+  it('normalizes case and removes duplicate IDs while preserving order', () => {
+    expect(normalizeLinkedKnowledgeDocumentIds([idA.toUpperCase(), idA, idB])).toEqual([idA, idB]);
+  });
+
+  it('rejects non-arrays and non-UUIDv7 values', () => {
+    expect(() => normalizeLinkedKnowledgeDocumentIds('not-an-array')).toThrow();
+    expect(() => normalizeLinkedKnowledgeDocumentIds(['not-an-id'])).toThrow();
+  });
+
+  it('enforces the linked-document limit', () => {
+    expect(() =>
+      normalizeLinkedKnowledgeDocumentIds(
+        Array.from(
+          { length: MAX_LINKED_KNOWLEDGE_PAGES + 1 },
+          (_, index) => `01933e4a-7b89-7c35-a8f3-${index.toString().padStart(12, '0')}`
+        )
+      )
+    ).toThrow();
+  });
+});
+
+describe('normalizeLinkedKnowledgeDocumentId', () => {
+  const id = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f';
+
+  it('normalizes one branch Knowledge document ID', () => {
+    expect(normalizeLinkedKnowledgeDocumentId(id.toUpperCase())).toBe(id);
+  });
+
+  it('accepts clearing the branch link', () => {
+    expect(normalizeLinkedKnowledgeDocumentId(null)).toBeNull();
+  });
+
+  it('rejects arrays and invalid IDs', () => {
+    expect(() => normalizeLinkedKnowledgeDocumentId([id])).toThrow();
+    expect(() => normalizeLinkedKnowledgeDocumentId('not-an-id')).toThrow();
   });
 });
 

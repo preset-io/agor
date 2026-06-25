@@ -25,6 +25,7 @@ export interface ZoneTriggerBranchInput {
   pull_request_url?: string;
   notes?: string;
   path?: string;
+  linked_knowledge_page_id?: string | null;
   custom_context?: Record<string, unknown>;
 }
 
@@ -74,6 +75,7 @@ export function buildZoneTriggerContext(
     pull_request_url: branch?.pull_request_url ?? '',
     notes: branch?.notes ?? '',
     path: branch?.path ?? '',
+    linked_knowledge_page_id: branch?.linked_knowledge_page_id ?? '',
     context: branchCtx,
     custom_context: branchCtx,
   };

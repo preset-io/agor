@@ -177,8 +177,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         cli_state: session.cli_state,
         // Billing model snapshot (subscription / api-key / unknown).
         billing_mode: session.billing_mode,
-        // Knowledge pages linked by agents during work.
-        linked_knowledge_pages: session.linked_knowledge_pages,
+        // Stable Knowledge document IDs linked by agents during work.
+        linked_knowledge_page_ids: session.linked_knowledge_page_ids,
       },
     };
   }

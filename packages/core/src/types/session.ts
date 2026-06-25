@@ -18,6 +18,7 @@ import type {
 } from './agentic-tool';
 import type { ContextFilePath } from './context';
 import type { BoardID, BranchID, SessionID, SessionRelationshipID, TaskID, UserID } from './id';
+import type { KnowledgeDocumentID } from './knowledge';
 import type { ScheduleID } from './schedule';
 
 export const SessionStatus = {
@@ -508,12 +509,12 @@ export interface Session {
   };
 
   /**
-   * Knowledge pages linked to this session by agents during work.
+   * Knowledge documents linked to this session by agents during work.
    *
-   * Agents call `agor_session_link_knowledge_page` / `agor_session_unlink_knowledge_page`
-   * to manage this list. Users can remove entries via session settings.
+   * Only stable document IDs are persisted. Consumers resolve the current
+   * title and browser URL from the Knowledge service when rendering.
    */
-  linked_knowledge_pages?: { url: string; name: string }[];
+  linked_knowledge_page_ids?: KnowledgeDocumentID[];
 }
 
 /**

@@ -21,6 +21,7 @@ import {
   BoardRepository,
   type BranchRepository,
   type Database,
+  isValidUUID,
   ScheduleRepository,
   type SessionRepository,
   shortId,
@@ -54,6 +55,7 @@ import type {
   Branch,
   BranchID,
   HookContext,
+  KnowledgeDocumentID,
   MCPServer,
   Paginated,
   Params,
@@ -295,7 +297,90 @@ export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
   'ready_for_prompt',
   'git_state',
   'sdk_session_id',
+  // Linking readable Knowledge documents is part of working in a session, not
+  // privileged session metadata. It therefore follows the same permission
+  // rule as prompting: session-tier for one's own session, prompt-tier for
+  // another user's session.
+  'linked_knowledge_page_ids',
 ];
+
+export const MAX_LINKED_KNOWLEDGE_PAGES = 100;
+
+export function normalizeLinkedKnowledgeDocumentId(value: unknown): KnowledgeDocumentID | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value !== 'string' || !isValidUUID(value)) {
+    throw new BadRequest('linked_knowledge_page_id must be a Knowledge document UUIDv7');
+  }
+  return value.toLowerCase() as KnowledgeDocumentID;
+}
+
+export function normalizeLinkedKnowledgeDocumentIds(value: unknown): KnowledgeDocumentID[] {
+  if (!Array.isArray(value)) {
+    throw new BadRequest('linked_knowledge_page_ids must be an array of Knowledge document IDs');
+  }
+  if (value.length > MAX_LINKED_KNOWLEDGE_PAGES) {
+    throw new BadRequest(`At most ${MAX_LINKED_KNOWLEDGE_PAGES} Knowledge documents may be linked`);
+  }
+
+  const ids: KnowledgeDocumentID[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (typeof candidate !== 'string' || !isValidUUID(candidate)) {
+      throw new BadRequest('Each linked Knowledge document ID must be a UUIDv7');
+    }
+    const normalized = candidate.toLowerCase() as KnowledgeDocumentID;
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+  }
+  return ids;
+}
+
+function validateLinkedKnowledgeDocumentId(
+  getExistingId: (context: HookContext) => string | null | undefined
+) {
+  return async (context: HookContext) => {
+    const data = context.data as Record<string, unknown> | undefined;
+    if (!data || !Object.hasOwn(data, 'linked_knowledge_page_id')) return context;
+
+    const documentId = normalizeLinkedKnowledgeDocumentId(data.linked_knowledge_page_id);
+    if (context.params.provider && documentId !== null && documentId !== getExistingId(context)) {
+      await context.app
+        .service('kb/documents')
+        .get(documentId, { ...context.params, query: undefined });
+    }
+
+    data.linked_knowledge_page_id = documentId;
+    return context;
+  };
+}
+
+function validateLinkedKnowledgeDocumentIds(
+  getExistingIds: (context: HookContext) => readonly string[] | undefined
+) {
+  return async (context: HookContext) => {
+    const data = context.data as Record<string, unknown> | undefined;
+    if (!data || !Object.hasOwn(data, 'linked_knowledge_page_ids')) return context;
+
+    const ids = normalizeLinkedKnowledgeDocumentIds(data.linked_knowledge_page_ids);
+    const existing = new Set(getExistingIds(context) ?? []);
+    const additions = ids.filter((id) => !existing.has(id));
+
+    // A link may only be added when the caller can currently read the target
+    // document. The Knowledge service also resolves short/access semantics and
+    // rejects archived documents. Removals remain possible after access loss.
+    if (context.params.provider && additions.length > 0) {
+      const documents = context.app.service('kb/documents');
+      for (const documentId of additions) {
+        await documents.get(documentId, { ...context.params, query: undefined });
+      }
+    }
+
+    data.linked_knowledge_page_ids = ids;
+    return context;
+  };
+}
 
 export function isPromptFlowPatchOnly(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
@@ -1107,12 +1192,24 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireMinimumRole(ROLES.MEMBER, 'create branches'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(),
+        validateLinkedKnowledgeDocumentId(() => undefined),
         injectCreatedBy(),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(),
+        ...(branchRbacEnabled
+          ? [
+              loadBranch(branchRepository),
+              ensureBranchPermission('all', 'update branches', superadminOpts),
+            ]
+          : []),
+        validateLinkedKnowledgeDocumentId(
+          (context) =>
+            (context.params as AuthenticatedParams & { branch?: Branch }).branch
+              ?.linked_knowledge_page_id
+        ),
       ],
       patch: [
         requireAdminForEnvConfig(),
@@ -1123,6 +1220,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureBranchPermission('all', 'update branches', superadminOpts), // Require 'all' permission to update
             ]
           : []),
+        validateLinkedKnowledgeDocumentId(
+          (context) =>
+            (context.params as AuthenticatedParams & { branch?: Branch }).branch
+              ?.linked_knowledge_page_id
+        ),
         // Capture previous others_fs_access for comparison in after hook
         ...(branchRbacEnabled
           ? [
@@ -2228,6 +2330,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanCreateSession(superadminOpts), // Require 'all' permission to create sessions
             ]
           : []),
+        validateLinkedKnowledgeDocumentIds(() => undefined),
         injectCreatedBy(),
         // Auto-fill permission_config / model_config from the creator's
         // default_agentic_config[tool] when the caller omits them. Must run
@@ -2311,6 +2414,22 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
+      update: [
+        ...(branchRbacEnabled
+          ? [
+              ensureSessionImmutability(),
+              resolveSessionContext(),
+              loadSession(sessionsService),
+              loadBranchFromSession(branchRepository),
+              ensureBranchPermission('all', 'update session metadata', superadminOpts),
+            ]
+          : []),
+        validateLinkedKnowledgeDocumentIds(
+          (context) =>
+            (context.params as AuthenticatedParams & { session?: Session }).session
+              ?.linked_knowledge_page_ids
+        ),
+      ],
       patch: [
         ...(branchRbacEnabled
           ? [
@@ -2339,6 +2458,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               },
             ]
           : []),
+        validateLinkedKnowledgeDocumentIds(
+          (context) =>
+            (context.params as AuthenticatedParams & { session?: Session }).session
+              ?.linked_knowledge_page_ids
+        ),
         // Validate user has prompt permission on callback target session's branch
         async (context) => {
           const patchCbConfig = (context.data as Record<string, unknown> | undefined)

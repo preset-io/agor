@@ -62,6 +62,7 @@ describe('buildZoneTriggerContext', () => {
         ref: 'feat-auth',
         issue_url: 'https://github.com/org/repo/issues/42',
         notes: 'wip',
+        linked_knowledge_page_id: 'doc-abc123',
         custom_context: { issue: 'PROJ-42' },
       },
     });
@@ -71,9 +72,21 @@ describe('buildZoneTriggerContext', () => {
       ref: 'feat-auth',
       issue_url: 'https://github.com/org/repo/issues/42',
       notes: 'wip',
+      linked_knowledge_page_id: 'doc-abc123',
       context: { issue: 'PROJ-42' },
       custom_context: { issue: 'PROJ-42' },
     });
+  });
+
+  it('exposes branch.linked_knowledge_page_id in the template context', () => {
+    const ctx = buildZoneTriggerContext({
+      branch: { linked_knowledge_page_id: 'doc-xyz789' },
+    });
+    const branch = ctx.branch as Record<string, unknown>;
+    expect(branch.linked_knowledge_page_id).toBe('doc-xyz789');
+    // Also available via worktree alias.
+    const worktree = ctx.worktree as Record<string, unknown>;
+    expect(worktree.linked_knowledge_page_id).toBe('doc-xyz789');
   });
 
   it('defaults all fields to safe empties when inputs are absent', () => {
@@ -85,6 +98,7 @@ describe('buildZoneTriggerContext', () => {
       pull_request_url: '',
       notes: '',
       path: '',
+      linked_knowledge_page_id: '',
       context: {},
       custom_context: {},
     });

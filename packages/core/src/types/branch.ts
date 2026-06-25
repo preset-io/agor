@@ -1,6 +1,6 @@
 // src/types/branch.ts
 import type { BoardID, BranchID, UUID } from './id';
-import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
+import type { KnowledgeDocumentID, KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
 
 /**
@@ -197,14 +197,12 @@ export interface Branch {
   pull_request_url?: string;
 
   /**
-   * Knowledge base URL associated with this branch.
+   * Knowledge document linked to this branch.
    *
-   * A single link to an external knowledge base, wiki, or documentation site
-   * relevant to this branch's work context.
-   *
-   * Example: "https://docs.example.com/api-reference"
+   * Only the stable document ID is persisted. Consumers resolve the current
+   * title and browser URL from the Knowledge service when rendering.
    */
-  knowledge_base_url?: string;
+  linked_knowledge_page_id?: KnowledgeDocumentID;
 
   /**
    * Freeform notes about this branch

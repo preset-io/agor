@@ -1,8 +1,17 @@
-import type { Board, Branch, MCPServer, Repo, Session } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  Branch,
+  KnowledgeDocumentID,
+  MCPServer,
+  Repo,
+  Session,
+} from '@agor-live/client';
 import { isAssistant } from '@agor-live/client';
-import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
+import { FolderOutlined, LinkOutlined, ReadOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
+import { useReadableKnowledgeDocuments } from '../../../hooks/useKnowledgeDocuments';
 import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
 import { MCPServerSelect } from '../../MCPServerSelect';
@@ -21,6 +30,7 @@ interface GeneralTabProps {
   sessions: Session[]; // Used to gauge environment risk on Archive/Delete
   boards?: Board[];
   mcpServers?: MCPServer[];
+  client: AgorClient | null;
   canEdit: boolean;
   state: GeneralFormState;
   setField: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
@@ -39,12 +49,14 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   sessions,
   boards = [],
   mcpServers = [],
+  client,
   canEdit,
   state,
   setField,
   onArchiveOrDelete,
 }) => {
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const knowledgeDocuments = useReadableKnowledgeDocuments(client);
 
   const handleArchiveOrDelete = (options: {
     metadataAction: 'archive' | 'delete';
@@ -151,12 +163,21 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item label="Knowledge Base" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
-              <Input
-                value={state.knowledgeBaseUrl}
-                onChange={(e) => setField('knowledgeBaseUrl', e.target.value)}
-                placeholder="https://docs.example.com/reference"
-                prefix={<LinkOutlined />}
+            <Form.Item label="Knowledge Pages" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+              <Select
+                style={{ width: '100%' }}
+                allowClear
+                value={state.knowledgePageId}
+                onChange={(id) =>
+                  setField('knowledgePageId', id as KnowledgeDocumentID | undefined)
+                }
+                placeholder="Link a Knowledge document"
+                suffixIcon={<ReadOutlined />}
+                optionFilterProp="label"
+                options={knowledgeDocuments.map((document) => ({
+                  value: document.document_id,
+                  label: document.title,
+                }))}
                 disabled={!canEdit}
               />
             </Form.Item>

@@ -1717,45 +1717,46 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_session_link_knowledge_page',
     {
       description:
-        'Link a knowledge page to the current session. The page will appear as a pill in the session header and in the attachments dropdown. Call this when you discover a relevant doc, wiki, or reference page while working.',
+        'Link an Agor Knowledge document to the current session. The document title is resolved live from the Knowledge Base, so renames are reflected automatically.',
       inputSchema: z.object({
         sessionId: mcpOptionalId(
           'sessionId',
           'Session',
           'Session to link the page to (defaults to the current MCP session)'
         ),
-        url: mcpRequiredString('url', 'URL of the knowledge page to link'),
-        name: mcpRequiredString('name', 'Display name for the knowledge page (e.g., "API Reference")'),
+        documentId: mcpRequiredString('documentId', 'Knowledge document ID (UUIDv7 or short ID)'),
       }),
     },
     async (args) => {
-      const url = args.url.trim();
-      const name = args.name.trim();
-      if (!/^https?:\/\//i.test(url)) {
-        return textResult({ ok: false, error: 'URL must start with http:// or https://' });
-      }
-
       const sessionId = args.sessionId
         ? await resolveSessionId(ctx, args.sessionId)
         : ctx.sessionId;
       if (!sessionId) return sessionContextRequiredResult();
 
       const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
+      const document = await ctx.app
+        .service('kb/documents')
+        .get(args.documentId.trim(), ctx.baseServiceParams);
       // Read-then-write: concurrent calls from different agents can race and
-      // silently drop each other's pages. Acceptable for low-frequency writes;
+      // silently drop each other's document IDs. Acceptable for low-frequency writes;
       // use optimistic locking if this becomes a problem.
       const session = await sessionsService.get(sessionId, ctx.baseServiceParams);
-      const existing = session.linked_knowledge_pages ?? [];
+      const existing = session.linked_knowledge_page_ids ?? [];
 
-      if (!existing.some((p) => p.url === url)) {
+      if (!existing.includes(document.document_id)) {
         await sessionsService.patch(
           sessionId,
-          { linked_knowledge_pages: [...existing, { url, name }] },
+          { linked_knowledge_page_ids: [...existing, document.document_id] },
           ctx.baseServiceParams
         );
       }
 
-      return textResult({ ok: true, url, name });
+      return textResult({
+        ok: true,
+        documentId: document.document_id,
+        title: document.title,
+        url: document.url,
+      });
     }
   );
 
@@ -1763,18 +1764,21 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_session_unlink_knowledge_page',
     {
-      description: 'Remove a previously linked knowledge page from the current session.',
+      description: 'Remove a previously linked Agor Knowledge document from the current session.',
       inputSchema: z.object({
         sessionId: mcpOptionalId(
           'sessionId',
           'Session',
           'Session to unlink the page from (defaults to the current MCP session)'
         ),
-        url: mcpRequiredString('url', 'URL of the knowledge page to remove'),
+        documentId: mcpRequiredString(
+          'documentId',
+          'Knowledge document ID to remove (full UUID recommended)'
+        ),
       }),
     },
     async (args) => {
-      const url = args.url.trim();
+      const requestedDocumentId = args.documentId.trim().toLowerCase();
       const sessionId = args.sessionId
         ? await resolveSessionId(ctx, args.sessionId)
         : ctx.sessionId;
@@ -1782,15 +1786,25 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
       const session = await sessionsService.get(sessionId, ctx.baseServiceParams);
-      const existing = session.linked_knowledge_pages ?? [];
+      const existing = session.linked_knowledge_page_ids ?? [];
+      const matchingIds = existing.filter(
+        (id) => id === requestedDocumentId || id.startsWith(requestedDocumentId)
+      );
+      if (matchingIds.length > 1) {
+        return textResult({
+          ok: false,
+          error: 'Knowledge document short ID is ambiguous; provide the full UUID',
+        });
+      }
+      const documentId = matchingIds[0] ?? requestedDocumentId;
 
       await sessionsService.patch(
         sessionId,
-        { linked_knowledge_pages: existing.filter((p) => p.url !== url) },
+        { linked_knowledge_page_ids: existing.filter((id) => id !== documentId) },
         ctx.baseServiceParams
       );
 
-      return textResult({ ok: true, url });
+      return textResult({ ok: true, documentId });
     }
   );
 }
