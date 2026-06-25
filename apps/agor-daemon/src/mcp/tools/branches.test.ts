@@ -163,6 +163,52 @@ describe('agor_branches_update', () => {
     expect(parsed.error).toMatch(/X-Agor-Session-Id/);
     expect(sessionsGet).not.toHaveBeenCalled();
   });
+
+  it('maps knowledgePageId to linked_knowledge_page_id in the patch call', async () => {
+    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
+    const branchesPatch = vi.fn(async () => ({
+      branch_id: 'branch-1',
+      linked_knowledge_page_id: 'doc-abc123',
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const update = registerAndCaptureUpdate({ app, userId: 'user-1' });
+    await update({ branchId: 'branch-1', knowledgePageId: 'doc-abc123' });
+
+    expect(branchesPatch).toHaveBeenCalledWith(
+      'branch-1',
+      expect.objectContaining({ linked_knowledge_page_id: 'doc-abc123' }),
+      expect.anything()
+    );
+  });
+
+  it('clears linked_knowledge_page_id when knowledgePageId is null', async () => {
+    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
+    const branchesPatch = vi.fn(async () => ({
+      branch_id: 'branch-1',
+      linked_knowledge_page_id: null,
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const update = registerAndCaptureUpdate({ app, userId: 'user-1' });
+    await update({ branchId: 'branch-1', knowledgePageId: null });
+
+    expect(branchesPatch).toHaveBeenCalledWith(
+      'branch-1',
+      expect.objectContaining({ linked_knowledge_page_id: null }),
+      expect.anything()
+    );
+  });
 });
 
 describe('agor_branches_create', () => {

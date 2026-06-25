@@ -163,7 +163,16 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item label="Knowledge Pages" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+            <Form.Item
+              label={
+                <Space size={4}>
+                  <ReadOutlined />
+                  <span>Knowledge Pages</span>
+                </Space>
+              }
+              labelCol={{ span: 6 }}
+              wrapperCol={{ span: 18 }}
+            >
               <Select
                 style={{ width: '100%' }}
                 allowClear
@@ -172,7 +181,6 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                   setField('knowledgePageId', id as KnowledgeDocumentID | undefined)
                 }
                 placeholder="Link a Knowledge document"
-                suffixIcon={<ReadOutlined />}
                 optionFilterProp="label"
                 options={knowledgeDocuments.map((document) => ({
                   value: document.document_id,

@@ -629,7 +629,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_update',
     {
       description:
-        'Update metadata for an existing branch (issue/PR URLs, notes, board placement, custom context, RBAC permissions, owners)',
+        'Update metadata for an existing branch (issue/PR URLs, knowledge page, notes, board placement, custom context, RBAC permissions, owners)',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         branchId: mcpOptionalId(
@@ -649,6 +649,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Pull request URL to associate. Pass null to clear. Must be http(s) when provided.'
           ),
+        knowledgePageId: z
+          .string({ error: 'knowledgePageId must be a string or null when provided.' })
+          .nullable()
+          .optional()
+          .describe('Knowledge document ID to associate with this branch. Pass null to clear.'),
         notes: z
           .string({ error: 'notes must be a string or null when provided.' })
           .nullable()
@@ -742,6 +747,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           args.pullRequestUrl === null
             ? null
             : (normalizeOptionalHttpUrl(args.pullRequestUrl, 'pullRequestUrl') ?? null);
+      }
+      if (args.knowledgePageId !== undefined) {
+        fieldsProvided++;
+        updates.linked_knowledge_page_id = args.knowledgePageId ?? null;
       }
       if (args.notes !== undefined) {
         fieldsProvided++;
