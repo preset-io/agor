@@ -228,12 +228,25 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       <div style={sectionHeaderStyle}>Settings</div>
 
       {/* Model */}
-      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-        <RobotOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
-        <Typography.Text style={{ fontSize: 12, flex: 1, color: token.colorTextSecondary }}>
+      <div style={{ ...overflowRowStyle, alignItems: 'flex-start', cursor: 'default' }}>
+        <RobotOutlined
+          style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0, paddingTop: 6 }}
+        />
+        <Typography.Text
+          style={{
+            fontSize: 12,
+            color: token.colorTextSecondary,
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            minWidth: 0,
+            paddingTop: 6,
+          }}
+        >
           Model
         </Typography.Text>
-        <div style={{ maxWidth: 160, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+        <div style={{ maxWidth: 160, flexShrink: 0 }}>
           <ModelSelector
             value={modelConfig}
             onChange={onModelConfigChange}
