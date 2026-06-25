@@ -84,6 +84,13 @@ interface SlackConfig {
   align_slack_users?: boolean;
 }
 
+export interface SlackUserAvatarProfile {
+  slackUserId: string;
+  email: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+}
+
 export interface SlackThreadHistoryMessage {
   ts: string;
   iso_time: string;
@@ -629,6 +636,64 @@ export class SlackConnector implements GatewayConnector {
       });
       return { email: null, displayName: null };
     }
+  }
+
+  /**
+   * Look up a Slack user by email and return display metadata including a
+   * high-resolution avatar URL. Used by Agor's admin-triggered user avatar
+   * sync. Prefer image_512 for crisp large/retina rendering, falling back to
+   * smaller Slack-provided variants.
+   */
+  async lookupUserAvatarByEmail(email: string): Promise<SlackUserAvatarProfile | null> {
+    const normalized = email.trim().toLowerCase();
+    if (!normalized) throw new Error('Slack user email is required');
+
+    const result = await this.web.users
+      .lookupByEmail({ email: normalized })
+      .catch((error: unknown) => {
+        if (extractSlackErrorCode(error) === 'users_not_found') {
+          return null;
+        }
+        throw error;
+      });
+    if (!result?.ok || !result.user?.id) {
+      return null;
+    }
+
+    const profile = result.user.profile as
+      | {
+          email?: string;
+          display_name?: string;
+          real_name?: string;
+          image_original?: string;
+          image_1024?: string;
+          image_512?: string;
+          image_192?: string;
+          image_72?: string;
+          image_48?: string;
+        }
+      | undefined;
+
+    const avatarUrl =
+      profile?.image_512 ||
+      profile?.image_original ||
+      profile?.image_1024 ||
+      profile?.image_192 ||
+      profile?.image_72 ||
+      profile?.image_48 ||
+      null;
+
+    return {
+      slackUserId: result.user.id,
+      email: profile?.email ?? normalized,
+      displayName:
+        profile?.display_name ||
+        profile?.real_name ||
+        result.user.real_name ||
+        result.user.name ||
+        null,
+      avatarUrl,
+    };
   }
 
   /**

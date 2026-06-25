@@ -13,8 +13,7 @@ import {
   saveConfig,
 } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   type AgenticToolName,
   type AuthenticatedParams,
@@ -23,6 +22,7 @@ import {
   TOOL_API_KEY_NAMES,
   type UserID,
 } from '@agor/core/types';
+import type { SessionTokenService } from './session-token-service.js';
 
 const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
   ANTHROPIC_API_KEY: true,
@@ -45,12 +45,28 @@ type ExecutorTokenPayload = {
 };
 
 function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefined {
-  const payload = (params as AuthenticatedParams | undefined)?.authentication?.payload as
-    | ExecutorTokenPayload
+  const authParams = params as
+    | (AuthenticatedParams & { task_id?: string; authentication?: { strategy?: string } })
     | undefined;
-  return payload?.type === 'executor-session' && payload.purpose === 'executor-task'
-    ? payload
-    : undefined;
+  const payload = authParams?.authentication?.payload as ExecutorTokenPayload | undefined;
+  if (payload?.type === 'executor-session' && payload.purpose === 'executor-task') {
+    return payload;
+  }
+
+  // Socket.io executor logins may preserve auth-result scope fields on the
+  // connection even when the decoded JWT payload is not carried forward into
+  // later service params. Keep the secret resolver restricted to task-scoped
+  // executor JWTs by only accepting this fallback for JWT-authenticated
+  // connections that have a task claim minted by ServiceJWTStrategy.
+  if (authParams?.authentication?.strategy === 'jwt' && authParams.task_id) {
+    return {
+      type: 'executor-session',
+      purpose: 'executor-task',
+      task_id: authParams.task_id,
+    };
+  }
+
+  return undefined;
 }
 
 /**
@@ -140,6 +156,14 @@ export class ConfigService {
        * sweep (legacy behavior preserved for non-SDK callers).
        */
       tool?: AgenticToolName;
+      /**
+       * Explicit task-scoped executor JWT proof. The Socket.io connection can
+       * authenticate as the session creator user while dropping custom JWT
+       * claims from later service params, so executors include the minted token
+       * on this secret-resolution call and the daemon validates it against the
+       * in-memory session-token registry.
+       */
+      executorSessionToken?: string;
     },
     params?: Params
   ): Promise<{
@@ -158,7 +182,24 @@ export class ConfigService {
     // service account or with a task-scoped executor runtime JWT. Normal
     // user/API-key auth may read masked config via /config but must not resolve
     // raw configured keys.
-    const executorPayload = getExecutorTokenPayload(params);
+    let executorPayload = getExecutorTokenPayload(params);
+    if (!executorPayload && params?.provider && data.executorSessionToken) {
+      const sessionTokenService = (
+        this.app as unknown as {
+          sessionTokenService?: SessionTokenService;
+        }
+      )?.sessionTokenService;
+      const sessionInfo = await sessionTokenService?.validateToken(data.executorSessionToken, {
+        taskId,
+      });
+      if (sessionInfo?.task_id === taskId) {
+        executorPayload = {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          task_id: sessionInfo.task_id,
+        };
+      }
+    }
     if (params?.provider) {
       const caller = (params as AuthenticatedParams | undefined)?.user;
       const isServiceAccount = caller?._isServiceAccount === true;

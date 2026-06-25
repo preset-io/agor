@@ -391,6 +391,9 @@ importers:
       emojibase-data:
         specifier: ^17.0.0
         version: 17.0.0(emojibase@17.0.0)
+      immer:
+        specifier: ^11.1.8
+        version: 11.1.8
       lz-string:
         specifier: 1.5.0
         version: 1.5.0
@@ -414,13 +417,16 @@ importers:
         version: 16.1.1(react@19.2.7)
       reactflow:
         specifier: ^11.11.4
-        version: 11.11.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        version: 11.11.4(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       streamdown:
         specifier: ^1.5.1
         version: 1.5.1(@types/mdast@4.0.4)(@types/react@19.2.17)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.2.7)(unified@11.0.5)
       use-stick-to-bottom:
         specifier: ^1.1.6
         version: 1.1.6(react@19.2.7)
+      zustand:
+        specifier: ^5.0.14
+        version: 5.0.14(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7))
     devDependencies:
       '@testing-library/jest-dom':
         specifier: ^6.9.1
@@ -6495,6 +6501,9 @@ packages:
     resolution: {integrity: sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==}
     engines: {node: '>= 4'}
 
+  immer@11.1.8:
+    resolution: {integrity: sha512-/tbkHMW7y10Lx6i1crLjD4/OhNkRG+Fo7byZHtah0547nIeXYcpIXaUh0IAQY6gO5459qpGGYapcEOHtFXkIuA==}
+
   import-in-the-middle@2.0.6:
     resolution: {integrity: sha512-3vZV3jX0XRFW3EJDTwzWoZa+RH1b8eTTx6YOCjglrLyPuepwoBti1k3L2dKwdCUrnVEfc5CuRuGstaC/uQJJaw==}
 
@@ -9417,6 +9426,24 @@ packages:
       immer:
         optional: true
       react:
+        optional: true
+
+  zustand@5.0.14:
+    resolution: {integrity: sha512-/8tAspM5LMPr28b3fwLYrtdj77ECpfZviaP75CMTnwO8ISyaE4GDIG/9rDDYq/cH9D2Xw2A2RXglLInmVBQB/g==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@types/react': '>=18.0.0'
+      immer: '>=9.0.6'
+      react: '>=18.0.0'
+      use-sync-external-store: '>=1.2.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      immer:
+        optional: true
+      react:
+        optional: true
+      use-sync-external-store:
         optional: true
 
   zwitch@2.0.4:
@@ -12675,29 +12702,29 @@ snapshots:
     dependencies:
       react: 19.2.7
 
-  '@reactflow/background@11.3.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@reactflow/background@11.3.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      '@reactflow/core': 11.11.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/core': 11.11.4(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       classcat: 5.0.5
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      zustand: 4.5.7(@types/react@19.2.17)(react@19.2.7)
+      zustand: 4.5.7(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7)
     transitivePeerDependencies:
       - '@types/react'
       - immer
 
-  '@reactflow/controls@11.2.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@reactflow/controls@11.2.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      '@reactflow/core': 11.11.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/core': 11.11.4(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       classcat: 5.0.5
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      zustand: 4.5.7(@types/react@19.2.17)(react@19.2.7)
+      zustand: 4.5.7(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7)
     transitivePeerDependencies:
       - '@types/react'
       - immer
 
-  '@reactflow/core@11.11.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@reactflow/core@11.11.4(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
       '@types/d3': 7.4.3
       '@types/d3-drag': 3.0.7
@@ -12709,14 +12736,14 @@ snapshots:
       d3-zoom: 3.0.0
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      zustand: 4.5.7(@types/react@19.2.17)(react@19.2.7)
+      zustand: 4.5.7(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7)
     transitivePeerDependencies:
       - '@types/react'
       - immer
 
-  '@reactflow/minimap@11.7.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@reactflow/minimap@11.7.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      '@reactflow/core': 11.11.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/core': 11.11.4(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/d3-selection': 3.0.11
       '@types/d3-zoom': 3.0.8
       classcat: 5.0.5
@@ -12724,31 +12751,31 @@ snapshots:
       d3-zoom: 3.0.0
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      zustand: 4.5.7(@types/react@19.2.17)(react@19.2.7)
+      zustand: 4.5.7(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7)
     transitivePeerDependencies:
       - '@types/react'
       - immer
 
-  '@reactflow/node-resizer@2.2.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@reactflow/node-resizer@2.2.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      '@reactflow/core': 11.11.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/core': 11.11.4(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       classcat: 5.0.5
       d3-drag: 3.0.0
       d3-selection: 3.0.0
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      zustand: 4.5.7(@types/react@19.2.17)(react@19.2.7)
+      zustand: 4.5.7(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7)
     transitivePeerDependencies:
       - '@types/react'
       - immer
 
-  '@reactflow/node-toolbar@1.3.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@reactflow/node-toolbar@1.3.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      '@reactflow/core': 11.11.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/core': 11.11.4(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       classcat: 5.0.5
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      zustand: 4.5.7(@types/react@19.2.17)(react@19.2.7)
+      zustand: 4.5.7(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7)
     transitivePeerDependencies:
       - '@types/react'
       - immer
@@ -16184,6 +16211,8 @@ snapshots:
 
   ignore@7.0.5: {}
 
+  immer@11.1.8: {}
+
   import-in-the-middle@2.0.6:
     dependencies:
       acorn: 8.15.0
@@ -18165,14 +18194,14 @@ snapshots:
 
   react@19.2.7: {}
 
-  reactflow@11.11.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
+  reactflow@11.11.4(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
     dependencies:
-      '@reactflow/background': 11.3.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@reactflow/controls': 11.2.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@reactflow/core': 11.11.4(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@reactflow/minimap': 11.7.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@reactflow/node-resizer': 2.2.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@reactflow/node-toolbar': 1.3.14(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/background': 11.3.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/controls': 11.2.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/core': 11.11.4(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/minimap': 11.7.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/node-resizer': 2.2.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@reactflow/node-toolbar': 1.3.14(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
     transitivePeerDependencies:
@@ -19773,11 +19802,19 @@ snapshots:
 
   zod@4.4.3: {}
 
-  zustand@4.5.7(@types/react@19.2.17)(react@19.2.7):
+  zustand@4.5.7(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7):
     dependencies:
       use-sync-external-store: 1.6.0(react@19.2.7)
     optionalDependencies:
       '@types/react': 19.2.17
+      immer: 11.1.8
       react: 19.2.7
+
+  zustand@5.0.14(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7)):
+    optionalDependencies:
+      '@types/react': 19.2.17
+      immer: 11.1.8
+      react: 19.2.7
+      use-sync-external-store: 1.6.0(react@19.2.7)
 
   zwitch@2.0.4: {}

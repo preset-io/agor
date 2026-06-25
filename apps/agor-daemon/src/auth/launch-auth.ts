@@ -288,7 +288,8 @@ async function upsertLaunchUser(
         updated_at: now,
         data: {
           ...data,
-          avatar: avatar ?? data.avatar,
+          avatar_url: avatar ?? data.avatar_url ?? data.avatar,
+          avatar_source: avatar ? 'launch-auth' : data.avatar_source,
           external_identities: nextIdentities,
         },
       })
@@ -316,7 +317,9 @@ async function upsertLaunchUser(
       onboarding_completed: false,
       must_change_password: false,
       data: {
+        avatar_url: avatar,
         avatar,
+        avatar_source: avatar ? 'launch-auth' : undefined,
         preferences: {},
         external_identities: [identity],
       } as UserDataWithExternalIdentities,

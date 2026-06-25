@@ -20,6 +20,7 @@ import { AppHeader } from '../components/AppHeader';
 import { SessionCanvas } from '../components/SessionCanvas';
 import type { StaticRemoteCursor } from '../components/SessionCanvas/canvas/RemoteCursorLayer';
 import { ConnectionProvider } from '../contexts/ConnectionContext';
+import { agorStore } from '../store/agorStore';
 import './MarketingScreenshotPage.css';
 
 const now = '2026-06-21T06:00:00.000Z';
@@ -618,6 +619,26 @@ export const MarketingScreenshotPage = () => {
     };
   }, []);
 
+  // Seed the global store with the demo fixtures so SessionCanvas's selector
+  // subscriptions resolve against them — the canvas reads entity state from the
+  // store, not props. This standalone demo route owns the store for its lifetime.
+  // Seeding runs in an effect (not during render) so the external singleton is
+  // mutated as a commit side effect rather than mid-render.
+  useEffect(() => {
+    agorStore.setState({
+      boardById: maps.boardById,
+      repoById: maps.repoById,
+      branchById: maps.branchById,
+      sessionById: maps.sessionById,
+      sessionsByBranch: maps.sessionsByBranch,
+      boardObjectById: maps.boardObjectById,
+      boardObjectsByBoardId: maps.boardObjectsByBoardId,
+      cardById: maps.cardById,
+      userById: maps.userById,
+      commentById: maps.commentById,
+    });
+  }, [maps]);
+
   return (
     <ConfigProvider
       theme={{
@@ -668,21 +689,10 @@ export const MarketingScreenshotPage = () => {
                 <SessionCanvas
                   board={board}
                   client={null}
-                  sessionById={maps.sessionById}
-                  sessionsByBranch={maps.sessionsByBranch}
-                  userById={maps.userById}
-                  repoById={maps.repoById}
                   branches={branches}
-                  branchById={maps.branchById}
-                  boardObjectById={maps.boardObjectById}
-                  boardObjectsByBoardId={maps.boardObjectsByBoardId}
-                  commentById={maps.commentById}
-                  cardById={maps.cardById}
                   currentUserId={users[0].user_id}
                   selectedSessionId={null}
                   availableAgents={[]}
-                  mcpServerById={new Map()}
-                  sessionMcpServerIds={new Map()}
                   staticCursors={staticCursors}
                   staticCursorScale={1.3}
                   height="calc(100vh - 64px)"

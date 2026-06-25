@@ -41,6 +41,7 @@
     "emoji-picker-react": "^4.19.1",
     "emojibase": "^17.0.0",
     "emojibase-data": "^17.0.0",
+    "immer": "^11.1.8",
     "lz-string": "1.5.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -50,7 +51,8 @@
     "react-syntax-highlighter": "^16.1.1",
     "reactflow": "^11.11.4",
     "streamdown": "^1.5.1",
-    "use-stick-to-bottom": "^1.1.6"
+    "use-stick-to-bottom": "^1.1.6",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

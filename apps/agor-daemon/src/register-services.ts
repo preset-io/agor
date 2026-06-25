@@ -613,12 +613,22 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Users service
   // ============================================================================
 
-  const usersService = createUsersService(db);
+  const usersService = createUsersService(db, app);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
-  // the custom `getGitEnvironment`. Listing `update` here makes Feathers' hook
+  // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
   app.use('/users', usersService, {
-    methods: ['find', 'get', 'create', 'patch', 'remove', 'getGitEnvironment'],
+    methods: [
+      'find',
+      'get',
+      'create',
+      'patch',
+      'remove',
+      'getGitEnvironment',
+      'getAvatarSettings',
+      'updateAvatarSettings',
+      'syncAvatars',
+    ],
   });
 
   // Bootstrap superadmin users

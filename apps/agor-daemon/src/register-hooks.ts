@@ -2215,6 +2215,24 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           return context;
         },
+        async (context: HookContext) => {
+          if ((context.params as Params & { skipAvatarRefresh?: boolean }).skipAvatarRefresh) {
+            return context;
+          }
+          const user = context.result as User;
+          const avatarService = safeService('users') as
+            | { refreshAvatarFromSettings?: (userId: UserID) => Promise<unknown> }
+            | undefined;
+          if (avatarService?.refreshAvatarFromSettings) {
+            avatarService.refreshAvatarFromSettings(user.user_id).catch((error: unknown) => {
+              console.warn(
+                `[users/avatar-sync] Failed to refresh avatar for new user ${shortId(user.user_id)}:`,
+                error instanceof Error ? error.message : String(error)
+              );
+            });
+          }
+          return context;
+        },
       ],
       patch: [
         async (context: HookContext) => {
@@ -2264,6 +2282,28 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             { logPrefix: '[Executor/user.patch]' }
           );
 
+          return context;
+        },
+        async (context: HookContext) => {
+          if ((context.params as Params & { skipAvatarRefresh?: boolean }).skipAvatarRefresh) {
+            return context;
+          }
+          const data = context.data as { email?: string; preferences?: unknown } | undefined;
+          if (data?.email === undefined && data?.preferences === undefined) {
+            return context;
+          }
+          const user = context.result as User;
+          const avatarService = safeService('users') as
+            | { refreshAvatarFromSettings?: (userId: UserID) => Promise<unknown> }
+            | undefined;
+          if (avatarService?.refreshAvatarFromSettings) {
+            avatarService.refreshAvatarFromSettings(user.user_id).catch((error: unknown) => {
+              console.warn(
+                `[users/avatar-sync] Failed to refresh avatar for updated user ${shortId(user.user_id)}:`,
+                error instanceof Error ? error.message : String(error)
+              );
+            });
+          }
           return context;
         },
       ],

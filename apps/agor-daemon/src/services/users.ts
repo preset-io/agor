@@ -28,7 +28,7 @@ import {
   update,
   users,
 } from '@agor/core/db';
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { isLikelyGitToken } from '@agor/core/git';
 import type {
   AgenticToolName,
@@ -42,6 +42,9 @@ import type {
   Params,
   StoredAgenticTools,
   User,
+  UserAvatarSettings,
+  UserAvatarSyncRequest,
+  UserAvatarSyncResult,
   UserID,
   UserRole,
 } from '@agor/core/types';
@@ -52,6 +55,7 @@ import {
   ROLES,
   toAgenticToolsStatus,
 } from '@agor/core/types';
+import { UserAvatarSyncManager } from './user-avatar-sync.js';
 
 function optionalNonNegativeInteger(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -185,6 +189,11 @@ interface CreateUserData {
   role?: UserRole;
   unix_username?: string;
   must_change_password?: boolean;
+  avatar_url?: string | null;
+  avatar?: string | null;
+  avatar_source?: string | null;
+  avatar_source_id?: string | null;
+  avatar_synced_at?: string | null;
 }
 
 /**
@@ -198,7 +207,11 @@ interface UpdateUserData {
   role?: UserRole;
   unix_username?: string;
   must_change_password?: boolean;
-  avatar?: string;
+  avatar_url?: string | null;
+  avatar?: string | null;
+  avatar_source?: string | null;
+  avatar_source_id?: string | null;
+  avatar_synced_at?: string | null;
   preferences?: Record<string, unknown>;
   onboarding_completed?: boolean;
   /**
@@ -220,7 +233,23 @@ interface UpdateUserData {
  * Users Service Methods
  */
 export class UsersService {
-  constructor(protected db: Database) {}
+  private avatarSync?: UserAvatarSyncManager;
+
+  constructor(
+    protected db: Database,
+    app?: Application
+  ) {
+    if (app) {
+      this.avatarSync = new UserAvatarSyncManager(db, app);
+    }
+  }
+
+  private requireAvatarSync(): UserAvatarSyncManager {
+    if (!this.avatarSync) {
+      throw new Error('User avatar sync is not available in this service context');
+    }
+    return this.avatarSync;
+  }
 
   /**
    * Find all users.
@@ -344,6 +373,11 @@ export class UsersService {
         created_at: now,
         updated_at: now,
         data: {
+          avatar_url: data.avatar_url ?? data.avatar ?? undefined,
+          avatar_source:
+            data.avatar_source ?? ((data.avatar_url ?? data.avatar) ? 'manual' : undefined),
+          avatar_source_id: data.avatar_source_id ?? undefined,
+          avatar_synced_at: data.avatar_synced_at ?? undefined,
           preferences: {},
         },
       })
@@ -386,7 +420,11 @@ export class UsersService {
 
     // Update data blob
     if (
-      data.avatar ||
+      data.avatar_url !== undefined ||
+      data.avatar !== undefined ||
+      data.avatar_source !== undefined ||
+      data.avatar_source_id !== undefined ||
+      data.avatar_synced_at !== undefined ||
       data.preferences ||
       data.agentic_tools ||
       data.env_vars ||
@@ -396,7 +434,11 @@ export class UsersService {
       const current = await this.get(id);
       const currentRow = await select(this.db).from(users).where(eq(users.user_id, id)).one();
       const currentData = currentRow?.data as {
+        avatar_url?: string;
         avatar?: string;
+        avatar_source?: string;
+        avatar_source_id?: string;
+        avatar_synced_at?: string;
         preferences?: Record<string, unknown>;
         agentic_tools?: StoredAgenticTools;
         env_vars?: Record<string, string | StoredEnvVar>;
@@ -485,8 +527,44 @@ export class UsersService {
         }
       }
 
+      const avatarUrlTouched = data.avatar_url !== undefined || data.avatar !== undefined;
+      const avatarCleared = data.avatar_url === null || data.avatar === null;
+      const inferredManualAvatarSource =
+        avatarUrlTouched && !avatarCleared && data.avatar_source === undefined;
+      const avatarSourceChangedAwayFromSlack =
+        data.avatar_source !== undefined &&
+        data.avatar_source !== null &&
+        data.avatar_source !== 'slack';
+
       updates.data = {
-        avatar: data.avatar ?? current.avatar,
+        ...currentData,
+        avatar_url: avatarCleared
+          ? undefined
+          : (data.avatar_url ?? data.avatar ?? current.avatar_url),
+        // Deprecated legacy alias: read for back-compat, stop writing it on avatar updates.
+        avatar: undefined,
+        avatar_source:
+          data.avatar_source === null || avatarCleared
+            ? undefined
+            : data.avatar_source !== undefined
+              ? data.avatar_source
+              : inferredManualAvatarSource
+                ? 'manual'
+                : current.avatar_source,
+        avatar_source_id:
+          data.avatar_source_id === null ||
+          avatarCleared ||
+          inferredManualAvatarSource ||
+          (avatarSourceChangedAwayFromSlack && data.avatar_source_id === undefined)
+            ? undefined
+            : (data.avatar_source_id ?? current.avatar_source_id),
+        avatar_synced_at:
+          data.avatar_synced_at === null ||
+          avatarCleared ||
+          inferredManualAvatarSource ||
+          (avatarSourceChangedAwayFromSlack && data.avatar_synced_at === undefined)
+            ? undefined
+            : (data.avatar_synced_at ?? current.avatar_synced_at),
         preferences: data.preferences ?? current.preferences,
         agentic_tools: Object.keys(nextAgenticTools).length > 0 ? nextAgenticTools : undefined,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
@@ -659,6 +737,28 @@ export class UsersService {
     return resolveUserEnvironment(userId, this.db);
   }
 
+  async getAvatarSettings(_data?: unknown, params?: Params): Promise<UserAvatarSettings> {
+    return this.requireAvatarSync().getSettings(params);
+  }
+
+  async updateAvatarSettings(
+    data: Partial<UserAvatarSettings>,
+    params?: Params
+  ): Promise<UserAvatarSettings> {
+    return this.requireAvatarSync().updateSettings(data, params);
+  }
+
+  async syncAvatars(
+    data: UserAvatarSyncRequest = {},
+    params?: Params
+  ): Promise<UserAvatarSyncResult> {
+    return this.requireAvatarSync().syncAvatars(data, params);
+  }
+
+  async refreshAvatarFromSettings(userId: UserID): Promise<UserAvatarSyncResult | null> {
+    return this.requireAvatarSync().refreshUserFromSettings(userId);
+  }
+
   /**
    * Convert database row to User type
    *
@@ -678,7 +778,11 @@ export class UsersService {
     includeAuthMetadata = true
   ): (User | InternalUser) & { password?: string } {
     const data = row.data as {
+      avatar_url?: string;
       avatar?: string;
+      avatar_source?: string;
+      avatar_source_id?: string;
+      avatar_synced_at?: string;
       preferences?: Record<string, unknown>;
       agentic_tools?: StoredAgenticTools; // Encrypted per-tool credential blobs
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
@@ -703,7 +807,11 @@ export class UsersService {
       emoji: row.emoji ?? undefined,
       role: normalizeRole(row.role ?? undefined),
       unix_username: row.unix_username ?? undefined,
+      avatar_url: data.avatar_url ?? data.avatar,
       avatar: data.avatar,
+      avatar_source: data.avatar_source,
+      avatar_source_id: data.avatar_source_id,
+      avatar_synced_at: data.avatar_synced_at,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,
@@ -761,7 +869,11 @@ class UsersServiceWithAuth extends UsersService {
     }
 
     const data = row.data as {
+      avatar_url?: string;
       avatar?: string;
+      avatar_source?: string;
+      avatar_source_id?: string;
+      avatar_synced_at?: string;
       preferences?: Record<string, unknown>;
       agentic_tools?: StoredAgenticTools;
       env_vars?: Record<string, string | StoredEnvVar>;
@@ -785,7 +897,11 @@ class UsersServiceWithAuth extends UsersService {
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
       role: normalizeRole(row.role ?? undefined),
+      avatar_url: data.avatar_url ?? data.avatar,
       avatar: data.avatar,
+      avatar_source: data.avatar_source,
+      avatar_source_id: data.avatar_source_id,
+      avatar_synced_at: data.avatar_synced_at,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,
@@ -801,6 +917,6 @@ class UsersServiceWithAuth extends UsersService {
 /**
  * Create users service
  */
-export function createUsersService(db: Database): UsersServiceWithAuth {
-  return new UsersServiceWithAuth(db);
+export function createUsersService(db: Database, app?: Application): UsersServiceWithAuth {
+  return new UsersServiceWithAuth(db, app);
 }

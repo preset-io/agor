@@ -74,6 +74,7 @@ const KNOWN_CSP_DIRECTIVES: ReadonlySet<string> = new Set([
  */
 export const SANDPACK_CSP_FRAME_SRC = 'https://*.codesandbox.io';
 export const SANDPACK_CSP_WORKER_SRC = 'blob:';
+export const SLACK_AVATAR_CSP_IMG_SRC = 'https://*.slack-edge.com';
 
 /**
  * Built-in CSP defaults.
@@ -94,7 +95,7 @@ function buildDefaultDirectives(opts: {
   if (opts.daemonUrl) connectSrc.push(opts.daemonUrl);
   if (opts.extraConnectSrc) connectSrc.push(...opts.extraConnectSrc);
 
-  const imgSrc = ["'self'", 'data:', 'blob:'];
+  const imgSrc = ["'self'", 'data:', 'blob:', SLACK_AVATAR_CSP_IMG_SRC];
   const frameSrc = ["'self'"];
   const workerSrc = ["'self'", SANDPACK_CSP_WORKER_SRC];
   if (opts.allowSandpack) {

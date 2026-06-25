@@ -214,6 +214,25 @@ const getLeftPanelMinSizePercent = (viewportWidth: number) =>
 const clampPercent = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
+// Freeze a callback's identity for the component's lifetime while always
+// invoking the latest implementation. Several action props arrive from the
+// parent (`AppContent`) as plain consts that get a fresh identity on every
+// store-driven re-render. Passing them straight to the memoized SessionCanvas
+// would defeat its `React.memo` (and the inner BranchNode / `initialNodes`
+// memoization) on every live patch. The wrapper's identity is stable; a ref
+// keeps it delegating to the current impl, so behavior is unchanged. Preserves
+// `undefined` so optional handlers stay absent (no spurious enabled UI).
+function useStableCallback<TFn extends (...args: never[]) => unknown>(
+  callback: TFn | undefined
+): TFn | undefined {
+  const callbackRef = useRef(callback);
+  useLayoutEffect(() => {
+    callbackRef.current = callback;
+  });
+  const stable = useCallback(((...args: never[]) => callbackRef.current?.(...args)) as TFn, []);
+  return callback ? stable : undefined;
+}
+
 export const App: React.FC<AppProps> = ({
   client,
   user,
@@ -1010,6 +1029,22 @@ export const App: React.FC<AppProps> = ({
     ]
   );
 
+  // Stabilize the passthrough action props before they reach the memoized
+  // SessionCanvas. These arrive from AppContent as plain consts (fresh identity
+  // on every store-driven re-render); without freezing them, SessionCanvas's
+  // React.memo would re-render on every live patch even when nothing it draws
+  // changed. Every other SessionCanvas prop is already stable (memoized values,
+  // useState setters, or useCallback handlers).
+  const stableOnSessionUpdate = useStableCallback(onUpdateSession);
+  const stableOnSessionDelete = useStableCallback(onDeleteSession);
+  const stableOnForkSession = useStableCallback(onForkSession);
+  const stableOnSpawnSession = useStableCallback(onSpawnSession);
+  const stableOnUpdateSessionMcpServers = useStableCallback(onUpdateSessionMcpServers);
+  const stableOnArchiveOrDeleteBranch = useStableCallback(onArchiveOrDeleteBranch);
+  const stableOnStartEnvironment = useStableCallback(onStartEnvironment);
+  const stableOnStopEnvironment = useStableCallback(onStopEnvironment);
+  const stableOnNukeEnvironment = useStableCallback(onNukeEnvironment);
+
   return (
     <AppEntityDataProvider value={appEntityDataValue}>
       <AppLiveDataProvider value={appLiveDataValue}>
@@ -1232,39 +1267,28 @@ export const App: React.FC<AppProps> = ({
                             ref={sessionCanvasRef}
                             board={currentBoard || null}
                             client={client}
-                            sessionById={sessionById}
-                            sessionsByBranch={sessionsByBranch}
-                            userById={userById}
-                            repoById={repoById}
                             branches={boardBranches}
                             primaryAssistantId={primaryAssistantId}
-                            branchById={branchById}
-                            boardObjectById={boardObjectById}
-                            boardObjectsByBoardId={boardObjectsByBoardId}
-                            commentById={commentById}
-                            cardById={cardById}
                             currentUserId={user?.user_id}
                             selectedSessionId={effectiveSelectedSessionId}
                             activeUrlTargetBranchId={activeUrlTargetBranchId}
                             activeUrlTargetArtifactId={activeUrlTargetArtifactId}
                             availableAgents={availableAgents}
-                            mcpServerById={mcpServerById}
-                            sessionMcpServerIds={sessionMcpServerIds}
                             onSessionClick={handleSessionClick}
-                            onSessionUpdate={onUpdateSession}
-                            onSessionDelete={onDeleteSession}
-                            onForkSession={onForkSession}
-                            onSpawnSession={onSpawnSession}
-                            onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+                            onSessionUpdate={stableOnSessionUpdate}
+                            onSessionDelete={stableOnSessionDelete}
+                            onForkSession={stableOnForkSession}
+                            onSpawnSession={stableOnSpawnSession}
+                            onUpdateSessionMcpServers={stableOnUpdateSessionMcpServers}
                             onOpenSettings={setSessionSettingsId}
                             onCreateSessionForBranch={setNewSessionBranchId}
                             onOpenBranch={setBranchModalBranchId}
-                            onArchiveOrDeleteBranch={onArchiveOrDeleteBranch}
+                            onArchiveOrDeleteBranch={stableOnArchiveOrDeleteBranch}
                             onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
-                            onStartEnvironment={onStartEnvironment}
-                            onStopEnvironment={onStopEnvironment}
+                            onStartEnvironment={stableOnStartEnvironment}
+                            onStopEnvironment={stableOnStopEnvironment}
                             onViewLogs={setLogsModalBranchId}
-                            onNukeEnvironment={onNukeEnvironment}
+                            onNukeEnvironment={stableOnNukeEnvironment}
                             onOpenCommentsPanel={handleOpenCommentsPanel}
                             onCommentHover={setHoveredCommentId}
                             onCommentSelect={handleCommentSelect}

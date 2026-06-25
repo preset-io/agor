@@ -346,6 +346,159 @@ describe('agor_branches_set_zone', () => {
     ).rejects.toThrow(/cannot be used when zoneId is null/i);
     expect(findByBranchId).not.toHaveBeenCalled();
   });
+
+  it('triggers a show_picker zone prompt when the target session belongs to the moved branch', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const branch = {
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+      name: 'Branch 1',
+    };
+    const targetSession = {
+      session_id: 'session-1',
+      branch_id: 'branch-1',
+      description: 'Existing branch session',
+      custom_context: {},
+    };
+    const zone = {
+      type: 'zone',
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 200,
+      label: 'Evidence/QA',
+      trigger: {
+        behavior: 'show_picker',
+        template: 'Run {{branch.name}} in {{zone.label}}',
+      },
+    };
+    const branchesGet = vi.fn(async () => branch);
+    const sessionsGet = vi.fn(async () => targetSession);
+    const boardsGet = vi.fn(async () => ({
+      board_id: 'board-1',
+      objects: {
+        'zone-validate': zone,
+      },
+    }));
+    const findByBranchId = vi.fn(async () => ({
+      object_id: 'obj-branch-1',
+      branch_id: 'branch-1',
+    }));
+    const boardObjectsPatch = vi.fn(async () => ({
+      object_id: 'obj-branch-1',
+      branch_id: 'branch-1',
+      zone_id: 'zone-validate',
+    }));
+    const promptCreate = vi.fn(async () => ({
+      task_id: 'task-1',
+      status: 'running',
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet };
+        if (name === 'sessions') return { get: sessionsGet };
+        if (name === 'boards') return { get: boardsGet };
+        if (name === 'board-objects') {
+          return {
+            findByBranchId,
+            patch: boardObjectsPatch,
+          };
+        }
+        if (name === '/sessions/:id/prompt') return { create: promptCreate };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await setZone({
+      branchId: 'branch-1',
+      zoneId: 'zone-validate',
+      triggerTemplate: true,
+      targetSessionId: 'session-1',
+    });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(sessionsGet).toHaveBeenCalledWith('session-1', baseServiceParams);
+    expect(boardObjectsPatch).toHaveBeenCalledWith(
+      'obj-branch-1',
+      expect.objectContaining({ zone_id: 'zone-validate' }),
+      baseServiceParams
+    );
+    expect(promptCreate).toHaveBeenCalledWith(
+      { prompt: 'Run Branch 1 in Evidence/QA', stream: true },
+      { ...baseServiceParams, route: { id: 'session-1' } }
+    );
+    expect(parsed.trigger.sessionId).toBe('session-1');
+  });
+
+  it('rejects show_picker zone triggers when the target session belongs to another branch', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const branch = {
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+      name: 'Branch 1',
+    };
+    const targetSession = {
+      session_id: 'session-2',
+      branch_id: 'branch-2',
+      description: 'Other branch session',
+      custom_context: {},
+    };
+    const branchesGet = vi.fn(async () => branch);
+    const sessionsGet = vi.fn(async () => targetSession);
+    const boardsGet = vi.fn();
+    const findByBranchId = vi.fn();
+    const boardObjectsPatch = vi.fn();
+    const promptCreate = vi.fn();
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet };
+        if (name === 'sessions') return { get: sessionsGet };
+        if (name === 'boards') return { get: boardsGet };
+        if (name === 'board-objects') {
+          return {
+            findByBranchId,
+            patch: boardObjectsPatch,
+          };
+        }
+        if (name === '/sessions/:id/prompt') return { create: promptCreate };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await expect(
+      setZone({
+        branchId: 'branch-1',
+        zoneId: 'zone-validate',
+        triggerTemplate: true,
+        targetSessionId: 'session-2',
+      })
+    ).rejects.toThrow(/belongs to branch branch2.*moving branch branch1/i);
+
+    expect(boardsGet).not.toHaveBeenCalled();
+    expect(findByBranchId).not.toHaveBeenCalled();
+    expect(boardObjectsPatch).not.toHaveBeenCalled();
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
 });
 
 describe('agor_branches_list', () => {

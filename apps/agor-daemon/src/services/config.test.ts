@@ -128,6 +128,65 @@ describe('ConfigService.resolveApiKey', () => {
     });
   });
 
+  it('allows executor runtime tokens passed as explicit session-token proof', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      sessionTokenService: {
+        validateToken: vi.fn(async () => ({ task_id: 'task-1' })),
+      },
+      service(name: string) {
+        if (name === 'tasks') {
+          return { get: vi.fn(async () => ({ created_by: 'creator-1', session_id: 'session-1' })) };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    const result = await service.resolveApiKey(
+      {
+        taskId: 'task-1' as TaskID,
+        keyName: 'OPENAI_API_KEY',
+        tool: 'codex',
+        executorSessionToken: 'executor-jwt',
+      },
+      {
+        provider: 'socketio',
+        user: { user_id: 'creator-1' },
+      } as never
+    );
+
+    expect(result).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
+  });
+
+  it('allows executor runtime tokens when Socket.io preserved scope fields without payload', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return { get: vi.fn(async () => ({ created_by: 'creator-1', session_id: 'session-1' })) };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    const result = await service.resolveApiKey(
+      { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+      {
+        provider: 'socketio',
+        authentication: { strategy: 'jwt' },
+        task_id: 'task-1',
+      } as never
+    );
+
+    expect(result).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
+  });
+
   it('rejects executor runtime tokens for a different API key than the session tool uses', async () => {
     const service = new ConfigService({} as never);
     service.app = {

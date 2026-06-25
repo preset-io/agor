@@ -10,7 +10,6 @@ import type {
   Branch,
   BranchID,
   CardWithType,
-  MCPServer,
   Repo,
   Session,
   SpawnConfig,
@@ -62,6 +61,17 @@ import {
 } from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  makeBoardObjectsForBoardSelector,
+  selectBranchById,
+  selectCardById,
+  selectCommentById,
+  selectMcpServerById,
+  selectRepoById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
 import { REACT_FLOW_DRAG_HANDLE_SELECTOR } from '../../utils/reactFlowDragClasses';
 import { sanitizeBoardCss } from '../../utils/sanitizeCss';
@@ -94,17 +104,12 @@ import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
 interface SessionCanvasProps {
   board: Board | null;
   client: AgorClient | null;
-  sessionById: Map<string, Session>; // O(1) ID lookups
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
-  userById: Map<string, User>; // Map-based user storage
-  repoById: Map<string, Repo>; // Map-based repo storage
+  // Entity maps (sessions, branches, repos, users, board objects, comments,
+  // cards, MCP servers) are read from the zustand store via narrow selector
+  // subscriptions rather than props — the canvas re-renders only for the slices
+  // it actually consumes.
   branches: Branch[];
   primaryAssistantId?: string | null;
-  branchById: Map<string, Branch>;
-  boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
-  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
-  commentById: Map<string, BoardComment>; // Map-based comment storage
-  cardById: Map<string, CardWithType>; // Map-based card storage for this board
   currentUserId?: string;
   selectedSessionId?: string | null;
   /** Branch currently targeted by a `/w/<…>/` deep link — folds into
@@ -114,8 +119,6 @@ interface SessionCanvasProps {
    *  ArtifactNode's dashed "selected" outline. */
   activeUrlTargetArtifactId?: string | null;
   availableAgents?: AgenticToolOption[];
-  mcpServerById?: Map<string, MCPServer>; // Map-based MCP server storage
-  sessionMcpServerIds?: Map<string, string[]>; // Map sessionId -> mcpServerIds[]
   onSessionClick?: (sessionId: string) => void;
   onTaskClick?: (taskId: string) => void;
   onSessionUpdate?: (sessionId: string, updates: Partial<Session>) => void;
@@ -347,28 +350,18 @@ const EMPTY_BOARD_ENTITY_OBJECTS: BoardEntityObject[] = Object.freeze(
   [] as BoardEntityObject[]
 ) as BoardEntityObject[];
 
-const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
+const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   (
     {
       board,
       client,
-      sessionById,
-      sessionsByBranch,
-      repoById,
       branches,
       primaryAssistantId,
-      branchById,
-      boardObjectsByBoardId,
-      commentById,
-      cardById,
-      userById,
       currentUserId,
       selectedSessionId,
       activeUrlTargetBranchId,
       activeUrlTargetArtifactId,
       availableAgents = [],
-      mcpServerById = new Map(),
-      sessionMcpServerIds = new Map(),
       onSessionClick,
       onTaskClick,
       onSessionUpdate,
@@ -397,6 +390,18 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   ) => {
     const { token } = theme.useToken();
     const mutationGate = useMutationGate();
+
+    // Entity state via narrow store subscriptions. Each whole-map selector is a
+    // stable module-level reference, so a slice only re-renders the canvas when
+    // its own reference changes (idempotent writes are short-circuited upstream).
+    const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+    const repoById = useAgorStore(selectRepoById);
+    const branchById = useAgorStore(selectBranchById);
+    const commentById = useAgorStore(selectCommentById);
+    const cardById = useAgorStore(selectCardById);
+    const userById = useAgorStore(selectUserById);
+    const mcpServerById = useAgorStore(selectMcpServerById);
+
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
     const hasCustomCss = Boolean(board?.custom_css?.trim());
@@ -419,17 +424,15 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return sanitizeBoardCss(bgRule + (board?.custom_css || ''), `.${boardCssClass}`);
     }, [board?.custom_css, board?.background_color, boardCssClass, hasUserStyling, hasUserBg]);
 
-    // Note: sessionsByBranch is now passed as prop (no longer computed locally)
-    // This enables efficient O(1) lookups and stable references across re-renders
-
+    // Board-scoped board objects: subscribe to only THIS board's bucket so
+    // other boards' object churn never re-renders the canvas. The factory is
+    // memoized per boardId so the selector reference is stable across renders.
     const boardId = board?.board_id;
-    const boardObjectsForBoard = useMemo(
-      () =>
-        boardId
-          ? boardObjectsByBoardId.get(boardId) || EMPTY_BOARD_ENTITY_OBJECTS
-          : EMPTY_BOARD_ENTITY_OBJECTS,
-      [boardId, boardObjectsByBoardId]
+    const boardObjectsSelector = useMemo(
+      () => makeBoardObjectsForBoardSelector(boardId),
+      [boardId]
     );
+    const boardObjectsForBoard = useAgorStore(boardObjectsSelector) || EMPTY_BOARD_ENTITY_OBJECTS;
 
     // Board-scoped placement maps: rebuild only when this board's object array
     // changes. This replaces the old global scan + JSON.stringify stabilizer.
@@ -452,9 +455,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Card modal state
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
     const [cardModalOpen, setCardModalOpen] = useState(false);
-
-    // Note: branchById is now passed as prop from parent (no longer computed locally)
-    // This enables efficient O(1) lookups and stable references across re-renders
 
     // Tool state for canvas annotations
     const [activeTool, setActiveTool] = useState<
@@ -2899,6 +2899,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   }
 );
 
-SessionCanvas.displayName = 'SessionCanvas';
+SessionCanvasInner.displayName = 'SessionCanvas';
+
+// Memoized so the canvas is insulated from its parent's top-down re-renders:
+// AgorApp re-renders on every live store patch, but SessionCanvas re-renders only
+// when one of its own props actually changes OR one of its `useAgorStore`
+// selector slices fires. The bailout holds only while the parent keeps every
+// prop referentially stable (see the stabilized handlers at the App render site).
+const SessionCanvas = React.memo(SessionCanvasInner);
 
 export default SessionCanvas;

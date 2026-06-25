@@ -836,3 +836,20 @@ describe('SlackConnector.sendMessage', () => {
     ]);
   });
 });
+
+describe('SlackConnector.lookupUserAvatarByEmail', () => {
+  it('treats Slack users_not_found platform errors as a skipped lookup', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: { users: { lookupByEmail: unknown } } }).web = {
+      users: {
+        lookupByEmail: async () => {
+          const error = new Error('users_not_found') as Error & { data?: { error?: string } };
+          error.data = { error: 'users_not_found' };
+          throw error;
+        },
+      },
+    };
+
+    await expect(connector.lookupUserAvatarByEmail('missing@example.com')).resolves.toBeNull();
+  });
+});

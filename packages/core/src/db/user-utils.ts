@@ -38,7 +38,11 @@ export interface CreateUserData {
  */
 export function userRowToUser(row: UserRow): InternalUser {
   const userData = (row.data ?? {}) as {
+    avatar_url?: string;
     avatar?: string;
+    avatar_source?: string;
+    avatar_source_id?: string;
+    avatar_synced_at?: string;
     preferences?: Record<string, unknown>;
   };
   return {
@@ -48,7 +52,11 @@ export function userRowToUser(row: UserRow): InternalUser {
     emoji: row.emoji ?? undefined,
     role: normalizeRole(row.role ?? undefined),
     unix_username: row.unix_username ?? undefined,
+    avatar_url: userData.avatar_url ?? userData.avatar,
     avatar: userData.avatar,
+    avatar_source: userData.avatar_source,
+    avatar_source_id: userData.avatar_source_id,
+    avatar_synced_at: userData.avatar_synced_at,
     preferences: userData.preferences,
     onboarding_completed: !!row.onboarding_completed,
     must_change_password: !!row.must_change_password,
