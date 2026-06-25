@@ -85,6 +85,7 @@ interface LlmOption {
   placeholder: string;
   keyLink: string | null;
   keyLinkLabel: string | null;
+  recommended?: boolean;
 }
 
 const LLM_OPTIONS: LlmOption[] = [
@@ -98,13 +99,14 @@ const LLM_OPTIONS: LlmOption[] = [
     placeholder: 'sk-ant-api03-…',
     keyLink: 'https://console.anthropic.com/',
     keyLinkLabel: 'console.anthropic.com',
+    recommended: true,
   },
   {
     id: 'openai',
     agent: 'codex',
     symbol: '⬡',
     provider: 'OpenAI',
-    title: 'GPT-4o',
+    title: 'GPT',
     description: 'Fast and strong at structured reasoning and code generation',
     placeholder: 'sk-proj-…',
     keyLink: 'https://platform.openai.com/api-keys',
@@ -711,12 +713,27 @@ export function OnboardingWizard({
                   {option.symbol}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14 }}>
                       {option.title}
                     </span>
                     {option.provider && (
                       <span style={{ color: TEXT_MUTED, fontSize: 12 }}>by {option.provider}</span>
+                    )}
+                    {option.recommended && (
+                      <span
+                        style={{
+                          background: 'rgba(99,102,241,0.18)',
+                          border: `1px solid ${INDIGO}`,
+                          borderRadius: 4,
+                          padding: '1px 6px',
+                          fontSize: 11,
+                          color: INDIGO,
+                          fontWeight: 600,
+                        }}
+                      >
+                        Recommended
+                      </span>
                     )}
                     {hasKey && (
                       <span
@@ -1488,13 +1505,14 @@ export function OnboardingWizard({
           WebkitBackdropFilter: 'blur(6px)',
           background: 'rgba(0,0,0,0.6)',
         },
-        body: {
-          padding: 0,
+        content: {
           background: MODAL_BG,
-        },
-        wrapper: {
+          borderRadius: 16,
+          padding: 0,
+          boxShadow: '0 32px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.07)',
           overflow: 'hidden',
         },
+        body: { padding: 0 },
       }}
     >
       {/* Progress indicator */}
@@ -1504,8 +1522,7 @@ export function OnboardingWizard({
       <div
         style={{
           padding: '20px 32px',
-          minHeight: 360,
-          maxHeight: 520,
+          height: 440,
           overflowY: 'auto',
         }}
       >
