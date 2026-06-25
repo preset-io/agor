@@ -122,6 +122,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     }
 
     return this.boardRepo.findAll(filter);
+  }
 
   /**
    * Custom method: Find board by slug

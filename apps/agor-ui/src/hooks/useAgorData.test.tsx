@@ -868,6 +868,46 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     }
   });
 
+  it('resolves the board scope for a /m/comments cold deep-link so the displayed board carries its objects at first paint', async () => {
+    // The mobile comments route lives outside the main entity route table; a
+    // cold deep-link must still resolve its board scope and fire the targeted
+    // full-board get, else `board.objects` is undefined until hydration lands.
+    // The route carries a full board_id (a UUID), resolved via the short-id
+    // resolver — so use a hex id here, not the slug.
+    const boardId = '0b0a4d00-0000-7000-8000-0000000000d1';
+    window.history.pushState({}, '', `/m/comments/${boardId}`);
+    const leanBoard = { board_id: boardId, slug: 'displayed', name: 'Displayed' };
+    const fullBoard = {
+      ...leanBoard,
+      custom_css: '.x{}',
+      objects: { 'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
+    };
+    const seed: Record<string, unknown[]> = {};
+    const gate = deferred();
+    const { client, onFetch } = makeMockClient(seed);
+    // Hold the boards hydration (call 2) open so the assertion sees first-paint
+    // state — objects can only have come from the targeted `boards.get`.
+    seed['boards:get'] = fullBoard as never;
+    onFetch('boards', 'findAll', (call) => {
+      if (call === 1) {
+        seed['boards:findAll'] = [leanBoard];
+        return undefined;
+      }
+      return gate.promise;
+    });
+    const { result } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+      const board = result.current.boardById.get(boardId);
+      expect(board?.objects).toBeDefined();
+      expect(Object.keys(board?.objects ?? {})).toContain('zone-1');
+      expect(board?.custom_css).toBe('.x{}');
+    } finally {
+      gate.resolve();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('backfills every board objects via the boards background hydration', async () => {
     const leanA = { board_id: 'board-A', slug: 'a', name: 'A' };
     const leanB = { board_id: 'board-B', slug: 'b', name: 'B' };

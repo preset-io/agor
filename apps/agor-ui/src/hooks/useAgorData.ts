@@ -141,6 +141,14 @@ function parseEntityPath(pathname: string): ParsedEntityPath {
   return { kind, token };
 }
 
+// The mobile comments deep link (`/m/comments/<board_id>`) lives OUTSIDE the
+// main entity route table (ENTITY_PATH_SEGMENTS) but still displays a single
+// board's annotations (zones drive comment anchoring) at first paint. Match it
+// here so a cold deep-link resolves its board scope and triggers the targeted
+// full-board `get` — otherwise `board.objects` stays undefined until the boards
+// background hydration lands. The `:boardId` is a full board_id.
+const MOBILE_COMMENTS_PATH_RE = /\/m\/comments\/([^/]+)/;
+
 // Resolve the board the app will ACTUALLY display on first paint from the
 // current URL, reusing the same slug/short-id resolvers `useUrlState` uses.
 // First-paint scoping MUST target this board (never the stored one) so the
@@ -159,6 +167,11 @@ function resolveDisplayedBoardId(
     { session_id: string; branch_id?: string; branch_board_id?: string | null }
   >
 ): string | null {
+  const mobileComments = pathname.match(MOBILE_COMMENTS_PATH_RE);
+  if (mobileComments) {
+    return resolveBoardFromUrlPure(mobileComments[1], boardById);
+  }
+
   const parsed = parseEntityPath(pathname);
   if (!parsed) return null;
 
@@ -650,7 +663,11 @@ export function useAgorData(
           // silent reconnect (boardScope undefined) skip it and let the boards
           // hydration restore objects. Not tracked — not a loading-checklist item.
           !silent && boardScope
-            ? (client.service('boards').get(boardScope) as Promise<Board>).catch(() => null)
+            ? // A failed get degrades gracefully rather than blocking first paint:
+              // the displayed board's objects backfill via the boards background
+              // hydration a beat later, so one board's annotation fetch failing
+              // must not fail or stall the whole load.
+              (client.service('boards').get(boardScope) as Promise<Board>).catch(() => null)
             : Promise.resolve(null),
         ]);
         debugTimer?.endFetchPhase();
