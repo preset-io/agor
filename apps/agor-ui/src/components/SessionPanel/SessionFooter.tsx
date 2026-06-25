@@ -1374,7 +1374,11 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 count={queuedTasks.length > 0 ? queuedTasks.length : 0}
                 size="small"
                 offset={[-2, 2]}
-                style={{ boxShadow: 'none', backgroundColor: token.colorInfo, fontSize: 10 }}
+                style={{
+                  boxShadow: 'none',
+                  backgroundColor: token.colorTextTertiary,
+                  fontSize: 10,
+                }}
               >
                 <Button
                   type="primary"
