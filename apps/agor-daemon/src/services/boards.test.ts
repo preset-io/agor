@@ -347,6 +347,44 @@ describe('BoardsService - Custom Methods', () => {
     expect(updated.objects?.['welcome-note']).toEqual(board.objects?.['welcome-note']);
   });
 
+  dbTest('find with lean omits objects/custom_css; get + full find keep them', async ({ db }) => {
+    const service = new BoardsService(db);
+
+    const board = (await service.create({
+      name: 'Lean Board',
+      slug: `lean-board-${generateId()}`,
+      created_by: TEST_USER,
+      custom_css: '.canvas { background: #000 }',
+      objects: {
+        'zone-1': { type: 'zone', x: 0, y: 0, width: 100, height: 100, label: 'Review' },
+      },
+    })) as Board;
+
+    const findBoardById = (result: Awaited<ReturnType<BoardsService['find']>>) => {
+      const list = Array.isArray(result) ? result : result.data;
+      const found = list.find((b) => b.board_id === board.board_id);
+      if (!found) throw new Error('board missing from find result');
+      return found;
+    };
+
+    // Lean list drops the heavy annotations but keeps metadata.
+    const leanBoard = findBoardById(await service.find({ query: { lean: true } } as never));
+    expect(leanBoard.name).toBe('Lean Board');
+    expect(leanBoard.objects).toBeUndefined();
+    expect(leanBoard.custom_css).toBeUndefined();
+
+    // Default (non-lean) list still carries them.
+    const fullBoard = findBoardById(await service.find({ query: {} } as never));
+    expect(fullBoard.objects).toBeDefined();
+    expect(Object.keys(fullBoard.objects ?? {})).toContain('zone-1');
+    expect(fullBoard.custom_css).toBe('.canvas { background: #000 }');
+
+    // Single-board read is always full, regardless of list leanness.
+    const got = await service.get(board.board_id);
+    expect(Object.keys(got.objects ?? {})).toContain('zone-1');
+    expect(got.custom_css).toBe('.canvas { background: #000 }');
+  });
+
   dbTest('should have all custom methods defined', async ({ db }) => {
     const service = new BoardsService(db);
 

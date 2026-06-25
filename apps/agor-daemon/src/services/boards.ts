@@ -76,21 +76,38 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    * The generic adapter would read the entire boards table and filter in
    * memory. `boards` is fetched on initial app load, so we narrow the read to
    * explicit board ids and any RBAC SQL visibility marker before rows leave the
-   * database. `find` still re-applies every query filter
-   * in memory, so this only ever returns a superset of the matching rows and the
-   * downstream sort/pagination is unaffected.
+   * database. `find` still re-applies every query filter in memory, so this
+   * only ever returns a superset of the matching rows and the downstream
+   * sort/pagination is unaffected.
    *
-   * The boards query validator (`boardQuerySchema`) does not accept `archived`
-   * and strips it before the service runs, so there is no archived predicate to
-   * push. A `{ $in }` is only pushed when every element is a
-   * string, keeping the superset invariant unconditional.
+   * `lean` is a list-only projection flag — it omits each board's heavy
+   * `data.objects` / `data.custom_css` (a client `$select` can't trim them:
+   * they live inside the `data` JSON column). Routing it through this one
+   * repository read is exactly what keeps the lean list from ever widening
+   * board visibility — it inherits the same RBAC + id pushdown as every other
+   * list read. It is NOT a board column, so we strip it from `query` before
+   * `find` hands the query to `filterData`, which would otherwise treat it as an
+   * equality filter on a non-existent `lean` column and empty the result;
+   * `$sort` / `$select` / pagination never touch the omitted fields, and
+   * `boards.get(id)` is unaffected and always returns the full board.
+   *
+   * The boards query validator (`boardQuerySchema`) accepts `board_id` and
+   * `lean` but strips `archived`, so there is no archived predicate to push. A
+   * `{ $in }` is only pushed when every element is a string, keeping the
+   * superset invariant unconditional.
    */
   protected async fetchData(query: Query, params?: BoardParams): Promise<Board[]> {
-    const filter: { boardIds?: BoardID[]; visibleToUserId?: UUID } = {};
+    const filter: { boardIds?: BoardID[]; visibleToUserId?: UUID; lean?: boolean } = {};
 
     if (params?._agorSqlBoardAccessUserId) {
       filter.visibleToUserId = params._agorSqlBoardAccessUserId;
     }
+
+    const leanQuery = query as Query & { lean?: boolean };
+    if (leanQuery.lean) {
+      filter.lean = true;
+    }
+    delete leanQuery.lean;
 
     const boardId = query.board_id;
     if (typeof boardId === 'string') {
@@ -105,7 +122,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     }
 
     return this.boardRepo.findAll(filter);
-  }
 
   /**
    * Custom method: Find board by slug

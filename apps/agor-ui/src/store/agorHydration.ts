@@ -51,6 +51,7 @@ const HYDRATION_BACKOFF_CAP_MS = 5000;
 export type HydratedCollection =
   | 'sessions'
   | 'branches'
+  | 'boards'
   | 'boardObjects'
   | 'cards'
   | 'comments'
@@ -67,6 +68,7 @@ export type HydratedCollection =
 export const FIRST_PAINT_MERGE_COLLECTIONS = [
   'sessions',
   'branches',
+  'boards',
   'boardObjects',
   'cards',
   'comments',
@@ -75,6 +77,7 @@ export const FIRST_PAINT_MERGE_COLLECTIONS = [
 const makeZeroCounters = (): Record<HydratedCollection, number> => ({
   sessions: 0,
   branches: 0,
+  boards: 0,
   boardObjects: 0,
   cards: 0,
   comments: 0,

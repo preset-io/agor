@@ -169,6 +169,11 @@ export const boardQuerySchema = createQuerySchema(
     created_by: Type.Optional(CommonSchemas.uuid),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),
+    // List-only projection flag: when true, the boards service omits the heavy
+    // `data.objects` / `data.custom_css` annotations from each row so a workspace
+    // load doesn't ship every board's canvas annotations to paint one board's.
+    // `boards.get(id)` is unaffected and always returns the full board.
+    lean: Type.Optional(CommonSchemas.boolean),
   })
 );
 

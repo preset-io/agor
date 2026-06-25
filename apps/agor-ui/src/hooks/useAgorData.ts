@@ -446,7 +446,17 @@ export function useAgorData(
           ),
           track(
             'boards',
-            client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            // First paint: LEAN list — omit each board's heavy `objects` /
+            // `custom_css` annotations (68% of the boards payload — only the
+            // displayed board needs them to paint). Metadata still covers the
+            // switcher, Home, and `resolveDisplayedBoardId` scope resolution. The
+            // displayed board's full record is fetched below; all boards' objects
+            // backfill via the `boards` background hydration. Silent reconnect
+            // resyncs FULL (mirrors sessions/branches) so the displayed board's
+            // zones never flash off while re-syncing.
+            client.service('boards').findAll({
+              query: { ...(silent ? {} : { lean: true }), $limit: PAGINATION.DEFAULT_LIMIT },
+            })
           ),
           track(
             'card-types',
@@ -570,65 +580,79 @@ export function useAgorData(
         // board's. Silent reconnect (boardScope undefined) fetches branches
         // GLOBAL/full to resync; sessions were already fetched full in the silent
         // light batch above, so the extra board-session fetch is skipped there.
-        const [branchesList, boardSessionsList, boardObjectsList, commentsList, cardsList] =
-          await Promise.all([
-            track(
-              'branches',
-              silent
-                ? client.service('branches').findAll({
-                    query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT },
-                  })
-                : boardScope
-                  ? client.service('branches').findAll({
-                      query: {
-                        archived: false,
-                        board_id: boardScope,
-                        $limit: PAGINATION.DEFAULT_LIMIT,
-                      },
-                    })
-                  : Promise.resolve([] as Branch[])
-            ),
-            // Board-scoped sessions: only when a board is displayed and we didn't
-            // already fetch the full set (silent path). Merged with the recent
-            // slice below. Not tracked — not part of the loading checklist.
-            !silent && boardScope
-              ? client.service('sessions').findAll({
-                  query: {
-                    archived: false,
-                    board_id: boardScope,
-                    $limit: PAGINATION.DEFAULT_LIMIT,
-                    $sort: { updated_at: -1 },
-                  },
+        const [
+          branchesList,
+          boardSessionsList,
+          boardObjectsList,
+          commentsList,
+          cardsList,
+          displayedBoardFull,
+        ] = await Promise.all([
+          track(
+            'branches',
+            silent
+              ? client.service('branches').findAll({
+                  query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT },
                 })
-              : Promise.resolve([] as Session[]),
-            track(
-              'board-objects',
-              client.service('board-objects').findAll({
+              : boardScope
+                ? client.service('branches').findAll({
+                    query: {
+                      archived: false,
+                      board_id: boardScope,
+                      $limit: PAGINATION.DEFAULT_LIMIT,
+                    },
+                  })
+                : Promise.resolve([] as Branch[])
+          ),
+          // Board-scoped sessions: only when a board is displayed and we didn't
+          // already fetch the full set (silent path). Merged with the recent
+          // slice below. Not tracked — not part of the loading checklist.
+          !silent && boardScope
+            ? client.service('sessions').findAll({
                 query: {
+                  archived: false,
+                  board_id: boardScope,
                   $limit: PAGINATION.DEFAULT_LIMIT,
-                  ...(boardScope ? { board_id: boardScope } : {}),
+                  $sort: { updated_at: -1 },
                 },
               })
-            ),
-            track(
-              'board-comments',
-              client.service('board-comments').findAll({
-                query: {
-                  $limit: PAGINATION.DEFAULT_LIMIT,
-                  ...(boardScope ? { board_id: boardScope } : {}),
-                },
-              })
-            ),
-            track(
-              'cards',
-              client.service('cards').findAll({
-                query: {
-                  $limit: PAGINATION.DEFAULT_LIMIT,
-                  ...(boardScope ? { board_id: boardScope } : {}),
-                },
-              })
-            ),
-          ]);
+            : Promise.resolve([] as Session[]),
+          track(
+            'board-objects',
+            client.service('board-objects').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                ...(boardScope ? { board_id: boardScope } : {}),
+              },
+            })
+          ),
+          track(
+            'board-comments',
+            client.service('board-comments').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                ...(boardScope ? { board_id: boardScope } : {}),
+              },
+            })
+          ),
+          track(
+            'cards',
+            client.service('cards').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                ...(boardScope ? { board_id: boardScope } : {}),
+              },
+            })
+          ),
+          // Displayed board's FULL record (with objects/custom_css) so its
+          // zones/text/markdown paint at first load — the gated boards fetch
+          // above is lean. Only when a board is actually displayed; Home and
+          // silent reconnect (boardScope undefined) skip it and let the boards
+          // hydration restore objects. Not tracked — not a loading-checklist item.
+          !silent && boardScope
+            ? (client.service('boards').get(boardScope) as Promise<Board>).catch(() => null)
+            : Promise.resolve(null),
+        ]);
         debugTimer?.endFetchPhase();
 
         if (!silent) {
@@ -667,6 +691,13 @@ export function useAgorData(
         const cardsMap = new Map<string, CardWithType>();
         for (const card of cardsList) {
           cardsMap.set(card.card_id, card);
+        }
+
+        // Replace the displayed board's LEAN row with its FULL record so the
+        // visible canvas paints zones/text/markdown at first paint (no flash).
+        // Other boards stay lean until the boards background hydration lands.
+        if (displayedBoardFull) {
+          boardsMap.set(displayedBoardFull.board_id, displayedBoardFull);
         }
 
         // Merge the recent session slice with the board-scoped sessions (dedup by
@@ -856,6 +887,24 @@ export function useAgorData(
                 ...prev,
                 commentById: buildById(allComments, 'comment_id'),
               }))
+          );
+        }
+
+        // Boards: the gated first-paint list is LEAN (no objects/custom_css) and
+        // board switching never refetches — so every OTHER board's annotations
+        // must be backfilled here, exactly like sessions/branches. Only on the
+        // non-silent first load: silent reconnect already refetched boards FULL
+        // above. The displayed board already carries its objects from the
+        // targeted get; the full set is a superset of it.
+        if (!silent) {
+          void runHydration(
+            'boards',
+            ['boards'],
+            () => client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allBoards) =>
+              agorStore
+                .getState()
+                .applyMaps((prev) => ({ ...prev, boardById: buildById(allBoards, 'board_id') }))
           );
         }
 
