@@ -10,6 +10,7 @@ import type {
 } from '@agor-live/client';
 import {
   BranchesOutlined,
+  CheckCircleFilled,
   ClockCircleOutlined,
   EllipsisOutlined,
   ForkOutlined,
@@ -23,6 +24,7 @@ import {
   QuestionCircleOutlined,
   RobotOutlined,
   SendOutlined,
+  SettingOutlined,
   StopOutlined,
   ToolOutlined,
   WarningOutlined,
@@ -163,47 +165,6 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
   const hasUnauthedMcp = unauthedMcpServers.length > 0;
 
-  // Tools chip popover: list server names
-  const toolsPopoverContent = (
-    <div style={{ maxWidth: 280 }}>
-      <Space direction="vertical" size={6} style={{ width: '100%' }}>
-        <Typography.Text strong style={{ fontSize: 13 }}>
-          Attached MCP servers
-        </Typography.Text>
-        {sessionMcpServerIds.map((id) => {
-          const server = mcpServerById.get(id);
-          const needsAuth = unauthedMcpServers.some((s) => s.mcp_server_id === id);
-          return (
-            <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {needsAuth && <WarningOutlined style={{ color: token.colorWarning, fontSize: 12 }} />}
-              <Typography.Text style={{ fontSize: 12 }}>
-                {server?.name ?? id}
-                {needsAuth && (
-                  <Typography.Text type="warning" style={{ fontSize: 11, marginLeft: 4 }}>
-                    (needs auth)
-                  </Typography.Text>
-                )}
-              </Typography.Text>
-            </div>
-          );
-        })}
-        {onOpenSessionSettings && (
-          <>
-            <Divider style={{ margin: '4px 0' }} />
-            <Button
-              type="link"
-              size="small"
-              style={{ padding: 0, height: 'auto' }}
-              onClick={() => onOpenSessionSettings(session.session_id)}
-            >
-              MCP settings
-            </Button>
-          </>
-        )}
-      </Space>
-    </div>
-  );
-
   const sectionHeaderStyle: React.CSSProperties = {
     padding: '6px 12px 3px',
     fontSize: 11,
@@ -221,6 +182,104 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
     padding: '0 6px 0 12px',
     height: 32,
   };
+
+  // Tools chip popover: list server names
+  const toolsPopoverContent = (
+    <div style={{ width: 260, paddingTop: 6, paddingBottom: 6 }}>
+      <div style={sectionHeaderStyle}>Tools</div>
+
+      {sessionMcpServerIds.length === 0 && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 4,
+            padding: '12px 12px 8px',
+            textAlign: 'center',
+          }}
+        >
+          <ToolOutlined style={{ fontSize: 20, color: token.colorTextTertiary }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            No tools attached
+          </Typography.Text>
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 11, color: token.colorTextTertiary }}
+          >
+            Add MCP servers in settings
+          </Typography.Text>
+        </div>
+      )}
+
+      {sessionMcpServerIds.map((id) => {
+        const server = mcpServerById.get(id);
+        const needsAuth = unauthedMcpServers.some((s) => s.mcp_server_id === id);
+        return (
+          <div
+            key={id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '0 12px',
+              height: 32,
+            }}
+          >
+            {needsAuth ? (
+              <WarningOutlined style={{ fontSize: 12, color: token.colorWarning, flexShrink: 0 }} />
+            ) : (
+              <CheckCircleFilled
+                style={{ fontSize: 12, color: token.colorSuccess, flexShrink: 0 }}
+              />
+            )}
+            <Typography.Text
+              style={{
+                fontSize: 13,
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                minWidth: 0,
+              }}
+            >
+              {server?.name ?? id}
+            </Typography.Text>
+            {needsAuth && (
+              <Typography.Text
+                type="warning"
+                style={{ fontSize: 11, flexShrink: 0, whiteSpace: 'nowrap' }}
+              >
+                needs auth
+              </Typography.Text>
+            )}
+          </div>
+        );
+      })}
+
+      {onOpenSessionSettings && (
+        <>
+          <Divider style={{ margin: '4px 0' }} />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '0 6px 0 12px',
+              height: 32,
+              cursor: 'pointer',
+            }}
+            onClick={() => onOpenSessionSettings(session.session_id)}
+          >
+            <SettingOutlined
+              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+            />
+            <Typography.Text style={{ fontSize: 13, flex: 1 }}>MCP settings</Typography.Text>
+          </div>
+        </>
+      )}
+    </div>
+  );
 
   const moreContent = (
     <div style={{ width: 260, paddingTop: 6, paddingBottom: 6 }}>
