@@ -1205,6 +1205,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureBranchPermission('all', 'update branches', superadminOpts),
             ]
           : []),
+        async (context) => {
+          const params = context.params as AuthenticatedParams & { branch?: Branch };
+          if (!params.branch) {
+            await loadBranch(branchRepository)(context);
+          }
+          return context;
+        },
         validateLinkedKnowledgeDocumentId(
           (context) =>
             (context.params as AuthenticatedParams & { branch?: Branch }).branch
@@ -1220,6 +1227,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureBranchPermission('all', 'update branches', superadminOpts), // Require 'all' permission to update
             ]
           : []),
+        async (context) => {
+          const params = context.params as AuthenticatedParams & { branch?: Branch };
+          if (!params.branch) {
+            await loadBranch(branchRepository)(context);
+          }
+          return context;
+        },
         validateLinkedKnowledgeDocumentId(
           (context) =>
             (context.params as AuthenticatedParams & { branch?: Branch }).branch
