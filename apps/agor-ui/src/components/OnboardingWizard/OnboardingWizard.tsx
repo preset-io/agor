@@ -17,8 +17,8 @@ import type {
   UserPreferences,
 } from '@agor-live/client';
 import { TOOL_API_KEY_NAMES } from '@agor-live/client';
-import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Spin, Typography, theme } from 'antd';
+import { CheckCircleOutlined, LeftOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Alert, Button, Input, Modal, Spin, Tag, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 
@@ -256,18 +256,11 @@ export interface OnboardingWizardProps {
   initialStep?: WizardStep;
 }
 
-// ─── Glass styles ─────────────────────────────────────────────────────────────
+// ─── Static glass layer (non-token values intentionally kept) ─────────────────
 
 const MODAL_BG = '#0d1426';
 const GLASS_CARD_BG = 'rgba(255,255,255,0.04)';
 const GLASS_CARD_BORDER = '1px solid rgba(255,255,255,0.08)';
-const GLASS_CARD_SELECTED_BG = 'rgba(99,102,241,0.12)';
-const GLASS_CARD_SELECTED_BORDER = '1px solid rgba(99,102,241,0.6)';
-const TEXT_PRIMARY = '#f1f5f9';
-const TEXT_SECONDARY = '#94a3b8';
-const TEXT_MUTED = '#64748b';
-const INDIGO = '#6366f1';
-const SUCCESS_GREEN = '#10b981';
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -289,7 +282,17 @@ export function OnboardingWizard({
   void _onCreateSession;
   void _onCheckAuth;
 
-  useToken();
+  const { token } = useToken();
+
+  // ── Token-derived styles (live, theme-aware) ────────────────────────────
+  const PRIMARY = token.colorPrimary;
+  const TEXT_PRIMARY = token.colorText;
+  const TEXT_SECONDARY = token.colorTextSecondary;
+  const TEXT_MUTED = token.colorTextTertiary;
+  const SUCCESS_GREEN = token.colorSuccess;
+  const CARD_SELECTED_BG = token.colorPrimaryBg;
+  const CARD_SELECTED_BORDER = `1px solid ${token.colorPrimaryBorder}`;
+  const CARD_SELECTED_SHADOW = `0 0 0 2px ${token.colorPrimaryBgHover}`;
 
   // ── Step state ──────────────────────────────────────────────────────────
   const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'persona');
@@ -591,8 +594,8 @@ export function OnboardingWizard({
                 width: isCurrent ? 12 : 8,
                 height: isCurrent ? 12 : 8,
                 borderRadius: '50%',
-                background: isCompleted || isCurrent ? INDIGO : 'rgba(255,255,255,0.2)',
-                boxShadow: isCurrent ? `0 0 8px rgba(99,102,241,0.7)` : undefined,
+                background: isCompleted || isCurrent ? PRIMARY : 'rgba(255,255,255,0.2)',
+                boxShadow: isCurrent ? `0 0 8px ${token.colorPrimaryActive}` : undefined,
                 transition: 'all 0.2s ease',
                 flexShrink: 0,
               }}
@@ -635,13 +638,13 @@ export function OnboardingWizard({
               type="button"
               onClick={() => setSelectedPersona(persona.id)}
               style={{
-                background: isSelected ? GLASS_CARD_SELECTED_BG : GLASS_CARD_BG,
-                border: isSelected ? GLASS_CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
+                border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
                 borderRadius: 12,
                 padding: '16px',
                 cursor: 'pointer',
                 textAlign: 'left',
-                boxShadow: isSelected ? `0 0 0 2px rgba(99,102,241,0.2)` : undefined,
+                boxShadow: isSelected ? CARD_SELECTED_SHADOW : undefined,
                 transition: 'all 0.15s ease',
                 width: '100%',
               }}
@@ -689,13 +692,13 @@ export function OnboardingWizard({
                   setLlmError(null);
                 }}
                 style={{
-                  background: isSelected ? GLASS_CARD_SELECTED_BG : GLASS_CARD_BG,
-                  border: isSelected ? GLASS_CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                  background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
+                  border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
                   borderRadius: 10,
                   padding: '14px 16px',
                   cursor: 'pointer',
                   textAlign: 'left',
-                  boxShadow: isSelected ? `0 0 0 2px rgba(99,102,241,0.2)` : undefined,
+                  boxShadow: isSelected ? CARD_SELECTED_SHADOW : undefined,
                   transition: 'all 0.15s ease',
                   display: 'flex',
                   alignItems: 'flex-start',
@@ -707,7 +710,7 @@ export function OnboardingWizard({
                   style={{
                     fontSize: 20,
                     flexShrink: 0,
-                    color: isSelected ? INDIGO : TEXT_SECONDARY,
+                    color: isSelected ? PRIMARY : TEXT_SECONDARY,
                   }}
                 >
                   {option.symbol}
@@ -721,33 +724,20 @@ export function OnboardingWizard({
                       <span style={{ color: TEXT_MUTED, fontSize: 12 }}>by {option.provider}</span>
                     )}
                     {option.recommended && (
-                      <span
-                        style={{
-                          background: 'rgba(99,102,241,0.18)',
-                          border: `1px solid ${INDIGO}`,
-                          borderRadius: 4,
-                          padding: '1px 6px',
-                          fontSize: 11,
-                          color: INDIGO,
-                          fontWeight: 600,
-                        }}
+                      <Tag
+                        color="processing"
+                        style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
                       >
                         Recommended
-                      </span>
+                      </Tag>
                     )}
                     {hasKey && (
-                      <span
-                        style={{
-                          background: 'rgba(16,185,129,0.15)',
-                          border: '1px solid rgba(16,185,129,0.4)',
-                          borderRadius: 4,
-                          padding: '1px 6px',
-                          fontSize: 11,
-                          color: SUCCESS_GREEN,
-                        }}
+                      <Tag
+                        color="success"
+                        style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
                       >
                         Connected
-                      </span>
+                      </Tag>
                     )}
                   </div>
                   <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
@@ -759,8 +749,8 @@ export function OnboardingWizard({
                     width: 16,
                     height: 16,
                     borderRadius: '50%',
-                    border: isSelected ? `2px solid ${INDIGO}` : '2px solid rgba(255,255,255,0.2)',
-                    background: isSelected ? INDIGO : 'transparent',
+                    border: isSelected ? `2px solid ${PRIMARY}` : '2px solid rgba(255,255,255,0.2)',
+                    background: isSelected ? PRIMARY : 'transparent',
                     flexShrink: 0,
                     marginTop: 2,
                   }}
@@ -794,7 +784,7 @@ export function OnboardingWizard({
                   href={selectedOption.keyLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ fontSize: 12, color: INDIGO }}
+                  style={{ fontSize: 12, color: PRIMARY }}
                 >
                   Get your key at {selectedOption.keyLinkLabel} →
                 </Typography.Link>
@@ -879,8 +869,8 @@ export function OnboardingWizard({
           <div
             key={term}
             style={{
-              background: 'rgba(99,102,241,0.08)',
-              border: '1px solid rgba(99,102,241,0.2)',
+              background: token.colorFillAlter,
+              border: `1px solid ${token.colorBorderSecondary}`,
               borderRadius: 20,
               padding: '4px 12px',
               fontSize: 12,
@@ -968,9 +958,9 @@ export function OnboardingWizard({
         {/* Value prop callout */}
         <div
           style={{
-            background: 'rgba(99,102,241,0.08)',
-            border: '1px solid rgba(99,102,241,0.2)',
-            borderRadius: 10,
+            background: token.colorFillAlter,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: token.borderRadiusLG,
             padding: '12px 14px',
             marginBottom: 20,
           }}
@@ -1026,7 +1016,7 @@ export function OnboardingWizard({
                 href="https://github.com/settings/tokens"
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ fontSize: 12, color: INDIGO }}
+                style={{ fontSize: 12, color: PRIMARY }}
               >
                 github.com/settings/tokens →
               </Typography.Link>
@@ -1057,7 +1047,7 @@ export function OnboardingWizard({
                 href="https://linear.app/settings/api"
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ fontSize: 12, color: INDIGO }}
+                style={{ fontSize: 12, color: PRIMARY }}
               >
                 linear.app/settings/api →
               </Typography.Link>
@@ -1122,7 +1112,7 @@ export function OnboardingWizard({
                   href="https://id.atlassian.com/manage-profile/security/api-tokens"
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ fontSize: 12, color: INDIGO }}
+                  style={{ fontSize: 12, color: PRIMARY }}
                 >
                   id.atlassian.com →
                 </Typography.Link>
@@ -1153,7 +1143,7 @@ export function OnboardingWizard({
                 href="https://www.notion.so/my-integrations"
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ fontSize: 12, color: INDIGO }}
+                style={{ fontSize: 12, color: PRIMARY }}
               >
                 notion.so/my-integrations →
               </Typography.Link>
@@ -1184,10 +1174,11 @@ export function OnboardingWizard({
         >
           <Button
             type="text"
+            icon={<LeftOutlined />}
             onClick={() => setActiveIntegration(null)}
-            style={{ color: TEXT_SECONDARY, padding: 0 }}
+            style={{ color: TEXT_SECONDARY, paddingLeft: 0 }}
           >
-            ← Back to tools
+            Back to tools
           </Button>
           <Button
             type="primary"
@@ -1235,9 +1226,9 @@ export function OnboardingWizard({
         {/* Slack featured card */}
         <div
           style={{
-            background: 'rgba(99,102,241,0.08)',
-            border: '1px solid rgba(99,102,241,0.35)',
-            borderRadius: 12,
+            background: token.colorPrimaryBg,
+            border: `1px solid ${token.colorPrimaryBorder}`,
+            borderRadius: token.borderRadiusLG,
             padding: '16px 18px',
             marginBottom: 14,
             display: 'flex',
@@ -1251,19 +1242,12 @@ export function OnboardingWizard({
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
                 <Text style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14 }}>Slack</Text>
-                <span
-                  style={{
-                    background: `rgba(99,102,241,0.2)`,
-                    border: `1px solid ${INDIGO}`,
-                    borderRadius: 4,
-                    padding: '1px 6px',
-                    fontSize: 11,
-                    color: INDIGO,
-                    fontWeight: 600,
-                  }}
+                <Tag
+                  color="processing"
+                  style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
                 >
                   Recommended
-                </span>
+                </Tag>
               </div>
               <Text style={{ color: TEXT_SECONDARY, fontSize: 12 }}>{slackConfig.description}</Text>
             </div>
@@ -1297,7 +1281,7 @@ export function OnboardingWizard({
                   hoveredIntegration === integration.id ? 'rgba(255,255,255,0.07)' : GLASS_CARD_BG,
                 border:
                   hoveredIntegration === integration.id
-                    ? '1px solid rgba(99,102,241,0.4)'
+                    ? `1px solid ${token.colorPrimaryBorder}`
                     : GLASS_CARD_BORDER,
                 borderRadius: 10,
                 padding: '14px',
@@ -1321,7 +1305,7 @@ export function OnboardingWizard({
                   type="text"
                   size="small"
                   onClick={() => setActiveIntegration(integration.id as IntegrationId)}
-                  style={{ color: INDIGO, padding: '2px 8px', fontSize: 12 }}
+                  style={{ color: PRIMARY, padding: '2px 8px', fontSize: 12 }}
                 >
                   Connect
                 </Button>
@@ -1453,10 +1437,11 @@ export function OnboardingWizard({
         {canGoBack && (
           <Button
             type="text"
+            icon={<LeftOutlined />}
             onClick={handleBack}
-            style={{ color: TEXT_SECONDARY, padding: '4px 0' }}
+            style={{ color: TEXT_SECONDARY, paddingLeft: 0 }}
           >
-            ← Back
+            Back
           </Button>
         )}
       </div>
