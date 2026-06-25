@@ -106,4 +106,29 @@ describe('UsersService — avatar source metadata', () => {
       expect(updated.avatar_synced_at).toBeUndefined();
     }
   );
+
+  dbTest(
+    'clears stale Slack metadata when avatar source changes away from Slack',
+    async ({ db }) => {
+      const service = new UsersService(db);
+      const user = await service.create({
+        email: 'avatar-source-change@test.local',
+        password: 'test-password-1234',
+        avatar_url: 'https://slack.example.com/avatar-512.png',
+        avatar_source: 'slack',
+        avatar_source_id: 'U456',
+        avatar_synced_at: '2026-06-24T00:00:00.000Z',
+      });
+
+      const updated = await service.patch(user.user_id as UserID, {
+        avatar_url: 'https://launch.example.com/avatar.png',
+        avatar_source: 'launch-auth',
+      });
+
+      expect(updated.avatar_url).toBe('https://launch.example.com/avatar.png');
+      expect(updated.avatar_source).toBe('launch-auth');
+      expect(updated.avatar_source_id).toBeUndefined();
+      expect(updated.avatar_synced_at).toBeUndefined();
+    }
+  );
 });

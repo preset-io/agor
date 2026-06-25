@@ -66,6 +66,38 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({ client, gatewayC
     setGatewayId(saved.gateway_channel_id);
   };
 
+  const enableWithCurrentGateway = async (nextEnabled: boolean) => {
+    const previousEnabled = enabled;
+    setEnabled(nextEnabled);
+    if (nextEnabled && !gatewayId) {
+      return;
+    }
+    try {
+      await save(nextEnabled, gatewayId);
+    } catch (error) {
+      setEnabled(previousEnabled);
+      showError(
+        `Failed to update avatar settings: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const selectGateway = async (nextGatewayId: string) => {
+    const previousGatewayId = gatewayId;
+    setGatewayId(nextGatewayId);
+    if (!enabled) {
+      return;
+    }
+    try {
+      await save(true, nextGatewayId);
+    } catch (error) {
+      setGatewayId(previousGatewayId);
+      showError(
+        `Failed to update avatar settings: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
   const runSync = async () => {
     if (!client || !gatewayId) return;
     setSyncing(true);
@@ -104,11 +136,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({ client, gatewayC
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Checkbox
             checked={enabled}
-            onChange={async (event) => {
-              const nextEnabled = event.target.checked;
-              setEnabled(nextEnabled);
-              await save(nextEnabled, gatewayId);
-            }}
+            onChange={(event) => enableWithCurrentGateway(event.target.checked)}
           >
             Enable Slack-synced avatars
           </Checkbox>
@@ -123,11 +151,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({ client, gatewayC
               style={{ minWidth: 320 }}
               placeholder="Select Slack gateway"
               value={gatewayId ?? undefined}
-              disabled={!enabled}
-              onChange={async (value) => {
-                setGatewayId(value);
-                await save(enabled, value);
-              }}
+              onChange={selectGateway}
               options={slackGateways.map((channel) => ({
                 value: channel.id,
                 label: `${channel.name}${channel.enabled ? '' : ' (disabled)'}`,

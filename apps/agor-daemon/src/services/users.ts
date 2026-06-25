@@ -511,6 +511,10 @@ export class UsersService {
       const avatarCleared = data.avatar_url === null || data.avatar === null;
       const inferredManualAvatarSource =
         avatarUrlTouched && !avatarCleared && data.avatar_source === undefined;
+      const avatarSourceChangedAwayFromSlack =
+        data.avatar_source !== undefined &&
+        data.avatar_source !== null &&
+        data.avatar_source !== 'slack';
 
       updates.data = {
         ...currentData,
@@ -528,11 +532,17 @@ export class UsersService {
                 ? 'manual'
                 : current.avatar_source,
         avatar_source_id:
-          data.avatar_source_id === null || avatarCleared || inferredManualAvatarSource
+          data.avatar_source_id === null ||
+          avatarCleared ||
+          inferredManualAvatarSource ||
+          (avatarSourceChangedAwayFromSlack && data.avatar_source_id === undefined)
             ? undefined
             : (data.avatar_source_id ?? current.avatar_source_id),
         avatar_synced_at:
-          data.avatar_synced_at === null || avatarCleared || inferredManualAvatarSource
+          data.avatar_synced_at === null ||
+          avatarCleared ||
+          inferredManualAvatarSource ||
+          (avatarSourceChangedAwayFromSlack && data.avatar_synced_at === undefined)
             ? undefined
             : (data.avatar_synced_at ?? current.avatar_synced_at),
         preferences: data.preferences ?? current.preferences,
