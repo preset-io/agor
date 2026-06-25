@@ -2195,6 +2195,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           if ((context.params as Params & { skipAvatarRefresh?: boolean }).skipAvatarRefresh) {
             return context;
           }
+          const data = context.data as { email?: string; preferences?: unknown } | undefined;
+          if (data?.email === undefined && data?.preferences === undefined) {
+            return context;
+          }
           const user = context.result as User;
           const avatarService = safeService('user-avatars') as
             | { refreshUserFromSettings?: (userId: UserID) => Promise<unknown> }

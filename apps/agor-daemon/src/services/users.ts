@@ -354,7 +354,8 @@ export class UsersService {
         updated_at: now,
         data: {
           avatar_url: data.avatar_url ?? data.avatar ?? undefined,
-          avatar_source: data.avatar_source ?? undefined,
+          avatar_source:
+            data.avatar_source ?? ((data.avatar_url ?? data.avatar) ? 'manual' : undefined),
           avatar_source_id: data.avatar_source_id ?? undefined,
           avatar_synced_at: data.avatar_synced_at ?? undefined,
           preferences: {},
@@ -506,22 +507,32 @@ export class UsersService {
         }
       }
 
+      const avatarUrlTouched = data.avatar_url !== undefined || data.avatar !== undefined;
+      const avatarCleared = data.avatar_url === null || data.avatar === null;
+      const inferredManualAvatarSource =
+        avatarUrlTouched && !avatarCleared && data.avatar_source === undefined;
+
       updates.data = {
         ...currentData,
-        avatar_url:
-          data.avatar_url === null || data.avatar === null
-            ? undefined
-            : (data.avatar_url ?? data.avatar ?? current.avatar_url),
+        avatar_url: avatarCleared
+          ? undefined
+          : (data.avatar_url ?? data.avatar ?? current.avatar_url),
         // Deprecated legacy alias: read for back-compat, stop writing it on avatar updates.
         avatar: undefined,
         avatar_source:
-          data.avatar_source === null ? undefined : (data.avatar_source ?? current.avatar_source),
+          data.avatar_source === null || avatarCleared
+            ? undefined
+            : data.avatar_source !== undefined
+              ? data.avatar_source
+              : inferredManualAvatarSource
+                ? 'manual'
+                : current.avatar_source,
         avatar_source_id:
-          data.avatar_source_id === null
+          data.avatar_source_id === null || avatarCleared || inferredManualAvatarSource
             ? undefined
             : (data.avatar_source_id ?? current.avatar_source_id),
         avatar_synced_at:
-          data.avatar_synced_at === null
+          data.avatar_synced_at === null || avatarCleared || inferredManualAvatarSource
             ? undefined
             : (data.avatar_synced_at ?? current.avatar_synced_at),
         preferences: data.preferences ?? current.preferences,

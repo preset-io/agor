@@ -648,8 +648,15 @@ export class SlackConnector implements GatewayConnector {
     const normalized = email.trim().toLowerCase();
     if (!normalized) throw new Error('Slack user email is required');
 
-    const result = await this.web.users.lookupByEmail({ email: normalized });
-    if (!result.ok || !result.user?.id) {
+    const result = await this.web.users
+      .lookupByEmail({ email: normalized })
+      .catch((error: unknown) => {
+        if (extractSlackErrorCode(error) === 'users_not_found') {
+          return null;
+        }
+        throw error;
+      });
+    if (!result?.ok || !result.user?.id) {
       return null;
     }
 

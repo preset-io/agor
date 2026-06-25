@@ -85,6 +85,9 @@ export class UserAvatarsService {
       gateway_channel_id:
         data.enabled === false ? null : (data.gateway_channel_id ?? current.gateway_channel_id),
     };
+    if (next.enabled && !next.gateway_channel_id) {
+      throw new Error('Select a Slack gateway channel before enabling Slack avatars');
+    }
     await this.saveSettings(
       next,
       (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined

@@ -622,7 +622,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: ['find', 'get', 'create', 'patch', 'remove', 'getGitEnvironment'],
   });
   app.use('/user-avatars', createUserAvatarsService(db, app), {
-    methods: ['find', 'create', 'patch', 'refreshUserFromSettings'],
+    methods: ['find', 'create', 'patch'],
   });
 
   // Bootstrap superadmin users
