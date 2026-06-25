@@ -1,7 +1,15 @@
 import { existsSync } from 'node:fs';
 import { isBranchRbacEnabled, loadConfig } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
-import type { BoardID, Branch, BranchID, Repo, UUID, ZoneBoardObject } from '@agor/core/types';
+import type {
+  BoardID,
+  Branch,
+  BranchID,
+  Repo,
+  Session,
+  UUID,
+  ZoneBoardObject,
+} from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, getAssistantConfig, isAssistant } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
@@ -15,7 +23,6 @@ import {
   resolveBranchId,
   resolveMcpServerId,
   resolveRepoId,
-  resolveSessionId,
 } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -892,9 +899,15 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         );
       }
 
-      const targetSessionId = rawTargetSessionId
-        ? await resolveSessionId(ctx, rawTargetSessionId)
+      const targetSession = rawTargetSessionId
+        ? ((await ctx.app
+            .service('sessions')
+            .get(rawTargetSessionId, ctx.baseServiceParams)) as Pick<
+            Session,
+            'session_id' | 'branch_id' | 'description' | 'custom_context'
+          >)
         : undefined;
+      const targetSessionId = targetSession?.session_id;
 
       console.log(
         zoneId === null
@@ -904,6 +917,16 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
       // Get branch to find its board
       const branch = await ctx.app.service('branches').get(branchId, ctx.baseServiceParams);
+
+      if (triggerTemplate && targetSession && targetSession.branch_id !== branch.branch_id) {
+        throw new Error(
+          `targetSessionId ${shortId(targetSession.session_id)} belongs to branch ${shortId(
+            targetSession.branch_id
+          )}, but agor_branches_set_zone is moving branch ${shortId(
+            branch.branch_id
+          )}. Use a session in the moved branch or create a branch-local session first.`
+        );
+      }
 
       // Find or create board object for this branch
       const boardObjectsService = ctx.app.service('board-objects') as unknown as {
@@ -1021,18 +1044,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         // Pull the target session into the render context so templates can
         // reference `{{session.description}}` / `{{session.context.foo}}` —
         // matches what the UI's reuse-existing preview path does.
-        let targetSession:
-          | { description?: string; custom_context?: Record<string, unknown> }
-          | undefined;
-        try {
-          targetSession = await ctx.app
-            .service('sessions')
-            .get(targetSessionId, ctx.baseServiceParams);
-        } catch {
-          // Session lookup is best-effort; render context defaults are safe.
-          targetSession = undefined;
-        }
-
         const templateContext = buildZoneTriggerContext({
           branch,
           board,
