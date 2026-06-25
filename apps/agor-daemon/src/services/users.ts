@@ -185,6 +185,11 @@ interface CreateUserData {
   role?: UserRole;
   unix_username?: string;
   must_change_password?: boolean;
+  avatar_url?: string | null;
+  avatar?: string | null;
+  avatar_source?: string | null;
+  avatar_source_id?: string | null;
+  avatar_synced_at?: string | null;
 }
 
 /**
@@ -198,7 +203,11 @@ interface UpdateUserData {
   role?: UserRole;
   unix_username?: string;
   must_change_password?: boolean;
-  avatar?: string;
+  avatar_url?: string | null;
+  avatar?: string | null;
+  avatar_source?: string | null;
+  avatar_source_id?: string | null;
+  avatar_synced_at?: string | null;
   preferences?: Record<string, unknown>;
   onboarding_completed?: boolean;
   /**
@@ -344,6 +353,10 @@ export class UsersService {
         created_at: now,
         updated_at: now,
         data: {
+          avatar_url: data.avatar_url ?? data.avatar ?? undefined,
+          avatar_source: data.avatar_source ?? undefined,
+          avatar_source_id: data.avatar_source_id ?? undefined,
+          avatar_synced_at: data.avatar_synced_at ?? undefined,
           preferences: {},
         },
       })
@@ -386,7 +399,11 @@ export class UsersService {
 
     // Update data blob
     if (
-      data.avatar ||
+      data.avatar_url !== undefined ||
+      data.avatar !== undefined ||
+      data.avatar_source !== undefined ||
+      data.avatar_source_id !== undefined ||
+      data.avatar_synced_at !== undefined ||
       data.preferences ||
       data.agentic_tools ||
       data.env_vars ||
@@ -396,7 +413,11 @@ export class UsersService {
       const current = await this.get(id);
       const currentRow = await select(this.db).from(users).where(eq(users.user_id, id)).one();
       const currentData = currentRow?.data as {
+        avatar_url?: string;
         avatar?: string;
+        avatar_source?: string;
+        avatar_source_id?: string;
+        avatar_synced_at?: string;
         preferences?: Record<string, unknown>;
         agentic_tools?: StoredAgenticTools;
         env_vars?: Record<string, string | StoredEnvVar>;
@@ -486,7 +507,23 @@ export class UsersService {
       }
 
       updates.data = {
-        avatar: data.avatar ?? current.avatar,
+        ...currentData,
+        avatar_url:
+          data.avatar_url === null || data.avatar === null
+            ? undefined
+            : (data.avatar_url ?? data.avatar ?? current.avatar_url),
+        // Deprecated legacy alias: read for back-compat, stop writing it on avatar updates.
+        avatar: undefined,
+        avatar_source:
+          data.avatar_source === null ? undefined : (data.avatar_source ?? current.avatar_source),
+        avatar_source_id:
+          data.avatar_source_id === null
+            ? undefined
+            : (data.avatar_source_id ?? current.avatar_source_id),
+        avatar_synced_at:
+          data.avatar_synced_at === null
+            ? undefined
+            : (data.avatar_synced_at ?? current.avatar_synced_at),
         preferences: data.preferences ?? current.preferences,
         agentic_tools: Object.keys(nextAgenticTools).length > 0 ? nextAgenticTools : undefined,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
@@ -678,7 +715,11 @@ export class UsersService {
     includeAuthMetadata = true
   ): (User | InternalUser) & { password?: string } {
     const data = row.data as {
+      avatar_url?: string;
       avatar?: string;
+      avatar_source?: string;
+      avatar_source_id?: string;
+      avatar_synced_at?: string;
       preferences?: Record<string, unknown>;
       agentic_tools?: StoredAgenticTools; // Encrypted per-tool credential blobs
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
@@ -703,7 +744,11 @@ export class UsersService {
       emoji: row.emoji ?? undefined,
       role: normalizeRole(row.role ?? undefined),
       unix_username: row.unix_username ?? undefined,
+      avatar_url: data.avatar_url ?? data.avatar,
       avatar: data.avatar,
+      avatar_source: data.avatar_source,
+      avatar_source_id: data.avatar_source_id,
+      avatar_synced_at: data.avatar_synced_at,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,
@@ -761,7 +806,11 @@ class UsersServiceWithAuth extends UsersService {
     }
 
     const data = row.data as {
+      avatar_url?: string;
       avatar?: string;
+      avatar_source?: string;
+      avatar_source_id?: string;
+      avatar_synced_at?: string;
       preferences?: Record<string, unknown>;
       agentic_tools?: StoredAgenticTools;
       env_vars?: Record<string, string | StoredEnvVar>;
@@ -785,7 +834,11 @@ class UsersServiceWithAuth extends UsersService {
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
       role: normalizeRole(row.role ?? undefined),
+      avatar_url: data.avatar_url ?? data.avatar,
       avatar: data.avatar,
+      avatar_source: data.avatar_source,
+      avatar_source_id: data.avatar_source_id,
+      avatar_synced_at: data.avatar_synced_at,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,

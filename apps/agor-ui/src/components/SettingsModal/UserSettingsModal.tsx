@@ -189,6 +189,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         unix_username: userData.unix_username,
         groupIds: [],
         eventStreamEnabled: userData.preferences?.eventStream?.enabled ?? true,
+        useSlackAvatar: userData.preferences?.use_slack_avatar !== false,
         must_change_password: userData.must_change_password ?? false,
       });
     },
@@ -368,18 +369,25 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     try {
       await form.validateFields(['email', 'name', 'emoji', 'role', 'unix_username']);
       const values = form.getFieldsValue();
+      const nextPreferences: NonNullable<UpdateUserInput['preferences']> = {
+        ...user.preferences,
+        eventStream: {
+          enabled: values.eventStreamEnabled ?? true,
+        },
+      };
+      if (values.useSlackAvatar === false) {
+        nextPreferences.use_slack_avatar = false;
+      } else {
+        delete nextPreferences.use_slack_avatar;
+      }
+
       const updates: UpdateUserInput = {
         email: values.email,
         name: values.name,
         emoji: values.emoji,
         role: values.role,
         unix_username: values.unix_username,
-        preferences: {
-          ...user.preferences,
-          eventStream: {
-            enabled: values.eventStreamEnabled ?? true,
-          },
-        },
+        preferences: nextPreferences,
       };
       if (values.password?.trim()) {
         updates.password = values.password;
@@ -758,6 +766,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 name="eventStreamEnabled"
                 valuePropName="checked"
                 tooltip="Show/hide the event stream icon in the navbar. When enabled, you can view live WebSocket events for debugging."
+              >
+                <Switch />
+              </Form.Item>
+
+              <Form.Item
+                label="Use Slack avatar when available"
+                name="useSlackAvatar"
+                valuePropName="checked"
+                tooltip="When enabled, Agor shows your Slack-synced profile image. Turn this off to keep using your emoji tile."
               >
                 <Switch />
               </Form.Item>

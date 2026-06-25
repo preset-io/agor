@@ -354,10 +354,13 @@ export async function resolveApiKeyForTask(
   // `tool` scopes the per-user lookup to the calling SDK's bucket so a Codex spawn
   // never resolves a key stored under `agentic_tools['claude-code']`, and vice versa.
   try {
+    const executorSessionToken = (client as AgorClient & { executorSessionToken?: string })
+      .executorSessionToken;
     const result = (await client.service('config/resolve-api-key').create({
       taskId,
       keyName,
       tool,
+      ...(executorSessionToken ? { executorSessionToken } : {}),
     })) as import('@agor/core/config').KeyResolutionResult;
     sdkDebug(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
     return result;

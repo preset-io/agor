@@ -462,6 +462,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <UsersTable
             userById={userById}
             mcpServerById={mcpServerById}
+            gatewayChannelById={gatewayChannelById}
             client={client}
             currentUser={currentUser}
             onCreate={onCreateUser}

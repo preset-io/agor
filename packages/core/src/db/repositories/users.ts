@@ -55,7 +55,11 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       onboarding_completed: row.onboarding_completed,
       must_change_password: row.must_change_password,
       tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
+      avatar_url: row.data.avatar_url ?? row.data.avatar,
       avatar: row.data.avatar,
+      avatar_source: row.data.avatar_source,
+      avatar_source_id: row.data.avatar_source_id,
+      avatar_synced_at: row.data.avatar_synced_at,
       preferences: row.data.preferences as User['preferences'],
       // Convert encrypted per-tool credential blobs into boolean presence flags.
       agentic_tools: toAgenticToolsStatus(row.data.agentic_tools as StoredAgenticTools | undefined),
@@ -110,7 +114,11 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       must_change_password: user.must_change_password ?? false,
       tokens_valid_after: user.tokens_valid_after ? new Date(user.tokens_valid_after) : null,
       data: {
+        avatar_url: user.avatar_url,
         avatar: user.avatar,
+        avatar_source: user.avatar_source,
+        avatar_source_id: user.avatar_source_id,
+        avatar_synced_at: user.avatar_synced_at,
         preferences: user.preferences,
         // Encrypted per-tool credentials. Only forwarded when caller passes the
         // raw shape (internal credential mutators); regular updates leave it undefined,

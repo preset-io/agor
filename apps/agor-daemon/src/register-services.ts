@@ -110,6 +110,7 @@ import { createTasksService } from './services/tasks.js';
 import { createTemplatesService } from './services/templates.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
+import { createUserAvatarsService } from './services/user-avatars.js';
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
@@ -619,6 +620,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
   app.use('/users', usersService, {
     methods: ['find', 'get', 'create', 'patch', 'remove', 'getGitEnvironment'],
+  });
+  app.use('/user-avatars', createUserAvatarsService(db, app), {
+    methods: ['find', 'create', 'patch', 'refreshUserFromSettings'],
   });
 
   // Bootstrap superadmin users

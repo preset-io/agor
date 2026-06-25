@@ -46,6 +46,7 @@ import {
 } from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+import { UserIdentityAvatar } from '../UserIdentityAvatar';
 // Side-effect import: registers every built-in widget component with the
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
 import '../Widgets';
@@ -346,7 +347,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
   // Get current user's emoji
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
-  const userEmoji = currentUser?.emoji || '👤';
 
   // Skip rendering if message has no content
   if (!message.content || (typeof message.content === 'string' && message.content.trim() === '')) {
@@ -591,7 +591,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {hasTextBefore &&
         (() => {
           const avatar = isUser ? (
-            <AgorAvatar>{userEmoji}</AgorAvatar>
+            <UserIdentityAvatar user={currentUser} />
           ) : (
             getAgentAvatar({ assistantEmoji, agentic_tool, isCallback, token })
           );

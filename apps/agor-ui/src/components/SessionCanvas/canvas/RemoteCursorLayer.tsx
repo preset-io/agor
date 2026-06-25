@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { useViewport } from 'reactflow';
 import { useBoardPresenceRoom } from '../../../hooks/useBoardPresenceRoom';
 import { usePresence } from '../../../hooks/usePresence';
+import { UserIdentityAvatar } from '../../UserIdentityAvatar';
 
 export interface StaticRemoteCursor {
   userId: string;
@@ -128,7 +129,7 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
                   boxShadow: token.boxShadowSecondary,
                 }}
               >
-                <span style={{ fontSize: '14px' }}>{user.emoji || '👤'}</span>
+                <UserIdentityAvatar user={user} size={18} fontSize="14px" />
                 <span style={{ fontWeight: 500 }}>{user.name || user.email}</span>
               </div>
             </div>

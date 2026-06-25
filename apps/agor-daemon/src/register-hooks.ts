@@ -1920,6 +1920,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
+  safeService('user-avatars')?.hooks({
+    before: {
+      all: [requireAuth],
+      find: [requireMinimumRole(ROLES.ADMIN, 'view user avatar settings')],
+      create: [requireMinimumRole(ROLES.ADMIN, 'sync user avatars')],
+      patch: [requireMinimumRole(ROLES.ADMIN, 'update user avatar settings')],
+    },
+  });
+
   // ============================================================================
   // Users hooks
   // ============================================================================
@@ -2113,6 +2122,24 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           return context;
         },
+        async (context: HookContext) => {
+          if ((context.params as Params & { skipAvatarRefresh?: boolean }).skipAvatarRefresh) {
+            return context;
+          }
+          const user = context.result as User;
+          const avatarService = safeService('user-avatars') as
+            | { refreshUserFromSettings?: (userId: UserID) => Promise<unknown> }
+            | undefined;
+          if (avatarService?.refreshUserFromSettings) {
+            avatarService.refreshUserFromSettings(user.user_id).catch((error: unknown) => {
+              console.warn(
+                `[user-avatars] Failed to refresh avatar for new user ${shortId(user.user_id)}:`,
+                error instanceof Error ? error.message : String(error)
+              );
+            });
+          }
+          return context;
+        },
       ],
       patch: [
         async (context: HookContext) => {
@@ -2162,6 +2189,24 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             { logPrefix: '[Executor/user.patch]' }
           );
 
+          return context;
+        },
+        async (context: HookContext) => {
+          if ((context.params as Params & { skipAvatarRefresh?: boolean }).skipAvatarRefresh) {
+            return context;
+          }
+          const user = context.result as User;
+          const avatarService = safeService('user-avatars') as
+            | { refreshUserFromSettings?: (userId: UserID) => Promise<unknown> }
+            | undefined;
+          if (avatarService?.refreshUserFromSettings) {
+            avatarService.refreshUserFromSettings(user.user_id).catch((error: unknown) => {
+              console.warn(
+                `[user-avatars] Failed to refresh avatar for updated user ${shortId(user.user_id)}:`,
+                error instanceof Error ? error.message : String(error)
+              );
+            });
+          }
           return context;
         },
       ],

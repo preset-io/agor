@@ -214,7 +214,8 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.strictObject({
         name: mcpOptionalString('name', 'Display name'),
         emoji: mcpOptionalString('emoji', 'User emoji (single emoji character)'),
-        avatar: mcpOptionalString('avatar', 'Avatar URL'),
+        avatar_url: mcpOptionalString('avatar_url', 'Avatar URL'),
+        avatar: mcpOptionalString('avatar', 'Legacy avatar URL alias'),
         preferences: z
           .object({})
           .passthrough()
@@ -226,6 +227,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       const updateData: Record<string, unknown> = {};
       if (args.name !== undefined) updateData.name = args.name;
       if (args.emoji !== undefined) updateData.emoji = args.emoji;
+      if (args.avatar_url !== undefined) updateData.avatar_url = args.avatar_url;
       if (args.avatar !== undefined) updateData.avatar = args.avatar;
       if (args.preferences !== undefined) updateData.preferences = args.preferences;
       const updatedUser = await ctx.app
@@ -262,7 +264,8 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe('Force user to change password on next login (optional)'),
         emoji: mcpOptionalString('emoji', 'User emoji (optional, single emoji character)'),
-        avatar: mcpOptionalString('avatar', 'Avatar URL (optional)'),
+        avatar_url: mcpOptionalString('avatar_url', 'Avatar URL (optional)'),
+        avatar: mcpOptionalString('avatar', 'Legacy avatar URL alias (optional)'),
         preferences: z
           .object({})
           .passthrough()
@@ -280,6 +283,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       if (args.must_change_password !== undefined)
         updateData.must_change_password = args.must_change_password;
       if (args.emoji !== undefined) updateData.emoji = args.emoji;
+      if (args.avatar_url !== undefined) updateData.avatar_url = args.avatar_url;
       if (args.avatar !== undefined) updateData.avatar = args.avatar;
       if (args.preferences !== undefined) updateData.preferences = args.preferences;
 
@@ -308,7 +312,8 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
           'emoji',
           'User emoji for visual identity (optional, single emoji character)'
         ),
-        avatar: mcpOptionalString('avatar', 'Avatar URL (optional)'),
+        avatar_url: mcpOptionalString('avatar_url', 'Avatar URL (optional)'),
+        avatar: mcpOptionalString('avatar', 'Legacy avatar URL alias (optional)'),
         unix_username: mcpOptionalString(
           'unix_username',
           'Unix username for shell access (optional, defaults to email prefix if not specified)'
@@ -332,6 +337,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       };
       if (args.name !== undefined) createData.name = args.name;
       if (args.emoji !== undefined) createData.emoji = args.emoji;
+      if (args.avatar_url !== undefined) createData.avatar_url = args.avatar_url;
       if (args.avatar !== undefined) createData.avatar = args.avatar;
       if (args.unix_username !== undefined) createData.unix_username = args.unix_username;
       if (args.must_change_password !== undefined)

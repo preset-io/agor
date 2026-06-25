@@ -1,5 +1,6 @@
 import type { User } from '@agor-live/client';
 import { Space, Tooltip, theme } from 'antd';
+import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
 export interface UserAvatarProps {
   user: User;
@@ -8,9 +9,9 @@ export interface UserAvatarProps {
 }
 
 const sizeMap = {
-  small: 12,
-  default: 14,
-  large: 18,
+  small: { avatar: 18, font: 12 },
+  default: { avatar: 22, font: 14 },
+  large: { avatar: 28, font: 18 },
 };
 
 /**
@@ -23,13 +24,13 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
   showName = true,
   size = 'default',
 }) => {
-  const fontSize = sizeMap[size];
+  const sizes = sizeMap[size];
   const { token } = theme.useToken();
 
   return (
     <Tooltip title={`${user.name || user.email} (${user.role})`}>
       <Space size={4}>
-        <span style={{ fontSize }}>{user.emoji || '👤'}</span>
+        <UserIdentityAvatar user={user} size={sizes.avatar} fontSize={`${sizes.font}px`} />
         {showName && (
           <span
             style={{

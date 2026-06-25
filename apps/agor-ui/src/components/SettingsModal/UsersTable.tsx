@@ -1,6 +1,7 @@
 import type {
   AgorClient,
   CreateUserInput,
+  GatewayChannel,
   Group,
   GroupMembership,
   MCPServer,
@@ -20,6 +21,7 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from 'antd';
@@ -29,12 +31,15 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
+import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { UserAvatarsTab } from './UserAvatarsTab';
 import { UserSettingsModal } from './UserSettingsModal';
 
 interface UsersTableProps {
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
+  gatewayChannelById?: Map<string, GatewayChannel>;
   client: AgorClient | null;
   currentUser?: User | null;
   onCreate?: (data: CreateUserInput) => void;
@@ -45,6 +50,7 @@ interface UsersTableProps {
 export const UsersTable: React.FC<UsersTableProps> = ({
   userById,
   mcpServerById,
+  gatewayChannelById = new Map(),
   client,
   currentUser,
   onCreate,
@@ -161,7 +167,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       key: 'email',
       render: (email: string, user: User) => (
         <Space>
-          <span style={{ fontSize: 20 }}>{user.emoji || '👤'}</span>
+          <UserIdentityAvatar user={user} size={28} fontSize="20px" />
           <span>
             <HighlightMatch text={email} query={searchTerm} />
           </span>
@@ -237,7 +243,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     },
   ];
 
-  return (
+  const usersTable = (
     <div>
       <div
         style={{
@@ -366,5 +372,25 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         onUpdate={onUpdate}
       />
     </div>
+  );
+
+  return (
+    <Tabs
+      defaultActiveKey="users"
+      items={[
+        { key: 'users', label: 'Users', children: usersTable },
+        ...(isAdmin
+          ? [
+              {
+                key: 'avatars',
+                label: 'Avatars',
+                children: (
+                  <UserAvatarsTab client={client} gatewayChannelById={gatewayChannelById} />
+                ),
+              },
+            ]
+          : []),
+      ]}
+    />
   );
 };

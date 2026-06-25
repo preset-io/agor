@@ -3695,7 +3695,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     core: ['sessions', 'tasks', 'messages'],
     branches: ['branches'],
     repos: ['repos'],
-    users: ['users'],
+    users: ['users', 'user-avatars'],
     boards: ['boards', 'board-objects', 'board-comments'],
     cards: ['cards', 'card-types'],
     artifacts: ['artifacts'],

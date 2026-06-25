@@ -38,6 +38,8 @@ import type {
   TemplateRenderRequest,
   TemplateRenderResponse,
   User,
+  UserAvatarSettings,
+  UserAvatarSyncResult,
   UUID,
 } from '@agor/core/types';
 import authentication from '@feathersjs/authentication-client';
@@ -178,6 +180,7 @@ export interface ServiceTypes {
   branches: Branch;
   schedules: Schedule;
   users: User;
+  'user-avatars': UserAvatarSettings | UserAvatarSyncResult;
   groups: Group;
   'group-memberships': GroupMembership;
   'boards/:id/owners': User;

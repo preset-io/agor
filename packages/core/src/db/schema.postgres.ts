@@ -902,6 +902,10 @@ export const users = pgTable(
       .json<unknown>('data')
       .$type<{
         avatar?: string;
+        avatar_url?: string;
+        avatar_source?: string;
+        avatar_source_id?: string;
+        avatar_synced_at?: string;
         preferences?: Record<string, unknown>;
         // Stable external-auth identity mappings used by generic launch-code auth.
         external_identities?: UserExternalIdentity[];
