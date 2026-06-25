@@ -337,11 +337,32 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * Callers that explicitly want to exclude archived branches should pass
    * `{ includeArchived: false }`.
    *
-   * @param filter - Optional filters (repo_id, includeArchived)
+   * The `board_id`, `archived`, and `branchIds` filters let the list read path
+   * (`BranchesService.find`) push its high-selectivity predicates into SQL so it
+   * no longer materializes the whole table before filtering in memory.
+   *
+   * @param filter - Optional filters
    * @param filter.repo_id - Filter by repository ID
    * @param filter.includeArchived - Include archived branches (default: true)
+   * @param filter.board_id - Filter to a single board
+   * @param filter.archived - Filter to an exact archived state (takes precedence
+   *   over `includeArchived`)
+   * @param filter.branchIds - Restrict to a set of branch IDs (empty set yields
+   *   no rows, matching an `{ $in: [] }` filter)
    */
-  async findAll(filter?: { repo_id?: UUID; includeArchived?: boolean }): Promise<Branch[]> {
+  async findAll(filter?: {
+    repo_id?: UUID;
+    includeArchived?: boolean;
+    board_id?: BoardID;
+    archived?: boolean;
+    branchIds?: BranchID[];
+  }): Promise<Branch[]> {
+    // An explicit empty id set can never match a row; short-circuit so we skip
+    // the read entirely and avoid emitting an empty `IN ()` predicate.
+    if (filter?.branchIds !== undefined && filter.branchIds.length === 0) {
+      return [];
+    }
+
     const includeArchived = filter?.includeArchived ?? true;
 
     // Build where conditions
@@ -349,8 +370,16 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (filter?.repo_id) {
       conditions.push(eq(branches.repo_id, filter.repo_id));
     }
-    if (!includeArchived) {
+    if (filter?.board_id) {
+      conditions.push(eq(branches.board_id, filter.board_id));
+    }
+    if (filter?.archived !== undefined) {
+      conditions.push(eq(branches.archived, filter.archived));
+    } else if (!includeArchived) {
       conditions.push(eq(branches.archived, false));
+    }
+    if (filter?.branchIds !== undefined) {
+      conditions.push(inArray(branches.branch_id, filter.branchIds));
     }
 
     const query = select(this.db).from(branches);

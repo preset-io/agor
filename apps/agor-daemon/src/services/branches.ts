@@ -55,7 +55,7 @@ import {
 } from '@agor/core/unix';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
-import { DrizzleService } from '../adapters/drizzle';
+import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
@@ -1085,6 +1085,44 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     return withZone as BranchWithZoneAndSessions;
+  }
+
+  /**
+   * Push the list read's high-selectivity predicates into SQL.
+   *
+   * The generic adapter would read the entire branches table and filter in
+   * memory, so the cost scaled with total branch count rather than the scoped
+   * result. `branches` is the highest-cardinality entity fetched during initial
+   * app load, so we narrow the read to the board scope, archived state, and any
+   * accessible-id set (injected by RBAC scoping or resolved from `zone_id`)
+   * before rows leave the database. `find` still re-applies every query filter
+   * in memory, so this only ever returns a superset of the matching rows and the
+   * downstream sort/pagination/enrichment is unaffected.
+   *
+   * `zone_id` is deliberately not pushed here — it is virtual (backed by
+   * board_objects, not a branches column) and is already resolved to a
+   * `branch_id` filter in `find` before this runs.
+   */
+  protected async fetchData(query: Query): Promise<Branch[]> {
+    const filter: {
+      repo_id?: UUID;
+      board_id?: BoardID;
+      archived?: boolean;
+      branchIds?: BranchID[];
+    } = {};
+
+    if (typeof query.repo_id === 'string') filter.repo_id = query.repo_id as UUID;
+    if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
+    if (typeof query.archived === 'boolean') filter.archived = query.archived;
+
+    const branchId = query.branch_id;
+    if (typeof branchId === 'string') {
+      filter.branchIds = [branchId as BranchID];
+    } else if (branchId && typeof branchId === 'object' && Array.isArray(branchId.$in)) {
+      filter.branchIds = branchId.$in as BranchID[];
+    }
+
+    return this.branchRepo.findAll(filter);
   }
 
   /**
