@@ -169,9 +169,9 @@ export function sessionPatched(session: Session) {
 
       // Bail out when the session is content-equal to what we already hold.
       // Mirrors the sessionById bailout above so an idempotent patch doesn't
-      // produce a fresh branch-bucket array (which would invalidate
-      // `data.sessions === n.sessions` in BranchNode's custom areEqual and
-      // re-render every BranchCard on the affected branch).
+      // produce a fresh branch-bucket array — preserving the reference that
+      // `makeSessionsForBranchSelector(branchId)` returns, so a BranchNode
+      // subscribed to it doesn't re-render on a no-op patch.
       if (
         branchSessions[index] === mergedSession ||
         shallowEqualEntity(branchSessions[index], mergedSession)
