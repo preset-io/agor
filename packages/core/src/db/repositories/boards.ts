@@ -8,13 +8,14 @@ import type {
   Board,
   BoardAccessMode,
   BoardExportBlob,
+  BoardID,
   BoardObject,
   Branch,
   BranchPermissionLevel,
   UUID,
 } from '@agor/core/types';
 import { isAssistant } from '@agor/core/types';
-import { and, eq, exists, isNull, like, ne, or, sql } from 'drizzle-orm';
+import { and, eq, exists, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -329,12 +330,38 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   }
 
   /**
-   * Find all boards
+   * Find all boards (with optional filters).
+   *
+   * The `board_id` and `archived` filters let the list read path
+   * (`BoardsService.find`) push its high-selectivity predicates — including the
+   * accessible-id set injected by RBAC scoping — into SQL so it no longer
+   * materializes the whole table before filtering in memory.
+   *
+   * @param filter - Optional filters
+   * @param filter.archived - Filter to an exact archived state
+   * @param filter.boardIds - Restrict to a set of board IDs (empty set yields no
+   *   rows, matching an `{ $in: [] }` filter)
    */
-  async findAll(): Promise<Board[]> {
+  async findAll(filter?: { archived?: boolean; boardIds?: BoardID[] }): Promise<Board[]> {
     try {
+      // An explicit empty id set can never match a row; short-circuit so we skip
+      // the read entirely and avoid emitting an empty `IN ()` predicate.
+      if (filter?.boardIds !== undefined && filter.boardIds.length === 0) {
+        return [];
+      }
+
+      const conditions = [];
+      if (filter?.archived !== undefined) {
+        conditions.push(eq(boards.archived, filter.archived));
+      }
+      if (filter?.boardIds !== undefined) {
+        conditions.push(inArray(boards.board_id, filter.boardIds));
+      }
+
       const baseUrl = await getBaseUrl();
-      const rows = await select(this.db).from(boards).all();
+      const query = select(this.db).from(boards);
+      const rows =
+        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
       return rows.map((row: BoardRow) => this.rowToBoard(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(

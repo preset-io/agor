@@ -6,13 +6,14 @@
 
 import {
   BoardObjectRepository,
+  BoardRepository,
   BranchRepository,
   type Database,
   generateId,
   RepoRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { Board, BranchID, UUID } from '@agor/core/types';
+import type { Board, BoardID, BranchID, UUID } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { BoardsService } from './boards';
@@ -357,4 +358,102 @@ describe('BoardsService - Custom Methods', () => {
     expect(typeof service.clone).toBe('function');
     expect(typeof service.ensureAssistantWelcomeNote).toBe('function');
   });
+});
+
+describe('BoardsService.find SQL pushdown', () => {
+  async function seed(db: Database) {
+    const service = new BoardsService(db);
+    const repo = new BoardRepository(db);
+    const b1 = (await service.create({
+      name: 'Beta',
+      slug: 'beta',
+      created_by: TEST_USER,
+    })) as Board;
+    const b2 = (await service.create({
+      name: 'Alpha',
+      slug: 'alpha',
+      created_by: TEST_USER,
+    })) as Board;
+    const archived = (await service.create({
+      name: 'Gamma',
+      slug: 'gamma',
+      created_by: TEST_USER,
+    })) as Board;
+    await repo.update(archived.board_id, { archived: true });
+    return { service, b1, b2, archived };
+  }
+
+  dbTest('pushes archived into the repository read (rbac off)', async ({ db }) => {
+    const { service } = await seed(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { boardRepo: BoardRepository }).boardRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({ query: { archived: false, $sort: { name: 1 } } })) as {
+      data: Board[];
+      total: number;
+    };
+
+    // SQL-bounded: the scoped predicate reaches the repository, not a whole-table read.
+    expect(repoFindAll).toHaveBeenCalledWith({ archived: false });
+    // Parity: archived board excluded, sorted by name.
+    expect(result.total).toBe(2);
+    expect(result.data.map((b) => b.name)).toEqual(['Alpha', 'Beta']);
+  });
+
+  dbTest('pushes an accessible board_id $in set into SQL (rbac on)', async ({ db }) => {
+    const { service, b1, b2 } = await seed(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { boardRepo: BoardRepository }).boardRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: { board_id: { $in: [b1.board_id as BoardID, b2.board_id as BoardID] } },
+    })) as { data: Board[]; total: number };
+
+    expect(repoFindAll).toHaveBeenCalledWith({
+      boardIds: [b1.board_id, b2.board_id],
+    });
+    expect(result.total).toBe(2);
+    expect(result.data.map((b) => b.board_id).sort()).toEqual([b1.board_id, b2.board_id].sort());
+  });
+
+  dbTest('pushes a scalar board_id as a single-id set', async ({ db }) => {
+    const { service, b1 } = await seed(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { boardRepo: BoardRepository }).boardRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({ query: { board_id: b1.board_id } })) as {
+      data: Board[];
+      total: number;
+    };
+
+    expect(repoFindAll).toHaveBeenCalledWith({ boardIds: [b1.board_id] });
+    expect(result.total).toBe(1);
+    expect(result.data[0].board_id).toBe(b1.board_id);
+  });
+
+  dbTest(
+    'returns no rows for an empty accessible set without reading the table',
+    async ({ db }) => {
+      const { service } = await seed(db);
+      const repoFindAll = vi.spyOn(
+        (service as unknown as { boardRepo: BoardRepository }).boardRepo,
+        'findAll'
+      );
+
+      const result = (await service.find({ query: { board_id: { $in: [] } } })) as {
+        data: Board[];
+        total: number;
+      };
+
+      expect(repoFindAll).toHaveBeenCalledWith({ boardIds: [] });
+      expect(result.total).toBe(0);
+      expect(result.data).toHaveLength(0);
+    }
+  );
 });

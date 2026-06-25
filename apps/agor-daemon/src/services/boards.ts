@@ -16,12 +16,13 @@ import type {
   AuthenticatedParams,
   Board,
   BoardExportBlob,
+  BoardID,
   BoardObject,
   QueryParams,
   UUID,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-import { DrizzleService } from '../adapters/drizzle';
+import { DrizzleService, type Query } from '../adapters/drizzle';
 import {
   type BoardObjectPatchedEventPayload,
   toBoardObjectPatchedEventPayload,
@@ -65,6 +66,32 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     this.boardRepo = boardRepo;
     this.boardObjectRepo = new BoardObjectRepository(db);
     this.emitBoardObjectPatched = emitBoardObjectPatched;
+  }
+
+  /**
+   * Push the list read's high-selectivity predicates into SQL.
+   *
+   * The generic adapter would read the entire boards table and filter in
+   * memory. `boards` is fetched on initial app load, so we narrow the read to
+   * the archived state and any accessible-id set (injected by RBAC scoping via
+   * `findVisibleBoardIds`) before rows leave the database. `find` still
+   * re-applies every query filter in memory, so this only ever returns a
+   * superset of the matching rows and the downstream sort/pagination is
+   * unaffected.
+   */
+  protected async fetchData(query: Query): Promise<Board[]> {
+    const filter: { archived?: boolean; boardIds?: BoardID[] } = {};
+
+    if (typeof query.archived === 'boolean') filter.archived = query.archived;
+
+    const boardId = query.board_id;
+    if (typeof boardId === 'string') {
+      filter.boardIds = [boardId as BoardID];
+    } else if (boardId && typeof boardId === 'object' && Array.isArray(boardId.$in)) {
+      filter.boardIds = boardId.$in as BoardID[];
+    }
+
+    return this.boardRepo.findAll(filter);
   }
 
   /**
