@@ -28,7 +28,7 @@ import {
   update,
   users,
 } from '@agor/core/db';
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { isLikelyGitToken } from '@agor/core/git';
 import type {
   AgenticToolName,
@@ -42,6 +42,9 @@ import type {
   Params,
   StoredAgenticTools,
   User,
+  UserAvatarSettings,
+  UserAvatarSyncRequest,
+  UserAvatarSyncResult,
   UserID,
   UserRole,
 } from '@agor/core/types';
@@ -52,6 +55,7 @@ import {
   ROLES,
   toAgenticToolsStatus,
 } from '@agor/core/types';
+import { UserAvatarSyncManager } from './user-avatar-sync.js';
 
 function optionalNonNegativeInteger(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -229,7 +233,23 @@ interface UpdateUserData {
  * Users Service Methods
  */
 export class UsersService {
-  constructor(protected db: Database) {}
+  private avatarSync?: UserAvatarSyncManager;
+
+  constructor(
+    protected db: Database,
+    app?: Application
+  ) {
+    if (app) {
+      this.avatarSync = new UserAvatarSyncManager(db, app);
+    }
+  }
+
+  private requireAvatarSync(): UserAvatarSyncManager {
+    if (!this.avatarSync) {
+      throw new Error('User avatar sync is not available in this service context');
+    }
+    return this.avatarSync;
+  }
 
   /**
    * Find all users.
@@ -717,6 +737,28 @@ export class UsersService {
     return resolveUserEnvironment(userId, this.db);
   }
 
+  async getAvatarSettings(_data?: unknown, params?: Params): Promise<UserAvatarSettings> {
+    return this.requireAvatarSync().getSettings(params);
+  }
+
+  async updateAvatarSettings(
+    data: Partial<UserAvatarSettings>,
+    params?: Params
+  ): Promise<UserAvatarSettings> {
+    return this.requireAvatarSync().updateSettings(data, params);
+  }
+
+  async syncAvatars(
+    data: UserAvatarSyncRequest = {},
+    params?: Params
+  ): Promise<UserAvatarSyncResult> {
+    return this.requireAvatarSync().syncAvatars(data, params);
+  }
+
+  async refreshAvatarFromSettings(userId: UserID): Promise<UserAvatarSyncResult | null> {
+    return this.requireAvatarSync().refreshUserFromSettings(userId);
+  }
+
   /**
    * Convert database row to User type
    *
@@ -875,6 +917,6 @@ class UsersServiceWithAuth extends UsersService {
 /**
  * Create users service
  */
-export function createUsersService(db: Database): UsersServiceWithAuth {
-  return new UsersServiceWithAuth(db);
+export function createUsersService(db: Database, app?: Application): UsersServiceWithAuth {
+  return new UsersServiceWithAuth(db, app);
 }

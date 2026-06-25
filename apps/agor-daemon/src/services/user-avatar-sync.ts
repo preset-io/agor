@@ -56,7 +56,7 @@ function isUsableAvatarUrl(url: string | null | undefined): url is string {
   }
 }
 
-export class UserAvatarsService {
+export class UserAvatarSyncManager {
   private variables: AppVariableRepository;
   private gatewayChannels: GatewayChannelRepository;
   private users: UsersRepository;
@@ -70,14 +70,15 @@ export class UserAvatarsService {
     this.users = new UsersRepository(db);
   }
 
-  async find(_params?: Params): Promise<UserAvatarSettings> {
+  async getSettings(params?: Params): Promise<UserAvatarSettings> {
+    requireAdmin(params);
     const raw = await this.variables.getPlain(NAMESPACE, SETTINGS_KEY);
     return parseSettings(raw);
   }
 
-  async patch(_id: null, data: Partial<UserAvatarSettings>, params?: Params) {
+  async updateSettings(data: Partial<UserAvatarSettings>, params?: Params) {
     requireAdmin(params);
-    const current = await this.find();
+    const current = await this.getSettings();
     const next: UserAvatarSettings = {
       ...current,
       ...data,
@@ -98,9 +99,12 @@ export class UserAvatarsService {
     return next;
   }
 
-  async create(data: UserAvatarSyncRequest = {}, params?: Params): Promise<UserAvatarSyncResult> {
+  async syncAvatars(
+    data: UserAvatarSyncRequest = {},
+    params?: Params
+  ): Promise<UserAvatarSyncResult> {
     requireAdmin(params);
-    const settings = await this.find();
+    const settings = await this.getSettings();
     const gatewayChannelId = data.gateway_channel_id ?? settings.gateway_channel_id;
     const result = data.user_id
       ? await this.refreshSingleUser(data.user_id as UserID, gatewayChannelId, {
@@ -124,7 +128,7 @@ export class UserAvatarsService {
   }
 
   async refreshUserFromSettings(userId: UserID): Promise<UserAvatarSyncResult | null> {
-    const settings = await this.find();
+    const settings = await this.getSettings();
     if (!settings.enabled || settings.provider !== 'slack' || !settings.gateway_channel_id) {
       return null;
     }
@@ -310,8 +314,4 @@ export class UserAvatarsService {
       };
     }
   }
-}
-
-export function createUserAvatarsService(db: Database, app: Application): UserAvatarsService {
-  return new UserAvatarsService(db, app);
 }

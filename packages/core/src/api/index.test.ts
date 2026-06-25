@@ -588,7 +588,12 @@ describe('createClient', () => {
       const usersService = client.service('users') as unknown as {
         methods: MockedFunction<(...names: string[]) => unknown>;
       };
-      expect(usersService.methods).toHaveBeenCalledWith('getGitEnvironment');
+      expect(usersService.methods).toHaveBeenCalledWith(
+        'getGitEnvironment',
+        'getAvatarSettings',
+        'updateAvatarSettings',
+        'syncAvatars'
+      );
     });
 
     it('registers repos.initializeUnixGroup custom method on client', () => {

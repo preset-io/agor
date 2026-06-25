@@ -14,6 +14,19 @@ interface UserAvatarsTabProps {
   gatewayChannelById: Map<string, GatewayChannel>;
 }
 
+type UsersAvatarClient = {
+  getAvatarSettings(data?: unknown): Promise<UserAvatarSettings>;
+  updateAvatarSettings(data: Partial<UserAvatarSettings>): Promise<UserAvatarSettings>;
+  syncAvatars(data: {
+    gateway_channel_id?: string | null;
+    user_id?: string;
+  }): Promise<UserAvatarSyncResult>;
+};
+
+function usersAvatarClient(client: AgorClient): UsersAvatarClient {
+  return client.service('users') as unknown as UsersAvatarClient;
+}
+
 const DEFAULT_SETTINGS: UserAvatarSettings = {
   enabled: false,
   provider: null,
@@ -40,9 +53,8 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({ client, gatewayC
   useEffect(() => {
     if (!client) return;
     setLoading(true);
-    client
-      .service('user-avatars')
-      .find()
+    usersAvatarClient(client)
+      .getAvatarSettings({})
       .then((value) => {
         const next = value as unknown as UserAvatarSettings;
         setSettings(next);
@@ -56,7 +68,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({ client, gatewayC
 
   const save = async (nextEnabled = enabled, nextGatewayId = gatewayId) => {
     if (!client) return;
-    const saved = (await client.service('user-avatars').patch(null, {
+    const saved = (await usersAvatarClient(client).updateAvatarSettings({
       enabled: nextEnabled,
       provider: nextEnabled ? 'slack' : null,
       gateway_channel_id: nextEnabled ? nextGatewayId : null,
@@ -103,7 +115,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({ client, gatewayC
     setSyncing(true);
     try {
       await save(true, gatewayId);
-      const result = (await client.service('user-avatars').create({
+      const result = (await usersAvatarClient(client).syncAvatars({
         gateway_channel_id: gatewayId,
       })) as UserAvatarSyncResult;
       setLastResult(result);
