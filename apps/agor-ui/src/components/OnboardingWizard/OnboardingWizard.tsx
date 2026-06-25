@@ -22,9 +22,11 @@ import {
   CheckOutlined,
   LeftOutlined,
   LoadingOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Spin, Tag, Typography, theme } from 'antd';
+import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 
 const { Text, Title, Paragraph } = Typography;
@@ -314,6 +316,7 @@ export function OnboardingWizard({
 
   // ── Step 3: workspace ───────────────────────────────────────────────────
   const [boardName, setBoardName] = useState('My project board');
+  const [boardEmoji, setBoardEmoji] = useState('📋');
   const [repoUrl, setRepoUrl] = useState('');
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const [boardCreating, setBoardCreating] = useState(false);
@@ -516,6 +519,7 @@ export function OnboardingWizard({
         try {
           const board = await client.service('boards').create({
             name: boardName.trim(),
+            icon: boardEmoji,
           });
           const newBoardId = board?.board_id ?? null;
           setCreatedBoardId(newBoardId);
@@ -556,6 +560,7 @@ export function OnboardingWizard({
     hasExistingBoard,
     client,
     boardName,
+    boardEmoji,
     saveOnboardingProgress,
     activeIntegration,
     createdBoardId,
@@ -930,7 +935,15 @@ export function OnboardingWizard({
             <Text
               style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
             >
-              Repo URL <span style={{ color: TEXT_MUTED, fontSize: 12 }}>optional</span>
+              Repo URL <span style={{ color: TEXT_MUTED, fontSize: 12 }}>optional</span>{' '}
+              <Tooltip
+                title="Link a Git repo to enable AI coding branches. Agor checks out branches from this repo when your AI starts a coding session. You can add more repos later."
+                placement="right"
+              >
+                <QuestionCircleOutlined
+                  style={{ color: TEXT_MUTED, fontSize: 12, cursor: 'help' }}
+                />
+              </Tooltip>
             </Text>
             <Input
               placeholder="https://github.com/you/your-repo"
@@ -948,15 +961,44 @@ export function OnboardingWizard({
             >
               Board name
             </Text>
-            <Input
-              placeholder="My project board"
-              value={boardName}
-              onChange={(e) => setBoardName(e.target.value)}
-              style={{
-                background: 'rgba(0,0,0,0.3)',
-                borderColor: 'rgba(255,255,255,0.12)',
-              }}
-            />
+            <div style={{ display: 'flex', gap: 0 }}>
+              <EmojiPickerInput value={boardEmoji} onChange={setBoardEmoji} defaultEmoji="📋" />
+              <Input
+                placeholder="My project board"
+                value={boardName}
+                onChange={(e) => setBoardName(e.target.value)}
+                style={{
+                  background: 'rgba(0,0,0,0.3)',
+                  borderColor: 'rgba(255,255,255,0.12)',
+                  borderTopLeftRadius: 0,
+                  borderBottomLeftRadius: 0,
+                  flex: 1,
+                }}
+              />
+            </div>
+          </div>
+          <div
+            style={{
+              background: GLASS_CARD_BG,
+              border: GLASS_CARD_BORDER,
+              borderRadius: 10,
+              padding: '12px 14px',
+              display: 'flex',
+              gap: 10,
+              alignItems: 'flex-start',
+            }}
+          >
+            <span style={{ fontSize: 18, flexShrink: 0 }}>🤖</span>
+            <div>
+              <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
+                Primary assistant
+              </Text>
+              <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
+                Each board has a dedicated AI agent that watches it and can be tasked directly —
+                your board&apos;s primary assistant. It will use the AI you chose in the previous
+                step.
+              </div>
+            </div>
           </div>
         </div>
       )}
