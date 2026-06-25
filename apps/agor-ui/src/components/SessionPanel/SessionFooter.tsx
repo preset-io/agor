@@ -1040,8 +1040,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 trigger="click"
                 placement="topLeft"
                 title="Model"
+                overlayStyle={{ maxWidth: 'none' }}
+                overlayInnerStyle={{ padding: 8 }}
                 content={
-                  <div style={{ width: 360 }}>
+                  <div style={{ width: 420 }}>
                     <ModelSelector
                       value={modelConfig}
                       onChange={onModelConfigChange}
