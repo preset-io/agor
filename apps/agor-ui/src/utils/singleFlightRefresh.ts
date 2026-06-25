@@ -43,6 +43,16 @@ import { getStoredRefreshToken, type RefreshResult, refreshAndStoreTokens } from
 export const TOKENS_REFRESHED_EVENT = 'agor:tokens-refreshed';
 
 /**
+ * Notify long-lived clients and React listeners that the browser has fresh
+ * auth tokens. Use this for every successful auth path that stores or rotates
+ * tokens while the page may already have socket/service clients alive.
+ */
+export function dispatchTokensRefreshed(result: RefreshResult): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent<RefreshResult>(TOKENS_REFRESHED_EVENT, { detail: result }));
+}
+
+/**
  * Custom DOM event fired when the refresh endpoint returned a definite auth
  * failure. Listeners (useAuth) should treat this as "session is dead" and
  * clear tokens + bounce to login.
@@ -118,12 +128,9 @@ export function refreshTokensSingleFlight(
       // the user logged out and back in, or a transient failure was
       // misclassified, resume normal operation.
       unrecoverable = false;
-      // Notify listeners (useAuth) that tokens have rotated.
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent<RefreshResult>(TOKENS_REFRESHED_EVENT, { detail: result })
-        );
-      }
+      // Notify listeners (useAuth, socket clients, data hooks) that tokens
+      // have rotated.
+      dispatchTokensRefreshed(result);
       return result;
     })
     .catch((err) => {

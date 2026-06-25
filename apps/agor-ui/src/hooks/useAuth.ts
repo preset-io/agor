@@ -17,6 +17,7 @@ import {
   removeLaunchCodeFromCurrentUrl,
 } from '../utils/launchAuth';
 import {
+  dispatchTokensRefreshed,
   RefreshUnrecoverableError,
   refreshTokensSingleFlight,
   resetRefreshFailureState,
@@ -172,6 +173,7 @@ export function useAuth(): UseAuthReturn {
             loading: false,
             error: null,
           });
+          dispatchTokensRefreshed(result);
 
           return;
         } catch (launchError) {
@@ -473,6 +475,7 @@ export function useAuth(): UseAuthReturn {
         loading: false,
         error: null,
       });
+      dispatchTokensRefreshed(result);
 
       return true;
     } catch (error) {
