@@ -1102,6 +1102,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * `zone_id` is deliberately not pushed here — it is virtual (backed by
    * board_objects, not a branches column) and is already resolved to a
    * `branch_id` filter in `find` before this runs.
+   *
+   * A `{ $in }` is only pushed when every element is a string. `branches.branch_id`
+   * is non-null so it can't diverge today, but the guard keeps the superset
+   * invariant unconditional and avoids handing a malformed element to SQL.
    */
   protected async fetchData(query: Query): Promise<Branch[]> {
     const filter: {
@@ -1118,7 +1122,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const branchId = query.branch_id;
     if (typeof branchId === 'string') {
       filter.branchIds = [branchId as BranchID];
-    } else if (branchId && typeof branchId === 'object' && Array.isArray(branchId.$in)) {
+    } else if (
+      branchId &&
+      typeof branchId === 'object' &&
+      Array.isArray(branchId.$in) &&
+      branchId.$in.every((el: unknown) => typeof el === 'string')
+    ) {
       filter.branchIds = branchId.$in as BranchID[];
     }
 

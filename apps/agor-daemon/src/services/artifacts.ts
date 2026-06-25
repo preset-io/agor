@@ -364,8 +364,15 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    *
    * Artifacts are not query-validated, so values arrive uncoerced: only push
    * when the value already has the column's type (string `board_id`, boolean
-   * `archived`, string / `{ $in }` `branch_id`). Anything else falls through to
-   * the unchanged in-memory filter, preserving current behavior exactly.
+   * `archived`, string / all-string `{ $in }` `branch_id`). Anything else falls
+   * through to the unchanged in-memory filter, preserving current behavior
+   * exactly.
+   *
+   * `artifacts.branch_id` is nullable, so a `{ $in }` that contains a non-string
+   * element (e.g. `null`) is deliberately NOT pushed: `filterData` matches null
+   * branch_ids against such a set via JS `includes`, but SQL `IN (NULL)` never
+   * does — pushing it would return a SUBSET and break the superset contract.
+   * board_id / archived may still be pushed in that case.
    */
   protected async fetchData(query: Query): Promise<Artifact[]> {
     const filter: { board_id?: BoardID; archived?: boolean; branchIds?: BranchID[] } = {};
@@ -376,7 +383,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const branchId = query.branch_id;
     if (typeof branchId === 'string') {
       filter.branchIds = [branchId as BranchID];
-    } else if (branchId && typeof branchId === 'object' && Array.isArray(branchId.$in)) {
+    } else if (
+      branchId &&
+      typeof branchId === 'object' &&
+      Array.isArray(branchId.$in) &&
+      branchId.$in.every((el: unknown) => typeof el === 'string')
+    ) {
       filter.branchIds = branchId.$in as BranchID[];
     }
 

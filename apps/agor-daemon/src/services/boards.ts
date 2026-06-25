@@ -73,21 +73,28 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    *
    * The generic adapter would read the entire boards table and filter in
    * memory. `boards` is fetched on initial app load, so we narrow the read to
-   * the archived state and any accessible-id set (injected by RBAC scoping via
-   * `findVisibleBoardIds`) before rows leave the database. `find` still
-   * re-applies every query filter in memory, so this only ever returns a
-   * superset of the matching rows and the downstream sort/pagination is
-   * unaffected.
+   * the accessible-id set (injected by RBAC scoping via `findVisibleBoardIds`)
+   * before rows leave the database. `find` still re-applies every query filter
+   * in memory, so this only ever returns a superset of the matching rows and the
+   * downstream sort/pagination is unaffected.
+   *
+   * The boards query validator (`boardQuerySchema`) does not accept `archived`
+   * and strips it before the service runs, so there is nothing to push beyond
+   * the board-id scope. A `{ $in }` is only pushed when every element is a
+   * string, keeping the superset invariant unconditional.
    */
   protected async fetchData(query: Query): Promise<Board[]> {
-    const filter: { archived?: boolean; boardIds?: BoardID[] } = {};
-
-    if (typeof query.archived === 'boolean') filter.archived = query.archived;
+    const filter: { boardIds?: BoardID[] } = {};
 
     const boardId = query.board_id;
     if (typeof boardId === 'string') {
       filter.boardIds = [boardId as BoardID];
-    } else if (boardId && typeof boardId === 'object' && Array.isArray(boardId.$in)) {
+    } else if (
+      boardId &&
+      typeof boardId === 'object' &&
+      Array.isArray(boardId.$in) &&
+      boardId.$in.every((el: unknown) => typeof el === 'string')
+    ) {
       filter.boardIds = boardId.$in as BoardID[];
     }
 

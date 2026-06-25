@@ -1856,4 +1856,41 @@ describe('ArtifactsService.find SQL pushdown', () => {
       expect(result.data).toHaveLength(0);
     }
   );
+
+  // branch_id is nullable: a `{ $in }` containing a non-string element must NOT
+  // be pushed, because SQL `IN (NULL)` never matches an orphan's null branch_id
+  // while the JS `includes` path does. Pushing it would return a SUBSET.
+  dbTest('does NOT push a $in containing null — orphans stay visible', async ({ db }) => {
+    const { service } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: { branch_id: { $in: [null as unknown as BranchID] } },
+    })) as { data: Artifact[]; total: number };
+
+    // Fell through to the whole-table read (no branchIds pushed); filterData
+    // applied the $in in JS, which matches the orphan's null branch_id.
+    expect(repoFindAll).toHaveBeenCalledWith({});
+    expect(result.data.map((a) => a.name)).toEqual(['a-orphan']);
+    expect(result.data.every((a) => a.branch_id === null)).toBe(true);
+  });
+
+  dbTest('does NOT push a mixed null + string $in — orphans stay visible', async ({ db }) => {
+    const { service, branch1 } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: { branch_id: { $in: [null as unknown as BranchID, branch1] } },
+    })) as { data: Artifact[]; total: number };
+
+    // Whole-table fall-through; JS $in matches the orphan AND both branch1 rows.
+    expect(repoFindAll).toHaveBeenCalledWith({});
+    expect(result.data.map((a) => a.name).sort()).toEqual(['a-branch1', 'a-orphan', 'b-branch1']);
+  });
 });
