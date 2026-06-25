@@ -8,7 +8,8 @@
  */
 
 import type { User } from '@agor-live/client';
-import { Button } from 'antd';
+import { ApiOutlined } from '@ant-design/icons';
+import { Button, Tag } from 'antd';
 import type { WizardStep } from '../OnboardingWizard';
 
 export interface OnboardingBannersProps {
@@ -111,8 +112,20 @@ export function OnboardingBanners({
         zIndex: 10,
       }}
     >
-      <span style={{ color: '#c7d2fe', fontSize: 13, fontWeight: 500 }}>
-        ⚡ Connect Slack or GitHub to unlock your AI's full potential.
+      <span
+        style={{
+          color: '#c7d2fe',
+          fontSize: 13,
+          fontWeight: 500,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        <Tag icon={<ApiOutlined />} color="default" style={{ margin: 0, fontSize: 12 }}>
+          {mcpServerCount} MCP {mcpServerCount === 1 ? 'server' : 'servers'}
+        </Tag>
+        Connect tools to unlock your AI's full potential.
       </span>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <Button

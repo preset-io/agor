@@ -314,6 +314,7 @@ export function OnboardingWizard({
   const [integrationInputs, setIntegrationInputs] = useState<Record<string, string>>({});
   const [slackConnecting, setSlackConnecting] = useState(false);
   const [slackConnected, setSlackConnected] = useState(false);
+  const [hoveredIntegration, setHoveredIntegration] = useState<IntegrationId | null>(null);
 
   // ── Reset on open ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -330,6 +331,7 @@ export function OnboardingWizard({
       setIntegrationInputs({});
       setSlackConnecting(false);
       setSlackConnected(false);
+      setHoveredIntegration(null);
       // Pre-select LLM if user already has one configured
       if (hasAnyLlmKey(user)) {
         const claude = user?.agentic_tools?.['claude-code'];
@@ -1271,14 +1273,22 @@ export function OnboardingWizard({
           {gridIntegrations.map((integration) => (
             <div
               key={integration.id}
+              onMouseEnter={() => setHoveredIntegration(integration.id as IntegrationId)}
+              onMouseLeave={() => setHoveredIntegration(null)}
               style={{
-                background: GLASS_CARD_BG,
-                border: GLASS_CARD_BORDER,
+                background:
+                  hoveredIntegration === integration.id ? 'rgba(255,255,255,0.07)' : GLASS_CARD_BG,
+                border:
+                  hoveredIntegration === integration.id
+                    ? '1px solid rgba(99,102,241,0.4)'
+                    : GLASS_CARD_BORDER,
                 borderRadius: 10,
                 padding: '14px',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 6,
+                transition: 'background 0.15s, border-color 0.15s',
+                cursor: 'default',
               }}
             >
               <div
