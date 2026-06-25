@@ -756,7 +756,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }
       if (args.knowledgePageId !== undefined) {
         fieldsProvided++;
-        updates.linked_knowledge_page_id = args.knowledgePageId ?? null;
+        if (args.knowledgePageId === null) {
+          updates.linked_knowledge_page_id = null;
+        } else {
+          const doc = await ctx.app
+            .service('kb/documents')
+            .get(args.knowledgePageId.toLowerCase(), ctx.baseServiceParams);
+          updates.linked_knowledge_page_id = doc.document_id;
+        }
       }
       if (args.notes !== undefined) {
         fieldsProvided++;

@@ -206,25 +206,34 @@ describe('agor_branches_update', () => {
     expect(sessionsGet).not.toHaveBeenCalled();
   });
 
-  it('maps knowledgePageId to linked_knowledge_page_id in the patch call', async () => {
+  it('resolves knowledgePageId via kb/documents and patches with normalized document_id', async () => {
     const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
     const branchesPatch = vi.fn(async () => ({
       branch_id: 'branch-1',
-      linked_knowledge_page_id: 'doc-abc123',
+      linked_knowledge_page_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+    }));
+    const kbDocumentsGet = vi.fn(async () => ({
+      document_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
     }));
     const app = {
       service(name: string) {
         if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
+        if (name === 'kb/documents') return { get: kbDocumentsGet };
         throw new Error(`Unexpected service call: ${name}`);
       },
     };
 
     const update = registerAndCaptureUpdate({ app, userId: 'user-1' });
-    await update({ branchId: 'branch-1', knowledgePageId: 'doc-abc123' });
+    // Agent supplies a short/non-normalized ID — the tool resolves it
+    await update({ branchId: 'branch-1', knowledgePageId: '01933e4a7b897c35a8f39d2e1c4b5a6f' });
 
+    expect(kbDocumentsGet).toHaveBeenCalledWith(
+      '01933e4a7b897c35a8f39d2e1c4b5a6f',
+      expect.anything()
+    );
     expect(branchesPatch).toHaveBeenCalledWith(
       'branch-1',
-      expect.objectContaining({ linked_knowledge_page_id: 'doc-abc123' }),
+      expect.objectContaining({ linked_knowledge_page_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' }),
       expect.anything()
     );
   });

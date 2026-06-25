@@ -169,7 +169,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               label={
                 <Space size={4}>
                   <ReadOutlined />
-                  <span>Knowledge Pages</span>
+                  <span>Knowledge Page</span>
                 </Space>
               }
               labelCol={{ span: 6 }}

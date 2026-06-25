@@ -1736,7 +1736,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
       const document = await ctx.app
         .service('kb/documents')
-        .get(args.documentId.trim(), ctx.baseServiceParams);
+        .get(args.documentId.trim().toLowerCase(), ctx.baseServiceParams);
       // Read-then-write: concurrent calls from different agents can race and
       // silently drop each other's document IDs. Acceptable for low-frequency writes;
       // use optimistic locking if this becomes a problem.
