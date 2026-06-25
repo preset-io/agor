@@ -635,6 +635,11 @@ export const MarketingScreenshotPage = () => {
       cardById: maps.cardById,
       userById: maps.userById,
       commentById: maps.commentById,
+      // AppHeader's GlobalSearch reads artifacts + MCP servers from the store;
+      // pin them empty so a previously-populated workspace store can't leak its
+      // entities into this standalone demo regardless of prior state.
+      artifactById: new Map(),
+      mcpServerById: new Map(),
     });
   }, [maps]);
 
@@ -674,7 +679,6 @@ export const MarketingScreenshotPage = () => {
               eventStreamEnabled={true}
               hasUserMentions={true}
               currentBoardId={boardId}
-              recentBoards={[]}
             />
             <main className="marketing-product-canvas">
               <ReactFlowProvider>

@@ -485,8 +485,10 @@ export const App: React.FC<AppProps> = ({
     true
   );
 
-  // Track recent boards (single instance — passed down to AppHeader as props)
-  const { recentBoards, recentBoardIds, trackBoardVisit } = useRecentBoards(
+  // Recent-board visit tracking + the id list HomePage consumes. AppHeader owns
+  // its own pill derivation from the store (so it isn't fed an unstable array),
+  // and the localStorage-backed recents list keeps both in sync.
+  const { recentBoardIds, trackBoardVisit } = useRecentBoards(
     mapToArray(boardById),
     currentBoardId
   );
@@ -1110,7 +1112,6 @@ export const App: React.FC<AppProps> = ({
               onHomeClick={handleHomeClick}
               onUserClick={handleHeaderUserClick}
               instanceLabel={instanceLabel}
-              recentBoards={recentBoards}
               instanceDescription={instanceDescription}
             />
             <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>

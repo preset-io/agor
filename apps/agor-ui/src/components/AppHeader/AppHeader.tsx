@@ -12,6 +12,7 @@ import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectArtifactById,
@@ -63,8 +64,6 @@ export interface AppHeaderProps {
     boardId?: BoardID,
     cursorPosition?: { x: number; y: number }
   ) => void; // Navigate to user's board
-  /** Recently visited boards (excluding current) for quick-access pills */
-  recentBoards?: Board[];
   /** Instance label for deployment identification (displayed as a Tag) */
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
@@ -133,7 +132,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   onBoardChange,
   onHomeClick,
   onUserClick,
-  recentBoards = [],
   instanceLabel,
   instanceDescription,
 }) => {
@@ -155,6 +153,11 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   const mcpServerById = useAgorStore(selectMcpServerById);
   const boards = useMemo(() => mapToArray(boardById), [boardById]);
   const presenceUsers = useMemo(() => mapToArray(userById), [userById]);
+  // Derive the recent-board pills here (not as a prop): the source array is the
+  // store-derived `boards`, so unrelated App re-renders can't hand us a fresh
+  // recents array and defeat React.memo. The localStorage-backed recents list is
+  // shared across hook instances, so this stays in sync with App's visit tracker.
+  const { recentBoards } = useRecentBoards(boards, currentBoardId ?? '');
   // Single source of truth for "is the daemon usable right now?". Captures
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.

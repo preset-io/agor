@@ -1,4 +1,4 @@
-import type { Board, Repo } from '@agor-live/client';
+import type { Board, Repo, User } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -128,25 +128,61 @@ function useStableCallback<TFn extends (...args: never[]) => unknown>(
 // Lets a test trigger a parent re-render without touching AppHeader's props.
 let triggerParentRerender: () => void = () => {};
 
-// Parent harness that renders the REAL memo'd AppHeader the way App does: an
-// action handler flows through `useStableCallback` so its identity is frozen. A
-// `useState` bump (driven from the test) re-renders THIS parent; the `stabilize`
-// flag toggles whether the settings handler is stabilized, so the same harness
-// proves both halves of the guard.
+// Stable identities for every NON-flipped AppHeader prop, mirroring App's render
+// site: handlers are frozen (App routes them through useStableCallback) and the
+// scalar props are constants. Module-level so they keep their identity across
+// parent re-renders — the whole point of the guard is that NOTHING AppHeader
+// receives churns, so React.memo can bail out.
+const HARNESS_USER = { user_id: 'u1', name: 'User', email: 'u@example.test' } as unknown as User;
+const noop = () => {};
+
+// The complete prop set App passes, minus the one handler the harness flips. If a
+// future change reintroduces an unstable prop here (e.g. a fresh array), the
+// all-stable assertion below starts failing — that's the regression this guards.
+const STABLE_HEADER_PROPS = {
+  user: HARNESS_USER,
+  presenceClient: null,
+  currentUserId: 'u1',
+  connected: true,
+  connecting: false,
+  onMenuClick: noop,
+  onCommentsClick: noop,
+  onEventStreamClick: noop,
+  onUserSettingsClick: noop,
+  onThemeEditorClick: noop,
+  onLogout: noop,
+  onRetryConnection: noop,
+  currentBoardName: 'Board',
+  currentBoardIcon: '📋',
+  unreadCommentsCount: 0,
+  eventStreamEnabled: true,
+  hasUserMentions: false,
+  currentBoardId: 'board-1',
+  onBoardChange: noop,
+  onHomeClick: noop,
+  onUserClick: noop,
+  instanceLabel: 'Test Instance',
+} as const;
+
+// Parent harness that renders the REAL memo'd AppHeader the way App does, with
+// the FULL prop set. One handler (`onSettingsClick`) flows through
+// `useStableCallback` when `stabilize` is true and is passed as a fresh arrow
+// otherwise — so the same harness proves both halves of the guard while every
+// other prop stays referentially stable. A `useState` bump re-renders THIS
+// parent without touching any prop value.
 function ParentHarness({ stabilize }: { stabilize: boolean }) {
   const [, setTick] = useState(0);
   triggerParentRerender = () => setTick((tick) => tick + 1);
 
-  // Fresh identity on every parent render (mirrors App's plain-const handlers).
-  // When `stabilize` is true we freeze it through useStableCallback; when false
-  // we pass it straight through so memo sees a new prop each render.
+  // Fresh identity on every parent render unless we freeze it via
+  // useStableCallback (mirrors App's plain-const → stabilized handlers).
   const settingsImpl = () => {};
   const stableSettings = useStableCallback(settingsImpl);
   const onSettingsClick = stabilize ? stableSettings : settingsImpl;
 
   return (
     <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <AppHeader onSettingsClick={onSettingsClick} />
+      <AppHeader {...STABLE_HEADER_PROPS} onSettingsClick={onSettingsClick} />
     </MemoryRouter>
   );
 }
