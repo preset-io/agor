@@ -66,7 +66,7 @@ export function OnboardingBanners({
         }}
       >
         <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>
-          ⚠️ No AI connected — Agor can't do anything useful without one.
+          ⚡ Add an API key to start your first session — everything else is ready.
         </span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Button
@@ -100,8 +100,8 @@ export function OnboardingBanners({
   return (
     <div
       style={{
-        background: 'rgba(99,102,241,0.1)',
-        borderBottom: '1px solid rgba(99,102,241,0.5)',
+        background: 'rgba(46,154,146,0.1)',
+        borderBottom: '1px solid rgba(46,154,146,0.35)',
         height: 44,
         display: 'flex',
         alignItems: 'center',
@@ -114,7 +114,7 @@ export function OnboardingBanners({
     >
       <span
         style={{
-          color: '#c7d2fe',
+          color: '#7dd3ce',
           fontSize: 13,
           fontWeight: 500,
           display: 'flex',
@@ -125,7 +125,7 @@ export function OnboardingBanners({
         <Tag icon={<ApiOutlined />} color="default" style={{ margin: 0, fontSize: 12 }}>
           {mcpServerCount} MCP {mcpServerCount === 1 ? 'server' : 'servers'}
         </Tag>
-        Connect tools to unlock your AI's full potential.
+        Connect Slack, GitHub, or Linear to let your AI post updates and track issues.
       </span>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <Button
@@ -140,8 +140,8 @@ export function OnboardingBanners({
           size="small"
           onClick={() => onOpenWizardAtStep('integrations')}
           style={{
-            background: '#6366f1',
-            borderColor: '#6366f1',
+            background: '#2e9a92',
+            borderColor: '#2e9a92',
             color: '#fff',
             fontWeight: 600,
             fontSize: 12,

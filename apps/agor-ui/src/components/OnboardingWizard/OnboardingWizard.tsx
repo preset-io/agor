@@ -41,13 +41,13 @@ type IntegrationId = 'slack' | 'github' | 'linear' | 'jira' | 'notion';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: WizardStep[] = ['persona', 'llm', 'workspace', 'integrations', 'done'];
+const STEPS: WizardStep[] = ['persona', 'workspace', 'integrations', 'llm', 'done'];
 
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
   persona: { number: 1, label: 'You', skippable: true },
-  llm: { number: 2, label: 'AI', skippable: true },
-  workspace: { number: 3, label: 'Workspace', skippable: true },
-  integrations: { number: 4, label: 'Integrations', skippable: true },
+  workspace: { number: 2, label: 'Workspace', skippable: true },
+  integrations: { number: 3, label: 'Integrations', skippable: true },
+  llm: { number: 4, label: 'AI', skippable: true },
   done: { number: 5, label: "You're ready", skippable: false },
 };
 
@@ -477,13 +477,13 @@ export function OnboardingWizard({
         if (selectedPersona) {
           saveOnboardingProgress({ persona: selectedPersona });
         }
-        goToStep('llm');
+        goToStep('workspace');
         break;
       }
       case 'llm': {
         if (!selectedAgent) return;
         if (agentHasKey(selectedAgent)) {
-          goToStep('workspace');
+          goToStep('done');
           return;
         }
         if (!user || !apiKey.trim()) return;
@@ -498,7 +498,7 @@ export function OnboardingWizard({
               [targetTool]: { [keyName]: apiKey.trim() },
             } as UpdateUserInput['agentic_tools'],
           });
-          goToStep('workspace');
+          goToStep('done');
         } catch (err) {
           setLlmError(
             `Failed to save API key: ${err instanceof Error ? err.message : String(err)}`
@@ -538,7 +538,7 @@ export function OnboardingWizard({
         if (activeIntegration) {
           setActiveIntegration(null);
         } else {
-          goToStep('done');
+          goToStep('llm');
         }
         break;
       }
@@ -677,10 +677,11 @@ export function OnboardingWizard({
     return (
       <div>
         <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
-          Choose your AI.
+          Last step: connect your AI.
         </Title>
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-          Agor works with multiple AI models. Pick one — you can add more later in Settings.
+          Choose a model and add your API key. This is what powers everything — you can change it
+          anytime in Settings.
         </Paragraph>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
