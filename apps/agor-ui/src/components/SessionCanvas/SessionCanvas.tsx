@@ -1258,7 +1258,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           .filter((n) => n.type === 'zone' && !deletedObjectsRef.current.has(n.id))
           .map((newZone) => {
             const existingZone = currentNodes.find((n) => n.id === newZone.id);
-            return { ...newZone, selected: existingZone?.selected };
+            return {
+              ...newZone,
+              selected: existingZone?.selected,
+              // Preserve runtime zIndex (e.g. 101 when selected) so board data
+              // updates don't reset it to the base value of 100.
+              zIndex: existingZone?.zIndex ?? newZone.zIndex,
+            };
           });
 
         const markdown = boardObjectNodes
@@ -1393,6 +1399,26 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const onNodesChange = useCallback(
       // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
       (changes: any) => {
+        // Raise/lower a zone's zIndex when it becomes selected/deselected so its
+        // toolbar clears neighboring zone nodes. zIndex 101 beats sibling zones
+        // (100) while staying below notes (300), artifacts (400), and branches (500).
+        // We do this in the external nodes state (not via useReactFlow().setNodes)
+        // so the board sync effect's currentNodes snapshot reflects the change and
+        // doesn't overwrite it on the next board data update.
+        // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+        const selectChanges = changes.filter((c: any) => c.type === 'select');
+        if (selectChanges.length > 0) {
+          setNodes((currentNodes) =>
+            currentNodes.map((n) => {
+              if (n.type !== 'zone') return n;
+              // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+              const change = selectChanges.find((c: any) => c.id === n.id);
+              if (change) return { ...n, zIndex: change.selected ? 101 : 100 };
+              return n;
+            })
+          );
+        }
+
         // Detect resize by checking for dimensions changes
         // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
         changes.forEach((change: any) => {
@@ -1466,7 +1492,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Call the original handler
         onNodesChangeInternal(changes);
       },
-      [board, client, onNodesChangeInternal]
+      [board, client, onNodesChangeInternal, setNodes]
     );
 
     // Handle node drag start
