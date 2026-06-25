@@ -10,7 +10,6 @@ import type {
 } from '@agor-live/client';
 import {
   BranchesOutlined,
-  CheckCircleFilled,
   ClockCircleOutlined,
   EllipsisOutlined,
   ForkOutlined,
@@ -24,14 +23,13 @@ import {
   QuestionCircleOutlined,
   RobotOutlined,
   SendOutlined,
-  SettingOutlined,
   StopOutlined,
   ToolOutlined,
-  WarningOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Divider, Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
+import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { EffortSelector } from '../EffortSelector';
 import type { ModelConfig } from '../ModelSelector';
 import { ModelSelector } from '../ModelSelector';
@@ -40,6 +38,7 @@ import { TimerPill } from '../Pill';
 import { getModelDisplayName } from '../Pill/modelDisplay';
 import { SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
+import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 
 export interface SessionFooterProps {
   // Session data for chips
@@ -59,6 +58,7 @@ export interface SessionFooterProps {
   sessionMcpServerIds: string[];
   unauthedMcpServers: MCPServer[];
   mcpServerById: Map<string, MCPServer>;
+  userAuthenticatedMcpServerIds: Set<string>;
   // Action state
   isRunning: boolean;
   isStopping: boolean;
@@ -100,6 +100,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   sessionMcpServerIds,
   unauthedMcpServers,
   mcpServerById,
+  userAuthenticatedMcpServerIds,
   isRunning,
   isStopping,
   stopRequestInFlight,
@@ -155,16 +156,33 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           : session.model_config.model
       )
     : null;
-  const tokensK = tokenBreakdown.total > 0 ? Math.round(tokenBreakdown.total / 1000) : 0;
+  const tokenDisplay =
+    tokenBreakdown.total >= 1000
+      ? `${Math.round(tokenBreakdown.total / 1000)}k`
+      : tokenBreakdown.total > 0
+        ? String(tokenBreakdown.total)
+        : null;
 
-  // Context window usage percentage (for warning styling)
-  const contextPct =
-    latestContextWindow && latestContextWindow.limit > 0
-      ? latestContextWindow.used / latestContextWindow.limit
-      : 0;
+  // Context window usage percentage (for warning styling).
+  // Prefers the executor-supplied snapshot.percentage (0-100) when available
+  // so Codex baseline-adjusted display matches the agent's own indicator.
+  const contextPct = React.useMemo(() => {
+    if (!latestContextWindow) return 0;
+    const meta = latestContextWindow.taskMetadata as {
+      normalized_sdk_response?: {
+        contextUsageSnapshot?: { percentage: number; totalTokens: number; maxTokens: number };
+      };
+    } | null;
+    const snapshot = meta?.normalized_sdk_response?.contextUsageSnapshot;
+    return (
+      resolveContextWindowPercentage(
+        latestContextWindow.used,
+        latestContextWindow.limit,
+        snapshot
+      ) / 100
+    );
+  }, [latestContextWindow]);
   const contextWarning = contextPct > 0.8;
-
-  const hasUnauthedMcp = unauthedMcpServers.length > 0;
 
   const sectionHeaderStyle: React.CSSProperties = {
     padding: '6px 12px 3px',
@@ -183,104 +201,6 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
     padding: '0 6px 0 12px',
     height: 32,
   };
-
-  // Tools chip popover: list server names
-  const toolsPopoverContent = (
-    <div style={{ width: 260, paddingTop: 6, paddingBottom: 6 }}>
-      <div style={sectionHeaderStyle}>Tools</div>
-
-      {sessionMcpServerIds.length === 0 && (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 4,
-            padding: '12px 12px 8px',
-            textAlign: 'center',
-          }}
-        >
-          <ToolOutlined style={{ fontSize: 20, color: token.colorTextTertiary }} />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            No tools attached
-          </Typography.Text>
-          <Typography.Text
-            type="secondary"
-            style={{ fontSize: 11, color: token.colorTextTertiary }}
-          >
-            Add MCP servers in settings
-          </Typography.Text>
-        </div>
-      )}
-
-      {sessionMcpServerIds.map((id) => {
-        const server = mcpServerById.get(id);
-        const needsAuth = unauthedMcpServers.some((s) => s.mcp_server_id === id);
-        return (
-          <div
-            key={id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '0 12px',
-              height: 32,
-            }}
-          >
-            {needsAuth ? (
-              <WarningOutlined style={{ fontSize: 12, color: token.colorWarning, flexShrink: 0 }} />
-            ) : (
-              <CheckCircleFilled
-                style={{ fontSize: 12, color: token.colorSuccess, flexShrink: 0 }}
-              />
-            )}
-            <Typography.Text
-              style={{
-                fontSize: 13,
-                flex: 1,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                minWidth: 0,
-              }}
-            >
-              {server?.name ?? id}
-            </Typography.Text>
-            {needsAuth && (
-              <Typography.Text
-                type="warning"
-                style={{ fontSize: 11, flexShrink: 0, whiteSpace: 'nowrap' }}
-              >
-                needs auth
-              </Typography.Text>
-            )}
-          </div>
-        );
-      })}
-
-      {onOpenSessionSettings && (
-        <>
-          <Divider style={{ margin: '4px 0' }} />
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '0 6px 0 12px',
-              height: 32,
-              cursor: 'pointer',
-            }}
-            onClick={() => onOpenSessionSettings(session.session_id)}
-          >
-            <SettingOutlined
-              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-            />
-            <Typography.Text style={{ fontSize: 13, flex: 1 }}>MCP settings</Typography.Text>
-          </div>
-        </>
-      )}
-    </div>
-  );
 
   const moreContent = (
     <div style={{ width: 260, paddingTop: 6, paddingBottom: 6 }}>
@@ -382,7 +302,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       <div style={sectionHeaderStyle}>Actions</div>
 
       {/* Upload */}
+      {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
       <div
+        role="button"
+        tabIndex={connectionDisabled ? -1 : 0}
         style={{
           ...overflowRowStyle,
           opacity: connectionDisabled ? 0.4 : 1,
@@ -394,6 +317,17 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             : () => {
                 setMoreOpen(false);
                 onUploadOpen();
+              }
+        }
+        onKeyDown={
+          connectionDisabled
+            ? undefined
+            : (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setMoreOpen(false);
+                  onUploadOpen();
+                }
               }
         }
       >
@@ -462,7 +396,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
       {/* Fork */}
       {toolCaps?.supportsSessionFork !== false && (
+        // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
+          role="button"
+          tabIndex={connectionDisabled ? -1 : 0}
           style={{
             ...overflowRowStyle,
             opacity: connectionDisabled ? 0.4 : 1,
@@ -474,6 +411,17 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               : () => {
                   setMoreOpen(false);
                   onFork();
+                }
+          }
+          onKeyDown={
+            connectionDisabled
+              ? undefined
+              : (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setMoreOpen(false);
+                    onFork();
+                  }
                 }
           }
         >
@@ -543,7 +491,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
       {/* BTW fork */}
       {toolCaps?.supportsSessionFork !== false && (
+        // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
+          role="button"
+          tabIndex={connectionDisabled || !hasInput ? -1 : 0}
           style={{
             ...overflowRowStyle,
             opacity: connectionDisabled || !hasInput ? 0.4 : 1,
@@ -555,6 +506,17 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               : () => {
                   setMoreOpen(false);
                   onBtwSend();
+                }
+          }
+          onKeyDown={
+            connectionDisabled || !hasInput
+              ? undefined
+              : (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setMoreOpen(false);
+                    onBtwSend();
+                  }
                 }
           }
         >
@@ -630,7 +592,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
 
       {/* Spawn */}
       {toolCaps?.supportsChildSpawn !== false && (
+        // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
+          role="button"
+          tabIndex={connectionDisabled || isRunning ? -1 : 0}
           style={{
             ...overflowRowStyle,
             opacity: connectionDisabled || isRunning ? 0.4 : 1,
@@ -642,6 +607,17 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
               : () => {
                   setMoreOpen(false);
                   onSpawnOpen();
+                }
+          }
+          onKeyDown={
+            connectionDisabled || isRunning
+              ? undefined
+              : (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setMoreOpen(false);
+                    onSpawnOpen();
+                  }
                 }
           }
         >
@@ -861,7 +837,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         </div>
       )}
 
-      {tokensK > 0 && (
+      {tokenDisplay !== null && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
           <NumberOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
@@ -981,7 +957,18 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           </div>
         }
       >
-        <div style={{ ...overflowRowStyle, cursor: 'pointer' }}>
+        {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
+        <div
+          role="button"
+          tabIndex={0}
+          style={{ ...overflowRowStyle, cursor: 'pointer' }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              e.currentTarget.click();
+            }
+          }}
+        >
           <IdcardOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
           />
@@ -1086,7 +1073,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         {(pinnedChips.includes('tools') ||
           (footerTimerTask && pinnedChips.includes('timer')) ||
           (modelName && pinnedChips.includes('model')) ||
-          (tokensK > 0 && pinnedChips.includes('tokens')) ||
+          (tokenDisplay !== null && pinnedChips.includes('tokens')) ||
           (latestContextWindow &&
             latestContextWindow.limit > 0 &&
             pinnedChips.includes('context')) ||
@@ -1120,38 +1107,14 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             )}
 
             {pinnedChips.includes('tools') && (
-              <Popover
-                trigger="click"
-                placement="topLeft"
-                content={toolsPopoverContent}
-                title={null}
-              >
-                <Tag
-                  icon={<ToolOutlined />}
-                  color={hasUnauthedMcp ? 'warning' : 'default'}
-                  style={{
-                    cursor: 'pointer',
-                    height: 22,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    opacity: sessionMcpServerIds.length === 0 ? 0.45 : 1,
-                  }}
-                  data-testid="tools-chip"
-                >
-                  {sessionMcpServerIds.length === 0 ? (
-                    'No tools'
-                  ) : (
-                    <>
-                      Tools&nbsp;·&nbsp;{sessionMcpServerIds.length}
-                      {hasUnauthedMcp && (
-                        <WarningOutlined
-                          style={{ marginLeft: token.sizeUnit, color: token.colorWarning }}
-                        />
-                      )}
-                    </>
-                  )}
-                </Tag>
-              </Popover>
+              <SessionMcpFooterControl
+                client={client}
+                sessionId={session.session_id}
+                sessionMcpServerIds={sessionMcpServerIds}
+                mcpServerById={mcpServerById}
+                userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
+                onOpenSessionSettings={onOpenSessionSettings}
+              />
             )}
 
             {/* Model chip */}
@@ -1199,19 +1162,42 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             )}
 
             {/* Tokens chip */}
-            {tokensK > 0 && pinnedChips.includes('tokens') && (
-              <Tag
-                color="default"
-                style={{
-                  cursor: 'default',
-                  height: 22,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                }}
-                data-testid="tokens-chip"
+            {tokenDisplay !== null && pinnedChips.includes('tokens') && (
+              <Tooltip
+                title={
+                  tokenBreakdown.total > 0 ? (
+                    <div style={{ fontSize: 12 }}>
+                      <div>Total: {tokenBreakdown.total.toLocaleString()}</div>
+                      {tokenBreakdown.input > 0 && (
+                        <div>Input: {tokenBreakdown.input.toLocaleString()}</div>
+                      )}
+                      {tokenBreakdown.output > 0 && (
+                        <div>Output: {tokenBreakdown.output.toLocaleString()}</div>
+                      )}
+                      {tokenBreakdown.cacheRead > 0 && (
+                        <div>Cache read: {tokenBreakdown.cacheRead.toLocaleString()}</div>
+                      )}
+                      {tokenBreakdown.cost > 0 && (
+                        <div>Est. cost: ${tokenBreakdown.cost.toFixed(4)}</div>
+                      )}
+                    </div>
+                  ) : undefined
+                }
+                placement="top"
               >
-                {tokensK}k tokens
-              </Tag>
+                <Tag
+                  color="default"
+                  style={{
+                    cursor: 'default',
+                    height: 22,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                  }}
+                  data-testid="tokens-chip"
+                >
+                  {tokenDisplay} tokens
+                </Tag>
+              </Tooltip>
             )}
 
             {/* Context % chip */}

@@ -19,8 +19,19 @@ export function useFooterPreferences(): [
 ] {
   const [prefs, setPrefs] = React.useState<FooterPreferences>(() => {
     try {
-      const stored = localStorage.getItem(KEY);
-      if (stored) return { ...DEFAULTS, ...JSON.parse(stored) };
+      const stored = JSON.parse(localStorage.getItem(KEY) ?? 'null');
+      if (stored && typeof stored === 'object') {
+        return {
+          ...DEFAULTS,
+          ...stored,
+          pinnedItems: Array.isArray(stored.pinnedItems)
+            ? stored.pinnedItems
+            : DEFAULTS.pinnedItems,
+          pinnedChips: Array.isArray(stored.pinnedChips)
+            ? stored.pinnedChips
+            : DEFAULTS.pinnedChips,
+        };
+      }
     } catch {
       // ignore
     }

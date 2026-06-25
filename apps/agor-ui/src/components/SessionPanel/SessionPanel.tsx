@@ -823,6 +823,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       sessionMcpServerIds={sessionMcpServerIds}
       unauthedMcpServers={unauthedMcpServers}
       mcpServerById={mcpServerById}
+      userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
       isRunning={isRunning}
       isStopping={isStopping}
       stopRequestInFlight={stopRequestInFlight}

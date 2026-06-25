@@ -183,18 +183,19 @@ describe('SessionFooter', () => {
     expect(timerChip.tagName.toLowerCase()).toBe('div');
   });
 
-  it('Tools chip shows "No tools" when no MCP servers are attached', () => {
+  it('MCP chip shows 0 count when no MCP servers are attached', () => {
     render(<SessionFooter {...baseProps} sessionMcpServerIds={[]} />, { wrapper: Wrapper });
-    const chip = screen.getByTestId('tools-chip');
+    const chip = screen.getByTitle(/No MCP servers attached/);
     expect(chip).toBeInTheDocument();
-    expect(chip.textContent).toContain('No tools');
+    expect(chip.textContent).toContain('0');
   });
 
-  it('Tools chip shows the server count when MCP servers are attached', () => {
+  it('MCP chip shows the server count when MCP servers are attached', () => {
     render(<SessionFooter {...baseProps} sessionMcpServerIds={['a', 'b', 'c']} />, {
       wrapper: Wrapper,
     });
-    const chip = screen.getByTestId('tools-chip');
+    // IDs not in mcpServerById are counted as "missing" → "need attention" tooltip
+    const chip = screen.getByTitle(/3 MCP servers need attention/);
     expect(chip).toBeInTheDocument();
     expect(chip.textContent).toContain('3');
   });
