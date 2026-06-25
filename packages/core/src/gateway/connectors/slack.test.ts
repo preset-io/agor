@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isChannelAllowedByWhitelist,
   markdownToMrkdwn,
   markdownToSlackPayload,
   SlackConnector,
@@ -851,5 +852,31 @@ describe('SlackConnector.lookupUserAvatarByEmail', () => {
     };
 
     await expect(connector.lookupUserAvatarByEmail('missing@example.com')).resolves.toBeNull();
+  });
+});
+
+describe('isChannelAllowedByWhitelist', () => {
+  const whitelist = ['C123'];
+
+  it('always accepts DMs even when a channel whitelist is configured', () => {
+    expect(isChannelAllowedByWhitelist('im', 'D999', whitelist)).toBe(true);
+  });
+
+  it('rejects a channel-like surface not in the whitelist', () => {
+    expect(isChannelAllowedByWhitelist('channel', 'C999', whitelist)).toBe(false);
+  });
+
+  it('accepts a channel-like surface that is in the whitelist', () => {
+    expect(isChannelAllowedByWhitelist('channel', 'C123', whitelist)).toBe(true);
+  });
+
+  it('applies the whitelist to private channels and group DMs', () => {
+    expect(isChannelAllowedByWhitelist('group', 'C999', whitelist)).toBe(false);
+    expect(isChannelAllowedByWhitelist('mpim', 'C999', whitelist)).toBe(false);
+  });
+
+  it('accepts everything when no whitelist is configured', () => {
+    expect(isChannelAllowedByWhitelist('channel', 'C999', undefined)).toBe(true);
+    expect(isChannelAllowedByWhitelist('channel', 'C999', [])).toBe(true);
   });
 });

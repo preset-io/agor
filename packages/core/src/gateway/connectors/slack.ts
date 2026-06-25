@@ -522,6 +522,24 @@ function extractSlackErrorCode(resultOrError: unknown): string | undefined {
   return candidate.data?.error ?? candidate.error;
 }
 
+/**
+ * Decide whether the `allowed_channel_ids` whitelist permits an inbound event.
+ *
+ * DMs (`im`) always pass: a DM conversation id is never present in a
+ * channel-id whitelist, so applying the filter there would silently disable
+ * direct messages the moment any whitelist is configured. The whitelist only
+ * governs channel-like surfaces (`channel`/`group`/`mpim`).
+ */
+export function isChannelAllowedByWhitelist(
+  channelType: string,
+  channelId: string | undefined,
+  allowedChannelIds: string[] | undefined
+): boolean {
+  if (channelType === 'im') return true;
+  if (!allowedChannelIds || allowedChannelIds.length === 0) return true;
+  return !!channelId && allowedChannelIds.includes(channelId);
+}
+
 export class SlackConnector implements GatewayConnector {
   readonly channelType: ChannelType = 'slack';
 
@@ -1495,11 +1513,9 @@ export class SlackConnector implements GatewayConnector {
         return;
       }
 
-      // Channel whitelist check (applies to all channel types)
-      if (allowedChannelIds && allowedChannelIds.length > 0) {
-        if (!allowedChannelIds.includes(event.channel)) {
-          return; // Not in whitelist
-        }
+      // Channel whitelist governs channel-like surfaces only; DMs always pass.
+      if (!isChannelAllowedByWhitelist(channelType, event.channel, allowedChannelIds)) {
+        return;
       }
 
       // Mention requirement handling
