@@ -608,7 +608,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             key: 'terminal',
             icon: <CodeOutlined />,
             label: 'Open terminal',
-            onClick: () => onOpenTerminal([`cd ${branch.path}`], branch.branch_id),
+            onClick: () => onOpenTerminal([], branch.branch_id),
           },
         ]
       : []),

@@ -629,7 +629,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_update',
     {
       description:
-        'Update metadata for an existing branch (issue/PR URLs, knowledge page, notes, board placement, custom context, RBAC permissions, owners)',
+        'Update metadata for an existing branch (issue/PR URLs, knowledge page, notes, board placement, attention state, custom context, RBAC permissions, owners)',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         branchId: mcpOptionalId(
@@ -679,6 +679,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe(
             'Default MCP server IDs for new sessions in this branch. Sessions inherit these unless they explicitly specify their own. Pass null to clear.'
+          ),
+        needsAttention: z
+          .boolean({ error: 'needsAttention must be a boolean when provided.' })
+          .optional()
+          .describe(
+            'Branch/card attention highlight state. Pass true to mark the branch as needing attention, or false to clear it.'
           ),
         // RBAC fields (optional, safe to ignore for single-user setups)
         othersCan: z
@@ -781,6 +787,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           args.mcpServerIds === null
             ? []
             : await Promise.all(args.mcpServerIds.map((id) => resolveMcpServerId(ctx, id)));
+      }
+      if (args.needsAttention !== undefined) {
+        fieldsProvided++;
+        updates.needs_attention = args.needsAttention;
       }
       if (args.othersCan !== undefined) {
         fieldsProvided++;

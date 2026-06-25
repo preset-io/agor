@@ -145,6 +145,48 @@ describe('agor_branches_update', () => {
     expect(branchesPatch).toHaveBeenCalledWith('branch-1', { notes: 'updated' }, baseServiceParams);
   });
 
+  it('clears branch attention state through branch metadata updates', async () => {
+    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
+    const branchesPatch = vi.fn(async () => ({
+      branch_id: 'branch-1',
+      needs_attention: false,
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const update = registerAndCaptureUpdate({ app, userId: 'user-1' });
+
+    await update({ branchId: 'branch-1', needsAttention: false });
+
+    expect(branchesGet).toHaveBeenCalledWith('branch-1', {});
+    expect(branchesPatch).toHaveBeenCalledWith('branch-1', { needs_attention: false }, {});
+  });
+
+  it('marks branch attention state through branch metadata updates', async () => {
+    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
+    const branchesPatch = vi.fn(async () => ({
+      branch_id: 'branch-1',
+      needs_attention: true,
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const update = registerAndCaptureUpdate({ app, userId: 'user-1' });
+
+    await update({ branchId: 'branch-1', needsAttention: true });
+
+    expect(branchesGet).toHaveBeenCalledWith('branch-1', {});
+    expect(branchesPatch).toHaveBeenCalledWith('branch-1', { needs_attention: true }, {});
+  });
+
   it('returns an actionable error when branchId is omitted without session context', async () => {
     const sessionsGet = vi.fn();
     const app = {
@@ -261,6 +303,23 @@ describe('agor_branches_create', () => {
 });
 
 describe('branch MCP input schemas', () => {
+  it('accepts boolean branch attention updates and rejects non-booleans', () => {
+    const config = registerAndCaptureConfig('agor_branches_update', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', needsAttention: false }).success
+    ).toBe(true);
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', needsAttention: true }).success
+    ).toBe(true);
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', needsAttention: 'false' }).success
+    ).toBe(false);
+  });
+
   it('rejects empty required IDs/names with field-specific messages', () => {
     const config = registerAndCaptureConfig('agor_branches_create', {
       app: {},

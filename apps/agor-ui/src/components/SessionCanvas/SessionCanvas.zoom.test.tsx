@@ -9,6 +9,9 @@ let reactFlowProps: Record<string, unknown> | null = null;
 // Stable spy for the `useNodesState` setter (onNodesChangeInternal). Lets tests
 // assert that onNodesChange forwards changes to React Flow's internal handler.
 const onNodesChangeInternalSpy = vi.fn();
+// Stable spy for the raw setNodes setter (setNodesUnsafe). Lets tests inspect
+// the functional updater passed when zIndex needs to change for zone selection.
+const setNodesUnsafeSpy = vi.fn();
 
 vi.mock('reactflow', () => ({
   Background: () => <div data-testid="react-flow-background" />,
@@ -34,7 +37,11 @@ vi.mock('reactflow', () => ({
   },
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
   useEdgesState: (initialEdges: unknown[]) => [initialEdges, vi.fn(), vi.fn()],
-  useNodesState: (initialNodes: unknown[]) => [initialNodes, vi.fn(), onNodesChangeInternalSpy],
+  useNodesState: (initialNodes: unknown[]) => [
+    initialNodes,
+    setNodesUnsafeSpy,
+    onNodesChangeInternalSpy,
+  ],
 }));
 
 vi.mock('./canvas/AppNode', () => ({
@@ -48,6 +55,7 @@ vi.mock('./canvas/ArtifactNode', () => ({
 beforeEach(() => {
   reactFlowProps = null;
   onNodesChangeInternalSpy.mockClear();
+  setNodesUnsafeSpy.mockClear();
 });
 
 describe('SessionCanvas zoom shortcuts', () => {
@@ -274,6 +282,58 @@ describe('SessionCanvas zoom shortcuts', () => {
 
       expect(getNode).toHaveBeenCalledWith('missing-node');
       expect(patch).not.toHaveBeenCalled();
+    });
+
+    describe('zone select zIndex', () => {
+      // The setNodes wrapper in SessionCanvas calls setNodesUnsafe with a
+      // functional updater. We capture that updater and call it with mock nodes
+      // to assert what the zIndex transition produces.
+      function getLastSetNodesUpdater() {
+        const calls = setNodesUnsafeSpy.mock.calls;
+        const last = calls.at(-1);
+        return last?.[0] as ((nodes: unknown[]) => unknown[]) | undefined;
+      }
+
+      it('raises zone zIndex to 101 when the zone is selected', () => {
+        const { onNodesChange } = renderCanvas(null);
+        setNodesUnsafeSpy.mockClear();
+
+        act(() => onNodesChange([{ type: 'select', id: 'zone-1', selected: true }]));
+
+        const updater = getLastSetNodesUpdater();
+        expect(updater).toBeDefined();
+        const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 100 }];
+        const result = updater!(mockNodes) as typeof mockNodes;
+        expect(result[0].zIndex).toBe(101);
+      });
+
+      it('restores zone zIndex to 100 when the zone is deselected', () => {
+        const { onNodesChange } = renderCanvas(null);
+        setNodesUnsafeSpy.mockClear();
+
+        act(() => onNodesChange([{ type: 'select', id: 'zone-1', selected: false }]));
+
+        const updater = getLastSetNodesUpdater();
+        expect(updater).toBeDefined();
+        const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 101 }];
+        const result = updater!(mockNodes) as typeof mockNodes;
+        expect(result[0].zIndex).toBe(100);
+      });
+
+      it('returns the same node array reference when no zone is in the select changes', () => {
+        const { onNodesChange } = renderCanvas(null);
+        setNodesUnsafeSpy.mockClear();
+
+        // Select a non-zone node (e.g. a branch) — zone-1 is untouched
+        act(() => onNodesChange([{ type: 'select', id: 'branch-999', selected: true }]));
+
+        const updater = getLastSetNodesUpdater();
+        expect(updater).toBeDefined();
+        const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 100 }];
+        const result = updater!(mockNodes);
+        // Guard returns currentNodes unchanged so React can bail out on re-render
+        expect(result).toBe(mockNodes);
+      });
     });
   });
 });
