@@ -1408,15 +1408,24 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
         const selectChanges = changes.filter((c: any) => c.type === 'select');
         if (selectChanges.length > 0) {
-          setNodes((currentNodes) =>
-            currentNodes.map((n) => {
+          setNodes((currentNodes) => {
+            // onNodesChange is hot (fires on drag, resize, selection). Guard against
+            // re-renders when no zone is involved: `map` always allocates a new array,
+            // so returning currentNodes unchanged lets React bail out.
+            // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+            const zoneIds = new Set(selectChanges.map((c: any) => c.id));
+            const hasZoneChange = currentNodes.some(
+              (n) => n.type === 'zone' && zoneIds.has(n.id)
+            );
+            if (!hasZoneChange) return currentNodes;
+            return currentNodes.map((n) => {
               if (n.type !== 'zone') return n;
               // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
               const change = selectChanges.find((c: any) => c.id === n.id);
               if (change) return { ...n, zIndex: change.selected ? 101 : 100 };
               return n;
-            })
-          );
+            });
+          });
         }
 
         // Detect resize by checking for dimensions changes
