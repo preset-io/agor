@@ -136,7 +136,7 @@ const buildGeneralDefaults = (branch: Branch | null): GeneralFormState => ({
   boardId: branch?.board_id || undefined,
   issueUrl: branch?.issue_url || '',
   prUrl: branch?.pull_request_url || '',
-  knowledgePageId: branch?.linked_knowledge_page_id,
+  knowledgePageId: branch?.linked_knowledge_page_id || undefined,
   notes: branch?.notes || '',
   mcpServerIds: branch?.mcp_server_ids || [],
 });

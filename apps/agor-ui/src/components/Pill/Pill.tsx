@@ -1185,14 +1185,13 @@ interface KnowledgePagePillProps extends BasePillProps {
 }
 
 export const KnowledgePagePill: React.FC<KnowledgePagePillProps> = ({ url, name, style }) => {
-  const isSafe = /^https?:\/\//i.test(url);
   return (
     <Tooltip title={url}>
       <Tag
         icon={<FileTextOutlined />}
         color={PILL_COLORS.git}
-        style={{ ...style, cursor: isSafe ? 'pointer' : 'default', maxWidth: 220 }}
-        onClick={() => isSafe && window.open(url, '_blank', 'noopener,noreferrer')}
+        style={{ ...style, cursor: 'pointer', maxWidth: 220 }}
+        onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
       >
         <span style={pillTextStyle}>{name}</span>
       </Tag>
