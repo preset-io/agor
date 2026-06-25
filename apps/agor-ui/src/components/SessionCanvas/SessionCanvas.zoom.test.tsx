@@ -307,57 +307,57 @@ describe('SessionCanvas zoom shortcuts', () => {
       expect(getNode).toHaveBeenCalledWith('missing-node');
       expect(patch).not.toHaveBeenCalled();
     });
-  });
 
-  describe('onNodesChange zone select zIndex', () => {
-    // The setNodes wrapper in SessionCanvas calls setNodesUnsafe with a
-    // functional updater. We capture that updater and call it with mock nodes
-    // to assert what the zIndex transition produces.
-    function getLastSetNodesUpdater() {
-      const calls = setNodesUnsafeSpy.mock.calls;
-      const last = calls.at(-1);
-      return last?.[0] as ((nodes: unknown[]) => unknown[]) | undefined;
-    }
+    describe('zone select zIndex', () => {
+      // The setNodes wrapper in SessionCanvas calls setNodesUnsafe with a
+      // functional updater. We capture that updater and call it with mock nodes
+      // to assert what the zIndex transition produces.
+      function getLastSetNodesUpdater() {
+        const calls = setNodesUnsafeSpy.mock.calls;
+        const last = calls.at(-1);
+        return last?.[0] as ((nodes: unknown[]) => unknown[]) | undefined;
+      }
 
-    it('raises zone zIndex to 101 when the zone is selected', () => {
-      const { onNodesChange } = renderCanvas(null);
-      setNodesUnsafeSpy.mockClear();
+      it('raises zone zIndex to 101 when the zone is selected', () => {
+        const { onNodesChange } = renderCanvas(null);
+        setNodesUnsafeSpy.mockClear();
 
-      act(() => onNodesChange([{ type: 'select', id: 'zone-1', selected: true }]));
+        act(() => onNodesChange([{ type: 'select', id: 'zone-1', selected: true }]));
 
-      const updater = getLastSetNodesUpdater();
-      expect(updater).toBeDefined();
-      const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 100 }];
-      const result = updater!(mockNodes) as typeof mockNodes;
-      expect(result[0].zIndex).toBe(101);
-    });
+        const updater = getLastSetNodesUpdater();
+        expect(updater).toBeDefined();
+        const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 100 }];
+        const result = updater!(mockNodes) as typeof mockNodes;
+        expect(result[0].zIndex).toBe(101);
+      });
 
-    it('restores zone zIndex to 100 when the zone is deselected', () => {
-      const { onNodesChange } = renderCanvas(null);
-      setNodesUnsafeSpy.mockClear();
+      it('restores zone zIndex to 100 when the zone is deselected', () => {
+        const { onNodesChange } = renderCanvas(null);
+        setNodesUnsafeSpy.mockClear();
 
-      act(() => onNodesChange([{ type: 'select', id: 'zone-1', selected: false }]));
+        act(() => onNodesChange([{ type: 'select', id: 'zone-1', selected: false }]));
 
-      const updater = getLastSetNodesUpdater();
-      expect(updater).toBeDefined();
-      const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 101 }];
-      const result = updater!(mockNodes) as typeof mockNodes;
-      expect(result[0].zIndex).toBe(100);
-    });
+        const updater = getLastSetNodesUpdater();
+        expect(updater).toBeDefined();
+        const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 101 }];
+        const result = updater!(mockNodes) as typeof mockNodes;
+        expect(result[0].zIndex).toBe(100);
+      });
 
-    it('returns the same node array reference when no zone is in the select changes', () => {
-      const { onNodesChange } = renderCanvas(null);
-      setNodesUnsafeSpy.mockClear();
+      it('returns the same node array reference when no zone is in the select changes', () => {
+        const { onNodesChange } = renderCanvas(null);
+        setNodesUnsafeSpy.mockClear();
 
-      // Select a non-zone node (e.g. a branch) — zone-1 is untouched
-      act(() => onNodesChange([{ type: 'select', id: 'branch-999', selected: true }]));
+        // Select a non-zone node (e.g. a branch) — zone-1 is untouched
+        act(() => onNodesChange([{ type: 'select', id: 'branch-999', selected: true }]));
 
-      const updater = getLastSetNodesUpdater();
-      expect(updater).toBeDefined();
-      const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 100 }];
-      const result = updater!(mockNodes);
-      // Guard returns currentNodes unchanged so React can bail out on re-render
-      expect(result).toBe(mockNodes);
+        const updater = getLastSetNodesUpdater();
+        expect(updater).toBeDefined();
+        const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 100 }];
+        const result = updater!(mockNodes);
+        // Guard returns currentNodes unchanged so React can bail out on re-render
+        expect(result).toBe(mockNodes);
+      });
     });
   });
 });
