@@ -22,8 +22,8 @@ const { Text, Title } = Typography;
 export const HomePage = memo(function HomePage(props: HomePageProps) {
   const { token } = theme.useToken();
   const homeBackground = DEFAULT_BACKGROUNDS[isDarkTheme(token) ? 'dark' : 'light'];
-  // Entity maps come straight from the store so this large home surface no
-  // longer re-renders on every App store-tick that re-derives prop maps.
+  // Subscribe to entity maps by slice from the store: each selector only wakes
+  // this large home surface when its own slice changes.
   const boardById = useAgorStore(selectBoardById);
   const branchById = useAgorStore(selectBranchById);
   const repoById = useAgorStore(selectRepoById);

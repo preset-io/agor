@@ -13,8 +13,8 @@ export interface HomePageProps {
 
 /**
  * Entity maps the home sub-sections consume. HomePage reads these from the
- * store and drills them into its sections, so they live separately from
- * HomePageProps (HomePage itself no longer receives them as props).
+ * store and drills them into its sections, so they're typed separately from
+ * HomePageProps (which carries only HomePage's own props).
  */
 export interface HomeEntityMaps {
   boardById: Map<string, Board>;

@@ -102,16 +102,16 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { message } = AntApp.useApp();
-  // Entity maps read straight from the store so this panel no longer re-renders
-  // on every App store-tick that re-derives the prop maps.
+  // Subscribe to entity maps by slice from the store: each selector only wakes
+  // this panel when its own slice changes.
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const branchById = useAgorStore(selectBranchById);
   const repoById = useAgorStore(selectRepoById);
   const userById = useAgorStore(selectUserById);
   const commentById = useAgorStore(selectCommentById);
-  // Derive the board-scoped comment list and board objects here rather than
-  // re-drilling them: comments only render when a board is selected, where
-  // `board.board_id` is the same id App filtered on.
+  // Derive the board-scoped comment list and board objects locally: comments
+  // only render when a board is selected, so filtering by `board.board_id`
+  // scopes them to that board.
   const comments = useMemo(
     () => mapToArray(commentById).filter((c) => c.board_id === board?.board_id),
     [commentById, board?.board_id]
