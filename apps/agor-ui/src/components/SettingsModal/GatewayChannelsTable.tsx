@@ -367,6 +367,24 @@ const SLACK_SETUP_STEPS = [
 ];
 
 /**
+ * Form fields whose values feed the `gateway-channels/test` probe. Editing any
+ * of them makes a previously-passing test result stale, so the green result is
+ * cleared when one changes.
+ */
+const SLACK_PROBE_FIELDS = new Set<string>([
+  'bot_token',
+  'app_token',
+  'slack_app_name',
+  'enable_channels',
+  'enable_groups',
+  'enable_mpim',
+  'align_slack_users',
+  'outbound_enabled',
+  'slack_public_scope',
+  'allowed_channel_ids',
+]);
+
+/**
  * Copy text to the clipboard, falling back to a transient textarea +
  * `execCommand('copy')` for browsers/contexts where the async Clipboard API is
  * unavailable (e.g. non-secure origins).
@@ -503,7 +521,6 @@ const SlackSetupWizard: React.FC<{
   testResult: SlackTestResult | null;
   testLoading: boolean;
   onTest: () => void;
-  onInvalidateTest: () => void;
 }> = ({
   form,
   userById,
@@ -515,7 +532,6 @@ const SlackSetupWizard: React.FC<{
   testResult,
   testLoading,
   onTest,
-  onInvalidateTest,
 }) => {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
@@ -528,9 +544,6 @@ const SlackSetupWizard: React.FC<{
   const alignUsers = Form.useWatch('align_slack_users', form) ?? false;
   const outbound = Form.useWatch('outbound_enabled', form) ?? false;
   const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
-  const allowedChannelIds = (Form.useWatch('allowed_channel_ids', form) as string[]) ?? [];
-  const botToken = (Form.useWatch('bot_token', form) as string) ?? '';
-  const appToken = (Form.useWatch('app_token', form) as string) ?? '';
 
   const wizardOptions: SlackWizardOptions = useMemo(
     () => ({
@@ -551,15 +564,13 @@ const SlackSetupWizard: React.FC<{
   const scopes = useMemo(() => requiredBotScopes(wizardOptions), [wizardOptions]);
   const events = useMemo(() => requiredBotEvents(wizardOptions), [wizardOptions]);
 
-  // Any change that alters the probe config (manifest inputs, tokens, or the
-  // channel-scope options sent to gateway-channels/test) invalidates a prior
-  // test result. A green check against stale config would be misleading.
-  const invalidationKey = `${manifestJson}|${botToken}|${appToken}|${publicScope}|${allowedChannelIds.join(',')}`;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: invalidationKey is the change trigger, not a value read in the body.
+  // Reset the "Copied" affordance whenever the manifest content changes.
+  // (Stale test-result invalidation is owned by the parent's Form onValuesChange,
+  // which fires on real edits without racing useWatch against the async probe.)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: manifestJson is the change trigger, not a value read in the body.
   useEffect(() => {
-    onInvalidateTest();
     setCopied(false);
-  }, [invalidationKey, onInvalidateTest]);
+  }, [manifestJson]);
 
   const manifestPreview = (
     <pre
@@ -978,7 +989,6 @@ const ChannelFormFields: React.FC<{
   slackTestResult: SlackTestResult | null;
   slackTestLoading: boolean;
   onSlackTest: () => void;
-  onInvalidateSlackTest: () => void;
 }> = ({
   form,
   mode,
@@ -1000,7 +1010,6 @@ const ChannelFormFields: React.FC<{
   slackTestResult,
   slackTestLoading,
   onSlackTest,
-  onInvalidateSlackTest,
 }) => {
   const { showError } = useThemedMessage();
 
@@ -1732,7 +1741,6 @@ const ChannelFormFields: React.FC<{
           testResult={slackTestResult}
           testLoading={slackTestLoading}
           onTest={onSlackTest}
-          onInvalidateTest={onInvalidateSlackTest}
         />
       )}
 
@@ -2210,6 +2218,18 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const invalidateSlackTest = useCallback(() => {
     setSlackTestResult(null);
   }, []);
+
+  // Clear a passing Slack test result the moment any probe-affecting field is
+  // edited. Driven by the Form's onValuesChange (real edits only) rather than a
+  // useWatch effect, so it never races the async probe that sets the result.
+  const handleCreateValuesChange = useCallback(
+    (changed: Record<string, unknown>) => {
+      if (Object.keys(changed).some((field) => SLACK_PROBE_FIELDS.has(field))) {
+        invalidateSlackTest();
+      }
+    },
+    [invalidateSlackTest]
+  );
 
   // Switching channel type abandons any in-progress platform setup, so clear the
   // wizard state for both platforms.
@@ -2745,7 +2765,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         }}
         width={600}
       >
-        <Form form={createForm} layout="vertical" preserve style={{ marginTop: 16 }}>
+        <Form
+          form={createForm}
+          layout="vertical"
+          preserve
+          onValuesChange={handleCreateValuesChange}
+          style={{ marginTop: 16 }}
+        >
           <ChannelFormFields
             form={createForm}
             mode="create"
@@ -2766,7 +2792,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             slackTestResult={slackTestResult}
             slackTestLoading={slackTestLoading}
             onSlackTest={handleSlackTest}
-            onInvalidateSlackTest={invalidateSlackTest}
           />
         </Form>
       </Modal>
@@ -2808,7 +2833,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             slackTestResult={null}
             slackTestLoading={false}
             onSlackTest={() => {}}
-            onInvalidateSlackTest={() => {}}
           />
         </Form>
       </Modal>

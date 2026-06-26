@@ -202,6 +202,29 @@ describe('GatewayChannelsTable Slack create wizard', () => {
       config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
     });
   }, 30000);
+
+  it('invalidates a passing test result when a channel-scope option changes', async () => {
+    const { client } = makeClient({ ok: true, failures: [], notVerifiable: [] });
+    renderTable(client);
+    fireEvent.click(screen.getByRole('button', { name: /Add Channel/i }));
+
+    // Enable a public-channel surface so the scope option is in play.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Public channels' }));
+
+    await advanceToCreateAppStep();
+    fireEvent.click(screen.getByRole('button', { name: /Next: Tokens & Test/i }));
+    fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText('Connection succeeded')).toBeInTheDocument();
+
+    // Narrowing public channels to a specific set changes the probe config and
+    // must clear the now-stale green result.
+    fireEvent.click(screen.getByText('Specific channels only'));
+
+    await waitFor(() => expect(screen.queryByText('Connection succeeded')).toBeNull());
+  }, 30000);
 });
 
 describe('GatewayChannelsTable Slack edit mode', () => {
