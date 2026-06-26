@@ -153,60 +153,93 @@ describe('computeLayerChanges', () => {
     ]);
   });
 
-  describe('clamping to the board-object band', () => {
-    it('never sends "front" up to or past the card layer (clamps at the ceiling)', () => {
+  describe('boundary handling at the band edges [1, 499]', () => {
+    it('"front" pins the target at the ceiling and pushes the occupant down (never reaches 500)', () => {
       const peers: ZPeer[] = [
         { id: 'a', zIndex: 200 },
         { id: 'b', zIndex: BOARD_OBJECT_Z_MAX },
       ];
-      // maxOther + 1 would be 500 (the card layer); clamp to the ceiling.
+      // maxOther + 1 would be 500 (the card layer); instead pin target at the
+      // ceiling and drop the occupant so the target leads, staying in-band.
       expect(computeLayerChanges('front', 'a', peers)).toEqual([
         { id: 'a', zIndex: BOARD_OBJECT_Z_MAX },
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MAX - 1 },
       ]);
     });
 
-    it('is a no-op for "front" when the target is already at the ceiling alongside a peer', () => {
+    it('"front" when target already ties at the ceiling drops the peer so the target leads (no wedge)', () => {
       const peers: ZPeer[] = [
         { id: 'a', zIndex: BOARD_OBJECT_Z_MAX },
         { id: 'b', zIndex: BOARD_OBJECT_Z_MAX },
       ];
-      expect(computeLayerChanges('front', 'a', peers)).toEqual([]);
+      // Previously a no-op (wedge); now the tied peer is lowered so "a" leads.
+      expect(computeLayerChanges('front', 'a', peers)).toEqual([
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MAX - 1 },
+      ]);
     });
 
-    it('never sends "back" below the floor (clamps at 1)', () => {
+    it('"back" pins the target at the floor and pushes the occupant up (never reaches 0)', () => {
       const peers: ZPeer[] = [
         { id: 'a', zIndex: 50 },
         { id: 'b', zIndex: BOARD_OBJECT_Z_MIN },
       ];
-      // minOther - 1 would be 0; clamp to the floor.
       expect(computeLayerChanges('back', 'a', peers)).toEqual([
         { id: 'a', zIndex: BOARD_OBJECT_Z_MIN },
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MIN + 1 },
       ]);
     });
 
-    it('is a no-op for "back" when the target is already at the floor alongside a peer', () => {
+    it('"back" when target already ties at the floor raises the peer so the target trails (no wedge)', () => {
       const peers: ZPeer[] = [
         { id: 'a', zIndex: BOARD_OBJECT_Z_MIN },
         { id: 'b', zIndex: BOARD_OBJECT_Z_MIN },
       ];
-      expect(computeLayerChanges('back', 'a', peers)).toEqual([]);
+      expect(computeLayerChanges('back', 'a', peers)).toEqual([
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MIN + 1 },
+      ]);
     });
 
-    it('is a no-op for "forward" at the ceiling when a peer ties at the ceiling', () => {
-      // Tie-break step would land at MAX+1 → clamped back to MAX → no change.
+    it('"forward" at the ceiling tie lowers the tied peer instead of wedging', () => {
       const peers: ZPeer[] = [
         { id: 'a', zIndex: BOARD_OBJECT_Z_MAX },
         { id: 'b', zIndex: BOARD_OBJECT_Z_MAX },
       ];
-      expect(computeLayerChanges('forward', 'a', peers)).toEqual([]);
+      // Tie-break can't step the target to MAX+1, so the tied peer drops one.
+      expect(computeLayerChanges('forward', 'a', peers)).toEqual([
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MAX - 1 },
+      ]);
     });
 
-    it('is a no-op for "backward" at the floor when a peer ties at the floor', () => {
+    it('"backward" at the floor tie raises the tied peer instead of wedging', () => {
       const peers: ZPeer[] = [
         { id: 'a', zIndex: BOARD_OBJECT_Z_MIN },
         { id: 'b', zIndex: BOARD_OBJECT_Z_MIN },
       ];
-      expect(computeLayerChanges('backward', 'a', peers)).toEqual([]);
+      expect(computeLayerChanges('backward', 'a', peers)).toEqual([
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MIN + 1 },
+      ]);
+    });
+
+    it('no boundary path ever emits a zIndex outside [1, 499]', () => {
+      const atCeiling: ZPeer[] = [
+        { id: 'a', zIndex: BOARD_OBJECT_Z_MAX },
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MAX },
+      ];
+      const atFloor: ZPeer[] = [
+        { id: 'a', zIndex: BOARD_OBJECT_Z_MIN },
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MIN },
+      ];
+      for (const [op, peers] of [
+        ['front', atCeiling],
+        ['forward', atCeiling],
+        ['back', atFloor],
+        ['backward', atFloor],
+      ] as const) {
+        for (const change of computeLayerChanges(op, 'a', peers)) {
+          expect(change.zIndex).toBeGreaterThanOrEqual(BOARD_OBJECT_Z_MIN);
+          expect(change.zIndex).toBeLessThanOrEqual(BOARD_OBJECT_Z_MAX);
+        }
+      }
     });
   });
 });

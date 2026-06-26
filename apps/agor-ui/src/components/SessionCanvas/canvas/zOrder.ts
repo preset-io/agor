@@ -105,18 +105,38 @@ export function computeLayerChanges(op: LayerOp, targetId: string, peers: ZPeer[
       const maxOther = Math.max(...others.map((p) => p.zIndex));
       // Already strictly in front of everything → nothing to do.
       if (target.zIndex > maxOther) return [];
-      // Clamp so a board object can never reach the card (500) / comment (1000)
-      // layers. At the ceiling the move can collapse to a no-op.
-      const next = Math.min(maxOther + 1, BOARD_OBJECT_Z_MAX);
-      if (next === target.zIndex) return [];
-      return [{ id: targetId, zIndex: next }];
+      // Room above the highest peer: just step the target up.
+      if (maxOther < BOARD_OBJECT_Z_MAX) {
+        return [{ id: targetId, zIndex: maxOther + 1 }];
+      }
+      // Ceiling is occupied (a peer sits at the band max). We can't go above it
+      // without leaving the band, so pin the target at the max and push the peers
+      // that share the ceiling down one, leaving the target strictly in front.
+      return [
+        ...(target.zIndex === BOARD_OBJECT_Z_MAX
+          ? []
+          : [{ id: targetId, zIndex: BOARD_OBJECT_Z_MAX }]),
+        ...others
+          .filter((p) => p.zIndex >= BOARD_OBJECT_Z_MAX)
+          .map((p) => ({ id: p.id, zIndex: BOARD_OBJECT_Z_MAX - 1 })),
+      ];
     }
     case 'back': {
       const minOther = Math.min(...others.map((p) => p.zIndex));
       if (target.zIndex < minOther) return [];
-      const next = Math.max(minOther - 1, BOARD_OBJECT_Z_MIN);
-      if (next === target.zIndex) return [];
-      return [{ id: targetId, zIndex: next }];
+      if (minOther > BOARD_OBJECT_Z_MIN) {
+        return [{ id: targetId, zIndex: minOther - 1 }];
+      }
+      // Floor is occupied: pin the target at the min and push the peers that share
+      // the floor up one, leaving the target strictly at the back.
+      return [
+        ...(target.zIndex === BOARD_OBJECT_Z_MIN
+          ? []
+          : [{ id: targetId, zIndex: BOARD_OBJECT_Z_MIN }]),
+        ...others
+          .filter((p) => p.zIndex <= BOARD_OBJECT_Z_MIN)
+          .map((p) => ({ id: p.id, zIndex: BOARD_OBJECT_Z_MIN + 1 })),
+      ];
     }
     case 'forward': {
       // Nearest peer strictly above the target.
@@ -131,13 +151,18 @@ export function computeLayerChanges(op: LayerOp, targetId: string, peers: ZPeer[
           { id: above.id, zIndex: Math.max(target.zIndex, BOARD_OBJECT_Z_MIN) },
         ];
       }
-      // No strictly-higher peer, but if a peer SHARES our zIndex (the headline
+      // No strictly-higher peer. If a peer SHARES our zIndex (the headline
       // "two zones both at the default 100" case) break the tie by stepping up
       // one — otherwise the button would silently do nothing.
-      if (!others.some((p) => p.zIndex === target.zIndex)) return [];
+      const tied = others.filter((p) => p.zIndex === target.zIndex);
+      if (tied.length === 0) return [];
       const next = Math.min(target.zIndex + 1, BOARD_OBJECT_Z_MAX);
-      if (next === target.zIndex) return [];
-      return [{ id: targetId, zIndex: next }];
+      if (next !== target.zIndex) return [{ id: targetId, zIndex: next }];
+      // At the ceiling the target can't step up, so push the tied peers down one
+      // instead — the target still ends up strictly above them.
+      return tied
+        .filter((p) => p.zIndex - 1 >= BOARD_OBJECT_Z_MIN)
+        .map((p) => ({ id: p.id, zIndex: p.zIndex - 1 }));
     }
     case 'backward': {
       // Nearest peer strictly below the target.
@@ -152,10 +177,14 @@ export function computeLayerChanges(op: LayerOp, targetId: string, peers: ZPeer[
         ];
       }
       // Mirror of `forward`: break a tie by stepping down one.
-      if (!others.some((p) => p.zIndex === target.zIndex)) return [];
+      const tied = others.filter((p) => p.zIndex === target.zIndex);
+      if (tied.length === 0) return [];
       const next = Math.max(target.zIndex - 1, BOARD_OBJECT_Z_MIN);
-      if (next === target.zIndex) return [];
-      return [{ id: targetId, zIndex: next }];
+      if (next !== target.zIndex) return [{ id: targetId, zIndex: next }];
+      // At the floor the target can't step down, so push the tied peers up one.
+      return tied
+        .filter((p) => p.zIndex + 1 <= BOARD_OBJECT_Z_MAX)
+        .map((p) => ({ id: p.id, zIndex: p.zIndex + 1 }));
     }
     default:
       return [];

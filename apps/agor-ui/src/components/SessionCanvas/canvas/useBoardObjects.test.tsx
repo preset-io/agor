@@ -116,7 +116,7 @@ describe('reorderObject', () => {
     });
   });
 
-  it('clamps "front" to the board-object ceiling (never the card layer)', async () => {
+  it('"front" at an occupied ceiling pins the target at 499 and drops the occupant (never the card layer)', async () => {
     const { client, patch } = makeClient();
     const board = makeBoard({
       a: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 200 },
@@ -126,9 +126,11 @@ describe('reorderObject', () => {
 
     await result.current.reorderObject('a', 'front');
 
+    // Can't go to 500; pin target at the ceiling and push the occupant down so
+    // the target still leads — both stay in-band.
     expect(patch.mock.calls[0][1]).toEqual({
       _action: 'mergeObjectFields',
-      objects: { a: { zIndex: 499 } },
+      objects: { a: { zIndex: 499 }, b: { zIndex: 498 } },
     });
   });
 
@@ -186,11 +188,12 @@ describe('reorderObject', () => {
 
     await result.current.reorderObject('a', 'front');
 
-    // sanitizeZIndex clamps the 600 peer to 499, so "front" lands at 499 — never
-    // 601 (which would collide with the card/comment layers).
+    // sanitizeZIndex clamps the 600 peer to 499 (the ceiling), so "front" pins
+    // the target at 499 and drops the occupant to 498 — never 601 / the card
+    // (500) / comment (1000) layers.
     expect(patch.mock.calls[0][1]).toEqual({
       _action: 'mergeObjectFields',
-      objects: { a: { zIndex: 499 } },
+      objects: { a: { zIndex: 499 }, b: { zIndex: 498 } },
     });
   });
 });

@@ -103,9 +103,12 @@ export const useBoardObjects = ({
    *
    * Peers are scoped to board objects of the SAME type as the target (zones
    * reorder only against zones). This is intentional: only zones expose reorder
-   * controls, the per-type defaults keep each type in its own band, and ranking
-   * a zone against markdown/app objects — which have no reorder UI — would
-   * strand them and let a zone intercept their clicks.
+   * controls, so ranking a zone against markdown/app objects — which have no
+   * reorder UI — would strand them and let a zone intercept their clicks.
+   * Same-type scoping does NOT strictly isolate the per-type default bands:
+   * a zone can be pushed above a lower-default markdown (300) / app (400) under
+   * deliberate or MCP/import input. The only hard guarantee is the clamp to
+   * [1, 499], so a zone can never reach the card (500) / comment (1000) layers.
    *
    * Persistence sends ONLY the changed `zIndex` per object via a narrow field
    * merge (`mergeObjectFields`), not a full stale copy. The server shallow-
