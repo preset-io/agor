@@ -85,7 +85,6 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         user={user}
         currentUser={user}
         client={null as AgorClient | null}
-        mcpServerById={new Map()}
         onUpdate={onUpdate}
       />
     );
@@ -126,7 +125,6 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         user={user}
         currentUser={user}
         client={null as AgorClient | null}
-        mcpServerById={new Map()}
         onUpdate={onUpdate}
       />
     );
@@ -171,7 +169,6 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
           user={user}
           currentUser={user}
           client={null as AgorClient | null}
-          mcpServerById={new Map()}
           onUpdate={async (userId, updates) => {
             updateSpy(userId, updates);
             if (updates.env_vars) {

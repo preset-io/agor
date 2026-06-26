@@ -461,7 +461,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         return (
           <UsersTable
             userById={userById}
-            mcpServerById={mcpServerById}
             gatewayChannelById={gatewayChannelById}
             client={client}
             currentUser={currentUser}
@@ -558,9 +557,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         branch={selectedBranch}
         repo={selectedRepo}
         sessions={branchSessions}
-        boardById={boardById}
         boardObjects={boardObjects}
-        mcpServerById={mcpServerById}
         client={client}
         currentUser={currentUser}
         onUpdateBranch={onUpdateBranch}

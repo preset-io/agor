@@ -1644,7 +1644,6 @@ function AppContent() {
             onClose={() => setOpenUserSettings(false)}
             user={currentUser}
             client={client}
-            mcpServerById={mcpServerById}
             onUpdateUser={handleUpdateUser}
             onRefreshCurrentUser={reAuthenticate}
             onRestartOnboarding={handleRestartOnboarding}

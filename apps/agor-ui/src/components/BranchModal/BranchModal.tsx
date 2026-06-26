@@ -1,17 +1,10 @@
-import type {
-  AgorClient,
-  Board,
-  BoardEntityObject,
-  Branch,
-  MCPServer,
-  Repo,
-  Session,
-  User,
-} from '@agor-live/client';
+import type { AgorClient, BoardEntityObject, Branch, Repo, Session, User } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import { Badge, Button, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useAgorStore } from '../../store/agorStore';
+import { selectBoardById, selectMcpServerById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { AssistantTab } from './tabs/AssistantTab';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
@@ -39,9 +32,7 @@ export interface BranchModalProps {
   branch: Branch | null;
   repo: Repo | null;
   sessions: Session[]; // Used for GeneralTab session count
-  boardById?: Map<string, Board>;
   boardObjects?: BoardEntityObject[];
-  mcpServerById?: Map<string, MCPServer>;
   client: AgorClient | null;
   currentUser?: User | null; // Current user for RBAC
   // Used by EnvironmentTab for its independent start/stop/snapshot actions.
@@ -68,9 +59,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   branch,
   repo,
   sessions,
-  boardById = new Map(),
   boardObjects = [],
-  mcpServerById = new Map(),
   client,
   currentUser,
   onUpdateBranch,
@@ -81,6 +70,10 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   onExecuteScheduleNow,
   defaultTab,
 }) => {
+  // Entity maps are read from the store rather than drilled through props so
+  // the App shell doesn't have to forward them into every modal.
+  const boardById = useAgorStore(selectBoardById);
+  const mcpServerById = useAgorStore(selectMcpServerById);
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const [activeTab, setActiveTab] = useState<BranchModalTab>('general');

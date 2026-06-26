@@ -4,7 +4,6 @@ import type {
   GatewayChannel,
   Group,
   GroupMembership,
-  MCPServer,
   UpdateUserInput,
   User,
 } from '@agor-live/client';
@@ -38,7 +37,6 @@ import { UserSettingsModal } from './UserSettingsModal';
 
 interface UsersTableProps {
   userById: Map<string, User>;
-  mcpServerById: Map<string, MCPServer>;
   gatewayChannelById?: Map<string, GatewayChannel>;
   client: AgorClient | null;
   currentUser?: User | null;
@@ -49,7 +47,6 @@ interface UsersTableProps {
 
 export const UsersTable: React.FC<UsersTableProps> = ({
   userById,
-  mcpServerById,
   gatewayChannelById = new Map(),
   client,
   currentUser,
@@ -366,7 +363,6 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           void loadGroups();
         }}
         user={editingUser}
-        mcpServerById={mcpServerById}
         client={client}
         currentUser={currentUser}
         onUpdate={onUpdate}
