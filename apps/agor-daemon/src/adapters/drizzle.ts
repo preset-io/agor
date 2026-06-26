@@ -66,6 +66,18 @@ export interface Repository<T> {
 }
 
 /**
+ * Optional low-level seam for multi-tenant deployments. Existing services pass a
+ * concrete repository. A future tenant-aware service can pass a resolver that
+ * chooses the repository/database from Feathers `params` for this method call.
+ *
+ * This mirrors Feathers' documented per-request adapter customization pattern
+ * (`params.adapter`) without mutating any global app/service database handle.
+ */
+export type RepositoryResolver<T, P extends Params = Params> =
+  | Repository<T>
+  | ((params?: P) => Repository<T> | Promise<Repository<T>>);
+
+/**
  * Drizzle Service Adapter
  *
  * Implements FeathersJS service methods using a Drizzle repository.
@@ -83,13 +95,26 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   emit?: (event: string, ...args: any[]) => boolean;
 
   constructor(
-    private repository: Repository<T>,
+    private readonly repositoryOrResolver: RepositoryResolver<T, P>,
     options: DrizzleAdapterOptions = {}
   ) {
     this.id = options.id ?? 'id';
     this.paginate = options.paginate;
     this.multi = options.multi ?? false;
     this.resourceType = options.resourceType ?? 'Record';
+  }
+
+  /**
+   * Resolve the repository for a method call. In normal single-tenant mode this
+   * returns the repository that was injected at service construction. In a
+   * multi-tenant service, callers can inject a resolver that reads `params.tenant`
+   * / `params.adapter.tenantId` and returns the tenant-specific repository.
+   */
+  protected async getRepository(params?: P): Promise<Repository<T>> {
+    if (typeof this.repositoryOrResolver === 'function') {
+      return await this.repositoryOrResolver(params);
+    }
+    return this.repositoryOrResolver;
   }
 
   /**
@@ -224,7 +249,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
    * rows for the result to stay identical.
    */
   protected async fetchData(_query: Query, _params?: P): Promise<T[]> {
-    return this.repository.findAll();
+    return (await this.getRepository(_params)).findAll();
   }
 
   /**
@@ -282,7 +307,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       return prefetched.record;
     }
 
-    const result = await this.repository.findById(String(id));
+    const result = await (await this.getRepository(_params)).findById(String(id));
 
     if (!result) {
       throw new NotFoundError(this.resourceType, String(id));
@@ -298,7 +323,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     if (Array.isArray(data)) {
       // Bulk create
       const results = await Promise.all(
-        data.map((item) => this.repository.create(item as Partial<T>))
+        data.map(async (item) => (await this.getRepository(params)).create(item as Partial<T>))
       );
       // Emit created event for each item
       for (const result of results) {
@@ -307,7 +332,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       return results;
     }
 
-    const result = await this.repository.create(data as Partial<T>);
+    const result = await (await this.getRepository(params)).create(data as Partial<T>);
     this.emit?.('created', result, params);
     return result;
   }
@@ -326,7 +351,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     // Verify record exists (throws NotFoundError if not found)
     await this.get(id, params);
 
-    const result = await this.repository.update(String(id), data as Partial<T>);
+    const result = await (await this.getRepository(params)).update(String(id), data as Partial<T>);
     this.emit?.('updated', result, params);
     return result;
   }
@@ -343,12 +368,13 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
 
       // Find all matching records and patch them
       const query = this.getQuery(params);
-      let records = await this.repository.findAll();
+      let records = await (await this.getRepository(params)).findAll();
       records = this.filterData(records, query);
 
+      const repository = await this.getRepository(params);
       const results = await Promise.all(
         records.map((record) =>
-          this.repository.update(
+          repository.update(
             (record as Record<string, unknown>)[this.id] as string,
             data as Partial<T>
           )
@@ -367,7 +393,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     // Verify record exists (throws NotFoundError if not found)
     await this.get(id, params);
 
-    const result = await this.repository.update(String(id), data as Partial<T>);
+    const result = await (await this.getRepository(params)).update(String(id), data as Partial<T>);
     this.emit?.('patched', result, params);
     return result;
   }
@@ -384,11 +410,14 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
 
       // Find all matching records and remove them
       const query = this.getQuery(params);
-      let records = await this.repository.findAll();
+      let records = await (await this.getRepository(params)).findAll();
       records = this.filterData(records, query);
 
       // biome-ignore lint/suspicious/noExplicitAny: Need to access ID field dynamically
-      await Promise.all(records.map((record) => this.repository.delete((record as any)[this.id])));
+      const repository = await this.getRepository(params);
+      await Promise.all(
+        records.map(async (record) => repository.delete((record as any)[this.id]))
+      );
 
       // Emit removed event for each record
       for (const record of records) {
@@ -402,7 +431,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     // Get record before deletion (throws NotFoundError if not found)
     const existing = await this.get(id, params);
 
-    await this.repository.delete(String(id));
+    await (await this.getRepository(params)).delete(String(id));
     this.emit?.('removed', existing, params);
     return existing;
   }
