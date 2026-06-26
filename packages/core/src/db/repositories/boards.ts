@@ -898,6 +898,50 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   }
 
   /**
+   * Atomically shallow-merge field patches into existing board objects.
+   *
+   * Unlike upsertBoardObject (which fully replaces the object value, dropping
+   * omitted fields), this overwrites ONLY the provided keys and leaves the rest
+   * of each object intact — so a narrow change (e.g. a zIndex reorder) can't
+   * revert a field edited concurrently elsewhere.
+   *
+   * Objects that no longer exist are SKIPPED, never re-created. This is what
+   * lets a forward/backward swap touch a neighbor without resurrecting it if it
+   * was deleted between the client's read and this write. All patches are
+   * applied in a single read-modify-write, so multi-object reorders persist
+   * atomically (unlike the sequential batchUpsertBoardObjects).
+   */
+  async mergeBoardObjectFields(
+    boardId: string,
+    patches: Record<string, Partial<BoardObject>>
+  ): Promise<Board> {
+    try {
+      const fullId = await this.resolveId(boardId);
+
+      const current = await this.findById(fullId);
+      if (!current) {
+        throw new EntityNotFoundError('Board', boardId);
+      }
+
+      const updatedObjects = { ...(current.objects || {}) };
+      for (const [objectId, fields] of Object.entries(patches)) {
+        const existing = updatedObjects[objectId];
+        if (!existing) continue; // never resurrect a concurrently-deleted object
+        updatedObjects[objectId] = { ...existing, ...fields } as BoardObject;
+      }
+
+      return this.update(fullId, { objects: updatedObjects });
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to merge board object fields: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * DEPRECATED: Delete a zone and handle associated sessions
    * TODO: Reimplement using board-objects table
    */

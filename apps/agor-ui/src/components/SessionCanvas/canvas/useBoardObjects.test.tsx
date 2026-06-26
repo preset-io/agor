@@ -1,0 +1,123 @@
+import type { Board } from '@agor-live/client';
+import { renderHook } from '@testing-library/react';
+import { App as AntApp } from 'antd';
+import type { ReactNode } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import { useBoardObjects } from './useBoardObjects';
+
+/**
+ * Minimal client whose `service('boards').patch` is a spy. reorderObject is the
+ * only behavior exercised here, and it only touches `client` + `board`.
+ */
+function makeClient() {
+  const patch = vi.fn().mockResolvedValue({});
+  const client = { service: vi.fn().mockReturnValue({ patch }) };
+  return { client: client as never, patch };
+}
+
+function makeBoard(objects: Record<string, unknown>): Board {
+  return { board_id: 'board-1', objects } as unknown as Board;
+}
+
+const wrapper = ({ children }: { children: ReactNode }) => <AntApp>{children}</AntApp>;
+
+function renderReorder(board: Board, client: unknown) {
+  return renderHook(
+    () =>
+      useBoardObjects({
+        board,
+        client: client as never,
+        sessionsByBranch: new Map(),
+        branches: [],
+        boardObjectsForBoard: [],
+        setNodes: vi.fn(),
+        deletedObjectsRef: { current: new Set<string>() },
+      }),
+    { wrapper }
+  );
+}
+
+describe('reorderObject', () => {
+  it('"front" sends a single mergeObjectFields patch with the clamped zIndex', async () => {
+    const { client, patch } = makeClient();
+    const board = makeBoard({
+      a: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+      b: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'B', zIndex: 105 },
+    });
+    const { result } = renderReorder(board, client);
+
+    await result.current.reorderObject('a', 'front');
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(patch.mock.calls[0][0]).toBe('board-1');
+    expect(patch.mock.calls[0][1]).toEqual({
+      _action: 'mergeObjectFields',
+      objects: { a: { zIndex: 106 } },
+    });
+  });
+
+  it('"forward" sends one mergeObjectFields patch touching BOTH swapped ids', async () => {
+    const { client, patch } = makeClient();
+    const board = makeBoard({
+      a: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+      b: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'B', zIndex: 105 },
+    });
+    const { result } = renderReorder(board, client);
+
+    await result.current.reorderObject('a', 'forward');
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(patch.mock.calls[0][1]).toEqual({
+      _action: 'mergeObjectFields',
+      objects: { a: { zIndex: 105 }, b: { zIndex: 100 } },
+    });
+  });
+
+  it('scopes peers to the SAME type — a zone does not rank against markdown', async () => {
+    const { client, patch } = makeClient();
+    const board = makeBoard({
+      a: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+      b: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'B', zIndex: 100 },
+      m: { type: 'markdown', x: 0, y: 0, width: 1, content: '', zIndex: 300 },
+    });
+    const { result } = renderReorder(board, client);
+
+    await result.current.reorderObject('a', 'front');
+
+    // If the markdown (300) were a peer, the result would be 301. Scoping to
+    // zones makes maxOther 100, so the tie breaks to 101.
+    expect(patch.mock.calls[0][1]).toEqual({
+      _action: 'mergeObjectFields',
+      objects: { a: { zIndex: 101 } },
+    });
+  });
+
+  it('clamps "front" to the board-object ceiling (never the card layer)', async () => {
+    const { client, patch } = makeClient();
+    const board = makeBoard({
+      a: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 200 },
+      b: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'B', zIndex: 499 },
+    });
+    const { result } = renderReorder(board, client);
+
+    await result.current.reorderObject('a', 'front');
+
+    expect(patch.mock.calls[0][1]).toEqual({
+      _action: 'mergeObjectFields',
+      objects: { a: { zIndex: 499 } },
+    });
+  });
+
+  it('does nothing when the operation is a no-op (already at front)', async () => {
+    const { client, patch } = makeClient();
+    const board = makeBoard({
+      a: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 110 },
+      b: { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'B', zIndex: 100 },
+    });
+    const { result } = renderReorder(board, client);
+
+    await result.current.reorderObject('a', 'front');
+
+    expect(patch).not.toHaveBeenCalled();
+  });
+});

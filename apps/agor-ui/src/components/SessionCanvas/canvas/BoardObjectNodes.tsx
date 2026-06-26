@@ -23,11 +23,14 @@ import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { DeleteZoneModal } from './DeleteZoneModal';
 import { ZoneConfigModal } from './ZoneConfigModal';
 import type { LayerOp } from './zOrder';
-
-// Zone label font-size bounds and stepper increment (px).
-const ZONE_FONT_SIZE_MIN = 10;
-const ZONE_FONT_SIZE_MAX = 48;
-const ZONE_FONT_SIZE_STEP = 2;
+import {
+  clampZoneFontSize,
+  effectiveLabelFontSize,
+  statusFontSizeFor,
+  ZONE_FONT_SIZE_MAX,
+  ZONE_FONT_SIZE_MIN,
+  ZONE_FONT_SIZE_STEP,
+} from './zoneFontSize';
 
 // Zone content opacity constant - used for zone background and color indicator
 export const ZONE_CONTENT_OPACITY = 0.1;
@@ -225,18 +228,19 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     }
   };
 
-  // Effective label font size: persisted value or the theme default.
-  const labelFontSize = data.fontSize ?? token.fontSize;
+  // Effective label font size: sanitized persisted value or the theme default.
+  // Sanitizing on read defends the DOM against bad fontSize data (negative,
+  // non-finite, absurdly large) written via MCP/import.
+  const labelFontSize = effectiveLabelFontSize(data.fontSize, token.fontSize);
   // Status keeps its smaller relative size, scaled from the label size when set.
-  const statusFontSize = data.fontSize
-    ? Math.max(1, Math.round(data.fontSize * (token.fontSizeSM / token.fontSize)))
-    : token.fontSizeSM;
+  const statusFontSize = statusFontSizeFor(data.fontSize, token.fontSize, token.fontSizeSM);
+  const atMinFontSize = labelFontSize <= ZONE_FONT_SIZE_MIN;
+  const atMaxFontSize = labelFontSize >= ZONE_FONT_SIZE_MAX;
 
   const handleFontSizeStep = (delta: number) => {
     if (mutationDisabled) return;
-    const current = data.fontSize ?? token.fontSize;
-    const next = Math.max(ZONE_FONT_SIZE_MIN, Math.min(ZONE_FONT_SIZE_MAX, current + delta));
-    if (next !== current && data.onUpdate) {
+    const next = clampZoneFontSize(labelFontSize, delta);
+    if (next !== labelFontSize && data.onUpdate) {
       data.onUpdate(data.objectId, createObjectData({ fontSize: next }));
     }
   };
@@ -275,16 +279,22 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   );
 
   // A toolbar icon button that runs `action` on pointer-up (matching the
-  // existing lock/settings/delete buttons' event handling).
+  // existing lock/settings/delete buttons' event handling). Keyboard activation
+  // (Enter/Space) fires a synthetic click with `detail === 0` and no preceding
+  // pointer events, so we run the action from onClick in that case too — while
+  // skipping mouse-driven clicks (detail >= 1) which already ran on pointer-up.
   const renderActionButton = (
     key: string,
     title: string,
     icon: React.ReactNode,
-    action: () => void
+    action: () => void,
+    disabled = false
   ) => (
     <button
       key={key}
       type="button"
+      aria-label={title}
+      disabled={disabled}
       onPointerDown={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -292,14 +302,21 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       onPointerUp={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (mutationDisabled) return;
+        if (mutationDisabled || disabled) return;
         action();
       }}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (e.detail === 0) {
+          if (mutationDisabled || disabled) return;
+          action();
+        }
       }}
-      style={iconButtonStyle}
+      style={{
+        ...iconButtonStyle,
+        ...(disabled ? { opacity: 0.4, cursor: 'not-allowed' } : {}),
+      }}
       title={title}
     >
       {icon}
@@ -686,7 +703,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               'font-smaller',
               'Smaller label',
               <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>−</span>,
-              () => handleFontSizeStep(-ZONE_FONT_SIZE_STEP)
+              () => handleFontSizeStep(-ZONE_FONT_SIZE_STEP),
+              atMinFontSize
             )}
             <span
               style={{
@@ -704,7 +722,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               'font-larger',
               'Larger label',
               <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>+</span>,
-              () => handleFontSizeStep(ZONE_FONT_SIZE_STEP)
+              () => handleFontSizeStep(ZONE_FONT_SIZE_STEP),
+              atMaxFontSize
             )}
           </div>
           {verticalDivider}

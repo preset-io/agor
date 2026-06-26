@@ -187,6 +187,11 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
     objects: unknown[],
     params?: FeathersParams
   ): Promise<Board>;
+  mergeBoardObjectFields(
+    boardId: string,
+    patches: Record<string, unknown>,
+    params?: FeathersParams
+  ): Promise<Board>;
   deleteZone(
     boardId: string,
     zoneId: string,

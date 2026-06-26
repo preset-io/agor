@@ -24,6 +24,36 @@ export const DEFAULT_BOARD_OBJECT_Z_INDEX: Record<BoardObjectType, number> = {
   text: 100,
 };
 
+/**
+ * Board objects must stay BELOW the branch/card layer (zIndex 500) and the
+ * comment layer (1000) rendered by SessionCanvas. Clamp every reorder result
+ * into [BOARD_OBJECT_Z_MIN, BOARD_OBJECT_Z_MAX] so "Bring to front" can never
+ * push an object up onto (or above) a card or comment.
+ */
+export const BOARD_OBJECT_Z_MAX = 499;
+export const BOARD_OBJECT_Z_MIN = 1;
+
+/**
+ * Coerce a persisted zIndex to a finite number, falling back to the per-type
+ * default. Guards against bad data from MCP/import writes (non-numeric, NaN,
+ * Infinity) before the value feeds `computeLayerChanges` or a node's zIndex.
+ */
+export function sanitizeZIndex(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * zIndex for a board object given its base order and selection state.
+ *
+ * A selected object floats exactly one step above its own base so it sits above
+ * same-band peers while selected, then restores to its base on deselect. Single
+ * source of truth for the selection bump (used by both the SessionCanvas paint
+ * pass and the onNodesChange select handler).
+ */
+export function selectedZIndex(base: number, selected: boolean): number {
+  return selected ? base + 1 : base;
+}
+
 /** Layer operations available from the zone toolbar. */
 export type LayerOp = 'front' | 'forward' | 'backward' | 'back';
 
@@ -65,34 +95,56 @@ export function computeLayerChanges(op: LayerOp, targetId: string, peers: ZPeer[
       const maxOther = Math.max(...others.map((p) => p.zIndex));
       // Already strictly in front of everything → nothing to do.
       if (target.zIndex > maxOther) return [];
-      return [{ id: targetId, zIndex: maxOther + 1 }];
+      // Clamp so a board object can never reach the card (500) / comment (1000)
+      // layers. At the ceiling the move can collapse to a no-op.
+      const next = Math.min(maxOther + 1, BOARD_OBJECT_Z_MAX);
+      if (next === target.zIndex) return [];
+      return [{ id: targetId, zIndex: next }];
     }
     case 'back': {
       const minOther = Math.min(...others.map((p) => p.zIndex));
       if (target.zIndex < minOther) return [];
-      return [{ id: targetId, zIndex: minOther - 1 }];
+      const next = Math.max(minOther - 1, BOARD_OBJECT_Z_MIN);
+      if (next === target.zIndex) return [];
+      return [{ id: targetId, zIndex: next }];
     }
     case 'forward': {
       // Nearest peer strictly above the target.
       const above = others
         .filter((p) => p.zIndex > target.zIndex)
         .sort((a, b) => a.zIndex - b.zIndex)[0];
-      if (!above) return [];
-      return [
-        { id: targetId, zIndex: above.zIndex },
-        { id: above.id, zIndex: target.zIndex },
-      ];
+      if (above) {
+        return [
+          { id: targetId, zIndex: above.zIndex },
+          { id: above.id, zIndex: target.zIndex },
+        ];
+      }
+      // No strictly-higher peer, but if a peer SHARES our zIndex (the headline
+      // "two zones both at the default 100" case) break the tie by stepping up
+      // one — otherwise the button would silently do nothing.
+      if (!others.some((p) => p.zIndex === target.zIndex)) return [];
+      const next = Math.min(target.zIndex + 1, BOARD_OBJECT_Z_MAX);
+      if (next === target.zIndex) return [];
+      return [{ id: targetId, zIndex: next }];
     }
     case 'backward': {
       // Nearest peer strictly below the target.
       const below = others
         .filter((p) => p.zIndex < target.zIndex)
         .sort((a, b) => b.zIndex - a.zIndex)[0];
-      if (!below) return [];
-      return [
-        { id: targetId, zIndex: below.zIndex },
-        { id: below.id, zIndex: target.zIndex },
-      ];
+      if (below) {
+        return [
+          { id: targetId, zIndex: below.zIndex },
+          { id: below.id, zIndex: target.zIndex },
+        ];
+      }
+      // Mirror of `forward`: break a tie by stepping down one.
+      if (!others.some((p) => p.zIndex === target.zIndex)) return [];
+      const next = Math.max(target.zIndex - 1, BOARD_OBJECT_Z_MIN);
+      if (next === target.zIndex) return [];
+      return [{ id: targetId, zIndex: next }];
     }
+    default:
+      return [];
   }
 }

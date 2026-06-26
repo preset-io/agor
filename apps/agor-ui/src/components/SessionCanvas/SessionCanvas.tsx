@@ -101,7 +101,7 @@ import {
 } from './canvas/utils/coordinateTransforms';
 import { getValidZoneParentId, sanitizeOrphanedNodeParents } from './canvas/utils/nodeParentUtils';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
-import { DEFAULT_BOARD_OBJECT_Z_INDEX } from './canvas/zOrder';
+import { DEFAULT_BOARD_OBJECT_Z_INDEX, selectedZIndex } from './canvas/zOrder';
 
 interface SessionCanvasProps {
   board: Board | null;
@@ -1272,7 +1272,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             return {
               ...newZone,
               selected: existingZone?.selected,
-              zIndex: existingZone?.selected ? base + 1 : base,
+              zIndex: selectedZIndex(base, !!existingZone?.selected),
             };
           });
 
@@ -1424,7 +1424,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 // Bump above the zone's own base order while selected; restore the
                 // persisted/default base on deselect so custom layering survives.
                 const base = (n.data?.zIndex as number) ?? DEFAULT_BOARD_OBJECT_Z_INDEX.zone;
-                return { ...n, zIndex: change.selected ? base + 1 : base };
+                return { ...n, zIndex: selectedZIndex(base, !!change.selected) };
               }
               return n;
             });
