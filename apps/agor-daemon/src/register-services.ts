@@ -43,6 +43,7 @@ import {
   AGENTIC_TOOL_CAPABILITIES,
   isSessionExecuting,
   isTaskExecuting,
+  ROLES,
   SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
@@ -80,6 +81,7 @@ import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
+import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
@@ -115,6 +117,7 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
+import { requireMinimumRole } from './utils/authorization.js';
 import { escapeHtml } from './utils/html.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -460,6 +463,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   if (svcEnabled('gateway')) {
     app.use('/gateway-channels', createGatewayChannelsService(db));
+
+    // Sub-path service for the connection probe. A sub-path does NOT inherit
+    // the parent gateway-channels admin gating / redaction hooks, so it carries
+    // its own requireAuth + admin gate. It reads decrypted tokens via the
+    // repository and returns no token values.
+    app.use('/gateway-channels/test', createGatewayChannelsTestService(db));
+    app.service('gateway-channels/test').hooks({
+      before: {
+        create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'test gateway channels')],
+      },
+    });
+
     app.use('/thread-session-map', createThreadSessionMapService(db));
     app.use('/gateway', createGatewayService(db, app), {
       // Only expose the inbound gateway entrypoint and existing route hook

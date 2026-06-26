@@ -880,3 +880,134 @@ describe('isChannelAllowedByWhitelist', () => {
     expect(isChannelAllowedByWhitelist('channel', 'C999', [])).toBe(true);
   });
 });
+
+describe('SlackConnector.testConnection', () => {
+  /**
+   * Build a connector with mocked bot (`this.web`) and app-token
+   * (`createWebClient`) clients so the probe never touches the network.
+   */
+  function makeProbeConnector(args: {
+    config?: Record<string, unknown>;
+    authTest?: () => Promise<unknown>;
+    appConnectionsOpen?: () => Promise<unknown>;
+    conversationsInfo?: () => Promise<unknown>;
+  }) {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test', ...args.config });
+    (connector as unknown as { web: unknown }).web = {
+      auth: {
+        test:
+          args.authTest ??
+          (async () => ({
+            ok: true,
+            team_id: 'T1',
+            team: 'Acme',
+            user_id: 'U1',
+            user: 'agor-bot',
+          })),
+      },
+      conversations: {
+        info: args.conversationsInfo ?? (async () => ({ ok: true, channel: { id: 'C1' } })),
+      },
+    };
+    (connector as unknown as { createWebClient: (t: string) => unknown }).createWebClient = () => ({
+      apps: {
+        connections: {
+          open: args.appConnectionsOpen ?? (async () => ({ ok: true, url: 'wss://example' })),
+        },
+      },
+    });
+    return connector;
+  }
+
+  it('reports ok on the happy path (bot + app token + channel)', async () => {
+    const connector = makeProbeConnector({
+      config: { app_token: 'xapp-test', allowed_channel_ids: ['C1'] },
+    });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(true);
+    expect(result.team).toEqual({ id: 'T1', name: 'Acme' });
+    expect(result.bot).toEqual({ userId: 'U1', name: 'agor-bot' });
+    expect(result.appTokenValid).toBe(true);
+    expect(result.channelAccess).toEqual([{ channelId: 'C1', ok: true }]);
+    expect(result.failures).toEqual([]);
+    expect(result.notVerifiable.length).toBeGreaterThan(0);
+  });
+
+  it('classifies invalid_auth bot-token failures', async () => {
+    const connector = makeProbeConnector({
+      config: { app_token: 'xapp-test' },
+      authTest: async () => {
+        throw { data: { ok: false, error: 'invalid_auth' } };
+      },
+    });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(false);
+    expect(result.team).toBeUndefined();
+    const failure = result.failures.find((f) => f.capability === 'bot_token');
+    expect(failure?.slackError).toBe('invalid_auth');
+    expect(failure?.reason).toMatch(/invalid/i);
+  });
+
+  it('surfaces missing_scope needed/provided verbatim', async () => {
+    const connector = makeProbeConnector({
+      config: { app_token: 'xapp-test', allowed_channel_ids: ['C1'] },
+      conversationsInfo: async () => {
+        throw {
+          data: {
+            ok: false,
+            error: 'missing_scope',
+            needed: 'channels:read',
+            provided: 'chat:write',
+          },
+        };
+      },
+    });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(false);
+    const failure = result.failures.find((f) => f.capability === 'channel_access');
+    expect(failure?.slackError).toBe('missing_scope');
+    expect(failure?.needed).toBe('channels:read');
+    expect(failure?.provided).toBe('chat:write');
+  });
+
+  it('reports app-token failures from apps.connections.open', async () => {
+    const connector = makeProbeConnector({
+      config: { app_token: 'xapp-bad' },
+      appConnectionsOpen: async () => ({ ok: false, error: 'invalid_auth' }),
+    });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(false);
+    expect(result.appTokenValid).toBe(false);
+    const failure = result.failures.find((f) => f.capability === 'app_token');
+    expect(failure?.slackError).toBe('invalid_auth');
+  });
+
+  it('reports a missing app token as an app_token failure', async () => {
+    const connector = makeProbeConnector({ config: {} });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(false);
+    expect(result.appTokenValid).toBe(false);
+    expect(result.failures.some((f) => f.capability === 'app_token')).toBe(true);
+  });
+
+  it('catches restricted-channel not_in_channel errors', async () => {
+    const connector = makeProbeConnector({
+      config: { app_token: 'xapp-test', allowed_channel_ids: ['C1'] },
+      conversationsInfo: async () => {
+        throw { data: { ok: false, error: 'not_in_channel' } };
+      },
+    });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(false);
+    expect(result.channelAccess).toEqual([{ channelId: 'C1', ok: false }]);
+    const failure = result.failures.find((f) => f.capability === 'channel_access');
+    expect(failure?.slackError).toBe('not_in_channel');
+    expect(failure?.reason).toMatch(/not a member/i);
+  });
+});
