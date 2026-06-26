@@ -132,3 +132,35 @@ sequenceDiagram
   pools, small max size, idle eviction, and likely PgBouncer/managed pooling.
 - Background jobs still need distributed locks/queues; Socket.IO Redis adapter
   only solves realtime fanout.
+
+## Tenant placement / pooling note
+
+For thousands of GA/self-serve tenants, schema-per-tenant inside a shared/cell
+Postgres database may be a better default than database-per-tenant. It preserves
+normal app pool behavior:
+
+```text
+10 pods × small number of cell DB pools × pool max N
+```
+
+instead of:
+
+```text
+10 pods × active tenants × pool max N
+```
+
+The likely placement model is hybrid:
+
+```ts
+type TenantPlacement =
+  | { kind: 'cell-schema'; cellId: string; schema: string; role: string }
+  | { kind: 'dedicated-database'; databaseUrl: string; databaseUser: string };
+```
+
+Caveat for review: shared-login `SET LOCAL ROLE` is not automatically a full
+SQL-injection containment boundary. If the shared app pool user can assume every
+tenant role, arbitrary injected SQL might be able to `RESET ROLE` / `SET ROLE`
+unless permissions are designed and tested carefully. The app pool user should
+not have direct cross-tenant table access; tenant roles should be `NOLOGIN`,
+minimal, and preferably non-inherited. Dedicated tenant DB users remain the
+stronger isolation tier.
