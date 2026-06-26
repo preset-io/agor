@@ -243,10 +243,8 @@ describe('ConversationView auto-scroll integration', () => {
   });
 
   it('clears the escape lock when the exposed scrollToBottom is invoked', () => {
-    // A prior scroll-up left the bottom lock escaped; an explicit go-to-bottom
-    // intent (FAB / send) must clear it so the library can re-pin to streamed
-    // content.
-    mockState.escapedFromLock = true;
+    // An explicit go-to-bottom intent (FAB / send) must clear a prior scroll-up's
+    // escape so the library can re-pin to streamed content.
     const tasks = [makeTask('task-1', 'first task')];
     const state = makeState({ loading: false, tasks });
     mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
@@ -265,7 +263,10 @@ describe('ConversationView auto-scroll integration', () => {
       />
     );
 
+    // Escape AFTER the mount landing (which also clears it) so the assertion
+    // proves the exposed call — not the landing — did the clearing.
     mockScrollToBottom.mockClear();
+    mockState.escapedFromLock = true;
     act(() => exposedScrollToBottom?.());
 
     expect(mockState.escapedFromLock).toBe(false);
