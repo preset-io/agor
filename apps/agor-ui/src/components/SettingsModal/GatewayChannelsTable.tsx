@@ -54,7 +54,6 @@ import {
   Popconfirm,
   Radio,
   Select,
-  type SelectProps,
   Space,
   Spin,
   Steps,
@@ -79,6 +78,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BranchSelect } from './BranchSelect';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { UserSelect } from './UserSelect';
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
@@ -150,24 +150,6 @@ const SectionLabel: React.FC<{ icon: React.ReactNode; title: string; subtitle?: 
       )}
     </span>
   </Space>
-);
-
-const UserSelect: React.FC<SelectProps<string> & { userById: Map<string, User> }> = ({
-  userById,
-  placeholder = 'Select a user',
-  ...selectProps
-}) => (
-  <Select {...selectProps} placeholder={placeholder} showSearch optionFilterProp="children">
-    {Array.from(userById.values())
-      .sort((a, b) =>
-        (a.name || a.email || a.user_id).localeCompare(b.name || b.email || b.user_id)
-      )
-      .map((u) => (
-        <Select.Option key={u.user_id} value={u.user_id}>
-          {u.name || u.email || u.user_id}
-        </Select.Option>
-      ))}
-  </Select>
 );
 
 const getIdentitySubtitle = (alignUsers: boolean): string =>
