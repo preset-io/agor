@@ -13,7 +13,7 @@ import { formatRelativeTime } from '../../utils/time';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle, withAlpha } from './homeStyles';
-import type { HomePageProps } from './types';
+import type { HomeSectionProps } from './types';
 
 const { Text } = Typography;
 
@@ -62,7 +62,7 @@ const deriveBoardRows = ({
   recentBoardIds,
   branchById,
   sessionsByBranch,
-}: Pick<HomePageProps, 'boardById' | 'recentBoardIds' | 'branchById' | 'sessionsByBranch'>) => {
+}: Pick<HomeSectionProps, 'boardById' | 'recentBoardIds' | 'branchById' | 'sessionsByBranch'>) => {
   const visitRank = new Map((recentBoardIds ?? []).map((boardId, index) => [boardId, index]));
   const branchesByBoard = groupBranchesByBoard(branchById);
   const visibleSessionsByBranch = groupVisibleSessionsByBranch(sessionsByBranch);
@@ -238,7 +238,7 @@ const BoardHomeCard: React.FC<{
 
 export const HomeBoardsSection: React.FC<
   Pick<
-    HomePageProps,
+    HomeSectionProps,
     'boardById' | 'recentBoardIds' | 'branchById' | 'sessionsByBranch' | 'onBoardClick'
   >
 > = ({ boardById, recentBoardIds = [], branchById, sessionsByBranch, onBoardClick }) => {

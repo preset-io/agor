@@ -25,7 +25,7 @@ import { formatRelativeTime } from '../../utils/time';
 import { AssistantPill, BoardPill, BranchPill, SessionPill, UserPill } from '../Pill';
 import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
-import type { HomePageProps } from './types';
+import type { HomeSectionProps } from './types';
 
 const { Text } = Typography;
 
@@ -71,7 +71,7 @@ const ActivityFeedItem: React.FC<{
 
 export const HomeActivitySection: React.FC<
   Pick<
-    HomePageProps,
+    HomeSectionProps,
     | 'branchById'
     | 'boardById'
     | 'sessionById'

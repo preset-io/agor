@@ -1,6 +1,15 @@
 import { Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectBoardById,
+  selectBranchById,
+  selectRepoById,
+  selectSessionById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
 import { isDarkTheme } from '../../utils/theme';
 import { HomeActivitySection } from './HomeActivitySection';
 import { HomeBoardsSection } from './HomeBoardsSection';
@@ -13,6 +22,14 @@ const { Text, Title } = Typography;
 export const HomePage: React.FC<HomePageProps> = (props) => {
   const { token } = theme.useToken();
   const homeBackground = DEFAULT_BACKGROUNDS[isDarkTheme(token) ? 'dark' : 'light'];
+  // Entity maps come straight from the store so this large home surface no
+  // longer re-renders on every App store-tick that re-derives prop maps.
+  const boardById = useAgorStore(selectBoardById);
+  const branchById = useAgorStore(selectBranchById);
+  const repoById = useAgorStore(selectRepoById);
+  const sessionById = useAgorStore(selectSessionById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const userById = useAgorStore(selectUserById);
   return (
     <div style={{ height: '100%', width: '100%', overflow: 'hidden', background: homeBackground }}>
       <div
@@ -39,27 +56,27 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
             </Space>
           </div>
           <HomeBoardsSection
-            boardById={props.boardById}
+            boardById={boardById}
             recentBoardIds={props.recentBoardIds}
-            branchById={props.branchById}
-            sessionsByBranch={props.sessionsByBranch}
+            branchById={branchById}
+            sessionsByBranch={sessionsByBranch}
             onBoardClick={props.onBoardClick}
           />
           <HomeSessionsSection
-            sessionById={props.sessionById}
-            branchById={props.branchById}
-            boardById={props.boardById}
-            repoById={props.repoById}
+            sessionById={sessionById}
+            branchById={branchById}
+            boardById={boardById}
+            repoById={repoById}
             currentUserId={props.currentUserId}
             onSessionClick={props.onSessionClick}
           />
         </main>
         <aside style={{ minHeight: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <HomeActivitySection
-            branchById={props.branchById}
-            boardById={props.boardById}
-            sessionById={props.sessionById}
-            userById={props.userById}
+            branchById={branchById}
+            boardById={boardById}
+            sessionById={sessionById}
+            userById={userById}
             onBoardClick={props.onBoardClick}
             onBranchClick={props.onBranchClick}
             onSessionClick={props.onSessionClick}

@@ -1124,10 +1124,6 @@ export const App: React.FC<AppProps> = ({
                   primaryAssistantBranch={primaryAssistantBranch}
                   primaryAssistantRepo={primaryAssistantRepo}
                   primaryAssistantInaccessible={primaryAssistantInaccessible}
-                  sessionsByBranch={sessionsByBranch}
-                  branchById={branchById}
-                  repoById={repoById}
-                  userById={userById}
                   currentUserId={user?.user_id}
                   selectedSessionId={effectiveSelectedSessionId}
                   onSessionClick={handleSessionClick}
@@ -1146,10 +1142,6 @@ export const App: React.FC<AppProps> = ({
                   onViewLogs={setLogsModalBranchId}
                   onNukeEnvironment={onNukeEnvironment}
                   onExecuteScheduleNow={onExecuteScheduleNow}
-                  comments={mapToArray(commentById).filter(
-                    (c: BoardComment) => c.board_id === currentBoardId
-                  )}
-                  boardObjects={currentBoard?.objects}
                   onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
                   onReplyComment={onReplyComment}
                   onResolveComment={onResolveComment}
@@ -1221,13 +1213,7 @@ export const App: React.FC<AppProps> = ({
                       <HomePage
                         client={client}
                         connected={connected}
-                        boardById={boardById}
                         recentBoardIds={recentBoardIds}
-                        branchById={branchById}
-                        repoById={repoById}
-                        sessionById={sessionById}
-                        sessionsByBranch={sessionsByBranch}
-                        userById={userById}
                         currentUserId={user?.user_id}
                         onBoardClick={navigation.goToBoard}
                         onBranchClick={navigation.goToBranch}
