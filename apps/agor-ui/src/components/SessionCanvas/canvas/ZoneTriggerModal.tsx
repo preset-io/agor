@@ -126,7 +126,7 @@ export const ZoneTriggerModal = ({
     }
 
     // Otherwise most recent session
-    return branchSessions.sort(
+    return [...branchSessions].sort(
       (a, b) =>
         new Date(b.last_updated || b.created_at).getTime() -
         new Date(a.last_updated || a.created_at).getTime()
