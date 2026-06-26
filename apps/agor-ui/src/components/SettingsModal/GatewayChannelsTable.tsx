@@ -330,23 +330,65 @@ interface GitHubSetupParams {
   installation_id?: string;
 }
 
-/** GitHub setup wizard steps */
-const GITHUB_SETUP_STEPS = [
-  { title: 'Create App' },
-  { title: 'Credentials' },
-  { title: 'Configure' },
-];
+// ============================================================================
+// Unified create-wizard step model
+// ============================================================================
+
+/**
+ * Step-indicator items for the create wizard, keyed by channel type. Every flow
+ * shares a universal step 0 ("Channel": type, name, target branch, enabled);
+ * platform-specific steps follow. A single modal footer drives navigation, so
+ * the indicator is the only place step structure differs between platforms.
+ */
+function createStepsForType(type: ChannelType): { title: string }[] {
+  switch (type) {
+    case 'slack':
+      return [
+        { title: 'Channel' },
+        { title: 'Options' },
+        { title: 'Create app' },
+        { title: 'Tokens & test' },
+      ];
+    case 'github':
+      return [
+        { title: 'Channel' },
+        { title: 'Create app' },
+        { title: 'Credentials' },
+        { title: 'Configure' },
+      ];
+    case 'teams':
+      return [{ title: 'Channel' }, { title: 'Setup' }];
+    default:
+      return [{ title: 'Channel' }];
+  }
+}
+
+/**
+ * Form fields the create footer validates before leaving a given step. The final
+ * step returns `[]` — submission runs a full `validateFields()` instead.
+ */
+function createStepFields(type: ChannelType, step: number, alignSlackUsers: boolean): string[] {
+  if (step === 0) {
+    const fields = ['name', 'target_branch_id', 'channel_type'];
+    // Slack and GitHub pick identity inside their platform steps; everyone else
+    // chooses it on the universal Channel step.
+    if (type !== 'slack' && type !== 'github') fields.push('agor_user_id');
+    return fields;
+  }
+  if (type === 'slack' && step === 1) {
+    const fields = ['slack_app_name'];
+    if (!alignSlackUsers) fields.push('agor_user_id');
+    return fields;
+  }
+  if (type === 'github' && step === 2) {
+    return ['github_app_id', 'github_private_key'];
+  }
+  return [];
+}
 
 // ============================================================================
 // Slack Setup Wizard (create mode)
 // ============================================================================
-
-/** Slack guided-setup wizard steps. */
-const SLACK_SETUP_STEPS = [
-  { title: 'Options' },
-  { title: 'Create App' },
-  { title: 'Tokens & Test' },
-];
 
 /**
  * Form fields whose values feed the `gateway-channels/test` probe. Editing any
@@ -498,8 +540,8 @@ const SlackSetupWizard: React.FC<{
   mcpServerById: Map<string, MCPServer>;
   selectedAgent: string;
   onAgentChange: (agent: string) => void;
+  /** Slack sub-step within the unified create wizard (0=Options, 1=Create app, 2=Tokens). */
   step: number;
-  onStepChange: (step: number) => void;
   testResult: SlackTestResult | null;
   testLoading: boolean;
   onTest: () => void;
@@ -510,7 +552,6 @@ const SlackSetupWizard: React.FC<{
   selectedAgent,
   onAgentChange,
   step,
-  onStepChange,
   testResult,
   testLoading,
   onTest,
@@ -602,17 +643,6 @@ const SlackSetupWizard: React.FC<{
     </div>
   );
 
-  const goToCreateApp = async () => {
-    const fields: string[] = ['name', 'target_branch_id', 'slack_app_name'];
-    if (!alignUsers) fields.push('agor_user_id');
-    try {
-      await form.validateFields(fields);
-    } catch {
-      return;
-    }
-    onStepChange(1);
-  };
-
   const handleCopy = async () => {
     const ok = await copyTextToClipboard(manifestJson);
     if (ok) {
@@ -633,8 +663,6 @@ const SlackSetupWizard: React.FC<{
 
   return (
     <>
-      <Steps current={step} size="small" items={SLACK_SETUP_STEPS} style={{ marginBottom: 24 }} />
-
       {/* Step 0: Options (kept mounted so Form.Items stay registered for validation) */}
       <div style={{ display: step === 0 ? undefined : 'none' }}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
@@ -765,10 +793,6 @@ const SlackSetupWizard: React.FC<{
         </Typography.Text>
         {manifestPreview}
         {scopeList}
-
-        <Button type="primary" block onClick={goToCreateApp}>
-          Next: Create App
-        </Button>
       </div>
 
       {/* Step 1: Create app from manifest */}
@@ -812,13 +836,6 @@ const SlackSetupWizard: React.FC<{
             the <code>connections:write</code> scope — this is your <code>xapp-</code> token.
           </li>
         </ol>
-
-        <Space>
-          <Button onClick={() => onStepChange(0)}>Back</Button>
-          <Button type="primary" onClick={() => onStepChange(2)}>
-            Next: Tokens &amp; Test
-          </Button>
-        </Space>
       </div>
 
       {/* Step 2: Tokens + test */}
@@ -938,10 +955,6 @@ const SlackSetupWizard: React.FC<{
             },
           ]}
         />
-
-        <Button onClick={() => onStepChange(1)} style={{ marginTop: 8 }}>
-          Back
-        </Button>
       </div>
     </>
   );
@@ -959,15 +972,12 @@ const ChannelFormFields: React.FC<{
   selectedAgent: string;
   onAgentChange: (agent: string) => void;
   editingChannel?: GatewayChannel | null;
-  /** GitHub setup wizard state (managed by parent) */
-  githubStep: number;
-  onGithubStepChange: (step: number) => void;
-  githubSetupParams: GitHubSetupParams | null;
+  /** Current step in the unified create wizard (0 = universal "Channel" step). */
+  createStep: number;
+  /** GitHub setup status (create mode only). */
   githubLoading: boolean;
   githubError: string | null;
-  /** Slack setup wizard state (managed by parent, create mode only) */
-  slackStep: number;
-  onSlackStepChange: (step: number) => void;
+  /** Slack guided-setup state (create mode only). */
   slackTestResult: SlackTestResult | null;
   slackTestLoading: boolean;
   onSlackTest: () => void;
@@ -982,13 +992,9 @@ const ChannelFormFields: React.FC<{
   selectedAgent,
   onAgentChange,
   editingChannel,
-  githubStep,
-  onGithubStepChange,
-  githubSetupParams,
+  createStep,
   githubLoading,
   githubError,
-  slackStep,
-  onSlackStepChange,
   slackTestResult,
   slackTestLoading,
   onSlackTest,
@@ -1006,87 +1012,93 @@ const ChannelFormFields: React.FC<{
 
   return (
     <>
-      {/* ── Basic Settings (always visible) ── */}
-      <Form.Item
-        label="Channel Type"
-        name="channel_type"
-        initialValue={mode === 'create' ? 'slack' : undefined}
-        rules={[{ required: true }]}
-      >
-        <Select onChange={(value: ChannelType) => onChannelTypeChange(value)}>
-          {CHANNEL_TYPE_OPTIONS.map((opt) => (
-            <Select.Option key={opt.value} value={opt.value}>
-              <Space>
-                {opt.icon}
-                {opt.label}
-              </Space>
-            </Select.Option>
-          ))}
-        </Select>
-      </Form.Item>
-
-      <Form.Item
-        label="Name"
-        name="name"
-        rules={[{ required: true, message: 'Please enter a channel name' }]}
-      >
-        <Input placeholder="e.g., Team Slack, Personal Discord" />
-      </Form.Item>
-
-      <Form.Item
-        label="Target Branch"
-        name="target_branch_id"
-        rules={[{ required: true, message: 'Please select a target branch' }]}
-        tooltip={
-          mode === 'create'
-            ? 'New sessions from this channel will be created in this branch'
-            : undefined
-        }
-      >
-        <BranchSelect branchById={branchById} />
-      </Form.Item>
-
-      {/* Slack and GitHub choose identity in their platform-specific Identity sections. */}
-      {channelType !== 'slack' && channelType !== 'github' && (
-        <Form.Item
-          label="Post messages as"
-          name="agor_user_id"
-          rules={[{ required: true, message: 'Please select a user' }]}
-          tooltip="Sessions from this channel will run as this Agor user"
-        >
-          <UserSelect userById={userById} />
-        </Form.Item>
-      )}
-
-      <Form.Item
-        label="Enabled"
-        name="enabled"
-        valuePropName="checked"
-        initialValue={mode === 'create' ? true : undefined}
-      >
-        <Switch />
-      </Form.Item>
-
-      {channelType !== 'slack' && channelType !== 'github' && channelType !== 'teams' && (
-        <Alert
-          title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
-          description="This platform integration is not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
+      {/* Unified step indicator — sits directly under the modal title on create. */}
+      {mode === 'create' && (
+        <Steps
+          current={createStep}
+          size="small"
+          items={createStepsForType(channelType)}
+          style={{ marginBottom: 24 }}
         />
       )}
 
-      {/* ── GitHub App Setup Wizard ── */}
+      {/* ── Step 0 "Channel": universal basics. Kept mounted on create so its
+          required fields stay registered for the final validateFields(). ── */}
+      <div style={{ display: mode === 'create' && createStep !== 0 ? 'none' : undefined }}>
+        <Form.Item
+          label="Channel Type"
+          name="channel_type"
+          initialValue={mode === 'create' ? 'slack' : undefined}
+          rules={[{ required: true }]}
+        >
+          <Select onChange={(value: ChannelType) => onChannelTypeChange(value)}>
+            {CHANNEL_TYPE_OPTIONS.map((opt) => (
+              <Select.Option key={opt.value} value={opt.value}>
+                <Space>
+                  {opt.icon}
+                  {opt.label}
+                </Space>
+              </Select.Option>
+            ))}
+          </Select>
+        </Form.Item>
+
+        <Form.Item
+          label="Name"
+          name="name"
+          rules={[{ required: true, message: 'Please enter a channel name' }]}
+        >
+          <Input placeholder="e.g., Team Slack, Personal Discord" />
+        </Form.Item>
+
+        <Form.Item
+          label="Target Branch"
+          name="target_branch_id"
+          rules={[{ required: true, message: 'Please select a target branch' }]}
+          tooltip={
+            mode === 'create'
+              ? 'New sessions from this channel will be created in this branch'
+              : undefined
+          }
+        >
+          <BranchSelect branchById={branchById} />
+        </Form.Item>
+
+        {/* Slack and GitHub choose identity in their platform-specific Identity sections. */}
+        {channelType !== 'slack' && channelType !== 'github' && (
+          <Form.Item
+            label="Post messages as"
+            name="agor_user_id"
+            rules={[{ required: true, message: 'Please select a user' }]}
+            tooltip="Sessions from this channel will run as this Agor user"
+          >
+            <UserSelect userById={userById} />
+          </Form.Item>
+        )}
+
+        <Form.Item
+          label="Enabled"
+          name="enabled"
+          valuePropName="checked"
+          initialValue={mode === 'create' ? true : undefined}
+        >
+          <Switch />
+        </Form.Item>
+
+        {channelType !== 'slack' && channelType !== 'github' && channelType !== 'teams' && (
+          <Alert
+            title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
+            description="This platform integration is not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+        )}
+      </div>
+
+      {/* ── GitHub App Setup (create steps + shared config collapse) ── */}
       {channelType === 'github' && (
         <>
-          <Steps
-            current={githubStep}
-            size="small"
-            items={GITHUB_SETUP_STEPS}
-            style={{ marginBottom: 24 }}
-          />
-
           {githubLoading && (
             <div style={{ textAlign: 'center', padding: '24px 0' }}>
               <Spin indicator={<LoadingOutlined spin />} />
@@ -1106,8 +1118,8 @@ const ChannelFormFields: React.FC<{
             />
           )}
 
-          {/* Step 0: Create GitHub App */}
-          {githubStep === 0 && !githubLoading && mode === 'create' && (
+          {/* Step 1 (Create app): register the GitHub App. */}
+          {mode === 'create' && createStep === 1 && !githubLoading && (
             <div style={{ marginBottom: 16 }}>
               <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
                 Create a GitHub App to connect Agor to your repositories. This uses GitHub&apos;s
@@ -1183,20 +1195,16 @@ const ChannelFormFields: React.FC<{
                 Create GitHub App on GitHub
               </Button>
 
-              <Button
-                type="default"
-                block
-                onClick={() => onGithubStepChange(1)}
-                style={{ marginTop: 12 }}
-              >
-                I&apos;ve created the app — enter credentials
-              </Button>
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '12px 0 0' }}>
+                Already created the app? Click <strong>Continue</strong> below to enter its
+                credentials.
+              </Typography.Paragraph>
             </div>
           )}
 
-          {/* Step 1: Installation Picker */}
-          {githubStep >= 1 && !githubLoading && (
-            <div style={{ marginBottom: 16, display: githubStep === 1 ? undefined : 'none' }}>
+          {/* Step 2 (Credentials): App ID + private key. */}
+          {mode === 'create' && createStep === 2 && !githubLoading && (
+            <div style={{ marginBottom: 16 }}>
               <Alert
                 type="info"
                 showIcon
@@ -1219,6 +1227,7 @@ const ChannelFormFields: React.FC<{
               <Form.Item
                 label="App ID"
                 name="github_app_id"
+                rules={[{ required: true, message: 'Enter your GitHub App ID' }]}
                 tooltip="Found on your GitHub App's settings page (General → About)"
               >
                 <Input placeholder="123456" />
@@ -1227,6 +1236,7 @@ const ChannelFormFields: React.FC<{
               <Form.Item
                 label="Private Key (PEM)"
                 name="github_private_key"
+                rules={[{ required: true, message: 'Paste your GitHub App private key' }]}
                 tooltip="Generate a private key on your GitHub App's settings page, then paste the .pem file contents"
               >
                 <Input.TextArea
@@ -1247,35 +1257,11 @@ const ChannelFormFields: React.FC<{
               {githubError && (
                 <Alert type="error" showIcon title={githubError} style={{ marginBottom: 12 }} />
               )}
-
-              <Button
-                type="primary"
-                onClick={() => {
-                  const appId = form.getFieldValue('github_app_id');
-                  const pem = form.getFieldValue('github_private_key');
-                  if (!appId || !pem) {
-                    const errors: { name: string; errors: string[] }[] = [];
-                    if (!appId)
-                      errors.push({ name: 'github_app_id', errors: ['Enter your GitHub App ID'] });
-                    if (!pem)
-                      errors.push({
-                        name: 'github_private_key',
-                        errors: ['Paste your GitHub App private key'],
-                      });
-                    form.setFields(errors);
-                    return;
-                  }
-                  onGithubStepChange(2);
-                }}
-                style={{ marginTop: 8 }}
-              >
-                Next: Configure Channel
-              </Button>
             </div>
           )}
 
-          {/* Step 2: Configuration */}
-          {githubStep === 2 && !githubLoading && (
+          {/* Step 3 (Configure): shared settings collapse — also the edit-mode body. */}
+          {((mode === 'create' && createStep === 3) || mode === 'edit') && !githubLoading && (
             <Collapse
               ghost
               destroyOnHidden={false}
@@ -1486,8 +1472,8 @@ const ChannelFormFields: React.FC<{
         </>
       )}
 
-      {/* ── Collapsible sections (Teams) ── */}
-      {channelType === 'teams' && (
+      {/* ── Teams setup (create step 1, or the whole edit body) ── */}
+      {channelType === 'teams' && (mode === 'edit' || createStep === 1) && (
         <Collapse
           ghost
           destroyOnHidden={false}
@@ -1710,16 +1696,15 @@ const ChannelFormFields: React.FC<{
         />
       )}
 
-      {/* ── Slack guided setup wizard (create) ── */}
-      {channelType === 'slack' && mode === 'create' && (
+      {/* ── Slack guided setup wizard (create steps 1–3) ── */}
+      {channelType === 'slack' && mode === 'create' && createStep >= 1 && (
         <SlackSetupWizard
           form={form}
           userById={userById}
           mcpServerById={mcpServerById}
           selectedAgent={selectedAgent}
           onAgentChange={onAgentChange}
-          step={slackStep}
-          onStepChange={onSlackStepChange}
+          step={createStep - 1}
           testResult={slackTestResult}
           testLoading={slackTestLoading}
           onTest={onSlackTest}
@@ -2086,14 +2071,16 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const loadingReferencedBranchIds = useRef<Set<string>>(new Set());
   const referencedBranchesByIdRef = useRef<Map<string, Branch>>(new Map());
 
-  // ── GitHub App Setup State (lifted from ChannelFormFields) ──
-  const [githubStep, setGithubStep] = useState(0);
+  // ── Unified create-wizard step (0 = universal "Channel" step) ──
+  const [createStep, setCreateStep] = useState(0);
+  const [creating, setCreating] = useState(false);
+
+  // ── GitHub App Setup State (create mode) ──
   const [githubLoading, setGithubLoading] = useState(false);
   const [githubError, setGithubError] = useState<string | null>(null);
   const [githubSetupParams, setGithubSetupParams] = useState<GitHubSetupParams | null>(null);
 
-  // ── Slack Setup Wizard State (lifted from ChannelFormFields) ──
-  const [slackStep, setSlackStep] = useState(0);
+  // ── Slack guided-setup state (create mode) ──
   const [slackTestLoading, setSlackTestLoading] = useState(false);
   const [slackTestResult, setSlackTestResult] = useState<SlackTestResult | null>(null);
 
@@ -2108,12 +2095,21 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     if (installationId) {
       setGithubSetupParams({ installation_id: installationId });
       setChannelType('github');
-      setGithubStep(1); // Skip to credentials step since app is already created
+      // App is already created on GitHub — jump straight to the Credentials step
+      // (Channel=0, Create app=1, Credentials=2 in the unified GitHub flow).
+      setCreateStep(2);
       setCreateModalOpen(true);
       // Clean up URL params
       navigate('/', { replace: true });
     }
   }, [location.search, navigate]);
+
+  // Prefill the installation ID once the create form is mounted (deep-link return).
+  useEffect(() => {
+    if (createModalOpen && githubSetupParams?.installation_id) {
+      createForm.setFieldValue('github_installation_id', githubSetupParams.installation_id);
+    }
+  }, [createModalOpen, githubSetupParams, createForm]);
 
   // Keep referenced target branches resolvable in CRUD even when archived branches
   // are excluded from the core store.
@@ -2185,17 +2181,22 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // No automatic credential fetch — user provides App ID and PEM manually
 
   const resetGithubState = useCallback(() => {
-    setGithubStep(0);
     setGithubLoading(false);
     setGithubError(null);
     setGithubSetupParams(null);
   }, []);
 
   const resetSlackState = useCallback(() => {
-    setSlackStep(0);
     setSlackTestLoading(false);
     setSlackTestResult(null);
   }, []);
+
+  // Reset the whole create flow back to its universal first step.
+  const resetCreateFlow = useCallback(() => {
+    setCreateStep(0);
+    resetGithubState();
+    resetSlackState();
+  }, [resetGithubState, resetSlackState]);
 
   const invalidateSlackTest = useCallback(() => {
     setSlackTestResult(null);
@@ -2213,15 +2214,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     [invalidateSlackTest]
   );
 
-  // Switching channel type abandons any in-progress platform setup, so clear the
-  // wizard state for both platforms.
+  // Switching channel type changes the step structure, so snap back to the
+  // universal first step and clear any in-progress platform setup.
   const handleChannelTypeChange = useCallback(
     (type: ChannelType) => {
       setChannelType(type);
-      resetGithubState();
-      resetSlackState();
+      resetCreateFlow();
     },
-    [resetGithubState, resetSlackState]
+    [resetCreateFlow]
   );
 
   // Probe the entered Slack tokens against the live workspace via the
@@ -2395,6 +2395,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   };
 
   const handleCreate = async () => {
+    setCreating(true);
     try {
       await createForm.validateFields();
       // Use getFieldsValue(true) to include values from collapsed (unmounted)
@@ -2420,8 +2421,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       createForm.resetFields();
       setCreateModalOpen(false);
       setChannelType('slack');
-      resetGithubState();
-      resetSlackState();
+      resetCreateFlow();
     } catch (error: unknown) {
       const err = error as { errorFields?: { errors: string[] }[]; message?: string };
       if (err.errorFields?.length) {
@@ -2429,7 +2429,42 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       } else {
         showError(`Failed to create channel: ${err.message || String(error)}`);
       }
+    } finally {
+      setCreating(false);
     }
+  };
+
+  // Single create-footer primary action: validate the current step, then either
+  // advance or (on the final step) submit. Navigation lives only in the footer.
+  const createSteps = createStepsForType(channelType);
+  const isFinalCreateStep = createStep >= createSteps.length - 1;
+
+  const handleCreatePrimary = async () => {
+    if (isFinalCreateStep) {
+      await handleCreate();
+      return;
+    }
+    const fields = createStepFields(
+      channelType,
+      createStep,
+      createForm.getFieldValue('align_slack_users') ?? false
+    );
+    if (fields.length > 0) {
+      try {
+        await createForm.validateFields(fields);
+      } catch {
+        return;
+      }
+    }
+    setCreateStep((step) => step + 1);
+  };
+
+  const closeCreateModal = () => {
+    createForm.resetFields();
+    setCreateModalOpen(false);
+    setChannelType('slack');
+    setSelectedAgent('claude-code');
+    resetCreateFlow();
   };
 
   const handleEdit = (channel: GatewayChannel) => {
@@ -2726,26 +2761,28 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       <Modal
         title="Add Gateway Channel"
         open={createModalOpen}
-        onOk={handleCreate}
-        onCancel={() => {
-          createForm.resetFields();
-          setCreateModalOpen(false);
-          setChannelType('slack');
-          setSelectedAgent('claude-code');
-          resetGithubState();
-          resetSlackState();
-        }}
-        okText="Create"
-        okButtonProps={{
-          // Hide the Create button until each platform's guided setup reaches its
-          // final step (GitHub config / Slack tokens & test).
-          style:
-            (channelType === 'github' && githubStep < 2) ||
-            (channelType === 'slack' && slackStep < 2)
-              ? { display: 'none' }
-              : undefined,
-        }}
+        onCancel={closeCreateModal}
         width={600}
+        footer={
+          // One structurally-identical footer on every step: Back (left),
+          // Cancel + primary (right). Buttons never move between steps.
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <Button
+              type="link"
+              disabled={createStep === 0}
+              onClick={() => setCreateStep((step) => Math.max(0, step - 1))}
+              style={{ paddingLeft: 0 }}
+            >
+              Back
+            </Button>
+            <Space style={{ marginLeft: 'auto' }}>
+              <Button onClick={closeCreateModal}>Cancel</Button>
+              <Button type="primary" loading={creating} onClick={handleCreatePrimary}>
+                {isFinalCreateStep ? 'Create channel' : 'Continue'}
+              </Button>
+            </Space>
+          </div>
+        }
       >
         <Form
           form={createForm}
@@ -2764,13 +2801,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             mcpServerById={mcpServerById}
             selectedAgent={selectedAgent}
             onAgentChange={setSelectedAgent}
-            githubStep={githubStep}
-            onGithubStepChange={setGithubStep}
-            githubSetupParams={githubSetupParams}
+            createStep={createStep}
             githubLoading={githubLoading}
             githubError={githubError}
-            slackStep={slackStep}
-            onSlackStepChange={setSlackStep}
             slackTestResult={slackTestResult}
             slackTestLoading={slackTestLoading}
             onSlackTest={handleSlackTest}
@@ -2805,13 +2838,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             selectedAgent={selectedAgent}
             onAgentChange={setSelectedAgent}
             editingChannel={editingChannel}
-            githubStep={2}
-            onGithubStepChange={() => {}}
-            githubSetupParams={null}
+            createStep={0}
             githubLoading={false}
             githubError={null}
-            slackStep={2}
-            onSlackStepChange={() => {}}
             slackTestResult={null}
             slackTestLoading={false}
             onSlackTest={() => {}}
