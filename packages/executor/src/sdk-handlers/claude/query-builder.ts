@@ -7,6 +7,7 @@
 
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import { shortId, validateDirectory } from '@agor/core';
 import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
@@ -34,7 +35,7 @@ import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
-import { parseModelWithBetas } from './model-utils.js';
+import { parseModelWithBetas, toClaudeEffort } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 
@@ -169,6 +170,8 @@ export async function setupQuery(
   query: InterruptibleQuery;
   resolvedModel: string;
   getStderr: () => string;
+  /** Absolute path of the per-session ultracode settings file, if one was written. Caller cleans it up. */
+  ultracodeSettingsPath?: string;
 }> {
   const { taskId, permissionMode, resume = true, abortController } = options;
 
@@ -310,11 +313,14 @@ export async function setupQuery(
   }
 
   // Configure effort level — controls reasoning depth via SDK's effort parameter
-  // Matches Claude Code CLI's --effort flag (low/medium/high/max)
-  const effort = session.model_config?.effort;
+  // Matches Claude Code CLI's --effort flag (low/medium/high/max).
+  // 'minimal' is Codex-only; clamp it to 'low' before passing to the Claude SDK.
+  const effort = toClaudeEffort(session.model_config?.effort);
   if (effort) {
     queryOptions.effort = effort;
-    console.log(`🧠 Effort level: ${effort}`);
+    console.log(
+      `🧠 Effort level: ${effort}${session.model_config?.effort === 'minimal' ? ' (clamped from minimal)' : ''}`
+    );
   } else {
     console.log(`🧠 Effort level: high (default)`);
   }
@@ -342,6 +348,32 @@ export async function setupQuery(
     extraArgs.advisor = advisorModel;
     queryOptions.extraArgs = extraArgs;
     console.log(`🧭 Advisor model: ${advisorModel} (via --advisor)`);
+  }
+
+  // Write a unique per-session settings file for ultracode mode and pass its path
+  // via Options.settings (file-path form). The file-path form avoids the /tmp
+  // content-addressing collision that occurs when Settings are inlined as JSON: the
+  // CLI hashes the JSON object and writes it to /tmp/claude-settings-<hash>.json
+  // mode 0600; identical settings across sessions (or across Unix users in
+  // insulated/strict mode) all resolve to the SAME hash → EACCES on concurrent runs.
+  // Using a UUID-keyed path under ~/.agor/session-flags/ is unique per session.
+  // Caller is responsible for cleanup (try/finally around the for-await loop).
+  let ultracodeSettingsPath: string | undefined;
+  if (session.model_config?.ultracode) {
+    try {
+      const flagsDir = `${os.homedir()}/.agor/session-flags`;
+      await fs.mkdir(flagsDir, { recursive: true, mode: 0o700 });
+      const settingsPath = `${flagsDir}/${sessionId}.json`;
+      await fs.writeFile(settingsPath, JSON.stringify({ ultracode: true }), { mode: 0o600 });
+      queryOptions.settings = settingsPath;
+      ultracodeSettingsPath = settingsPath;
+      console.log(`⚡ ultracode: true (settings file: ${settingsPath})`);
+    } catch (err) {
+      console.warn(
+        `[query-builder] failed to write ultracode settings file for session ${shortId(sessionId)}: ultracode will be inactive:`,
+        err
+      );
+    }
   }
 
   // Add beta flags (e.g., 1M context window for [1m] model variants)
@@ -733,5 +765,6 @@ export async function setupQuery(
     query: queryObj,
     resolvedModel: model,
     getStderr,
+    ultracodeSettingsPath,
   };
 }

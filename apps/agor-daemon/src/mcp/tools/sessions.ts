@@ -67,8 +67,8 @@ import { listAttachedMcpServers } from './mcp-servers.js';
  *     want to pin a model — forcing them to construct the full object is
  *     hostile UX (and several MCP clients silently drop nested objects in
  *     tool args, see PR #1056 background).
- *   - Full object: `{ mode, model, effort, advisorModel, provider }` for
- *     callers that need to override `mode`/`effort`/`advisorModel`/`provider`.
+ *   - Full object: `{ mode, model, effort, advisorModel, ultracode, provider }` for
+ *     callers that need to override `mode`/`effort`/`advisorModel`/`ultracode`/`provider`.
  *
  * IMPORTANT — no `.transform()` here. Zod's JSON-Schema converter
  * (`zod/v4-mini`'s `toJSONSchema`, used in `mcp/server.ts` to populate the
@@ -90,13 +90,21 @@ const modelConfigObjectSchema = z.object({
     "Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"
   ),
   effort: z
-    .enum(['low', 'medium', 'high', 'xhigh', 'max'])
+    .enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
     .optional()
-    .describe('Reasoning effort level (default: high)'),
+    .describe(
+      "Reasoning effort level (default: high). 'minimal' is Codex-only; Claude treats it as 'low'."
+    ),
   advisorModel: mcpOptionalString(
     'modelConfig.advisorModel',
     "Claude Code advisor model override (e.g. 'opus', 'sonnet', 'fable', or a full model ID)."
   ),
+  ultracode: z
+    .boolean()
+    .optional()
+    .describe(
+      'Enable Claude Code ultracode mode: xhigh effort + standing workflow orchestration. Only valid for claude-code / claude-code-cli sessions.'
+    ),
   provider: mcpOptionalString(
     'modelConfig.provider',
     "Provider ID (OpenCode only, e.g. 'anthropic')"
@@ -113,7 +121,7 @@ const modelConfigInputSchema = z
   ])
   .optional()
   .describe(
-    "Model override for this session. Pass either a model ID string (e.g. 'claude-opus-4-6') or a full { mode, model, effort, advisorModel, provider } object. Overrides the user default model_config and is threaded through to the spawned agent process. Call agor_models_list to discover valid model IDs per agenticTool."
+    "Model override for this session. Pass either a model ID string (e.g. 'claude-opus-4-6') or a full { mode, model, effort, advisorModel, ultracode, provider } object. Overrides the user default model_config and is threaded through to the spawned agent process. Call agor_models_list to discover valid model IDs per agenticTool."
   );
 
 /**
@@ -901,7 +909,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing branch. When called from an MCP session context in the same target branch (the default for branch-local orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Cross-branch sessions are not genealogy-linked automatically; use callbacks for remote completion routing. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing branch. When called from an MCP session context in the same target branch (the default for branch-local orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Cross-branch sessions are not genealogy-linked automatically; use callbacks for remote completion routing. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, ultracode, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
@@ -967,6 +975,18 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const agenticTool = args.agenticTool as AgenticToolName;
 
+      // Guard: ultracode is only valid for claude-code / claude-code-cli
+      const explicitModelConfig = coerceModelConfig(args.modelConfig);
+      if (
+        explicitModelConfig?.ultracode === true &&
+        agenticTool !== 'claude-code' &&
+        agenticTool !== 'claude-code-cli'
+      ) {
+        return textResult({
+          error: `ultracode is only valid for claude-code or claude-code-cli sessions, not '${agenticTool}'`,
+        });
+      }
+
       // Fetch user data to get unix_username
       const user = await ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams);
 
@@ -996,7 +1016,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         user,
         branch,
         overrides: {
-          modelConfig: coerceModelConfig(args.modelConfig),
+          modelConfig: explicitModelConfig,
           mcpServerIds: explicitMcpServerIds,
         },
       });

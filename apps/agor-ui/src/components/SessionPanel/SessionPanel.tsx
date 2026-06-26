@@ -795,6 +795,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       } else {
         delete nextConfig.advisorModel;
       }
+      if (newConfig.ultracode) {
+        nextConfig.ultracode = true;
+      } else {
+        delete nextConfig.ultracode;
+      }
       onUpdateSession(session.session_id, { model_config: nextConfig });
     }
   };
@@ -826,6 +831,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         model: session.model_config.model,
         provider: session.model_config.provider,
         advisorModel: session.model_config.advisorModel,
+        ultracode: session.model_config.ultracode,
       }
     : undefined;
 

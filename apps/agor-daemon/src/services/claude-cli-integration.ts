@@ -36,6 +36,7 @@
 
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
+import * as fsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -50,6 +51,7 @@ import {
   getContextWindowLimit,
   permissionModeForCli,
   slugForCwd,
+  toClaudeEffort,
 } from '@agor/core/claude-cli';
 import {
   type Database,
@@ -1005,6 +1007,34 @@ export function getCliWatcherRegistry(app: Application): ClaudeCliWatcherRegistr
 }
 
 /**
+ * Write a unique per-session `{"ultracode":true}` settings file and return its
+ * path. Returns `undefined` when the session has no ultracode flag set.
+ *
+ * Uses `~/.agor/session-flags/<session-id>.json` so the path is globally unique
+ * (session UUID, not content-addressed) and avoids the /tmp collision that
+ * affects `--settings '<inline-json>'`. Mirrors the mcpConfigPath pattern:
+ * write before spawn, best-effort cleanup left for a future lifecycle hook.
+ */
+async function writeUltracodeSettingsFileIfNeeded(session: Session): Promise<string | undefined> {
+  if (!session.model_config?.ultracode) return undefined;
+
+  const flagsDir = path.join(os.homedir(), '.agor', 'session-flags');
+  try {
+    await fsPromises.mkdir(flagsDir, { recursive: true, mode: 0o700 });
+    const settingsPath = path.join(flagsDir, `${session.session_id}.json`);
+    await fsPromises.writeFile(settingsPath, JSON.stringify({ ultracode: true }), { mode: 0o600 });
+    console.log(`⚡ [claude-cli] ultracode settings file: ${settingsPath}`);
+    return settingsPath;
+  } catch (err) {
+    console.warn(
+      `[claude-cli-integration] failed to write ultracode settings file for session ${shortId(session.session_id)}: ultracode will be inactive:`,
+      err instanceof Error ? err.message : String(err)
+    );
+    return undefined;
+  }
+}
+
+/**
  * Build the `ClaudeCliSpawnConfig` for a session.
  *
  * Encoded defaults:
@@ -1018,7 +1048,7 @@ export function getCliWatcherRegistry(app: Application): ClaudeCliWatcherRegistr
 export function buildSpawnConfigForSession(
   session: Session,
   branchCwd: string,
-  opts: { mcpConfigPath?: string } = {}
+  opts: { mcpConfigPath?: string; ultracodeSettingsPath?: string } = {}
 ): ClaudeCliSpawnConfig {
   // If the JSONL transcript for this session id already exists on disk,
   // `claude --session-id <X>` errors out with "Session ID is already in
@@ -1034,11 +1064,12 @@ export function buildSpawnConfigForSession(
     resumeSessionId: transcriptExists ? session.session_id : undefined,
     displayName: `cli-${shortId(session.session_id)}`,
     model: session.model_config?.model,
-    effort: session.model_config?.effort as ClaudeCliSpawnConfig['effort'] | undefined,
+    effort: toClaudeEffort(session.model_config?.effort),
     advisorModel: session.model_config?.advisorModel,
     permissionMode: permissionModeForCli(session.permission_config?.mode),
     addDirs: [branchCwd],
     mcpConfigPath: opts.mcpConfigPath,
+    ultracodeSettingsPath: opts.ultracodeSettingsPath,
     // appendSystemPromptFile: lands once session-context rendering is wired.
   };
 }
@@ -1342,7 +1373,11 @@ export async function onCliSessionCreated(
   const slug = slugForCwd(branchCwd);
   const jsonlPath = claudeSessionJsonlPath(homeDir, branchCwd, session.session_id);
   const mcpConfigPath = await writeClaudeCliMcpConfigForSession(app, session);
-  const spawnCfg = buildSpawnConfigForSession(session, branchCwd, { mcpConfigPath });
+  const ultracodeSettingsPath = await writeUltracodeSettingsFileIfNeeded(session);
+  const spawnCfg = buildSpawnConfigForSession(session, branchCwd, {
+    mcpConfigPath,
+    ultracodeSettingsPath,
+  });
   const built = buildClaudeCliSpawn(spawnCfg);
   const tabName = spawnCfg.displayName ?? `cli-${shortId(session.session_id)}`;
 

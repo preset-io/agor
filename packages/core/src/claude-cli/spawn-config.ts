@@ -46,6 +46,18 @@ function parseModelWithBetas(rawModel: string): { model: string; betas: string[]
 }
 
 /**
+ * Clamp an Agor EffortLevel to a value the Claude CLI/SDK accepts.
+ * Claude does not support 'minimal' — clamp it to 'low'.
+ */
+export function toClaudeEffort(
+  effort: string | undefined
+): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined {
+  if (!effort) return undefined;
+  if (effort === 'minimal') return 'low';
+  return effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+}
+
+/**
  * Permission modes the CLI accepts. Mirrors the SDK's `ClaudeCodePermissionMode`
  * union but extended with `auto` and the synthetic `dangerously-skip-permissions`
  * marker — picked from the user-facing Defaults dropdown (analysis doc § Claude
@@ -91,11 +103,18 @@ export interface ClaudeCliSpawnConfig {
    */
   model?: string;
 
-  /** Reasoning effort. */
+  /** Reasoning effort. Claude clamps 'minimal' to 'low' internally. */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
   /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable', or full model ID). */
   advisorModel?: string;
+
+  /**
+   * Absolute path to the per-session ultracode settings file. When set,
+   * `--settings <path>` is added to the spawn args. The caller is responsible
+   * for writing the file (content: `{"ultracode":true}`) and eventual cleanup.
+   */
+  ultracodeSettingsPath?: string;
 
   /** Permission handling at spawn. See type comment. */
   permissionMode?: ClaudeCliPermissionMode;
@@ -212,6 +231,10 @@ export function buildClaudeCliSpawn(cfg: ClaudeCliSpawnConfig): BuiltSpawn {
     const { model, betas } = parseModelWithBetas(cfg.advisorModel);
     args.push('--advisor', model);
     pushBetas(betas);
+  }
+
+  if (cfg.ultracodeSettingsPath) {
+    args.push('--settings', cfg.ultracodeSettingsPath);
   }
 
   if (cfg.permissionMode) {

@@ -5,6 +5,7 @@
  * Maps to the SDK's effort parameter (output_config.effort in the API).
  *
  * Levels:
+ * - Minimal: Fastest; Codex only (Claude uses Low instead)
  * - Low: Minimal thinking, fastest responses
  * - Medium: Moderate thinking
  * - High: Deep reasoning (default)
@@ -51,6 +52,12 @@ const EFFORT_OPTIONS: {
     shortLabel: 'Mx',
     label: 'Max',
     description: 'Highest effort level (model-dependent)',
+  },
+  {
+    value: 'minimal',
+    shortLabel: 'Mn',
+    label: 'Minimal',
+    description: 'Fastest; Codex only (Claude uses Low)',
   },
 ];
 

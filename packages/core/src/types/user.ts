@@ -94,6 +94,8 @@ export interface DefaultModelConfig {
   effort?: EffortLevel;
   /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); unset means no session override */
   advisorModel?: string;
+  /** Enable Claude Code ultracode mode (claude-code / claude-code-cli only). */
+  ultracode?: boolean;
 }
 
 /**

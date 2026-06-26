@@ -3,6 +3,7 @@ import {
   buildClaudeCliSpawn,
   formatAsShellCommand,
   formatForZellijNewTab,
+  toClaudeEffort,
 } from './spawn-config.js';
 
 describe('buildClaudeCliSpawn', () => {
@@ -156,5 +157,39 @@ describe('formatAsShellCommand', () => {
       sessionId: "with'quote",
     });
     expect(formatAsShellCommand(built)).toContain(`'with'\\''quote'`);
+  });
+});
+
+describe('buildClaudeCliSpawn - ultracodeSettingsPath', () => {
+  it('emits --settings <path> when ultracodeSettingsPath is set', () => {
+    const path = '/home/alice/.agor/session-flags/abc-123.json';
+    const { args } = buildClaudeCliSpawn({ ultracodeSettingsPath: path });
+    const i = args.indexOf('--settings');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe(path);
+  });
+
+  it('omits --settings when ultracodeSettingsPath is absent', () => {
+    const { args } = buildClaudeCliSpawn({ sessionId: 'abc' });
+    expect(args).not.toContain('--settings');
+  });
+});
+
+describe('toClaudeEffort', () => {
+  it("clamps 'minimal' to 'low'", () => {
+    expect(toClaudeEffort('minimal')).toBe('low');
+  });
+
+  it('passes known levels through unchanged', () => {
+    expect(toClaudeEffort('low')).toBe('low');
+    expect(toClaudeEffort('medium')).toBe('medium');
+    expect(toClaudeEffort('high')).toBe('high');
+    expect(toClaudeEffort('xhigh')).toBe('xhigh');
+    expect(toClaudeEffort('max')).toBe('max');
+  });
+
+  it('returns undefined when effort is not set', () => {
+    expect(toClaudeEffort(undefined)).toBeUndefined();
+    expect(toClaudeEffort('')).toBeUndefined();
   });
 });

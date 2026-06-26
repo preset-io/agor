@@ -24,6 +24,7 @@ export interface SpawnSubsessionContext {
     model?: string;
     effort?: string;
     advisorModel?: string;
+    ultracode?: boolean;
   };
   codexSandboxMode?: string;
   codexApprovalPolicy?: string;
@@ -62,7 +63,8 @@ REQUEST: """
       (effort:
       {{modelConfig.effort}}){{/if}}{{#if modelConfig.advisorModel}}
       (advisor:
-      {{modelConfig.advisorModel}}){{/if}}
+      {{modelConfig.advisorModel}}){{/if}}{{#if modelConfig.ultracode}}
+      (ultracode: enabled){{/if}}
   {{/if}}
   {{#if codexSandboxMode}}
     - Codex Sandbox Mode:
@@ -115,7 +117,9 @@ hashing and JWT for tokens."
     modelConfig.effort
   }}, effort: "{{modelConfig.effort}}"{{/if}}{{#if
     modelConfig.advisorModel
-  }}, advisorModel: "{{modelConfig.advisorModel}}"{{/if}}
+  }}, advisorModel: "{{modelConfig.advisorModel}}"{{/if}}{{#if
+    modelConfig.ultracode
+  }}, ultracode: true{{/if}}
   }
 {{/if}}
 {{#if codexSandboxMode}}
@@ -159,7 +163,9 @@ session will do YOUR EXACT TOOL CALL MUST BE: agor_sessions_spawn({ "prompt": "{
     modelConfig.effort
   }}, "effort": "{{modelConfig.effort}}"{{/if}}{{#if
     modelConfig.advisorModel
-  }}, "advisorModel": "{{modelConfig.advisorModel}}"{{/if}}
+  }}, "advisorModel": "{{modelConfig.advisorModel}}"{{/if}}{{#if
+    modelConfig.ultracode
+  }}, "ultracode": true{{/if}}
   },{{/if}}{{#if codexSandboxMode}}
   "codexSandboxMode": "{{codexSandboxMode}}",{{/if}}{{#if codexApprovalPolicy}}
   "codexApprovalPolicy": "{{codexApprovalPolicy}}",{{/if}}{{#if codexNetworkAccess}}

@@ -257,3 +257,22 @@ describe('resolveModelConfigWithFallback', () => {
     expect(result?.model).toBe('composer-experimental');
   });
 });
+
+describe('resolveModelConfig - ultracode + minimal round-trips', () => {
+  const now = new Date('2026-06-26T00:00:00.000Z');
+
+  it('round-trips ultracode:true through resolveModelConfig', () => {
+    const result = resolveModelConfig({ model: 'claude-sonnet-4-6', ultracode: true }, { now });
+    expect(result).toHaveProperty('ultracode', true);
+  });
+
+  it('omits ultracode key when not supplied', () => {
+    const result = resolveModelConfig({ model: 'claude-sonnet-4-6' }, { now });
+    expect(result).not.toHaveProperty('ultracode');
+  });
+
+  it("round-trips 'minimal' effort through resolveModelConfig", () => {
+    const result = resolveModelConfig({ model: 'claude-sonnet-4-6', effort: 'minimal' }, { now });
+    expect(result).toHaveProperty('effort', 'minimal');
+  });
+});

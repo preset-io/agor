@@ -36,6 +36,7 @@ export type ModelConfigInput = {
   model?: string;
   effort?: EffortLevel;
   advisorModel?: string;
+  ultracode?: boolean;
   provider?: string;
 };
 
@@ -68,6 +69,7 @@ export function resolveModelConfig(
     updated_at: (opts?.now ?? new Date()).toISOString(),
     ...(input.effort !== undefined && { effort: input.effort }),
     ...(input.advisorModel !== undefined && { advisorModel: input.advisorModel }),
+    ...(input.ultracode !== undefined && { ultracode: input.ultracode }),
     ...(input.provider !== undefined && { provider: input.provider }),
   };
 }
@@ -124,6 +126,7 @@ function getModelLessFallbackOverrides(
   const overrides: ModelConfigInput = {};
   if (input?.effort !== undefined) overrides.effort = input.effort;
   if (input?.advisorModel !== undefined) overrides.advisorModel = input.advisorModel;
+  if (input?.ultracode !== undefined) overrides.ultracode = input.ultracode;
   return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 

@@ -32,6 +32,12 @@ vi.mock('./model-utils.js', () => ({
     model: model.replace('[1m]', ''),
     betas: model.includes('[1m]') ? ['context-1m-2025-08-07'] : [],
   })),
+  // Use the real clamping logic so tests that check effort values get faithful results.
+  toClaudeEffort: vi.fn((effort: string | undefined) => {
+    if (!effort) return undefined;
+    if (effort === 'minimal') return 'low';
+    return effort;
+  }),
 }));
 vi.mock('./permissions/permission-hooks.js', () => ({
   createCanUseToolCallback: vi.fn(
@@ -407,5 +413,103 @@ describe('setupQuery - canUseTool registration', () => {
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
     expect(callArgs.options.canUseTool).toBeUndefined();
+  });
+});
+
+describe('setupQuery - ultracode settings-file delivery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(Claude.query).mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+    } as any);
+  });
+
+  function createUltracodeDeps(modelConfig?: Record<string, unknown>): QuerySetupDeps {
+    return {
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'ultra-session' as SessionID,
+          branch_id: 'test-branch' as BranchID,
+          model_config: modelConfig,
+        }),
+      } as any,
+      branchesRepo: {
+        findById: vi.fn().mockResolvedValue({ path: '/test/project' }),
+      } as any,
+      permissionLocks: new Map(),
+    };
+  }
+
+  it('writes a unique-path settings file when ultracode:true and passes path to SDK', async () => {
+    const deps = createUltracodeDeps({ model: 'claude-sonnet-4-6', ultracode: true });
+    const { ultracodeSettingsPath } = await setupQuery(
+      'ultra-session' as SessionID,
+      'test prompt',
+      deps
+    );
+
+    // Must return a file-path string (not undefined)
+    expect(typeof ultracodeSettingsPath).toBe('string');
+    // Path must be unique per session (contain the session ID)
+    expect(ultracodeSettingsPath).toContain('ultra-session');
+    // Path must be under .agor/session-flags, not /tmp (EACCES collision guard)
+    expect(ultracodeSettingsPath).toContain('.agor/session-flags');
+    expect(ultracodeSettingsPath).toMatch(/\.json$/);
+
+    // The SDK must receive the path via options.settings (file-path form, not inline object)
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options.settings).toBe(ultracodeSettingsPath);
+  });
+
+  it('returns no settingsPath and does not set options.settings when ultracode is unset', async () => {
+    const deps = createUltracodeDeps({ model: 'claude-sonnet-4-6' });
+    const { ultracodeSettingsPath } = await setupQuery(
+      'ultra-session' as SessionID,
+      'test prompt',
+      deps
+    );
+    expect(ultracodeSettingsPath).toBeUndefined();
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options.settings).toBeUndefined();
+  });
+});
+
+describe('setupQuery - minimal effort clamping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(Claude.query).mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+    } as any);
+  });
+
+  function createEffortDeps(effort: string): QuerySetupDeps {
+    return {
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'effort-session' as SessionID,
+          branch_id: 'test-branch' as BranchID,
+          model_config: { model: 'claude-sonnet-4-6', effort },
+        }),
+      } as any,
+      branchesRepo: {
+        findById: vi.fn().mockResolvedValue({ path: '/test/project' }),
+      } as any,
+      permissionLocks: new Map(),
+    };
+  }
+
+  it("clamps 'minimal' to 'low' before passing to the Claude SDK", async () => {
+    await setupQuery('effort-session' as SessionID, 'test prompt', createEffortDeps('minimal'));
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options.effort).toBe('low');
+  });
+
+  it("passes 'xhigh' through unchanged", async () => {
+    await setupQuery('effort-session' as SessionID, 'test prompt', createEffortDeps('xhigh'));
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options.effort).toBe('xhigh');
   });
 });

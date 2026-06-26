@@ -9,6 +9,18 @@ const CONTEXT_1M_BETA = 'context-1m-2025-08-07';
 const MODEL_1M_SUFFIX = '[1m]';
 
 /**
+ * Clamp an Agor EffortLevel to a value the Claude SDK/CLI accepts.
+ * Claude has no 'minimal' level — clamp it to 'low'.
+ */
+export function toClaudeEffort(
+  effort: string | undefined
+): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined {
+  if (!effort) return undefined;
+  if (effort === 'minimal') return 'low';
+  return effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+}
+
+/**
  * Parse a model ID that may include a [1m] suffix into the base model ID
  * and any required SDK beta flags.
  *

@@ -977,6 +977,7 @@ export const users = pgTable(
               model?: string;
               effort?: EffortLevel;
               advisorModel?: string;
+              ultracode?: boolean;
             };
             permissionMode?: string;
             mcpServerIds?: string[];
@@ -987,6 +988,7 @@ export const users = pgTable(
               model?: string;
               effort?: EffortLevel;
               advisorModel?: string;
+              ultracode?: boolean;
             };
             permissionMode?: string;
             mcpServerIds?: string[];

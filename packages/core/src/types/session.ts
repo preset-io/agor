@@ -4,7 +4,7 @@
  * Effort level controls how much reasoning Claude applies.
  * Maps to Claude API's output_config.effort and the Claude Code CLI's --effort flag.
  */
-export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type EffortLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 import type {
   AgenticToolName,
@@ -258,6 +258,11 @@ export interface Session {
     effort?: EffortLevel;
     /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); unset means no session override */
     advisorModel?: string;
+    /**
+     * Enable Claude Code ultracode mode: xhigh effort + standing dynamic-workflow orchestration.
+     * Delivered via a unique per-session --settings file. Only valid for claude-code / claude-code-cli.
+     */
+    ultracode?: boolean;
     /**
      * Provider ID for OpenCode sessions (e.g., 'openai', 'anthropic', 'opencode')
      * Used in combination with model to specify which provider's API to use
@@ -716,6 +721,8 @@ export interface SpawnConfig {
     effort?: EffortLevel;
     /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); ignored for non-Claude tools. */
     advisorModel?: string;
+    /** Enable Claude Code ultracode mode (claude-code / claude-code-cli only). */
+    ultracode?: boolean;
     /**
      * Provider ID (OpenCode only, e.g. 'anthropic', 'openai', 'opencode').
      * Persisted on session.model_config.provider. Ignored for non-OpenCode tools.

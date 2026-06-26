@@ -10,7 +10,7 @@ import {
   type GeminiModel,
 } from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Input, Radio, Select, Space, Tooltip, theme } from 'antd';
+import { Checkbox, Input, Radio, Select, Space, Tooltip, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import {
   DEFAULT_CURSOR_MODEL,
@@ -24,6 +24,8 @@ export interface ModelConfig {
   model: string;
   // Claude Code-specific: server-side advisor tool model.
   advisorModel?: string;
+  // Claude Code-specific: ultracode mode (xhigh effort + workflow orchestration).
+  ultracode?: boolean;
   // OpenCode-specific: provider + model
   provider?: string;
 }
@@ -340,6 +342,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
   };
 
+  const handleUltracodeChange = (checked: boolean) => {
+    if (onChange) {
+      onChange({
+        ...value,
+        mode,
+        model: value?.model || fallbackModel,
+        ultracode: checked || undefined,
+      });
+    }
+  };
+
   if (compact) {
     const currentValue = value?.model || fallbackModel;
     const options = modelList.map((m) => ({
@@ -537,6 +550,21 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               label: model.id,
             }))}
           />
+        </div>
+      )}
+      {(effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli') && (
+        <div>
+          <Tooltip title="Enables Claude Code ultracode mode: implies xhigh reasoning effort and standing workflow orchestration. Requires a model that supports xhigh effort.">
+            <Checkbox
+              checked={!!value?.ultracode}
+              onChange={(e) => handleUltracodeChange(e.target.checked)}
+            >
+              <Space size={4}>
+                <span>Ultracode</span>
+                <InfoCircleOutlined style={{ color: 'rgba(255,255,255,0.45)', fontSize: 12 }} />
+              </Space>
+            </Checkbox>
+          </Tooltip>
         </div>
       )}
     </Space>

@@ -54,15 +54,15 @@ import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 /**
- * Map Agor's effort level (`low`/`medium`/`high`/`xhigh`/`max`) to Codex SDK's
+ * Map Agor's effort level (`minimal`/`low`/`medium`/`high`/`xhigh`/`max`) to Codex SDK's
  * `ModelReasoningEffort` (`minimal`/`low`/`medium`/`high`/`xhigh`).
  *
- * Agor has no equivalent for `minimal`. Codex has no `max` — both Agor `max`
- * and Agor `xhigh` map to Codex `xhigh` (the Codex ceiling).
+ * `minimal` passes through directly (Codex supports it; Claude does not).
+ * Codex has no `max` — both Agor `max` and `xhigh` map to Codex `xhigh` (the ceiling).
  */
 function toCodexReasoningEffort(
   effort: EffortLevel | undefined
-): 'low' | 'medium' | 'high' | 'xhigh' | undefined {
+): 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
   if (!effort) return undefined;
   return effort === 'max' || effort === 'xhigh' ? 'xhigh' : effort;
 }

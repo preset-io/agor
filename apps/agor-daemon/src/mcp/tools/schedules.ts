@@ -34,15 +34,24 @@ const agenticToolConfigSchema = z
       .object({
         mode: z.enum(['alias', 'exact']).optional(),
         model: mcpOptionalString('model_config.model', 'Model name override.'),
-        effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        effort: z
+          .enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+          .optional()
+          .describe("'minimal' is Codex-only; Claude treats it as 'low'."),
         advisorModel: mcpOptionalString(
           'model_config.advisorModel',
           "Claude Code advisor model override (e.g. 'opus', 'sonnet', 'fable')."
         ),
+        ultracode: z
+          .boolean()
+          .optional()
+          .describe(
+            'Enable ultracode mode (claude-code / claude-code-cli only): xhigh effort + standing workflow orchestration.'
+          ),
       })
       .optional()
       .describe(
-        'Optional model override (canonical DefaultModelConfig shape). Omit to inherit the agent default; set { model } to override; set { mode, model, effort, advisorModel } for full control.'
+        'Optional model override (canonical DefaultModelConfig shape). Omit to inherit the agent default; set { model } to override; set { mode, model, effort, advisorModel, ultracode } for full control.'
       ),
     mcp_server_ids: z
       .array(mcpRequiredId('mcp_server_ids[]', 'MCP server'))

@@ -5,6 +5,7 @@
  * Automatically loads CLAUDE.md and uses preset system prompts matching Claude Code CLI.
  */
 
+import * as fs from 'node:fs/promises';
 import { shortId } from '@agor/core/db';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
 import type {
@@ -174,7 +175,11 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     }
 
-    const { query: result, getStderr } = await setupQuery(
+    const {
+      query: result,
+      getStderr,
+      ultracodeSettingsPath,
+    } = await setupQuery(
       sessionId,
       prompt,
       {
@@ -324,6 +329,15 @@ If you continue to see authentication errors, please contact your Agor administr
         stderr: stderrOutput || '(no stderr output)',
       });
       throw enhancedError;
+    } finally {
+      if (ultracodeSettingsPath) {
+        fs.unlink(ultracodeSettingsPath).catch((err) => {
+          console.warn(
+            `[prompt-service] failed to clean up ultracode settings file ${ultracodeSettingsPath}:`,
+            err
+          );
+        });
+      }
     }
   }
 

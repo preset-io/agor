@@ -1453,3 +1453,112 @@ describe('attached_mcp_servers in session-info tools', () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ultracode + minimal — agor_sessions_create guard + thread-through
+// ---------------------------------------------------------------------------
+describe("agor_sessions_create - ultracode guard and 'minimal' effort", () => {
+  const baseBranch2 = { branch_id: 'wt-2', path: '/tmp/wt2', mcp_server_ids: [] };
+  const baseUser2 = {
+    user_id: 'user-1',
+    unix_username: 'alice',
+    default_agentic_config: {
+      'claude-code': {
+        permissionMode: 'acceptEdits',
+        modelConfig: { mode: 'alias', model: 'claude-sonnet-4-6', effort: 'high' },
+      },
+    },
+  };
+
+  function makeApp(sessionCreates: unknown[]) {
+    return makeFakeApp({
+      users: { get: async () => baseUser2 },
+      branches: { get: async () => baseBranch2 },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', mcp_token: 'tok', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-2',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+  }
+
+  beforeEach(() => {
+    vi.doMock('../../utils/branch-inspect.js', () => ({
+      inspectBranchViaExecutor: async () => ({ currentSha: 'sha-abc', currentRef: 'main' }),
+    }));
+    vi.doMock('@agor/core/types', async () => {
+      const actual = await vi.importActual<Record<string, unknown>>('@agor/core/types');
+      return { ...actual, getDefaultPermissionMode: () => 'acceptEdits' };
+    });
+    vi.doMock('@agor/core/utils/permission-mode-mapper', () => ({
+      mapPermissionMode: (m: string) => m,
+    }));
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('rejects ultracode:true for a non-claude-code tool with a descriptive error', async () => {
+    const sessionCreates: unknown[] = [];
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app: makeApp(sessionCreates), userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-2',
+      agenticTool: 'codex',
+      modelConfig: { model: 'o4-mini', ultracode: true },
+    });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.error).toMatch(/ultracode.*claude-code/i);
+    expect(sessionCreates).toHaveLength(0);
+  });
+
+  it('accepts ultracode:true for claude-code and threads it into model_config', async () => {
+    const sessionCreates: unknown[] = [];
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app: makeApp(sessionCreates), userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({
+      branchId: 'wt-2',
+      agenticTool: 'claude-code',
+      modelConfig: { model: 'claude-sonnet-4-6', ultracode: true },
+    });
+
+    expect(sessionCreates).toHaveLength(1);
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.model_config.ultracode).toBe(true);
+  });
+
+  it("accepts effort:'minimal' for claude-code and threads it into model_config", async () => {
+    const sessionCreates: unknown[] = [];
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app: makeApp(sessionCreates), userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({
+      branchId: 'wt-2',
+      agenticTool: 'claude-code',
+      modelConfig: { model: 'claude-sonnet-4-6', effort: 'minimal' },
+    });
+
+    expect(sessionCreates).toHaveLength(1);
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.model_config.effort).toBe('minimal');
+  });
+});
