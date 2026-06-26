@@ -528,6 +528,7 @@ const SlackSetupWizard: React.FC<{
   const alignUsers = Form.useWatch('align_slack_users', form) ?? false;
   const outbound = Form.useWatch('outbound_enabled', form) ?? false;
   const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
+  const allowedChannelIds = (Form.useWatch('allowed_channel_ids', form) as string[]) ?? [];
   const botToken = (Form.useWatch('bot_token', form) as string) ?? '';
   const appToken = (Form.useWatch('app_token', form) as string) ?? '';
 
@@ -550,9 +551,10 @@ const SlackSetupWizard: React.FC<{
   const scopes = useMemo(() => requiredBotScopes(wizardOptions), [wizardOptions]);
   const events = useMemo(() => requiredBotEvents(wizardOptions), [wizardOptions]);
 
-  // Any change to the manifest inputs or tokens invalidates a prior test result.
-  // A green check against stale credentials/options would be misleading.
-  const invalidationKey = `${manifestJson}|${botToken}|${appToken}`;
+  // Any change that alters the probe config (manifest inputs, tokens, or the
+  // channel-scope options sent to gateway-channels/test) invalidates a prior
+  // test result. A green check against stale config would be misleading.
+  const invalidationKey = `${manifestJson}|${botToken}|${appToken}|${publicScope}|${allowedChannelIds.join(',')}`;
   // biome-ignore lint/correctness/useExhaustiveDependencies: invalidationKey is the change trigger, not a value read in the body.
   useEffect(() => {
     onInvalidateTest();
