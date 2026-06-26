@@ -728,6 +728,18 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     expect(payload.caveats).toEqual(
       expect.arrayContaining([expect.stringContaining('GENERATED ONLY')])
     );
+
+    // Secrets must never flow into the create payload the agent would paste —
+    // setup_steps reference the xoxb-/xapp- token names as instructions, so the
+    // no-token invariant is scoped to create_channel_config_hint.
+    const hintConfig = payload.create_channel_config_hint.config;
+    expect(hintConfig).not.toHaveProperty('bot_token');
+    expect(hintConfig).not.toHaveProperty('app_token');
+    const serializedHint = JSON.stringify(payload.create_channel_config_hint);
+    expect(serializedHint).not.toContain('bot_token');
+    expect(serializedHint).not.toContain('app_token');
+    expect(serializedHint).not.toContain('xoxb');
+    expect(serializedHint).not.toContain('xapp');
   });
 
   it('adds outbound scopes and config when outbound is enabled', async () => {
@@ -772,6 +784,16 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       outbound_enabled: true,
       allowed_channel_ids: ['C123', 'C456'],
     });
+    expect(payload.caveats).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('restrictToChannelIds maps to config.allowed_channel_ids'),
+      ])
+    );
+    expect(payload.caveats).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/restrictToChannelIds.*does NOT change the manifest scopes/),
+      ])
+    );
   });
 
   it('applies schema defaults so omitted toggles yield a DM-only manifest', async () => {
