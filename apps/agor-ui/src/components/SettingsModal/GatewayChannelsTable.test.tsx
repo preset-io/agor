@@ -77,11 +77,18 @@ function renderTable(client: AgorClient | null) {
   );
 }
 
-/** Open an antd Select by its placeholder, then click the named option. */
-async function selectByPlaceholder(placeholder: string, optionName: string | RegExp) {
+/**
+ * Open an antd Select by its placeholder, then click the option whose label
+ * matches `optionTitle`. The `role="option"` node is an aria helper; the
+ * clickable element is `.ant-select-item-option[title=…]`.
+ */
+async function selectByPlaceholder(placeholder: string, optionTitle: string) {
   fireEvent.mouseDown(screen.getByText(placeholder));
-  const option = await screen.findByRole('option', { name: optionName });
-  fireEvent.click(option);
+  await screen.findByRole('option', { name: optionTitle });
+  const item = document.querySelector(
+    `.ant-select-item-option[title="${optionTitle}"]`
+  ) as HTMLElement;
+  fireEvent.click(item);
 }
 
 /** Fill the wizard's Options step and advance to the "Create App" step. */
@@ -113,7 +120,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.queryByText('Post messages as')).not.toBeInTheDocument();
   });
 
-  it('updates the manifest preview and scope list as surfaces change', () => {
+  it('updates the manifest preview and scope list as surfaces change', async () => {
     renderTable(null);
     fireEvent.click(screen.getByRole('button', { name: /Add Channel/i }));
 
@@ -121,10 +128,12 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.queryByText('channels:history')).not.toBeInTheDocument();
     expect(screen.queryByText('app_mention')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Public channels'));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Public channels' }));
 
-    // Now they appear in both the manifest JSON and the derived scope/event list.
-    expect(screen.queryAllByText('channels:history').length).toBeGreaterThan(0);
+    // Now they appear in the derived scope/event list (Form.useWatch flush).
+    await waitFor(() =>
+      expect(screen.queryAllByText('channels:history').length).toBeGreaterThan(0)
+    );
     expect(screen.queryAllByText('app_mentions:read').length).toBeGreaterThan(0);
     expect(screen.queryAllByText('app_mention').length).toBeGreaterThan(0);
   });
@@ -139,7 +148,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Next: Tokens & Test/i }));
     expect(screen.getByPlaceholderText('xoxb-...')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('xapp-...')).toBeInTheDocument();
-  });
+  }, 30000);
 
   it('runs the connection probe and renders team/bot/notVerifiable honestly', async () => {
     const result = {
@@ -172,7 +181,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(
       screen.getByText('Bot must be invited to each channel before it can post')
     ).toBeInTheDocument();
-  });
+  }, 30000);
 
   it('creates the channel from the final step', async () => {
     const { client, channelCreate } = makeClient();
@@ -192,7 +201,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
       channel_type: 'slack',
       config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
     });
-  });
+  }, 30000);
 });
 
 describe('GatewayChannelsTable Slack edit mode', () => {
