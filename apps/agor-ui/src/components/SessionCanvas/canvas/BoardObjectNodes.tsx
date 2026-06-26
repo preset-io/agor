@@ -3,7 +3,17 @@
  */
 
 import type { BoardComment, BoardObject, User } from '@agor-live/client';
-import { DeleteOutlined, LockOutlined, SettingOutlined, UnlockOutlined } from '@ant-design/icons';
+import {
+  CaretDownOutlined,
+  CaretUpOutlined,
+  DeleteOutlined,
+  FontSizeOutlined,
+  LockOutlined,
+  SettingOutlined,
+  UnlockOutlined,
+  VerticalAlignBottomOutlined,
+  VerticalAlignTopOutlined,
+} from '@ant-design/icons';
 import { ColorPicker, theme } from 'antd';
 import type { Color } from 'antd/es/color-picker';
 import { AggregationColor } from 'antd/es/color-picker/color';
@@ -12,6 +22,12 @@ import { NodeResizer, useViewport } from 'reactflow';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { DeleteZoneModal } from './DeleteZoneModal';
 import { ZoneConfigModal } from './ZoneConfigModal';
+import type { LayerOp } from './zOrder';
+
+// Zone label font-size bounds and stepper increment (px).
+const ZONE_FONT_SIZE_MIN = 10;
+const ZONE_FONT_SIZE_MAX = 48;
+const ZONE_FONT_SIZE_STEP = 2;
 
 // Zone content opacity constant - used for zone background and color indicator
 export const ZONE_CONTENT_OPACITY = 0.1;
@@ -44,12 +60,17 @@ interface ZoneNodeData {
   color?: string;
   status?: string;
   locked?: boolean;
+  /** Label/status font size in px. Falls back to the theme default when unset. */
+  fontSize?: number;
+  /** Effective base stacking order (persisted value or per-type default). */
+  zIndex?: number;
   x: number;
   y: number;
   trigger?: BoardObject extends { type: 'zone'; trigger?: infer T } ? T : never;
   sessionCount?: number;
   onUpdate?: (objectId: string, objectData: BoardObject) => void;
   onDelete?: (objectId: string, deleteAssociatedSessions: boolean) => void;
+  onReorder?: (objectId: string, op: LayerOp) => void;
 }
 
 // Local storage key for recent colors
@@ -136,6 +157,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       color?: string;
       status?: string;
       locked?: boolean;
+      fontSize?: number;
+      zIndex?: number;
       trigger?: BoardObject extends { type: 'zone'; trigger?: infer T } ? T : never;
     }>
   ): BoardObject => ({
@@ -150,6 +173,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     color: data.color,
     status: data.status,
     locked: data.locked,
+    fontSize: data.fontSize,
+    zIndex: data.zIndex,
     trigger: data.trigger,
     ...overrides,
   });
@@ -198,6 +223,95 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     if (data.onUpdate) {
       data.onUpdate(data.objectId, createObjectData({ locked: !data.locked }));
     }
+  };
+
+  // Effective label font size: persisted value or the theme default.
+  const labelFontSize = data.fontSize ?? token.fontSize;
+  // Status keeps its smaller relative size, scaled from the label size when set.
+  const statusFontSize = data.fontSize
+    ? Math.max(1, Math.round(data.fontSize * (token.fontSizeSM / token.fontSize)))
+    : token.fontSizeSM;
+
+  const handleFontSizeStep = (delta: number) => {
+    if (mutationDisabled) return;
+    const current = data.fontSize ?? token.fontSize;
+    const next = Math.max(ZONE_FONT_SIZE_MIN, Math.min(ZONE_FONT_SIZE_MAX, current + delta));
+    if (next !== current && data.onUpdate) {
+      data.onUpdate(data.objectId, createObjectData({ fontSize: next }));
+    }
+  };
+
+  const handleReorder = (op: LayerOp) => {
+    if (mutationDisabled) return;
+    data.onReorder?.(data.objectId, op);
+  };
+
+  // Shared style for the compact square icon buttons in the toolbar.
+  const iconButtonStyle: React.CSSProperties = {
+    width: '20px',
+    height: '20px',
+    borderRadius: '3px',
+    backgroundColor: token.colorBgContainer,
+    border: `1px solid ${token.colorBorder}`,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    userSelect: 'none',
+    cursor: 'pointer',
+    padding: 0,
+    color: token.colorText,
+  };
+
+  const verticalDivider = (
+    <div
+      style={{
+        width: '1px',
+        height: '24px',
+        backgroundColor: token.colorBorder,
+        margin: '0 2px',
+        alignSelf: 'center',
+      }}
+    />
+  );
+
+  // A toolbar icon button that runs `action` on pointer-up (matching the
+  // existing lock/settings/delete buttons' event handling).
+  const renderActionButton = (
+    key: string,
+    title: string,
+    icon: React.ReactNode,
+    action: () => void
+  ) => (
+    <button
+      key={key}
+      type="button"
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onPointerUp={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (mutationDisabled) return;
+        action();
+      }}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      style={iconButtonStyle}
+      title={title}
+    >
+      {icon}
+    </button>
+  );
+
+  const layerIconStyle: React.CSSProperties = {
+    fontSize: '12px',
+    color: token.colorText,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   };
 
   // Backwards compatibility: fall back to `color` if new fields not set
@@ -527,6 +641,73 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               />
             )}
           </button>
+          {verticalDivider}
+          {/* Layer (z-order) controls */}
+          <div
+            className="nodrag nopan"
+            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+          >
+            {renderActionButton(
+              'to-back',
+              'Send to back',
+              <VerticalAlignBottomOutlined style={layerIconStyle} />,
+              () => handleReorder('back')
+            )}
+            {renderActionButton(
+              'send-backward',
+              'Send backward',
+              <CaretDownOutlined style={layerIconStyle} />,
+              () => handleReorder('backward')
+            )}
+            {renderActionButton(
+              'bring-forward',
+              'Bring forward',
+              <CaretUpOutlined style={layerIconStyle} />,
+              () => handleReorder('forward')
+            )}
+            {renderActionButton(
+              'to-front',
+              'Bring to front',
+              <VerticalAlignTopOutlined style={layerIconStyle} />,
+              () => handleReorder('front')
+            )}
+          </div>
+          {verticalDivider}
+          {/* Label font-size stepper */}
+          <div
+            className="nodrag nopan"
+            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+          >
+            <FontSizeOutlined
+              style={{ fontSize: '12px', color: token.colorTextSecondary }}
+              title="Label font size"
+            />
+            {renderActionButton(
+              'font-smaller',
+              'Smaller label',
+              <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>−</span>,
+              () => handleFontSizeStep(-ZONE_FONT_SIZE_STEP)
+            )}
+            <span
+              style={{
+                fontSize: '11px',
+                color: token.colorTextSecondary,
+                fontVariantNumeric: 'tabular-nums',
+                minWidth: '20px',
+                textAlign: 'center',
+                userSelect: 'none',
+              }}
+            >
+              {Math.round(labelFontSize)}
+            </span>
+            {renderActionButton(
+              'font-larger',
+              'Larger label',
+              <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>+</span>,
+              () => handleFontSizeStep(ZONE_FONT_SIZE_STEP)
+            )}
+          </div>
+          {verticalDivider}
           <button
             type="button"
             onPointerDown={(e) => {
@@ -624,8 +805,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             // Position label to allow for inverse scaling
             position: 'relative',
             width: '100%',
-            // Reserve space for scaled label (base font size / zoom)
-            minHeight: `${token.fontSize * scale}px`,
+            // Reserve space for scaled label (font size / zoom)
+            minHeight: `${labelFontSize * scale}px`,
           }}
           onDoubleClick={() => {
             if (mutationDisabled) return;
@@ -643,7 +824,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               className="nodrag" // Prevent node drag when typing
               style={{
                 margin: 0,
-                fontSize: token.fontSize,
+                fontSize: labelFontSize,
                 fontWeight: 600,
                 border: 'none',
                 outline: 'none',
@@ -660,7 +841,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             <h3
               style={{
                 margin: 0,
-                fontSize: token.fontSize,
+                fontSize: labelFontSize,
                 fontWeight: 600,
                 color: textColor,
                 // Apply inverse scale to maintain constant visual size (Figma-style)
@@ -681,7 +862,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           <div
             style={{
               marginTop: `${8 * scale}px`,
-              fontSize: token.fontSizeSM,
+              fontSize: statusFontSize,
               fontWeight: 500,
               color: textColor,
               textTransform: 'uppercase',

@@ -12,6 +12,7 @@ import type {
 } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import type { Node } from 'reactflow';
+import { computeLayerChanges, DEFAULT_BOARD_OBJECT_Z_INDEX, type LayerOp } from './zOrder';
 
 interface UseBoardObjectsProps {
   board: Board | null;
@@ -85,6 +86,57 @@ export const useBoardObjects = ({
       }
     },
     [client] // Only depend on client, not board
+  );
+
+  /**
+   * Reorder a board object relative to its peers (To Front / Bring Forward /
+   * Send Backward / To Back). Computes the new zIndex via the pure helper and
+   * persists it. Peers are the other board objects in the JSON blob — cards and
+   * comments are separate models and intentionally excluded.
+   */
+  const reorderObject = useCallback(
+    async (objectId: string, op: LayerOp) => {
+      const currentBoard = boardRef.current;
+      if (!currentBoard || !client) return;
+
+      const objects = currentBoard.objects ?? {};
+      const peers = Object.entries(objects).map(([id, obj]) => ({
+        id,
+        zIndex: obj.zIndex ?? DEFAULT_BOARD_OBJECT_Z_INDEX[obj.type],
+      }));
+
+      const changes = computeLayerChanges(op, objectId, peers);
+      if (changes.length === 0) return;
+
+      try {
+        if (changes.length === 1) {
+          const { id, zIndex } = changes[0];
+          const existing = objects[id];
+          if (!existing) return;
+          await client.service('boards').patch(currentBoard.board_id, {
+            _action: 'upsertObject',
+            objectId: id,
+            objectData: { ...existing, zIndex },
+          } as unknown as Partial<Board>);
+        } else {
+          // Forward/backward swaps touch two objects — persist atomically.
+          const batch: Record<string, BoardObject> = {};
+          for (const { id, zIndex } of changes) {
+            const existing = objects[id];
+            if (!existing) continue;
+            batch[id] = { ...existing, zIndex };
+          }
+          if (Object.keys(batch).length === 0) return;
+          await client.service('boards').patch(currentBoard.board_id, {
+            _action: 'batchUpsertObjects',
+            objects: batch,
+          } as unknown as Partial<Board>);
+        }
+      } catch (error) {
+        console.error('Failed to reorder object:', error);
+      }
+    },
+    [client]
   );
 
   /**
@@ -215,7 +267,8 @@ export const useBoardObjects = ({
             position: { x: objectData.x, y: objectData.y },
             // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
             selectable: true,
-            zIndex: 400, // Above markdown (300), below branches (500)
+            // Above markdown (300), below branches (500) by default.
+            zIndex: objectData.zIndex ?? DEFAULT_BOARD_OBJECT_Z_INDEX.app,
             className: eraserMode ? 'eraser-mode' : undefined,
             data: {
               objectId,
@@ -243,7 +296,7 @@ export const useBoardObjects = ({
             position: { x: objectData.x, y: objectData.y },
             // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
             selectable: true,
-            zIndex: 400,
+            zIndex: objectData.zIndex ?? DEFAULT_BOARD_OBJECT_Z_INDEX.artifact,
             className: eraserMode ? 'eraser-mode' : undefined,
             data: {
               objectId,
@@ -265,7 +318,8 @@ export const useBoardObjects = ({
             position: { x: objectData.x, y: objectData.y },
             // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
             selectable: true,
-            zIndex: 300, // Above zones (100), below branches (500)
+            // Above zones (100), below branches (500) by default.
+            zIndex: objectData.zIndex ?? DEFAULT_BOARD_OBJECT_Z_INDEX.markdown,
             className: eraserMode ? 'eraser-mode' : undefined,
             data: {
               objectId,
@@ -302,7 +356,8 @@ export const useBoardObjects = ({
           // Locked zones are never draggable. Unlocked zones inherit from
           // canvas-level nodesDraggable (mutationGate.canMutate).
           ...(isLocked ? { draggable: false } : {}),
-          zIndex: 100, // Zones behind branches and comments
+          // Zones behind branches and comments by default; honor explicit order.
+          zIndex: objectData.zIndex ?? DEFAULT_BOARD_OBJECT_Z_INDEX.zone,
           className: eraserMode ? 'eraser-mode' : undefined,
           // Set dimensions both as direct props (for collision detection) and style (for rendering)
           width: objectData.width,
@@ -321,12 +376,18 @@ export const useBoardObjects = ({
             color: objectData.color, // Backwards compatibility
             status: objectData.type === 'zone' ? objectData.status : undefined,
             locked: isLocked,
+            fontSize: objectData.type === 'zone' ? objectData.fontSize : undefined,
+            // Effective base zIndex (persisted or per-type default). Consumed by
+            // the selection-bump logic in SessionCanvas so a selected zone
+            // restores to its own order on deselect.
+            zIndex: objectData.zIndex ?? DEFAULT_BOARD_OBJECT_Z_INDEX.zone,
             x: objectData.x, // Include position in data for updates
             y: objectData.y,
             trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
             sessionCount,
             onUpdate: handleUpdateObject,
             onDelete: deleteZone,
+            onReorder: reorderObject,
           },
         };
       });
@@ -338,6 +399,7 @@ export const useBoardObjects = ({
     deleteZone,
     deleteObject,
     deleteArtifact,
+    reorderObject,
     eraserMode,
     activeUrlTargetArtifactId,
     onEditMarkdown,
@@ -363,7 +425,7 @@ export const useBoardObjects = ({
           type: 'zone',
           position: { x, y },
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
-          zIndex: 100, // Zones behind branches and comments
+          zIndex: DEFAULT_BOARD_OBJECT_Z_INDEX.zone, // Zones behind branches and comments
           style: {
             width,
             height,
@@ -451,6 +513,7 @@ export const useBoardObjects = ({
     addZoneNode,
     deleteObject,
     deleteZone,
+    reorderObject,
     batchUpdateObjectPositions,
   };
 };
