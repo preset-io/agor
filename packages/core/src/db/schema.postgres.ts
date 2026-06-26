@@ -1673,7 +1673,7 @@ export const gatewayChannels = pgTable(
     // Materialized for queries
     name: text('name').notNull(),
     channel_type: text('channel_type', {
-      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams'],
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut'],
     }).notNull(),
     target_branch_id: varchar('target_branch_id', { length: 36 })
       .notNull()
@@ -1760,7 +1760,7 @@ export const gatewayOutboundMessages = pgTable(
       .notNull()
       .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
     channel_type: text('channel_type', {
-      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams'],
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut'],
     }).notNull(),
 
     platform_channel_id: text('platform_channel_id').notNull(),

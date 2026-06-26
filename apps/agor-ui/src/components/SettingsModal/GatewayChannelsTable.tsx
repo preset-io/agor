@@ -82,6 +82,7 @@ const CHANNEL_TYPE_OPTIONS: { value: ChannelType; label: string; icon: React.Rea
   { value: 'slack', label: 'Slack', icon: <SlackOutlined /> },
   { value: 'github', label: 'GitHub', icon: <GithubOutlined /> },
   { value: 'teams', label: 'Microsoft Teams', icon: <TeamOutlined /> },
+  { value: 'shortcut', label: 'Shortcut', icon: <ThunderboltOutlined /> },
   { value: 'discord', label: 'Discord', icon: <MessageOutlined /> },
   { value: 'whatsapp', label: 'WhatsApp', icon: <MessageOutlined /> },
   { value: 'telegram', label: 'Telegram', icon: <MessageOutlined /> },
@@ -95,6 +96,8 @@ function getChannelTypeIcon(type: ChannelType): React.ReactNode {
       return <GithubOutlined />;
     case 'teams':
       return <TeamOutlined />;
+    case 'shortcut':
+      return <ThunderboltOutlined />;
     default:
       return <MessageOutlined />;
   }
@@ -108,6 +111,8 @@ function getChannelTypeColor(type: ChannelType): string {
       return 'default';
     case 'teams':
       return 'geekblue';
+    case 'shortcut':
+      return 'gold';
     case 'discord':
       return 'blue';
     case 'whatsapp':
@@ -384,6 +389,7 @@ const ChannelFormFields: React.FC<{
   const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
   const alignSlackUsers = Form.useWatch('align_slack_users', form) ?? false;
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
+  const alignShortcutUsers = Form.useWatch('shortcut_align_users', form) ?? false;
 
   const sourcesEnabled = enableChannels || enableGroups || enableMpim;
 
@@ -430,7 +436,7 @@ const ChannelFormFields: React.FC<{
       </Form.Item>
 
       {/* Slack and GitHub choose identity in their platform-specific Identity sections. */}
-      {channelType !== 'slack' && channelType !== 'github' && (
+      {channelType !== 'slack' && channelType !== 'github' && channelType !== 'shortcut' && (
         <Form.Item
           label="Post messages as"
           name="agor_user_id"
@@ -450,15 +456,18 @@ const ChannelFormFields: React.FC<{
         <Switch />
       </Form.Item>
 
-      {channelType !== 'slack' && channelType !== 'github' && channelType !== 'teams' && (
-        <Alert
-          title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
-          description="This platform integration is not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-      )}
+      {channelType !== 'slack' &&
+        channelType !== 'github' &&
+        channelType !== 'teams' &&
+        channelType !== 'shortcut' && (
+          <Alert
+            title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
+            description="This platform integration is not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+        )}
 
       {/* ── GitHub App Setup Wizard ── */}
       {channelType === 'github' && (
@@ -1093,6 +1102,220 @@ const ChannelFormFields: React.FC<{
         />
       )}
 
+      {channelType === 'shortcut' && (
+        <Collapse
+          ghost
+          destroyOnHidden={false}
+          defaultActiveKey={mode === 'create' ? ['shortcut-credentials', 'identity'] : []}
+          style={{ marginLeft: -16, marginRight: -16 }}
+          items={[
+            // ── Credentials ──
+            {
+              key: 'shortcut-credentials',
+              label: (
+                <SectionLabel
+                  icon={<KeyOutlined />}
+                  title="Shortcut Credentials"
+                  subtitle={mode === 'edit' ? 'leave blank to keep current' : undefined}
+                />
+              ),
+              children: (
+                <>
+                  <Form.Item
+                    label="API Token"
+                    name="shortcut_api_token"
+                    rules={
+                      mode === 'create'
+                        ? [{ required: true, message: 'Shortcut API token is required' }]
+                        : []
+                    }
+                    tooltip="Shortcut API token (Settings → API Tokens). Sent in the Shortcut-Token header."
+                  >
+                    <Input.Password
+                      placeholder={mode === 'edit' ? '••••••••' : 'Shortcut API token'}
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Agent Member ID (optional)"
+                    name="shortcut_agent_member_id"
+                    tooltip="Override the mention target. Leave blank to auto-resolve from the API token's own member — comments that @mention that member trigger the agent."
+                  >
+                    <Input placeholder="(auto-resolved from token)" />
+                  </Form.Item>
+
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Shortcut Setup"
+                    description={
+                      <span>
+                        Create an API token under{' '}
+                        <Typography.Link
+                          href="https://app.shortcut.com/settings/account/api-tokens"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Shortcut → Settings → API Tokens
+                        </Typography.Link>
+                        . The agent member ID is the Shortcut member the agent is mentioned as;
+                        @mentioning it on a story comment triggers the agent.
+                      </span>
+                    }
+                    style={{ fontSize: 12 }}
+                  />
+                </>
+              ),
+            },
+
+            // ── Discovery ──
+            {
+              key: 'shortcut-config',
+              label: (
+                <SectionLabel
+                  icon={<MessageOutlined />}
+                  title="Discovery"
+                  subtitle="mentions & polling"
+                />
+              ),
+              children: (
+                <>
+                  <Form.Item
+                    label="Require @mention"
+                    name="shortcut_require_mention"
+                    valuePropName="checked"
+                    initialValue={true}
+                    tooltip="Only respond to comments that @mention the agent member"
+                  >
+                    <Switch />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Mention Name"
+                    name="shortcut_mention_name"
+                    tooltip="Handle used in the comment-discovery search. Auto-resolved from the agent member if left blank."
+                  >
+                    <Input prefix="@" placeholder="(auto-resolved)" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Search Scope (optional)"
+                    name="shortcut_search_query_extra"
+                    tooltip={
+                      'Appended to the discovery search for scoping, e.g. team:"Backend". Use one channel per repo/team and scope each so a mention maps to exactly one channel.'
+                    }
+                  >
+                    <Input placeholder={'team:"Backend"'} />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Poll Interval (seconds)"
+                    name="shortcut_poll_interval_s"
+                    initialValue={15}
+                    tooltip="How frequently to poll the Shortcut API for new mentions"
+                  >
+                    <InputNumber min={5} max={300} style={{ width: '100%' }} />
+                  </Form.Item>
+                </>
+              ),
+            },
+
+            // ── Identity ──
+            {
+              key: 'identity',
+              label: (
+                <SectionLabel
+                  icon={<UserOutlined />}
+                  title="Identity"
+                  subtitle={getIdentitySubtitle(alignShortcutUsers)}
+                />
+              ),
+              children: (
+                <PlatformIdentityFields
+                  alignFieldName="shortcut_align_users"
+                  alignLabel="Align Shortcut users"
+                  alignDescription="Map Shortcut members to Agor users by email. Unmapped users are rejected."
+                  alignUsers={alignShortcutUsers}
+                  userById={userById}
+                  alignedContent={
+                    <Form.Item
+                      label="User Map"
+                      name="shortcut_user_map"
+                      tooltip="JSON object mapping Shortcut member IDs to Agor email addresses (for members whose Shortcut email differs from their Agor email)"
+                      rules={[{ validator: validateJSON }]}
+                    >
+                      <JSONEditor
+                        rows={4}
+                        placeholder={'{\n  "<shortcut-member-id>": "user@example.com"\n}'}
+                      />
+                    </Form.Item>
+                  }
+                />
+              ),
+            },
+
+            // ── Agentic Tool Configuration ──
+            {
+              key: 'agentic-tool-config',
+              label: (
+                <SectionLabel
+                  icon={<ThunderboltOutlined />}
+                  title="Agent Configuration"
+                  subtitle={selectedAgent}
+                />
+              ),
+              children: (
+                <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Configure which agent and settings to use for sessions created from this
+                    channel.
+                  </Typography.Text>
+                  <AgentSelectionGrid
+                    agents={AVAILABLE_AGENTS}
+                    selectedAgentId={selectedAgent}
+                    onSelect={onAgentChange}
+                    columns={2}
+                    showHelperText={false}
+                    showComparisonLink={false}
+                  />
+                  <AgenticToolConfigForm
+                    agenticTool={selectedAgent as AgenticToolName}
+                    mcpServerById={mcpServerById}
+                    showHelpText={false}
+                  />
+                </Space>
+              ),
+            },
+
+            // ── Environment Variables ──
+            {
+              key: 'env-vars',
+              label: (
+                <SectionLabel
+                  icon={<LockOutlined />}
+                  title="Environment Variables"
+                  subtitle="channel-level secrets"
+                />
+              ),
+              children: (
+                <>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                  >
+                    Define environment variables for sessions created from this channel. Useful for
+                    service account tokens or API keys for MCP servers.
+                  </Typography.Text>
+                  <Form.Item name="envVars" noStyle>
+                    <GatewayEnvVarsEditor />
+                  </Form.Item>
+                </>
+              ),
+            },
+          ]}
+        />
+      )}
+
       {/* ── Collapsible sections (Slack only) ── */}
       {channelType === 'slack' && (
         <Collapse
@@ -1594,6 +1817,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       'signing_secret',
       'private_key',
       'app_password',
+      'api_token',
     ];
     const sanitizedExisting = { ...(existingConfig || {}) };
     for (const field of SENSITIVE_FIELDS) {
@@ -1631,6 +1855,33 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.webhook_port = (values.teams_webhook_port as number) ?? 3978;
       config.webhook_path = (values.teams_webhook_path as string) || '/api/messages';
       config.require_mention = values.teams_require_mention ?? true;
+    } else if (values.channel_type === 'shortcut') {
+      if (values.shortcut_api_token) config.api_token = values.shortcut_api_token;
+      if (values.shortcut_agent_member_id) {
+        config.agent_member_id = values.shortcut_agent_member_id;
+      } else {
+        delete config.agent_member_id;
+      }
+      if (values.shortcut_mention_name) {
+        config.mention_name = values.shortcut_mention_name;
+      } else {
+        delete config.mention_name;
+      }
+      if (values.shortcut_search_query_extra) {
+        config.search_query_extra = values.shortcut_search_query_extra;
+      } else {
+        delete config.search_query_extra;
+      }
+      config.require_mention = values.shortcut_require_mention ?? true;
+      config.poll_interval_ms = ((values.shortcut_poll_interval_s as number) ?? 15) * 1000;
+      config.align_shortcut_users = values.shortcut_align_users ?? false;
+      if (values.shortcut_user_map) {
+        try {
+          config.user_map = JSON.parse(values.shortcut_user_map as string);
+        } catch {
+          // validateJSON rule handles the error display
+        }
+      }
     } else if (values.channel_type === 'slack') {
       if (values.bot_token) config.bot_token = values.bot_token;
       if (values.app_token) config.app_token = values.app_token;
@@ -1775,6 +2026,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.teams_webhook_port = (config?.webhook_port as number) ?? 3978;
       formValues.teams_webhook_path = (config?.webhook_path as string) || '/api/messages';
       formValues.teams_require_mention = config?.require_mention ?? true;
+    } else if (channel.channel_type === 'shortcut') {
+      formValues.shortcut_agent_member_id = config?.agent_member_id;
+      formValues.shortcut_mention_name = config?.mention_name;
+      formValues.shortcut_search_query_extra = config?.search_query_extra;
+      formValues.shortcut_require_mention = config?.require_mention ?? true;
+      formValues.shortcut_poll_interval_s = ((config?.poll_interval_ms as number) ?? 15000) / 1000;
+      formValues.shortcut_align_users = config?.align_shortcut_users ?? false;
+      const userMap = config?.user_map as Record<string, string> | undefined;
+      if (userMap && typeof userMap === 'object' && Object.keys(userMap).length > 0) {
+        formValues.shortcut_user_map = JSON.stringify(userMap, null, 2);
+      }
     }
 
     editForm.setFieldsValue(formValues);

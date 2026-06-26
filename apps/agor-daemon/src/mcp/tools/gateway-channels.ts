@@ -153,9 +153,11 @@ const gatewayChannelCreateSchema = z
   .strictObject({
     name: mcpRequiredString('name', 'Human-readable channel name, e.g. "Engineering Slack".'),
     channelType: z
-      .enum(['slack', 'github', 'teams', 'discord', 'whatsapp', 'telegram'])
+      .enum(['slack', 'github', 'teams', 'shortcut', 'discord', 'whatsapp', 'telegram'])
       .default('slack')
-      .describe('Gateway platform type. Current active connectors are slack, github, and teams.'),
+      .describe(
+        'Gateway platform type. Current active connectors are slack, github, teams, and shortcut.'
+      ),
     targetBranchId: mcpRequiredId(
       'targetBranchId',
       'Branch',
@@ -209,6 +211,16 @@ const gatewayChannelCreateSchema = z
             message: `config.${field} is required for Teams gateway channels.`,
           });
         }
+      }
+    }
+    if (value.channelType === 'shortcut') {
+      // Only api_token is required — agent_member_id auto-resolves from the token's own member.
+      if (!config.api_token) {
+        issue.addIssue({
+          code: 'custom',
+          path: ['config', 'api_token'],
+          message: 'config.api_token is required for Shortcut gateway channels.',
+        });
       }
     }
   });
@@ -437,7 +449,7 @@ const gatewayChannelUpdateSchema = z.strictObject({
   ),
   name: mcpOptionalNonEmptyString('name', 'New human-readable channel name.'),
   channelType: z
-    .enum(['slack', 'github', 'teams', 'discord', 'whatsapp', 'telegram'])
+    .enum(['slack', 'github', 'teams', 'shortcut', 'discord', 'whatsapp', 'telegram'])
     .optional()
     .describe('Gateway platform type. Changing this should include compatible config.'),
   targetBranchId: mcpOptionalId('targetBranchId', 'Branch', 'New target branch/worktree ID.'),
@@ -548,7 +560,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           .optional()
           .describe('Include disabled channels (default: true).'),
         channelType: z
-          .enum(['slack', 'github', 'teams', 'discord', 'whatsapp', 'telegram'])
+          .enum(['slack', 'github', 'teams', 'shortcut', 'discord', 'whatsapp', 'telegram'])
           .optional()
           .describe('Optional platform filter.'),
         limit: mcpLimit(100),

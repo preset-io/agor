@@ -29,7 +29,14 @@ export type GatewayOutboundMessageID = UUID;
 // ============================================================================
 
 /** Supported messaging platform types */
-export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram' | 'github' | 'teams';
+export type ChannelType =
+  | 'slack'
+  | 'discord'
+  | 'whatsapp'
+  | 'telegram'
+  | 'github'
+  | 'teams'
+  | 'shortcut';
 
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';
@@ -42,6 +49,7 @@ export const GATEWAY_SENSITIVE_CONFIG_FIELDS = [
   'private_key',
   'webhook_secret',
   'app_password',
+  'api_token',
 ] as const;
 
 /** Sentinel value used by gateway APIs/tools to represent a redacted secret. */

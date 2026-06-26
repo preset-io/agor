@@ -26,6 +26,7 @@
 import type { Octokit } from '@octokit/rest';
 import type { ChannelType } from '../../types/gateway';
 import type { GatewayConnector, InboundMessage } from '../connector';
+import { addToRingBuffer, escapeRegex } from './shared';
 
 // ============================================================================
 // Config & State Types
@@ -61,9 +62,6 @@ interface RepoPollState {
   lastEtag: string | null; // ETag for conditional requests (304 Not Modified)
   processedCommentIds: Set<number>; // Ring buffer for dedup
 }
-
-/** Max comment IDs to keep in the dedup set per repo */
-const MAX_PROCESSED_IDS = 1000;
 
 /** Default poll interval */
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
@@ -115,26 +113,6 @@ function hasActiveMention(text: string, mentionName: string): boolean {
 function stripMention(text: string, mentionName: string): string {
   const pattern = new RegExp(`@${escapeRegex(mentionName)}\\s*`, 'gi');
   return text.replace(pattern, '').trim();
-}
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Add a comment ID to the dedup set, evicting oldest if over capacity.
- * Simple approach: convert to array, slice, rebuild set.
- */
-function addToRingBuffer(set: Set<number>, id: number): void {
-  set.add(id);
-  if (set.size > MAX_PROCESSED_IDS) {
-    // Evict oldest entries (Sets iterate in insertion order)
-    const arr = [...set];
-    const toRemove = arr.slice(0, arr.length - MAX_PROCESSED_IDS);
-    for (const old of toRemove) {
-      set.delete(old);
-    }
-  }
 }
 
 // ============================================================================
