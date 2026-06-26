@@ -2,7 +2,7 @@ import type { AgorClient, Branch, GatewayChannel, MCPServer, User } from '@agor-
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 
 // The real branch/user pickers are antd v6 `Select`s; opening their dropdowns in
@@ -334,46 +334,30 @@ describe('GatewayChannelsTable Slack edit mode', () => {
   });
 });
 
-/** Render the table at a specific route so the GitHub deep-link effect fires. */
-function renderTableAt(path: string, client: AgorClient | null) {
-  const branch = makeBranch();
-  const user = makeUser();
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <AntdApp>
-        <GatewayChannelsTable
-          client={client}
-          gatewayChannelById={new Map<string, GatewayChannel>()}
-          branchById={new Map([[branch.branch_id, branch]])}
-          userById={new Map([[user.user_id, user]])}
-          mcpServerById={new Map<string, MCPServer>()}
-        />
-      </AntdApp>
-    </MemoryRouter>
-  );
-}
-
-describe('GatewayChannelsTable GitHub install deep-link return', () => {
-  afterEach(() => {
-    sessionStorage.clear();
-  });
-
-  it('restores the step-0 draft, syncs channel_type=github, and builds a github payload', async () => {
-    // Simulate the step-0 essentials stashed right before the install redirect.
-    sessionStorage.setItem(
-      'agor.gateway.githubSetupDraft',
-      JSON.stringify({ name: 'My GH', target_branch_id: 'branch-1' })
-    );
-
+describe('GatewayChannelsTable GitHub create wizard', () => {
+  it('walks Channel → Create app → Credentials → Configure and builds a github payload', async () => {
     const { client, channelCreate } = makeClient();
-    renderTableAt('/?installation_id=987654', client);
+    renderTable(client);
+    clickButton(/Add Channel/);
 
-    // Lands on the Credentials step with the GitHub flow active (channelType synced).
-    expect(await screen.findByText('Enter your GitHub App credentials')).toBeInTheDocument();
-    // Restored draft is in the (hidden, mounted) step-0 fields.
-    expect((screen.getByLabelText('branch-select') as HTMLInputElement).value).toBe('branch-1');
+    // Switch the channel type to GitHub via the (real) antd Select.
+    fireEvent.mouseDown(document.querySelector('.ant-select-selector') as HTMLElement);
+    fireEvent.click(screen.getByText('GitHub'));
 
-    // Credentials → Configure.
+    // Step 0 (Channel): GitHub picks identity later, so only name + branch here.
+    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+      target: { value: 'My GH' },
+    });
+    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
+    clickButton(/^Continue$/);
+    await flush();
+
+    // Step 1 (Create app): no required fields — Continue straight through.
+    expect(screen.getByText(/Create GitHub App on GitHub/)).toBeInTheDocument();
+    clickButton(/^Continue$/);
+    await flush();
+
+    // Step 2 (Credentials): App ID + private key, then Continue.
     fireEvent.change(screen.getByPlaceholderText('123456'), { target: { value: '111' } });
     fireEvent.change(screen.getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), {
       target: { value: 'pem-body' },
@@ -381,7 +365,7 @@ describe('GatewayChannelsTable GitHub install deep-link return', () => {
     clickButton(/^Continue$/);
     await flush();
 
-    // Configure: watch repos (tags Select, tokenized via comma) + identity.
+    // Step 3 (Configure): watch repos (tags Select, tokenized via comma) + identity.
     const watchRepos = document.querySelector('#github_watch_repos') as HTMLInputElement;
     fireEvent.change(watchRepos, { target: { value: 'preset-io/agor,' } });
     fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
@@ -394,7 +378,7 @@ describe('GatewayChannelsTable GitHub install deep-link return', () => {
       channel_type: 'github',
       name: 'My GH',
       target_branch_id: 'branch-1',
-      config: { installation_id: 987654, app_id: 111 },
+      config: { app_id: 111, watch_repos: ['preset-io/agor'] },
     });
   });
 });
