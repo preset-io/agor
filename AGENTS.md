@@ -92,7 +92,7 @@ Terms you'll see across the codebase, UI, and docs:
 | **Unix user mode** | `simple` / `insulated` / `strict` — progressive OS-level isolation tiers. See "Feature Flags" below.                                                                                            |
 | **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                             |
 | **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).              |
-| **Effort**         | Reasoning depth knob (`low`/`medium`/`high`/`max`) on `model_config`. Maps to Claude API `output_config.effort`.                                                                                |
+| **Effort**         | Reasoning depth knob (`low`/`medium`/`high`/`xhigh`/`max`) on `model_config`. Maps to Claude API `output_config.effort`.                                                                       |
 
 ## Where to look first
 
@@ -412,16 +412,19 @@ security toggles stored alongside permissions:
 
 ## Effort Level (Reasoning Depth)
 
-Agor exposes Claude's `effort` parameter to control how much reasoning Claude applies to responses. This maps directly to the Claude API's `output_config.effort` and the Claude Code CLI's `--effort` flag.
+Agor exposes the `effort` parameter to control how much reasoning the agent applies to responses. This maps directly to the Claude API's `output_config.effort` and the Claude Code CLI's `--effort` flag.
 
 ### Levels
 
-| Level    | Description                    | Use case                         |
-| -------- | ------------------------------ | -------------------------------- |
-| `low`    | Minimal thinking, fastest      | Simple tasks, quick lookups      |
-| `medium` | Moderate thinking              | Balanced speed/quality           |
-| `high`   | Deep reasoning (default)       | Complex coding, reviews          |
-| `max`    | Maximum effort (Opus 4.6 only) | Critical decisions, architecture |
+| Level    | Description                      | Use case                         |
+| -------- | -------------------------------- | -------------------------------- |
+| `low`    | Minimal thinking, fastest        | Simple tasks, quick lookups      |
+| `medium` | Moderate thinking                | Balanced speed/quality           |
+| `high`   | Deep reasoning (default)         | Complex coding, reviews          |
+| `xhigh`  | Extra reasoning depth            | Demanding tasks before max       |
+| `max`    | Highest effort (model-dependent) | Critical decisions, architecture |
+
+On Codex, both `xhigh` and `max` map to Codex's `xhigh` (its ceiling). Codex `minimal` is not exposed by Agor.
 
 ### Extended Context (1M tokens)
 

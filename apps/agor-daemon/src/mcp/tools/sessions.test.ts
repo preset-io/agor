@@ -399,6 +399,46 @@ describe('agor_sessions_create', () => {
     expect(parsed.session).not.toHaveProperty('mcp_token');
   });
 
+  it('accepts effort: xhigh and threads it through to session.model_config', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return {
+            session_id: 'sess-xhigh',
+            mcp_token: 'secret-token',
+            ...(data as Record<string, unknown>),
+          };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+      modelConfig: { model: 'claude-sonnet-4-6', mode: 'alias', effort: 'xhigh' },
+    });
+
+    expect(sessionCreates).toHaveLength(1);
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.model_config.effort).toBe('xhigh');
+  });
+
   it("attributes sessions created from another user's session context to the acting MCP user and uses their defaults", async () => {
     const sessionCreates: unknown[] = [];
     const baseServiceParams = {
