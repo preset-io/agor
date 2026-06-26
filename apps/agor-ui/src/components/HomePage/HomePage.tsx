@@ -1,5 +1,5 @@
 import { Space, Typography, theme } from 'antd';
-import type React from 'react';
+import { memo } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -19,7 +19,7 @@ import type { HomePageProps } from './types';
 
 const { Text, Title } = Typography;
 
-export const HomePage: React.FC<HomePageProps> = (props) => {
+export const HomePage = memo(function HomePage(props: HomePageProps) {
   const { token } = theme.useToken();
   const homeBackground = DEFAULT_BACKGROUNDS[isDarkTheme(token) ? 'dark' : 'light'];
   // Entity maps come straight from the store so this large home surface no
@@ -86,6 +86,6 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       </div>
     </div>
   );
-};
+});
 
 export default HomePage;
