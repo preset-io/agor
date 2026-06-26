@@ -1012,1034 +1012,1056 @@ const ChannelFormFields: React.FC<{
 
   return (
     <>
-      {/* Unified step indicator — sits directly under the modal title on create. */}
+      {/* Unified step indicator — sits directly under the modal title on create,
+          fixed above the scrollable content so it never scrolls away. */}
       {mode === 'create' && (
         <Steps
           current={createStep}
           size="small"
           items={createStepsForType(channelType)}
-          style={{ marginBottom: 24 }}
+          style={{ marginBottom: 16, flexShrink: 0 }}
         />
       )}
 
-      {/* ── Step 0 "Channel": universal basics. Kept mounted on create so its
-          required fields stay registered for the final validateFields(). ── */}
-      <div style={{ display: mode === 'create' && createStep !== 0 ? 'none' : undefined }}>
-        <Form.Item
-          label="Channel Type"
-          name="channel_type"
-          initialValue={mode === 'create' ? 'slack' : undefined}
-          rules={[{ required: true }]}
-        >
-          <Select onChange={(value: ChannelType) => onChannelTypeChange(value)}>
-            {CHANNEL_TYPE_OPTIONS.map((opt) => (
-              <Select.Option key={opt.value} value={opt.value}>
-                <Space>
-                  {opt.icon}
-                  {opt.label}
-                </Space>
-              </Select.Option>
-            ))}
-          </Select>
-        </Form.Item>
-
-        <Form.Item
-          label="Name"
-          name="name"
-          rules={[{ required: true, message: 'Please enter a channel name' }]}
-        >
-          <Input placeholder="e.g., Team Slack, Personal Discord" />
-        </Form.Item>
-
-        <Form.Item
-          label="Target Branch"
-          name="target_branch_id"
-          rules={[{ required: true, message: 'Please select a target branch' }]}
-          tooltip={
-            mode === 'create'
-              ? 'New sessions from this channel will be created in this branch'
-              : undefined
-          }
-        >
-          <BranchSelect branchById={branchById} />
-        </Form.Item>
-
-        {/* Slack and GitHub choose identity in their platform-specific Identity sections. */}
-        {channelType !== 'slack' && channelType !== 'github' && (
+      {/* On create the step content scrolls inside a viewport-capped region while
+          the title (antd), step indicator (above) and footer (antd) stay fixed.
+          The paddingInline/marginInline pair lets edge-bleeding Collapses align to
+          the body edge without producing a horizontal scrollbar. */}
+      <div
+        style={
+          mode === 'create'
+            ? {
+                maxHeight: '56vh',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                paddingInline: 16,
+                marginInline: -16,
+              }
+            : undefined
+        }
+      >
+        {/* ── Step 0 "Channel": universal basics. Kept mounted on create so its
+            required fields stay registered for the final validateFields(). ── */}
+        <div style={{ display: mode === 'create' && createStep !== 0 ? 'none' : undefined }}>
           <Form.Item
-            label="Post messages as"
-            name="agor_user_id"
-            rules={[{ required: true, message: 'Please select a user' }]}
-            tooltip="Sessions from this channel will run as this Agor user"
+            label="Channel Type"
+            name="channel_type"
+            initialValue={mode === 'create' ? 'slack' : undefined}
+            rules={[{ required: true }]}
           >
-            <UserSelect userById={userById} />
+            <Select onChange={(value: ChannelType) => onChannelTypeChange(value)}>
+              {CHANNEL_TYPE_OPTIONS.map((opt) => (
+                <Select.Option key={opt.value} value={opt.value}>
+                  <Space>
+                    {opt.icon}
+                    {opt.label}
+                  </Space>
+                </Select.Option>
+              ))}
+            </Select>
           </Form.Item>
-        )}
 
-        <Form.Item
-          label="Enabled"
-          name="enabled"
-          valuePropName="checked"
-          initialValue={mode === 'create' ? true : undefined}
-        >
-          <Switch />
-        </Form.Item>
+          <Form.Item
+            label="Name"
+            name="name"
+            rules={[{ required: true, message: 'Please enter a channel name' }]}
+          >
+            <Input placeholder="e.g., Team Slack, Personal Discord" />
+          </Form.Item>
 
-        {channelType !== 'slack' && channelType !== 'github' && channelType !== 'teams' && (
-          <Alert
-            title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
-            description="This platform integration is not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-        )}
-      </div>
+          <Form.Item
+            label="Target Branch"
+            name="target_branch_id"
+            rules={[{ required: true, message: 'Please select a target branch' }]}
+            tooltip={
+              mode === 'create'
+                ? 'New sessions from this channel will be created in this branch'
+                : undefined
+            }
+          >
+            <BranchSelect branchById={branchById} />
+          </Form.Item>
 
-      {/* ── GitHub App Setup (create steps + shared config collapse) ── */}
-      {channelType === 'github' && (
-        <>
-          {githubLoading && (
-            <div style={{ textAlign: 'center', padding: '24px 0' }}>
-              <Spin indicator={<LoadingOutlined spin />} />
-              <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-                Loading GitHub App data...
-              </Typography.Text>
-            </div>
+          {/* Slack and GitHub choose identity in their platform-specific Identity sections. */}
+          {channelType !== 'slack' && channelType !== 'github' && (
+            <Form.Item
+              label="Post messages as"
+              name="agor_user_id"
+              rules={[{ required: true, message: 'Please select a user' }]}
+              tooltip="Sessions from this channel will run as this Agor user"
+            >
+              <UserSelect userById={userById} />
+            </Form.Item>
           )}
 
-          {githubError && (
+          <Form.Item
+            label="Enabled"
+            name="enabled"
+            valuePropName="checked"
+            initialValue={mode === 'create' ? true : undefined}
+          >
+            <Switch />
+          </Form.Item>
+
+          {channelType !== 'slack' && channelType !== 'github' && channelType !== 'teams' && (
             <Alert
-              type="error"
+              title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
+              description="This platform integration is not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
+              type="info"
               showIcon
-              title="GitHub Setup Error"
-              description={githubError}
               style={{ marginBottom: 16 }}
             />
           )}
+        </div>
 
-          {/* Step 1 (Create app): register the GitHub App. */}
-          {mode === 'create' && createStep === 1 && !githubLoading && (
-            <div style={{ marginBottom: 16 }}>
-              <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-                Create a GitHub App to connect Agor to your repositories. This uses GitHub&apos;s
-                URL-parameters registration flow — you&apos;ll be redirected to GitHub with the form
-                pre-filled, then brought back here to complete setup.
-              </Typography.Paragraph>
+        {/* ── GitHub App Setup (create steps + shared config collapse) ── */}
+        {channelType === 'github' && (
+          <>
+            {githubLoading && (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <Spin indicator={<LoadingOutlined spin />} />
+                <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+                  Loading GitHub App data...
+                </Typography.Text>
+              </div>
+            )}
 
-              <Form.Item label="App Name" name="github_app_name">
-                <Input placeholder="Agor (optional — defaults to 'Agor')" />
-              </Form.Item>
-
-              <Form.Item
-                label="Target Organization"
-                name="github_org"
-                tooltip="Leave empty to create the app under your personal GitHub account"
-              >
-                <Input placeholder="my-org (optional)" />
-              </Form.Item>
-
-              <Button
-                type="primary"
-                icon={<GithubOutlined />}
-                block
-                onClick={async () => {
-                  const daemonUrl = getDaemonUrl();
-                  const params = new URLSearchParams();
-                  const appName = form.getFieldValue('github_app_name');
-                  const org = form.getFieldValue('github_org');
-                  if (appName) params.set('name', appName);
-                  if (org) params.set('org', org);
-
-                  // Fetch a one-time CSRF state token bound to the current admin.
-                  // This authenticates the install-initiation step and binds the
-                  // post-install callback to this user_id.
-                  try {
-                    const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
-                    if (!accessToken) {
-                      showError('You must be logged in as an admin to install the GitHub App.');
-                      return;
-                    }
-                    const stateRes = await fetch(`${daemonUrl}/api/github/setup/state`, {
-                      method: 'POST',
-                      headers: {
-                        Authorization: `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json',
-                      },
-                    });
-                    if (!stateRes.ok) {
-                      const body = await stateRes
-                        .json()
-                        .catch(() => ({}) as Record<string, unknown>);
-                      const err =
-                        typeof body?.error === 'string'
-                          ? body.error
-                          : `Failed to start GitHub App install (HTTP ${stateRes.status})`;
-                      showError(err);
-                      return;
-                    }
-                    const { state } = (await stateRes.json()) as { state?: string };
-                    if (!state) {
-                      showError('Daemon did not return an install state token.');
-                      return;
-                    }
-                    params.set('state', state);
-                    window.open(`${daemonUrl}/api/github/setup/new?${params.toString()}`, '_blank');
-                  } catch (err) {
-                    showError(
-                      err instanceof Error ? err.message : 'Failed to initiate GitHub App install'
-                    );
-                  }
-                }}
-              >
-                Create GitHub App on GitHub
-              </Button>
-
-              <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '12px 0 0' }}>
-                Already created the app? Click <strong>Continue</strong> below to enter its
-                credentials.
-              </Typography.Paragraph>
-            </div>
-          )}
-
-          {/* Step 2 (Credentials): App ID + private key. */}
-          {mode === 'create' && createStep === 2 && !githubLoading && (
-            <div style={{ marginBottom: 16 }}>
+            {githubError && (
               <Alert
-                type="info"
+                type="error"
                 showIcon
-                title="Enter your GitHub App credentials"
-                description={
-                  <span>
-                    On your GitHub App&apos;s settings page:
-                    <br />
-                    1. Copy the <strong>App ID</strong> (shown at the top under &quot;About&quot;)
-                    <br />
-                    2. Scroll to &quot;Private keys&quot; and click{' '}
-                    <strong>&quot;Generate a private key&quot;</strong>
-                    <br />
-                    3. Paste the downloaded .pem file contents below
-                  </span>
-                }
+                title="GitHub Setup Error"
+                description={githubError}
                 style={{ marginBottom: 16 }}
               />
+            )}
 
-              <Form.Item
-                label="App ID"
-                name="github_app_id"
-                rules={[{ required: true, message: 'Enter your GitHub App ID' }]}
-                tooltip="Found on your GitHub App's settings page (General → About)"
-              >
-                <Input placeholder="123456" />
-              </Form.Item>
+            {/* Step 1 (Create app): register the GitHub App. */}
+            {mode === 'create' && createStep === 1 && !githubLoading && (
+              <div style={{ marginBottom: 16 }}>
+                <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+                  Create a GitHub App to connect Agor to your repositories. This uses GitHub&apos;s
+                  URL-parameters registration flow — you&apos;ll be redirected to GitHub with the
+                  form pre-filled, then brought back here to complete setup.
+                </Typography.Paragraph>
 
-              <Form.Item
-                label="Private Key (PEM)"
-                name="github_private_key"
-                rules={[{ required: true, message: 'Paste your GitHub App private key' }]}
-                tooltip="Generate a private key on your GitHub App's settings page, then paste the .pem file contents"
-              >
-                <Input.TextArea
-                  rows={4}
-                  placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;..."
-                  style={{ fontFamily: 'monospace', fontSize: 11 }}
+                <Form.Item label="App Name" name="github_app_name">
+                  <Input placeholder="Agor (optional — defaults to 'Agor')" />
+                </Form.Item>
+
+                <Form.Item
+                  label="Target Organization"
+                  name="github_org"
+                  tooltip="Leave empty to create the app under your personal GitHub account"
+                >
+                  <Input placeholder="my-org (optional)" />
+                </Form.Item>
+
+                <Button
+                  type="primary"
+                  icon={<GithubOutlined />}
+                  block
+                  onClick={async () => {
+                    const daemonUrl = getDaemonUrl();
+                    const params = new URLSearchParams();
+                    const appName = form.getFieldValue('github_app_name');
+                    const org = form.getFieldValue('github_org');
+                    if (appName) params.set('name', appName);
+                    if (org) params.set('org', org);
+
+                    // Fetch a one-time CSRF state token bound to the current admin.
+                    // This authenticates the install-initiation step and binds the
+                    // post-install callback to this user_id.
+                    try {
+                      const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
+                      if (!accessToken) {
+                        showError('You must be logged in as an admin to install the GitHub App.');
+                        return;
+                      }
+                      const stateRes = await fetch(`${daemonUrl}/api/github/setup/state`, {
+                        method: 'POST',
+                        headers: {
+                          Authorization: `Bearer ${accessToken}`,
+                          'Content-Type': 'application/json',
+                        },
+                      });
+                      if (!stateRes.ok) {
+                        const body = await stateRes
+                          .json()
+                          .catch(() => ({}) as Record<string, unknown>);
+                        const err =
+                          typeof body?.error === 'string'
+                            ? body.error
+                            : `Failed to start GitHub App install (HTTP ${stateRes.status})`;
+                        showError(err);
+                        return;
+                      }
+                      const { state } = (await stateRes.json()) as { state?: string };
+                      if (!state) {
+                        showError('Daemon did not return an install state token.');
+                        return;
+                      }
+                      params.set('state', state);
+                      window.open(
+                        `${daemonUrl}/api/github/setup/new?${params.toString()}`,
+                        '_blank'
+                      );
+                    } catch (err) {
+                      showError(
+                        err instanceof Error ? err.message : 'Failed to initiate GitHub App install'
+                      );
+                    }
+                  }}
+                >
+                  Create GitHub App on GitHub
+                </Button>
+
+                <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '12px 0 0' }}>
+                  Already created the app? Click <strong>Continue</strong> below to enter its
+                  credentials.
+                </Typography.Paragraph>
+              </div>
+            )}
+
+            {/* Step 2 (Credentials): App ID + private key. */}
+            {mode === 'create' && createStep === 2 && !githubLoading && (
+              <div style={{ marginBottom: 16 }}>
+                <Alert
+                  type="info"
+                  showIcon
+                  title="Enter your GitHub App credentials"
+                  description={
+                    <span>
+                      On your GitHub App&apos;s settings page:
+                      <br />
+                      1. Copy the <strong>App ID</strong> (shown at the top under &quot;About&quot;)
+                      <br />
+                      2. Scroll to &quot;Private keys&quot; and click{' '}
+                      <strong>&quot;Generate a private key&quot;</strong>
+                      <br />
+                      3. Paste the downloaded .pem file contents below
+                    </span>
+                  }
+                  style={{ marginBottom: 16 }}
                 />
-              </Form.Item>
 
-              <Form.Item
-                label="Installation ID"
-                name="github_installation_id"
-                tooltip="Set automatically via the setup callback, or paste from your GitHub App's installation URL"
-              >
-                <Input placeholder="123456789" />
-              </Form.Item>
+                <Form.Item
+                  label="App ID"
+                  name="github_app_id"
+                  rules={[{ required: true, message: 'Enter your GitHub App ID' }]}
+                  tooltip="Found on your GitHub App's settings page (General → About)"
+                >
+                  <Input placeholder="123456" />
+                </Form.Item>
 
-              {githubError && (
-                <Alert type="error" showIcon title={githubError} style={{ marginBottom: 12 }} />
-              )}
-            </div>
-          )}
+                <Form.Item
+                  label="Private Key (PEM)"
+                  name="github_private_key"
+                  rules={[{ required: true, message: 'Paste your GitHub App private key' }]}
+                  tooltip="Generate a private key on your GitHub App's settings page, then paste the .pem file contents"
+                >
+                  <Input.TextArea
+                    rows={4}
+                    placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;..."
+                    style={{ fontFamily: 'monospace', fontSize: 11 }}
+                  />
+                </Form.Item>
 
-          {/* Step 3 (Configure): shared settings collapse — also the edit-mode body. */}
-          {((mode === 'create' && createStep === 3) || mode === 'edit') && !githubLoading && (
-            <Collapse
-              ghost
-              destroyOnHidden={false}
-              defaultActiveKey={mode === 'create' ? ['identity', 'github-config'] : []}
-              style={{ marginLeft: -16, marginRight: -16 }}
-              items={[
-                // ── Credentials (edit mode) ──
-                ...(mode === 'edit'
-                  ? [
-                      {
-                        key: 'github-credentials',
-                        label: (
-                          <SectionLabel
-                            icon={<GithubOutlined />}
-                            title="App Credentials"
-                            subtitle={
-                              editingChannel?.config &&
-                              (editingChannel.config as Record<string, unknown>).private_key
-                                ? 'configured'
-                                : 'not set'
-                            }
-                          />
-                        ),
-                        children: (
-                          <>
-                            <Form.Item
-                              label="App ID"
-                              name="github_app_id"
-                              tooltip="Found on your GitHub App's settings page (General → About)"
-                            >
-                              <Input placeholder="123456" />
-                            </Form.Item>
-                            <Form.Item
-                              label="Private Key (PEM)"
-                              name="github_private_key"
-                              tooltip="Leave empty to keep the existing key. Paste a new .pem to replace it."
-                            >
-                              <Input.TextArea
-                                rows={3}
-                                placeholder={
-                                  editingChannel?.config &&
-                                  (editingChannel.config as Record<string, unknown>).private_key
-                                    ? '(private key is set — paste new key to replace)'
-                                    : '-----BEGIN RSA PRIVATE KEY-----\n...'
-                                }
-                                style={{ fontFamily: 'monospace', fontSize: 11 }}
-                              />
-                            </Form.Item>
-                            <Form.Item
-                              label="Installation ID"
-                              name="github_installation_id"
-                              tooltip="Set automatically via the setup callback, or paste from your GitHub App's installation URL"
-                            >
-                              <Input placeholder="123456789" />
-                            </Form.Item>
-                          </>
-                        ),
-                      },
-                    ]
-                  : []),
-                {
-                  key: 'github-config',
-                  label: (
-                    <SectionLabel
-                      icon={<GithubOutlined />}
-                      title="GitHub Settings"
-                      subtitle="polling & mentions"
-                    />
-                  ),
-                  children: (
-                    <>
-                      <Form.Item
-                        label="Watch Repos"
-                        name="github_watch_repos"
-                        rules={[{ required: true, message: 'At least one repo is required' }]}
-                        tooltip="Repos to watch for @mentions, in owner/repo format"
-                      >
-                        <Select
-                          mode="tags"
-                          placeholder="preset-io/agor"
-                          tokenSeparators={[',', ' ']}
-                        />
-                      </Form.Item>
+                <Form.Item
+                  label="Installation ID"
+                  name="github_installation_id"
+                  tooltip="Set automatically via the setup callback, or paste from your GitHub App's installation URL"
+                >
+                  <Input placeholder="123456789" />
+                </Form.Item>
 
-                      <Form.Item
-                        label="Require @mention"
-                        name="github_require_mention"
-                        valuePropName="checked"
-                        initialValue={true}
-                        tooltip="Only respond to PR/issue comments that @mention the bot"
-                      >
-                        <Switch />
-                      </Form.Item>
+                {githubError && (
+                  <Alert type="error" showIcon title={githubError} style={{ marginBottom: 12 }} />
+                )}
+              </div>
+            )}
 
-                      <Form.Item
-                        label="Mention Name"
-                        name="github_mention_name"
-                        tooltip="The name users type to trigger the bot (e.g., 'agor' for @agor)"
-                        initialValue="agor"
-                      >
-                        <Input prefix="@" placeholder="agor" />
-                      </Form.Item>
-
-                      <Form.Item
-                        label="Poll Interval (seconds)"
-                        name="github_poll_interval_s"
-                        initialValue={30}
-                        tooltip="How frequently to poll the GitHub API for new mentions"
-                      >
-                        <InputNumber min={10} max={300} style={{ width: '100%' }} />
-                      </Form.Item>
-                    </>
-                  ),
-                },
-                // ── Identity ──
-                {
-                  key: 'identity',
-                  label: (
-                    <SectionLabel
-                      icon={<UserOutlined />}
-                      title="Identity"
-                      subtitle={getIdentitySubtitle(alignGithubUsers)}
-                    />
-                  ),
-                  children: (
-                    <PlatformIdentityFields
-                      alignFieldName="github_align_users"
-                      alignLabel="Align GitHub users"
-                      alignDescription="Map GitHub logins to Agor users. Unmapped users are rejected."
-                      alignUsers={alignGithubUsers}
-                      userById={userById}
-                      alignedContent={
+            {/* Step 3 (Configure): shared settings collapse — also the edit-mode body. */}
+            {((mode === 'create' && createStep === 3) || mode === 'edit') && !githubLoading && (
+              <Collapse
+                ghost
+                destroyOnHidden={false}
+                defaultActiveKey={mode === 'create' ? ['identity', 'github-config'] : []}
+                style={{ marginLeft: -16, marginRight: -16 }}
+                items={[
+                  // ── Credentials (edit mode) ──
+                  ...(mode === 'edit'
+                    ? [
+                        {
+                          key: 'github-credentials',
+                          label: (
+                            <SectionLabel
+                              icon={<GithubOutlined />}
+                              title="App Credentials"
+                              subtitle={
+                                editingChannel?.config &&
+                                (editingChannel.config as Record<string, unknown>).private_key
+                                  ? 'configured'
+                                  : 'not set'
+                              }
+                            />
+                          ),
+                          children: (
+                            <>
+                              <Form.Item
+                                label="App ID"
+                                name="github_app_id"
+                                tooltip="Found on your GitHub App's settings page (General → About)"
+                              >
+                                <Input placeholder="123456" />
+                              </Form.Item>
+                              <Form.Item
+                                label="Private Key (PEM)"
+                                name="github_private_key"
+                                tooltip="Leave empty to keep the existing key. Paste a new .pem to replace it."
+                              >
+                                <Input.TextArea
+                                  rows={3}
+                                  placeholder={
+                                    editingChannel?.config &&
+                                    (editingChannel.config as Record<string, unknown>).private_key
+                                      ? '(private key is set — paste new key to replace)'
+                                      : '-----BEGIN RSA PRIVATE KEY-----\n...'
+                                  }
+                                  style={{ fontFamily: 'monospace', fontSize: 11 }}
+                                />
+                              </Form.Item>
+                              <Form.Item
+                                label="Installation ID"
+                                name="github_installation_id"
+                                tooltip="Set automatically via the setup callback, or paste from your GitHub App's installation URL"
+                              >
+                                <Input placeholder="123456789" />
+                              </Form.Item>
+                            </>
+                          ),
+                        },
+                      ]
+                    : []),
+                  {
+                    key: 'github-config',
+                    label: (
+                      <SectionLabel
+                        icon={<GithubOutlined />}
+                        title="GitHub Settings"
+                        subtitle="polling & mentions"
+                      />
+                    ),
+                    children: (
+                      <>
                         <Form.Item
-                          label="User Map"
-                          name="github_user_map"
-                          tooltip="JSON object mapping GitHub logins to Agor email addresses"
-                          rules={[{ validator: validateJSON }]}
+                          label="Watch Repos"
+                          name="github_watch_repos"
+                          rules={[{ required: true, message: 'At least one repo is required' }]}
+                          tooltip="Repos to watch for @mentions, in owner/repo format"
                         >
-                          <JSONEditor
-                            rows={4}
-                            placeholder={'{\n  "octocat": "user@example.com"\n}'}
+                          <Select
+                            mode="tags"
+                            placeholder="preset-io/agor"
+                            tokenSeparators={[',', ' ']}
                           />
                         </Form.Item>
-                      }
-                    />
-                  ),
-                },
-                // ── Agentic Tool Configuration ──
-                {
-                  key: 'agentic-tool-config',
-                  label: (
-                    <SectionLabel
-                      icon={<ThunderboltOutlined />}
-                      title="Agent Configuration"
-                      subtitle={selectedAgent}
-                    />
-                  ),
-                  children: (
-                    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        Configure which agent and settings to use for sessions created from this
-                        channel.
-                      </Typography.Text>
-                      <AgentSelectionGrid
-                        agents={AVAILABLE_AGENTS}
-                        selectedAgentId={selectedAgent}
-                        onSelect={onAgentChange}
-                        columns={2}
-                        showHelperText={false}
-                        showComparisonLink={false}
-                      />
-                      <AgenticToolConfigForm
-                        agenticTool={selectedAgent as AgenticToolName}
-                        mcpServerById={mcpServerById}
-                        showHelpText={false}
-                      />
-                    </Space>
-                  ),
-                },
-                // ── Environment Variables ──
-                {
-                  key: 'env-vars',
-                  label: (
-                    <SectionLabel
-                      icon={<LockOutlined />}
-                      title="Environment Variables"
-                      subtitle="channel-level secrets"
-                    />
-                  ),
-                  children: (
-                    <>
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                      >
-                        Define environment variables for sessions created from this channel. Useful
-                        for service account tokens or API keys for MCP servers.
-                      </Typography.Text>
-                      <Form.Item name="envVars" noStyle>
-                        <GatewayEnvVarsEditor />
-                      </Form.Item>
-                    </>
-                  ),
-                },
-              ]}
-            />
-          )}
-        </>
-      )}
 
-      {/* ── Teams setup (create step 1, or the whole edit body) ── */}
-      {channelType === 'teams' && (mode === 'edit' || createStep === 1) && (
-        <Collapse
-          ghost
-          destroyOnHidden={false}
-          defaultActiveKey={mode === 'create' ? ['teams-credentials'] : []}
-          style={{ marginLeft: -16, marginRight: -16 }}
-          items={[
-            // ── Credentials ──
-            {
-              key: 'teams-credentials',
-              label: (
-                <SectionLabel
-                  icon={<KeyOutlined />}
-                  title="Azure Bot Credentials"
-                  subtitle={mode === 'edit' ? 'leave blank to keep current' : undefined}
-                />
-              ),
-              children: (
-                <>
-                  <Form.Item
-                    label="App ID"
-                    name="teams_app_id"
-                    rules={
-                      mode === 'create'
-                        ? [{ required: true, message: 'Azure Bot App ID is required' }]
-                        : []
-                    }
-                    tooltip="Azure Bot Registration Application (client) ID"
-                  >
-                    <Input placeholder="00000000-0000-0000-0000-000000000000" />
-                  </Form.Item>
-
-                  <Form.Item
-                    label="App Password"
-                    name="teams_app_password"
-                    rules={
-                      mode === 'create'
-                        ? [{ required: true, message: 'Azure Bot App Password is required' }]
-                        : []
-                    }
-                    tooltip="Azure Bot Registration client secret (value, not the secret ID)"
-                  >
-                    <Input.Password
-                      placeholder={mode === 'edit' ? '••••••••' : 'Client secret value'}
-                    />
-                  </Form.Item>
-
-                  <Form.Item
-                    label="Tenant ID"
-                    name="teams_tenant_id"
-                    rules={[
-                      {
-                        required: true,
-                        message: 'Tenant ID is required for Teams bots',
-                      },
-                    ]}
-                    tooltip="Azure AD Tenant ID. Required so the bot can acquire tokens to send replies."
-                  >
-                    <Input placeholder="00000000-0000-0000-0000-000000000000" />
-                  </Form.Item>
-
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="Azure Bot Setup"
-                    description={
-                      <span>
-                        Create an Azure Bot resource in the{' '}
-                        <Typography.Link
-                          href="https://portal.azure.com/#create/Microsoft.AzureBotService"
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <Form.Item
+                          label="Require @mention"
+                          name="github_require_mention"
+                          valuePropName="checked"
+                          initialValue={true}
+                          tooltip="Only respond to PR/issue comments that @mention the bot"
                         >
-                          Azure Portal
-                        </Typography.Link>
-                        . Both single-tenant and multi-tenant bots are supported. The{' '}
-                        <strong>Tenant ID</strong> is required so the bot can send replies. Then
-                        sideload the bot as a Teams app via a custom manifest.
-                      </span>
-                    }
-                    style={{ fontSize: 12 }}
+                          <Switch />
+                        </Form.Item>
+
+                        <Form.Item
+                          label="Mention Name"
+                          name="github_mention_name"
+                          tooltip="The name users type to trigger the bot (e.g., 'agor' for @agor)"
+                          initialValue="agor"
+                        >
+                          <Input prefix="@" placeholder="agor" />
+                        </Form.Item>
+
+                        <Form.Item
+                          label="Poll Interval (seconds)"
+                          name="github_poll_interval_s"
+                          initialValue={30}
+                          tooltip="How frequently to poll the GitHub API for new mentions"
+                        >
+                          <InputNumber min={10} max={300} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </>
+                    ),
+                  },
+                  // ── Identity ──
+                  {
+                    key: 'identity',
+                    label: (
+                      <SectionLabel
+                        icon={<UserOutlined />}
+                        title="Identity"
+                        subtitle={getIdentitySubtitle(alignGithubUsers)}
+                      />
+                    ),
+                    children: (
+                      <PlatformIdentityFields
+                        alignFieldName="github_align_users"
+                        alignLabel="Align GitHub users"
+                        alignDescription="Map GitHub logins to Agor users. Unmapped users are rejected."
+                        alignUsers={alignGithubUsers}
+                        userById={userById}
+                        alignedContent={
+                          <Form.Item
+                            label="User Map"
+                            name="github_user_map"
+                            tooltip="JSON object mapping GitHub logins to Agor email addresses"
+                            rules={[{ validator: validateJSON }]}
+                          >
+                            <JSONEditor
+                              rows={4}
+                              placeholder={'{\n  "octocat": "user@example.com"\n}'}
+                            />
+                          </Form.Item>
+                        }
+                      />
+                    ),
+                  },
+                  // ── Agentic Tool Configuration ──
+                  {
+                    key: 'agentic-tool-config',
+                    label: (
+                      <SectionLabel
+                        icon={<ThunderboltOutlined />}
+                        title="Agent Configuration"
+                        subtitle={selectedAgent}
+                      />
+                    ),
+                    children: (
+                      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          Configure which agent and settings to use for sessions created from this
+                          channel.
+                        </Typography.Text>
+                        <AgentSelectionGrid
+                          agents={AVAILABLE_AGENTS}
+                          selectedAgentId={selectedAgent}
+                          onSelect={onAgentChange}
+                          columns={2}
+                          showHelperText={false}
+                          showComparisonLink={false}
+                        />
+                        <AgenticToolConfigForm
+                          agenticTool={selectedAgent as AgenticToolName}
+                          mcpServerById={mcpServerById}
+                          showHelpText={false}
+                        />
+                      </Space>
+                    ),
+                  },
+                  // ── Environment Variables ──
+                  {
+                    key: 'env-vars',
+                    label: (
+                      <SectionLabel
+                        icon={<LockOutlined />}
+                        title="Environment Variables"
+                        subtitle="channel-level secrets"
+                      />
+                    ),
+                    children: (
+                      <>
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                        >
+                          Define environment variables for sessions created from this channel.
+                          Useful for service account tokens or API keys for MCP servers.
+                        </Typography.Text>
+                        <Form.Item name="envVars" noStyle>
+                          <GatewayEnvVarsEditor />
+                        </Form.Item>
+                      </>
+                    ),
+                  },
+                ]}
+              />
+            )}
+          </>
+        )}
+
+        {/* ── Teams setup (create step 1, or the whole edit body) ── */}
+        {channelType === 'teams' && (mode === 'edit' || createStep === 1) && (
+          <Collapse
+            ghost
+            destroyOnHidden={false}
+            defaultActiveKey={mode === 'create' ? ['teams-credentials'] : []}
+            style={{ marginLeft: -16, marginRight: -16 }}
+            items={[
+              // ── Credentials ──
+              {
+                key: 'teams-credentials',
+                label: (
+                  <SectionLabel
+                    icon={<KeyOutlined />}
+                    title="Azure Bot Credentials"
+                    subtitle={mode === 'edit' ? 'leave blank to keep current' : undefined}
                   />
-                </>
-              ),
-            },
+                ),
+                children: (
+                  <>
+                    <Form.Item
+                      label="App ID"
+                      name="teams_app_id"
+                      rules={
+                        mode === 'create'
+                          ? [{ required: true, message: 'Azure Bot App ID is required' }]
+                          : []
+                      }
+                      tooltip="Azure Bot Registration Application (client) ID"
+                    >
+                      <Input placeholder="00000000-0000-0000-0000-000000000000" />
+                    </Form.Item>
 
-            // ── Message Sources ──
-            {
-              key: 'teams-message-sources',
-              label: (
-                <SectionLabel
-                  icon={<MessageOutlined />}
-                  title="Message Sources"
-                  subtitle="DMs & channels"
-                />
-              ),
-              children: (
-                <>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: 12, display: 'block', marginBottom: 16 }}
-                  >
-                    Configure how the bot responds in Teams channels vs 1:1 chats. Direct messages
-                    are always enabled.
-                  </Typography.Text>
+                    <Form.Item
+                      label="App Password"
+                      name="teams_app_password"
+                      rules={
+                        mode === 'create'
+                          ? [{ required: true, message: 'Azure Bot App Password is required' }]
+                          : []
+                      }
+                      tooltip="Azure Bot Registration client secret (value, not the secret ID)"
+                    >
+                      <Input.Password
+                        placeholder={mode === 'edit' ? '••••••••' : 'Client secret value'}
+                      />
+                    </Form.Item>
 
-                  <Form.Item
-                    label="Require @mention in channels"
-                    name="teams_require_mention"
-                    valuePropName="checked"
-                    initialValue={true}
-                    tooltip="When enabled, bot only responds when @mentioned in Teams channels (recommended)"
-                  >
-                    <Switch />
-                  </Form.Item>
-                </>
-              ),
-            },
+                    <Form.Item
+                      label="Tenant ID"
+                      name="teams_tenant_id"
+                      rules={[
+                        {
+                          required: true,
+                          message: 'Tenant ID is required for Teams bots',
+                        },
+                      ]}
+                      tooltip="Azure AD Tenant ID. Required so the bot can acquire tokens to send replies."
+                    >
+                      <Input placeholder="00000000-0000-0000-0000-000000000000" />
+                    </Form.Item>
 
-            // ── Webhook Configuration ──
-            {
-              key: 'teams-webhook',
-              label: (
-                <SectionLabel
-                  icon={<ToolOutlined />}
-                  title="Webhook Configuration"
-                  subtitle="port & path"
-                />
-              ),
-              children: (
-                <>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                  >
-                    The Teams connector runs an HTTP server for the Bot Framework messaging
-                    endpoint. Configure the port and path to match your Azure Bot&apos;s messaging
-                    endpoint URL.
-                  </Typography.Text>
-
-                  <Form.Item
-                    label="Webhook Port"
-                    name="teams_webhook_port"
-                    initialValue={3978}
-                    tooltip="Port for the Bot Framework HTTP endpoint"
-                  >
-                    <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
-                  </Form.Item>
-
-                  <Form.Item
-                    label="Webhook Path"
-                    name="teams_webhook_path"
-                    initialValue="/api/messages"
-                    tooltip="URL path for the Bot Framework messaging endpoint"
-                  >
-                    <Input placeholder="/api/messages" />
-                  </Form.Item>
-                </>
-              ),
-            },
-
-            // ── Agentic Tool Configuration ──
-            {
-              key: 'agentic-tool-config',
-              label: (
-                <SectionLabel
-                  icon={<ThunderboltOutlined />}
-                  title="Agent Configuration"
-                  subtitle={selectedAgent}
-                />
-              ),
-              children: (
-                <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Configure which agent and settings to use for sessions created from this
-                    channel.
-                  </Typography.Text>
-                  <AgentSelectionGrid
-                    agents={AVAILABLE_AGENTS}
-                    selectedAgentId={selectedAgent}
-                    onSelect={onAgentChange}
-                    columns={2}
-                    showHelperText={false}
-                    showComparisonLink={false}
-                  />
-                  <AgenticToolConfigForm
-                    agenticTool={selectedAgent as AgenticToolName}
-                    mcpServerById={mcpServerById}
-                    showHelpText={false}
-                  />
-                </Space>
-              ),
-            },
-
-            // ── Environment Variables ──
-            {
-              key: 'env-vars',
-              label: (
-                <SectionLabel
-                  icon={<LockOutlined />}
-                  title="Environment Variables"
-                  subtitle="channel-level secrets"
-                />
-              ),
-              children: (
-                <>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                  >
-                    Define environment variables for sessions created from this channel. Useful for
-                    service account tokens or API keys for MCP servers.
-                  </Typography.Text>
-                  <Form.Item name="envVars" noStyle>
-                    <GatewayEnvVarsEditor />
-                  </Form.Item>
-                </>
-              ),
-            },
-          ]}
-        />
-      )}
-
-      {/* ── Slack guided setup wizard (create steps 1–3) ── */}
-      {channelType === 'slack' && mode === 'create' && createStep >= 1 && (
-        <SlackSetupWizard
-          form={form}
-          userById={userById}
-          mcpServerById={mcpServerById}
-          selectedAgent={selectedAgent}
-          onAgentChange={onAgentChange}
-          step={createStep - 1}
-          testResult={slackTestResult}
-          testLoading={slackTestLoading}
-          onTest={onSlackTest}
-        />
-      )}
-
-      {/* ── Collapsible sections (Slack edit) ── */}
-      {channelType === 'slack' && mode === 'edit' && (
-        <Collapse
-          ghost
-          destroyOnHidden={false}
-          defaultActiveKey={[]}
-          style={{ marginLeft: -16, marginRight: -16 }}
-          items={[
-            // ── Identity ──
-            {
-              key: 'identity',
-              label: (
-                <SectionLabel
-                  icon={<TeamOutlined />}
-                  title="Identity"
-                  subtitle={getIdentitySubtitle(alignSlackUsers)}
-                />
-              ),
-              children: (
-                <PlatformIdentityFields
-                  alignFieldName="align_slack_users"
-                  alignLabel="Align Slack users"
-                  alignDescription="Match Slack profile email to an Agor user. Unmatched users are rejected."
-                  alignUsers={alignSlackUsers}
-                  userById={userById}
-                  alignedContent={
                     <Alert
                       type="info"
                       showIcon
-                      title="Requires users:read.email scope"
+                      message="Azure Bot Setup"
                       description={
                         <span>
-                          Add <code>users:read.email</code> to your Slack app so Agor can match
-                          Slack profiles by email.
+                          Create an Azure Bot resource in the{' '}
+                          <Typography.Link
+                            href="https://portal.azure.com/#create/Microsoft.AzureBotService"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Azure Portal
+                          </Typography.Link>
+                          . Both single-tenant and multi-tenant bots are supported. The{' '}
+                          <strong>Tenant ID</strong> is required so the bot can send replies. Then
+                          sideload the bot as a Teams app via a custom manifest.
                         </span>
                       }
                       style={{ fontSize: 12 }}
                     />
-                  }
-                />
-              ),
-            },
-            // ── Credentials ──
-            {
-              key: 'credentials',
-              label: (
-                <SectionLabel
-                  icon={<KeyOutlined />}
-                  title="Credentials"
-                  subtitle={mode === 'edit' ? 'leave blank to keep current' : undefined}
-                />
-              ),
-              children: (
-                <>
-                  <Form.Item
-                    label="Bot Token"
-                    name="bot_token"
-                    tooltip="Slack Bot User OAuth Token (xoxb-...)"
-                  >
-                    <Input.Password placeholder="••••••••" />
-                  </Form.Item>
+                  </>
+                ),
+              },
 
-                  <Form.Item
-                    label="App Token"
-                    name="app_token"
-                    tooltip="Slack App-Level Token for Socket Mode (xapp-...)"
-                  >
-                    <Input.Password placeholder="••••••••" />
-                  </Form.Item>
-
-                  <Alert
-                    type="info"
-                    showIcon
-                    title="Socket Mode Required"
-                    description="Enable Socket Mode in your Slack app settings and generate an app-level token with connections:write scope."
-                    style={{ fontSize: 12 }}
+              // ── Message Sources ──
+              {
+                key: 'teams-message-sources',
+                label: (
+                  <SectionLabel
+                    icon={<MessageOutlined />}
+                    title="Message Sources"
+                    subtitle="DMs & channels"
                   />
-                </>
-              ),
-            },
+                ),
+                children: (
+                  <>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, display: 'block', marginBottom: 16 }}
+                    >
+                      Configure how the bot responds in Teams channels vs 1:1 chats. Direct messages
+                      are always enabled.
+                    </Typography.Text>
 
-            // ── Message Sources ──
-            {
-              key: 'message-sources',
-              label: (
-                <SectionLabel
-                  icon={<MessageOutlined />}
-                  title="Message Sources"
-                  subtitle="DMs always enabled"
-                />
-              ),
-              children: (
-                <>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: 12, display: 'block', marginBottom: 16 }}
-                  >
-                    Choose where the bot listens for messages. Direct messages are always enabled.
-                  </Typography.Text>
+                    <Form.Item
+                      label="Require @mention in channels"
+                      name="teams_require_mention"
+                      valuePropName="checked"
+                      initialValue={true}
+                      tooltip="When enabled, bot only responds when @mentioned in Teams channels (recommended)"
+                    >
+                      <Switch />
+                    </Form.Item>
+                  </>
+                ),
+              },
 
-                  <Form.Item
-                    label="Public Channels"
-                    name="enable_channels"
-                    valuePropName="checked"
-                    initialValue={false}
-                    tooltip="Bot will respond to messages in public channels it's added to"
-                  >
-                    <Switch />
-                  </Form.Item>
+              // ── Webhook Configuration ──
+              {
+                key: 'teams-webhook',
+                label: (
+                  <SectionLabel
+                    icon={<ToolOutlined />}
+                    title="Webhook Configuration"
+                    subtitle="port & path"
+                  />
+                ),
+                children: (
+                  <>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                    >
+                      The Teams connector runs an HTTP server for the Bot Framework messaging
+                      endpoint. Configure the port and path to match your Azure Bot&apos;s messaging
+                      endpoint URL.
+                    </Typography.Text>
 
-                  <Form.Item
-                    label="Private Channels"
-                    name="enable_groups"
-                    valuePropName="checked"
-                    initialValue={false}
-                    tooltip="Bot will respond to messages in private channels it's added to"
-                  >
-                    <Switch />
-                  </Form.Item>
+                    <Form.Item
+                      label="Webhook Port"
+                      name="teams_webhook_port"
+                      initialValue={3978}
+                      tooltip="Port for the Bot Framework HTTP endpoint"
+                    >
+                      <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
+                    </Form.Item>
 
-                  <Form.Item
-                    label="Group DMs"
-                    name="enable_mpim"
-                    valuePropName="checked"
-                    initialValue={false}
-                    tooltip="Bot will respond to messages in multi-person direct messages"
-                  >
-                    <Switch />
-                  </Form.Item>
+                    <Form.Item
+                      label="Webhook Path"
+                      name="teams_webhook_path"
+                      initialValue="/api/messages"
+                      tooltip="URL path for the Bot Framework messaging endpoint"
+                    >
+                      <Input placeholder="/api/messages" />
+                    </Form.Item>
+                  </>
+                ),
+              },
 
-                  {sourcesEnabled && (
-                    <Alert
-                      type="info"
-                      showIcon
-                      title="Slack mentions are always required"
-                      description="Agor only starts or continues Slack channel threads when this bot is explicitly @mentioned. Missed thread replies are included as catch-up context on the next mention."
-                      style={{ marginBottom: 12 }}
+              // ── Agentic Tool Configuration ──
+              {
+                key: 'agentic-tool-config',
+                label: (
+                  <SectionLabel
+                    icon={<ThunderboltOutlined />}
+                    title="Agent Configuration"
+                    subtitle={selectedAgent}
+                  />
+                ),
+                children: (
+                  <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      Configure which agent and settings to use for sessions created from this
+                      channel.
+                    </Typography.Text>
+                    <AgentSelectionGrid
+                      agents={AVAILABLE_AGENTS}
+                      selectedAgentId={selectedAgent}
+                      onSelect={onAgentChange}
+                      columns={2}
+                      showHelperText={false}
+                      showComparisonLink={false}
                     />
-                  )}
+                    <AgenticToolConfigForm
+                      agenticTool={selectedAgent as AgenticToolName}
+                      mcpServerById={mcpServerById}
+                      showHelpText={false}
+                    />
+                  </Space>
+                ),
+              },
 
-                  {sourcesEnabled && (
+              // ── Environment Variables ──
+              {
+                key: 'env-vars',
+                label: (
+                  <SectionLabel
+                    icon={<LockOutlined />}
+                    title="Environment Variables"
+                    subtitle="channel-level secrets"
+                  />
+                ),
+                children: (
+                  <>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                    >
+                      Define environment variables for sessions created from this channel. Useful
+                      for service account tokens or API keys for MCP servers.
+                    </Typography.Text>
+                    <Form.Item name="envVars" noStyle>
+                      <GatewayEnvVarsEditor />
+                    </Form.Item>
+                  </>
+                ),
+              },
+            ]}
+          />
+        )}
+
+        {/* ── Slack guided setup wizard (create steps 1–3) ── */}
+        {channelType === 'slack' && mode === 'create' && createStep >= 1 && (
+          <SlackSetupWizard
+            form={form}
+            userById={userById}
+            mcpServerById={mcpServerById}
+            selectedAgent={selectedAgent}
+            onAgentChange={onAgentChange}
+            step={createStep - 1}
+            testResult={slackTestResult}
+            testLoading={slackTestLoading}
+            onTest={onSlackTest}
+          />
+        )}
+
+        {/* ── Collapsible sections (Slack edit) ── */}
+        {channelType === 'slack' && mode === 'edit' && (
+          <Collapse
+            ghost
+            destroyOnHidden={false}
+            defaultActiveKey={[]}
+            style={{ marginLeft: -16, marginRight: -16 }}
+            items={[
+              // ── Identity ──
+              {
+                key: 'identity',
+                label: (
+                  <SectionLabel
+                    icon={<TeamOutlined />}
+                    title="Identity"
+                    subtitle={getIdentitySubtitle(alignSlackUsers)}
+                  />
+                ),
+                children: (
+                  <PlatformIdentityFields
+                    alignFieldName="align_slack_users"
+                    alignLabel="Align Slack users"
+                    alignDescription="Match Slack profile email to an Agor user. Unmatched users are rejected."
+                    alignUsers={alignSlackUsers}
+                    userById={userById}
+                    alignedContent={
+                      <Alert
+                        type="info"
+                        showIcon
+                        title="Requires users:read.email scope"
+                        description={
+                          <span>
+                            Add <code>users:read.email</code> to your Slack app so Agor can match
+                            Slack profiles by email.
+                          </span>
+                        }
+                        style={{ fontSize: 12 }}
+                      />
+                    }
+                  />
+                ),
+              },
+              // ── Credentials ──
+              {
+                key: 'credentials',
+                label: (
+                  <SectionLabel
+                    icon={<KeyOutlined />}
+                    title="Credentials"
+                    subtitle={mode === 'edit' ? 'leave blank to keep current' : undefined}
+                  />
+                ),
+                children: (
+                  <>
+                    <Form.Item
+                      label="Bot Token"
+                      name="bot_token"
+                      tooltip="Slack Bot User OAuth Token (xoxb-...)"
+                    >
+                      <Input.Password placeholder="••••••••" />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="App Token"
+                      name="app_token"
+                      tooltip="Slack App-Level Token for Socket Mode (xapp-...)"
+                    >
+                      <Input.Password placeholder="••••••••" />
+                    </Form.Item>
+
                     <Alert
                       type="info"
                       showIcon
-                      title="Required Slack Scopes & Events"
+                      title="Socket Mode Required"
+                      description="Enable Socket Mode in your Slack app settings and generate an app-level token with connections:write scope."
+                      style={{ fontSize: 12 }}
+                    />
+                  </>
+                ),
+              },
+
+              // ── Message Sources ──
+              {
+                key: 'message-sources',
+                label: (
+                  <SectionLabel
+                    icon={<MessageOutlined />}
+                    title="Message Sources"
+                    subtitle="DMs always enabled"
+                  />
+                ),
+                children: (
+                  <>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, display: 'block', marginBottom: 16 }}
+                    >
+                      Choose where the bot listens for messages. Direct messages are always enabled.
+                    </Typography.Text>
+
+                    <Form.Item
+                      label="Public Channels"
+                      name="enable_channels"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Bot will respond to messages in public channels it's added to"
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Private Channels"
+                      name="enable_groups"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Bot will respond to messages in private channels it's added to"
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Group DMs"
+                      name="enable_mpim"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Bot will respond to messages in multi-person direct messages"
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    {sourcesEnabled && (
+                      <Alert
+                        type="info"
+                        showIcon
+                        title="Slack mentions are always required"
+                        description="Agor only starts or continues Slack channel threads when this bot is explicitly @mentioned. Missed thread replies are included as catch-up context on the next mention."
+                        style={{ marginBottom: 12 }}
+                      />
+                    )}
+
+                    {sourcesEnabled && (
+                      <Alert
+                        type="info"
+                        showIcon
+                        title="Required Slack Scopes & Events"
+                        description={
+                          <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
+                            <li>
+                              <code>chat:write</code> (always required)
+                            </li>
+                            {enableChannels && (
+                              <>
+                                <li>
+                                  <code>channels:history</code> + <code>app_mentions:read</code>
+                                </li>
+                                <li>
+                                  Events: <code>message.channels</code>, <code>app_mention</code>
+                                </li>
+                              </>
+                            )}
+                            {enableGroups && (
+                              <li>
+                                <code>groups:history</code> + event: <code>message.groups</code>
+                              </li>
+                            )}
+                            {enableMpim && (
+                              <li>
+                                <code>mpim:history</code> + event: <code>message.mpim</code>
+                              </li>
+                            )}
+                          </ul>
+                        }
+                        style={{ fontSize: 12 }}
+                      />
+                    )}
+                  </>
+                ),
+              },
+
+              // ── Outbound ──
+              {
+                key: 'outbound',
+                label: (
+                  <SectionLabel
+                    icon={<MessageOutlined />}
+                    title="Outbound"
+                    subtitle="proactive sends"
+                  />
+                ),
+                children: (
+                  <>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                    >
+                      Allow authorized agents to send proactive Slack messages through this gateway.
+                      Targets can be Slack channel IDs, channel names, or Slack user emails.
+                    </Typography.Text>
+
+                    <Form.Item
+                      label="Enable outbound sends"
+                      name="outbound_enabled"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="When enabled, branch admins/owners with full branch access can send proactive Slack messages through this gateway."
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Default outbound target"
+                      name="default_outbound_target"
+                      tooltip="Optional. Used when the agent omits a target. Examples: #project-updates, channel:C01ABC123, user@example.com."
+                    >
+                      <Input placeholder="#project-updates, channel:C01ABC123, or user@example.com" />
+                    </Form.Item>
+
+                    <Alert
+                      type="info"
+                      showIcon
+                      title="Slack scopes"
                       description={
-                        <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
-                          <li>
-                            <code>chat:write</code> (always required)
-                          </li>
-                          {enableChannels && (
-                            <>
-                              <li>
-                                <code>channels:history</code> + <code>app_mentions:read</code>
-                              </li>
-                              <li>
-                                Events: <code>message.channels</code>, <code>app_mention</code>
-                              </li>
-                            </>
-                          )}
-                          {enableGroups && (
-                            <li>
-                              <code>groups:history</code> + event: <code>message.groups</code>
-                            </li>
-                          )}
-                          {enableMpim && (
-                            <li>
-                              <code>mpim:history</code> + event: <code>message.mpim</code>
-                            </li>
-                          )}
-                        </ul>
+                        <span>
+                          Channel-name targets require <code>channels:read</code> and, for private
+                          channels, <code>groups:read</code>. Email targets require{' '}
+                          <code>users:read.email</code> and open a DM with that Slack user.
+                        </span>
                       }
                       style={{ fontSize: 12 }}
                     />
-                  )}
-                </>
-              ),
-            },
+                  </>
+                ),
+              },
 
-            // ── Outbound ──
-            {
-              key: 'outbound',
-              label: (
-                <SectionLabel
-                  icon={<MessageOutlined />}
-                  title="Outbound"
-                  subtitle="proactive sends"
-                />
-              ),
-              children: (
-                <>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                  >
-                    Allow authorized agents to send proactive Slack messages through this gateway.
-                    Targets can be Slack channel IDs, channel names, or Slack user emails.
-                  </Typography.Text>
-
-                  <Form.Item
-                    label="Enable outbound sends"
-                    name="outbound_enabled"
-                    valuePropName="checked"
-                    initialValue={false}
-                    tooltip="When enabled, branch admins/owners with full branch access can send proactive Slack messages through this gateway."
-                  >
-                    <Switch />
-                  </Form.Item>
-
-                  <Form.Item
-                    label="Default outbound target"
-                    name="default_outbound_target"
-                    tooltip="Optional. Used when the agent omits a target. Examples: #project-updates, channel:C01ABC123, user@example.com."
-                  >
-                    <Input placeholder="#project-updates, channel:C01ABC123, or user@example.com" />
-                  </Form.Item>
-
-                  <Alert
-                    type="info"
-                    showIcon
-                    title="Slack scopes"
-                    description={
-                      <span>
-                        Channel-name targets require <code>channels:read</code> and, for private
-                        channels, <code>groups:read</code>. Email targets require{' '}
-                        <code>users:read.email</code> and open a DM with that Slack user.
-                      </span>
-                    }
-                    style={{ fontSize: 12 }}
+              // ── Advanced ──
+              {
+                key: 'advanced',
+                label: (
+                  <SectionLabel
+                    icon={<ToolOutlined />}
+                    title="Advanced"
+                    subtitle="channel whitelist"
                   />
-                </>
-              ),
-            },
+                ),
+                children: (
+                  <>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                    >
+                      Restrict the bot to specific Slack channels by ID. Leave empty to allow all
+                      channels. Find channel IDs: right-click channel &rarr; View channel details
+                      &rarr; scroll to bottom.
+                    </Typography.Text>
+                    <Form.Item
+                      name="allowed_channel_ids"
+                      tooltip="Slack channel IDs (e.g., C01ABC123XY). Press Enter to add each ID."
+                    >
+                      <Select
+                        mode="tags"
+                        placeholder="Add channel IDs... (e.g., C01ABC123XY)"
+                        style={{ width: '100%' }}
+                        tokenSeparators={[',', ' ']}
+                      />
+                    </Form.Item>
+                  </>
+                ),
+              },
 
-            // ── Advanced ──
-            {
-              key: 'advanced',
-              label: (
-                <SectionLabel
-                  icon={<ToolOutlined />}
-                  title="Advanced"
-                  subtitle="channel whitelist"
-                />
-              ),
-              children: (
-                <>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                  >
-                    Restrict the bot to specific Slack channels by ID. Leave empty to allow all
-                    channels. Find channel IDs: right-click channel &rarr; View channel details
-                    &rarr; scroll to bottom.
-                  </Typography.Text>
-                  <Form.Item
-                    name="allowed_channel_ids"
-                    tooltip="Slack channel IDs (e.g., C01ABC123XY). Press Enter to add each ID."
-                  >
-                    <Select
-                      mode="tags"
-                      placeholder="Add channel IDs... (e.g., C01ABC123XY)"
-                      style={{ width: '100%' }}
-                      tokenSeparators={[',', ' ']}
+              // ── Agentic Tool Configuration ──
+              {
+                key: 'agentic-tool-config',
+                label: (
+                  <SectionLabel
+                    icon={<ThunderboltOutlined />}
+                    title="Agent Configuration"
+                    subtitle={selectedAgent}
+                  />
+                ),
+                children: (
+                  <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      Configure which agent and settings to use for sessions created from this
+                      channel.
+                    </Typography.Text>
+                    <AgentSelectionGrid
+                      agents={AVAILABLE_AGENTS}
+                      selectedAgentId={selectedAgent}
+                      onSelect={onAgentChange}
+                      columns={2}
+                      showHelperText={false}
+                      showComparisonLink={false}
                     />
-                  </Form.Item>
-                </>
-              ),
-            },
-
-            // ── Agentic Tool Configuration ──
-            {
-              key: 'agentic-tool-config',
-              label: (
-                <SectionLabel
-                  icon={<ThunderboltOutlined />}
-                  title="Agent Configuration"
-                  subtitle={selectedAgent}
-                />
-              ),
-              children: (
-                <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Configure which agent and settings to use for sessions created from this
-                    channel.
-                  </Typography.Text>
-                  <AgentSelectionGrid
-                    agents={AVAILABLE_AGENTS}
-                    selectedAgentId={selectedAgent}
-                    onSelect={onAgentChange}
-                    columns={2}
-                    showHelperText={false}
-                    showComparisonLink={false}
+                    <AgenticToolConfigForm
+                      agenticTool={selectedAgent as AgenticToolName}
+                      mcpServerById={mcpServerById}
+                      showHelpText={false}
+                    />
+                  </Space>
+                ),
+              },
+              // ── Environment Variables ──
+              {
+                key: 'env-vars',
+                label: (
+                  <SectionLabel
+                    icon={<LockOutlined />}
+                    title="Environment Variables"
+                    subtitle="channel-level secrets"
                   />
-                  <AgenticToolConfigForm
-                    agenticTool={selectedAgent as AgenticToolName}
-                    mcpServerById={mcpServerById}
-                    showHelpText={false}
-                  />
-                </Space>
-              ),
-            },
-            // ── Environment Variables ──
-            {
-              key: 'env-vars',
-              label: (
-                <SectionLabel
-                  icon={<LockOutlined />}
-                  title="Environment Variables"
-                  subtitle="channel-level secrets"
-                />
-              ),
-              children: (
-                <>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                  >
-                    Define environment variables for sessions created from this channel. Useful for
-                    service account tokens or API keys for MCP servers.
-                  </Typography.Text>
-                  <Form.Item name="envVars" noStyle>
-                    <GatewayEnvVarsEditor />
-                  </Form.Item>
-                </>
-              ),
-            },
-          ]}
-        />
-      )}
+                ),
+                children: (
+                  <>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                    >
+                      Define environment variables for sessions created from this channel. Useful
+                      for service account tokens or API keys for MCP servers.
+                    </Typography.Text>
+                    <Form.Item name="envVars" noStyle>
+                      <GatewayEnvVarsEditor />
+                    </Form.Item>
+                  </>
+                ),
+              },
+            ]}
+          />
+        )}
+      </div>
     </>
   );
 };
