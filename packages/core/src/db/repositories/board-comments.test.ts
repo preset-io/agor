@@ -492,6 +492,26 @@ describe('BoardCommentsRepository.findAll', () => {
       await expect(
         repo.count({ board_id: isolatedPrivateBoard.board_id, visibleToUserId: userId })
       ).resolves.toBe(0);
+
+      const reply = await repo.createReply(
+        visibleTaskComment.comment_id,
+        createCommentData({ content: 'visible reply inherits task attachment' })
+      );
+      const withReply = await repo.findAll({
+        board_id: privateBoard.board_id,
+        visibleToUserId: userId,
+      });
+      expect(withReply.map((comment) => comment.comment_id).sort()).toEqual(
+        [
+          boardOnlyComment.comment_id,
+          visibleTaskComment.comment_id,
+          visibleMessageComment.comment_id,
+          reply.comment_id,
+        ].sort()
+      );
+      await expect(
+        repo.count({ board_id: privateBoard.board_id, visibleToUserId: userId })
+      ).resolves.toBe(4);
     }
   );
 
@@ -1047,6 +1067,24 @@ describe('BoardCommentsRepository.createReply', () => {
     );
 
     expect(reply.board_id).toBe(board.board_id);
+  });
+
+  dbTest('should persist inherited attachments on replies', async ({ db }) => {
+    const repo = new BoardCommentsRepository(db);
+    const board = await createTestBoard(db);
+    const target = await createAttachedCommentTarget(db, board.board_id, 'view', 'reply-inherit');
+    const root = await repo.create(
+      createCommentData({
+        board_id: board.board_id,
+        task_id: target.task.task_id,
+        message_id: target.message.message_id,
+      })
+    );
+
+    const reply = await repo.createReply(root.comment_id, createCommentData({ content: 'Reply' }));
+
+    expect(reply.task_id).toBe(target.task.task_id);
+    expect(reply.message_id).toBe(target.message.message_id);
   });
 
   dbTest('should strip position from replies', async ({ db }) => {

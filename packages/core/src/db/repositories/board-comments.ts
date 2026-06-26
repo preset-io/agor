@@ -571,11 +571,12 @@ export class BoardCommentsRepository
         ...data,
         parent_comment_id: parent.comment_id,
         board_id: parent.board_id, // Inherit board_id from parent
-        // Replies don't have attachments - they inherit context from parent
-        session_id: undefined,
-        task_id: undefined,
-        message_id: undefined,
-        branch_id: undefined,
+        // Persist inherited attachments so replies remain visible through the
+        // same branch/session/task/message access path as the thread root.
+        session_id: parent.session_id,
+        task_id: parent.task_id,
+        message_id: parent.message_id,
+        branch_id: parent.branch_id,
         position: undefined,
       };
 
