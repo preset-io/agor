@@ -46,3 +46,6 @@ apps/agor-desktop/out/
 
 # Playwright MCP tool artifacts
 .playwright-mcp/
+
+# Nix
+result

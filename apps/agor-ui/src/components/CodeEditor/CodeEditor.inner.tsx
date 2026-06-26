@@ -66,7 +66,7 @@ const CodeEditorInner: React.FC<CodeEditorInnerProps> = ({
       .then(({ markdown }) => {
         const createMarkdownWithCodeLanguages = () =>
           markdown({
-            codeLanguages: (info) => {
+            codeLanguages: (info: string) => {
               const languageName = info.trim().split(/\s+/, 1)[0]?.toLowerCase();
               if (languageName === 'yaml' || languageName === 'yml') return yaml().language;
               if (languageName === 'json') return json().language;
