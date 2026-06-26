@@ -15,6 +15,7 @@ import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
+import { UsersRepository } from './users';
 
 /**
  * Create test task data
@@ -433,6 +434,73 @@ describe('TaskRepository.findAll', () => {
     expect(found.full_prompt).toBe(data.full_prompt);
     expect(found.status).toBe(data.status);
     expect(found.tool_use_count).toBe(data.tool_use_count);
+  });
+
+  dbTest('should restrict by visibleToUserId through session branch access', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branches = new BranchRepository(db);
+    const sessions = new SessionRepository(db);
+    const viewerId = generateId() as UUID;
+    await users.create({
+      user_id: viewerId,
+      email: 'tasks-visible@example.com',
+      name: 'Tasks Viewer',
+    });
+    const repo = await repos.create({
+      repo_id: generateId(),
+      slug: `tasks-visible-${branchCounter++}`,
+      name: 'Tasks Visible',
+      repo_type: 'remote' as const,
+      remote_url: 'https://github.com/test/repo.git',
+      local_path: '/tmp/tasks-visible',
+      default_branch: 'main',
+    });
+    const visibleBranch = await branches.create({
+      branch_id: generateId(),
+      repo_id: repo.repo_id,
+      name: `visible-${branchCounter}`,
+      ref: 'main',
+      branch_unique_id: branchCounter++,
+      path: '/tmp/tasks-visible/visible',
+      created_by: 'test-user' as UUID,
+      permission_source: 'override',
+      others_can: 'none',
+    });
+    const hiddenBranch = await branches.create({
+      branch_id: generateId(),
+      repo_id: repo.repo_id,
+      name: `hidden-${branchCounter}`,
+      ref: 'main',
+      branch_unique_id: branchCounter++,
+      path: '/tmp/tasks-visible/hidden',
+      created_by: 'test-user' as UUID,
+      permission_source: 'override',
+      others_can: 'none',
+    });
+    await branches.addOwner(visibleBranch.branch_id, viewerId);
+    const visibleSession = await sessions.create({
+      session_id: generateId(),
+      branch_id: visibleBranch.branch_id,
+      agentic_tool: 'claude-code',
+      created_by: 'test-user' as UUID,
+    });
+    const hiddenSession = await sessions.create({
+      session_id: generateId(),
+      branch_id: hiddenBranch.branch_id,
+      agentic_tool: 'claude-code',
+      created_by: 'test-user' as UUID,
+    });
+    const visibleTask = await taskRepo.create(
+      createTaskData({ session_id: visibleSession.session_id, full_prompt: 'visible' })
+    );
+    await taskRepo.create(
+      createTaskData({ session_id: hiddenSession.session_id, full_prompt: 'hidden' })
+    );
+
+    const visible = await taskRepo.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((task) => task.task_id)).toEqual([visibleTask.task_id]);
   });
 });
 

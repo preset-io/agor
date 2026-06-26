@@ -24,6 +24,7 @@ import {
   sessionMcpServers,
   shortId,
   UserMCPOAuthTokenRepository,
+  visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
@@ -36,6 +37,7 @@ import type {
   Params,
   SessionID,
   UserID,
+  UUID,
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_CAPABILITIES,
@@ -571,10 +573,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           mcp_server_id?: string;
           enabled?: boolean;
         };
+        _agorSqlSessionAccessUserId?: UUID;
       }) {
         const conditions: ReturnType<typeof eq>[] = [];
-        // session_id may be a scalar string or `{ $in: [...] }` — the latter is
-        // injected by the RBAC scoping hook to restrict rows to accessible sessions.
+        // session_id may be a scalar string or `{ $in: [...] }` from callers.
+        // RBAC scoping is composed below via `_agorSqlSessionAccessUserId`.
         const sessionIdFilter = params?.query?.session_id;
         if (typeof sessionIdFilter === 'string') {
           conditions.push(eq(sessionMcpServers.session_id, sessionIdFilter));
@@ -593,6 +596,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         }
         if (params?.query?.enabled !== undefined) {
           conditions.push(eq(sessionMcpServers.enabled, params.query.enabled));
+        }
+        if (params?._agorSqlSessionAccessUserId) {
+          conditions.push(
+            visibleSessionReferenceAccessExists(
+              db,
+              params._agorSqlSessionAccessUserId,
+              sessionMcpServers.session_id
+            )
+          );
         }
         let query = select(db).from(sessionMcpServers);
         if (conditions.length > 0) {

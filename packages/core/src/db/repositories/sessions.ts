@@ -293,14 +293,33 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * LEFT JOINs with branches to populate board_id and url in a single query.
    */
-  async findAll(): Promise<Session[]> {
+  async findAll(filter?: { visibleToUserId?: UUID }): Promise<Session[]> {
     try {
       const baseUrl = await getBaseUrl();
 
-      const results = await select(this.db)
-        .from(sessions)
-        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
-        .all();
+      const conditions = [];
+      if (filter?.visibleToUserId) {
+        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+      }
+
+      // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+      const query: any = filter?.visibleToUserId
+        ? select(this.db)
+            .from(sessions)
+            .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+            .leftJoin(
+              branchOwners,
+              and(
+                eq(branchOwners.branch_id, branches.branch_id),
+                eq(branchOwners.user_id, filter.visibleToUserId)
+              )
+            )
+        : select(this.db)
+            .from(sessions)
+            .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
+
+      const results =
+        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
 
       return results.map(
         (result: {
@@ -365,16 +384,32 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * the branch join is the authoritative source. This still pushes the
    * filter down to SQL (one indexed JOIN), not an in-memory scan.
    */
-  async findByBoard(boardId: string): Promise<Session[]> {
+  async findByBoard(boardId: string, filter?: { visibleToUserId?: UUID }): Promise<Session[]> {
     try {
       const baseUrl = await getBaseUrl();
 
+      const conditions = [eq(branches.board_id, boardId)];
+      if (filter?.visibleToUserId) {
+        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+      }
+
       // Filter on the branch's board_id via the JOIN (sessions.board_id is dead).
-      const results = await select(this.db)
-        .from(sessions)
-        .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
-        .where(eq(branches.board_id, boardId))
-        .all();
+      // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+      const query: any = filter?.visibleToUserId
+        ? select(this.db)
+            .from(sessions)
+            .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
+            .leftJoin(
+              branchOwners,
+              and(
+                eq(branchOwners.branch_id, branches.branch_id),
+                eq(branchOwners.user_id, filter.visibleToUserId)
+              )
+            )
+        : select(this.db)
+            .from(sessions)
+            .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      const results = await query.where(and(...conditions)).all();
 
       return results.map(
         (result: {
@@ -419,6 +454,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     sortUpdatedAt?: 1 | -1;
     limit?: number;
     skip?: number;
+    visibleToUserId?: UUID;
   }): Promise<{ data: Session[]; total: number }> {
     try {
       const baseUrl = await getBaseUrl();
@@ -426,19 +462,42 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const conditions = [];
       if (opts.boardId !== undefined) conditions.push(eq(branches.board_id, opts.boardId));
       if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
+      if (opts.visibleToUserId) {
+        conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
+      }
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
       // Total matching rows — drives Feathers pagination + the findAll loop.
-      const countQuery = select(this.db, { count: sql<number>`count(*)` })
+      // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+      let countQuery: any = select(this.db, { count: sql<number>`count(*)` })
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      if (opts.visibleToUserId) {
+        countQuery = countQuery.leftJoin(
+          branchOwners,
+          and(
+            eq(branchOwners.branch_id, branches.branch_id),
+            eq(branchOwners.user_id, opts.visibleToUserId)
+          )
+        );
+      }
       const countRow = await (whereClause ? countQuery.where(whereClause) : countQuery).one();
       const total = Number(countRow?.count ?? 0);
 
       // Page of rows, recency-sorted in SQL on the real `updated_at` column.
-      let dataQuery = select(this.db)
+      // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+      let dataQuery: any = select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      if (opts.visibleToUserId) {
+        dataQuery = dataQuery.leftJoin(
+          branchOwners,
+          and(
+            eq(branchOwners.branch_id, branches.branch_id),
+            eq(branchOwners.user_id, opts.visibleToUserId)
+          )
+        );
+      }
       if (whereClause) dataQuery = dataQuery.where(whereClause);
       if (opts.sortUpdatedAt !== undefined) {
         dataQuery = dataQuery.orderBy(

@@ -25,6 +25,7 @@ import {
   branchOwners,
   groupMemberships,
   groups,
+  sessions,
 } from '../schema';
 
 export const VISIBLE_BRANCH_PERMISSION_LEVELS = BRANCH_PERMISSION_LEVELS.filter(
@@ -169,5 +170,32 @@ export function visibleBranchReferenceAccessExists(
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
       )
       .where(and(eq(branches.branch_id, branchId), visibleBranchAccessCondition(db, userId)))
+  );
+}
+
+/**
+ * Correlated visibility predicate for tables that carry a session_id.
+ *
+ * The referenced session is visible when its branch is visible to the user.
+ * This avoids resolving all accessible sessions into `session_id IN (...)` and
+ * works for high-cardinality child tables such as messages and tasks.
+ */
+export function visibleSessionReferenceAccessExists(
+  db: Database,
+  userId: UUID,
+  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
+  sessionId: any
+): SQL {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(sessions)
+      .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
+      .leftJoin(
+        branchOwners,
+        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+      )
+      .where(and(eq(sessions.session_id, sessionId), visibleBranchAccessCondition(db, userId)))
   );
 }

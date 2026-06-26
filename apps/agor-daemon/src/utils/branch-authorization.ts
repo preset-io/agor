@@ -1628,6 +1628,25 @@ export function scopeFindToAccessibleSessions(
 }
 
 /**
+ * Mark a session-scoped find() request for repository-level SQL RBAC pushdown.
+ *
+ * This is the single-query alternative to {@link scopeFindToAccessibleSessions}:
+ * instead of preloading every accessible session id and injecting a large
+ * `session_id IN (...)` filter, services that understand this marker compose
+ * the shared branch visibility predicate through the session's branch.
+ */
+export function scopeFindToAccessibleSessionsSql(options?: { allowSuperadmin?: boolean }) {
+  return async (context: HookContext) => {
+    const decision = await resolveFindSqlScopeAccess(context, options);
+    if (decision.kind !== 'filter') return context;
+
+    (context.params as { _agorSqlSessionAccessUserId?: UUID })._agorSqlSessionAccessUserId =
+      decision.userId;
+    return context;
+  };
+}
+
+/**
  * Scope find() queries on the boards service to the set of boards the caller
  * can see.
  *

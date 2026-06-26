@@ -18,6 +18,7 @@ import {
   scopeFindToAccessibleBranches,
   scopeFindToAccessibleBranchesSql,
   scopeFindToAccessibleSessions,
+  scopeFindToAccessibleSessionsSql,
 } from './branch-authorization';
 
 const USER_ID = 'user-aaaa-0001' as import('@agor/core/types').UUID;
@@ -260,6 +261,22 @@ describe('scopeFindToAccessibleBoardsSql', () => {
 
     expect((ctx.params as any)._agorSqlBoardAccessUserId).toBe(USER_ID);
     expect((ctx.params.query as any).board_id).toBe('board1');
+  });
+});
+
+describe('scopeFindToAccessibleSessionsSql', () => {
+  it('marks regular external callers for repository SQL session visibility pushdown', async () => {
+    const hook = scopeFindToAccessibleSessionsSql();
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: USER_ID, role: ROLES.MEMBER },
+      query: { session_id: 's1' },
+    });
+
+    await hook(ctx);
+
+    expect((ctx.params as any)._agorSqlSessionAccessUserId).toBe(USER_ID);
+    expect((ctx.params.query as any).session_id).toBe('s1');
   });
 });
 

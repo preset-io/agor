@@ -109,9 +109,8 @@ import {
   resolveSessionContext,
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
-  scopeFindToAccessibleSessions,
+  scopeFindToAccessibleSessionsSql,
   scopeScheduleQuery,
-  scopeSessionQuery,
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
@@ -523,9 +522,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // RBAC: Scope messages.find() to sessions the caller can access.
         // Without this backstop, any authenticated member could list messages
         // across every session/branch by omitting the session_id filter.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
-          : []),
+        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
         ...(branchRbacEnabled
@@ -1495,9 +1492,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       find: [
         requireMinimumRole(ROLES.MEMBER, 'list session MCP servers'),
         // RBAC: Scope to sessions the caller can access.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
-          : []),
+        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
     },
     after: {
@@ -1516,10 +1511,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       find: [
         requireMinimumRole(ROLES.MEMBER, 'list session env selections'),
-        // RBAC: Scope to sessions the caller can access.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
-          : []),
+        // This top-level service is event-only and always returns []; do not
+        // run RBAC preloads for an intentionally empty result set.
       ],
     },
   });
@@ -2224,8 +2217,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [typedValidateQuery(sessionQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
-        // RBAC: Optimized SQL-based filtering (single query with JOIN on branches, no N+1)
-        ...(branchRbacEnabled ? [scopeSessionQuery(sessionsRepository, superadminOpts)] : []),
+        // RBAC: mark external regular-user finds for SessionsService to compose
+        // the shared branch visibility predicate directly into its SQL read.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
         ...(branchRbacEnabled
@@ -2405,10 +2399,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     after: {
       find: [
         async (context) => {
-          // In RBAC mode, scopeSessionQuery() resolves the paginated result in
-          // before.find for SQL-efficient access control. That intentionally
-          // short-circuits SessionsService.find(), so enrich list payloads here
-          // as a single batched query over the final page.
+          // Session find results may be produced by custom hooks or service
+          // methods. Enrich once, as a single batched query over the final page.
           context.result = await enrichSessionFindResultWithRemoteRelationships(
             context.result as Paginated<Session> | Session[],
             sessionsService
@@ -2752,9 +2744,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(taskQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Scope tasks.find() to sessions the caller can access.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
-          : []),
+        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
         ...(branchRbacEnabled
