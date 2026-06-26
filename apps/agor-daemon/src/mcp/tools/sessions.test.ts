@@ -1413,3 +1413,179 @@ describe('attached_mcp_servers in session-info tools', () => {
     ]);
   });
 });
+
+// ============================================================================
+// agor_sessions_link_knowledge_page / agor_sessions_unlink_knowledge_page
+// ============================================================================
+
+describe('agor_sessions_link_knowledge_page', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('resolves document via kb/documents, appends to session, returns document info', async () => {
+    const sessionsGet = vi.fn(async () => ({
+      session_id: 'sess-1',
+      linked_knowledge_page_ids: [],
+    }));
+    const sessionsPatch = vi.fn(async () => ({}));
+    const kbDocumentsGet = vi.fn(async () => ({
+      document_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      title: 'My Doc',
+      url: 'https://agor.live/kb/01933e4a',
+    }));
+
+    const app = makeFakeApp({
+      sessions: { get: sessionsGet, patch: sessionsPatch },
+      'kb/documents': { get: kbDocumentsGet },
+    });
+
+    const { agor_sessions_link_knowledge_page } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_sessions_link_knowledge_page']
+    );
+
+    const result = await agor_sessions_link_knowledge_page({
+      documentId: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(kbDocumentsGet).toHaveBeenCalledWith(
+      '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      expect.anything()
+    );
+    expect(sessionsPatch).toHaveBeenCalledWith(
+      'sess-1',
+      { linked_knowledge_page_ids: ['01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f'] },
+      expect.anything()
+    );
+    expect(payload).toMatchObject({
+      ok: true,
+      documentId: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      title: 'My Doc',
+    });
+  });
+
+  it('normalizes documentId to lowercase before kb/documents lookup', async () => {
+    const sessionsGet = vi.fn(async () => ({
+      session_id: 'sess-1',
+      linked_knowledge_page_ids: [],
+    }));
+    const sessionsPatch = vi.fn(async () => ({}));
+    const kbDocumentsGet = vi.fn(async () => ({
+      document_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      title: 'My Doc',
+      url: 'https://agor.live/kb/01933e4a',
+    }));
+
+    const app = makeFakeApp({
+      sessions: { get: sessionsGet, patch: sessionsPatch },
+      'kb/documents': { get: kbDocumentsGet },
+    });
+
+    const { agor_sessions_link_knowledge_page } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_sessions_link_knowledge_page']
+    );
+
+    await agor_sessions_link_knowledge_page({
+      documentId: '01933E4A-7B89-7C35-A8F3-9D2E1C4B5A6F',
+    });
+
+    expect(kbDocumentsGet).toHaveBeenCalledWith(
+      '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      expect.anything()
+    );
+  });
+
+  it('skips patch when document is already linked', async () => {
+    const alreadyLinked = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f';
+    const sessionsGet = vi.fn(async () => ({
+      session_id: 'sess-1',
+      linked_knowledge_page_ids: [alreadyLinked],
+    }));
+    const sessionsPatch = vi.fn(async () => ({}));
+    const kbDocumentsGet = vi.fn(async () => ({
+      document_id: alreadyLinked,
+      title: 'My Doc',
+      url: 'https://agor.live/kb/01933e4a',
+    }));
+
+    const app = makeFakeApp({
+      sessions: { get: sessionsGet, patch: sessionsPatch },
+      'kb/documents': { get: kbDocumentsGet },
+    });
+
+    const { agor_sessions_link_knowledge_page } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_sessions_link_knowledge_page']
+    );
+
+    await agor_sessions_link_knowledge_page({ documentId: alreadyLinked });
+
+    expect(sessionsPatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('agor_sessions_unlink_knowledge_page', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('removes the document from linked_knowledge_page_ids', async () => {
+    const docId = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f';
+    const otherId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const sessionsGet = vi.fn(async () => ({
+      session_id: 'sess-1',
+      linked_knowledge_page_ids: [docId, otherId],
+    }));
+    const sessionsPatch = vi.fn(async () => ({}));
+
+    const app = makeFakeApp({
+      sessions: { get: sessionsGet, patch: sessionsPatch },
+    });
+
+    const { agor_sessions_unlink_knowledge_page } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_sessions_unlink_knowledge_page']
+    );
+
+    const result = await agor_sessions_unlink_knowledge_page({ documentId: docId });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(sessionsPatch).toHaveBeenCalledWith(
+      'sess-1',
+      { linked_knowledge_page_ids: [otherId] },
+      expect.anything()
+    );
+    expect(payload).toMatchObject({ ok: true, documentId: docId });
+  });
+
+  it('returns ok:false when short ID is ambiguous', async () => {
+    const sessionsGet = vi.fn(async () => ({
+      session_id: 'sess-1',
+      linked_knowledge_page_ids: [
+        '01933e4a-aaaa-0000-0000-000000000000',
+        '01933e4a-bbbb-0000-0000-000000000000',
+      ],
+    }));
+    const sessionsPatch = vi.fn(async () => ({}));
+
+    const app = makeFakeApp({
+      sessions: { get: sessionsGet, patch: sessionsPatch },
+    });
+
+    const { agor_sessions_unlink_knowledge_page } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_sessions_unlink_knowledge_page']
+    );
+
+    const result = await agor_sessions_unlink_knowledge_page({ documentId: '01933e4a' });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(sessionsPatch).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({ ok: false });
+  });
+});

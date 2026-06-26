@@ -1712,9 +1712,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  // Tool: agor_session_link_knowledge_page
+  // Tool: agor_sessions_link_knowledge_page
   server.registerTool(
-    'agor_session_link_knowledge_page',
+    'agor_sessions_link_knowledge_page',
     {
       description:
         'Link an Agor Knowledge document to the current session. The document title is resolved live from the Knowledge Base, so renames are reflected automatically.',
@@ -1760,9 +1760,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  // Tool: agor_session_unlink_knowledge_page
+  // Tool: agor_sessions_unlink_knowledge_page
   server.registerTool(
-    'agor_session_unlink_knowledge_page',
+    'agor_sessions_unlink_knowledge_page',
     {
       description: 'Remove a previously linked Agor Knowledge document from the current session.',
       inputSchema: z.object({
