@@ -65,7 +65,6 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
 import { getDaemonUrl } from '@/config/daemon';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
@@ -319,31 +318,6 @@ const GatewayEnvVarsEditor: React.FC<{
     </div>
   );
 };
-
-// ============================================================================
-// GitHub App Setup Types & Helpers
-// ============================================================================
-
-/**
- * State carried across the GitHub App install round-trip. `installation_id`
- * arrives via the deep-link URL; the rest is restored from the sessionStorage
- * draft persisted before the redirect (the install opens a fresh page, so the
- * in-memory form is gone on return).
- */
-interface GitHubSetupParams {
-  installation_id?: string;
-  name?: string;
-  target_branch_id?: string;
-  github_app_name?: string;
-  github_org?: string;
-}
-
-/**
- * sessionStorage key for the step-0 essentials stashed right before the GitHub
- * App install redirect. A new tab opened via `window.open` inherits a copy of
- * the opener's sessionStorage, so the install-callback page can restore them.
- */
-const GITHUB_SETUP_DRAFT_KEY = 'agor.gateway.githubSetupDraft';
 
 // ============================================================================
 // Unified create-wizard step model
@@ -1021,9 +995,6 @@ const ChannelFormFields: React.FC<{
   const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
   const alignSlackUsers = Form.useWatch('align_slack_users', form) ?? false;
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
-  // Set after an install round-trip; lets the Create-app step recognize the
-  // already-installed case instead of prompting to create the app again.
-  const githubInstallationId = Form.useWatch('github_installation_id', form);
 
   const sourcesEnabled = enableChannels || enableGroups || enableMpim;
 
@@ -1156,21 +1127,6 @@ const ChannelFormFields: React.FC<{
             {/* Step 1 (Create app): register the GitHub App. */}
             {mode === 'create' && createStep === 1 && !githubLoading && (
               <div style={{ marginBottom: 16 }}>
-                {githubInstallationId ? (
-                  <Alert
-                    type="success"
-                    showIcon
-                    title="GitHub App already installed"
-                    description={
-                      <span>
-                        Installation <code>{String(githubInstallationId)}</code> was captured from
-                        the install callback. Click <strong>Continue</strong> to enter its
-                        credentials.
-                      </span>
-                    }
-                    style={{ marginBottom: 16 }}
-                  />
-                ) : null}
                 <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
                   Create a GitHub App to connect Agor to your repositories. This uses GitHub&apos;s
                   URL-parameters registration flow — you&apos;ll be redirected to GitHub with the
@@ -1234,21 +1190,6 @@ const ChannelFormFields: React.FC<{
                         return;
                       }
                       params.set('state', state);
-                      // Stash step-0 essentials so the install-callback page (a
-                      // fresh load) can restore name/branch and land on Credentials.
-                      try {
-                        sessionStorage.setItem(
-                          GITHUB_SETUP_DRAFT_KEY,
-                          JSON.stringify({
-                            name: form.getFieldValue('name') ?? '',
-                            target_branch_id: form.getFieldValue('target_branch_id') ?? '',
-                            github_app_name: appName ?? '',
-                            github_org: org ?? '',
-                          })
-                        );
-                      } catch {
-                        // Non-fatal: the deep-link return falls back to step 0.
-                      }
                       window.open(
                         `${daemonUrl}/api/github/setup/new?${params.toString()}`,
                         '_blank'
@@ -2147,64 +2088,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // ── GitHub App Setup State (create mode) ──
   const [githubLoading, setGithubLoading] = useState(false);
   const [githubError, setGithubError] = useState<string | null>(null);
-  const [githubSetupParams, setGithubSetupParams] = useState<GitHubSetupParams | null>(null);
 
   // ── Slack guided-setup state (create mode) ──
   const [slackTestLoading, setSlackTestLoading] = useState(false);
   const [slackTestResult, setSlackTestResult] = useState<SlackTestResult | null>(null);
-
-  // Detect GitHub setup callback params from URL
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const installationId = params.get('installation_id');
-
-    if (installationId) {
-      // Restore the step-0 essentials stashed before the install redirect.
-      let draft: Partial<GitHubSetupParams> = {};
-      try {
-        const raw = sessionStorage.getItem(GITHUB_SETUP_DRAFT_KEY);
-        if (raw) draft = JSON.parse(raw) as Partial<GitHubSetupParams>;
-      } catch {
-        // Ignore malformed drafts — fall back to step 0 below.
-      }
-
-      setGithubSetupParams({ installation_id: installationId, ...draft });
-      setChannelType('github');
-      // With a restored draft (name + branch), jump straight to Credentials
-      // (Channel=0, Create app=1, Credentials=2). Without it, land on step 0 so
-      // the user can supply the required name/branch first.
-      const hasDraft = Boolean(draft.name && draft.target_branch_id);
-      setCreateStep(hasDraft ? 2 : 0);
-      setCreateModalOpen(true);
-      // Clean up URL params
-      navigate('/', { replace: true });
-    }
-  }, [location.search, navigate]);
-
-  // Once the create form is mounted on a deep-link return, sync the channel type
-  // and restore the captured draft/installation into the form, then drop the
-  // sessionStorage draft so a later manual create can't inherit it.
-  useEffect(() => {
-    if (!createModalOpen || !githubSetupParams) return;
-    const { installation_id, name, target_branch_id, github_app_name, github_org } =
-      githubSetupParams;
-    createForm.setFieldsValue({
-      channel_type: 'github',
-      ...(installation_id ? { github_installation_id: installation_id } : {}),
-      ...(name ? { name } : {}),
-      ...(target_branch_id ? { target_branch_id } : {}),
-      ...(github_app_name ? { github_app_name } : {}),
-      ...(github_org ? { github_org } : {}),
-    });
-    try {
-      sessionStorage.removeItem(GITHUB_SETUP_DRAFT_KEY);
-    } catch {
-      // Best-effort cleanup.
-    }
-  }, [createModalOpen, githubSetupParams, createForm]);
 
   // Keep referenced target branches resolvable in CRUD even when archived branches
   // are excluded from the core store.
@@ -2278,7 +2165,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const resetGithubState = useCallback(() => {
     setGithubLoading(false);
     setGithubError(null);
-    setGithubSetupParams(null);
   }, []);
 
   const resetSlackState = useCallback(() => {
