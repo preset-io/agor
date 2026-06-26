@@ -1,14 +1,52 @@
-import type { GatewayChannel, HookContext, SlackTestResult } from '@agor/core/types';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { GatewayChannel, HookContext } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const STORED_BOT_TOKEN = 'xoxb-decrypted-secret';
 const STORED_APP_TOKEN = 'xapp-decrypted-secret';
 
-// Capture the config the connector was built with so we can assert that the
-// decrypted stored tokens (not the redaction sentinel) reached the probe.
-let capturedConfig: Record<string, unknown> | undefined;
-let probeResult: SlackTestResult;
+// Resolved tokens the service fed into the REAL connector. Lets the
+// substitution tests prove the decrypted stored tokens reach the probe
+// end-to-end while still exercising the real SlackConnector.testConnection().
+let capturedBotToken: string | undefined;
+let capturedAppToken: string | undefined;
+const conversationsInfoChannels: string[] = [];
+
+let authTestImpl: () => Promise<unknown>;
+let appOpenImpl: () => Promise<unknown>;
+let conversationsInfoImpl: (args: { channel: string }) => Promise<unknown>;
+
+// Delegate to the real getConnector / SlackConnector so the real probe strings
+// run, then stub only the web-client seam so no network is touched.
+vi.mock('@agor/core/gateway', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/gateway')>();
+  return {
+    ...actual,
+    getConnector: (channelType: string, config: Record<string, unknown>) => {
+      capturedBotToken = config.bot_token as string | undefined;
+      const connector = actual.getConnector(channelType as never, config) as unknown as {
+        web: unknown;
+        createWebClient: (token: string) => unknown;
+      };
+      connector.web = {
+        auth: { test: () => authTestImpl() },
+        conversations: {
+          info: (args: { channel: string }) => {
+            conversationsInfoChannels.push(args.channel);
+            return conversationsInfoImpl(args);
+          },
+        },
+      };
+      connector.createWebClient = (token: string) => {
+        capturedAppToken = token;
+        return { apps: { connections: { open: () => appOpenImpl() } } };
+      };
+      return connector;
+    },
+  };
+});
 
 const findById = vi.fn();
 
@@ -18,17 +56,6 @@ vi.mock('@agor/core/db', async (importOriginal) => {
     ...actual,
     GatewayChannelRepository: class {
       findById = findById;
-    },
-  };
-});
-
-vi.mock('@agor/core/gateway', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@agor/core/gateway')>();
-  return {
-    ...actual,
-    getConnector: (_channelType: string, config: Record<string, unknown>) => {
-      capturedConfig = config;
-      return { testConnection: async () => probeResult };
     },
   };
 });
@@ -57,17 +84,20 @@ const storedChannel: GatewayChannel = {
 } as unknown as GatewayChannel;
 
 beforeEach(() => {
-  capturedConfig = undefined;
+  capturedBotToken = undefined;
+  capturedAppToken = undefined;
+  conversationsInfoChannels.length = 0;
   findById.mockReset();
-  probeResult = {
+  findById.mockResolvedValue(storedChannel);
+  authTestImpl = async () => ({
     ok: true,
-    team: { id: 'T1', name: 'Acme' },
-    bot: { userId: 'U1', name: 'agor-bot' },
-    appTokenValid: true,
-    channelAccess: [{ channelId: 'C1', ok: true }],
-    failures: [],
-    notVerifiable: ['something'],
-  };
+    team_id: 'T1',
+    team: 'Acme',
+    user_id: 'U1',
+    user: 'agor-bot',
+  });
+  appOpenImpl = async () => ({ ok: true, url: 'wss://example' });
+  conversationsInfoImpl = async (args) => ({ ok: true, channel: { id: args.channel } });
 });
 
 describe('gateway-channels/test admin gate', () => {
@@ -88,21 +118,34 @@ describe('gateway-channels/test admin gate', () => {
   });
 });
 
+describe('gateway-channels/test hook wiring (register-services)', () => {
+  // A sub-path service does not inherit the parent gateway-channels hooks, so
+  // the registration MUST attach its own auth + admin gate on create. Mirrors
+  // the source-level wiring check used for `/mcp-servers/discover`.
+  const source = readFileSync(join(__dirname, '..', 'register-services.ts'), 'utf8');
+  const start = source.indexOf("app.service('gateway-channels/test').hooks(");
+  const block = start === -1 ? '' : source.slice(start, start + 300);
+
+  it('gates create with requireAuth then admin role', () => {
+    expect(start).toBeGreaterThan(-1);
+    expect(block).toMatch(/create:\s*\[\s*ctx\.requireAuth,\s*requireMinimumRole\(ROLES\.ADMIN/);
+  });
+});
+
 describe('gateway-channels/test service', () => {
-  it('substitutes decrypted stored tokens when only gatewayChannelId is given', async () => {
-    findById.mockResolvedValue(storedChannel);
+  it('substitutes decrypted stored tokens into the real connector', async () => {
     const service = createGatewayChannelsTestService({} as never);
 
     const result = await service.create({ gatewayChannelId: 'chan-1' });
 
     expect(findById).toHaveBeenCalledWith('chan-1');
-    expect(capturedConfig?.bot_token).toBe(STORED_BOT_TOKEN);
-    expect(capturedConfig?.app_token).toBe(STORED_APP_TOKEN);
+    // Both decrypted tokens reached the real probe.
+    expect(capturedBotToken).toBe(STORED_BOT_TOKEN);
+    expect(capturedAppToken).toBe(STORED_APP_TOKEN);
     expect(result.ok).toBe(true);
   });
 
   it('keeps stored secrets when overrides send the redaction sentinel', async () => {
-    findById.mockResolvedValue(storedChannel);
     const service = createGatewayChannelsTestService({} as never);
 
     await service.create({
@@ -110,18 +153,32 @@ describe('gateway-channels/test service', () => {
       config: { bot_token: '••••••••', allowed_channel_ids: ['C2'] },
     });
 
-    expect(capturedConfig?.bot_token).toBe(STORED_BOT_TOKEN);
-    // A real (non-sentinel) override is applied.
-    expect(capturedConfig?.allowed_channel_ids).toEqual(['C2']);
+    // Sentinel secret → stored token preserved; real override → applied.
+    expect(capturedBotToken).toBe(STORED_BOT_TOKEN);
+    expect(conversationsInfoChannels).toEqual(['C2']);
   });
 
-  it('returns a result free of any token strings', async () => {
-    findById.mockResolvedValue(storedChannel);
+  it('returns a result free of token values or prefixes, even on errors', async () => {
+    // Representative error mix that still exercises the real probe strings.
+    appOpenImpl = async () => {
+      throw {
+        data: {
+          ok: false,
+          error: 'missing_scope',
+          needed: 'connections:write',
+          provided: 'chat:write',
+        },
+      };
+    };
+    conversationsInfoImpl = async () => {
+      throw { data: { ok: false, error: 'not_in_channel' } };
+    };
     const service = createGatewayChannelsTestService({} as never);
 
     const result = await service.create({ gatewayChannelId: 'chan-1' });
     const serialized = JSON.stringify(result);
 
+    expect(result.ok).toBe(false);
     expect(serialized).not.toContain(STORED_BOT_TOKEN);
     expect(serialized).not.toContain(STORED_APP_TOKEN);
     expect(serialized).not.toContain('xoxb');

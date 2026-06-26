@@ -891,6 +891,7 @@ describe('SlackConnector.testConnection', () => {
     authTest?: () => Promise<unknown>;
     appConnectionsOpen?: () => Promise<unknown>;
     conversationsInfo?: () => Promise<unknown>;
+    capture?: { appToken?: string };
   }) {
     const connector = new SlackConnector({ bot_token: 'xoxb-test', ...args.config });
     (connector as unknown as { web: unknown }).web = {
@@ -909,19 +910,26 @@ describe('SlackConnector.testConnection', () => {
         info: args.conversationsInfo ?? (async () => ({ ok: true, channel: { id: 'C1' } })),
       },
     };
-    (connector as unknown as { createWebClient: (t: string) => unknown }).createWebClient = () => ({
-      apps: {
-        connections: {
-          open: args.appConnectionsOpen ?? (async () => ({ ok: true, url: 'wss://example' })),
+    (connector as unknown as { createWebClient: (t: string) => unknown }).createWebClient = (
+      token: string
+    ) => {
+      if (args.capture) args.capture.appToken = token;
+      return {
+        apps: {
+          connections: {
+            open: args.appConnectionsOpen ?? (async () => ({ ok: true, url: 'wss://example' })),
+          },
         },
-      },
-    });
+      };
+    };
     return connector;
   }
 
   it('reports ok on the happy path (bot + app token + channel)', async () => {
+    const capture: { appToken?: string } = {};
     const connector = makeProbeConnector({
       config: { app_token: 'xapp-test', allowed_channel_ids: ['C1'] },
+      capture,
     });
     const result = await connector.testConnection();
 
@@ -932,6 +940,8 @@ describe('SlackConnector.testConnection', () => {
     expect(result.channelAccess).toEqual([{ channelId: 'C1', ok: true }]);
     expect(result.failures).toEqual([]);
     expect(result.notVerifiable.length).toBeGreaterThan(0);
+    // The app-token client must be built from the app-level token, not the bot token.
+    expect(capture.appToken).toBe('xapp-test');
   });
 
   it('classifies invalid_auth bot-token failures', async () => {

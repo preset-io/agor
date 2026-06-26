@@ -622,7 +622,7 @@ function normalizeAllowedChannelIds(raw: unknown): string[] {
  * "fully verified".
  */
 const SLACK_NOT_VERIFIABLE = [
-  'Whether the bot token (xoxb) and app-level token (xapp) belong to the same Slack app.',
+  'Whether the bot token and app-level token belong to the same Slack app.',
   'Whether the required Slack event subscriptions are installed and delivering events.',
   'Whether the full set of required OAuth scopes is granted — only scopes exercised by the probed API calls are checked.',
 ];
@@ -746,8 +746,7 @@ export class SlackConnector implements GatewayConnector {
       appTokenValid = false;
       failures.push({
         capability: 'app_token',
-        reason:
-          'No app-level token (xapp-) is configured; Socket Mode cannot connect to receive messages.',
+        reason: 'No app-level token is configured; Socket Mode cannot connect to receive messages.',
       });
     } else {
       try {
