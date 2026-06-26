@@ -107,8 +107,8 @@ import {
   loadSessionBranch,
   PERMISSION_RANK,
   resolveSessionContext,
-  scopeFindToAccessibleBoards,
-  scopeFindToAccessibleBranches,
+  scopeFindToAccessibleBoardsSql,
+  scopeFindToAccessibleBranchesSql,
   scopeFindToAccessibleSessions,
   scopeScheduleQuery,
   scopeSessionQuery,
@@ -807,13 +807,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       find: [
         // RBAC: Artifacts carry a `branch_id` (nullable — survives branch deletion).
-        // Scope find() to the branches the caller can access. Rows with null
-        // branch_id (orphaned artifacts) will be excluded by the $in filter,
-        // which is the safe default — orphans can only be surfaced via explicit
-        // board-scoped queries.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleBranches(branchRepository, superadminOpts)]
-          : []),
+        // Scope find() to the branches the caller can access. The service pushes
+        // this into SQL as a correlated visibility predicate rather than
+        // preloading ids and injecting `branch_id IN (...)`.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts'), ensureArtifactOwnerOrAdmin()],
@@ -1089,11 +1086,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireMinimumRole(ROLES.MEMBER, 'access branches'),
       ],
       find: [
-        // RBAC: compose an accessible branch_id filter and let BranchesService.find()
-        // handle service-level filters/enrichment (including virtual zone_id).
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleBranches(branchRepository, superadminOpts)]
-          : []),
+        // RBAC: mark external regular-user finds for BranchesService to compose
+        // the shared branch visibility predicate directly into its SQL read.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       get: [
         ...(branchRbacEnabled
@@ -2870,11 +2865,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(boardQueryValidator), requireAuth],
       find: [
         // RBAC: restrict boards.find to boards the caller created or has a
-        // branch on. Runs at the SQL layer via BoardRepository.findVisibleBoardIds
-        // to avoid hydrating every accessible branch in-memory.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleBoards(boardRepository, superadminOpts)]
-          : []),
+        // branch on. The service pushes this into the repository query as one
+        // SQL predicate, avoiding a preloaded `board_id IN (...)` list.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       get: [ensureCanViewBoard('view this board')],
       findBySlug: [ensureCanViewBoard('view this board')],

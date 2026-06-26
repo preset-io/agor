@@ -15,7 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { isAssistant } from '@agor/core/types';
-import { and, eq, exists, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
+import { and, eq, exists, inArray, isNull, like, ne, or, type SQL, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -332,17 +332,74 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   /**
    * Find all boards (with optional filters).
    *
-   * The `board_id` and `archived` filters let the list read path
-   * (`BoardsService.find`) push its high-selectivity predicates — including the
-   * accessible-id set injected by RBAC scoping — into SQL so it no longer
-   * materializes the whole table before filtering in memory.
+   * The `board_id`, `archived`, and `visibleToUserId` filters let the list read
+   * path (`BoardsService.find`) push high-selectivity predicates — including
+   * board RBAC visibility — into SQL so it no longer materializes the whole
+   * table before filtering in memory.
    *
    * @param filter - Optional filters
    * @param filter.archived - Filter to an exact archived state
    * @param filter.boardIds - Restrict to a set of board IDs (empty set yields no
    *   rows, matching an `{ $in: [] }` filter)
+   * @param filter.visibleToUserId - Restrict to boards visible to this user
+   *   under branch RBAC.
    */
-  async findAll(filter?: { archived?: boolean; boardIds?: BoardID[] }): Promise<Board[]> {
+  private visibleBoardCondition(userId: UUID): SQL {
+    // Raw drizzle builder for the EXISTS subqueries — `exists()` expects a
+    // drizzle SelectQueryBuilder, not the cross-dialect wrapper shape, and
+    // the subqueries don't need `.all()` / `.one()` execution methods.
+    const accessibleBranchExists = exists(
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+      (this.db as any)
+        .select({ _: sql`1` })
+        .from(branches)
+        .leftJoin(
+          branchOwners,
+          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+        )
+        .where(
+          and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition(this.db, userId))
+        )
+    );
+    const accessiblePrimaryAssistantExists = exists(
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+      (this.db as any)
+        .select({ _: sql`1` })
+        .from(branches)
+        .leftJoin(
+          branchOwners,
+          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+        )
+        .where(
+          and(
+            eq(branches.branch_id, boards.primary_assistant_id),
+            visibleBranchAccessCondition(this.db, userId)
+          )
+        )
+    );
+
+    return (
+      or(
+        eq(boards.created_by, userId),
+        exists(
+          // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+          (this.db as any)
+            .select({ _: sql`1` })
+            .from(boardOwners)
+            .where(and(eq(boardOwners.board_id, boards.board_id), eq(boardOwners.user_id, userId)))
+        ),
+        sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared') = 'shared'`,
+        accessibleBranchExists,
+        accessiblePrimaryAssistantExists
+      ) ?? sql`false`
+    );
+  }
+
+  async findAll(filter?: {
+    archived?: boolean;
+    boardIds?: BoardID[];
+    visibleToUserId?: UUID;
+  }): Promise<Board[]> {
     try {
       // An explicit empty id set can never match a row; short-circuit so we skip
       // the read entirely and avoid emitting an empty `IN ()` predicate.
@@ -356,6 +413,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       }
       if (filter?.boardIds !== undefined) {
         conditions.push(inArray(boards.board_id, filter.boardIds));
+      }
+      if (filter?.visibleToUserId) {
+        conditions.push(this.visibleBoardCondition(filter.visibleToUserId));
       }
 
       const baseUrl = await getBaseUrl();
@@ -393,57 +453,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * @returns Array of board ids the user can see
    */
   async findVisibleBoardIds(userId: UUID): Promise<string[]> {
-    // Raw drizzle builder for the EXISTS subquery — `exists()` expects a
-    // drizzle SelectQueryBuilder, not the cross-dialect wrapper shape, and
-    // the subquery doesn't need `.all()` / `.one()` execution methods.
-    const accessibleBranchExists = exists(
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-      (this.db as any)
-        .select({ _: sql`1` })
-        .from(branches)
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
-        .where(
-          and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition(this.db, userId))
-        )
-    );
-    const accessiblePrimaryAssistantExists = exists(
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-      (this.db as any)
-        .select({ _: sql`1` })
-        .from(branches)
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
-        .where(
-          and(
-            eq(branches.branch_id, boards.primary_assistant_id),
-            visibleBranchAccessCondition(this.db, userId)
-          )
-        )
-    );
     const rows = await select(this.db, { board_id: boards.board_id })
       .from(boards)
-      .where(
-        or(
-          eq(boards.created_by, userId),
-          exists(
-            // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-            (this.db as any)
-              .select({ _: sql`1` })
-              .from(boardOwners)
-              .where(
-                and(eq(boardOwners.board_id, boards.board_id), eq(boardOwners.user_id, userId))
-              )
-          ),
-          sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared') = 'shared'`,
-          accessibleBranchExists,
-          accessiblePrimaryAssistantExists
-        )
-      )
+      .where(this.visibleBoardCondition(userId))
       .all();
     return rows.map((r: { board_id: string }) => r.board_id);
   }

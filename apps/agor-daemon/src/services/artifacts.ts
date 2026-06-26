@@ -52,6 +52,7 @@ import type {
   SessionID,
   UserID,
   UserRole,
+  UUID,
 } from '@agor/core/types';
 import {
   ARTIFACT_SCOPED_ONLY_GRANT_KEYS,
@@ -207,7 +208,10 @@ export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
   branch_id?: BranchID;
   archived?: boolean;
-}>;
+}> & {
+  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+  _agorSqlBranchAccessUserId?: UUID;
+};
 
 const MAX_CONSOLE_ENTRIES = 100;
 
@@ -355,8 +359,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    *
    * The generic adapter would read the entire artifacts table and filter in
    * memory. Artifacts are fetched on initial app load, so we narrow the read to
-   * the board, archived state, and the accessible-branch set (injected by RBAC
-   * scoping via `scopeFindToAccessibleBranches`) before rows leave the database.
+   * the board, archived state, explicit branch ids, and any RBAC SQL branch
+   * visibility marker before rows leave the database.
    * The per-row `rowToArtifact` / `getBaseUrl` enrichment runs inside
    * `artifactRepo.findAll` on the reduced set, and `find` still re-applies every
    * query filter in memory, so this only ever returns a superset of the matching
@@ -374,11 +378,19 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * does — pushing it would return a SUBSET and break the superset contract.
    * board_id / archived may still be pushed in that case.
    */
-  protected async fetchData(query: Query): Promise<Artifact[]> {
-    const filter: { board_id?: BoardID; archived?: boolean; branchIds?: BranchID[] } = {};
+  protected async fetchData(query: Query, params?: ArtifactParams): Promise<Artifact[]> {
+    const filter: {
+      board_id?: BoardID;
+      archived?: boolean;
+      branchIds?: BranchID[];
+      visibleToUserId?: UUID;
+    } = {};
 
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
     if (typeof query.archived === 'boolean') filter.archived = query.archived;
+    if (params?._agorSqlBranchAccessUserId) {
+      filter.visibleToUserId = params._agorSqlBranchAccessUserId;
+    }
 
     const branchId = query.branch_id;
     if (typeof branchId === 'string') {

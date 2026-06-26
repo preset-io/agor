@@ -144,3 +144,30 @@ export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
     ) ?? sql`false`
   );
 }
+
+/**
+ * Correlated branch-visibility predicate for tables that carry a branch_id.
+ *
+ * This is the SQL-pushdown equivalent of resolving all accessible branch ids
+ * first and applying `branch_id IN (...)`, but it avoids hydrating branch rows
+ * and avoids very large parameter lists. The `branchId` expression is normally
+ * a column from the outer query (for example `artifacts.branch_id`).
+ */
+export function visibleBranchReferenceAccessExists(
+  db: Database,
+  userId: UUID,
+  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
+  branchId: any
+): SQL {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(branches)
+      .leftJoin(
+        branchOwners,
+        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+      )
+      .where(and(eq(branches.branch_id, branchId), visibleBranchAccessCondition(db, userId)))
+  );
+}

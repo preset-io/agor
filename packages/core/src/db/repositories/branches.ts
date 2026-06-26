@@ -349,6 +349,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    *   over `includeArchived`)
    * @param filter.branchIds - Restrict to a set of branch IDs (empty set yields
    *   no rows, matching an `{ $in: [] }` filter)
+   * @param filter.visibleToUserId - Restrict to branches visible to this user
+   *   under branch RBAC, pushed down as a SQL predicate instead of a preloaded
+   *   `branch_id IN (...)` list.
    */
   async findAll(filter?: {
     repo_id?: UUID;
@@ -356,6 +359,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     board_id?: BoardID;
     archived?: boolean;
     branchIds?: BranchID[];
+    visibleToUserId?: UUID;
   }): Promise<Branch[]> {
     // An explicit empty id set can never match a row; short-circuit so we skip
     // the read entirely and avoid emitting an empty `IN ()` predicate.
@@ -381,10 +385,29 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (filter?.branchIds !== undefined) {
       conditions.push(inArray(branches.branch_id, filter.branchIds));
     }
+    if (filter?.visibleToUserId) {
+      conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+    }
 
-    const query = select(this.db).from(branches);
+    // The join shape differs only when RBAC SQL scoping is active. Keep the
+    // execution below uniform; Drizzle's cross-dialect builder types are more
+    // precise than this conditional can express.
+    // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+    const baseQuery: any = filter?.visibleToUserId
+      ? select(this.db, getTableColumns(branches))
+          .from(branches)
+          .leftJoin(
+            branchOwners,
+            and(
+              eq(branchOwners.branch_id, branches.branch_id),
+              eq(branchOwners.user_id, filter.visibleToUserId)
+            )
+          )
+      : select(this.db).from(branches);
     const rows =
-      conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
+      conditions.length > 0
+        ? await baseQuery.where(and(...conditions)).all()
+        : await baseQuery.all();
 
     const baseUrl = await getBaseUrl();
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));

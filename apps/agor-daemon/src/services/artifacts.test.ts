@@ -1857,6 +1857,24 @@ describe('ArtifactsService.find SQL pushdown', () => {
     }
   );
 
+  dbTest('pushes the RBAC SQL visibility marker into the repository read', async ({ db }) => {
+    const { service, boardA } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    await service.find({
+      _agorSqlBranchAccessUserId: 'viewer-1' as UUID,
+      query: { board_id: boardA },
+    });
+
+    expect(repoFindAll).toHaveBeenCalledWith({
+      board_id: boardA,
+      visibleToUserId: 'viewer-1',
+    });
+  });
+
   // branch_id is nullable: a `{ $in }` containing a non-string element must NOT
   // be pushed, because SQL `IN (NULL)` never matches an orphan's null branch_id
   // while the JS `includes` path does. Pushing it would return a SUBSET.

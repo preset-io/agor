@@ -198,6 +198,7 @@ function createFindHarness(opts: {
     board_id?: string;
     archived?: boolean;
     branchIds?: BranchID[];
+    visibleToUserId?: string;
   }) =>
     opts.branches.filter((branch) => {
       if (filter?.repo_id !== undefined && branch.repo_id !== filter.repo_id) return false;
@@ -973,6 +974,23 @@ describe('BranchesService.find SQL pushdown', () => {
     expect(branchRepo.findAll).toHaveBeenCalledWith({ branchIds: [] });
     expect(result.total).toBe(0);
     expect(result.data).toHaveLength(0);
+  });
+
+  it('pushes the RBAC SQL visibility marker into the repository read', async () => {
+    const { service, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    await service.find({
+      _agorSqlBranchAccessUserId: 'viewer-1' as UUID,
+      query: { board_id: 'board-1' },
+    } as BranchParams);
+
+    expect(branchRepo.findAll).toHaveBeenCalledWith({
+      board_id: 'board-1',
+      visibleToUserId: 'viewer-1',
+    });
   });
 });
 

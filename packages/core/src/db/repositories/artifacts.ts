@@ -32,6 +32,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
+import { visibleBranchReferenceAccessExists } from './branch-access';
 
 export class ArtifactRepository implements BaseRepository<Artifact, Partial<Artifact>> {
   constructor(private db: Database) {}
@@ -175,11 +176,16 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    * @param filter.archived - Filter to an exact archived state
    * @param filter.branchIds - Restrict to a set of branch IDs (empty set yields
    *   no rows, matching an `{ $in: [] }` filter)
+   * @param filter.visibleToUserId - Restrict to artifacts whose branch is
+   *   visible to this user under branch RBAC, pushed down as a correlated SQL
+   *   EXISTS instead of a preloaded `branch_id IN (...)` list. Null-branch
+   *   artifacts are excluded, matching the existing RBAC find-hook behavior.
    */
   async findAll(filter?: {
     board_id?: BoardID;
     archived?: boolean;
     branchIds?: BranchID[];
+    visibleToUserId?: UUID;
   }): Promise<Artifact[]> {
     try {
       // An explicit empty id set can never match a row; short-circuit so we skip
@@ -197,6 +203,11 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       }
       if (filter?.branchIds !== undefined) {
         conditions.push(inArray(artifacts.branch_id, filter.branchIds));
+      }
+      if (filter?.visibleToUserId) {
+        conditions.push(
+          visibleBranchReferenceAccessExists(this.db, filter.visibleToUserId, artifacts.branch_id)
+        );
       }
 
       const query = select(this.db).from(artifacts);

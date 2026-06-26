@@ -13,6 +13,7 @@ import { ArtifactRepository } from './artifacts';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
+import { UsersRepository } from './users';
 
 async function createBoard(db: Database): Promise<BoardID> {
   const board = await new BoardRepository(db).create({
@@ -23,7 +24,10 @@ async function createBoard(db: Database): Promise<BoardID> {
   return board.board_id as BoardID;
 }
 
-async function createBranch(db: Database): Promise<BranchID> {
+async function createBranch(
+  db: Database,
+  overrides?: { created_by?: UUID; others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all' }
+): Promise<BranchID> {
   const repo = await new RepoRepository(db).create({
     repo_id: generateId() as UUID,
     slug: `repo-${generateId()}`,
@@ -40,7 +44,9 @@ async function createBranch(db: Database): Promise<BranchID> {
     ref: 'refs/heads/feature',
     branch_unique_id: 1,
     path: `/tmp/${generateId()}`,
-    created_by: 'test-user' as UUID,
+    created_by: overrides?.created_by ?? ('test-user' as UUID),
+    permission_source: 'override',
+    others_can: overrides?.others_can,
   });
   return branch.branch_id as BranchID;
 }
@@ -114,5 +120,43 @@ describe('ArtifactRepository.findAll', () => {
     await repo.create({ artifact_id: generateId(), board_id: board, name: 'a1' });
 
     expect(await repo.findAll({ branchIds: [] })).toEqual([]);
+  });
+
+  dbTest('pushes branch visibility directly into findAll SQL', async ({ db }) => {
+    const repo = new ArtifactRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const board = await createBoard(db);
+    const viewerId = generateId() as UUID;
+    await usersRepo.create({
+      user_id: viewerId,
+      email: 'artifact-visible-branch@example.com',
+      name: 'Artifact Viewer',
+    });
+    const visibleBranch = await createBranch(db, { others_can: 'none' });
+    const hiddenBranch = await createBranch(db, { others_can: 'none' });
+    await branchRepo.addOwner(visibleBranch, viewerId);
+
+    const visibleArtifact = await repo.create({
+      artifact_id: generateId(),
+      board_id: board,
+      branch_id: visibleBranch,
+      name: 'visible',
+    });
+    await repo.create({
+      artifact_id: generateId(),
+      board_id: board,
+      branch_id: hiddenBranch,
+      name: 'hidden',
+    });
+    await repo.create({
+      artifact_id: generateId(),
+      board_id: board,
+      branch_id: null,
+      name: 'orphan',
+    });
+
+    const visible = await repo.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((a) => a.artifact_id)).toEqual([visibleArtifact.artifact_id]);
   });
 });

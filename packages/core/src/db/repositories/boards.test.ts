@@ -575,6 +575,31 @@ describe('BoardRepository.findAll', () => {
 
     expect(await repo.findAll({ boardIds: [] })).toEqual([]);
   });
+
+  dbTest('should push board visibility directly into findAll SQL', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const viewerId = generateId() as UUID;
+
+    const ownedPrivate = await repo.create(
+      createBoardData({
+        name: 'Owned private',
+        slug: 'owned-private',
+        access_mode: 'private',
+        created_by: viewerId,
+      })
+    );
+    await repo.create(
+      createBoardData({
+        name: 'Other private',
+        slug: 'other-private',
+        access_mode: 'private',
+        created_by: generateId() as UUID,
+      })
+    );
+
+    const visible = await repo.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((b) => b.board_id)).toEqual([ownedPrivate.board_id]);
+  });
 });
 
 // ============================================================================

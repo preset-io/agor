@@ -39,6 +39,8 @@ export interface BoardParams
   user?: AuthenticatedParams['user'];
   /** Internal hook signal; set only when ensureAssistantWelcomeNote writes. */
   assistantWelcomeNoteMutated?: boolean;
+  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+  _agorSqlBoardAccessUserId?: UUID;
 }
 
 /**
@@ -73,18 +75,22 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    *
    * The generic adapter would read the entire boards table and filter in
    * memory. `boards` is fetched on initial app load, so we narrow the read to
-   * the accessible-id set (injected by RBAC scoping via `findVisibleBoardIds`)
-   * before rows leave the database. `find` still re-applies every query filter
+   * explicit board ids and any RBAC SQL visibility marker before rows leave the
+   * database. `find` still re-applies every query filter
    * in memory, so this only ever returns a superset of the matching rows and the
    * downstream sort/pagination is unaffected.
    *
    * The boards query validator (`boardQuerySchema`) does not accept `archived`
-   * and strips it before the service runs, so there is nothing to push beyond
-   * the board-id scope. A `{ $in }` is only pushed when every element is a
+   * and strips it before the service runs, so there is no archived predicate to
+   * push. A `{ $in }` is only pushed when every element is a
    * string, keeping the superset invariant unconditional.
    */
-  protected async fetchData(query: Query): Promise<Board[]> {
-    const filter: { boardIds?: BoardID[] } = {};
+  protected async fetchData(query: Query, params?: BoardParams): Promise<Board[]> {
+    const filter: { boardIds?: BoardID[]; visibleToUserId?: UUID } = {};
+
+    if (params?._agorSqlBoardAccessUserId) {
+      filter.visibleToUserId = params._agorSqlBoardAccessUserId;
+    }
 
     const boardId = query.board_id;
     if (typeof boardId === 'string') {

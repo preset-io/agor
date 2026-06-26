@@ -60,7 +60,7 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
    * `archived`). Anything else falls through to the unchanged in-memory filter,
    * preserving current behavior exactly.
    */
-  protected async fetchData(query: Query): Promise<Card[]> {
+  protected async fetchData(query: Query, _params?: CardParams): Promise<Card[]> {
     const filter: { board_id?: BoardID; archived?: boolean } = {};
 
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;

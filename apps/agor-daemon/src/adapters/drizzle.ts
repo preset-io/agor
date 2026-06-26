@@ -223,7 +223,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
    * `filterData`, an override only needs to return a superset of the matching
    * rows for the result to stay identical.
    */
-  protected async fetchData(_query: Query): Promise<T[]> {
+  protected async fetchData(_query: Query, _params?: P): Promise<T[]> {
     return this.repository.findAll();
   }
 
@@ -235,7 +235,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
 
     // Get the candidate row set (whole table by default; subclasses may push
     // predicates into SQL — filterData below still applies every query filter)
-    let data = await this.fetchData(query);
+    let data = await this.fetchData(query, params);
 
     // Apply filters
     data = this.filterData(data, query);

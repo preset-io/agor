@@ -16,7 +16,7 @@ import {
 import type { Board, BoardID, BranchID, UUID } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
-import { BoardsService } from './boards';
+import { type BoardParams, BoardsService } from './boards';
 
 const TEST_USER = 'test-user' as UUID;
 const TEST_PARAMS = { user: { user_id: TEST_USER } } as never;
@@ -458,4 +458,19 @@ describe('BoardsService.find SQL pushdown', () => {
       expect(result.data).toHaveLength(0);
     }
   );
+
+  dbTest('pushes the RBAC SQL visibility marker into the repository read', async ({ db }) => {
+    const { service } = await seed(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { boardRepo: BoardRepository }).boardRepo,
+      'findAll'
+    );
+
+    await service.find({
+      _agorSqlBoardAccessUserId: TEST_USER as UUID,
+      query: {},
+    } as BoardParams);
+
+    expect(repoFindAll).toHaveBeenCalledWith({ visibleToUserId: TEST_USER });
+  });
 });

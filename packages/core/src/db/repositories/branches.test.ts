@@ -586,6 +586,42 @@ describe('BranchRepository.findAll', () => {
 
     expect(await wtRepo.findAll({ branchIds: [] })).toEqual([]);
   });
+
+  dbTest('should push branch visibility directly into findAll SQL', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const viewerId = generateId() as UUID;
+    await usersRepo.create({
+      user_id: viewerId,
+      email: 'findall-visible-branch@example.com',
+      name: 'Visible Branch Viewer',
+    });
+
+    const repo = await repoRepo.create(createRepoData());
+    const ownedPrivate = await wtRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'owned-private',
+        branch_unique_id: 1,
+        permission_source: 'override',
+        others_can: 'none',
+      })
+    );
+    await wtRepo.addOwner(ownedPrivate.branch_id, viewerId);
+    await wtRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'other-private',
+        branch_unique_id: 2,
+        permission_source: 'override',
+        others_can: 'none',
+      })
+    );
+
+    const visible = await wtRepo.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((w) => w.name)).toEqual(['owned-private']);
+  });
 });
 
 // ============================================================================
