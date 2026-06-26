@@ -8,7 +8,7 @@ import type {
   Session,
 } from '@agor-live/client';
 import { isAssistant } from '@agor-live/client';
-import { FolderOutlined, LinkOutlined, ReadOutlined } from '@ant-design/icons';
+import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
 import { useReadableKnowledgeDocuments } from '../../../hooks/useKnowledgeDocuments';
@@ -165,16 +165,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item
-              label={
-                <Space size={4}>
-                  <ReadOutlined />
-                  <span>Knowledge Page</span>
-                </Space>
-              }
-              labelCol={{ span: 6 }}
-              wrapperCol={{ span: 18 }}
-            >
+            <Form.Item label="Knowledge Page" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
               <Select
                 style={{ width: '100%' }}
                 allowClear

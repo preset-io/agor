@@ -183,6 +183,10 @@ export const ZoneConfigModal = ({
                   <code>{'{{ branch.notes }}'}</code> - Branch notes
                 </li>
                 <li>
+                  <code>{'{{ branch.linked_knowledge_page_id }}'}</code> - Linked Knowledge document
+                  ID
+                </li>
+                <li>
                   <code>{'{{ session.description }}'}</code> - Session description
                 </li>
                 <li>
