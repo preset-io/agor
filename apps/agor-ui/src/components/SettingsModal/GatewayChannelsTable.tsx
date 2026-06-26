@@ -1,3 +1,12 @@
+// Import the manifest helpers from the connector-free subpath so the browser
+// bundle never pulls in @slack/web-api / @slack/socket-mode (node-only) via the
+// gateway barrel.
+import {
+  buildSlackManifest,
+  requiredBotEvents,
+  requiredBotScopes,
+  type SlackWizardOptions,
+} from '@agor/core/gateway/slack-manifest';
 import type {
   AgenticToolName,
   AgorClient,
@@ -8,12 +17,17 @@ import type {
   GatewayEnvVar,
   MCPServer,
   PermissionMode,
+  SlackTestResult,
   User,
   UUID,
 } from '@agor-live/client';
 import {
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  ExclamationCircleOutlined,
   GithubOutlined,
   KeyOutlined,
   LoadingOutlined,
@@ -341,6 +355,603 @@ const GITHUB_SETUP_STEPS = [
   { title: 'Configure' },
 ];
 
+// ============================================================================
+// Slack Setup Wizard (create mode)
+// ============================================================================
+
+/** Slack guided-setup wizard steps. */
+const SLACK_SETUP_STEPS = [
+  { title: 'Options' },
+  { title: 'Create App' },
+  { title: 'Tokens & Test' },
+];
+
+/**
+ * Copy text to the clipboard, falling back to a transient textarea +
+ * `execCommand('copy')` for browsers/contexts where the async Clipboard API is
+ * unavailable (e.g. non-secure origins).
+ */
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the legacy path below.
+  }
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Honest rendering of a Slack connection probe. A green result is advisory:
+ * `notVerifiable` is surfaced as a warning so success is never read as "fully
+ * verified".
+ */
+const SlackTestResultView: React.FC<{ result: SlackTestResult }> = ({ result }) => {
+  const hasFollowups = result.failures.length > 0 || result.notVerifiable.length > 0;
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <Alert
+        type={result.ok ? 'success' : 'error'}
+        showIcon
+        icon={result.ok ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
+        title={result.ok ? 'Connection succeeded' : 'Connection failed'}
+        description={
+          <div style={{ fontSize: 12 }}>
+            {result.team && (
+              <div>
+                Team: <strong>{result.team.name}</strong> ({result.team.id})
+              </div>
+            )}
+            {result.bot && (
+              <div>
+                Bot: <strong>{result.bot.name}</strong> ({result.bot.userId})
+              </div>
+            )}
+            <div>
+              App token (Socket Mode):{' '}
+              <strong>{result.appTokenValid ? 'valid' : 'not verified'}</strong>
+            </div>
+            {result.channelAccess && result.channelAccess.length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                Sampled channel access:
+                <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                  {result.channelAccess.map((c) => (
+                    <li key={c.channelId}>
+                      <code>{c.channelId}</code>: {c.ok ? 'ok' : 'no access'}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        }
+        style={{ marginBottom: hasFollowups ? 12 : 0 }}
+      />
+      {result.failures.length > 0 && (
+        <Alert
+          type="error"
+          showIcon
+          title="Failures"
+          description={
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 12 }}>
+              {result.failures.map((f) => (
+                <li key={`${f.capability}:${f.reason}`}>
+                  <strong>{f.capability}</strong>: {f.reason}
+                  {f.needed ? ` (needs ${f.needed})` : ''}
+                </li>
+              ))}
+            </ul>
+          }
+          style={{ marginBottom: result.notVerifiable.length > 0 ? 12 : 0 }}
+        />
+      )}
+      {result.notVerifiable.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<ExclamationCircleOutlined />}
+          title="Not verifiable from here"
+          description={
+            <div style={{ fontSize: 12 }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                A green result does not guarantee these — confirm them in Slack:
+              </Typography.Text>
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {result.notVerifiable.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+            </div>
+          }
+          style={{ fontSize: 12 }}
+        />
+      )}
+    </div>
+  );
+};
+
+/**
+ * Guided Slack setup wizard shown on create. Mirrors the GitHub `Steps` flow:
+ * step state is lifted to the parent, the modal's OK button stays hidden until
+ * the final step. Selections drive a live manifest preview + derived scope/event
+ * list via {@link buildSlackManifest} / {@link requiredBotScopes}, so the user
+ * never adds a scope by hand.
+ */
+const SlackSetupWizard: React.FC<{
+  form: FormInstance;
+  userById: Map<string, User>;
+  mcpServerById: Map<string, MCPServer>;
+  selectedAgent: string;
+  onAgentChange: (agent: string) => void;
+  step: number;
+  onStepChange: (step: number) => void;
+  testResult: SlackTestResult | null;
+  testLoading: boolean;
+  onTest: () => void;
+  onInvalidateTest: () => void;
+}> = ({
+  form,
+  userById,
+  mcpServerById,
+  selectedAgent,
+  onAgentChange,
+  step,
+  onStepChange,
+  testResult,
+  testLoading,
+  onTest,
+  onInvalidateTest,
+}) => {
+  const { token } = theme.useToken();
+  const { showError } = useThemedMessage();
+  const [copied, setCopied] = useState(false);
+
+  const appName = (Form.useWatch('slack_app_name', form) as string) ?? '';
+  const enableChannels = Form.useWatch('enable_channels', form) ?? false;
+  const enableGroups = Form.useWatch('enable_groups', form) ?? false;
+  const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
+  const alignUsers = Form.useWatch('align_slack_users', form) ?? false;
+  const outbound = Form.useWatch('outbound_enabled', form) ?? false;
+  const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
+  const botToken = (Form.useWatch('bot_token', form) as string) ?? '';
+  const appToken = (Form.useWatch('app_token', form) as string) ?? '';
+
+  const wizardOptions: SlackWizardOptions = useMemo(
+    () => ({
+      appName: appName || 'Agor',
+      publicChannels: enableChannels,
+      privateChannels: enableGroups,
+      groupDms: enableMpim,
+      alignUsers,
+      outbound,
+    }),
+    [appName, enableChannels, enableGroups, enableMpim, alignUsers, outbound]
+  );
+
+  const manifestJson = useMemo(
+    () => JSON.stringify(buildSlackManifest(wizardOptions), null, 2),
+    [wizardOptions]
+  );
+  const scopes = useMemo(() => requiredBotScopes(wizardOptions), [wizardOptions]);
+  const events = useMemo(() => requiredBotEvents(wizardOptions), [wizardOptions]);
+
+  // Any change to the manifest inputs or tokens invalidates a prior test result.
+  // A green check against stale credentials/options would be misleading.
+  const invalidationKey = `${manifestJson}|${botToken}|${appToken}`;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: invalidationKey is the change trigger, not a value read in the body.
+  useEffect(() => {
+    onInvalidateTest();
+    setCopied(false);
+  }, [invalidationKey, onInvalidateTest]);
+
+  const manifestPreview = (
+    <pre
+      style={{
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorder}`,
+        borderRadius: token.borderRadius,
+        padding: 12,
+        margin: '0 0 16px',
+        maxHeight: 280,
+        overflow: 'auto',
+        fontSize: 11,
+        lineHeight: 1.5,
+        fontFamily: 'monospace',
+      }}
+    >
+      {manifestJson}
+    </pre>
+  );
+
+  const scopeList = (
+    <div style={{ marginBottom: 16 }}>
+      <Typography.Text strong style={{ fontSize: 12 }}>
+        Bot scopes ({scopes.length})
+      </Typography.Text>
+      <div style={{ marginTop: 6 }}>
+        {scopes.map((s) => (
+          <Tag key={s} style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}>
+            {s}
+          </Tag>
+        ))}
+      </div>
+      <Typography.Text strong style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+        Event subscriptions ({events.length})
+      </Typography.Text>
+      <div style={{ marginTop: 6 }}>
+        {events.map((e) => (
+          <Tag
+            key={e}
+            color="blue"
+            style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}
+          >
+            {e}
+          </Tag>
+        ))}
+      </div>
+    </div>
+  );
+
+  const goToCreateApp = async () => {
+    const fields: string[] = ['name', 'target_branch_id', 'slack_app_name'];
+    if (!alignUsers) fields.push('agor_user_id');
+    try {
+      await form.validateFields(fields);
+    } catch {
+      return;
+    }
+    onStepChange(1);
+  };
+
+  const handleCopy = async () => {
+    const ok = await copyTextToClipboard(manifestJson);
+    if (ok) {
+      setCopied(true);
+    } else {
+      showError('Copy failed — select the manifest text and copy it manually.');
+    }
+  };
+
+  const handleTestClick = async () => {
+    try {
+      await form.validateFields(['bot_token', 'app_token']);
+    } catch {
+      return;
+    }
+    onTest();
+  };
+
+  return (
+    <>
+      <Steps current={step} size="small" items={SLACK_SETUP_STEPS} style={{ marginBottom: 24 }} />
+
+      {/* Step 0: Options (kept mounted so Form.Items stay registered for validation) */}
+      <div style={{ display: step === 0 ? undefined : 'none' }}>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+          Choose what the bot can do. Your selections build a Slack app manifest below — paste it
+          into Slack in the next step so every scope and event is preconfigured for you.
+        </Typography.Paragraph>
+
+        <Form.Item
+          label="App Name"
+          name="slack_app_name"
+          initialValue="Agor"
+          rules={[{ required: true, message: 'Enter a name for the Slack app' }]}
+          tooltip="Display name for the Slack app created from the manifest"
+        >
+          <Input placeholder="Agor" />
+        </Form.Item>
+
+        <div style={{ marginBottom: 16 }}>
+          <Typography.Text strong style={{ fontSize: 13 }}>
+            Surfaces
+          </Typography.Text>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 12px' }}>
+            Where the bot listens for messages.
+          </Typography.Paragraph>
+
+          <div style={{ marginBottom: 8 }}>
+            <Checkbox checked disabled>
+              Direct messages
+            </Checkbox>
+            <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+              always on
+            </Typography.Text>
+          </div>
+
+          <div style={{ marginBottom: 8 }}>
+            <Form.Item name="enable_channels" valuePropName="checked" initialValue={false} noStyle>
+              <Checkbox>Public channels</Checkbox>
+            </Form.Item>
+          </div>
+          {enableChannels && (
+            <div style={{ margin: '0 0 8px 24px' }}>
+              <Form.Item name="slack_public_scope" initialValue="all" noStyle>
+                <Radio.Group>
+                  <Space orientation="vertical" size={4}>
+                    <Radio value="all">All public channels the bot is added to</Radio>
+                    <Radio value="specific">Specific channels only</Radio>
+                  </Space>
+                </Radio.Group>
+              </Form.Item>
+              {publicScope === 'specific' && (
+                <Form.Item
+                  name="allowed_channel_ids"
+                  style={{ marginTop: 8, marginBottom: 0 }}
+                  tooltip="Slack channel IDs (e.g., C01ABC123XY). Press Enter to add each ID."
+                >
+                  <Select
+                    mode="tags"
+                    placeholder="C01ABC123XY"
+                    style={{ width: '100%' }}
+                    tokenSeparators={[',', ' ']}
+                  />
+                </Form.Item>
+              )}
+            </div>
+          )}
+
+          <div style={{ marginBottom: 8 }}>
+            <Form.Item name="enable_groups" valuePropName="checked" initialValue={false} noStyle>
+              <Checkbox>Private channels</Checkbox>
+            </Form.Item>
+          </div>
+          <div>
+            <Form.Item name="enable_mpim" valuePropName="checked" initialValue={false} noStyle>
+              <Checkbox>Group DMs</Checkbox>
+            </Form.Item>
+          </div>
+        </div>
+
+        <Form.Item
+          label="Align Slack users"
+          name="align_slack_users"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Match each Slack profile email to an Agor user. Unmatched users are rejected."
+        >
+          <Switch />
+        </Form.Item>
+        {alignUsers ? (
+          <Alert
+            type="info"
+            showIcon
+            title="Requires users:read.email scope"
+            description="Added to the manifest automatically so Agor can match Slack profiles by email."
+            style={{ fontSize: 12, marginBottom: 16 }}
+          />
+        ) : (
+          <Form.Item
+            label="Run as"
+            name="agor_user_id"
+            rules={[{ required: true, message: 'Please select a user' }]}
+            tooltip="All sessions from this channel run as this Agor user"
+          >
+            <UserSelect userById={userById} />
+          </Form.Item>
+        )}
+
+        <Form.Item
+          label="Enable outbound sends"
+          name="outbound_enabled"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Allow authorized agents to send proactive Slack messages through this gateway."
+        >
+          <Switch />
+        </Form.Item>
+        {outbound && (
+          <Form.Item
+            label="Default outbound target"
+            name="default_outbound_target"
+            tooltip="Optional. Used when the agent omits a target. Examples: #project-updates, channel:C01ABC123, user@example.com."
+          >
+            <Input placeholder="#project-updates, channel:C01ABC123, or user@example.com" />
+          </Form.Item>
+        )}
+
+        <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
+          Manifest preview
+        </Typography.Text>
+        {manifestPreview}
+        {scopeList}
+
+        <Button type="primary" block onClick={goToCreateApp}>
+          Next: Create App
+        </Button>
+      </div>
+
+      {/* Step 1: Create app from manifest */}
+      <div style={{ display: step === 1 ? undefined : 'none' }}>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+          Create the Slack app from this manifest. Slack preconfigures every scope and event for you
+          — no manual scope entry needed.
+        </Typography.Paragraph>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <Button
+            size="small"
+            icon={copied ? <CheckCircleOutlined /> : <CopyOutlined />}
+            onClick={handleCopy}
+          >
+            {copied ? 'Copied' : 'Copy manifest'}
+          </Button>
+        </div>
+        {manifestPreview}
+
+        <ol style={{ paddingLeft: 20, margin: '0 0 16px', fontSize: 13 }}>
+          <li>
+            Open{' '}
+            <Typography.Link
+              href="https://api.slack.com/apps?new_app=1"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              api.slack.com/apps
+            </Typography.Link>{' '}
+            → <strong>Create New App</strong> → <strong>From a manifest</strong>.
+          </li>
+          <li>
+            Pick your workspace, paste the manifest above, and click <strong>Create</strong>.
+          </li>
+          <li>
+            <strong>Install</strong> the app to your workspace when prompted.
+          </li>
+          <li>
+            Go to <strong>Basic Information → App-Level Tokens</strong> and generate a token with
+            the <code>connections:write</code> scope — this is your <code>xapp-</code> token.
+          </li>
+        </ol>
+
+        <Space>
+          <Button onClick={() => onStepChange(0)}>Back</Button>
+          <Button type="primary" onClick={() => onStepChange(2)}>
+            Next: Tokens &amp; Test
+          </Button>
+        </Space>
+      </div>
+
+      {/* Step 2: Tokens + test */}
+      <div style={{ display: step === 2 ? undefined : 'none' }}>
+        <Alert
+          type="info"
+          showIcon
+          title="Where to find these tokens"
+          description={
+            <span>
+              <strong>Bot token (xoxb-)</strong>: OAuth &amp; Permissions → Bot User OAuth Token.
+              <br />
+              <strong>App token (xapp-)</strong>: Basic Information → App-Level Tokens.
+            </span>
+          }
+          style={{ marginBottom: 16, fontSize: 12 }}
+        />
+
+        <Form.Item
+          label="Bot Token"
+          name="bot_token"
+          rules={[{ required: true, message: 'Bot token is required' }]}
+          tooltip="OAuth & Permissions → Bot User OAuth Token (xoxb-...)"
+        >
+          <Input.Password placeholder="xoxb-..." />
+        </Form.Item>
+
+        <Form.Item
+          label="App Token"
+          name="app_token"
+          rules={[{ required: true, message: 'App token is required' }]}
+          tooltip="Basic Information → App-Level Tokens (xapp-...)"
+        >
+          <Input.Password placeholder="xapp-..." />
+        </Form.Item>
+
+        <Button
+          icon={<ThunderboltOutlined />}
+          loading={testLoading}
+          onClick={handleTestClick}
+          style={{ marginBottom: 12 }}
+        >
+          Test connection
+        </Button>
+
+        {testResult && <SlackTestResultView result={testResult} />}
+
+        {!testResult?.ok && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Testing is optional"
+            description="Slack can't be fully verified up front. You can save now and confirm by sending the bot a message — but an untested channel may not work."
+            style={{ marginBottom: 16, fontSize: 12 }}
+          />
+        )}
+
+        <Collapse
+          ghost
+          destroyOnHidden={false}
+          style={{ marginLeft: -16, marginRight: -16 }}
+          items={[
+            {
+              key: 'agentic-tool-config',
+              label: (
+                <SectionLabel
+                  icon={<ThunderboltOutlined />}
+                  title="Agent Configuration"
+                  subtitle={selectedAgent}
+                />
+              ),
+              children: (
+                <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Configure which agent and settings to use for sessions created from this
+                    channel.
+                  </Typography.Text>
+                  <AgentSelectionGrid
+                    agents={AVAILABLE_AGENTS}
+                    selectedAgentId={selectedAgent}
+                    onSelect={onAgentChange}
+                    columns={2}
+                    showHelperText={false}
+                    showComparisonLink={false}
+                  />
+                  <AgenticToolConfigForm
+                    agenticTool={selectedAgent as AgenticToolName}
+                    mcpServerById={mcpServerById}
+                    showHelpText={false}
+                  />
+                </Space>
+              ),
+            },
+            {
+              key: 'env-vars',
+              label: (
+                <SectionLabel
+                  icon={<LockOutlined />}
+                  title="Environment Variables"
+                  subtitle="channel-level secrets"
+                />
+              ),
+              children: (
+                <>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                  >
+                    Define environment variables for sessions created from this channel. Useful for
+                    service account tokens or API keys for MCP servers.
+                  </Typography.Text>
+                  <Form.Item name="envVars" noStyle>
+                    <GatewayEnvVarsEditor />
+                  </Form.Item>
+                </>
+              ),
+            },
+          ]}
+        />
+
+        <Button onClick={() => onStepChange(1)} style={{ marginTop: 8 }}>
+          Back
+        </Button>
+      </div>
+    </>
+  );
+};
+
 /** Shared form fields for create and edit modals */
 const ChannelFormFields: React.FC<{
   form: FormInstance;
@@ -359,6 +970,13 @@ const ChannelFormFields: React.FC<{
   githubSetupParams: GitHubSetupParams | null;
   githubLoading: boolean;
   githubError: string | null;
+  /** Slack setup wizard state (managed by parent, create mode only) */
+  slackStep: number;
+  onSlackStepChange: (step: number) => void;
+  slackTestResult: SlackTestResult | null;
+  slackTestLoading: boolean;
+  onSlackTest: () => void;
+  onInvalidateSlackTest: () => void;
 }> = ({
   form,
   mode,
@@ -375,6 +993,12 @@ const ChannelFormFields: React.FC<{
   githubSetupParams,
   githubLoading,
   githubError,
+  slackStep,
+  onSlackStepChange,
+  slackTestResult,
+  slackTestLoading,
+  onSlackTest,
+  onInvalidateSlackTest,
 }) => {
   const { showError } = useThemedMessage();
 
@@ -1093,12 +1717,29 @@ const ChannelFormFields: React.FC<{
         />
       )}
 
-      {/* ── Collapsible sections (Slack only) ── */}
-      {channelType === 'slack' && (
+      {/* ── Slack guided setup wizard (create) ── */}
+      {channelType === 'slack' && mode === 'create' && (
+        <SlackSetupWizard
+          form={form}
+          userById={userById}
+          mcpServerById={mcpServerById}
+          selectedAgent={selectedAgent}
+          onAgentChange={onAgentChange}
+          step={slackStep}
+          onStepChange={onSlackStepChange}
+          testResult={slackTestResult}
+          testLoading={slackTestLoading}
+          onTest={onSlackTest}
+          onInvalidateTest={onInvalidateSlackTest}
+        />
+      )}
+
+      {/* ── Collapsible sections (Slack edit) ── */}
+      {channelType === 'slack' && mode === 'edit' && (
         <Collapse
           ghost
           destroyOnHidden={false}
-          defaultActiveKey={mode === 'create' ? ['identity', 'credentials'] : []}
+          defaultActiveKey={[]}
           style={{ marginLeft: -16, marginRight: -16 }}
           items={[
             // ── Identity ──
@@ -1150,27 +1791,17 @@ const ChannelFormFields: React.FC<{
                   <Form.Item
                     label="Bot Token"
                     name="bot_token"
-                    rules={
-                      mode === 'create'
-                        ? [{ required: true, message: 'Bot token is required' }]
-                        : []
-                    }
                     tooltip="Slack Bot User OAuth Token (xoxb-...)"
                   >
-                    <Input.Password placeholder={mode === 'edit' ? '••••••••' : 'xoxb-...'} />
+                    <Input.Password placeholder="••••••••" />
                   </Form.Item>
 
                   <Form.Item
                     label="App Token"
                     name="app_token"
-                    rules={
-                      mode === 'create'
-                        ? [{ required: true, message: 'App token is required' }]
-                        : []
-                    }
                     tooltip="Slack App-Level Token for Socket Mode (xapp-...)"
                   >
-                    <Input.Password placeholder={mode === 'edit' ? '••••••••' : 'xapp-...'} />
+                    <Input.Password placeholder="••••••••" />
                   </Form.Item>
 
                   <Alert
@@ -1469,6 +2100,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [githubError, setGithubError] = useState<string | null>(null);
   const [githubSetupParams, setGithubSetupParams] = useState<GitHubSetupParams | null>(null);
 
+  // ── Slack Setup Wizard State (lifted from ChannelFormFields) ──
+  const [slackStep, setSlackStep] = useState(0);
+  const [slackTestLoading, setSlackTestLoading] = useState(false);
+  const [slackTestResult, setSlackTestResult] = useState<SlackTestResult | null>(null);
+
   // Detect GitHub setup callback params from URL
   const location = useLocation();
   const navigate = useNavigate();
@@ -1562,6 +2198,69 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setGithubError(null);
     setGithubSetupParams(null);
   }, []);
+
+  const resetSlackState = useCallback(() => {
+    setSlackStep(0);
+    setSlackTestLoading(false);
+    setSlackTestResult(null);
+  }, []);
+
+  const invalidateSlackTest = useCallback(() => {
+    setSlackTestResult(null);
+  }, []);
+
+  // Switching channel type abandons any in-progress platform setup, so clear the
+  // wizard state for both platforms.
+  const handleChannelTypeChange = useCallback(
+    (type: ChannelType) => {
+      setChannelType(type);
+      resetGithubState();
+      resetSlackState();
+    },
+    [resetGithubState, resetSlackState]
+  );
+
+  // Probe the entered Slack tokens against the live workspace via the
+  // `gateway-channels/test` service. No gatewayChannelId — the channel doesn't
+  // exist yet, so the probe runs purely against the supplied config.
+  const handleSlackTest = useCallback(async () => {
+    if (!client) {
+      showError('Not connected to server');
+      return;
+    }
+    const values = createForm.getFieldsValue(true);
+    const config: Record<string, unknown> = {
+      bot_token: values.bot_token,
+      app_token: values.app_token,
+      enable_channels: values.enable_channels ?? false,
+      enable_groups: values.enable_groups ?? false,
+      enable_mpim: values.enable_mpim ?? false,
+      align_slack_users: values.align_slack_users ?? false,
+      allowed_channel_ids: values.allowed_channel_ids ?? [],
+      outbound_enabled: values.outbound_enabled ?? false,
+    };
+    setSlackTestLoading(true);
+    setSlackTestResult(null);
+    try {
+      const result = (await client
+        .service('gateway-channels/test')
+        .create({ config })) as SlackTestResult;
+      setSlackTestResult(result);
+    } catch (error) {
+      setSlackTestResult({
+        ok: false,
+        failures: [
+          {
+            capability: 'connection',
+            reason: error instanceof Error ? error.message : String(error),
+          },
+        ],
+        notVerifiable: [],
+      });
+    } finally {
+      setSlackTestLoading(false);
+    }
+  }, [client, createForm, showError]);
 
   // Pre-populate agentic config form with user defaults when agent changes
   useEffect(() => {
@@ -1697,6 +2396,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       // Use getFieldsValue(true) to include values from collapsed (unmounted)
       // panels that validateFields() may omit.
       const values = createForm.getFieldsValue(true);
+      // The whitelist only applies when the wizard limits public channels to a
+      // specific set; "all public channels" (or no public channels) must clear it.
+      if (
+        values.channel_type === 'slack' &&
+        (values.slack_public_scope !== 'specific' || !values.enable_channels)
+      ) {
+        values.allowed_channel_ids = [];
+      }
       const data = extractFormData(values, undefined, selectedAgent);
 
       if (!client) {
@@ -1710,6 +2417,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       setCreateModalOpen(false);
       setChannelType('slack');
       resetGithubState();
+      resetSlackState();
     } catch (error: unknown) {
       const err = error as { errorFields?: { errors: string[] }[]; message?: string };
       if (err.errorFields?.length) {
@@ -2021,11 +2729,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           setChannelType('slack');
           setSelectedAgent('claude-code');
           resetGithubState();
+          resetSlackState();
         }}
         okText="Create"
         okButtonProps={{
-          // Hide the Create button when GitHub setup hasn't reached the config step
-          style: channelType === 'github' && githubStep < 2 ? { display: 'none' } : undefined,
+          // Hide the Create button until each platform's guided setup reaches its
+          // final step (GitHub config / Slack tokens & test).
+          style:
+            (channelType === 'github' && githubStep < 2) ||
+            (channelType === 'slack' && slackStep < 2)
+              ? { display: 'none' }
+              : undefined,
         }}
         width={600}
       >
@@ -2034,7 +2748,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             form={createForm}
             mode="create"
             channelType={channelType}
-            onChannelTypeChange={setChannelType}
+            onChannelTypeChange={handleChannelTypeChange}
             branchById={branchOptionsById}
             userById={userById}
             mcpServerById={mcpServerById}
@@ -2045,6 +2759,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             githubSetupParams={githubSetupParams}
             githubLoading={githubLoading}
             githubError={githubError}
+            slackStep={slackStep}
+            onSlackStepChange={setSlackStep}
+            slackTestResult={slackTestResult}
+            slackTestLoading={slackTestLoading}
+            onSlackTest={handleSlackTest}
+            onInvalidateSlackTest={invalidateSlackTest}
           />
         </Form>
       </Modal>
@@ -2081,6 +2801,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             githubSetupParams={null}
             githubLoading={false}
             githubError={null}
+            slackStep={2}
+            onSlackStepChange={() => {}}
+            slackTestResult={null}
+            slackTestLoading={false}
+            onSlackTest={() => {}}
+            onInvalidateSlackTest={() => {}}
           />
         </Form>
       </Modal>
