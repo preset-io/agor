@@ -2,7 +2,7 @@ import type { AgorClient, Branch, GatewayChannel, MCPServer, User } from '@agor-
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 
 // The real branch/user pickers are antd v6 `Select`s; opening their dropdowns in
@@ -331,5 +331,114 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     // No unified step indicator and no wizard footer in edit mode.
     expect(screen.queryByText('Tokens & test')).not.toBeInTheDocument();
     expect(queryButton(/^Continue$/)).toBeUndefined();
+  });
+});
+
+/** Render the table at a specific route so the GitHub deep-link effect fires. */
+function renderTableAt(path: string, client: AgorClient | null) {
+  const branch = makeBranch();
+  const user = makeUser();
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <AntdApp>
+        <GatewayChannelsTable
+          client={client}
+          gatewayChannelById={new Map<string, GatewayChannel>()}
+          branchById={new Map([[branch.branch_id, branch]])}
+          userById={new Map([[user.user_id, user]])}
+          mcpServerById={new Map<string, MCPServer>()}
+        />
+      </AntdApp>
+    </MemoryRouter>
+  );
+}
+
+describe('GatewayChannelsTable GitHub install deep-link return', () => {
+  afterEach(() => {
+    sessionStorage.clear();
+  });
+
+  it('restores the step-0 draft, syncs channel_type=github, and builds a github payload', async () => {
+    // Simulate the step-0 essentials stashed right before the install redirect.
+    sessionStorage.setItem(
+      'agor.gateway.githubSetupDraft',
+      JSON.stringify({ name: 'My GH', target_branch_id: 'branch-1' })
+    );
+
+    const { client, channelCreate } = makeClient();
+    renderTableAt('/?installation_id=987654', client);
+
+    // Lands on the Credentials step with the GitHub flow active (channelType synced).
+    expect(await screen.findByText('Enter your GitHub App credentials')).toBeInTheDocument();
+    // Restored draft is in the (hidden, mounted) step-0 fields.
+    expect((screen.getByLabelText('branch-select') as HTMLInputElement).value).toBe('branch-1');
+
+    // Credentials → Configure.
+    fireEvent.change(screen.getByPlaceholderText('123456'), { target: { value: '111' } });
+    fireEvent.change(screen.getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), {
+      target: { value: 'pem-body' },
+    });
+    clickButton(/^Continue$/);
+    await flush();
+
+    // Configure: watch repos (tags Select, tokenized via comma) + identity.
+    const watchRepos = document.querySelector('#github_watch_repos') as HTMLInputElement;
+    fireEvent.change(watchRepos, { target: { value: 'preset-io/agor,' } });
+    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
+
+    clickButton(/Create channel/);
+    await flush();
+
+    await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
+    expect(channelCreate.mock.calls[0][0]).toMatchObject({
+      channel_type: 'github',
+      name: 'My GH',
+      target_branch_id: 'branch-1',
+      config: { installation_id: 987654, app_id: 111 },
+    });
+  });
+});
+
+describe('GatewayChannelsTable Teams create wizard', () => {
+  it('walks Channel → Setup and builds a teams payload', async () => {
+    const { client, channelCreate } = makeClient();
+    renderTable(client);
+    clickButton(/Add Channel/);
+
+    // Switch the channel type to Microsoft Teams via the (real) antd Select.
+    fireEvent.mouseDown(document.querySelector('.ant-select-selector') as HTMLElement);
+    fireEvent.click(screen.getByText('Microsoft Teams'));
+
+    // Step 0 for Teams includes the generic "Post messages as" identity.
+    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+      target: { value: 'My Teams' },
+    });
+    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
+    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
+    clickButton(/^Continue$/);
+    await flush();
+
+    // Setup step (final): Azure Bot credentials.
+    fireEvent.change(document.querySelector('#teams_app_id') as HTMLInputElement, {
+      target: { value: 'app-123' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Client secret value'), {
+      target: { value: 'secret' },
+    });
+    fireEvent.change(document.querySelector('#teams_tenant_id') as HTMLInputElement, {
+      target: { value: 'tenant-123' },
+    });
+
+    clickButton(/Create channel/);
+    await flush();
+
+    await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
+    expect(channelCreate.mock.calls[0][0]).toMatchObject({
+      channel_type: 'teams',
+      name: 'My Teams',
+      target_branch_id: 'branch-1',
+      agor_user_id: 'user-1',
+      config: { app_id: 'app-123', tenant_id: 'tenant-123' },
+    });
   });
 });
