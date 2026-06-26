@@ -11,6 +11,8 @@ const DEFAULT_SITE_URL = 'https://agor.live';
 export const BRAND_NAME = 'agor';
 export const THEME_COLOR = '#2e9a92';
 export const FAVICON_PATH = '/favicon.png';
+export const APPLE_TOUCH_ICON_PATH = '/favicon.png';
+export const WEB_MANIFEST_PATH = '/site.webmanifest';
 export const LOGO_PATH = '/logo.png';
 
 export const DEFAULT_DESCRIPTION =

@@ -3,8 +3,7 @@ User-agent: *
 Allow: /
 Crawl-delay: 1
 
-# Block internal/build paths
-Disallow: /_next/
+# Block the exported 404 page, but keep static assets crawlable so bots can render pages.
 Disallow: /404
 
 # Sitemap

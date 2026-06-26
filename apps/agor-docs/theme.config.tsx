@@ -4,6 +4,7 @@ import { useConfig } from 'nextra-theme-docs';
 import { NavbarCloudCTA } from './components/NavbarCloudCTA';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from './lib/links';
 import {
+  APPLE_TOUCH_ICON_PATH,
   BRAND_NAME,
   DEFAULT_DESCRIPTION,
   FAVICON_PATH,
@@ -13,6 +14,7 @@ import {
   getSocialImage,
   LOGO_PATH,
   THEME_COLOR,
+  WEB_MANIFEST_PATH,
 } from './lib/siteMetadata';
 
 const basePath = getBasePath();
@@ -157,6 +159,8 @@ const config: DocsThemeConfig = {
         {/* Additional Meta */}
         <meta name="theme-color" content={THEME_COLOR} />
         <link rel="icon" type="image/png" href={`${basePath}${FAVICON_PATH}`} />
+        <link rel="apple-touch-icon" href={`${basePath}${APPLE_TOUCH_ICON_PATH}`} />
+        <link rel="manifest" href={`${basePath}${WEB_MANIFEST_PATH}`} />
         <link rel="canonical" href={canonicalUrl} />
 
         {/* JSON-LD Structured Data */}

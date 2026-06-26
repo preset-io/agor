@@ -1,0 +1,17 @@
+{
+  "name": "agor docs",
+  "short_name": "agor",
+  "description": "Team command center for all things agentic.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1110",
+  "theme_color": "#2e9a92",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
