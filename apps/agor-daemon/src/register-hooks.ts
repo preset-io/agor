@@ -17,7 +17,6 @@ import {
 } from '@agor/core/config';
 import {
   ArtifactRepository,
-  BoardObjectRepository,
   BoardRepository,
   type BranchRepository,
   type Database,
@@ -77,7 +76,6 @@ import type {
 } from './declarations.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import type { ArtifactsService } from './services/artifacts.js';
-import { normalizeBoardObjectFindQuery } from './services/board-objects.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
 import {
@@ -107,13 +105,11 @@ import {
   loadScheduleAndBranch,
   loadSession,
   loadSessionBranch,
-  PERMISSION_RANK,
   resolveSessionContext,
-  scopeFindToAccessibleBoards,
-  scopeFindToAccessibleBranches,
-  scopeFindToAccessibleSessions,
+  scopeFindToAccessibleBoardsSql,
+  scopeFindToAccessibleBranchesSql,
+  scopeFindToAccessibleSessionsSql,
   scopeScheduleQuery,
-  scopeSessionQuery,
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
@@ -608,9 +604,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // RBAC: Scope messages.find() to sessions the caller can access.
         // Without this backstop, any authenticated member could list messages
         // across every session/branch by omitting the session_id filter.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
-          : []),
+        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
         ...(branchRbacEnabled
@@ -697,8 +691,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
   // Board objects hooks
   // ============================================================================
-  const boardObjectRepository = new BoardObjectRepository(db);
-
   safeService('board-objects')?.hooks({
     before: {
       all: [
@@ -706,133 +698,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'manage board objects'),
       ],
-      // NOTE: We deliberately do NOT add the generic scopeFindToAccessibleBranches here.
-      // Board-objects may reference `branch_id` (branch cards) OR `card_id`
-      // (kanban cards with no branch) OR neither (zones, layout objects).
-      // That generic hook would filter out rows with null branch_id, breaking
-      // card-only boards. The RBAC find hook below uses a board-object-specific
-      // SQL query that preserves card/zone rows while scoping branch-bound ones.
-      find: [
-        ...(branchRbacEnabled
-          ? [
-              async (context: HookContext) => {
-                if (!context.params.provider) return context;
-
-                const userId = context.params.user?.user_id as
-                  | import('@agor/core/types').UUID
-                  | undefined;
-                const normalized = normalizeBoardObjectFindQuery(context.params.query);
-
-                if (!userId) {
-                  context.result = {
-                    total: 0,
-                    limit: normalized.limit,
-                    skip: normalized.skip,
-                    data: [],
-                  };
-                  return context;
-                }
-
-                const [total, data] = await Promise.all([
-                  boardObjectRepository.countVisibleToUser(userId, normalized.filters),
-                  boardObjectRepository.findVisibleToUser(
-                    userId,
-                    normalized.filters,
-                    normalized.pagination
-                  ),
-                ]);
-
-                context.result = {
-                  total,
-                  limit: normalized.limit,
-                  skip: normalized.skip,
-                  data,
-                };
-                (context.params as { _boardObjectsRbacScoped?: boolean })._boardObjectsRbacScoped =
-                  true;
-                return context;
-              },
-            ]
-          : []),
-      ],
-    },
-    after: {
-      find: [
-        ...(branchRbacEnabled
-          ? [
-              // Filter board-objects based on branch access permissions
-              async (context: HookContext) => {
-                if (
-                  (context.params as { _boardObjectsRbacScoped?: boolean })._boardObjectsRbacScoped
-                ) {
-                  return context;
-                }
-
-                // Skip for internal calls
-                if (!context.params.provider) {
-                  return context;
-                }
-
-                const userId = context.params.user?.user_id as
-                  | import('@agor/core/types').UUID
-                  | undefined;
-                if (!userId) {
-                  // Not authenticated - return empty results
-                  context.result = {
-                    total: 0,
-                    limit: context.result?.limit ?? 0,
-                    skip: context.result?.skip ?? 0,
-                    data: [],
-                  };
-                  return context;
-                }
-
-                // Get all board objects from result
-                // biome-ignore lint/suspicious/noExplicitAny: BoardObject type not fully available in hook context
-                const boardObjects: any[] = context.result?.data ?? context.result ?? [];
-
-                // Filter based on branch access
-                const authorizedBoardObjects = [];
-                for (const boardObject of boardObjects) {
-                  // Board objects may reference branches or sessions
-                  if (boardObject.branch_id) {
-                    // Check branch access
-                    const branch = await branchRepository.findById(boardObject.branch_id);
-                    if (!branch) {
-                      continue; // Skip if branch doesn't exist
-                    }
-
-                    const effectivePermission = await branchRepository.resolveUserPermission(
-                      branch,
-                      userId
-                    );
-                    const hasAccess = PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
-
-                    if (hasAccess) {
-                      authorizedBoardObjects.push(boardObject);
-                    }
-                  } else if (boardObject.card_id) {
-                    // Card board objects: cards inherit board-level access (no per-card RBAC)
-                    authorizedBoardObjects.push(boardObject);
-                  } else {
-                    // No branch or card reference - allow access (e.g., zones, other board objects)
-                    authorizedBoardObjects.push(boardObject);
-                  }
-                }
-
-                // Update result
-                if (context.result?.data) {
-                  context.result.data = authorizedBoardObjects;
-                  context.result.total = authorizedBoardObjects.length;
-                } else {
-                  context.result = authorizedBoardObjects;
-                }
-
-                return context;
-              },
-            ]
-          : []),
-      ],
+      // Board-objects may reference a branch or may be loose board/card/layout
+      // rows. The service composes this marker into an object-specific SQL
+      // predicate: branch-bound rows require branch access; loose rows require
+      // board visibility.
+      find: [...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : [])],
     },
   });
 
@@ -892,13 +762,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       find: [
         // RBAC: Artifacts carry a `branch_id` (nullable — survives branch deletion).
-        // Scope find() to the branches the caller can access. Rows with null
-        // branch_id (orphaned artifacts) will be excluded by the $in filter,
-        // which is the safe default — orphans can only be surfaced via explicit
-        // board-scoped queries.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleBranches(branchRepository, superadminOpts)]
-          : []),
+        // Scope find() to the branches the caller can access. The service pushes
+        // this into SQL as a correlated visibility predicate rather than
+        // preloading ids and injecting `branch_id IN (...)`.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts'), ensureArtifactOwnerOrAdmin()],
@@ -1130,6 +997,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('board-comments')?.hooks({
     before: {
       all: [typedValidateQuery(boardCommentQueryValidator), requireAuth],
+      find: [
+        // Board comments inherit board visibility for pure board/spatial
+        // comments and branch/session/task/message visibility for attached
+        // comments. The service pushes the marker into SQL.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+      ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create board comments'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete board comments')],
@@ -1174,11 +1047,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireMinimumRole(ROLES.MEMBER, 'access branches'),
       ],
       find: [
-        // RBAC: compose an accessible branch_id filter and let BranchesService.find()
-        // handle service-level filters/enrichment (including virtual zone_id).
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleBranches(branchRepository, superadminOpts)]
-          : []),
+        // RBAC: mark external regular-user finds for BranchesService to compose
+        // the shared branch visibility predicate directly into its SQL read.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       get: [
         ...(branchRbacEnabled
@@ -1616,9 +1487,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       find: [
         requireMinimumRole(ROLES.MEMBER, 'list session MCP servers'),
         // RBAC: Scope to sessions the caller can access.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
-          : []),
+        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
     },
     after: {
@@ -1637,10 +1506,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       find: [
         requireMinimumRole(ROLES.MEMBER, 'list session env selections'),
-        // RBAC: Scope to sessions the caller can access.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
-          : []),
+        // This top-level service is event-only and always returns []; do not
+        // run RBAC preloads for an intentionally empty result set.
       ],
     },
   });
@@ -2345,8 +2212,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [typedValidateQuery(sessionQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
-        // RBAC: Optimized SQL-based filtering (single query with JOIN on branches, no N+1)
-        ...(branchRbacEnabled ? [scopeSessionQuery(sessionsRepository, superadminOpts)] : []),
+        // RBAC: mark external regular-user finds for SessionsService to compose
+        // the shared branch visibility predicate directly into its SQL read.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
         ...(branchRbacEnabled
@@ -2564,10 +2432,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     after: {
       find: [
         async (context) => {
-          // In RBAC mode, scopeSessionQuery() resolves the paginated result in
-          // before.find for SQL-efficient access control. That intentionally
-          // short-circuits SessionsService.find(), so enrich list payloads here
-          // as a single batched query over the final page.
+          // Session find results may be produced by custom hooks or service
+          // methods. Enrich once, as a single batched query over the final page.
           context.result = await enrichSessionFindResultWithRemoteRelationships(
             context.result as Paginated<Session> | Session[],
             sessionsService
@@ -2911,9 +2777,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(taskQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Scope tasks.find() to sessions the caller can access.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleSessions(sessionsRepository, superadminOpts)]
-          : []),
+        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
         ...(branchRbacEnabled
@@ -3024,11 +2888,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(boardQueryValidator), requireAuth],
       find: [
         // RBAC: restrict boards.find to boards the caller created or has a
-        // branch on. Runs at the SQL layer via BoardRepository.findVisibleBoardIds
-        // to avoid hydrating every accessible branch in-memory.
-        ...(branchRbacEnabled
-          ? [scopeFindToAccessibleBoards(boardRepository, superadminOpts)]
-          : []),
+        // branch on. The service pushes this into the repository query as one
+        // SQL predicate, avoiding a preloaded `board_id IN (...)` list.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       get: [ensureCanViewBoard('view this board')],
       findBySlug: [ensureCanViewBoard('view this board')],

@@ -24,6 +24,7 @@ import {
   sessionMcpServers,
   shortId,
   UserMCPOAuthTokenRepository,
+  visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
@@ -36,11 +37,13 @@ import type {
   Params,
   SessionID,
   UserID,
+  UUID,
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_CAPABILITIES,
   isSessionExecuting,
   isTaskExecuting,
+  ROLES,
   SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
@@ -78,6 +81,7 @@ import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
+import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
@@ -113,6 +117,7 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
+import { requireMinimumRole } from './utils/authorization.js';
 import { escapeHtml } from './utils/html.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -458,6 +463,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   if (svcEnabled('gateway')) {
     app.use('/gateway-channels', createGatewayChannelsService(db));
+
+    // Sub-path service for the connection probe. A sub-path does NOT inherit
+    // the parent gateway-channels admin gating / redaction hooks, so it carries
+    // its own requireAuth + admin gate. It reads decrypted tokens via the
+    // repository and returns no token values.
+    app.use('/gateway-channels/test', createGatewayChannelsTestService(db));
+    app.service('gateway-channels/test').hooks({
+      before: {
+        create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'test gateway channels')],
+      },
+    });
+
     app.use('/thread-session-map', createThreadSessionMapService(db));
     app.use('/gateway', createGatewayService(db, app), {
       // Only expose the inbound gateway entrypoint and existing route hook
@@ -571,10 +588,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           mcp_server_id?: string;
           enabled?: boolean;
         };
+        _agorSqlSessionAccessUserId?: UUID;
       }) {
         const conditions: ReturnType<typeof eq>[] = [];
-        // session_id may be a scalar string or `{ $in: [...] }` — the latter is
-        // injected by the RBAC scoping hook to restrict rows to accessible sessions.
+        // session_id may be a scalar string or `{ $in: [...] }` from callers.
+        // RBAC scoping is composed below via `_agorSqlSessionAccessUserId`.
         const sessionIdFilter = params?.query?.session_id;
         if (typeof sessionIdFilter === 'string') {
           conditions.push(eq(sessionMcpServers.session_id, sessionIdFilter));
@@ -593,6 +611,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         }
         if (params?.query?.enabled !== undefined) {
           conditions.push(eq(sessionMcpServers.enabled, params.query.enabled));
+        }
+        if (params?._agorSqlSessionAccessUserId) {
+          conditions.push(
+            visibleSessionReferenceAccessExists(
+              db,
+              params._agorSqlSessionAccessUserId,
+              sessionMcpServers.session_id
+            )
+          );
         }
         let query = select(db).from(sessionMcpServers);
         if (conditions.length > 0) {

@@ -823,3 +823,113 @@ describe('useAgorData — bulk-write revision bumps', () => {
     expect(result.current.sessionById.has('s-1')).toBe(false);
   });
 });
+
+/**
+ * The gated boards list is LEAN (no `data.objects` / `custom_css`) so a workspace
+ * load doesn't ship every board's annotations to paint one board's. The displayed
+ * board's full record is fetched via `boards.get`, and every board's annotations
+ * backfill via the `boards` background hydration. The mock can't see the `lean`
+ * query flag, so these tests drive per-call data through the `onFetch` side effect
+ * (which runs before each `findAll` reads `seed`).
+ */
+describe('useAgorData — lean boards list + objects hydration', () => {
+  it('paints the displayed board objects from the targeted get at first paint (before boards hydration lands)', async () => {
+    window.history.pushState({}, '', '/b/displayed/');
+    const leanBoard = { board_id: 'board-D', slug: 'displayed', name: 'Displayed' };
+    const fullBoard = {
+      ...leanBoard,
+      custom_css: '.x{}',
+      objects: { 'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
+    };
+    const seed: Record<string, unknown[]> = {};
+    const gate = deferred();
+    const { client, onFetch } = makeMockClient(seed);
+    // Gated list (call 1) returns the lean board; hold the boards hydration
+    // (call 2) open so the assertion sees the first-paint state — objects can
+    // only have come from the targeted `boards.get`, never the hydration.
+    seed['boards:get'] = fullBoard as never;
+    onFetch('boards', 'findAll', (call) => {
+      if (call === 1) {
+        seed['boards:findAll'] = [leanBoard];
+        return undefined;
+      }
+      return gate.promise;
+    });
+    const { result } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+      const board = result.current.boardById.get('board-D');
+      expect(board?.objects).toBeDefined();
+      expect(Object.keys(board?.objects ?? {})).toContain('zone-1');
+      expect(board?.custom_css).toBe('.x{}');
+    } finally {
+      gate.resolve();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('resolves the board scope for a /m/comments cold deep-link so the displayed board carries its objects at first paint', async () => {
+    // The mobile comments route lives outside the main entity route table; a
+    // cold deep-link must still resolve its board scope and fire the targeted
+    // full-board get, else `board.objects` is undefined until hydration lands.
+    // The route carries a full board_id (a UUID), resolved via the short-id
+    // resolver — so use a hex id here, not the slug.
+    const boardId = '0b0a4d00-0000-7000-8000-0000000000d1';
+    window.history.pushState({}, '', `/m/comments/${boardId}`);
+    const leanBoard = { board_id: boardId, slug: 'displayed', name: 'Displayed' };
+    const fullBoard = {
+      ...leanBoard,
+      custom_css: '.x{}',
+      objects: { 'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
+    };
+    const seed: Record<string, unknown[]> = {};
+    const gate = deferred();
+    const { client, onFetch } = makeMockClient(seed);
+    // Hold the boards hydration (call 2) open so the assertion sees first-paint
+    // state — objects can only have come from the targeted `boards.get`.
+    seed['boards:get'] = fullBoard as never;
+    onFetch('boards', 'findAll', (call) => {
+      if (call === 1) {
+        seed['boards:findAll'] = [leanBoard];
+        return undefined;
+      }
+      return gate.promise;
+    });
+    const { result } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+      const board = result.current.boardById.get(boardId);
+      expect(board?.objects).toBeDefined();
+      expect(Object.keys(board?.objects ?? {})).toContain('zone-1');
+      expect(board?.custom_css).toBe('.x{}');
+    } finally {
+      gate.resolve();
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('backfills every board objects via the boards background hydration', async () => {
+    const leanA = { board_id: 'board-A', slug: 'a', name: 'A' };
+    const leanB = { board_id: 'board-B', slug: 'b', name: 'B' };
+    const fullA = {
+      ...leanA,
+      objects: { 'z-a': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
+    };
+    const fullB = {
+      ...leanB,
+      objects: { 'z-b': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
+    };
+    const seed: Record<string, unknown[]> = {};
+    const { client, onFetch } = makeMockClient(seed);
+    // Home path (jsdom `/`): no board scope, no targeted get. The lean gated
+    // fetch (call 1) carries no objects; the hydration (call 2) carries them.
+    onFetch('boards', 'findAll', (call) => {
+      seed['boards:findAll'] = call === 1 ? [leanA, leanB] : [fullA, fullB];
+    });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await flush();
+    expect(result.current.boardById.get('board-A')?.objects).toBeDefined();
+    expect(result.current.boardById.get('board-B')?.objects).toBeDefined();
+  });
+});

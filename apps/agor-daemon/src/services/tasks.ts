@@ -21,6 +21,7 @@ import type {
   SessionID,
   Task,
   TaskID,
+  UUID,
 } from '@agor/core/types';
 import {
   isTerminalTaskStatus,
@@ -28,7 +29,7 @@ import {
   type TaskMetadata,
   TaskStatus,
 } from '@agor/core/types';
-import { DrizzleService } from '../adapters/drizzle';
+import { DrizzleService, type Query } from '../adapters/drizzle';
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import {
   type ExecutorHeartbeatCallbackPayload,
@@ -80,6 +81,8 @@ export type TaskParams = QueryParams<{
    * terminal transition. Most callers should leave this unset.
    */
   suppressBtwCleanup?: boolean;
+  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+  _agorSqlSessionAccessUserId?: UUID;
 };
 
 interface CompletionCallbackDispatchResult {
@@ -122,6 +125,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * Override find to support session-based filtering
    */
   async find(params?: TaskParams): Promise<Task[] | Paginated<Task>> {
+    if (params?._agorSqlSessionAccessUserId) {
+      return super.find(params);
+    }
+
     // If filtering by session_id as a scalar string, use repository shortcut.
     // Note: `session_id` may be injected as `{ $in: [...] }` by the RBAC scoping
     // hook — in that case we fall through to `super.find`, whose adapter's
@@ -166,6 +173,28 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     // Otherwise use default find
     return super.find(params);
+  }
+
+  protected async fetchData(query: Query, params?: TaskParams): Promise<Task[]> {
+    const sessionId = query.session_id;
+    const filter: Parameters<TaskRepository['findAll']>[0] = {};
+
+    if (typeof sessionId === 'string') {
+      filter.sessionId = sessionId as SessionID;
+    } else if (
+      sessionId &&
+      typeof sessionId === 'object' &&
+      Array.isArray(sessionId.$in) &&
+      sessionId.$in.every((el: unknown) => typeof el === 'string')
+    ) {
+      filter.sessionIds = sessionId.$in as SessionID[];
+    }
+    if (typeof query.status === 'string') filter.status = query.status as Task['status'];
+    if (params?._agorSqlSessionAccessUserId) {
+      filter.visibleToUserId = params._agorSqlSessionAccessUserId;
+    }
+
+    return this.taskRepo.findAll(filter);
   }
 
   /**

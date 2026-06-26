@@ -449,6 +449,66 @@ describe('SessionRepository.findAll', () => {
     expect(found.status).toBe(SessionStatus.RUNNING);
     expect(found.branch_id).toBe(branch.branch_id);
   });
+
+  dbTest(
+    'should push visibleToUserId branch access filtering into findAll/findPage',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const userId = generateId() as UUID;
+
+      const gitRepo = await repoRepo.create({
+        repo_id: generateId(),
+        slug: `session-rbac-repo-${Date.now()}`,
+        name: 'Session RBAC Repo',
+        repo_type: 'remote' as const,
+        remote_url: 'https://github.com/test/session-rbac.git',
+        local_path: '/tmp/session-rbac-repo',
+        default_branch: 'main',
+      });
+      const visibleBranch = await branchRepo.create({
+        branch_id: generateId(),
+        repo_id: gitRepo.repo_id,
+        name: 'visible',
+        ref: 'visible',
+        branch_unique_id: Math.floor(Math.random() * 1000000),
+        path: '/tmp/session-rbac-visible',
+        base_ref: 'main',
+        new_branch: false,
+        created_by: generateId() as UUID,
+        permission_source: 'override',
+        others_can: 'view',
+      });
+      const hiddenBranch = await branchRepo.create({
+        branch_id: generateId(),
+        repo_id: gitRepo.repo_id,
+        name: 'hidden',
+        ref: 'hidden',
+        branch_unique_id: Math.floor(Math.random() * 1000000),
+        path: '/tmp/session-rbac-hidden',
+        base_ref: 'main',
+        new_branch: false,
+        created_by: generateId() as UUID,
+        permission_source: 'override',
+        others_can: 'none',
+      });
+
+      const visibleSession = await repo.create(
+        createSessionData({ branch_id: visibleBranch.branch_id, title: 'Visible Session' })
+      );
+      await repo.create(
+        createSessionData({ branch_id: hiddenBranch.branch_id, title: 'Hidden Session' })
+      );
+
+      const visible = await repo.findAll({ visibleToUserId: userId });
+      expect(visible.map((session) => session.session_id)).toEqual([visibleSession.session_id]);
+
+      const page = await repo.findPage({ visibleToUserId: userId, limit: 10, skip: 0 });
+      expect(page.total).toBe(1);
+      expect(page.data.map((session) => session.session_id)).toEqual([visibleSession.session_id]);
+    }
+  );
 });
 
 // ============================================================================

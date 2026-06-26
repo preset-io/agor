@@ -21,6 +21,8 @@
 import type { Repo } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
 import { CreateDialog } from './CreateDialog';
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
@@ -50,16 +52,18 @@ const userRepo = makeRepo({
 });
 
 function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> = {}) {
+  // CreateDialog reads entity maps from the store, so seed the repos there
+  // rather than passing them as props.
   const repoById = new Map<string, Repo>([
     [frameworkRepo.repo_id, frameworkRepo],
     [userRepo.repo_id, userRepo],
   ]);
+  agorStore.setState({ ...EMPTY_MAPS, repoById });
 
   return render(
     <CreateDialog
       open
       onClose={vi.fn()}
-      repoById={repoById}
       availableAgents={[
         { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: 'Claude' },
       ]}

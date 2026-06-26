@@ -26,7 +26,7 @@ import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slac
 import { WebClient } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
 
-import type { ChannelType } from '../../types/gateway';
+import type { ChannelType, SlackTestFailure, SlackTestResult } from '../../types/gateway';
 import type { GatewayConnector, InboundMessage, OutboundPayload } from '../connector';
 
 // Block Kit table block limits (Slack docs, native block introduced Aug 2025).
@@ -522,6 +522,129 @@ function extractSlackErrorCode(resultOrError: unknown): string | undefined {
   return candidate.data?.error ?? candidate.error;
 }
 
+interface SlackErrorDetail {
+  code?: string;
+  needed?: string;
+  provided?: string;
+  retryAfter?: number;
+}
+
+/**
+ * Normalize either a non-OK Slack response (`{ error, needed, provided }`) or a
+ * thrown Slack SDK error (`WebAPIPlatformError` / `WebAPIRateLimitedError`) into
+ * the fields the connection probe reports. `needed`/`provided` carry the
+ * verbatim `missing_scope` detail; `retryAfter` is set for rate-limit errors.
+ */
+function extractSlackErrorDetail(resultOrError: unknown): SlackErrorDetail {
+  if (typeof resultOrError !== 'object' || resultOrError === null) return {};
+  const candidate = resultOrError as {
+    error?: string;
+    needed?: string;
+    provided?: string;
+    code?: string;
+    retryAfter?: number;
+    data?: { error?: string; needed?: string; provided?: string };
+  };
+  return {
+    code: candidate.data?.error ?? candidate.error ?? candidate.code,
+    needed: candidate.data?.needed ?? candidate.needed,
+    provided: candidate.data?.provided ?? candidate.provided,
+    retryAfter: candidate.retryAfter,
+  };
+}
+
+/** Human-readable reasons for the bot-token (`auth.test`) probe failure codes. */
+const BOT_TOKEN_ERROR_REASONS: Record<string, string> = {
+  invalid_auth: 'The bot token is invalid.',
+  account_inactive: 'The bot token belongs to a deleted or deactivated account or workspace.',
+  token_revoked: 'The bot token has been revoked.',
+  token_expired: 'The bot token has expired.',
+  not_authed: 'No bot token was provided.',
+  no_permission: 'The bot token lacks permission to call auth.test.',
+};
+
+/** Human-readable reasons for the channel-access (`conversations.info`) probe failure codes. */
+const CHANNEL_ACCESS_ERROR_REASONS: Record<string, string> = {
+  not_in_channel: 'The bot is not a member of this channel; invite it so it can read messages.',
+  channel_not_found: 'The channel ID was not found, or the bot cannot see it.',
+  is_archived: 'The channel is archived.',
+};
+
+/**
+ * Build a {@link SlackTestFailure} from an error detail, surfacing Slack's
+ * verbatim `missing_scope` needed/provided and rate-limit `Retry-After` rather
+ * than collapsing them into a generic message.
+ */
+function buildTestFailure(
+  capability: string,
+  detail: SlackErrorDetail,
+  reasons: Record<string, string>
+): SlackTestFailure {
+  const { code, needed, provided, retryAfter } = detail;
+  let reason: string;
+  if (code === 'missing_scope') {
+    reason = needed
+      ? `Slack reports a missing OAuth scope; add "${needed}".`
+      : 'Slack reports a missing OAuth scope.';
+  } else if (code === 'ratelimited' || retryAfter != null) {
+    reason =
+      retryAfter != null
+        ? `Slack rate-limited the probe; retry after ${retryAfter}s. The probe did not retry.`
+        : 'Slack rate-limited the probe. The probe did not retry.';
+  } else if (code && reasons[code]) {
+    reason = reasons[code];
+  } else if (code) {
+    reason = `Slack returned error "${code}".`;
+  } else {
+    reason = 'A network or unexpected error occurred while contacting Slack.';
+  }
+
+  const failure: SlackTestFailure = { capability, reason };
+  if (code) failure.slackError = code;
+  if (needed) failure.needed = needed;
+  if (provided) failure.provided = provided;
+  return failure;
+}
+
+/**
+ * Normalize an `allowed_channel_ids` config value (which may be a string,
+ * array, or malformed) into a clean `string[]`.
+ */
+function normalizeAllowedChannelIds(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string');
+  if (typeof raw === 'string' && raw) return [raw];
+  return [];
+}
+
+/**
+ * The things a connection probe fundamentally cannot prove. Surfaced verbatim
+ * in {@link SlackTestResult.notVerifiable} so a green result is never read as
+ * "fully verified".
+ */
+const SLACK_NOT_VERIFIABLE = [
+  'Whether the bot token and app-level token belong to the same Slack app.',
+  'Whether the required Slack event subscriptions are installed and delivering events.',
+  'Whether the full set of required OAuth scopes is granted — only scopes exercised by the probed API calls are checked.',
+];
+
+/**
+ * Decide whether the `allowed_channel_ids` whitelist permits an inbound event.
+ *
+ * DMs (`im`) always pass: a DM conversation id is never present in a
+ * channel-id whitelist, so applying the filter there would silently disable
+ * direct messages the moment any whitelist is configured. The whitelist only
+ * governs channel-like surfaces (`channel`/`group`/`mpim`).
+ */
+export function isChannelAllowedByWhitelist(
+  channelType: string,
+  channelId: string | undefined,
+  allowedChannelIds: string[] | undefined
+): boolean {
+  if (channelType === 'im') return true;
+  if (!allowedChannelIds || allowedChannelIds.length === 0) return true;
+  return !!channelId && allowedChannelIds.includes(channelId);
+}
+
 export class SlackConnector implements GatewayConnector {
   readonly channelType: ChannelType = 'slack';
 
@@ -568,6 +691,130 @@ export class SlackConnector implements GatewayConnector {
     // Initialization - tokens validated during startListening
 
     this.web = new WebClient(this.config.bot_token);
+  }
+
+  /**
+   * Build a Slack WebClient for an arbitrary token. Isolated so connection
+   * probes can construct a client for the app-level (`xapp-`) token, and so
+   * tests can stub the app-token client independently of `this.web`.
+   */
+  protected createWebClient(token: string): WebClient {
+    return new WebClient(token);
+  }
+
+  /**
+   * Best-effort probe of the configured Slack credentials and reachability.
+   *
+   * Probes capabilities directly rather than diffing scope-header strings:
+   *   - `auth.test()` with the bot token → team + bot identity.
+   *   - `apps.connections.open()` with the app-level token → Socket Mode /
+   *     `connections:write` validity.
+   *   - `conversations.info` on the first whitelisted channel (when any) →
+   *     channel reachability.
+   *
+   * Slack's `missing_scope` needed/provided detail and rate-limit `Retry-After`
+   * are surfaced verbatim. Never logs or returns token values.
+   */
+  async testConnection(): Promise<SlackTestResult> {
+    const failures: SlackTestFailure[] = [];
+    const notVerifiable = [...SLACK_NOT_VERIFIABLE];
+
+    let team: SlackTestResult['team'];
+    let bot: SlackTestResult['bot'];
+    let botTokenValid = false;
+
+    try {
+      const authTest = await this.web.auth.test();
+      if (authTest.ok) {
+        botTokenValid = true;
+        team = { id: authTest.team_id ?? '', name: authTest.team ?? '' };
+        bot = { userId: authTest.user_id ?? '', name: authTest.user ?? '' };
+      } else {
+        failures.push(
+          buildTestFailure('bot_token', extractSlackErrorDetail(authTest), BOT_TOKEN_ERROR_REASONS)
+        );
+      }
+    } catch (error) {
+      failures.push(
+        buildTestFailure('bot_token', extractSlackErrorDetail(error), BOT_TOKEN_ERROR_REASONS)
+      );
+    }
+
+    let appTokenValid: boolean;
+    const appToken = this.config.app_token;
+    if (!appToken) {
+      appTokenValid = false;
+      failures.push({
+        capability: 'app_token',
+        reason: 'No app-level token is configured; Socket Mode cannot connect to receive messages.',
+      });
+    } else {
+      try {
+        const appClient = this.createWebClient(appToken);
+        const res = await appClient.apps.connections.open();
+        if (res.ok) {
+          appTokenValid = true;
+        } else {
+          appTokenValid = false;
+          failures.push(buildTestFailure('app_token', extractSlackErrorDetail(res), {}));
+        }
+      } catch (error) {
+        appTokenValid = false;
+        failures.push(buildTestFailure('app_token', extractSlackErrorDetail(error), {}));
+      }
+    }
+
+    let channelAccess: SlackTestResult['channelAccess'];
+    const allowedChannelIds = normalizeAllowedChannelIds(this.config.allowed_channel_ids);
+    if (allowedChannelIds.length > 0) {
+      const channelId = allowedChannelIds[0];
+      let channelOk = false;
+      try {
+        const info = await this.web.conversations.info({ channel: channelId });
+        if (info.ok) {
+          channelOk = true;
+        } else {
+          failures.push(
+            buildTestFailure(
+              'channel_access',
+              extractSlackErrorDetail(info),
+              CHANNEL_ACCESS_ERROR_REASONS
+            )
+          );
+        }
+      } catch (error) {
+        failures.push(
+          buildTestFailure(
+            'channel_access',
+            extractSlackErrorDetail(error),
+            CHANNEL_ACCESS_ERROR_REASONS
+          )
+        );
+      }
+      channelAccess = [{ channelId, ok: channelOk }];
+      if (allowedChannelIds.length > 1) {
+        notVerifiable.push(
+          `Only the first of ${allowedChannelIds.length} configured channels was probed; the rest were not checked.`
+        );
+      }
+    } else {
+      notVerifiable.push(
+        'No channel whitelist is configured, so no specific channel reachability was verified.'
+      );
+    }
+
+    const channelsOk = !channelAccess || channelAccess.some((c) => c.ok);
+    const ok = botTokenValid && appTokenValid && channelsOk && failures.length === 0;
+
+    return {
+      ok,
+      ...(team ? { team } : {}),
+      ...(bot ? { bot } : {}),
+      appTokenValid,
+      ...(channelAccess ? { channelAccess } : {}),
+      failures,
+      notVerifiable,
+    };
   }
 
   /**
@@ -1495,11 +1742,9 @@ export class SlackConnector implements GatewayConnector {
         return;
       }
 
-      // Channel whitelist check (applies to all channel types)
-      if (allowedChannelIds && allowedChannelIds.length > 0) {
-        if (!allowedChannelIds.includes(event.channel)) {
-          return; // Not in whitelist
-        }
+      // Channel whitelist governs channel-like surfaces only; DMs always pass.
+      if (!isChannelAllowedByWhitelist(channelType, event.channel, allowedChannelIds)) {
+        return;
       }
 
       // Mention requirement handling

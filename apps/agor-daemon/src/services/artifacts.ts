@@ -52,6 +52,7 @@ import type {
   SessionID,
   UserID,
   UserRole,
+  UUID,
 } from '@agor/core/types';
 import {
   ARTIFACT_SCOPED_ONLY_GRANT_KEYS,
@@ -61,7 +62,7 @@ import {
   proxyGrantEnvName,
   ROLES,
 } from '@agor/core/types';
-import { DrizzleService } from '../adapters/drizzle.js';
+import { DrizzleService, type Query } from '../adapters/drizzle.js';
 import { ARTIFACT_RUNTIME_JWT_AUDIENCE, issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import {
@@ -207,7 +208,10 @@ export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
   branch_id?: BranchID;
   archived?: boolean;
-}>;
+}> & {
+  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+  _agorSqlBranchAccessUserId?: UUID;
+};
 
 const MAX_CONSOLE_ENTRIES = 100;
 
@@ -348,6 +352,59 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     this.boardRepo = new BoardRepository(db);
     this.app = app;
     this.dbRef = db;
+  }
+
+  /**
+   * Push the list read's high-selectivity predicates into SQL.
+   *
+   * The generic adapter would read the entire artifacts table and filter in
+   * memory. Artifacts are fetched on initial app load, so we narrow the read to
+   * the board, archived state, explicit branch ids, and any RBAC SQL branch
+   * visibility marker before rows leave the database.
+   * The per-row `rowToArtifact` / `getBaseUrl` enrichment runs inside
+   * `artifactRepo.findAll` on the reduced set, and `find` still re-applies every
+   * query filter in memory, so this only ever returns a superset of the matching
+   * rows.
+   *
+   * Artifacts are not query-validated, so values arrive uncoerced: only push
+   * when the value already has the column's type (string `board_id`, boolean
+   * `archived`, string / all-string `{ $in }` `branch_id`). Anything else falls
+   * through to the unchanged in-memory filter, preserving current behavior
+   * exactly.
+   *
+   * `artifacts.branch_id` is nullable, so a `{ $in }` that contains a non-string
+   * element (e.g. `null`) is deliberately NOT pushed: `filterData` matches null
+   * branch_ids against such a set via JS `includes`, but SQL `IN (NULL)` never
+   * does — pushing it would return a SUBSET and break the superset contract.
+   * board_id / archived may still be pushed in that case.
+   */
+  protected async fetchData(query: Query, params?: ArtifactParams): Promise<Artifact[]> {
+    const filter: {
+      board_id?: BoardID;
+      archived?: boolean;
+      branchIds?: BranchID[];
+      visibleToUserId?: UUID;
+    } = {};
+
+    if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
+    if (typeof query.archived === 'boolean') filter.archived = query.archived;
+    if (params?._agorSqlBranchAccessUserId) {
+      filter.visibleToUserId = params._agorSqlBranchAccessUserId;
+    }
+
+    const branchId = query.branch_id;
+    if (typeof branchId === 'string') {
+      filter.branchIds = [branchId as BranchID];
+    } else if (
+      branchId &&
+      typeof branchId === 'object' &&
+      Array.isArray(branchId.$in) &&
+      branchId.$in.every((el: unknown) => typeof el === 'string')
+    ) {
+      filter.branchIds = branchId.$in as BranchID[];
+    }
+
+    return this.artifactRepo.findAll(filter);
   }
 
   // Direct Feathers create is intentionally rejected — artifacts require

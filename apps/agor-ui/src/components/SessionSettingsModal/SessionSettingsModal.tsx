@@ -20,7 +20,6 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   KnowledgeDocumentID,
-  MCPServer,
   PermissionMode,
   Session,
   User,
@@ -37,6 +36,8 @@ import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Select, Space, Typography } from 'antd';
 import React from 'react';
 import { useReadableKnowledgeDocuments } from '../../hooks/useKnowledgeDocuments';
+import { useAgorStore } from '../../store/agorStore';
+import { selectMcpServerById, selectSessionMcpServerIds } from '../../store/selectors';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import { CallbackConfigForm } from '../CallbackConfigForm';
@@ -51,8 +52,6 @@ export interface SessionSettingsModalProps {
   open: boolean;
   onClose: () => void;
   session: Session;
-  mcpServerById: Map<string, MCPServer>;
-  sessionMcpServerIds: string[];
   onUpdate?: (sessionId: string, updates: Partial<Session>) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   /**
@@ -82,6 +81,11 @@ interface FormValues {
     template?: string;
   };
 }
+
+// Stable empty array for sessions with no attached MCP servers — keeps the
+// derived per-session slice reference-stable so the form-reset effect (which
+// depends on it) doesn't re-fire on unrelated store patches.
+const EMPTY_MCP_SERVER_IDS: string[] = [];
 
 function buildInitialValues(session: Session, sessionMcpServerIds: string[]): FormValues {
   const permissionMode: PermissionMode =
@@ -172,14 +176,18 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   open,
   onClose,
   session,
-  mcpServerById,
-  sessionMcpServerIds,
   onUpdate,
   onUpdateSessionMcpServers,
   onUpdateSessionEnvSelections,
   client,
   currentUser,
 }) => {
+  // Entity maps come from the store rather than being drilled through the App
+  // shell. The whole session→MCP map is sliced to this session's ids here so
+  // the rest of the component keeps working with a plain `string[]`.
+  const mcpServerById = useAgorStore(selectMcpServerById);
+  const sessionMcpServerIds =
+    useAgorStore(selectSessionMcpServerIds).get(session.session_id) ?? EMPTY_MCP_SERVER_IDS;
   const [form] = Form.useForm();
   const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
     buildInitialValues(session, sessionMcpServerIds)

@@ -189,6 +189,29 @@ function createFindHarness(opts: {
       throw new Error(`Unknown service: ${path}`);
     },
   } as unknown as Application;
+  // Faithfully simulate the SQL pushdown performed by BranchRepository.findAll:
+  // narrow the candidate rows by the predicates fetchData hands the repository.
+  // DrizzleService.find still re-applies every query filter in memory, so the
+  // returned set only needs to match what the real WHERE clause would select.
+  const applyFilter = (filter?: {
+    repo_id?: string;
+    board_id?: string;
+    archived?: boolean;
+    branchIds?: BranchID[];
+    visibleToUserId?: string;
+  }) =>
+    opts.branches.filter((branch) => {
+      if (filter?.repo_id !== undefined && branch.repo_id !== filter.repo_id) return false;
+      if (filter?.board_id !== undefined && branch.board_id !== filter.board_id) return false;
+      if (filter?.archived !== undefined && Boolean(branch.archived) !== filter.archived)
+        return false;
+      if (
+        filter?.branchIds !== undefined &&
+        !filter.branchIds.includes(branch.branch_id as BranchID)
+      )
+        return false;
+      return true;
+    });
   const repository = {
     findAll: vi.fn(async () => opts.branches),
     findById: vi.fn(),
@@ -197,6 +220,7 @@ function createFindHarness(opts: {
     delete: vi.fn(),
   };
   const branchRepo = {
+    findAll: vi.fn(async (filter?: Parameters<typeof applyFilter>[0]) => applyFilter(filter)),
     findBranchIdsByZone: vi.fn(async () => opts.branchIdsInZone),
     enrichManyWithZoneInfo: vi.fn(async (branches: Array<Record<string, unknown>>) =>
       branches.map((branch: Record<string, unknown>) => ({
@@ -863,6 +887,110 @@ describe('BranchesService.find zone filtering', () => {
     expect(result.total).toBe(1);
     expect(result.data).toHaveLength(1);
     expect(result.data[0].branch_id).toBe('branch-3');
+  });
+});
+
+describe('BranchesService.find SQL pushdown', () => {
+  // Mixed fixture: two boards, archived + active rows, so a whole-table read
+  // would over-fetch relative to a board+archived scoped query.
+  const fixture = () => [
+    { branch_id: 'b1', name: 'beta', board_id: 'board-1', archived: false },
+    { branch_id: 'b2', name: 'alpha', board_id: 'board-1', archived: false },
+    { branch_id: 'b3', name: 'gamma', board_id: 'board-1', archived: true },
+    { branch_id: 'b4', name: 'delta', board_id: 'board-2', archived: false },
+  ];
+
+  it('pushes board_id + archived into the repository read and never reads the whole table (rbac off)', async () => {
+    const { service, repository, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    const result = (await service.find({
+      query: { board_id: 'board-1', archived: false, $sort: { name: 1 } },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    // Read is SQL-bounded: the scoped repo read runs, the whole-table read does not.
+    expect(branchRepo.findAll).toHaveBeenCalledWith({ board_id: 'board-1', archived: false });
+    expect(repository.findAll).not.toHaveBeenCalled();
+
+    // Parity: same rows the JS filter would keep, same order, same total + zone enrichment.
+    expect(result.total).toBe(2);
+    expect(result.data.map((b) => b.branch_id)).toEqual(['b2', 'b1']);
+    expect(result.data.every((b) => 'zone_id' in b)).toBe(true);
+  });
+
+  it('pushes an accessible branch_id $in set alongside board_id + archived (rbac on)', async () => {
+    const { service, repository, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    const result = (await service.find({
+      query: {
+        board_id: 'board-1',
+        archived: false,
+        branch_id: { $in: ['b1' as BranchID, 'b3' as BranchID, 'b4' as BranchID] },
+      },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    expect(branchRepo.findAll).toHaveBeenCalledWith({
+      board_id: 'board-1',
+      archived: false,
+      branchIds: ['b1', 'b3', 'b4'],
+    });
+    expect(repository.findAll).not.toHaveBeenCalled();
+
+    // b3 is archived, b4 is on board-2 → only b1 survives the intersection.
+    expect(result.total).toBe(1);
+    expect(result.data.map((b) => b.branch_id)).toEqual(['b1']);
+  });
+
+  it('pushes a scalar branch_id as a single-id set', async () => {
+    const { service, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    const result = (await service.find({
+      query: { branch_id: 'b2' as BranchID },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    expect(branchRepo.findAll).toHaveBeenCalledWith({ branchIds: ['b2'] });
+    expect(result.total).toBe(1);
+    expect(result.data[0].branch_id).toBe('b2');
+  });
+
+  it('returns no rows for an empty accessible set without reading the table', async () => {
+    const { service, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    const result = (await service.find({
+      query: { branch_id: { $in: [] } },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    expect(branchRepo.findAll).toHaveBeenCalledWith({ branchIds: [] });
+    expect(result.total).toBe(0);
+    expect(result.data).toHaveLength(0);
+  });
+
+  it('pushes the RBAC SQL visibility marker into the repository read', async () => {
+    const { service, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    await service.find({
+      _agorSqlBranchAccessUserId: 'viewer-1' as UUID,
+      query: { board_id: 'board-1' },
+    } as BranchParams);
+
+    expect(branchRepo.findAll).toHaveBeenCalledWith({
+      board_id: 'board-1',
+      visibleToUserId: 'viewer-1',
+    });
   });
 });
 

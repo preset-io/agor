@@ -3,8 +3,6 @@ import type {
   Board,
   CreateLocalRepoRequest,
   CreateRepoRequest,
-  MCPServer,
-  Repo,
   User,
 } from '@agor-live/client';
 import {
@@ -16,6 +14,8 @@ import {
 import { Alert, Button, Modal, Tabs } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
+import { useAgorStore } from '../../store/agorStore';
+import { selectBoardById, selectMcpServerById, selectRepoById } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
 import type { AssistantTabResult } from './tabs/AssistantTab';
 import { AssistantTab } from './tabs/AssistantTab';
@@ -68,12 +68,9 @@ const ACTION_LABELS: Record<ActiveTab, string> = {
 export interface CreateDialogProps {
   open: boolean;
   onClose: () => void;
-  repoById: Map<string, Repo>;
-  boardById: Map<string, Board>;
   currentBoardId?: string;
   defaultPosition?: { x: number; y: number };
   availableAgents: AgenticToolOption[];
-  mcpServerById?: Map<string, MCPServer>;
   currentUser?: User | null;
   client?: AgorClient | null;
   defaultTab?: ActiveTab;
@@ -100,12 +97,9 @@ function fireAndForget(result: void | Promise<void>) {
 export const CreateDialog: React.FC<CreateDialogProps> = ({
   open,
   onClose,
-  repoById,
-  boardById,
   currentBoardId,
   defaultPosition,
   availableAgents,
-  mcpServerById,
   currentUser,
   client,
   defaultTab = 'assistant',
@@ -116,6 +110,11 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   onCreateAssistant,
   branchStorageConfig,
 }) => {
+  // Entity maps are read from the store rather than drilled through props so
+  // the App shell doesn't have to forward them into every modal.
+  const repoById = useAgorStore(selectRepoById);
+  const boardById = useAgorStore(selectBoardById);
+  const mcpServerById = useAgorStore(selectMcpServerById);
   const [activeTab, setActiveTab] = useState<ActiveTab>(defaultTab);
   // Validity is tracked per tab so a sibling tab's empty-form state (or a
   // deferred validity push from its init effect) can't clobber the active

@@ -1,14 +1,4 @@
-import type {
-  AgorClient,
-  Board,
-  BoardComment,
-  BoardObject,
-  Branch,
-  Repo,
-  Session,
-  SpawnConfig,
-  User,
-} from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -26,6 +16,15 @@ import {
 } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectBranchById,
+  selectCommentById,
+  selectRepoById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
+import { mapToArray } from '../../utils/mapHelpers';
 import { BranchSessionSections } from '../BranchCard';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardSessionList } from '../BranchListDrawer';
@@ -44,10 +43,6 @@ interface BoardAssistantPanelProps {
   primaryAssistantBranch?: Branch;
   primaryAssistantRepo?: Repo;
   primaryAssistantInaccessible: boolean;
-  sessionsByBranch: Map<string, Session[]>;
-  branchById: Map<string, Branch>;
-  repoById: Map<string, Repo>;
-  userById: Map<string, User>;
   currentUserId?: string;
   selectedSessionId?: string | null;
   onSessionClick: (sessionId: string) => void;
@@ -69,8 +64,6 @@ interface BoardAssistantPanelProps {
   onViewLogs?: (branchId: string) => void;
   onNukeEnvironment?: (branchId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
-  comments?: BoardComment[];
-  boardObjects?: Record<string, BoardObject>;
   onSendComment?: (content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -89,10 +82,6 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
   primaryAssistantBranch,
   primaryAssistantRepo,
   primaryAssistantInaccessible,
-  sessionsByBranch,
-  branchById,
-  repoById,
-  userById,
   currentUserId,
   selectedSessionId,
   onSessionClick,
@@ -101,8 +90,6 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
   onSpawnSession,
   onOpenSettings,
   onOpenSessionSettings,
-  comments = [],
-  boardObjects,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -115,6 +102,21 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { message } = AntApp.useApp();
+  // Subscribe to entity maps by slice from the store: each selector only wakes
+  // this panel when its own slice changes.
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const branchById = useAgorStore(selectBranchById);
+  const repoById = useAgorStore(selectRepoById);
+  const userById = useAgorStore(selectUserById);
+  const commentById = useAgorStore(selectCommentById);
+  // Derive the board-scoped comment list and board objects locally: comments
+  // only render when a board is selected, so filtering by `board.board_id`
+  // scopes them to that board.
+  const comments = useMemo(
+    () => mapToArray(commentById).filter((c) => c.board_id === board?.board_id),
+    [commentById, board?.board_id]
+  );
+  const boardObjects = board?.objects;
   const defaultTab: BoardAssistantPanelTab = primaryAssistantInaccessible
     ? 'all-sessions'
     : 'assistant';

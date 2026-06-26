@@ -5,8 +5,8 @@
  * event — JSON.parse on the server side guarantees a new reference even
  * when the row is content-identical. Without a content check, the central
  * store handlers in useAgorData would replace the existing entry on every
- * "ghost" patch and cascade an unnecessary re-render through every consumer
- * of `useAppLiveData()` / `useAppRepoData()` etc.
+ * "ghost" patch and cascade an unnecessary re-render through every subscriber
+ * of those store slices.
  *
  * These helpers compare top-level keys only. Nested objects that the daemon
  * always reserializes (e.g. `session.model_config`, `branch.git_state`) will

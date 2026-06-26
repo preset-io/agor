@@ -1,13 +1,10 @@
-import type { AgorClient, MCPServer, UpdateUserInput, User } from '@agor-live/client';
+import type { AgorClient, UpdateUserInput, User } from '@agor-live/client';
 import { UserSettingsModal } from '../components/SettingsModal';
-
-const EMPTY_MCP_SERVER_MAP: Map<string, MCPServer> = new Map();
 
 export interface SharedUserSettingsModalProps {
   open: boolean;
   user: User | null;
   client: AgorClient | null;
-  mcpServerById?: Map<string, MCPServer>;
   onClose: () => void;
   onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onRefreshCurrentUser: () => Promise<unknown>;
@@ -19,14 +16,14 @@ export interface SharedUserSettingsModalProps {
  *
  * Workspace still renders its full settings stack inside `AgorApp`; lightweight
  * surfaces use this wrapper so a user menu/settings flow does not require the
- * Workspace route tree to mount first. The MCP server map is optional because
- * a fresh Knowledge deep link intentionally has not loaded Workspace data yet.
+ * Workspace route tree to mount first. The MCP server map is read by
+ * `UserSettingsModal` straight from the store, so a fresh Knowledge deep link
+ * that has not loaded Workspace data yet simply sees an empty map.
  */
 export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = ({
   open,
   user,
   client,
-  mcpServerById = EMPTY_MCP_SERVER_MAP,
   onClose,
   onUpdateUser,
   onRefreshCurrentUser,
@@ -37,7 +34,6 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
     onClose={onClose}
     user={user}
     currentUser={user}
-    mcpServerById={mcpServerById}
     client={client}
     onUpdate={async (userId, updates) => {
       await onUpdateUser(userId, updates);

@@ -14,7 +14,21 @@ export type {
   SlackThreadHistoryRequest,
   SlackThreadHistoryResult,
 } from './connectors/slack';
-export { markdownToMrkdwn, SlackConnector } from './connectors/slack';
+export {
+  isChannelAllowedByWhitelist,
+  markdownToMrkdwn,
+  SlackConnector,
+} from './connectors/slack';
+export type {
+  SlackAppManifest,
+  SlackBotEventSubscriptions,
+  SlackWizardOptions,
+} from './connectors/slack-manifest';
+export {
+  buildSlackManifest,
+  requiredBotEvents,
+  requiredBotScopes,
+} from './connectors/slack-manifest';
 export {
   extractQuotedReplyText,
   parseThreadId as parseTeamsThreadId,

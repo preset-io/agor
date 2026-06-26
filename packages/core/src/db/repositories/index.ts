@@ -9,6 +9,7 @@ export * from './base';
 export * from './board-comments';
 export * from './board-objects';
 export * from './boards';
+export * from './branch-access';
 export * from './branches';
 export * from './card-types';
 export * from './cards';
