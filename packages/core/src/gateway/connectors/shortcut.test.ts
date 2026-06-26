@@ -143,4 +143,29 @@ describe('sendMessage', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ text: 'hello', parent_id: 67890 });
     expect((init?.headers as Record<string, string>)['Shortcut-Token']).toBe('tok');
   });
+
+  it('edits the ack comment in place (PUT) when edit_comment_id is set', async () => {
+    const fetchMock = vi.fn(
+      async (_url: string | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ id: 999 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok', agent_member_id: 'm1' });
+    const id = await connector.sendMessage({
+      threadId: '12345|67890',
+      text: 'final reply',
+      metadata: { edit_comment_id: 999 },
+    });
+
+    expect(id).toBe('999');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('https://api.app.shortcut.com/api/v3/stories/12345/comments/999');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(init?.body as string)).toEqual({ text: 'final reply' });
+  });
 });

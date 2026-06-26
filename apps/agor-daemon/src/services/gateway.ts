@@ -661,10 +661,12 @@ export class GatewayService {
     text: string,
     opts?: { suppressSlack?: boolean }
   ): void {
-    // GitHub has its editable Processing comment. Slack keeps durable routing
+    // GitHub and Shortcut have their own editable ack comment (the connector's
+    // "Processing" / "👀 on it" comment that becomes the final reply), so they
+    // suppress all gateway system messages here. Slack keeps durable routing
     // messages (session links/errors) but suppresses transient lifecycle noise
     // like "creating session" and queued/status rows via suppressSlack.
-    if (channel.channel_type === 'github') return;
+    if (channel.channel_type === 'github' || channel.channel_type === 'shortcut') return;
     if (channel.channel_type === 'slack' && opts?.suppressSlack) return;
 
     if (!hasConnector(channel.channel_type as ChannelType)) return;
@@ -1845,15 +1847,23 @@ export class GatewayService {
       if (matchedUser) {
         user = await usersService.get(matchedUser.user_id);
       } else {
-        // Reject — no silent fallback to channel owner.
+        // Reject — no silent fallback to channel owner. Deliver the rejection by
+        // editing the "👀 on it" ack (or a fresh comment if the ack is absent).
         console.log(
           `[gateway] Shortcut user alignment failed: no Agor mapping for ${shortcutMemberId ?? 'unknown'} (thread=${data.thread_id})`
         );
-        this.sendSystemMessage(
-          channel,
-          data.thread_id,
-          "Your Shortcut account isn't linked to an Agor user. Ask an admin to add a user_map entry for your Shortcut member id, or set your Agor account email to match your Shortcut email."
-        );
+        try {
+          const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+          await connector.sendMessage({
+            threadId: data.thread_id,
+            text: "⚠️ Your Shortcut account isn't linked to an Agor user. Ask an admin to add a user_map entry for your Shortcut member id, or set your Agor account email to match your Shortcut email.",
+            metadata: data.metadata?.processing_comment_id
+              ? { edit_comment_id: data.metadata.processing_comment_id }
+              : undefined,
+          });
+        } catch (err) {
+          console.warn('[gateway] Failed to post Shortcut rejection comment:', err);
+        }
         return {
           success: false,
           sessionId: '',
@@ -2150,6 +2160,23 @@ export class GatewayService {
           });
         } catch (err) {
           console.warn('[gateway] Failed to update processing comment with session URL:', err);
+        }
+      }
+
+      // For Shortcut channels: edit the "👀 on it" ack to include the session link.
+      if (channel.channel_type === 'shortcut' && data.metadata?.processing_comment_id) {
+        try {
+          const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+          const ackText = sessionUrl
+            ? `👀 On it — [view session](${sessionUrl})`
+            : `👀 On it (session \`${shortId(sessionId)}\`)`;
+          await connector.sendMessage({
+            threadId: data.thread_id,
+            text: ackText,
+            metadata: { edit_comment_id: data.metadata.processing_comment_id },
+          });
+        } catch (err) {
+          console.warn('[gateway] Failed to update Shortcut ack with session URL:', err);
         }
       }
     }

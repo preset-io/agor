@@ -393,8 +393,25 @@ export class ShortcutConnector implements GatewayConnector {
         }
 
         const authorId = comment.author_id ?? 'unknown';
+        const rootCommentId = comment.parent_id ?? comment.id;
         const threadId = buildThreadId(story.id, comment);
         const text = stripAgentMention(comment.text ?? '', agentMemberId, mentionName ?? undefined);
+
+        // Post an immediate "👀 on it" ack, threaded under the root. The gateway
+        // later edits this comment into the final reply (mirrors GitHub's
+        // Processing comment) so the thread stays a single bot comment.
+        // Non-fatal — if it fails, the final reply just posts as a new comment.
+        let processingCommentId: number | undefined;
+        try {
+          const ack = await this.request<{ id: number }>(`/stories/${story.id}/comments`, {
+            method: 'POST',
+            body: JSON.stringify({ text: '👀 on it', parent_id: rootCommentId }),
+          });
+          processingCommentId = ack.id;
+          addToRingBuffer(this.state.processedCommentIds, ack.id);
+        } catch (err) {
+          console.warn('[shortcut] Failed to post ack comment:', err);
+        }
 
         // Resolve author identity for alignment (only when aligning, like GitHub).
         // The user_map tier-1 lookup happens in the gateway (it reads fresh
@@ -419,7 +436,8 @@ export class ShortcutConnector implements GatewayConnector {
             shortcut_story_id: story.id,
             shortcut_story_name: story.name,
             shortcut_story_url: story.app_url,
-            shortcut_root_comment_id: comment.parent_id ?? comment.id,
+            shortcut_root_comment_id: rootCommentId,
+            ...(processingCommentId ? { processing_comment_id: processingCommentId } : {}),
             ...(authorName ? { shortcut_user_name: authorName } : {}),
             ...(this.config.align_shortcut_users ? { align_shortcut_users: true } : {}),
             ...(authorEmail ? { shortcut_user_email: authorEmail } : {}),
@@ -447,10 +465,12 @@ export class ShortcutConnector implements GatewayConnector {
   // ── Outbound ──────────────────────────────────────────────
 
   /**
-   * Post a threaded reply on a story. `parent_id` is the THREAD ROOT encoded
-   * in the thread id (Shortcut threads one level deep). Media is referenced by
-   * URL in the text (raw video URLs render inline; `file_ids` is rejected by
-   * the comment API), so no attachment handling is needed here.
+   * Post a threaded reply on a story, OR edit an existing comment when
+   * `metadata.edit_comment_id` is set (used to turn the "👀 on it" ack into the
+   * final reply — one clean comment). `parent_id` is the THREAD ROOT encoded in
+   * the thread id (Shortcut threads one level deep). Media is referenced by URL
+   * in the text (raw video URLs render inline; `file_ids` is rejected by the
+   * comment API), so no attachment handling is needed here.
    */
   async sendMessage(req: {
     threadId: string;
@@ -458,6 +478,16 @@ export class ShortcutConnector implements GatewayConnector {
     metadata?: Record<string, unknown>;
   }): Promise<string> {
     const { storyId, rootCommentId } = parseThreadId(req.threadId);
+
+    const editCommentId = req.metadata?.edit_comment_id;
+    if (editCommentId != null) {
+      await this.request(`/stories/${storyId}/comments/${editCommentId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ text: req.text }),
+      });
+      return String(editCommentId);
+    }
+
     const created = await this.request<{ id: number }>(`/stories/${storyId}/comments`, {
       method: 'POST',
       body: JSON.stringify({ text: req.text, parent_id: rootCommentId }),
