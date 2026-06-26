@@ -14,7 +14,7 @@ export const blogPosts: BlogPost[] = [
     description:
       'Claude Tag brings @Claude into Slack. Here is why teams will still need modeled, governed, observable, multi-specialist assistants — and why Agor is built for that next step.',
     date: '2026-06-26',
-    image: '/screenshots/marketing/agor-marketing-slack-thread.png',
+    image: '/images/blog/claude-tag-vs-agor-assistants.png',
   },
   {
     slug: 'raise-team-helper-agent',
