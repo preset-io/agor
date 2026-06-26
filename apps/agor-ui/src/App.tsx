@@ -327,19 +327,11 @@ function AppContent() {
     sessionById,
     sessionsByBranch,
     boardById,
-    boardObjectById,
-    boardObjectsByBoardId,
     commentById,
-    cardById,
-    cardTypeById,
     repoById,
     branchById,
     userById,
-    mcpServerById,
-    gatewayChannelById,
-    artifactById,
     sessionMcpServerIds,
-    userAuthenticatedMcpServerIds,
     initialLoadItems,
     initialLoadComplete,
     loadingStage,
@@ -1548,21 +1540,7 @@ function AppContent() {
       user={currentUser}
       connected={connected}
       connecting={connecting}
-      sessionById={sessionById}
-      sessionsByBranch={sessionsByBranch}
       availableAgents={AVAILABLE_AGENTS}
-      boardById={boardById}
-      boardObjectById={boardObjectById}
-      boardObjectsByBoardId={boardObjectsByBoardId}
-      commentById={commentById}
-      cardById={cardById}
-      cardTypeById={cardTypeById}
-      repoById={repoById}
-      branchById={branchById}
-      userById={userById}
-      mcpServerById={mcpServerById}
-      sessionMcpServerIds={sessionMcpServerIds}
-      userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
       openSettingsTab={settingsTabToOpen}
       onSettingsClose={handleSettingsClose}
       openUserSettings={openUserSettings}
@@ -1599,11 +1577,9 @@ function AppContent() {
       onDeleteUser={handleDeleteUser}
       onCreateMCPServer={handleCreateMCPServer}
       onDeleteMCPServer={handleDeleteMCPServer}
-      gatewayChannelById={gatewayChannelById}
       onCreateGatewayChannel={handleCreateGatewayChannel}
       onUpdateGatewayChannel={handleUpdateGatewayChannel}
       onDeleteGatewayChannel={handleDeleteGatewayChannel}
-      artifactById={artifactById}
       onUpdateArtifact={handleUpdateArtifact}
       onDeleteArtifact={handleDeleteArtifact}
       onUpdateSessionMcpServers={handleUpdateSessionMcpServers}

@@ -6,14 +6,11 @@ import type {
   BoardEntityObject,
   BoardID,
   Branch,
-  CardType,
-  CardWithType,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
   CreateUserInput,
   GatewayChannel,
-  MCPServer,
   PermissionMode,
   Repo,
   Session,
@@ -46,6 +43,24 @@ import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
 import { type ActiveUrlTarget, useUrlState } from '../../hooks/useUrlState';
 import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectArtifactById,
+  selectBoardById,
+  selectBoardObjectById,
+  selectBoardObjectsByBoardId,
+  selectBranchById,
+  selectCardById,
+  selectCardTypeById,
+  selectCommentById,
+  selectGatewayChannelById,
+  selectMcpServerById,
+  selectRepoById,
+  selectSessionById,
+  selectSessionMcpServerIds,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
 import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
 import { createAssistantBranch } from '../../utils/assistantCreation';
@@ -90,21 +105,7 @@ export interface AppProps {
   user?: User | null;
   connected?: boolean;
   connecting?: boolean;
-  sessionById: Map<string, Session>; // O(1) lookups by session_id - efficient, stable references
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch-scoped filtering
   availableAgents: AgenticToolOption[];
-  boardById: Map<string, Board>; // Map-based board storage
-  boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
-  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
-  commentById: Map<string, BoardComment>; // Map-based comment storage
-  cardById: Map<string, CardWithType>; // Map-based card storage
-  cardTypeById: Map<string, CardType>; // Map-based card type storage
-  repoById: Map<string, Repo>; // Map-based repo storage
-  branchById: Map<string, Branch>; // Efficient branch lookups
-  userById: Map<string, User>; // Map-based user storage
-  mcpServerById: Map<string, MCPServer>; // Map-based MCP server storage
-  sessionMcpServerIds: Map<string, string[]>; // Map-based session-MCP relationships
-  userAuthenticatedMcpServerIds: Set<string>; // Per-user OAuth auth status
   initialBoardId?: string;
   openSettingsTab?: string | null; // Open settings modal to a specific tab
   onSettingsClose?: () => void; // Called when settings modal closes
@@ -167,11 +168,9 @@ export interface AppProps {
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
   onDeleteMCPServer?: (mcpServerId: string) => void;
-  gatewayChannelById: Map<string, GatewayChannel>;
   onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
   onUpdateGatewayChannel?: (channelId: string, updates: Partial<GatewayChannel>) => void;
   onDeleteGatewayChannel?: (channelId: string) => void;
-  artifactById: Map<string, Artifact>;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
@@ -237,21 +236,7 @@ export const App: React.FC<AppProps> = ({
   user,
   connected = false,
   connecting = false,
-  sessionById,
-  sessionsByBranch,
   availableAgents,
-  boardById,
-  boardObjectById,
-  boardObjectsByBoardId,
-  commentById,
-  cardById,
-  cardTypeById,
-  repoById,
-  branchById,
-  userById,
-  mcpServerById,
-  sessionMcpServerIds,
-  userAuthenticatedMcpServerIds,
   initialBoardId,
   openSettingsTab,
   onSettingsClose,
@@ -289,11 +274,9 @@ export const App: React.FC<AppProps> = ({
   onDeleteUser,
   onCreateMCPServer,
   onDeleteMCPServer,
-  gatewayChannelById,
   onCreateGatewayChannel,
   onUpdateGatewayChannel,
   onDeleteGatewayChannel,
-  artifactById,
   onUpdateArtifact,
   onDeleteArtifact,
   onUpdateSessionMcpServers,
@@ -311,6 +294,27 @@ export const App: React.FC<AppProps> = ({
   webTerminalEnabled = false,
   branchStorageConfig,
 }) => {
+  // Entity maps are read straight from the store via narrow slice selectors
+  // (rather than received as props). Each selector subscribes to a single
+  // slice, so App only re-renders when that specific slice's reference changes
+  // — and the derivations below keep their exact prior logic and memoization,
+  // only their data SOURCE moves from props to the store.
+  const sessionById = useAgorStore(selectSessionById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const boardById = useAgorStore(selectBoardById);
+  const boardObjectById = useAgorStore(selectBoardObjectById);
+  const boardObjectsByBoardId = useAgorStore(selectBoardObjectsByBoardId);
+  const commentById = useAgorStore(selectCommentById);
+  const cardById = useAgorStore(selectCardById);
+  const cardTypeById = useAgorStore(selectCardTypeById);
+  const repoById = useAgorStore(selectRepoById);
+  const branchById = useAgorStore(selectBranchById);
+  const userById = useAgorStore(selectUserById);
+  const mcpServerById = useAgorStore(selectMcpServerById);
+  const sessionMcpServerIds = useAgorStore(selectSessionMcpServerIds);
+  const gatewayChannelById = useAgorStore(selectGatewayChannelById);
+  const artifactById = useAgorStore(selectArtifactById);
+
   const { showWarning } = useThemedMessage();
   const location = useLocation();
   const routeParams = useParams<{

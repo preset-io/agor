@@ -19,10 +19,14 @@ export const selectSessionsByBranch = (s: AgorState) => s.sessionsByBranch;
 export const selectRepoById = (s: AgorState) => s.repoById;
 export const selectBranchById = (s: AgorState) => s.branchById;
 export const selectBoardById = (s: AgorState) => s.boardById;
+export const selectBoardObjectById = (s: AgorState) => s.boardObjectById;
+export const selectBoardObjectsByBoardId = (s: AgorState) => s.boardObjectsByBoardId;
 export const selectCommentById = (s: AgorState) => s.commentById;
 export const selectCardById = (s: AgorState) => s.cardById;
+export const selectCardTypeById = (s: AgorState) => s.cardTypeById;
 export const selectUserById = (s: AgorState) => s.userById;
 export const selectMcpServerById = (s: AgorState) => s.mcpServerById;
+export const selectGatewayChannelById = (s: AgorState) => s.gatewayChannelById;
 export const selectUserAuthenticatedMcpServerIds = (s: AgorState) =>
   s.userAuthenticatedMcpServerIds;
 export const selectArtifactById = (s: AgorState) => s.artifactById;
