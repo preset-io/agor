@@ -391,7 +391,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       </div>
 
       <Modal
-        title={createType === 'branch' ? 'New branch' : 'Start a session'}
+        title={createType === 'branch' ? 'New branch' : 'New assistant'}
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         width={420}
