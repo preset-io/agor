@@ -46,9 +46,10 @@ describe('statusFontSizeFor', () => {
     // 24 * (12 / 14) ≈ 20.57 → 21
     expect(statusFontSizeFor(24, 14, 12)).toBe(21);
   });
-  it('never returns below 1px even for tiny ratios', () => {
-    // Clamped label is MIN (10); 10 * (1 / 14) ≈ 0.71 → rounds to 1 via Math.max(1, …)
-    expect(statusFontSizeFor(2, 14, 1)).toBeGreaterThanOrEqual(1);
+  it('clamps to 1px when the scaled value would round to 0', () => {
+    // sanitize(10) = 10; 10 * (1 / 1000) = 0.01 → Math.round → 0; Math.max(1, 0)
+    // = 1. Without the clamp this would be 0 — so toBe(1) actually exercises it.
+    expect(statusFontSizeFor(10, 1000, 1)).toBe(1);
   });
 });
 

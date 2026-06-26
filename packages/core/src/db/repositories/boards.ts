@@ -898,18 +898,24 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   }
 
   /**
-   * Atomically shallow-merge field patches into existing board objects.
+   * Shallow-merge field patches into existing board objects in a single
+   * read-modify-write.
    *
    * Unlike upsertBoardObject (which fully replaces the object value, dropping
    * omitted fields), this overwrites ONLY the provided keys and leaves the rest
-   * of each object intact — so a narrow change (e.g. a zIndex reorder) can't
-   * revert a field edited concurrently elsewhere.
+   * of each object intact — so a narrow change (e.g. a zIndex reorder) has a
+   * smaller blast radius and won't clobber a field edited via a different patch
+   * call. Multiple objects in one call are merged before a single write, so a
+   * forward/backward swap touches both neighbors in one update.
    *
-   * Objects that no longer exist are SKIPPED, never re-created. This is what
-   * lets a forward/backward swap touch a neighbor without resurrecting it if it
-   * was deleted between the client's read and this write. All patches are
-   * applied in a single read-modify-write, so multi-object reorders persist
-   * atomically (unlike the sequential batchUpsertBoardObjects).
+   * Objects that no longer exist are SKIPPED, never re-created — so a swap can't
+   * resurrect a neighbor deleted between the client's read and this write.
+   *
+   * NOTE: this is NOT atomic against concurrent writers. Like every other board
+   * writer, the findById → update sequence has a lost-update window: a write
+   * that lands between the read and the update can be overwritten (last-write-
+   * wins). Merging only the patched keys narrows that window's blast radius
+   * versus a full-object upsert, but does not close it.
    */
   async mergeBoardObjectFields(
     boardId: string,

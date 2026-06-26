@@ -279,10 +279,12 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   );
 
   // A toolbar icon button that runs `action` on pointer-up (matching the
-  // existing lock/settings/delete buttons' event handling). Keyboard activation
-  // (Enter/Space) fires a synthetic click with `detail === 0` and no preceding
-  // pointer events, so we run the action from onClick in that case too — while
-  // skipping mouse-driven clicks (detail >= 1) which already ran on pointer-up.
+  // existing lock/settings/delete buttons' event handling). Pointer-up covers
+  // both mouse and touch (a tap synthesizes a click, but we never act on click).
+  // Keyboard activation is driven EXPLICITLY from onKeyDown (Enter/Space) — we
+  // deliberately do NOT infer keyboard from a `detail === 0` click, because some
+  // touch engines also report detail === 0 for tap-synthesized clicks, which
+  // would double-fire (pointerUp + click). onClick only swallows propagation.
   const renderActionButton = (
     key: string,
     title: string,
@@ -305,13 +307,16 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
         if (mutationDisabled || disabled) return;
         action();
       }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (mutationDisabled || disabled) return;
+        action();
+      }}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (e.detail === 0) {
-          if (mutationDisabled || disabled) return;
-          action();
-        }
       }}
       style={{
         ...iconButtonStyle,

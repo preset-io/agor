@@ -112,7 +112,8 @@ export const useBoardObjects = ({
    * merges into the freshest stored object and skips any object that was
    * deleted concurrently, so a swap can't resurrect a just-deleted neighbor and
    * unrelated fields edited elsewhere aren't reverted. The merge persists all
-   * touched objects in a single atomic write.
+   * touched objects in one read-modify-write (last-write-wins vs concurrent
+   * writers, like every other board writer — not atomic).
    */
   const reorderObject = useCallback(
     async (objectId: string, op: LayerOp) => {

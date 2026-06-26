@@ -3,6 +3,7 @@ import {
   BOARD_OBJECT_Z_MAX,
   BOARD_OBJECT_Z_MIN,
   computeLayerChanges,
+  DEFAULT_BOARD_OBJECT_Z_INDEX,
   sanitizeZIndex,
   selectedZIndex,
   type ZPeer,
@@ -190,6 +191,23 @@ describe('computeLayerChanges', () => {
       ];
       expect(computeLayerChanges('back', 'a', peers)).toEqual([]);
     });
+
+    it('is a no-op for "forward" at the ceiling when a peer ties at the ceiling', () => {
+      // Tie-break step would land at MAX+1 → clamped back to MAX → no change.
+      const peers: ZPeer[] = [
+        { id: 'a', zIndex: BOARD_OBJECT_Z_MAX },
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MAX },
+      ];
+      expect(computeLayerChanges('forward', 'a', peers)).toEqual([]);
+    });
+
+    it('is a no-op for "backward" at the floor when a peer ties at the floor', () => {
+      const peers: ZPeer[] = [
+        { id: 'a', zIndex: BOARD_OBJECT_Z_MIN },
+        { id: 'b', zIndex: BOARD_OBJECT_Z_MIN },
+      ];
+      expect(computeLayerChanges('backward', 'a', peers)).toEqual([]);
+    });
   });
 });
 
@@ -200,13 +218,51 @@ describe('selectedZIndex', () => {
   it('returns the base when not selected', () => {
     expect(selectedZIndex(100, false)).toBe(100);
   });
+  it('bumps a NON-default base by exactly one (guards against a hardcoded 101/100)', () => {
+    // A buggy `selected ? 101 : 100` would still pass the base-100 cases above;
+    // a non-default base catches it.
+    expect(selectedZIndex(103, true)).toBe(104);
+    expect(selectedZIndex(103, false)).toBe(103);
+  });
+});
+
+describe('zone selection round-trip (SessionCanvas zone-merge path)', () => {
+  // Mirrors the exact expression used at both SessionCanvas call sites
+  // (SessionCanvas.tsx ~L1271 board-sync and ~L1424 onNodesChange):
+  //   const base = (newZone.zIndex as number) ?? DEFAULT_BOARD_OBJECT_Z_INDEX.zone;
+  //   node.zIndex = selectedZIndex(base, selected);
+  // The base MUST come from the object's own persisted zIndex, not the per-type
+  // default — otherwise a custom-layered zone snaps back to 100 on deselect.
+  // Regression note: keep this in lockstep with those two call sites; the merge
+  // path itself isn't unit-rendered (SessionCanvas needs heavy setup).
+  const resolveZoneZIndex = (persisted: number | undefined, selected: boolean) =>
+    selectedZIndex(persisted ?? DEFAULT_BOARD_OBJECT_Z_INDEX.zone, selected);
+
+  it('a zone persisted at 103 renders at 104 selected and restores to 103 on deselect', () => {
+    expect(resolveZoneZIndex(103, true)).toBe(104);
+    expect(resolveZoneZIndex(103, false)).toBe(103);
+    // Crucially NOT the per-type default (100) on deselect.
+    expect(resolveZoneZIndex(103, false)).not.toBe(DEFAULT_BOARD_OBJECT_Z_INDEX.zone);
+  });
+
+  it('falls back to the per-type default only when the base is unset', () => {
+    expect(resolveZoneZIndex(undefined, false)).toBe(DEFAULT_BOARD_OBJECT_Z_INDEX.zone);
+    expect(resolveZoneZIndex(undefined, true)).toBe(DEFAULT_BOARD_OBJECT_Z_INDEX.zone + 1);
+  });
 });
 
 describe('sanitizeZIndex', () => {
-  it('passes through finite numbers (including the band extremes)', () => {
+  it('passes through in-band finite numbers', () => {
     expect(sanitizeZIndex(123, 100)).toBe(123);
-    expect(sanitizeZIndex(0, 100)).toBe(0);
-    expect(sanitizeZIndex(-5, 100)).toBe(-5);
+    expect(sanitizeZIndex(BOARD_OBJECT_Z_MIN, 100)).toBe(BOARD_OBJECT_Z_MIN);
+    expect(sanitizeZIndex(BOARD_OBJECT_Z_MAX, 100)).toBe(BOARD_OBJECT_Z_MAX);
+  });
+  it('clamps a finite but out-of-band value into [MIN, MAX]', () => {
+    // An out-of-band value persisted via MCP/import must never be read back as
+    // the card (500) / comment (1000) layer.
+    expect(sanitizeZIndex(600, 100)).toBe(BOARD_OBJECT_Z_MAX);
+    expect(sanitizeZIndex(0, 100)).toBe(BOARD_OBJECT_Z_MIN);
+    expect(sanitizeZIndex(-5, 100)).toBe(BOARD_OBJECT_Z_MIN);
   });
   it('falls back for non-finite or non-numeric values', () => {
     expect(sanitizeZIndex(Number.NaN, 100)).toBe(100);

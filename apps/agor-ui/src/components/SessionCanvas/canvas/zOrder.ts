@@ -34,12 +34,19 @@ export const BOARD_OBJECT_Z_MAX = 499;
 export const BOARD_OBJECT_Z_MIN = 1;
 
 /**
- * Coerce a persisted zIndex to a finite number, falling back to the per-type
- * default. Guards against bad data from MCP/import writes (non-numeric, NaN,
- * Infinity) before the value feeds `computeLayerChanges` or a node's zIndex.
+ * Coerce a persisted zIndex to an in-band number, falling back to the per-type
+ * default. Guards against bad data from MCP/import writes:
+ * - non-numeric / NaN / Infinity → the per-type `fallback`.
+ * - a finite but out-of-band value (e.g. 600 written directly via MCP/import)
+ *   is CLAMPED into [BOARD_OBJECT_Z_MIN, BOARD_OBJECT_Z_MAX] so it can never be
+ *   read back as >= the card (500) / comment (1000) layers (600 → 499).
+ *
+ * Because reads are clamped here, the peers fed into `computeLayerChanges` are
+ * already in-band; the swap branches clamp anyway as defense-in-depth.
  */
 export function sanitizeZIndex(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(BOARD_OBJECT_Z_MAX, Math.max(BOARD_OBJECT_Z_MIN, value));
 }
 
 /**
@@ -114,9 +121,11 @@ export function computeLayerChanges(op: LayerOp, targetId: string, peers: ZPeer[
         .filter((p) => p.zIndex > target.zIndex)
         .sort((a, b) => a.zIndex - b.zIndex)[0];
       if (above) {
+        // Defense-in-depth: clamp both sides of the swap into the band so no
+        // path can emit an out-of-band zIndex even if a peer slipped through.
         return [
-          { id: targetId, zIndex: above.zIndex },
-          { id: above.id, zIndex: target.zIndex },
+          { id: targetId, zIndex: Math.min(above.zIndex, BOARD_OBJECT_Z_MAX) },
+          { id: above.id, zIndex: Math.max(target.zIndex, BOARD_OBJECT_Z_MIN) },
         ];
       }
       // No strictly-higher peer, but if a peer SHARES our zIndex (the headline
@@ -133,9 +142,10 @@ export function computeLayerChanges(op: LayerOp, targetId: string, peers: ZPeer[
         .filter((p) => p.zIndex < target.zIndex)
         .sort((a, b) => b.zIndex - a.zIndex)[0];
       if (below) {
+        // Defense-in-depth: clamp both sides of the swap into the band.
         return [
-          { id: targetId, zIndex: below.zIndex },
-          { id: below.id, zIndex: target.zIndex },
+          { id: targetId, zIndex: Math.max(below.zIndex, BOARD_OBJECT_Z_MIN) },
+          { id: below.id, zIndex: Math.min(target.zIndex, BOARD_OBJECT_Z_MAX) },
         ];
       }
       // Mirror of `forward`: break a tie by stepping down one.

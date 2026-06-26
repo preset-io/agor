@@ -54,20 +54,55 @@ describe('ZoneNode layer toolbar', () => {
     expect(screen.getByLabelText('Bring to front')).toBeTruthy();
   });
 
-  it('fires onReorder via keyboard-style click when the mutation gate is open', () => {
+  it('fires onReorder exactly once for a mouse gesture (pointerUp only, never click)', () => {
     const onReorder = vi.fn();
     renderZone(onReorder, CONNECTED);
-    // fireEvent.click produces a synthetic click with detail 0 — the same shape
-    // as Enter/Space keyboard activation, which is the path the button must
-    // support (pointer events don't fire on keyboard activation).
-    fireEvent.click(screen.getByLabelText('Bring to front'));
+    const btn = screen.getByLabelText('Bring to front');
+    // A full mouse tap: pointerDown → pointerUp → click. The action runs on
+    // pointerUp; the trailing click (detail 1) must NOT also fire it. Some touch
+    // engines emit a detail-0 synthesized click on tap too — assert that path is
+    // inert as well so touch can't double-step.
+    fireEvent.pointerDown(btn);
+    fireEvent.pointerUp(btn);
+    fireEvent.click(btn, { detail: 1 });
+    fireEvent.click(btn, { detail: 0 });
+    expect(onReorder).toHaveBeenCalledTimes(1);
     expect(onReorder).toHaveBeenCalledWith('zone-1', 'front');
+  });
+
+  it('fires onReorder exactly once on keyboard activation (Enter / Space)', () => {
+    const onReorder = vi.fn();
+    renderZone(onReorder, CONNECTED);
+    const btn = screen.getByLabelText('Bring forward');
+    fireEvent.keyDown(btn, { key: 'Enter' });
+    expect(onReorder).toHaveBeenCalledTimes(1);
+    expect(onReorder).toHaveBeenLastCalledWith('zone-1', 'forward');
+
+    fireEvent.keyDown(btn, { key: ' ' });
+    expect(onReorder).toHaveBeenCalledTimes(2);
+    expect(onReorder).toHaveBeenLastCalledWith('zone-1', 'forward');
+  });
+
+  it('does not compound keyboard + the click the browser synthesizes after it', () => {
+    const onReorder = vi.fn();
+    renderZone(onReorder, CONNECTED);
+    const btn = screen.getByLabelText('Send to back');
+    // Real browsers fire a detail-0 click after Enter on a button. onKeyDown
+    // handles activation; onClick is inert — so the pair must total ONE call.
+    fireEvent.keyDown(btn, { key: 'Enter' });
+    fireEvent.click(btn, { detail: 0 });
+    expect(onReorder).toHaveBeenCalledTimes(1);
+    expect(onReorder).toHaveBeenCalledWith('zone-1', 'back');
   });
 
   it('does NOT fire onReorder when the mutation gate is closed (disconnected)', () => {
     const onReorder = vi.fn();
     renderZone(onReorder, DISCONNECTED);
-    fireEvent.click(screen.getByLabelText('Bring to front'));
+    const btn = screen.getByLabelText('Bring to front');
+    fireEvent.pointerDown(btn);
+    fireEvent.pointerUp(btn);
+    fireEvent.keyDown(btn, { key: 'Enter' });
+    fireEvent.click(btn, { detail: 0 });
     expect(onReorder).not.toHaveBeenCalled();
   });
 });
