@@ -25,7 +25,9 @@ import {
   branchOwners,
   groupMemberships,
   groups,
+  messages,
   sessions,
+  tasks,
 } from '../schema';
 
 export const VISIBLE_BRANCH_PERMISSION_LEVELS = BRANCH_PERMISSION_LEVELS.filter(
@@ -147,6 +149,76 @@ export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
 }
 
 /**
+ * Board visibility predicate correlated against the `boards` table in scope.
+ *
+ * A board is visible if the user owns it, is an explicit board owner, the board
+ * is shared, or at least one of its branches / primary assistant branch is
+ * visible through the branch RBAC predicate. All branch-derived checks are
+ * EXISTS-based so the outer row is never multiplied and no DISTINCT is needed.
+ */
+export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
+  const accessibleBranchExists = exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(branches)
+      .leftJoin(
+        branchOwners,
+        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+      )
+      .where(and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition(db, userId)))
+  );
+  const accessiblePrimaryAssistantExists = exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(branches)
+      .leftJoin(
+        branchOwners,
+        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+      )
+      .where(
+        and(
+          eq(branches.branch_id, boards.primary_assistant_id),
+          visibleBranchAccessCondition(db, userId)
+        )
+      )
+  );
+
+  return (
+    or(
+      eq(boards.created_by, userId),
+      exists(
+        // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+        (db as any)
+          .select({ _: sql`1` })
+          .from(boardOwners)
+          .where(and(eq(boardOwners.board_id, boards.board_id), eq(boardOwners.user_id, userId)))
+      ),
+      eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared'),
+      accessibleBranchExists,
+      accessiblePrimaryAssistantExists
+    ) ?? sql`false`
+  );
+}
+
+/** Correlated board-visibility predicate for tables that carry a board_id. */
+export function visibleBoardReferenceAccessExists(
+  db: Database,
+  userId: UUID,
+  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
+  boardId: any
+): SQL {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(boards)
+      .where(and(eq(boards.board_id, boardId), visibleBoardAccessCondition(db, userId)))
+  );
+}
+
+/**
  * Correlated branch-visibility predicate for tables that carry a branch_id.
  *
  * This is the SQL-pushdown equivalent of resolving all accessible branch ids
@@ -197,5 +269,47 @@ export function visibleSessionReferenceAccessExists(
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
       )
       .where(and(eq(sessions.session_id, sessionId), visibleBranchAccessCondition(db, userId)))
+  );
+}
+
+/** Correlated visibility predicate for tables that carry a task_id. */
+export function visibleTaskReferenceAccessExists(
+  db: Database,
+  userId: UUID,
+  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
+  taskId: any
+): SQL {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.task_id, taskId),
+          visibleSessionReferenceAccessExists(db, userId, tasks.session_id)
+        )
+      )
+  );
+}
+
+/** Correlated visibility predicate for tables that carry a message_id. */
+export function visibleMessageReferenceAccessExists(
+  db: Database,
+  userId: UUID,
+  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
+  messageId: any
+): SQL {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.message_id, messageId),
+          visibleSessionReferenceAccessExists(db, userId, messages.session_id)
+        )
+      )
   );
 }

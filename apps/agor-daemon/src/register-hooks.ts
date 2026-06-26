@@ -17,7 +17,6 @@ import {
 } from '@agor/core/config';
 import {
   ArtifactRepository,
-  BoardObjectRepository,
   BoardRepository,
   type BranchRepository,
   type Database,
@@ -75,7 +74,6 @@ import type {
 } from './declarations.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import type { ArtifactsService } from './services/artifacts.js';
-import { normalizeBoardObjectFindQuery } from './services/board-objects.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
 import {
@@ -105,7 +103,6 @@ import {
   loadScheduleAndBranch,
   loadSession,
   loadSessionBranch,
-  PERMISSION_RANK,
   resolveSessionContext,
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
@@ -609,8 +606,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
   // Board objects hooks
   // ============================================================================
-  const boardObjectRepository = new BoardObjectRepository(db);
-
   safeService('board-objects')?.hooks({
     before: {
       all: [
@@ -618,133 +613,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'manage board objects'),
       ],
-      // NOTE: We deliberately do NOT add the generic scopeFindToAccessibleBranches here.
-      // Board-objects may reference `branch_id` (branch cards) OR `card_id`
-      // (kanban cards with no branch) OR neither (zones, layout objects).
-      // That generic hook would filter out rows with null branch_id, breaking
-      // card-only boards. The RBAC find hook below uses a board-object-specific
-      // SQL query that preserves card/zone rows while scoping branch-bound ones.
-      find: [
-        ...(branchRbacEnabled
-          ? [
-              async (context: HookContext) => {
-                if (!context.params.provider) return context;
-
-                const userId = context.params.user?.user_id as
-                  | import('@agor/core/types').UUID
-                  | undefined;
-                const normalized = normalizeBoardObjectFindQuery(context.params.query);
-
-                if (!userId) {
-                  context.result = {
-                    total: 0,
-                    limit: normalized.limit,
-                    skip: normalized.skip,
-                    data: [],
-                  };
-                  return context;
-                }
-
-                const [total, data] = await Promise.all([
-                  boardObjectRepository.countVisibleToUser(userId, normalized.filters),
-                  boardObjectRepository.findVisibleToUser(
-                    userId,
-                    normalized.filters,
-                    normalized.pagination
-                  ),
-                ]);
-
-                context.result = {
-                  total,
-                  limit: normalized.limit,
-                  skip: normalized.skip,
-                  data,
-                };
-                (context.params as { _boardObjectsRbacScoped?: boolean })._boardObjectsRbacScoped =
-                  true;
-                return context;
-              },
-            ]
-          : []),
-      ],
-    },
-    after: {
-      find: [
-        ...(branchRbacEnabled
-          ? [
-              // Filter board-objects based on branch access permissions
-              async (context: HookContext) => {
-                if (
-                  (context.params as { _boardObjectsRbacScoped?: boolean })._boardObjectsRbacScoped
-                ) {
-                  return context;
-                }
-
-                // Skip for internal calls
-                if (!context.params.provider) {
-                  return context;
-                }
-
-                const userId = context.params.user?.user_id as
-                  | import('@agor/core/types').UUID
-                  | undefined;
-                if (!userId) {
-                  // Not authenticated - return empty results
-                  context.result = {
-                    total: 0,
-                    limit: context.result?.limit ?? 0,
-                    skip: context.result?.skip ?? 0,
-                    data: [],
-                  };
-                  return context;
-                }
-
-                // Get all board objects from result
-                // biome-ignore lint/suspicious/noExplicitAny: BoardObject type not fully available in hook context
-                const boardObjects: any[] = context.result?.data ?? context.result ?? [];
-
-                // Filter based on branch access
-                const authorizedBoardObjects = [];
-                for (const boardObject of boardObjects) {
-                  // Board objects may reference branches or sessions
-                  if (boardObject.branch_id) {
-                    // Check branch access
-                    const branch = await branchRepository.findById(boardObject.branch_id);
-                    if (!branch) {
-                      continue; // Skip if branch doesn't exist
-                    }
-
-                    const effectivePermission = await branchRepository.resolveUserPermission(
-                      branch,
-                      userId
-                    );
-                    const hasAccess = PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
-
-                    if (hasAccess) {
-                      authorizedBoardObjects.push(boardObject);
-                    }
-                  } else if (boardObject.card_id) {
-                    // Card board objects: cards inherit board-level access (no per-card RBAC)
-                    authorizedBoardObjects.push(boardObject);
-                  } else {
-                    // No branch or card reference - allow access (e.g., zones, other board objects)
-                    authorizedBoardObjects.push(boardObject);
-                  }
-                }
-
-                // Update result
-                if (context.result?.data) {
-                  context.result.data = authorizedBoardObjects;
-                  context.result.total = authorizedBoardObjects.length;
-                } else {
-                  context.result = authorizedBoardObjects;
-                }
-
-                return context;
-              },
-            ]
-          : []),
-      ],
+      // Board-objects may reference a branch or may be loose board/card/layout
+      // rows. The service composes this marker into an object-specific SQL
+      // predicate: branch-bound rows require branch access; loose rows require
+      // board visibility.
+      find: [...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : [])],
     },
   });
 
@@ -1039,6 +912,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('board-comments')?.hooks({
     before: {
       all: [typedValidateQuery(boardCommentQueryValidator), requireAuth],
+      find: [
+        // Board comments inherit board visibility for pure board/spatial
+        // comments and branch/session/task/message visibility for attached
+        // comments. The service pushes the marker into SQL.
+        ...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+      ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create board comments'), injectCreatedBy()],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete board comments')],

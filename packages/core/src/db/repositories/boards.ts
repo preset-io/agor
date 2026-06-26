@@ -15,7 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { isAssistant } from '@agor/core/types';
-import { and, eq, exists, inArray, isNull, like, ne, or, type SQL, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like, ne, type SQL } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -23,15 +23,13 @@ import { generateSlug } from '../../lib/slugs';
 import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import {
   type BoardInsert,
   type BoardRow,
   boardGroupGrants,
   boardOwners,
   boards,
-  branches,
-  branchOwners,
   groupMemberships,
   groups,
 } from '../schema';
@@ -43,7 +41,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { visibleBoardAccessCondition } from './branch-access';
 import { BranchRepository } from './branches';
 
 const BOARD_ACCESS_MODES = ['private', 'shared'] as const;
@@ -345,54 +343,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    *   under branch RBAC.
    */
   private visibleBoardCondition(userId: UUID): SQL {
-    // Raw drizzle builder for the EXISTS subqueries — `exists()` expects a
-    // drizzle SelectQueryBuilder, not the cross-dialect wrapper shape, and
-    // the subqueries don't need `.all()` / `.one()` execution methods.
-    const accessibleBranchExists = exists(
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-      (this.db as any)
-        .select({ _: sql`1` })
-        .from(branches)
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
-        .where(
-          and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition(this.db, userId))
-        )
-    );
-    const accessiblePrimaryAssistantExists = exists(
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-      (this.db as any)
-        .select({ _: sql`1` })
-        .from(branches)
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
-        .where(
-          and(
-            eq(branches.branch_id, boards.primary_assistant_id),
-            visibleBranchAccessCondition(this.db, userId)
-          )
-        )
-    );
-
-    return (
-      or(
-        eq(boards.created_by, userId),
-        exists(
-          // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-          (this.db as any)
-            .select({ _: sql`1` })
-            .from(boardOwners)
-            .where(and(eq(boardOwners.board_id, boards.board_id), eq(boardOwners.user_id, userId)))
-        ),
-        sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared') = 'shared'`,
-        accessibleBranchExists,
-        accessiblePrimaryAssistantExists
-      ) ?? sql`false`
-    );
+    return visibleBoardAccessCondition(this.db, userId);
   }
 
   async findAll(filter?: {
