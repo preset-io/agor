@@ -1461,7 +1461,6 @@ export const App: React.FC<AppProps> = ({
               boardObjects={mapToArray(boardObjectById)}
               repoById={repoById}
               branchById={branchById}
-              sessionById={sessionById}
               sessionsByBranch={sessionsByBranch}
               userById={userById}
               mcpServerById={mcpServerById}

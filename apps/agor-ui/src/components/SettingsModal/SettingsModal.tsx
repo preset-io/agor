@@ -64,7 +64,6 @@ export interface SettingsModalProps {
   boardObjects: BoardEntityObject[];
   repoById: Map<string, Repo>;
   branchById: Map<string, Branch>;
-  sessionById: Map<string, Session>; // O(1) ID lookups - efficient, stable references
   sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
