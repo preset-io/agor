@@ -258,7 +258,7 @@ export const HomeBoardsSection: React.FC<
           ref={gridRef}
           style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(${columns}, 1fr)`,
+            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
             gap: 12,
           }}
         >
