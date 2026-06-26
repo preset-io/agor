@@ -3,7 +3,6 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
-import { AppEntityDataProvider } from '../../contexts/AppDataContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import SessionPanel from './SessionPanel';
 
@@ -93,20 +92,11 @@ const branch = {
 function renderPanel(onOpenTerminal = vi.fn()) {
   render(
     <ConnectionProvider value={connected}>
-      <AppEntityDataProvider
-        value={{
-          repoById: new Map(),
-          userById: new Map(),
-          mcpServerById: new Map(),
-          userAuthenticatedMcpServerIds: new Set(),
-        }}
-      >
-        <AppActionsProvider value={{ onOpenTerminal }}>
-          <AntApp>
-            <SessionPanel client={null} session={session} branch={branch} open onClose={vi.fn()} />
-          </AntApp>
-        </AppActionsProvider>
-      </AppEntityDataProvider>
+      <AppActionsProvider value={{ onOpenTerminal }}>
+        <AntApp>
+          <SessionPanel client={null} session={session} branch={branch} open onClose={vi.fn()} />
+        </AntApp>
+      </AppActionsProvider>
     </ConnectionProvider>
   );
   return { onOpenTerminal };
