@@ -71,3 +71,64 @@ flowchart TD
    current branch/RBAC filtering in `utils/realtime-publish.ts`.
 6. **Background jobs/executors/MCP**: every non-HTTP path must carry tenant id;
    otherwise tenant-scoped DB access should throw.
+
+## HA / autoscaled sockets mental model
+
+Rooms are not assigned to daemon pods. A room is a logical label that exists on
+whatever pods currently have local sockets joined to that room. The load
+balancer does not need a room map, and we should not shard tenants/sessions to
+specific daemons for the initial architecture.
+
+```mermaid
+flowchart LR
+  U1[User 1] --> LB[ELB / ingress]
+  U2[User 2] --> LB
+
+  LB --> D1[Daemon A]
+  LB --> D2[Daemon B]
+  LB --> D3[Daemon C]
+
+  D1 <--> R[(Redis / Socket.IO adapter)]
+  D2 <--> R
+  D3 <--> R
+
+  D1 --> TDB[(Tenant Postgres)]
+  D2 --> TDB
+  D3 --> TDB
+```
+
+If User 1 and User 2 both view `tenant:t1:session:s1` but connect to different
+pods, both sockets join the same deterministic room name on their respective
+pods. An emit to that room from any pod is fanned out through the Socket.IO
+adapter; each receiving pod delivers only to its local sockets in that room.
+
+```mermaid
+sequenceDiagram
+  participant U1 as User 1
+  participant D1 as Daemon A
+  participant R as Redis adapter
+  participant D3 as Daemon C
+  participant U2 as User 2
+
+  U1->>D1: prompt session s1
+  D1->>D1: patch task/session/message
+  D1->>D1: emit to tenant:t1:session:s1
+  D1->>U1: local delivery
+  D1->>R: publish room packet
+  R->>D3: room packet
+  D3->>U2: local delivery
+```
+
+### Scaling notes
+
+- Redis here is pub/sub fanout, not the durable message queue/source of truth.
+- Socket events are live hints; tenant Postgres remains durable truth.
+- On disconnect/reconnect, clients should resubscribe rooms and refetch current
+  page/session state over REST to recover missed events.
+- Room-targeted emits avoid scanning every connected socket. Cost is closer to
+  `O(pods) + O(room recipients)`, not `O(total users)` per event.
+- A broad `authenticated` channel scan is the path to avoid at GA scale.
+- For thousands of tenants, DB pool lifecycle is a separate bottleneck: lazy
+  pools, small max size, idle eviction, and likely PgBouncer/managed pooling.
+- Background jobs still need distributed locks/queues; Socket.IO Redis adapter
+  only solves realtime fanout.
