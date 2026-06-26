@@ -76,6 +76,7 @@ const BoardHomeCard: React.FC<{
       style={{
         display: 'block',
         width: '100%',
+        height: '100%',
         textAlign: 'left',
         border: `1px solid ${hovered ? token.colorPrimary : token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
