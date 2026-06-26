@@ -129,38 +129,90 @@ function clickButton(text: RegExp) {
 /** Drain microtasks so a Form.validateFields()-gated step transition settles. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** Fill the wizard's Options step and advance to the "Create App" step. */
-async function advanceToCreateAppStep() {
+/** Fill the universal "Channel" step (step 0) and advance to "Options" (step 1). */
+async function advanceToOptions() {
   fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
     target: { value: 'My Slack' },
   });
   fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
+  clickButton(/^Continue$/);
+  await flush();
+}
+
+/** Advance from "Options" (fills identity) to the "Create app" step (step 2). */
+async function advanceToCreateAppStep() {
+  await advanceToOptions();
   fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
-  clickButton(/Next: Create App/);
+  clickButton(/^Continue$/);
+  await flush();
+}
+
+/** Advance all the way to the final "Tokens & test" step (step 3). */
+async function advanceToTokensStep() {
+  await advanceToCreateAppStep();
+  clickButton(/^Continue$/);
   await flush();
 }
 
 describe('GatewayChannelsTable Slack create wizard', () => {
-  it('renders the guided Steps wizard (not the Collapse) on create', () => {
+  it('opens on the universal "Channel" step with the unified step indicator', () => {
     renderTable(null);
     clickButton(/Add Channel/);
 
-    // Wizard step titles + first-step controls.
+    // Step indicator titles for the Slack flow sit under the modal title.
+    expect(screen.getByText('Channel')).toBeInTheDocument();
     expect(screen.getByText('Options')).toBeInTheDocument();
-    expect(screen.getByText('Tokens & Test')).toBeInTheDocument();
-    expect(screen.getByText('App Name')).toBeInTheDocument();
-    expect(screen.getByText('Surfaces')).toBeInTheDocument();
-    // DMs are informational (always on), not a toggle.
-    expect(screen.getByText('Direct messages')).toBeInTheDocument();
-    expect(screen.getByText('always on')).toBeInTheDocument();
-    // Slack still owns identity (no generic "Post messages as").
-    expect(screen.getByText('Align Slack users')).toBeInTheDocument();
+    expect(screen.getByText('Create app')).toBeInTheDocument();
+    expect(screen.getByText('Tokens & test')).toBeInTheDocument();
+
+    // Step 0 owns the universal basics; platform options live on later steps.
+    expect(screen.getByText('Channel Type')).toBeInTheDocument();
+    expect(screen.getByText('Name')).toBeInTheDocument();
+    expect(screen.getByText('Target Branch')).toBeInTheDocument();
+    expect(screen.getByText('Enabled')).toBeInTheDocument();
+    // Slack-specific options (App Name / Surfaces) are not shown yet.
+    expect(screen.queryByText('Surfaces')).not.toBeInTheDocument();
+    // Slack owns identity later — no generic "Post messages as".
     expect(screen.queryByText('Post messages as')).not.toBeInTheDocument();
+  });
+
+  it('keeps one footer on every step: Back disabled on step 0, primary verb on the last step', async () => {
+    renderTable(makeClient().client);
+    clickButton(/Add Channel/);
+
+    // Step 0: Back present-but-disabled; primary is "Continue"; no submit verb yet.
+    expect(getButton(/^Back$/).disabled).toBe(true);
+    expect(getButton(/^Cancel$/)).toBeInTheDocument();
+    expect(getButton(/^Continue$/)).toBeInTheDocument();
+    expect(queryButton(/Create channel/)).toBeUndefined();
+
+    // Mid-flow: Back enabled, still on "Continue".
+    await advanceToOptions();
+    expect(getButton(/^Back$/).disabled).toBe(false);
+    expect(getButton(/^Continue$/)).toBeInTheDocument();
+
+    // Surfaces appear on the Options step.
+    expect(screen.getByText('Surfaces')).toBeInTheDocument();
+    expect(screen.getByText('Align Slack users')).toBeInTheDocument();
+
+    // Final step: primary becomes the submit verb, "Continue" is gone.
+    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
+    clickButton(/^Continue$/);
+    await flush();
+    expect(getButton(/Copy manifest/)).toBeInTheDocument();
+    clickButton(/^Continue$/);
+    await flush();
+    expect(getButton(/Create channel/)).toBeInTheDocument();
+    expect(queryButton(/^Continue$/)).toBeUndefined();
+    expect(screen.getByPlaceholderText('xoxb-...')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('xapp-...')).toBeInTheDocument();
   });
 
   it('updates the manifest preview and scope list as surfaces change', async () => {
     renderTable(null);
     clickButton(/Add Channel/);
+    // Surfaces live on the Options step (step 1).
+    await advanceToOptions();
 
     // Public-channel scopes/events are absent until the surface is enabled.
     expect(screen.queryByText('channels:history')).not.toBeInTheDocument();
@@ -176,25 +228,6 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.queryAllByText('app_mention').length).toBeGreaterThan(0);
   });
 
-  it('navigates Options → Create App → Tokens & Test, gating the OK button', async () => {
-    renderTable(makeClient().client);
-    clickButton(/Add Channel/);
-
-    // OK/Create stays hidden until the wizard reaches its final step.
-    expect(getButton(/^Create$/).style.display).toBe('none');
-
-    await advanceToCreateAppStep();
-    expect(getButton(/Copy manifest/)).toBeInTheDocument();
-    expect(getButton(/^Create$/).style.display).toBe('none');
-
-    clickButton(/Next: Tokens & Test/);
-    await flush();
-
-    expect(getButton(/^Create$/).style.display).toBe('');
-    expect(screen.getByPlaceholderText('xoxb-...')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('xapp-...')).toBeInTheDocument();
-  });
-
   it('runs the connection probe and renders team/bot/notVerifiable honestly', async () => {
     const result = {
       ok: true,
@@ -208,9 +241,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     renderTable(client);
     clickButton(/Add Channel/);
 
-    await advanceToCreateAppStep();
-    clickButton(/Next: Tokens & Test/);
-    await flush();
+    await advanceToTokensStep();
 
     fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
     fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
@@ -234,14 +265,12 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     renderTable(client);
     clickButton(/Add Channel/);
 
-    await advanceToCreateAppStep();
-    clickButton(/Next: Tokens & Test/);
-    await flush();
+    await advanceToTokensStep();
     fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
     fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
 
-    // OK/Create is only shown once the wizard reaches the final step.
-    clickButton(/^Create$/);
+    // The submit verb appears only on the final step; it drives the create call.
+    clickButton(/Create channel/);
 
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
@@ -255,11 +284,15 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     renderTable(client);
     clickButton(/Add Channel/);
 
-    // Enable a public-channel surface so the scope option is in play.
+    // Enable a public-channel surface (Options step) so the scope option is in play.
+    await advanceToOptions();
     fireEvent.click(screen.getByText('Public channels'));
 
-    await advanceToCreateAppStep();
-    clickButton(/Next: Tokens & Test/);
+    // Finish identity + walk to the final Tokens step.
+    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
+    clickButton(/^Continue$/);
+    await flush();
+    clickButton(/^Continue$/);
     await flush();
     fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
     fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
@@ -295,6 +328,8 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     // Edit keeps the collapsible sections; the create-only wizard is absent.
     expect(screen.getByText('Credentials')).toBeInTheDocument();
     expect(screen.getByText('Message Sources')).toBeInTheDocument();
-    expect(queryButton(/Next: Create App/)).toBeUndefined();
+    // No unified step indicator and no wizard footer in edit mode.
+    expect(screen.queryByText('Tokens & test')).not.toBeInTheDocument();
+    expect(queryButton(/^Continue$/)).toBeUndefined();
   });
 });
