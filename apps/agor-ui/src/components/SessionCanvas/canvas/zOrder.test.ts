@@ -224,6 +224,13 @@ describe('selectedZIndex', () => {
     expect(selectedZIndex(103, true)).toBe(104);
     expect(selectedZIndex(103, false)).toBe(103);
   });
+  it('clamps the selection bump so a base-499 zone never reaches the card layer (500)', () => {
+    // The +1 bump must stay below BOARD_OBJECT_Z_MAX; otherwise a selected
+    // front-most zone renders at 500 and can mask cards.
+    expect(selectedZIndex(BOARD_OBJECT_Z_MAX, true)).toBe(BOARD_OBJECT_Z_MAX);
+    expect(selectedZIndex(BOARD_OBJECT_Z_MAX, false)).toBe(BOARD_OBJECT_Z_MAX);
+    expect(selectedZIndex(498, true)).toBe(BOARD_OBJECT_Z_MAX);
+  });
 });
 
 describe('zone selection round-trip (SessionCanvas zone-merge path)', () => {

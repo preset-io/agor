@@ -1346,6 +1346,50 @@ describe('BoardRepository.mergeBoardObjectFields', () => {
       repo.mergeBoardObjectFields('99999999', { 'zone-1': { zIndex: 1 } })
     ).rejects.toThrow(EntityNotFoundError);
   });
+
+  dbTest(
+    'ignores non-zIndex fields and clamps zIndex into the board-object band',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const board = await repo.create(
+        createBoardData({
+          objects: {
+            'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+          },
+        })
+      );
+
+      const updated = await repo.mergeBoardObjectFields(board.board_id, {
+        // `type`/`label` are NOT mergeable — the narrow action must not reshape the
+        // object; only the clamped zIndex applies (600 → 499).
+        'zone-1': { type: 'markdown', label: 'hacked', zIndex: 600 } as never,
+      });
+
+      const obj = updated.objects?.['zone-1'];
+      expect(obj?.type).toBe('zone'); // type untouched
+      expect((obj as { label?: string })?.label).toBe('A'); // label untouched
+      expect(obj?.zIndex).toBe(499); // clamped below the card layer
+    }
+  );
+
+  dbTest('skips a patch whose zIndex is missing or non-finite', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { label: 'noop' } as never,
+    });
+
+    // No mergeable field → object left exactly as-is.
+    expect(updated.objects?.['zone-1']?.zIndex).toBe(100);
+    expect((updated.objects?.['zone-1'] as { label?: string })?.label).toBe('A');
+  });
 });
 
 // ============================================================================

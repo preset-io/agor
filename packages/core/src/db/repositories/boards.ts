@@ -911,6 +911,12 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * Objects that no longer exist are SKIPPED, never re-created — so a swap can't
    * resurrect a neighbor deleted between the client's read and this write.
    *
+   * Only an explicit allowlist of fields can be merged (currently just `zIndex`,
+   * which is also clamped into the board-object band [1, 499] so it can never be
+   * pushed onto the card (500) / comment (1000) layers). Any other key in a
+   * patch is ignored, so this narrow action cannot reshape an object (e.g. flip
+   * its `type`) the way a full upsert could.
+   *
    * NOTE: this is NOT atomic against concurrent writers. Like every other board
    * writer, the findById → update sequence has a lost-update window: a write
    * that lands between the read and the update can be overwritten (last-write-
@@ -921,6 +927,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     boardId: string,
     patches: Record<string, Partial<BoardObject>>
   ): Promise<Board> {
+    // Board objects stay strictly below the card (500) / comment (1000) layers.
+    const Z_MIN = 1;
+    const Z_MAX = 499;
     try {
       const fullId = await this.resolveId(boardId);
 
@@ -933,7 +942,14 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       for (const [objectId, fields] of Object.entries(patches)) {
         const existing = updatedObjects[objectId];
         if (!existing) continue; // never resurrect a concurrently-deleted object
-        updatedObjects[objectId] = { ...existing, ...fields } as BoardObject;
+
+        // Allowlist: only `zIndex` is mergeable, and it is clamped server-side.
+        // Everything else in the patch is ignored so this action can't reshape
+        // an object's persisted fields.
+        const { zIndex } = fields as { zIndex?: unknown };
+        if (typeof zIndex !== 'number' || !Number.isFinite(zIndex)) continue;
+        const safeZIndex = Math.min(Z_MAX, Math.max(Z_MIN, zIndex));
+        updatedObjects[objectId] = { ...existing, zIndex: safeZIndex } as BoardObject;
       }
 
       return this.update(fullId, { objects: updatedObjects });

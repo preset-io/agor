@@ -56,9 +56,12 @@ export function sanitizeZIndex(value: unknown, fallback: number): number {
  * same-band peers while selected, then restores to its base on deselect. Single
  * source of truth for the selection bump (used by both the SessionCanvas paint
  * pass and the onNodesChange select handler).
+ *
+ * The +1 bump is clamped to BOARD_OBJECT_Z_MAX: a zone legitimately at base 499
+ * must not render at 500 (the card layer) while selected.
  */
 export function selectedZIndex(base: number, selected: boolean): number {
-  return selected ? base + 1 : base;
+  return selected ? Math.min(base + 1, BOARD_OBJECT_Z_MAX) : base;
 }
 
 /** Layer operations available from the zone toolbar. */
