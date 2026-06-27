@@ -14,6 +14,7 @@
  * agor.db, and the JWT secret). See `terminal:*` handlers below.
  */
 
+import { type ResolvedMultiTenancyConfig, resolveTenantContext } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -22,6 +23,7 @@ import type {
   CursorMovedEvent,
   CursorMoveEvent,
   PresenceUpdatedEvent,
+  TenantContext,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
@@ -60,7 +62,9 @@ interface FeathersSocket extends Socket {
     isService?: boolean;
     currentBoardId?: string;
     lastPresenceEmitAt?: number;
+    tenant?: TenantContext;
   };
+  handshake: Socket['handshake'] & { headers?: Record<string, string | string[] | undefined> };
 }
 
 export interface SocketIOOptions {
@@ -93,6 +97,8 @@ export interface SocketIOOptions {
    * simply skipped when omitted.
    */
   buildInfo?: BuildInfo;
+  /** Resolved app-level multi-tenancy configuration for socket tenant binding. */
+  multiTenancy?: ResolvedMultiTenancyConfig;
 }
 
 /**
@@ -109,6 +115,15 @@ export interface SocketIOOptions {
 export interface SocketAuthState {
   userId: string | null;
   isService: boolean;
+  tenant?: TenantContext;
+}
+
+function socketAuthState(
+  userId: string | null,
+  isService: boolean,
+  tenant?: TenantContext
+): SocketAuthState {
+  return tenant ? { userId, isService, tenant } : { userId, isService };
 }
 
 /**
@@ -136,15 +151,15 @@ export function getSocketAuthState(socket: Socket): SocketAuthState {
   const s = socket as FeathersSocket;
   const user = s.feathers?.user;
   if (user?._isServiceAccount === true) {
-    return { userId: null, isService: true };
+    return socketAuthState(null, true, s.data?.tenant);
   }
   if (s.data?.isService === true) {
-    return { userId: null, isService: true };
+    return socketAuthState(null, true, s.data?.tenant);
   }
   if (user?.user_id) {
-    return { userId: user.user_id, isService: false };
+    return socketAuthState(user.user_id, false, s.data?.tenant);
   }
-  return { userId: null, isService: false };
+  return socketAuthState(null, false, s.data?.tenant);
 }
 
 /**
@@ -195,6 +210,14 @@ export function createTokenBucket(
  */
 export function userRoomName(userId: string): string {
   return `user:${userId}`;
+}
+
+export function tenantChannelName(tenantId: string): string {
+  return `tenant:${tenantId}`;
+}
+
+export function tenantUserChannelName(tenantId: string, userId: string): string {
+  return `tenant:${tenantId}:user:${userId}`;
 }
 
 /**
@@ -260,6 +283,7 @@ export function createSocketIOConfig(
   getSocketServer: () => Server | null;
 } {
   const { corsOrigin, jwtSecret, credentialsAllowed, buildInfo } = options;
+  const multiTenancy = options.multiTenancy;
   // Default ON to mirror the daemon-wide default (see register-hooks.ts).
   const webTerminalEnabled = options.webTerminalEnabled !== false;
 
@@ -324,6 +348,13 @@ export function createSocketIOConfig(
           return next(new Error('Invalid token type'));
         }
 
+        const tenant = multiTenancy
+          ? resolveTenantContext(multiTenancy, {
+              authPayload: decoded,
+              headers: socket.handshake.headers as Record<string, unknown>,
+            })
+          : undefined;
+
         // Handle service tokens (used by executor for terminal streaming, git operations, etc.)
         if (tokenType === 'service') {
           // Service tokens don't have a user - they authenticate the executor process.
@@ -347,6 +378,10 @@ export function createSocketIOConfig(
           // Keep the handshake fast-path marker too — older code and any
           // future callers that only look at socket.data still see it.
           fs.data.isService = true;
+          if (tenant) {
+            connection.tenant = tenant;
+            if (connection.data) connection.data.tenant = tenant;
+          }
           console.log(
             `🔐 WebSocket authenticated (service): ${socket.id} (role: ${decoded.role || 'unknown'})`
           );
@@ -357,7 +392,12 @@ export function createSocketIOConfig(
         const user = await app.service('users').get(decoded.sub as import('@agor/core/types').UUID);
 
         // Attach user to socket (FeathersJS convention)
-        (socket as FeathersSocket).feathers = { user };
+        const fs = socket as FeathersSocket;
+        fs.feathers = { user: tenant ? { ...user, tenant_id: tenant.tenant_id } : user };
+        if (tenant) {
+          connection.tenant = tenant;
+          if (connection.data) connection.data.tenant = tenant;
+        }
 
         console.log(`🔐 WebSocket authenticated: ${socket.id} (user: ${shortId(user.user_id)})`);
         next();
@@ -791,7 +831,10 @@ export function createSocketIOConfig(
  *
  * @param app - FeathersJS application instance
  */
-export function configureChannels(app: Application): void {
+export function configureChannels(
+  app: Application,
+  options: { multiTenancy?: ResolvedMultiTenancyConfig } = {}
+): void {
   // SECURITY: Do NOT join connections to any channel on connect.
   // Unauthenticated sockets should not receive broadcast events.
   // They will be joined to 'authenticated' channel only after successful login.
@@ -804,11 +847,36 @@ export function configureChannels(app: Application): void {
   // This is the only way to receive broadcast events
   app.on('login', (authResult: unknown, context: { connection?: unknown }) => {
     if (context.connection) {
-      const result = authResult as { user?: { user_id?: string; email?: string } };
+      const result = authResult as {
+        user?: { user_id?: string; email?: string; tenant_id?: string };
+        authentication?: { payload?: unknown };
+      };
       console.debug('✅ Login event fired:', result.user?.user_id, result.user?.email);
 
-      // SECURITY: Only now does the connection receive broadcast events
+      const connection = context.connection as FeathersSocket & { tenant?: TenantContext };
+      const tenant = options.multiTenancy
+        ? resolveTenantContext(options.multiTenancy, {
+            params: {
+              user: result.user,
+              authentication: { payload: result.authentication?.payload },
+            },
+          })
+        : undefined;
+      if (tenant) {
+        connection.tenant = tenant;
+        if (connection.data) connection.data.tenant = tenant;
+      }
+
+      // SECURITY: Only now does the connection receive broadcast events.
       app.channel('authenticated').join(context.connection as never);
+      if (tenant) {
+        app.channel(tenantChannelName(tenant.tenant_id)).join(context.connection as never);
+        if (result.user?.user_id) {
+          app
+            .channel(tenantUserChannelName(tenant.tenant_id, result.user.user_id))
+            .join(context.connection as never);
+        }
+      }
     }
   });
 
@@ -817,8 +885,20 @@ export function configureChannels(app: Application): void {
     if (context.connection) {
       console.log('👋 Logout event fired');
 
+      const connection = context.connection as FeathersSocket & { tenant?: TenantContext };
+      const tenant = connection.data?.tenant ?? connection.tenant;
+      const userId = connection.feathers?.user?.user_id;
+
       // Remove from authenticated channel - no more broadcast events
       app.channel('authenticated').leave(context.connection as never);
+      if (tenant) {
+        app.channel(tenantChannelName(tenant.tenant_id)).leave(context.connection as never);
+        if (userId) {
+          app
+            .channel(tenantUserChannelName(tenant.tenant_id, userId))
+            .leave(context.connection as never);
+        }
+      }
     }
   });
 }

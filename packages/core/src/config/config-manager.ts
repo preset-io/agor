@@ -12,6 +12,7 @@ import yaml from 'js-yaml';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { resolveExecutorHeartbeatConfig } from './executor-heartbeat';
+import { assertValidMultiTenancyConfig } from './multitenancy';
 import {
   type AgorConfig,
   BRANCH_STORAGE_MODES,
@@ -198,6 +199,8 @@ function validateConfig(config: AgorConfig): void {
     );
   }
 
+  assertValidMultiTenancyConfig(config);
+
   validateOptionalHttpUrl(
     config.external_launch as Record<string, unknown> | undefined,
     'login_redirect_url',
@@ -364,6 +367,10 @@ export function getDefaultConfig(): AgorConfig {
     },
     analytics: getDefaultAnalyticsConfig(),
     telemetry: {},
+    multi_tenancy: {
+      mode: 'static',
+      static_tenant_id: 'default',
+    },
   };
 }
 

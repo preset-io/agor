@@ -35,6 +35,7 @@ import {
   loadConfigFromFile,
   renderGitConfigParametersForLog,
   resolveGitConfigParameters,
+  resolveMultiTenancyConfig,
   resolveSecurity,
   saveConfig,
 } from '@agor/core/config';
@@ -165,6 +166,11 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     : options?.configPath
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
+
+  const multiTenancy = resolveMultiTenancyConfig(config);
+  console.log(
+    `🏢 Multi-tenancy: mode=${multiTenancy.mode} tenant=${multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : 'auth-resolved'}`
+  );
 
   // Set GIT_CONFIG_PARAMETERS before any child-process spawn so every git
   // invocation under Agor's control inherits it. See @agor/core/config
@@ -593,9 +599,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     // welcome event on every connect (and reconnect), so UI tabs can detect
     // FE/BE drift after a deploy without waiting for the next /health poll.
     buildInfo: DAEMON_BUILD_INFO,
+    multiTenancy,
   });
   app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
-  configureChannels(app);
+  configureChannels(app, { multiTenancy });
   configureSwagger(app, { version: DAEMON_VERSION, port: DAEMON_PORT });
 
   const { db } = await initializeDatabase(DB_PATH);

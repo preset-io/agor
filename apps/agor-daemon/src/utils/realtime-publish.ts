@@ -1,3 +1,8 @@
+import {
+  type ResolvedMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
+} from '@agor/core/config';
 import type { BranchRepository, SessionRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -9,6 +14,10 @@ import {
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
 } from './realtime-access-cache.js';
+
+function tenantChannelName(tenantId: string): string {
+  return `tenant:${tenantId}`;
+}
 
 const DEBUG_REALTIME_PUBLISH =
   process.env.AGOR_DEBUG_REALTIME_PUBLISH === '1' ||
@@ -34,6 +43,7 @@ type RealtimePublishOptions = {
   sessionsRepository: SessionRepository;
   accessCache?: RealtimeAccessCache;
   allowSuperadmin?: boolean;
+  multiTenancy?: ResolvedMultiTenancyConfig;
 };
 
 type PublishChannel = ReturnType<Application['channel']>;
@@ -314,6 +324,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       sessionsRepository: sessionsRepository as unknown as RealtimeAccessSessionRepository,
     }),
     allowSuperadmin = true,
+    multiTenancy,
   } = options;
 
   app.publish(async (data: unknown, context: HookContext) => {
@@ -328,13 +339,30 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     }
 
     const authenticated = app.channel('authenticated');
-    if (!branchRbacEnabled) return authenticated;
+    let tenantScoped = authenticated;
+    if (multiTenancy) {
+      try {
+        const tenant = resolveTenantContext(multiTenancy, { params: context.params });
+        tenantScoped = app.channel(tenantChannelName(tenant.tenant_id));
+      } catch (error) {
+        if (error instanceof TenantResolutionError) {
+          console.warn('[realtime] Suppressing event without tenant context', {
+            path: context.path,
+            event: context.event,
+            method: context.method,
+          });
+          return filterToServiceConnections(authenticated);
+        }
+        throw error;
+      }
+    }
+    if (!branchRbacEnabled) return tenantScoped;
 
     const scope = await resolvePublishScope(data, context, accessCache);
-    if (scope.kind === 'global') return authenticated;
-    if (scope.kind === 'serviceOnly') return filterToServiceConnections(authenticated);
+    if (scope.kind === 'global') return tenantScoped;
+    if (scope.kind === 'serviceOnly') return filterToServiceConnections(tenantScoped);
     if (scope.kind === 'users') {
-      return filterToUserIdsOrAdmins(authenticated, scope.userIds, allowSuperadmin);
+      return filterToUserIdsOrAdmins(tenantScoped, scope.userIds, allowSuperadmin);
     }
 
     if (!scope.branchId) {
@@ -343,7 +371,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         event: context.event,
         method: context.method,
       });
-      return filterToServiceConnections(authenticated);
+      return filterToServiceConnections(tenantScoped);
     }
 
     const visibility = await accessCache.getBranchVisibility(scope.branchId);
@@ -353,13 +381,13 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         event: context.event,
         method: context.method,
       });
-      return filterToServiceConnections(authenticated);
+      return filterToServiceConnections(tenantScoped);
     }
 
     if (visibility.mode === 'allAuthenticated') {
-      return authenticated;
+      return tenantScoped;
     }
 
-    return filterToUserIdsOrSuperadmins(authenticated, visibility.userIds, allowSuperadmin);
+    return filterToUserIdsOrSuperadmins(tenantScoped, visibility.userIds, allowSuperadmin);
   });
 }

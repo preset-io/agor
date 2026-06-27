@@ -11,6 +11,7 @@ import {
   type AgorConfig,
   isUnixImpersonationEnabled,
   loadConfig,
+  resolveMultiTenancyConfig,
   type UnknownJson,
   validateRepoEnvironment,
   wrapV1AsV2,
@@ -398,6 +399,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       return undefined;
     }
   };
+
+  const multiTenancy = resolveMultiTenancyConfig(config);
 
   const realtimeAccessCache = new RealtimeAccessCache({
     branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
@@ -2092,6 +2095,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     sessionsRepository,
     accessCache: realtimeAccessCache,
     allowSuperadmin: superadminOpts.allowSuperadmin,
+    multiTenancy,
   });
 
   // ============================================================================

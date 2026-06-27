@@ -19,11 +19,12 @@ class FakeChannel {
 
 function makeApp(
   connections: unknown[],
-  services: Record<string, { get: (id: string) => Promise<unknown> }> = {}
+  services: Record<string, { get: (id: string) => Promise<unknown> }> = {},
+  channels: Record<string, unknown[]> = {}
 ) {
   let publishFn: ((data: unknown, context: any) => unknown) | undefined;
   const app = {
-    channel: vi.fn(() => new FakeChannel(connections)),
+    channel: vi.fn((name: string) => new FakeChannel(channels[name] ?? connections)),
     publish: vi.fn((fn) => {
       publishFn = fn;
     }),
@@ -88,6 +89,57 @@ describe('configureRealtimePublish', () => {
     );
 
     expect(channel.connections).toHaveLength(2);
+  });
+
+  it('scopes broadcasts to the resolved tenant channel in static multi-tenancy mode', async () => {
+    const tenantUser = user('tenant-user');
+    const otherTenantUser = user('other-tenant-user');
+    const app = makeApp(
+      [{ user: tenantUser }, { user: otherTenantUser }],
+      {},
+      {
+        authenticated: [{ user: tenantUser }, { user: otherTenantUser }],
+        'tenant:default': [{ user: tenantUser }],
+      }
+    );
+    const r = repos({ branch: branch('b1'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: { mode: 'static', static_tenant_id: 'default' as any },
+      ...r,
+    });
+
+    const channel = await app.runPublish(
+      { branch_id: 'b1' },
+      { path: 'branches', method: 'patch', event: 'patched', params: {} }
+    );
+
+    expect(channel.connections).toEqual([{ user: tenantUser }]);
+  });
+
+  it('fails closed for required_from_auth realtime events without tenant context', async () => {
+    const member = user('member');
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([{ user: member }, service]);
+    const r = repos({ branch: branch('b1'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    const channel = await app.runPublish(
+      { branch_id: 'b1' },
+      { path: 'branches', method: 'patch', event: 'patched', params: {} }
+    );
+
+    expect(channel.connections).toEqual([service]);
   });
 
   it('filters branch events to users with view access when RBAC is enabled', async () => {

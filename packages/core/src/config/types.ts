@@ -1085,6 +1085,28 @@ export interface AgorKnowledgeSettings {
 }
 
 /**
+ * App-level multi-tenancy settings.
+ *
+ * `static` preserves today's single-tenant behavior: every request belongs to
+ * one configured tenant id. `required_from_auth` is for hosted/cloud mode and
+ * must resolve a tenant from trusted authentication or request context; missing
+ * tenant context should fail closed before tenant-owned data is accessed.
+ */
+export interface AgorMultiTenancySettings {
+  /** Multi-tenancy mode. Defaults to `static`. */
+  mode?: 'static' | 'required_from_auth';
+
+  /** Static tenant id for self-hosted/single-instance mode. Defaults to `default`. */
+  static_tenant_id?: string;
+
+  /** JWT/user claim name to read in `required_from_auth` mode, e.g. `tenant_id`. */
+  auth_claim?: string;
+
+  /** Optional trusted HTTP header set by an auth/edge layer, e.g. `x-agor-tenant-id`. */
+  trusted_header?: string;
+}
+
+/**
  * Complete Agor configuration
  */
 export interface AgorConfig {
@@ -1135,6 +1157,9 @@ export interface AgorConfig {
 
   /** Onboarding settings (CLI init → UI wizard) */
   onboarding?: AgorOnboardingSettings;
+
+  /** App-level multi-tenancy settings. Defaults to static/default tenant. */
+  multi_tenancy?: AgorMultiTenancySettings;
 
   /**
    * HTTP proxy passthroughs for third-party APIs that don't return CORS
