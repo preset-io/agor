@@ -9,6 +9,9 @@ import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 const { TextArea } = Input;
 const { Text } = Typography;
 
+const DEFAULT_AGENT_UPLOAD_MESSAGE =
+  'Note: the user uploaded file(s): {filepath}\n\nPlease review and use them as context for this task.';
+
 export interface UploadedFile {
   filename: string;
   path: string;
@@ -38,7 +41,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const { showSuccess, showWarning, showError } = useThemedMessage();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [notifyAgent, setNotifyAgent] = useState(true);
-  const [agentMessage, setAgentMessage] = useState('Please review this file: {filepath}');
+  const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_UPLOAD_MESSAGE);
   const [uploading, setUploading] = useState(false);
 
   // Mirror fileList in a ref so cleanup (unmount/reset) can revoke object URLs
@@ -162,7 +165,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       // Reset and close
       resetFileList();
       setNotifyAgent(true);
-      setAgentMessage('Please review this file: {filepath}');
+      setAgentMessage(DEFAULT_AGENT_UPLOAD_MESSAGE);
       onClose();
     } catch (error) {
       console.error('Upload error:', error);
@@ -175,7 +178,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const handleCancel = () => {
     resetFileList();
     setNotifyAgent(true);
-    setAgentMessage('Please review this file: {filepath}');
+    setAgentMessage(DEFAULT_AGENT_UPLOAD_MESSAGE);
     onClose();
   };
 
@@ -207,6 +210,11 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         >
           <Button icon={<UploadOutlined />}>Select Files</Button>
         </Upload>
+
+        <Text type="secondary" style={{ fontSize: '12px' }}>
+          Files are uploaded to <Text code>~/.agor/uploads/</Text>. The agent receives the full file
+          path and can copy or move it into the branch if needed.
+        </Text>
 
         {/* Notify agent option */}
         <div>
