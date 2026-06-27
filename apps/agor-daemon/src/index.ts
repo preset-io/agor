@@ -632,7 +632,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
         },
       });
     }
-    startOpenSourceTelemetryUsageSummaryInterval();
+    startOpenSourceTelemetryUsageSummaryInterval(db);
     config.telemetry = { ...config.telemetry, last_reported_version: DAEMON_VERSION };
     saveConfig(pruneDefaultOpenSourceTelemetryDestination(config)).catch((error) => {
       console.warn(

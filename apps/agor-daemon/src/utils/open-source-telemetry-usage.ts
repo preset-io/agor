@@ -1,95 +1,178 @@
+import { loadConfig, saveConfig } from '@agor/core/config';
+import {
+  and,
+  branches,
+  count,
+  type Database,
+  eq,
+  gte,
+  lt,
+  select,
+  sessions,
+  tasks,
+} from '@agor/core/db';
 import {
   normalizeTelemetryModelFamily,
   normalizeTelemetryProvider,
   openSourceTelemetryLogger,
+  pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
 import type { Branch, Session, Task } from '@agor/core/types';
 
-interface UsageCounters {
-  promptCount: number;
-  activeUsers: Set<string>;
-  sessionCreatedCount: number;
-  branchCreatedCount: number;
-  taskCountByAgenticTool: Record<string, number>;
-  taskCountByProvider: Record<string, number>;
-  taskCountByModelFamily: Record<string, number>;
-}
+const ONE_HOUR_MS = 60 * 60 * 1000;
+const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
-function emptyCounters(): UsageCounters {
-  return {
-    promptCount: 0,
-    activeUsers: new Set<string>(),
-    sessionCreatedCount: 0,
-    branchCreatedCount: 0,
-    taskCountByAgenticTool: {},
-    taskCountByProvider: {},
-    taskCountByModelFamily: {},
-  };
+interface TaskUsageRow {
+  taskData: {
+    model?: string;
+  } | null;
+  agenticTool: string | null;
+  sessionData: {
+    model_config?: Session['model_config'];
+  } | null;
 }
-
-let counters = emptyCounters();
 
 function increment(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1;
 }
 
-export function recordOpenSourceTelemetryTaskCreated(task: Task): void {
-  counters.promptCount += 1;
-  if (task.created_by) counters.activeUsers.add(task.created_by);
+function previousUtcDayRange(now = new Date()): { day: string; start: Date; end: Date } {
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const start = new Date(end.getTime() - ONE_DAY_MS);
+  return { day: start.toISOString().slice(0, 10), start, end };
 }
 
-export function recordOpenSourceTelemetrySessionCreated(session: Session): void {
-  counters.sessionCreatedCount += 1;
-  if (session.created_by) counters.activeUsers.add(session.created_by);
-  increment(counters.taskCountByAgenticTool, session.agentic_tool ?? 'unknown');
-  increment(
-    counters.taskCountByProvider,
-    normalizeTelemetryProvider(session.model_config?.provider)
-  );
-  increment(
-    counters.taskCountByModelFamily,
-    normalizeTelemetryModelFamily(session.model_config?.model)
-  );
+async function countCreatedRows(
+  db: Database,
+  table: typeof tasks | typeof sessions | typeof branches,
+  start: Date,
+  end: Date
+): Promise<number> {
+  const row = await select(db, { value: count() })
+    .from(table)
+    .where(and(gte(table.created_at, start), lt(table.created_at, end)))
+    .one();
+  return Number(row?.value ?? 0);
 }
 
-export function recordOpenSourceTelemetryBranchCreated(branch: Branch): void {
-  counters.branchCreatedCount += 1;
-  if (branch.created_by) counters.activeUsers.add(branch.created_by);
+async function addDistinctCreatedBy(
+  db: Database,
+  table: typeof tasks | typeof sessions | typeof branches,
+  start: Date,
+  end: Date,
+  users: Set<string>
+): Promise<void> {
+  const rows = await select(db, { createdBy: table.created_by })
+    .from(table)
+    .where(and(gte(table.created_at, start), lt(table.created_at, end)))
+    .groupBy(table.created_by)
+    .all();
+
+  for (const row of rows as Array<{ createdBy: string | null }>) {
+    if (row.createdBy) users.add(row.createdBy);
+  }
 }
 
-export function flushOpenSourceTelemetryUsageSummary(): void {
+async function getTaskUsageRows(db: Database, start: Date, end: Date): Promise<TaskUsageRow[]> {
+  return (await select(db, {
+    taskData: tasks.data,
+    agenticTool: sessions.agentic_tool,
+    sessionData: sessions.data,
+  })
+    .from(tasks)
+    .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
+    .where(and(gte(tasks.created_at, start), lt(tasks.created_at, end)))
+    .all()) as TaskUsageRow[];
+}
+
+export function recordOpenSourceTelemetryTaskCreated(_task: Task): void {
+  // Usage summaries are DB-backed for restart-safe daily distinct counts.
+}
+
+export function recordOpenSourceTelemetrySessionCreated(_session: Session): void {
+  // Usage summaries are DB-backed for restart-safe daily distinct counts.
+}
+
+export function recordOpenSourceTelemetryBranchCreated(_branch: Branch): void {
+  // Usage summaries are DB-backed for restart-safe daily distinct counts.
+}
+
+export async function flushOpenSourceTelemetryUsageSummary(db: Database): Promise<void> {
   if (!openSourceTelemetryLogger.isEnabled()) return;
-  if (
-    counters.promptCount === 0 &&
-    counters.sessionCreatedCount === 0 &&
-    counters.branchCreatedCount === 0
-  ) {
-    return;
+
+  const { day, start, end } = previousUtcDayRange();
+  const config = await loadConfig();
+  if (config.telemetry?.last_usage_summary_day === day) return;
+
+  const [promptCount, branchCreatedCount, sessionCreatedCount, taskRows] = await Promise.all([
+    countCreatedRows(db, tasks, start, end),
+    countCreatedRows(db, branches, start, end),
+    countCreatedRows(db, sessions, start, end),
+    getTaskUsageRows(db, start, end),
+  ]);
+
+  const activeUsers = new Set<string>();
+  await Promise.all([
+    addDistinctCreatedBy(db, tasks, start, end, activeUsers),
+    addDistinctCreatedBy(db, sessions, start, end, activeUsers),
+    addDistinctCreatedBy(db, branches, start, end, activeUsers),
+  ]);
+
+  const taskCountByAgenticTool: Record<string, number> = {};
+  const taskCountByProvider: Record<string, number> = {};
+  const taskCountByModelFamily: Record<string, number> = {};
+
+  for (const task of taskRows) {
+    increment(taskCountByAgenticTool, task.agenticTool ?? 'unknown');
+    increment(
+      taskCountByProvider,
+      normalizeTelemetryProvider(task.sessionData?.model_config?.provider)
+    );
+    increment(
+      taskCountByModelFamily,
+      normalizeTelemetryModelFamily(task.taskData?.model ?? task.sessionData?.model_config?.model)
+    );
   }
 
-  openSourceTelemetryLogger.track({
-    event: 'usage.daily_summary',
-    properties: {
-      prompt_count: counters.promptCount,
-      active_user_count: counters.activeUsers.size,
-      session_created_count: counters.sessionCreatedCount,
-      branch_created_count: counters.branchCreatedCount,
-      task_count_by_agentic_tool: counters.taskCountByAgenticTool,
-      task_count_by_provider: counters.taskCountByProvider,
-      task_count_by_model_family: counters.taskCountByModelFamily,
-    },
-  });
-  counters = emptyCounters();
+  if (promptCount > 0 || sessionCreatedCount > 0 || branchCreatedCount > 0) {
+    openSourceTelemetryLogger.track({
+      event: 'usage.daily_summary',
+      properties: {
+        day,
+        period: 'previous_utc_day',
+        prompt_count: promptCount,
+        active_user_count: activeUsers.size,
+        session_created_count: sessionCreatedCount,
+        branch_created_count: branchCreatedCount,
+        task_count_by_agentic_tool: taskCountByAgenticTool,
+        task_count_by_provider: taskCountByProvider,
+        task_count_by_model_family: taskCountByModelFamily,
+      },
+    });
+    await openSourceTelemetryLogger.flush();
+  }
+
+  config.telemetry = { ...config.telemetry, last_usage_summary_day: day };
+  await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
 }
 
-export function startOpenSourceTelemetryUsageSummaryInterval(): NodeJS.Timeout {
-  const timer = setInterval(
-    () => {
-      flushOpenSourceTelemetryUsageSummary();
-      void openSourceTelemetryLogger.flush();
-    },
-    24 * 60 * 60 * 1000
-  );
+export function startOpenSourceTelemetryUsageSummaryInterval(db: Database): NodeJS.Timeout {
+  // Check hourly, but emit at most once per UTC day. The DB query only runs
+  // when the previous day has not yet been reported, keeping steady-state
+  // overhead to one config read per hour.
+  const run = (): void => {
+    flushOpenSourceTelemetryUsageSummary(db).catch((error) => {
+      console.warn(
+        '[telemetry] failed to emit usage summary:',
+        error instanceof Error ? error.message : String(error)
+      );
+    });
+  };
+
+  const startupTimer = setTimeout(run, 30_000);
+  startupTimer.unref?.();
+
+  const timer = setInterval(run, ONE_HOUR_MS);
   timer.unref?.();
   return timer;
 }
