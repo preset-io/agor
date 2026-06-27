@@ -26,6 +26,7 @@ export default class Telemetry extends Command {
     this.log('Commands:');
     this.log('  agor telemetry on');
     this.log('  agor telemetry off');
+    this.log('  agor telemetry test');
   }
 }
 

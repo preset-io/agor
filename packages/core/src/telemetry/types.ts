@@ -4,6 +4,7 @@ export type OpenSourceTelemetryEventName =
   | 'install.completed'
   | 'daemon.active'
   | 'daemon.upgraded'
+  | 'telemetry.test'
   | 'usage.daily_summary';
 
 export type TelemetryInstallChannel = 'npm' | 'docker' | 'source' | 'homebrew' | 'unknown';
