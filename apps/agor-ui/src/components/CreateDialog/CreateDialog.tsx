@@ -76,7 +76,7 @@ export interface CreateDialogProps {
   defaultTab?: ActiveTab;
   onCreateBranch: (config: BranchTabConfig) => void | Promise<void>;
   onCreateBoard: (board: Partial<Board>) => void | Promise<void>;
-  onCreateRepo: (data: CreateRepoRequest) => void | Promise<void>;
+  onCreateRepo: (data: CreateRepoRequest) => unknown;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateAssistant: (
     result: AssistantTabResult,
@@ -90,7 +90,7 @@ export interface CreateDialogProps {
  *  component) as part of its work — blocking the close on that would
  *  delay the modal teardown. Rejections are swallowed: each parent
  *  handler already surfaces its own errors via toasts. */
-function fireAndForget(result: void | Promise<void>) {
+function fireAndForget(result: unknown) {
   Promise.resolve(result).catch(() => {});
 }
 

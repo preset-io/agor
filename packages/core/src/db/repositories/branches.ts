@@ -44,6 +44,7 @@ import {
   schedules,
 } from '../schema';
 import {
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
@@ -114,42 +115,45 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   private rowToBranch(row: BranchRow, baseUrl?: string): Branch {
     const branchId = row.branch_id as BranchID;
     const url = baseUrl && row.board_id ? getBranchUrl(branchId, baseUrl) : null;
-    return {
-      branch_id: branchId,
-      repo_id: row.repo_id as UUID,
-      created_at: new Date(row.created_at).toISOString(),
-      updated_at: row.updated_at
-        ? new Date(row.updated_at).toISOString()
-        : new Date(row.created_at).toISOString(),
-      created_by: row.created_by as UUID,
-      name: row.name,
-      ref: row.ref,
-      ref_type: row.ref_type ?? 'branch',
-      branch_unique_id: row.branch_unique_id,
-      start_command: row.start_command ?? undefined, // Static environment fields
-      stop_command: row.stop_command ?? undefined,
-      nuke_command: row.nuke_command ?? undefined,
-      health_check_url: row.health_check_url ?? undefined,
-      app_url: row.app_url ?? undefined,
-      logs_command: row.logs_command ?? undefined,
-      environment_variant: row.environment_variant ?? undefined,
-      board_id: (row.board_id as BoardID | null) ?? undefined, // Top-level column
-      needs_attention: Boolean(row.needs_attention), // Convert SQLite integer (0/1) to boolean
-      archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
-      archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
-      archived_by: (row.archived_by as UUID | null) ?? undefined,
-      filesystem_status: row.filesystem_status ?? undefined,
-      // RBAC fields
-      permission_source: row.permission_source ?? 'override',
-      others_can: row.others_can ?? undefined,
-      others_fs_access: row.others_fs_access ?? undefined,
-      unix_group: row.unix_group ?? undefined,
-      // Branch storage mode
-      storage_mode: row.storage_mode ?? 'worktree',
-      clone_depth: row.clone_depth ?? undefined,
-      ...row.data,
-      url,
-    };
+    return attachHiddenTenant(
+      {
+        branch_id: branchId,
+        repo_id: row.repo_id as UUID,
+        created_at: new Date(row.created_at).toISOString(),
+        updated_at: row.updated_at
+          ? new Date(row.updated_at).toISOString()
+          : new Date(row.created_at).toISOString(),
+        created_by: row.created_by as UUID,
+        name: row.name,
+        ref: row.ref,
+        ref_type: row.ref_type ?? 'branch',
+        branch_unique_id: row.branch_unique_id,
+        start_command: row.start_command ?? undefined, // Static environment fields
+        stop_command: row.stop_command ?? undefined,
+        nuke_command: row.nuke_command ?? undefined,
+        health_check_url: row.health_check_url ?? undefined,
+        app_url: row.app_url ?? undefined,
+        logs_command: row.logs_command ?? undefined,
+        environment_variant: row.environment_variant ?? undefined,
+        board_id: (row.board_id as BoardID | null) ?? undefined, // Top-level column
+        needs_attention: Boolean(row.needs_attention), // Convert SQLite integer (0/1) to boolean
+        archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
+        archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+        archived_by: (row.archived_by as UUID | null) ?? undefined,
+        filesystem_status: row.filesystem_status ?? undefined,
+        // RBAC fields
+        permission_source: row.permission_source ?? 'override',
+        others_can: row.others_can ?? undefined,
+        others_fs_access: row.others_fs_access ?? undefined,
+        unix_group: row.unix_group ?? undefined,
+        // Branch storage mode
+        storage_mode: row.storage_mode ?? 'worktree',
+        clone_depth: row.clone_depth ?? undefined,
+        ...row.data,
+        url,
+      },
+      row
+    );
   }
 
   /**

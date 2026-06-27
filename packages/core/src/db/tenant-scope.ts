@@ -1,24 +1,13 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { sql } from 'drizzle-orm';
 import type { TenantID } from '../types/tenant';
+import { tenantDatabaseScope } from './tenant-context';
+
+export { getCurrentTenantDatabase, getCurrentTenantId } from './tenant-context';
+
 import type { Database } from './client';
 import { isPostgresDatabase } from './database-wrapper';
 
-interface TenantDatabaseScope {
-  db: Database;
-  tenantId?: TenantID | string;
-}
-
-const tenantDatabaseScope = new AsyncLocalStorage<TenantDatabaseScope>();
 const tenantScopedProxyTargets = new WeakMap<object, Database>();
-
-export function getCurrentTenantDatabase(): Database | undefined {
-  return tenantDatabaseScope.getStore()?.db;
-}
-
-export function getCurrentTenantId(): TenantID | string | undefined {
-  return tenantDatabaseScope.getStore()?.tenantId;
-}
 
 function scopedTarget(base: Database): Database {
   return tenantDatabaseScope.getStore()?.db ?? base;

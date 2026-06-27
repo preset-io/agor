@@ -622,7 +622,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   configureChannels(app, { multiTenancy });
   configureSwagger(app, { version: DAEMON_VERSION, port: DAEMON_PORT });
 
-  const { db } = await initializeDatabase(DB_PATH);
+  const { db } = await initializeDatabase(DB_PATH, {
+    tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
+  });
 
   // --------------------------------------------------------------------------
   // RBAC flags

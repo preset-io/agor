@@ -154,6 +154,38 @@ ALTER TABLE "kb_graph_edges" ADD COLUMN "tenant_id" text DEFAULT 'default' NOT N
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "kb_graph_edges_tenant_id_idx" ON "kb_graph_edges" ("tenant_id");
 --> statement-breakpoint
+ALTER TABLE "boards" DROP CONSTRAINT IF EXISTS "boards_slug_unique";
+--> statement-breakpoint
+ALTER TABLE "repos" DROP CONSTRAINT IF EXISTS "repos_slug_unique";
+--> statement-breakpoint
+ALTER TABLE "users" DROP CONSTRAINT IF EXISTS "users_email_unique";
+--> statement-breakpoint
+ALTER TABLE "gateway_channels" DROP CONSTRAINT IF EXISTS "gateway_channels_channel_key_unique";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "groups_slug_idx";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "app_variables_namespace_key_idx";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "uniq_thread_map_channel_thread";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "uniq_gateway_outbound_channel_thread";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "kb_namespaces_slug_idx";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "kb_namespace_acl_namespace_subject_idx";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "kb_documents_namespace_path_idx";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "kb_documents_uri_idx";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "kb_document_versions_document_version_idx";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "kb_embedding_spaces_provider_model_idx";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "kb_graph_nodes_uri_idx";
+--> statement-breakpoint
+DROP INDEX IF EXISTS "kb_graph_edges_source_target_type_idx";
+--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "boards_tenant_slug_unique" ON "boards" ("tenant_id", "slug");
 --> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "repos_tenant_slug_unique" ON "repos" ("tenant_id", "slug");

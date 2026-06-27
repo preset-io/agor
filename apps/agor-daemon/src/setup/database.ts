@@ -12,8 +12,10 @@ import {
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
   formatPendingMigrationsMessage,
+  runWithTenantDatabaseScope,
   seedInitialData,
 } from '@agor/core/db';
+import type { TenantID } from '@agor/core/types';
 import { extractDbFilePath } from '@agor/core/utils/path';
 import { logFirstRunAdminBootstrap, runFirstRunAdminBootstrap } from './first-run-admin.js';
 
@@ -98,7 +100,10 @@ async function checkAndReportMigrations(
  * @param dbPath - Database connection string
  * @returns Initialized database instance
  */
-export async function initializeDatabase(dbPath: string): Promise<DatabaseInitResult> {
+export async function initializeDatabase(
+  dbPath: string,
+  options: { tenantId?: TenantID | string } = {}
+): Promise<DatabaseInitResult> {
   console.log(`📦 Connecting to database: ${dbPath}`);
 
   // Ensure directory exists for SQLite
@@ -106,23 +111,26 @@ export async function initializeDatabase(dbPath: string): Promise<DatabaseInitRe
 
   // Create database with foreign keys enabled
   const db = await createDatabaseAsync({ url: dbPath });
+  const scopedDb = createTenantScopedDatabaseProxy(db);
 
   // Check migrations (exits if pending)
   await checkAndReportMigrations(db, dbPath);
 
-  // Seed initial data (idempotent - only creates if missing)
-  console.log('🌱 Seeding initial data...');
-  await seedInitialData(db);
+  await runWithTenantDatabaseScope(scopedDb, options.tenantId, async () => {
+    // Seed initial data (idempotent - only creates if missing). In static
+    // Postgres deployments, scope this to the configured tenant so changing
+    // multi_tenancy.static_tenant_id starts from a clean tenant-local slate.
+    console.log('🌱 Seeding initial data...');
+    await seedInitialData(scopedDb);
 
-  // First-run admin bootstrap: create a default admin if no users exist, and
-  // re-attribute any legacy `created_by='anonymous'` rows to a real user. This
-  // is the upgrade path for installs that previously ran in (now-removed)
-  // anonymous mode — their data isn't orphaned, and they get clear credentials
-  // written to disk on first start.
-  const bootstrapResult = await runFirstRunAdminBootstrap(db);
-  logFirstRunAdminBootstrap(bootstrapResult);
+    // First-run admin bootstrap: create a default admin if no users exist in
+    // the current tenant, and re-attribute any legacy `created_by='anonymous'`
+    // rows to a real user.
+    const bootstrapResult = await runFirstRunAdminBootstrap(scopedDb);
+    logFirstRunAdminBootstrap(bootstrapResult);
+  });
 
   console.log('✅ Database ready');
 
-  return { db: createTenantScopedDatabaseProxy(db) };
+  return { db: scopedDb };
 }

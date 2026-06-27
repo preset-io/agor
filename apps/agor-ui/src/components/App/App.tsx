@@ -127,7 +127,7 @@ export interface AppProps {
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
   onUnarchiveBoard?: (boardId: string) => void;
-  onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
+  onCreateRepo?: (data: CreateRepoRequest) => unknown;
   onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Database } from './client';
+import { insert } from './database-wrapper';
 import { createTenantScopedDatabaseProxy, runWithTenantDatabaseScope } from './tenant-scope';
 
 describe('tenant-scoped database proxy', () => {
@@ -88,5 +89,39 @@ describe('tenant-scoped database proxy', () => {
     });
 
     expect(base.transaction).not.toHaveBeenCalled();
+  });
+
+  it('stamps tenant_id into wrapped inserts for tenant-aware tables', async () => {
+    const captured: unknown[] = [];
+    const tx = {
+      execute: vi.fn(async () => []),
+      insert: vi.fn(() => ({
+        values: vi.fn((value: unknown) => {
+          captured.push(value);
+          return {};
+        }),
+      })),
+    };
+    const base = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(tx)),
+    };
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+    const tenantAwareTable = { tenant_id: {} } as never;
+
+    await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
+      insert(db, tenantAwareTable).values({ id: 'row-1', name: 'Example' });
+      insert(db, tenantAwareTable).values([
+        { id: 'row-2' },
+        { id: 'row-3', tenant_id: 'explicit' },
+      ]);
+    });
+
+    expect(captured).toEqual([
+      { tenant_id: 'tenant-a', id: 'row-1', name: 'Example' },
+      [
+        { tenant_id: 'tenant-a', id: 'row-2' },
+        { id: 'row-3', tenant_id: 'explicit' },
+      ],
+    ]);
   });
 });

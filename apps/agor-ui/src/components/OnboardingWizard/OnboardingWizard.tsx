@@ -28,6 +28,7 @@ import type {
 import {
   getDefaultPermissionMode,
   mapToCodexPermissionConfig,
+  shortId,
   TOOL_API_KEY_NAMES,
 } from '@agor-live/client';
 import { CheckCircleOutlined, KeyOutlined } from '@ant-design/icons';
@@ -394,14 +395,25 @@ export function OnboardingWizard({
   const findExistingAssistantBranch = useCallback(
     async (repoId: string, branchName: string): Promise<Branch | null> => {
       for (const branch of branches) {
-        if (branch.repo_id === repoId && branch.name === branchName && !branch.archived) {
+        if (
+          branch.repo_id === repoId &&
+          branch.name === branchName &&
+          !branch.archived &&
+          branch.filesystem_status !== 'failed'
+        ) {
           return branch;
         }
       }
 
       try {
         const result = await client?.service('branches').find({
-          query: { repo_id: repoId, name: branchName, archived: false, $limit: 1 },
+          query: {
+            repo_id: repoId,
+            name: branchName,
+            archived: false,
+            filesystem_status: { $ne: 'failed' },
+            $limit: 1,
+          },
         });
         const branches = Array.isArray(result) ? result : (result?.data ?? []);
         return (branches[0] as Branch | undefined) ?? null;
@@ -479,19 +491,51 @@ export function OnboardingWizard({
           frameworkRepo: FRAMEWORK_REPO_SLUG,
           createdViaOnboarding: true,
         };
-        const existingBranch = await findExistingAssistantBranch(repoId, defaultBranchName);
-        const branch =
-          existingBranch ??
-          (await onCreateBranch(repoId, {
-            name: defaultBranchName,
-            ref: defaultBranchName,
-            createBranch: true,
-            sourceBranch,
-            pullLatest: true,
-            boardId,
-            custom_context: { assistant: assistantConfig },
-          }));
-        if (!branch?.branch_id) throw new Error('Failed to create assistant branch.');
+        const fallbackBranchSuffix = user?.user_id
+          ? shortId(user.user_id)
+          : Date.now().toString(36).slice(-6);
+        const uniqueDefaultBranchName = sanitizeBranchName(
+          `${defaultBranchName}-${fallbackBranchSuffix}`
+        );
+        const branchNameCandidates = [uniqueDefaultBranchName, defaultBranchName];
+        let branch: Branch | null = null;
+        let existingBranch: Branch | null = null;
+        let lastCreateError: unknown;
+
+        for (const branchName of branchNameCandidates) {
+          existingBranch = await findExistingAssistantBranch(repoId, branchName);
+          if (existingBranch) {
+            branch = existingBranch;
+            break;
+          }
+
+          try {
+            branch = await onCreateBranch(repoId, {
+              name: branchName,
+              ref: branchName,
+              createBranch: true,
+              sourceBranch,
+              pullLatest: true,
+              boardId,
+              custom_context: { assistant: assistantConfig },
+            });
+            if (branch?.branch_id) break;
+          } catch (err) {
+            lastCreateError = err;
+            const message = err instanceof Error ? err.message : String(err);
+            if (
+              !message.includes('already exists') &&
+              !message.includes('in use by another branch')
+            ) {
+              throw err;
+            }
+          }
+        }
+
+        if (!branch?.branch_id) {
+          if (lastCreateError instanceof Error) throw lastCreateError;
+          throw new Error('Failed to create assistant branch.');
+        }
         if (existingBranch?.board_id && existingBranch.board_id !== boardId) {
           boardId = existingBranch.board_id;
           saveOnboardingProgress({ boardId });

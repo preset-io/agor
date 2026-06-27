@@ -44,7 +44,7 @@ export interface AssistantTabProps {
   repoById: Map<string, Repo>;
   onValidityChange: (valid: boolean) => void;
   formRef: React.MutableRefObject<(() => Promise<AssistantTabResult | null>) | null>;
-  onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
+  onCreateRepo?: (data: CreateRepoRequest) => unknown;
   availableAgents: AgenticToolOption[];
   mcpServerById?: Map<string, MCPServer>;
   currentUser?: User | null;
