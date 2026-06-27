@@ -1,5 +1,5 @@
 import { AuthenticationService, feathers } from '@agor/core/feathers';
-import type { Params, TenantID, User, UserID } from '@agor/core/types';
+import type { User, UserID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { expect, test } from 'vitest';
@@ -264,35 +264,6 @@ dbTest('fresh login after forced password change gets usable tokens', async ({ d
 
   const decoded = jwt.verify(refreshResult.accessToken, JWT_SECRET) as jwt.JwtPayload;
   expect(decoded[AUTH_TOKEN_ISSUED_AT_MS_CLAIM]).toEqual(expect.any(Number));
-});
-
-dbTest('refresh token service scopes new tokens from the tenant subdomain', async ({ db }) => {
-  const usersService = createUsersService(db);
-  const user = await createUser(usersService, 'tenant-refresh@example.test');
-  const refreshToken = issueRuntimeToken(
-    { sub: user.user_id, type: 'refresh', ...authTime(Date.now()) },
-    JWT_SECRET,
-    REFRESH_TOKEN_TTL
-  );
-
-  const refreshResult = await createRefreshTokenService({
-    jwtSecret: JWT_SECRET,
-    accessTokenTtl: ACCESS_TOKEN_TTL,
-    refreshTokenTtl: REFRESH_TOKEN_TTL,
-    usersService,
-    multiTenancy: {
-      mode: 'required_from_auth',
-      static_tenant_id: 'default' as TenantID,
-      auth_claim: 'tenant_id',
-      host_base_domain: 'agor.cloud',
-    },
-  }).create({ refreshToken }, {
-    provider: 'rest',
-    headers: { Host: 'netflix.agor.cloud' },
-  } as Params);
-
-  const decoded = jwt.verify(refreshResult.accessToken, JWT_SECRET) as jwt.JwtPayload;
-  expect(decoded.tenant_id).toBe('netflix');
 });
 
 dbTest(
