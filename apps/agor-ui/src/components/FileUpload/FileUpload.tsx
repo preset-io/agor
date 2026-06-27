@@ -212,8 +212,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         </Upload>
 
         <Text type="secondary" style={{ fontSize: '12px' }}>
-          Files are uploaded to <Text code>~/.agor/uploads/</Text>. The agent receives the full file
-          path and can copy or move it into the branch if needed.
+          Files are uploaded to <Text code>~/.agor/uploads/</Text>. When notified, the agent
+          receives the full file path and can copy or move it into the branch if needed.
         </Text>
 
         {/* Notify agent option */}
