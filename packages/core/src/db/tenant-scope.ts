@@ -64,6 +64,16 @@ export async function runWithTenantDatabaseScope<T>(
   tenantId: TenantID | string | undefined,
   work: () => Promise<T>
 ): Promise<T> {
+  const existingScope = tenantDatabaseScope.getStore();
+  if (existingScope) {
+    if (tenantId && existingScope.tenantId && tenantId !== existingScope.tenantId) {
+      throw new Error(
+        `Cannot enter tenant scope ${tenantId} from active tenant scope ${existingScope.tenantId}`
+      );
+    }
+    return work();
+  }
+
   const baseDb = unwrapTenantScopedDatabaseProxy(db);
 
   if (!isPostgresDatabase(baseDb) || !tenantId) {
