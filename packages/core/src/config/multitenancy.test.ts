@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   assertValidMultiTenancyConfig,
   DEFAULT_STATIC_TENANT_ID,
@@ -8,6 +8,9 @@ import {
 } from './multitenancy';
 
 describe('multi-tenancy config and tenant resolution', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   it('defaults to static/default tenant for single-tenant installs', () => {
     const config = resolveMultiTenancyConfig({});
     expect(config).toEqual({ mode: 'static', static_tenant_id: DEFAULT_STATIC_TENANT_ID });
@@ -20,9 +23,27 @@ describe('multi-tenancy config and tenant resolution', () => {
     ).toEqual({ tenant_id: 'acme', source: 'static' });
   });
 
-  it('requires an explicit resolver in required_from_auth mode', () => {
+  it('rejects required_from_auth on SQLite because SQLite has no tenant columns/RLS', () => {
+    vi.stubEnv('AGOR_DB_DIALECT', '');
+    vi.stubEnv('DATABASE_URL', '');
+
     expect(() =>
-      assertValidMultiTenancyConfig({ multi_tenancy: { mode: 'required_from_auth' } })
+      assertValidMultiTenancyConfig({
+        database: { dialect: 'sqlite' },
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      })
+    ).toThrow(/requires database\.dialect: postgresql/);
+  });
+
+  it('requires an explicit resolver in required_from_auth mode', () => {
+    vi.stubEnv('AGOR_DB_DIALECT', '');
+    vi.stubEnv('DATABASE_URL', '');
+
+    expect(() =>
+      assertValidMultiTenancyConfig({
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'required_from_auth' },
+      })
     ).toThrow(/auth_claim or multi_tenancy\.trusted_header/);
   });
 

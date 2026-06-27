@@ -38,6 +38,32 @@ function normalizeTenantId(value: unknown): TenantID | null {
   return trimmed.length > 0 ? (trimmed as TenantID) : null;
 }
 
+function detectPostgresUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return (
+    lower.startsWith('postgresql://') ||
+    lower.startsWith('postgres://') ||
+    lower.startsWith('pg://')
+  );
+}
+
+export function resolveMultiTenancyDatabaseDialect(
+  config: Pick<AgorConfig, 'database'> = {}
+): 'sqlite' | 'postgresql' {
+  if (process.env.AGOR_DB_DIALECT === 'postgresql' || process.env.AGOR_DB_DIALECT === 'sqlite') {
+    return process.env.AGOR_DB_DIALECT;
+  }
+  if (detectPostgresUrl(process.env.DATABASE_URL)) return 'postgresql';
+  if (config.database?.dialect === 'postgresql' || config.database?.dialect === 'sqlite') {
+    return config.database.dialect;
+  }
+  if (detectPostgresUrl(config.database?.postgresql?.url) || config.database?.postgresql?.host) {
+    return 'postgresql';
+  }
+  return 'sqlite';
+}
+
 function readClaim(payload: unknown, claim: string | undefined): TenantID | null {
   if (!claim || !payload || typeof payload !== 'object') return null;
   const value = (payload as Record<string, unknown>)[claim];
@@ -71,7 +97,9 @@ export function resolveMultiTenancyConfig(
   };
 }
 
-export function assertValidMultiTenancyConfig(config: Pick<AgorConfig, 'multi_tenancy'>): void {
+export function assertValidMultiTenancyConfig(
+  config: Pick<AgorConfig, 'multi_tenancy' | 'database'>
+): void {
   const resolved = resolveMultiTenancyConfig(config);
   if (resolved.mode !== 'static' && resolved.mode !== 'required_from_auth') {
     throw new Error('Config error: multi_tenancy.mode must be one of: static, required_from_auth');
@@ -79,10 +107,17 @@ export function assertValidMultiTenancyConfig(config: Pick<AgorConfig, 'multi_te
   if (!resolved.static_tenant_id) {
     throw new Error('Config error: multi_tenancy.static_tenant_id must not be empty');
   }
-  if (resolved.mode === 'required_from_auth' && !resolved.auth_claim && !resolved.trusted_header) {
-    throw new Error(
-      'Config error: multi_tenancy.required_from_auth requires multi_tenancy.auth_claim or multi_tenancy.trusted_header'
-    );
+  if (resolved.mode === 'required_from_auth') {
+    if (resolveMultiTenancyDatabaseDialect(config) !== 'postgresql') {
+      throw new Error(
+        'Config error: multi_tenancy.required_from_auth requires database.dialect: postgresql'
+      );
+    }
+    if (!resolved.auth_claim && !resolved.trusted_header) {
+      throw new Error(
+        'Config error: multi_tenancy.required_from_auth requires multi_tenancy.auth_claim or multi_tenancy.trusted_header'
+      );
+    }
   }
 }
 

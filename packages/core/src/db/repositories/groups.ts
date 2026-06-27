@@ -207,7 +207,6 @@ export class GroupRepository {
     if (existing) return this.rowToMembership(existing as GroupMembershipRow);
 
     const row = {
-      tenant_id: 'default',
       group_id: groupId as GroupID,
       user_id: userId as UserID,
       added_by: addedBy ?? null,

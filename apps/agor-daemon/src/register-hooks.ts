@@ -12,6 +12,7 @@ import {
   isUnixImpersonationEnabled,
   loadConfig,
   resolveMultiTenancyConfig,
+  resolveMultiTenancyDatabaseDialect,
   resolveTenantContext,
   TenantResolutionError,
   type UnknownJson,
@@ -403,6 +404,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   const multiTenancy = resolveMultiTenancyConfig(config);
+  const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
 
   const tenantOwnedServicePaths = [
     'sessions',
@@ -3161,5 +3163,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Tenant hooks are registered last so service-specific authentication hooks
   // (which populate params.user / params.authentication) run before tenant
   // resolution in required_from_auth mode.
-  registerTenantHooks();
+  if (tenantColumnsEnabled) {
+    registerTenantHooks();
+  }
 }

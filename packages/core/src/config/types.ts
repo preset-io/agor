@@ -1088,9 +1088,10 @@ export interface AgorKnowledgeSettings {
  * App-level multi-tenancy settings.
  *
  * `static` preserves today's single-tenant behavior: every request belongs to
- * one configured tenant id. `required_from_auth` is for hosted/cloud mode and
- * must resolve a tenant from trusted authentication or request context; missing
- * tenant context should fail closed before tenant-owned data is accessed.
+ * one configured tenant id. `required_from_auth` is Postgres-only hosted/cloud
+ * mode and must resolve a tenant from trusted authentication or request
+ * context; missing tenant context should fail closed before tenant-owned data is
+ * accessed.
  */
 export interface AgorMultiTenancySettings {
   /** Multi-tenancy mode. Defaults to `static`. */

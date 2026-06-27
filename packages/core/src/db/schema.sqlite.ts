@@ -48,7 +48,6 @@ const t = {
 export const sessions = sqliteTable(
   'sessions',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     session_id: text('session_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -221,7 +220,6 @@ export const sessions = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    tenantIdx: index('sessions_tenant_id_idx').on(table.tenant_id),
     statusIdx: index('sessions_status_idx').on(table.status),
     agenticToolIdx: index('sessions_agentic_tool_idx').on(table.agentic_tool),
     boardIdx: index('sessions_board_idx').on(table.board_id),
@@ -237,7 +235,7 @@ export const sessions = sqliteTable(
     // tick async paths). Partial because schedule_id is nullable: ad-hoc
     // sessions all have schedule_id NULL and must coexist.
     scheduleRunUnique: uniqueIndex('sessions_schedule_run_unique')
-      .on(table.tenant_id, table.schedule_id, table.scheduled_run_at)
+      .on(table.schedule_id, table.scheduled_run_at)
       // Both columns must be non-null: the logical dedup key is
       // (schedule_id, scheduled_run_at) and is only meaningful when
       // both are set. Non-scheduled sessions (schedule_id NULL) must
@@ -256,7 +254,6 @@ export const sessions = sqliteTable(
 export const sessionRelationships = sqliteTable(
   'session_relationships',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     relationship_id: text('relationship_id', { length: 36 }).primaryKey(),
     source_session_id: text('source_session_id', { length: 36 })
       .notNull()
@@ -278,12 +275,10 @@ export const sessionRelationships = sqliteTable(
     data: t.json<Record<string, unknown>>('data'),
   },
   (table) => ({
-    tenantIdx: index('session_relationships_tenant_id_idx').on(table.tenant_id),
     sourceIdx: index('session_relationships_source_idx').on(table.source_session_id),
     targetIdx: index('session_relationships_target_idx').on(table.target_session_id),
     callbackIdx: index('session_relationships_callback_idx').on(table.callback_session_id),
     sourceTargetTypeUnique: uniqueIndex('session_relationships_source_target_type_unique').on(
-      table.tenant_id,
       table.source_session_id,
       table.target_session_id,
       table.relationship_type
@@ -297,7 +292,6 @@ export const sessionRelationships = sqliteTable(
 export const tasks = sqliteTable(
   'tasks',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     task_id: text('task_id', { length: 36 }).primaryKey(),
     session_id: text('session_id', { length: 36 })
       .notNull()
@@ -368,7 +362,6 @@ export const tasks = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    tenantIdx: index('tasks_tenant_id_idx').on(table.tenant_id),
     sessionIdx: index('tasks_session_idx').on(table.session_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
@@ -377,7 +370,7 @@ export const tasks = sqliteTable(
     // serialization. Only QUEUED rows are constrained; CREATED/RUNNING/done
     // rows have NULL queue_position and are unaffected.
     queuedPositionUnique: uniqueIndex('tasks_queued_position_unique')
-      .on(table.tenant_id, table.session_id, table.queue_position)
+      .on(table.session_id, table.queue_position)
       .where(sql`${table.status} = 'queued'`),
   })
 );
@@ -392,7 +385,6 @@ export const tasks = sqliteTable(
 export const serializedSessions = sqliteTable(
   'serialized_sessions',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     id: text('id', { length: 36 }).primaryKey(),
     session_id: text('session_id', { length: 36 })
       .notNull()
@@ -410,7 +402,6 @@ export const serializedSessions = sqliteTable(
     payload: blob('payload', { mode: 'buffer' }), // gzipped; NULL while status='processing'
   },
   (table) => ({
-    tenantIdx: index('serialized_sessions_tenant_id_idx').on(table.tenant_id),
     sessionTurnIdx: index('serialized_sessions_session_turn_idx').on(
       table.session_id,
       table.turn_index
@@ -428,7 +419,6 @@ export const serializedSessions = sqliteTable(
 export const messages = sqliteTable(
   'messages',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     message_id: text('message_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -480,7 +470,6 @@ export const messages = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    tenantIdx: index('messages_tenant_id_idx').on(table.tenant_id),
     // Indexes for efficient lookups
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
@@ -494,7 +483,6 @@ export const messages = sqliteTable(
 export const boards = sqliteTable(
   'boards',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     board_id: text('board_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
@@ -504,7 +492,7 @@ export const boards = sqliteTable(
 
     // Materialized for lookups
     name: text('name').notNull(),
-    slug: text('slug'),
+    slug: text('slug').unique(),
     primary_assistant_id: text('primary_assistant_id', { length: 36 }).references(
       (): AnySQLiteColumn => branches.branch_id,
       {
@@ -536,10 +524,8 @@ export const boards = sqliteTable(
     archived_by: text('archived_by', { length: 36 }),
   },
   (table) => ({
-    tenantIdx: index('boards_tenant_id_idx').on(table.tenant_id),
     nameIdx: index('boards_name_idx').on(table.name),
     slugIdx: index('boards_slug_idx').on(table.slug),
-    slugTenantUnique: uniqueIndex('boards_tenant_slug_unique').on(table.tenant_id, table.slug),
   })
 );
 
@@ -551,13 +537,12 @@ export const boards = sqliteTable(
 export const repos = sqliteTable(
   'repos',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     repo_id: text('repo_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
 
     // Materialized for querying
-    slug: text('slug').notNull(),
+    slug: text('slug').notNull().unique(),
     repo_type: text('repo_type', { enum: ['remote', 'local'] })
       .notNull()
       .default('remote'),
@@ -625,9 +610,7 @@ export const repos = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    tenantIdx: index('repos_tenant_id_idx').on(table.tenant_id),
     slugIdx: index('repos_slug_idx').on(table.slug),
-    slugTenantUnique: uniqueIndex('repos_tenant_slug_unique').on(table.tenant_id, table.slug),
   })
 );
 
@@ -641,7 +624,6 @@ export const repos = sqliteTable(
 export const branches = sqliteTable(
   'branches',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     branch_id: text('branch_id', { length: 36 }).primaryKey(),
     repo_id: text('repo_id', { length: 36 })
@@ -779,7 +761,6 @@ export const branches = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    tenantIdx: index('branches_tenant_id_idx').on(table.tenant_id),
     repoIdx: index('branches_repo_idx').on(table.repo_id),
     nameIdx: index('branches_name_idx').on(table.name),
     refIdx: index('branches_ref_idx').on(table.ref),
@@ -800,7 +781,6 @@ export const branches = sqliteTable(
 export const branchOwners = sqliteTable(
   'branch_owners',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     branch_id: text('branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
@@ -810,7 +790,6 @@ export const branchOwners = sqliteTable(
     created_at: t.timestamp('created_at'),
   },
   (table) => ({
-    tenantIdx: index('branch_owners_tenant_id_idx').on(table.tenant_id),
     // Composite primary key matching migration 0016
     pk: primaryKey({ columns: [table.branch_id, table.user_id] }),
   })
@@ -825,7 +804,6 @@ export const branchOwners = sqliteTable(
 export const boardOwners = sqliteTable(
   'board_owners',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     board_id: text('board_id', { length: 36 })
       .notNull()
       .references(() => boards.board_id, { onDelete: 'cascade' }),
@@ -835,7 +813,6 @@ export const boardOwners = sqliteTable(
     created_at: t.timestamp('created_at'),
   },
   (table) => ({
-    tenantIdx: index('board_owners_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.board_id, table.user_id] }),
     userIdx: index('board_owners_user_idx').on(table.user_id),
   })
@@ -854,7 +831,6 @@ export const boardOwners = sqliteTable(
 export const schedules = sqliteTable(
   'schedules',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     schedule_id: text('schedule_id', { length: 36 }).primaryKey(),
     branch_id: text('branch_id', { length: 36 })
       .notNull()
@@ -892,7 +868,6 @@ export const schedules = sqliteTable(
       .references(() => users.user_id),
   },
   (table) => ({
-    tenantIdx: index('schedules_tenant_id_idx').on(table.tenant_id),
     // Scheduler hot path: WHERE enabled = true AND next_run_at <= ?
     enabledNextRunIdx: index('schedules_enabled_next_run_idx').on(table.enabled, table.next_run_at),
     branchIdx: index('schedules_branch_idx').on(table.branch_id),
@@ -910,14 +885,13 @@ export const schedules = sqliteTable(
 export const users = sqliteTable(
   'users',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     user_id: text('user_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
 
     // Materialized for auth lookups
-    email: text('email').notNull(),
+    email: text('email').unique().notNull(),
     password: text('password').notNull(), // bcrypt hashed
 
     // Basic profile (materialized for display)
@@ -1082,9 +1056,7 @@ export const users = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    tenantIdx: index('users_tenant_id_idx').on(table.tenant_id),
     emailIdx: index('users_email_idx').on(table.email),
-    emailTenantUnique: uniqueIndex('users_tenant_email_unique').on(table.tenant_id, table.email),
   })
 );
 
@@ -1094,7 +1066,6 @@ export const users = sqliteTable(
 export const groups = sqliteTable(
   'groups',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     group_id: text('group_id', { length: 36 }).primaryKey(),
     name: text('name').notNull(),
     slug: text('slug').notNull(),
@@ -1107,8 +1078,7 @@ export const groups = sqliteTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    tenantIdx: index('groups_tenant_id_idx').on(table.tenant_id),
-    slugIdx: uniqueIndex('groups_tenant_slug_unique').on(table.tenant_id, table.slug),
+    slugIdx: uniqueIndex('groups_slug_idx').on(table.slug),
     archivedIdx: index('groups_archived_idx').on(table.archived),
   })
 );
@@ -1119,7 +1089,6 @@ export const groups = sqliteTable(
 export const groupMemberships = sqliteTable(
   'group_memberships',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     group_id: text('group_id', { length: 36 })
       .notNull()
       .references(() => groups.group_id, { onDelete: 'cascade' }),
@@ -1132,7 +1101,6 @@ export const groupMemberships = sqliteTable(
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({
-    tenantIdx: index('group_memberships_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.group_id, table.user_id] }),
     userIdx: index('group_memberships_user_idx').on(table.user_id),
   })
@@ -1147,7 +1115,6 @@ export const groupMemberships = sqliteTable(
 export const branchGroupGrants = sqliteTable(
   'branch_group_grants',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     branch_id: text('branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
@@ -1167,7 +1134,6 @@ export const branchGroupGrants = sqliteTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    tenantIdx: index('branch_group_grants_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.branch_id, table.group_id] }),
     groupIdx: index('branch_group_grants_group_idx').on(table.group_id),
   })
@@ -1179,7 +1145,6 @@ export const branchGroupGrants = sqliteTable(
 export const boardGroupGrants = sqliteTable(
   'board_group_grants',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     board_id: text('board_id', { length: 36 })
       .notNull()
       .references(() => boards.board_id, { onDelete: 'cascade' }),
@@ -1199,7 +1164,6 @@ export const boardGroupGrants = sqliteTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    tenantIdx: index('board_group_grants_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.board_id, table.group_id] }),
     groupIdx: index('board_group_grants_group_idx').on(table.group_id),
   })
@@ -1215,7 +1179,6 @@ export const boardGroupGrants = sqliteTable(
 export const appVariables = sqliteTable(
   'app_variables',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     variable_id: text('variable_id', { length: 36 }).primaryKey(),
     namespace: text('namespace').notNull(),
     key: text('key').notNull(),
@@ -1231,12 +1194,7 @@ export const appVariables = sqliteTable(
     updated_at: t.timestamp('updated_at').notNull(),
   },
   (table) => ({
-    tenantIdx: index('app_variables_tenant_id_idx').on(table.tenant_id),
-    namespaceKeyIdx: uniqueIndex('app_variables_tenant_namespace_key_unique').on(
-      table.tenant_id,
-      table.namespace,
-      table.key
-    ),
+    namespaceKeyIdx: uniqueIndex('app_variables_namespace_key_idx').on(table.namespace, table.key),
     namespaceIdx: index('app_variables_namespace_idx').on(table.namespace),
   })
 );
@@ -1250,7 +1208,6 @@ export const appVariables = sqliteTable(
 export const userApiKeys = sqliteTable(
   'user_api_keys',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     id: text('id', { length: 36 }).primaryKey(),
     user_id: text('user_id', { length: 36 })
       .notNull()
@@ -1262,7 +1219,6 @@ export const userApiKeys = sqliteTable(
     last_used_at: t.timestamp('last_used_at'),
   },
   (table) => ({
-    tenantIdx: index('user_api_keys_tenant_id_idx').on(table.tenant_id),
     userIdx: index('user_api_keys_user_idx').on(table.user_id),
     prefixIdx: index('user_api_keys_prefix_idx').on(table.prefix),
   })
@@ -1277,7 +1233,6 @@ export const userApiKeys = sqliteTable(
 export const mcpServers = sqliteTable(
   'mcp_servers',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     mcp_server_id: text('mcp_server_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -1370,7 +1325,6 @@ export const mcpServers = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    tenantIdx: index('mcp_servers_tenant_id_idx').on(table.tenant_id),
     nameIdx: index('mcp_servers_name_idx').on(table.name),
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
@@ -1387,7 +1341,6 @@ export const mcpServers = sqliteTable(
 export const cardTypes = sqliteTable(
   'card_types',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     card_type_id: text('card_type_id', { length: 36 }).primaryKey(),
     name: text('name').notNull(),
     emoji: text('emoji'),
@@ -1398,7 +1351,6 @@ export const cardTypes = sqliteTable(
     updated_at: t.timestamp('updated_at').notNull(),
   },
   (table) => ({
-    tenantIdx: index('card_types_tenant_id_idx').on(table.tenant_id),
     nameIdx: index('card_types_name_idx').on(table.name),
   })
 );
@@ -1412,7 +1364,6 @@ export const cardTypes = sqliteTable(
 export const cards = sqliteTable(
   'cards',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     card_id: text('card_id', { length: 36 }).primaryKey(),
     board_id: text('board_id', { length: 36 })
       .notNull()
@@ -1434,7 +1385,6 @@ export const cards = sqliteTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    tenantIdx: index('cards_tenant_id_idx').on(table.tenant_id),
     boardIdx: index('cards_board_idx').on(table.board_id),
     cardTypeIdx: index('cards_card_type_idx').on(table.card_type_id),
     titleIdx: index('cards_title_idx').on(table.title),
@@ -1453,7 +1403,6 @@ export const cards = sqliteTable(
 export const artifacts = sqliteTable(
   'artifacts',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     artifact_id: text('artifact_id', { length: 36 }).primaryKey(),
     branch_id: text('branch_id', { length: 36 }).references(() => branches.branch_id, {
       onDelete: 'set null',
@@ -1489,7 +1438,6 @@ export const artifacts = sqliteTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    tenantIdx: index('artifacts_tenant_id_idx').on(table.tenant_id),
     branchIdx: index('artifacts_branch_idx').on(table.branch_id),
     sourceSessionIdx: index('artifacts_source_session_idx').on(table.source_session_id),
     boardIdx: index('artifacts_board_idx').on(table.board_id),
@@ -1510,7 +1458,6 @@ export type ArtifactInsert = typeof artifacts.$inferInsert;
 export const artifactTrustGrants = sqliteTable(
   'artifact_trust_grants',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     grant_id: text('grant_id', { length: 36 }).primaryKey(),
     user_id: text('user_id', { length: 36 }).notNull(),
     // CHECK constraint omitted — service-layer enforcement only, so adding new
@@ -1523,7 +1470,6 @@ export const artifactTrustGrants = sqliteTable(
     revoked_at: t.timestamp('revoked_at'),
   },
   (table) => ({
-    tenantIdx: index('artifact_trust_grants_tenant_id_idx').on(table.tenant_id),
     userIdx: index('artifact_trust_grants_user_idx').on(table.user_id),
     scopeIdx: index('artifact_trust_grants_scope_idx').on(table.scope_type, table.scope_value),
   })
@@ -1541,7 +1487,6 @@ export type ArtifactTrustGrantInsert = typeof artifactTrustGrants.$inferInsert;
 export const boardObjects = sqliteTable(
   'board_objects',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     object_id: text('object_id', { length: 36 }).primaryKey(),
     board_id: text('board_id', { length: 36 })
@@ -1567,7 +1512,6 @@ export const boardObjects = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    tenantIdx: index('board_objects_tenant_id_idx').on(table.tenant_id),
     boardIdx: index('board_objects_board_idx').on(table.board_id),
     branchIdx: index('board_objects_branch_idx').on(table.branch_id),
     cardIdx: index('board_objects_card_idx').on(table.card_id),
@@ -1583,7 +1527,6 @@ export const boardObjects = sqliteTable(
 export const sessionMcpServers = sqliteTable(
   'session_mcp_servers',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     session_id: text('session_id', { length: 36 })
       .notNull()
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
@@ -1594,7 +1537,6 @@ export const sessionMcpServers = sqliteTable(
     added_at: t.timestamp('added_at').notNull(),
   },
   (table) => ({
-    tenantIdx: index('session_mcp_servers_tenant_id_idx').on(table.tenant_id),
     // Composite primary key
     pk: index('session_mcp_servers_pk').on(table.session_id, table.mcp_server_id),
     // Indexes for queries
@@ -1621,7 +1563,6 @@ export const sessionMcpServers = sqliteTable(
 export const userMcpOauthTokens = sqliteTable(
   'user_mcp_oauth_tokens',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // NULL = shared-mode token (one per mcp_server_id)
     user_id: text('user_id', { length: 36 }).references(() => users.user_id, {
       onDelete: 'cascade',
@@ -1640,7 +1581,6 @@ export const userMcpOauthTokens = sqliteTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    tenantIdx: index('user_mcp_oauth_tokens_tenant_id_idx').on(table.tenant_id),
     // Composite lookup indexes. Uniqueness enforced via partial unique indexes
     // created in the migration (one for per-user rows, one for the shared row).
     pk: index('user_mcp_oauth_tokens_pk').on(table.user_id, table.mcp_server_id),
@@ -1662,7 +1602,6 @@ export const userMcpOauthTokens = sqliteTable(
 export const boardComments = sqliteTable(
   'board_comments',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     comment_id: text('comment_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -1733,7 +1672,6 @@ export const boardComments = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    tenantIdx: index('board_comments_tenant_id_idx').on(table.tenant_id),
     boardIdx: index('board_comments_board_idx').on(table.board_id),
     sessionIdx: index('board_comments_session_idx').on(table.session_id),
     taskIdx: index('board_comments_task_idx').on(table.task_id),
@@ -1756,7 +1694,6 @@ export const boardComments = sqliteTable(
 export const gatewayChannels = sqliteTable(
   'gateway_channels',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     id: text('id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -1774,7 +1711,7 @@ export const gatewayChannels = sqliteTable(
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
     agor_user_id: text('agor_user_id', { length: 36 }).notNull(),
-    channel_key: text('channel_key').notNull(),
+    channel_key: text('channel_key').notNull().unique(),
     enabled: t.bool('enabled').notNull().default(true),
     last_message_at: t.timestamp('last_message_at'),
 
@@ -1785,12 +1722,7 @@ export const gatewayChannels = sqliteTable(
     agentic_config: t.json<Record<string, unknown> | null>('agentic_config'),
   },
   (table) => ({
-    tenantIdx: index('gateway_channels_tenant_id_idx').on(table.tenant_id),
     channelKeyIdx: index('idx_gateway_channel_key').on(table.channel_key),
-    channelKeyTenantUnique: uniqueIndex('gateway_channels_tenant_channel_key_unique').on(
-      table.tenant_id,
-      table.channel_key
-    ),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
   })
 );
@@ -1804,7 +1736,6 @@ export const gatewayChannels = sqliteTable(
 export const threadSessionMap = sqliteTable(
   'thread_session_map',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     id: text('id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -1833,9 +1764,7 @@ export const threadSessionMap = sqliteTable(
     metadata: t.json<Record<string, unknown>>('metadata'),
   },
   (table) => ({
-    tenantIdx: index('thread_session_map_tenant_id_idx').on(table.tenant_id),
-    uniqueChannelThread: uniqueIndex('uniq_thread_map_tenant_channel_thread').on(
-      table.tenant_id,
+    uniqueChannelThread: uniqueIndex('uniq_thread_map_channel_thread').on(
       table.channel_id,
       table.thread_id
     ),
@@ -1855,7 +1784,6 @@ export const threadSessionMap = sqliteTable(
 export const gatewayOutboundMessages = sqliteTable(
   'gateway_outbound_messages',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     id: text('id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at').notNull(),
@@ -1906,9 +1834,7 @@ export const gatewayOutboundMessages = sqliteTable(
     consumed_at: t.timestamp('consumed_at'),
   },
   (table) => ({
-    tenantIdx: index('gateway_outbound_messages_tenant_id_idx').on(table.tenant_id),
-    uniqueChannelThread: uniqueIndex('uniq_gateway_outbound_tenant_channel_thread').on(
-      table.tenant_id,
+    uniqueChannelThread: uniqueIndex('uniq_gateway_outbound_channel_thread').on(
       table.gateway_channel_id,
       table.platform_thread_id
     ),
@@ -1941,7 +1867,6 @@ export const gatewayOutboundMessages = sqliteTable(
 export const sessionEnvSelections = sqliteTable(
   'session_env_selections',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     session_id: text('session_id', { length: 36 })
       .notNull()
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
@@ -1949,7 +1874,6 @@ export const sessionEnvSelections = sqliteTable(
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({
-    tenantIdx: index('session_env_selections_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.session_id, table.env_var_name] }),
     sessionIdx: index('session_env_selections_session_idx').on(table.session_id),
   })
@@ -1962,7 +1886,6 @@ export const sessionEnvSelections = sqliteTable(
 export const kbNamespaces = sqliteTable(
   'kb_namespaces',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     namespace_id: text('namespace_id', { length: 36 }).primaryKey(),
     slug: text('slug').notNull(),
     display_name: text('display_name').notNull(),
@@ -1995,9 +1918,8 @@ export const kbNamespaces = sqliteTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    tenantIdx: index('kb_namespaces_tenant_id_idx').on(table.tenant_id),
-    slugIdx: uniqueIndex('kb_namespaces_tenant_slug_unique')
-      .on(table.tenant_id, table.slug)
+    slugIdx: uniqueIndex('kb_namespaces_slug_idx')
+      .on(table.slug)
       .where(sql`${table.archived} = false`),
     kindIdx: index('kb_namespaces_kind_idx').on(table.kind),
     ownerIdx: index('kb_namespaces_owner_idx').on(table.owner_user_id),
@@ -2013,7 +1935,6 @@ export const kbNamespaces = sqliteTable(
 export const kbNamespaceAcl = sqliteTable(
   'kb_namespace_acl',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     namespace_acl_id: text('namespace_acl_id', { length: 36 }).primaryKey(),
     namespace_id: text('namespace_id', { length: 36 })
       .notNull()
@@ -2028,11 +1949,9 @@ export const kbNamespaceAcl = sqliteTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    tenantIdx: index('kb_namespace_acl_tenant_id_idx').on(table.tenant_id),
     namespaceIdx: index('kb_namespace_acl_namespace_idx').on(table.namespace_id),
     subjectIdx: index('kb_namespace_acl_subject_idx').on(table.subject_type, table.subject_id),
-    namespaceSubjectIdx: uniqueIndex('kb_namespace_acl_tenant_namespace_subject_unique').on(
-      table.tenant_id,
+    namespaceSubjectIdx: uniqueIndex('kb_namespace_acl_namespace_subject_idx').on(
       table.namespace_id,
       table.subject_type,
       table.subject_id
@@ -2046,7 +1965,6 @@ export const kbNamespaceAcl = sqliteTable(
 export const kbDocuments = sqliteTable(
   'kb_documents',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     document_id: text('document_id', { length: 36 }).primaryKey(),
     namespace_id: text('namespace_id', { length: 36 })
       .notNull()
@@ -2084,13 +2002,10 @@ export const kbDocuments = sqliteTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    tenantIdx: index('kb_documents_tenant_id_idx').on(table.tenant_id),
-    namespacePathIdx: uniqueIndex('kb_documents_tenant_namespace_path_unique')
-      .on(table.tenant_id, table.namespace_id, table.path)
+    namespacePathIdx: uniqueIndex('kb_documents_namespace_path_idx')
+      .on(table.namespace_id, table.path)
       .where(sql`${table.archived} = false`),
-    uriIdx: uniqueIndex('kb_documents_tenant_uri_unique')
-      .on(table.tenant_id, table.uri)
-      .where(sql`${table.archived} = false`),
+    uriIdx: uniqueIndex('kb_documents_uri_idx').on(table.uri).where(sql`${table.archived} = false`),
     namespaceIdx: index('kb_documents_namespace_idx').on(table.namespace_id),
     kindIdx: index('kb_documents_kind_idx').on(table.kind),
     visibilityIdx: index('kb_documents_visibility_idx').on(table.visibility),
@@ -2107,7 +2022,6 @@ export const kbDocuments = sqliteTable(
 export const kbDocumentVersions = sqliteTable(
   'kb_document_versions',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     version_id: text('version_id', { length: 36 }).primaryKey(),
     document_id: text('document_id', { length: 36 })
       .notNull()
@@ -2129,9 +2043,7 @@ export const kbDocumentVersions = sqliteTable(
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({
-    tenantIdx: index('kb_document_versions_tenant_id_idx').on(table.tenant_id),
-    documentVersionIdx: uniqueIndex('kb_document_versions_tenant_document_version_unique').on(
-      table.tenant_id,
+    documentVersionIdx: uniqueIndex('kb_document_versions_document_version_idx').on(
       table.document_id,
       table.version_number
     ),
@@ -2148,7 +2060,6 @@ export const kbDocumentVersions = sqliteTable(
 export const kbDocumentUnits = sqliteTable(
   'kb_document_units',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     unit_id: text('unit_id', { length: 36 }).primaryKey(),
     document_id: text('document_id', { length: 36 })
       .notNull()
@@ -2181,7 +2092,6 @@ export const kbDocumentUnits = sqliteTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    tenantIdx: index('kb_document_units_tenant_id_idx').on(table.tenant_id),
     documentIdx: index('kb_document_units_document_idx').on(table.document_id),
     versionIdx: index('kb_document_units_version_idx').on(table.version_id),
     versionOrdinalIdx: index('kb_document_units_version_ordinal_idx').on(
@@ -2197,7 +2107,6 @@ export const kbDocumentUnits = sqliteTable(
 export const kbEmbeddingSpaces = sqliteTable(
   'kb_embedding_spaces',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     embedding_space_id: text('embedding_space_id', { length: 36 }).primaryKey(),
     provider: text('provider').notNull(),
     model: text('model').notNull(),
@@ -2210,9 +2119,7 @@ export const kbEmbeddingSpaces = sqliteTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    tenantIdx: index('kb_embedding_spaces_tenant_id_idx').on(table.tenant_id),
-    providerModelIdx: uniqueIndex('kb_embedding_spaces_tenant_provider_model_unique').on(
-      table.tenant_id,
+    providerModelIdx: uniqueIndex('kb_embedding_spaces_provider_model_idx').on(
       table.provider,
       table.model,
       table.dimensions,
@@ -2230,7 +2137,6 @@ export const kbEmbeddingSpaces = sqliteTable(
 export const kbGraphNodes = sqliteTable(
   'kb_graph_nodes',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     node_id: text('node_id', { length: 36 }).primaryKey(),
     node_type: text('node_type', {
       enum: [
@@ -2295,9 +2201,8 @@ export const kbGraphNodes = sqliteTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    tenantIdx: index('kb_graph_nodes_tenant_id_idx').on(table.tenant_id),
-    uriIdx: uniqueIndex('kb_graph_nodes_tenant_uri_unique')
-      .on(table.tenant_id, table.uri)
+    uriIdx: uniqueIndex('kb_graph_nodes_uri_idx')
+      .on(table.uri)
       .where(sql`${table.archived} = false`),
     typeIdx: index('kb_graph_nodes_type_idx').on(table.node_type),
     namespaceIdx: index('kb_graph_nodes_namespace_idx').on(table.namespace_id),
@@ -2320,7 +2225,6 @@ export const kbGraphNodes = sqliteTable(
 export const kbGraphEdges = sqliteTable(
   'kb_graph_edges',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     edge_id: text('edge_id', { length: 36 }).primaryKey(),
     source_node_id: text('source_node_id', { length: 36 })
       .notNull()
@@ -2353,7 +2257,6 @@ export const kbGraphEdges = sqliteTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    tenantIdx: index('kb_graph_edges_tenant_id_idx').on(table.tenant_id),
     sourceIdx: index('kb_graph_edges_source_idx').on(table.source_node_id),
     targetIdx: index('kb_graph_edges_target_idx').on(table.target_node_id),
     typeIdx: index('kb_graph_edges_type_idx').on(table.edge_type),
@@ -2365,8 +2268,8 @@ export const kbGraphEdges = sqliteTable(
       table.target_node_id,
       table.edge_type
     ),
-    sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_tenant_source_target_type_unique')
-      .on(table.tenant_id, table.source_node_id, table.target_node_id, table.edge_type)
+    sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_source_target_type_idx')
+      .on(table.source_node_id, table.target_node_id, table.edge_type)
       .where(sql`${table.archived} = false`),
     archivedIdx: index('kb_graph_edges_archived_idx').on(table.archived),
   })
