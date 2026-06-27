@@ -372,6 +372,13 @@
       "when": 1781900000000,
       "tag": "0053_user_token_invalidation",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1782000000000,
+      "tag": "0054_app_level_multitenancy",
+      "breakpoints": true
     }
   ]
 }

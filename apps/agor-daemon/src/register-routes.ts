@@ -421,7 +421,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               jwtSecret,
               ACCESS_TOKEN_TTL,
               REFRESH_TOKEN_TTL,
-              authTokenIssuedAtClaim(Date.now(), context.result.user)
+              {
+                ...authTokenIssuedAtClaim(Date.now(), context.result.user),
+                ...(context.result.user.tenant_id
+                  ? { tenant_id: context.result.user.tenant_id }
+                  : {}),
+              }
             );
             context.result.accessToken = tokens.accessToken;
             context.result.refreshToken = tokens.refreshToken;

@@ -37,7 +37,9 @@ import {
   resolveGitConfigParameters,
   resolveMultiTenancyConfig,
   resolveSecurity,
+  resolveTenantContext,
   saveConfig,
+  TenantResolutionError,
 } from '@agor/core/config';
 import { getDatabaseUrl } from '@agor/core/db';
 import {
@@ -45,6 +47,7 @@ import {
   Forbidden,
   feathers,
   feathersExpress,
+  NotAuthenticated,
   rest,
   socketio,
 } from '@agor/core/feathers';
@@ -223,7 +226,21 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   // Auth configuration
   // --------------------------------------------------------------------------
-  const requireAuth = scopeExecutorRuntimeAuth(authenticate({ strategies: ['api-key', 'jwt'] }));
+  const authenticatedHook = scopeExecutorRuntimeAuth(
+    authenticate({ strategies: ['api-key', 'jwt'] })
+  );
+  const requireAuth = async (context: HookContext): Promise<HookContext> => {
+    const authed = await authenticatedHook(context);
+    try {
+      authed.params.tenant = resolveTenantContext(multiTenancy, { params: authed.params });
+      return authed;
+    } catch (error) {
+      if (error instanceof TenantResolutionError) {
+        throw new NotAuthenticated(error.message);
+      }
+      throw error;
+    }
+  };
 
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;

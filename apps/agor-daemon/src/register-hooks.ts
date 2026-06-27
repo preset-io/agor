@@ -12,6 +12,8 @@ import {
   isUnixImpersonationEnabled,
   loadConfig,
   resolveMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
   type UnknownJson,
   validateRepoEnvironment,
   wrapV1AsV2,
@@ -401,6 +403,119 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   const multiTenancy = resolveMultiTenancyConfig(config);
+
+  const tenantOwnedServicePaths = [
+    'sessions',
+    'session-relationships',
+    'tasks',
+    'messages',
+    'boards',
+    'repos',
+    'branches',
+    'branches/:id/owners',
+    'boards/:id/owners',
+    'schedules',
+    'users',
+    'groups',
+    'group-memberships',
+    'branches/:id/group-grants',
+    'boards/:id/group-grants',
+    'app-variables',
+    'mcp-servers',
+    'card-types',
+    'cards',
+    'artifacts',
+    'artifact-trust-grants',
+    'board-objects',
+    'session-mcp-servers',
+    'user-mcp-oauth-tokens',
+    'board-comments',
+    'gateway-channels',
+    'thread-session-map',
+    'gateway-outbound-messages',
+    'session-env-selections',
+    'kb/namespaces',
+    'kb/documents',
+    'kb/document-edits',
+    'kb/versions',
+    'kb/search',
+    'kb/settings',
+    'kb/indexing/status',
+    'kb/indexing/reindex',
+    'leaderboard',
+  ];
+
+  const stampTenantData = (data: unknown, tenantId: string): unknown => {
+    if (Array.isArray(data)) return data.map((item) => stampTenantData(item, tenantId));
+    if (!data || typeof data !== 'object') return data;
+    return { ...(data as Record<string, unknown>), tenant_id: tenantId };
+  };
+
+  const stripTenantData = (data: unknown): unknown => {
+    if (Array.isArray(data)) return data.map(stripTenantData);
+    if (!data || typeof data !== 'object') return data;
+    const clone = { ...(data as Record<string, unknown>) };
+    delete clone.tenant_id;
+    return clone;
+  };
+
+  const resultBelongsToTenant = (result: unknown, tenantId: string): boolean => {
+    if (Array.isArray(result)) return result.every((item) => resultBelongsToTenant(item, tenantId));
+    if (!result || typeof result !== 'object') return true;
+    const record = result as Record<string, unknown>;
+    if (Array.isArray(record.data))
+      return record.data.every((item) => resultBelongsToTenant(item, tenantId));
+    if (!('tenant_id' in record)) return true;
+    return record.tenant_id === tenantId;
+  };
+
+  const ensureTenantContext = async (context: HookContext): Promise<HookContext> => {
+    try {
+      context.params.tenant = resolveTenantContext(multiTenancy, { params: context.params });
+      return context;
+    } catch (error) {
+      if (error instanceof TenantResolutionError) {
+        throw new NotAuthenticated(error.message);
+      }
+      throw error;
+    }
+  };
+
+  const scopeTenantBefore = async (context: HookContext): Promise<HookContext> => {
+    await ensureTenantContext(context);
+    const tenantId = context.params.tenant?.tenant_id;
+    if (!tenantId) return context;
+
+    if (context.method === 'create') {
+      context.data = stampTenantData(context.data, tenantId) as typeof context.data;
+    } else if (context.method === 'update' || context.method === 'patch') {
+      context.data = stripTenantData(context.data) as typeof context.data;
+    }
+
+    if (context.method === 'find') {
+      context.params.query = { ...(context.params.query ?? {}), tenant_id: tenantId };
+    }
+    return context;
+  };
+
+  const assertTenantAfter = async (context: HookContext): Promise<HookContext> => {
+    const tenantId = context.params.tenant?.tenant_id;
+    if (tenantId && !resultBelongsToTenant(context.result, tenantId)) {
+      throw new NotAuthenticated('Tenant isolation check failed');
+    }
+    return context;
+  };
+
+  const registerTenantHooks = (): void => {
+    for (const path of tenantOwnedServicePaths) {
+      const service = safeService(path);
+      if (!service) continue;
+      service.hooks({
+        before: { all: [scopeTenantBefore] },
+        after: { all: [assertTenantAfter] },
+      });
+    }
+  };
 
   const realtimeAccessCache = new RealtimeAccessCache({
     branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
@@ -3042,4 +3157,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       after: { create: [clearRealtimeBranchVisibility] },
     });
   } // end boards archive/unarchive
+
+  // Tenant hooks are registered last so service-specific authentication hooks
+  // (which populate params.user / params.authentication) run before tenant
+  // resolution in required_from_auth mode.
+  registerTenantHooks();
 }

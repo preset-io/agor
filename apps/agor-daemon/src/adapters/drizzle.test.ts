@@ -19,6 +19,7 @@ import { DrizzleService, type Repository } from './drizzle.js';
 interface Widget {
   id: string;
   name: string;
+  tenant_id?: string;
 }
 
 function makeRepo(seed: Widget[] = []): Repository<Widget> {
@@ -123,5 +124,53 @@ describe('DrizzleService event emission', () => {
     await service.remove('w1');
 
     expect(events.map((e) => e.event)).toEqual(['removed']);
+  });
+});
+
+describe('DrizzleService tenant isolation', () => {
+  const tenantParams = { tenant: { tenant_id: 'tenant-a', source: 'static' } } as never;
+
+  it('stamps created rows with the resolved tenant_id', async () => {
+    const repo = makeRepo();
+    const { service } = makeService(repo);
+
+    const result = await service.create(
+      { id: 'w1', name: 'hello', tenant_id: 'client-supplied' },
+      tenantParams
+    );
+
+    expect(result).toMatchObject({ id: 'w1', tenant_id: 'tenant-a' });
+  });
+
+  it('filters find() results to the current tenant', async () => {
+    const repo = makeRepo([
+      { id: 'a', name: 'A', tenant_id: 'tenant-a' },
+      { id: 'b', name: 'B', tenant_id: 'tenant-b' },
+    ]);
+    const { service } = makeService(repo);
+
+    await expect(service.find(tenantParams)).resolves.toEqual([
+      { id: 'a', name: 'A', tenant_id: 'tenant-a' },
+    ]);
+  });
+
+  it('hides get() rows from other tenants as not found', async () => {
+    const repo = makeRepo([{ id: 'b', name: 'B', tenant_id: 'tenant-b' }]);
+    const { service } = makeService(repo);
+
+    await expect(service.get('b', tenantParams)).rejects.toThrow(/Widget.*b/);
+  });
+
+  it('does not allow patch() to move a row to another tenant', async () => {
+    const repo = makeRepo([{ id: 'a', name: 'A', tenant_id: 'tenant-a' }]);
+    const { service } = makeService(repo);
+
+    const result = await service.patch(
+      'a',
+      { tenant_id: 'tenant-b', name: 'updated' },
+      tenantParams
+    );
+
+    expect(result).toEqual({ id: 'a', name: 'updated', tenant_id: 'tenant-a' });
   });
 });

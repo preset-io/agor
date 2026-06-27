@@ -60,6 +60,7 @@ const t = {
 export const sessions = pgTable(
   'sessions',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     session_id: varchar('session_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -218,6 +219,7 @@ export const sessions = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdx: index('sessions_tenant_id_idx').on(table.tenant_id),
     statusIdx: index('sessions_status_idx').on(table.status),
     agenticToolIdx: index('sessions_agentic_tool_idx').on(table.agentic_tool),
     boardIdx: index('sessions_board_idx').on(table.board_id),
@@ -231,7 +233,7 @@ export const sessions = pgTable(
     // AND serves as the DB-level guard against check-then-create races
     // in spawnScheduledSession.
     scheduleRunUnique: uniqueIndex('sessions_schedule_run_unique')
-      .on(table.schedule_id, table.scheduled_run_at)
+      .on(table.tenant_id, table.schedule_id, table.scheduled_run_at)
       // Both columns must be non-null — see SQLite mirror.
       .where(sql`${table.schedule_id} IS NOT NULL AND ${table.scheduled_run_at} IS NOT NULL`),
   })
@@ -247,6 +249,7 @@ export const sessions = pgTable(
 export const sessionRelationships = pgTable(
   'session_relationships',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     relationship_id: varchar('relationship_id', { length: 36 }).primaryKey(),
     source_session_id: varchar('source_session_id', { length: 36 })
       .notNull()
@@ -268,10 +271,12 @@ export const sessionRelationships = pgTable(
     data: t.json<Record<string, unknown>>('data'),
   },
   (table) => ({
+    tenantIdx: index('session_relationships_tenant_id_idx').on(table.tenant_id),
     sourceIdx: index('session_relationships_source_idx').on(table.source_session_id),
     targetIdx: index('session_relationships_target_idx').on(table.target_session_id),
     callbackIdx: index('session_relationships_callback_idx').on(table.callback_session_id),
     sourceTargetTypeUnique: uniqueIndex('session_relationships_source_target_type_unique').on(
+      table.tenant_id,
       table.source_session_id,
       table.target_session_id,
       table.relationship_type
@@ -285,6 +290,7 @@ export const sessionRelationships = pgTable(
 export const tasks = pgTable(
   'tasks',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     task_id: varchar('task_id', { length: 36 }).primaryKey(),
     session_id: varchar('session_id', { length: 36 })
       .notNull()
@@ -355,6 +361,7 @@ export const tasks = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdx: index('tasks_tenant_id_idx').on(table.tenant_id),
     sessionIdx: index('tasks_session_idx').on(table.session_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
@@ -363,7 +370,7 @@ export const tasks = pgTable(
     // serialization. Only QUEUED rows are constrained; CREATED/RUNNING/done
     // rows have NULL queue_position and are unaffected.
     queuedPositionUnique: uniqueIndex('tasks_queued_position_unique')
-      .on(table.session_id, table.queue_position)
+      .on(table.tenant_id, table.session_id, table.queue_position)
       .where(sql`${table.status} = 'queued'`),
   })
 );
@@ -374,6 +381,7 @@ export const tasks = pgTable(
 export const serializedSessions = pgTable(
   'serialized_sessions',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     id: varchar('id', { length: 36 }).primaryKey(),
     session_id: varchar('session_id', { length: 36 })
       .notNull()
@@ -391,6 +399,7 @@ export const serializedSessions = pgTable(
     payload: bytea('payload'), // gzipped; NULL while status='processing'
   },
   (table) => ({
+    tenantIdx: index('serialized_sessions_tenant_id_idx').on(table.tenant_id),
     sessionTurnIdx: index('serialized_sessions_session_turn_idx').on(
       table.session_id,
       table.turn_index
@@ -408,6 +417,7 @@ export const serializedSessions = pgTable(
 export const messages = pgTable(
   'messages',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     message_id: varchar('message_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -459,6 +469,7 @@ export const messages = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdx: index('messages_tenant_id_idx').on(table.tenant_id),
     // Indexes for efficient lookups
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
@@ -472,6 +483,7 @@ export const messages = pgTable(
 export const boards = pgTable(
   'boards',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     board_id: varchar('board_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
@@ -481,7 +493,7 @@ export const boards = pgTable(
 
     // Materialized for lookups
     name: text('name').notNull(),
-    slug: text('slug').unique(),
+    slug: text('slug'),
     primary_assistant_id: varchar('primary_assistant_id', { length: 36 }).references(
       (): AnyPgColumn => branches.branch_id,
       {
@@ -513,8 +525,10 @@ export const boards = pgTable(
     archived_by: varchar('archived_by', { length: 36 }),
   },
   (table) => ({
+    tenantIdx: index('boards_tenant_id_idx').on(table.tenant_id),
     nameIdx: index('boards_name_idx').on(table.name),
     slugIdx: index('boards_slug_idx').on(table.slug),
+    slugTenantUnique: uniqueIndex('boards_tenant_slug_unique').on(table.tenant_id, table.slug),
   })
 );
 
@@ -526,12 +540,13 @@ export const boards = pgTable(
 export const repos = pgTable(
   'repos',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     repo_id: varchar('repo_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
 
     // Materialized for querying
-    slug: text('slug').notNull().unique(),
+    slug: text('slug').notNull(),
     repo_type: text('repo_type', { enum: ['remote', 'local'] })
       .notNull()
       .default('remote'),
@@ -599,7 +614,9 @@ export const repos = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdx: index('repos_tenant_id_idx').on(table.tenant_id),
     slugIdx: index('repos_slug_idx').on(table.slug),
+    slugTenantUnique: uniqueIndex('repos_tenant_slug_unique').on(table.tenant_id, table.slug),
   })
 );
 
@@ -613,6 +630,7 @@ export const repos = pgTable(
 export const branches = pgTable(
   'branches',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     branch_id: varchar('branch_id', { length: 36 }).primaryKey(),
     repo_id: varchar('repo_id', { length: 36 })
@@ -746,6 +764,7 @@ export const branches = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdx: index('branches_tenant_id_idx').on(table.tenant_id),
     repoIdx: index('branches_repo_idx').on(table.repo_id),
     nameIdx: index('branches_name_idx').on(table.name),
     refIdx: index('branches_ref_idx').on(table.ref),
@@ -766,6 +785,7 @@ export const branches = pgTable(
 export const branchOwners = pgTable(
   'branch_owners',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     branch_id: varchar('branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
@@ -775,6 +795,7 @@ export const branchOwners = pgTable(
     created_at: t.timestamp('created_at').defaultNow(),
   },
   (table) => ({
+    tenantIdx: index('branch_owners_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.branch_id, table.user_id] }),
   })
 );
@@ -788,6 +809,7 @@ export const branchOwners = pgTable(
 export const boardOwners = pgTable(
   'board_owners',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     board_id: varchar('board_id', { length: 36 })
       .notNull()
       .references(() => boards.board_id, { onDelete: 'cascade' }),
@@ -797,6 +819,7 @@ export const boardOwners = pgTable(
     created_at: t.timestamp('created_at'),
   },
   (table) => ({
+    tenantIdx: index('board_owners_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.board_id, table.user_id] }),
     userIdx: index('board_owners_user_idx').on(table.user_id),
   })
@@ -815,6 +838,7 @@ export const boardOwners = pgTable(
 export const schedules = pgTable(
   'schedules',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     schedule_id: varchar('schedule_id', { length: 36 }).primaryKey(),
     branch_id: varchar('branch_id', { length: 36 })
       .notNull()
@@ -851,6 +875,7 @@ export const schedules = pgTable(
       .references(() => users.user_id),
   },
   (table) => ({
+    tenantIdx: index('schedules_tenant_id_idx').on(table.tenant_id),
     enabledNextRunIdx: index('schedules_enabled_next_run_idx').on(table.enabled, table.next_run_at),
     branchIdx: index('schedules_branch_idx').on(table.branch_id),
     createdByIdx: index('schedules_created_by_idx').on(table.created_by),
@@ -866,13 +891,14 @@ export const schedules = pgTable(
 export const users = pgTable(
   'users',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     user_id: varchar('user_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
 
     // Materialized for auth lookups
-    email: text('email').unique().notNull(),
+    email: text('email').notNull(),
     password: text('password').notNull(), // bcrypt hashed
 
     // Basic profile (materialized for display)
@@ -1034,7 +1060,9 @@ export const users = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdx: index('users_tenant_id_idx').on(table.tenant_id),
     emailIdx: index('users_email_idx').on(table.email),
+    emailTenantUnique: uniqueIndex('users_tenant_email_unique').on(table.tenant_id, table.email),
   })
 );
 
@@ -1044,6 +1072,7 @@ export const users = pgTable(
 export const groups = pgTable(
   'groups',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     group_id: varchar('group_id', { length: 36 }).primaryKey(),
     name: text('name').notNull(),
     slug: text('slug').notNull(),
@@ -1056,7 +1085,8 @@ export const groups = pgTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    slugIdx: uniqueIndex('groups_slug_idx').on(table.slug),
+    tenantIdx: index('groups_tenant_id_idx').on(table.tenant_id),
+    slugIdx: uniqueIndex('groups_tenant_slug_unique').on(table.tenant_id, table.slug),
     archivedIdx: index('groups_archived_idx').on(table.archived),
   })
 );
@@ -1067,6 +1097,7 @@ export const groups = pgTable(
 export const groupMemberships = pgTable(
   'group_memberships',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     group_id: varchar('group_id', { length: 36 })
       .notNull()
       .references(() => groups.group_id, { onDelete: 'cascade' }),
@@ -1079,6 +1110,7 @@ export const groupMemberships = pgTable(
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({
+    tenantIdx: index('group_memberships_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.group_id, table.user_id] }),
     userIdx: index('group_memberships_user_idx').on(table.user_id),
   })
@@ -1093,6 +1125,7 @@ export const groupMemberships = pgTable(
 export const branchGroupGrants = pgTable(
   'branch_group_grants',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     branch_id: varchar('branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
@@ -1112,6 +1145,7 @@ export const branchGroupGrants = pgTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    tenantIdx: index('branch_group_grants_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.branch_id, table.group_id] }),
     groupIdx: index('branch_group_grants_group_idx').on(table.group_id),
   })
@@ -1123,6 +1157,7 @@ export const branchGroupGrants = pgTable(
 export const boardGroupGrants = pgTable(
   'board_group_grants',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     board_id: varchar('board_id', { length: 36 })
       .notNull()
       .references(() => boards.board_id, { onDelete: 'cascade' }),
@@ -1142,6 +1177,7 @@ export const boardGroupGrants = pgTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    tenantIdx: index('board_group_grants_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.board_id, table.group_id] }),
     groupIdx: index('board_group_grants_group_idx').on(table.group_id),
   })
@@ -1157,6 +1193,7 @@ export const boardGroupGrants = pgTable(
 export const appVariables = pgTable(
   'app_variables',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     variable_id: varchar('variable_id', { length: 36 }).primaryKey(),
     namespace: text('namespace').notNull(),
     key: text('key').notNull(),
@@ -1172,7 +1209,12 @@ export const appVariables = pgTable(
     updated_at: t.timestamp('updated_at').notNull(),
   },
   (table) => ({
-    namespaceKeyIdx: uniqueIndex('app_variables_namespace_key_idx').on(table.namespace, table.key),
+    tenantIdx: index('app_variables_tenant_id_idx').on(table.tenant_id),
+    namespaceKeyIdx: uniqueIndex('app_variables_tenant_namespace_key_unique').on(
+      table.tenant_id,
+      table.namespace,
+      table.key
+    ),
     namespaceIdx: index('app_variables_namespace_idx').on(table.namespace),
   })
 );
@@ -1186,6 +1228,7 @@ export const appVariables = pgTable(
 export const userApiKeys = pgTable(
   'user_api_keys',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     id: varchar('id', { length: 36 }).primaryKey(),
     user_id: varchar('user_id', { length: 36 })
       .notNull()
@@ -1197,6 +1240,7 @@ export const userApiKeys = pgTable(
     last_used_at: t.timestamp('last_used_at'),
   },
   (table) => ({
+    tenantIdx: index('user_api_keys_tenant_id_idx').on(table.tenant_id),
     userIdx: index('user_api_keys_user_idx').on(table.user_id),
     prefixIdx: index('user_api_keys_prefix_idx').on(table.prefix),
   })
@@ -1211,6 +1255,7 @@ export const userApiKeys = pgTable(
 export const mcpServers = pgTable(
   'mcp_servers',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     mcp_server_id: varchar('mcp_server_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -1300,6 +1345,7 @@ export const mcpServers = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdx: index('mcp_servers_tenant_id_idx').on(table.tenant_id),
     nameIdx: index('mcp_servers_name_idx').on(table.name),
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
@@ -1316,6 +1362,7 @@ export const mcpServers = pgTable(
 export const cardTypes = pgTable(
   'card_types',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     card_type_id: varchar('card_type_id', { length: 36 }).primaryKey(),
     name: text('name').notNull(),
     emoji: text('emoji'),
@@ -1326,6 +1373,7 @@ export const cardTypes = pgTable(
     updated_at: t.timestamp('updated_at').notNull(),
   },
   (table) => ({
+    tenantIdx: index('card_types_tenant_id_idx').on(table.tenant_id),
     nameIdx: index('card_types_name_idx').on(table.name),
   })
 );
@@ -1339,6 +1387,7 @@ export const cardTypes = pgTable(
 export const cards = pgTable(
   'cards',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     card_id: varchar('card_id', { length: 36 }).primaryKey(),
     board_id: varchar('board_id', { length: 36 })
       .notNull()
@@ -1360,6 +1409,7 @@ export const cards = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
+    tenantIdx: index('cards_tenant_id_idx').on(table.tenant_id),
     boardIdx: index('cards_board_idx').on(table.board_id),
     cardTypeIdx: index('cards_card_type_idx').on(table.card_type_id),
     titleIdx: index('cards_title_idx').on(table.title),
@@ -1378,6 +1428,7 @@ export const cards = pgTable(
 export const artifacts = pgTable(
   'artifacts',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     artifact_id: varchar('artifact_id', { length: 36 }).primaryKey(),
     branch_id: varchar('branch_id', { length: 36 }).references(() => branches.branch_id, {
       onDelete: 'set null',
@@ -1413,6 +1464,7 @@ export const artifacts = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
+    tenantIdx: index('artifacts_tenant_id_idx').on(table.tenant_id),
     branchIdx: index('artifacts_branch_idx').on(table.branch_id),
     sourceSessionIdx: index('artifacts_source_session_idx').on(table.source_session_id),
     boardIdx: index('artifacts_board_idx').on(table.board_id),
@@ -1431,6 +1483,7 @@ export type ArtifactInsert = typeof artifacts.$inferInsert;
 export const artifactTrustGrants = pgTable(
   'artifact_trust_grants',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     grant_id: varchar('grant_id', { length: 36 }).primaryKey(),
     user_id: varchar('user_id', { length: 36 }).notNull(),
     scope_type: text('scope_type').notNull(),
@@ -1441,6 +1494,7 @@ export const artifactTrustGrants = pgTable(
     revoked_at: t.timestamp('revoked_at'),
   },
   (table) => ({
+    tenantIdx: index('artifact_trust_grants_tenant_id_idx').on(table.tenant_id),
     userIdx: index('artifact_trust_grants_user_idx').on(table.user_id),
     scopeIdx: index('artifact_trust_grants_scope_idx').on(table.scope_type, table.scope_value),
   })
@@ -1458,6 +1512,7 @@ export type ArtifactTrustGrantInsert = typeof artifactTrustGrants.$inferInsert;
 export const boardObjects = pgTable(
   'board_objects',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     object_id: varchar('object_id', { length: 36 }).primaryKey(),
     board_id: varchar('board_id', { length: 36 })
@@ -1483,6 +1538,7 @@ export const boardObjects = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdx: index('board_objects_tenant_id_idx').on(table.tenant_id),
     boardIdx: index('board_objects_board_idx').on(table.board_id),
     branchIdx: index('board_objects_branch_idx').on(table.branch_id),
     cardIdx: index('board_objects_card_idx').on(table.card_id),
@@ -1498,6 +1554,7 @@ export const boardObjects = pgTable(
 export const sessionMcpServers = pgTable(
   'session_mcp_servers',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     session_id: varchar('session_id', { length: 36 })
       .notNull()
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
@@ -1508,6 +1565,7 @@ export const sessionMcpServers = pgTable(
     added_at: t.timestamp('added_at').notNull(),
   },
   (table) => ({
+    tenantIdx: index('session_mcp_servers_tenant_id_idx').on(table.tenant_id),
     // Composite primary key
     pk: index('session_mcp_servers_pk').on(table.session_id, table.mcp_server_id),
     // Indexes for queries
@@ -1531,6 +1589,7 @@ export const sessionMcpServers = pgTable(
 export const userMcpOauthTokens = pgTable(
   'user_mcp_oauth_tokens',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // NULL = shared-mode token (one per mcp_server_id)
     user_id: varchar('user_id', { length: 36 }).references(() => users.user_id, {
       onDelete: 'cascade',
@@ -1549,6 +1608,7 @@ export const userMcpOauthTokens = pgTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    tenantIdx: index('user_mcp_oauth_tokens_tenant_id_idx').on(table.tenant_id),
     // Composite lookup indexes. Uniqueness enforced via partial unique indexes
     // created in the migration (one for per-user rows, one for the shared row).
     pk: index('user_mcp_oauth_tokens_pk').on(table.user_id, table.mcp_server_id),
@@ -1570,6 +1630,7 @@ export const userMcpOauthTokens = pgTable(
 export const boardComments = pgTable(
   'board_comments',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     comment_id: varchar('comment_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -1640,6 +1701,7 @@ export const boardComments = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdx: index('board_comments_tenant_id_idx').on(table.tenant_id),
     boardIdx: index('board_comments_board_idx').on(table.board_id),
     sessionIdx: index('board_comments_session_idx').on(table.session_id),
     taskIdx: index('board_comments_task_idx').on(table.task_id),
@@ -1662,6 +1724,7 @@ export const boardComments = pgTable(
 export const gatewayChannels = pgTable(
   'gateway_channels',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     id: varchar('id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -1679,7 +1742,7 @@ export const gatewayChannels = pgTable(
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
     agor_user_id: varchar('agor_user_id', { length: 36 }).notNull(),
-    channel_key: text('channel_key').notNull().unique(),
+    channel_key: text('channel_key').notNull(),
     enabled: t.bool('enabled').notNull().default(true),
     last_message_at: t.timestamp('last_message_at'),
 
@@ -1690,7 +1753,12 @@ export const gatewayChannels = pgTable(
     agentic_config: t.json<Record<string, unknown> | null>('agentic_config'),
   },
   (table) => ({
+    tenantIdx: index('gateway_channels_tenant_id_idx').on(table.tenant_id),
     channelKeyIdx: index('idx_gateway_channel_key').on(table.channel_key),
+    channelKeyTenantUnique: uniqueIndex('gateway_channels_tenant_channel_key_unique').on(
+      table.tenant_id,
+      table.channel_key
+    ),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
   })
 );
@@ -1704,6 +1772,7 @@ export const gatewayChannels = pgTable(
 export const threadSessionMap = pgTable(
   'thread_session_map',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     // Primary identity
     id: varchar('id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -1732,7 +1801,9 @@ export const threadSessionMap = pgTable(
     metadata: t.json<Record<string, unknown>>('metadata'),
   },
   (table) => ({
-    uniqueChannelThread: uniqueIndex('uniq_thread_map_channel_thread').on(
+    tenantIdx: index('thread_session_map_tenant_id_idx').on(table.tenant_id),
+    uniqueChannelThread: uniqueIndex('uniq_thread_map_tenant_channel_thread').on(
+      table.tenant_id,
       table.channel_id,
       table.thread_id
     ),
@@ -1752,6 +1823,7 @@ export const threadSessionMap = pgTable(
 export const gatewayOutboundMessages = pgTable(
   'gateway_outbound_messages',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     id: varchar('id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at').notNull(),
@@ -1805,7 +1877,9 @@ export const gatewayOutboundMessages = pgTable(
     consumed_at: t.timestamp('consumed_at'),
   },
   (table) => ({
-    uniqueChannelThread: uniqueIndex('uniq_gateway_outbound_channel_thread').on(
+    tenantIdx: index('gateway_outbound_messages_tenant_id_idx').on(table.tenant_id),
+    uniqueChannelThread: uniqueIndex('uniq_gateway_outbound_tenant_channel_thread').on(
+      table.tenant_id,
       table.gateway_channel_id,
       table.platform_thread_id
     ),
@@ -1831,6 +1905,7 @@ export const gatewayOutboundMessages = pgTable(
 export const sessionEnvSelections = pgTable(
   'session_env_selections',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     session_id: varchar('session_id', { length: 36 })
       .notNull()
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
@@ -1838,6 +1913,7 @@ export const sessionEnvSelections = pgTable(
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({
+    tenantIdx: index('session_env_selections_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.session_id, table.env_var_name] }),
     sessionIdx: index('session_env_selections_session_idx').on(table.session_id),
   })
@@ -1850,6 +1926,7 @@ export const sessionEnvSelections = pgTable(
 export const kbNamespaces = pgTable(
   'kb_namespaces',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     namespace_id: varchar('namespace_id', { length: 36 }).primaryKey(),
     slug: text('slug').notNull(),
     display_name: text('display_name').notNull(),
@@ -1882,8 +1959,9 @@ export const kbNamespaces = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    slugIdx: uniqueIndex('kb_namespaces_slug_idx')
-      .on(table.slug)
+    tenantIdx: index('kb_namespaces_tenant_id_idx').on(table.tenant_id),
+    slugIdx: uniqueIndex('kb_namespaces_tenant_slug_unique')
+      .on(table.tenant_id, table.slug)
       .where(sql`${table.archived} = false`),
     kindIdx: index('kb_namespaces_kind_idx').on(table.kind),
     ownerIdx: index('kb_namespaces_owner_idx').on(table.owner_user_id),
@@ -1899,6 +1977,7 @@ export const kbNamespaces = pgTable(
 export const kbNamespaceAcl = pgTable(
   'kb_namespace_acl',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     namespace_acl_id: varchar('namespace_acl_id', { length: 36 }).primaryKey(),
     namespace_id: varchar('namespace_id', { length: 36 })
       .notNull()
@@ -1913,9 +1992,11 @@ export const kbNamespaceAcl = pgTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    tenantIdx: index('kb_namespace_acl_tenant_id_idx').on(table.tenant_id),
     namespaceIdx: index('kb_namespace_acl_namespace_idx').on(table.namespace_id),
     subjectIdx: index('kb_namespace_acl_subject_idx').on(table.subject_type, table.subject_id),
-    namespaceSubjectIdx: uniqueIndex('kb_namespace_acl_namespace_subject_idx').on(
+    namespaceSubjectIdx: uniqueIndex('kb_namespace_acl_tenant_namespace_subject_unique').on(
+      table.tenant_id,
       table.namespace_id,
       table.subject_type,
       table.subject_id
@@ -1929,6 +2010,7 @@ export const kbNamespaceAcl = pgTable(
 export const kbDocuments = pgTable(
   'kb_documents',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     document_id: varchar('document_id', { length: 36 }).primaryKey(),
     namespace_id: varchar('namespace_id', { length: 36 })
       .notNull()
@@ -1966,10 +2048,13 @@ export const kbDocuments = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    namespacePathIdx: uniqueIndex('kb_documents_namespace_path_idx')
-      .on(table.namespace_id, table.path)
+    tenantIdx: index('kb_documents_tenant_id_idx').on(table.tenant_id),
+    namespacePathIdx: uniqueIndex('kb_documents_tenant_namespace_path_unique')
+      .on(table.tenant_id, table.namespace_id, table.path)
       .where(sql`${table.archived} = false`),
-    uriIdx: uniqueIndex('kb_documents_uri_idx').on(table.uri).where(sql`${table.archived} = false`),
+    uriIdx: uniqueIndex('kb_documents_tenant_uri_unique')
+      .on(table.tenant_id, table.uri)
+      .where(sql`${table.archived} = false`),
     namespaceIdx: index('kb_documents_namespace_idx').on(table.namespace_id),
     kindIdx: index('kb_documents_kind_idx').on(table.kind),
     visibilityIdx: index('kb_documents_visibility_idx').on(table.visibility),
@@ -1986,6 +2071,7 @@ export const kbDocuments = pgTable(
 export const kbDocumentVersions = pgTable(
   'kb_document_versions',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     version_id: varchar('version_id', { length: 36 }).primaryKey(),
     document_id: varchar('document_id', { length: 36 })
       .notNull()
@@ -2007,7 +2093,9 @@ export const kbDocumentVersions = pgTable(
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({
-    documentVersionIdx: uniqueIndex('kb_document_versions_document_version_idx').on(
+    tenantIdx: index('kb_document_versions_tenant_id_idx').on(table.tenant_id),
+    documentVersionIdx: uniqueIndex('kb_document_versions_tenant_document_version_unique').on(
+      table.tenant_id,
       table.document_id,
       table.version_number
     ),
@@ -2024,6 +2112,7 @@ export const kbDocumentVersions = pgTable(
 export const kbDocumentUnits = pgTable(
   'kb_document_units',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     unit_id: varchar('unit_id', { length: 36 }).primaryKey(),
     document_id: varchar('document_id', { length: 36 })
       .notNull()
@@ -2056,6 +2145,7 @@ export const kbDocumentUnits = pgTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    tenantIdx: index('kb_document_units_tenant_id_idx').on(table.tenant_id),
     documentIdx: index('kb_document_units_document_idx').on(table.document_id),
     versionIdx: index('kb_document_units_version_idx').on(table.version_id),
     versionOrdinalIdx: index('kb_document_units_version_ordinal_idx').on(
@@ -2071,6 +2161,7 @@ export const kbDocumentUnits = pgTable(
 export const kbEmbeddingSpaces = pgTable(
   'kb_embedding_spaces',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     embedding_space_id: varchar('embedding_space_id', { length: 36 }).primaryKey(),
     provider: text('provider').notNull(),
     model: text('model').notNull(),
@@ -2083,7 +2174,9 @@ export const kbEmbeddingSpaces = pgTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
-    providerModelIdx: uniqueIndex('kb_embedding_spaces_provider_model_idx').on(
+    tenantIdx: index('kb_embedding_spaces_tenant_id_idx').on(table.tenant_id),
+    providerModelIdx: uniqueIndex('kb_embedding_spaces_tenant_provider_model_unique').on(
+      table.tenant_id,
       table.provider,
       table.model,
       table.dimensions,
@@ -2108,6 +2201,7 @@ export const kbEmbeddingSpaces = pgTable(
 export const kbGraphNodes = pgTable(
   'kb_graph_nodes',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     node_id: varchar('node_id', { length: 36 }).primaryKey(),
     node_type: text('node_type', {
       enum: [
@@ -2173,8 +2267,9 @@ export const kbGraphNodes = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
-    uriIdx: uniqueIndex('kb_graph_nodes_uri_idx')
-      .on(table.uri)
+    tenantIdx: index('kb_graph_nodes_tenant_id_idx').on(table.tenant_id),
+    uriIdx: uniqueIndex('kb_graph_nodes_tenant_uri_unique')
+      .on(table.tenant_id, table.uri)
       .where(sql`${table.archived} = false`),
     typeIdx: index('kb_graph_nodes_type_idx').on(table.node_type),
     namespaceIdx: index('kb_graph_nodes_namespace_idx').on(table.namespace_id),
@@ -2197,6 +2292,7 @@ export const kbGraphNodes = pgTable(
 export const kbGraphEdges = pgTable(
   'kb_graph_edges',
   {
+    tenant_id: text('tenant_id').notNull().default('default'),
     edge_id: varchar('edge_id', { length: 36 }).primaryKey(),
     source_node_id: varchar('source_node_id', { length: 36 })
       .notNull()
@@ -2229,6 +2325,7 @@ export const kbGraphEdges = pgTable(
     archived_at: t.timestamp('archived_at'),
   },
   (table) => ({
+    tenantIdx: index('kb_graph_edges_tenant_id_idx').on(table.tenant_id),
     sourceIdx: index('kb_graph_edges_source_idx').on(table.source_node_id),
     targetIdx: index('kb_graph_edges_target_idx').on(table.target_node_id),
     typeIdx: index('kb_graph_edges_type_idx').on(table.edge_type),
@@ -2240,8 +2337,8 @@ export const kbGraphEdges = pgTable(
       table.target_node_id,
       table.edge_type
     ),
-    sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_source_target_type_idx')
-      .on(table.source_node_id, table.target_node_id, table.edge_type)
+    sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_tenant_source_target_type_unique')
+      .on(table.tenant_id, table.source_node_id, table.target_node_id, table.edge_type)
       .where(sql`${table.archived} = false`),
     archivedIdx: index('kb_graph_edges_archived_idx').on(table.archived),
   })
