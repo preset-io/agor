@@ -20,6 +20,7 @@ import { platform } from 'node:os';
 import { configureAnalyticsLogger } from '@agor/core/analytics';
 import {
   configureOpenSourceTelemetryLogger,
+  loadOpenSourceTelemetryAgorVersion,
   openSourceTelemetryLogger,
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
@@ -80,6 +81,10 @@ import { registerAllWidgets } from './widgets/index.js';
 
 // Load daemon version at startup
 const DAEMON_VERSION = await loadDaemonVersion(import.meta.url);
+const TELEMETRY_AGOR_VERSION = await loadOpenSourceTelemetryAgorVersion(
+  DAEMON_VERSION,
+  import.meta.url
+);
 
 // Resolve build SHA (env > .build-info file > git > 'dev'). UI tabs capture
 // this on first connect and prompt a refresh if a later handshake disagrees.
@@ -607,7 +612,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     openSourceTelemetryLogger.track({
       event: 'daemon.active',
       properties: {
-        agor_version: DAEMON_VERSION,
+        agor_version: TELEMETRY_AGOR_VERSION,
         deployment_kind: process.env.KUBERNETES_SERVICE_HOST
           ? 'k8s'
           : process.env.container || process.env.AGOR_DOCKER
@@ -622,18 +627,21 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     });
     if (
       config.telemetry?.last_reported_version &&
-      config.telemetry.last_reported_version !== DAEMON_VERSION
+      config.telemetry.last_reported_version !== TELEMETRY_AGOR_VERSION
     ) {
       openSourceTelemetryLogger.track({
         event: 'daemon.upgraded',
         properties: {
           from_version: config.telemetry.last_reported_version,
-          to_version: DAEMON_VERSION,
+          to_version: TELEMETRY_AGOR_VERSION,
         },
       });
     }
     startOpenSourceTelemetryUsageSummaryInterval(db);
-    config.telemetry = { ...config.telemetry, last_reported_version: DAEMON_VERSION };
+    config.telemetry = {
+      ...config.telemetry,
+      last_reported_version: TELEMETRY_AGOR_VERSION,
+    };
     saveConfig(pruneDefaultOpenSourceTelemetryDestination(config)).catch((error) => {
       console.warn(
         '[telemetry] failed to persist last reported version:',

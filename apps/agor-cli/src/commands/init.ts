@@ -22,6 +22,7 @@ import {
   createOpenSourceTelemetryLogger,
   generateTelemetryInstanceId,
   isTelemetryFullyDisabledByEnv,
+  loadOpenSourceTelemetryAgorVersion,
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
 import { isDaemonRunning } from '@agor-live/client';
@@ -562,7 +563,10 @@ export default class Init extends Command {
     logger.track({
       event: 'install.completed',
       properties: {
-        agor_version: this.config.version,
+        agor_version: await loadOpenSourceTelemetryAgorVersion(
+          this.config.version,
+          import.meta.url
+        ),
         install_channel: this.getInstallChannel(),
         deployment_kind: this.getDeploymentKind(),
         os_family: platform(),

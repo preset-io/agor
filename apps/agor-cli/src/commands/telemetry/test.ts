@@ -4,6 +4,7 @@ import {
   createOpenSourceTelemetryLogger,
   generateTelemetryInstanceId,
   isTelemetryFullyDisabledByEnv,
+  loadOpenSourceTelemetryAgorVersion,
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
 import { Command } from '@oclif/core';
@@ -43,7 +44,10 @@ export default class TelemetryTest extends Command {
     logger.track({
       event: 'telemetry.test',
       properties: {
-        agor_version: this.config.version,
+        agor_version: await loadOpenSourceTelemetryAgorVersion(
+          this.config.version,
+          import.meta.url
+        ),
         source: 'cli',
         os_family: platform(),
         node_major: Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10),
