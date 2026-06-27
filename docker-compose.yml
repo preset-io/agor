@@ -209,14 +209,16 @@ services:
     # This avoids port conflicts when running multiple docker-compose instances
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # Init script to grant permissions (runs only on first startup)
-      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      # No bind-mounted init script: branch worktrees may be group/private under
+      # Unix isolation, making host files unreadable to the postgres container.
+      # POSTGRES_USER is a superuser in the official image, so Agor migrations
+      # can create the drizzle/public schemas directly at daemon startup.
     healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'pg_isready -U ${POSTGRES_USER:-agor} -d ${POSTGRES_DB:-agor} && psql -U ${POSTGRES_USER:-agor} -d ${POSTGRES_DB:-agor} -tAc "SELECT 1 FROM information_schema.schemata WHERE schema_name=''drizzle''" | grep -q 1',
-        ]
+      # Only gate on PostgreSQL accepting connections. Agor owns schema creation
+      # through Drizzle migrations during daemon startup; checking for the
+      # drizzle schema here can deadlock fresh environments before the daemon has
+      # a chance to create it.
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-agor} -d ${POSTGRES_DB:-agor}']
       interval: 2s
       timeout: 3s
       retries: 10
