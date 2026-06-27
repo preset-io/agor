@@ -23,6 +23,7 @@ import {
   TOOL_API_KEY_NAMES,
   type UserID,
 } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 
 const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
   ANTHROPIC_API_KEY: true,
@@ -48,9 +49,23 @@ function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefi
   const payload = (params as AuthenticatedParams | undefined)?.authentication?.payload as
     | ExecutorTokenPayload
     | undefined;
-  return payload?.type === 'executor-session' && payload.purpose === 'executor-task'
-    ? payload
-    : undefined;
+  if (payload?.type === 'executor-session' && payload.purpose === 'executor-task') {
+    return payload;
+  }
+
+  // Feathers transports do not consistently preserve the decoded JWT payload
+  // on params.authentication. The token was already verified by requireAuth
+  // before this service method runs, so decoding here is only to recover
+  // trusted scope claims for executor-session JWTs.
+  const accessToken = (params as AuthenticatedParams | undefined)?.authentication?.accessToken;
+  if (typeof accessToken === 'string') {
+    const decoded = jwt.decode(accessToken) as ExecutorTokenPayload | null;
+    if (decoded?.type === 'executor-session' && decoded.purpose === 'executor-task') {
+      return decoded;
+    }
+  }
+
+  return undefined;
 }
 
 /**
