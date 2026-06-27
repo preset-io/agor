@@ -62,6 +62,7 @@ const checks = [
     // Agor store/tenant transaction wrapper once introduced.
     baseline: {
       'packages/core/src/db/database-wrapper.ts': 1,
+      'packages/core/src/db/tenant-scope.ts': 1,
       'packages/core/src/db/repositories/tasks.ts': 2,
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,

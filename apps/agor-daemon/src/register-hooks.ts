@@ -24,6 +24,7 @@ import {
   BoardRepository,
   type BranchRepository,
   type Database,
+  runWithTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
   shortId,
@@ -70,7 +71,9 @@ import {
   hasMinimumRole,
   ROLES,
 } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { executorRuntimeScopeGuard } from './auth/executor-runtime-scope.js';
+import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from './auth/runtime-tokens.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -471,6 +474,73 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return record.tenant_id === tenantId;
   };
 
+  const readHeaderValue = (
+    headers: Record<string, unknown> | undefined,
+    name: string
+  ): string | null => {
+    if (!headers) return null;
+    const wanted = name.toLowerCase();
+    for (const [key, value] of Object.entries(headers)) {
+      if (key.toLowerCase() !== wanted) continue;
+      const raw = Array.isArray(value) ? value[0] : value;
+      return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+    }
+    return null;
+  };
+
+  const bearerPayloadFromHeaders = (headers: Record<string, unknown> | undefined): unknown => {
+    const authorization = readHeaderValue(headers, 'authorization');
+    const match = authorization?.match(/^Bearer\s+(.+)$/i);
+    if (!match || !jwtSecret) return undefined;
+    try {
+      return jwt.verify(match[1], jwtSecret, {
+        issuer: RUNTIME_JWT_ISSUER,
+        audience: RUNTIME_JWT_AUDIENCE,
+      });
+    } catch {
+      // Let the normal Feathers auth hook return the canonical auth failure.
+      return undefined;
+    }
+  };
+
+  const resolveTenantForDatabaseScope = (context: HookContext) => {
+    const params = context.params as HookContext['params'] & {
+      headers?: Record<string, unknown>;
+      connection?: { tenant?: unknown; data?: { tenant?: unknown } };
+    };
+    const connectionTenant = params.connection?.tenant ?? params.connection?.data?.tenant;
+    if (
+      connectionTenant &&
+      typeof connectionTenant === 'object' &&
+      'tenant_id' in connectionTenant
+    ) {
+      return connectionTenant as ReturnType<typeof resolveTenantContext>;
+    }
+
+    return resolveTenantContext(multiTenancy, {
+      params,
+      authPayload: params.authentication?.payload ?? bearerPayloadFromHeaders(params.headers),
+      headers: params.headers,
+    });
+  };
+
+  const tenantDatabaseScopeAround = async (
+    context: HookContext,
+    next: () => Promise<void>
+  ): Promise<HookContext> => {
+    try {
+      context.params.tenant = resolveTenantForDatabaseScope(context);
+    } catch (error) {
+      if (error instanceof TenantResolutionError) {
+        throw new NotAuthenticated(error.message);
+      }
+      throw error;
+    }
+
+    await runWithTenantDatabaseScope(db, context.params.tenant?.tenant_id, next);
+    return context;
+  };
+
   const ensureTenantContext = async (context: HookContext): Promise<HookContext> => {
     try {
       context.params.tenant = resolveTenantContext(multiTenancy, { params: context.params });
@@ -513,6 +583,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const service = safeService(path);
       if (!service) continue;
       service.hooks({
+        around: { all: [tenantDatabaseScopeAround] },
         before: { all: [scopeTenantBefore] },
         after: { all: [assertTenantAfter] },
       });

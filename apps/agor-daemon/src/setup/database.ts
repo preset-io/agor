@@ -10,6 +10,7 @@ import { access, mkdir } from 'node:fs/promises';
 import {
   checkMigrationStatus,
   createDatabaseAsync,
+  createTenantScopedDatabaseProxy,
   formatPendingMigrationsMessage,
   seedInitialData,
 } from '@agor/core/db';
@@ -123,5 +124,5 @@ export async function initializeDatabase(dbPath: string): Promise<DatabaseInitRe
 
   console.log('✅ Database ready');
 
-  return { db };
+  return { db: createTenantScopedDatabaseProxy(db) };
 }
