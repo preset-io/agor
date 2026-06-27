@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   BatchedOpenSourceTelemetryLogger,
   generateTelemetryInstanceId,
+  isTelemetryEnabledByEnv,
   isTelemetryFullyDisabledByEnv,
   normalizeTelemetryModelFamily,
   normalizeTelemetryProvider,
@@ -21,6 +22,13 @@ describe('open-source telemetry config', () => {
   it('honors kill-switch environment variables', () => {
     expect(isTelemetryFullyDisabledByEnv({ DO_NOT_TRACK: '1' } as NodeJS.ProcessEnv)).toBe(true);
     expect(isTelemetryFullyDisabledByEnv({ AGOR_TELEMETRY: '0' } as NodeJS.ProcessEnv)).toBe(true);
+    expect(isTelemetryEnabledByEnv({ AGOR_TELEMETRY: '1' } as NodeJS.ProcessEnv)).toBe(true);
+    expect(
+      isTelemetryEnabledByEnv({
+        AGOR_TELEMETRY: '1',
+        DO_NOT_TRACK: '1',
+      } as NodeJS.ProcessEnv)
+    ).toBe(false);
   });
 
   it('allows environment to enable telemetry over config', () => {

@@ -20,8 +20,6 @@ import { platform } from 'node:os';
 import { configureAnalyticsLogger } from '@agor/core/analytics';
 import {
   configureOpenSourceTelemetryLogger,
-  generateTelemetryInstanceId,
-  isTelemetryFullyDisabledByEnv,
   loadOpenSourceTelemetryAgorVersion,
   openSourceTelemetryLogger,
   pruneDefaultOpenSourceTelemetryDestination,
@@ -77,6 +75,7 @@ import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { runPostStartJob, startup } from './startup.js';
+import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
@@ -161,7 +160,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   process.env.GIT_ASKPASS = 'echo';
 
   // Load config: CLI-provided > configPath > default loadConfig()
-  const config: AgorConfig = options?.config
+  let config: AgorConfig = options?.config
     ? options.config
     : options?.configPath
       ? await loadConfigFromFile(options.configPath)
@@ -187,16 +186,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Configure analytics after process-wide git hardening is installed. Module
   // plugins are optional dynamic imports and must never prevent daemon startup.
   await configureAnalyticsLogger(config);
-  if (
-    ['1', 'true', 'yes', 'on'].includes((process.env.AGOR_TELEMETRY ?? '').trim().toLowerCase()) &&
-    !isTelemetryFullyDisabledByEnv() &&
-    !config.telemetry?.instance_id
-  ) {
-    config.telemetry = {
-      ...config.telemetry,
-      enabled: true,
-      instance_id: generateTelemetryInstanceId(),
-    };
+  const envTelemetryConfig = ensureOpenSourceTelemetryEnvEnabledConfig(config);
+  if (envTelemetryConfig.changed) {
+    config = envTelemetryConfig.config;
     await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
   }
   configureOpenSourceTelemetryLogger(config);

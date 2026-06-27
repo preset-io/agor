@@ -22,6 +22,10 @@ function envFlag(value: string | undefined): boolean | undefined {
   return undefined;
 }
 
+export function isTelemetryEnabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return envFlag(env.AGOR_TELEMETRY) === true && !isTelemetryFullyDisabledByEnv(env);
+}
+
 export function isTelemetryFullyDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.DO_NOT_TRACK === '1') return true;
   return envFlag(env.AGOR_TELEMETRY) === false;
