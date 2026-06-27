@@ -2081,9 +2081,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const branch = await this.get(id, params);
     const _repo = (await this.app.service('repos').get(branch.repo_id, params)) as Repo;
 
-    // Only check health for 'running' or 'starting' status
+    // Only check active environments, plus errored environments that may have been
+    // started successfully out-of-band. Allowing explicit health checks to recover
+    // from `error` prevents stale start failures from keeping a live environment red.
     const currentStatus = branch.environment_instance?.status;
-    if (currentStatus !== 'running' && currentStatus !== 'starting') {
+    const canProbeHealth =
+      currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'error';
+    if (!canProbeHealth) {
       return branch;
     }
 
@@ -2151,13 +2155,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
       }
 
-      // If health check succeeds and we're in 'starting' state, transition to 'running'
-      const shouldTransitionToRunning = isHealthy && currentStatus === 'starting';
+      // If health check succeeds and we're in 'starting' or 'error' state,
+      // transition/recover to 'running'. The explicit 'error' recovery path matters
+      // when a lifecycle command failed or raced but the configured app is now live.
+      const shouldTransitionToRunning =
+        isHealthy && (currentStatus === 'starting' || currentStatus === 'error');
 
       if (shouldTransitionToRunning) {
-        console.log(
-          `✅ First successful health check for ${branch.name} - transitioning to 'running'`
-        );
+        console.log(`✅ Successful health check for ${branch.name} - transitioning to 'running'`);
       }
 
       return await this.updateEnvironment(

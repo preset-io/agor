@@ -1553,3 +1553,65 @@ describe('BranchesService.create permission defaults', () => {
     }
   );
 });
+
+describe('BranchesService environment health recovery', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('recovers an errored environment to running when the health URL succeeds', async () => {
+    const branch = {
+      branch_id: 'wt-health-recover' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-recover',
+      path: '/tmp/wt-health-recover',
+      branch_unique_id: 1,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: {
+        status: 'error',
+        last_health_check: {
+          timestamp: '2026-06-27T00:00:00.000Z',
+          status: 'unhealthy',
+          message: 'start command exited with code 1',
+        },
+      },
+    };
+    const app = {
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update) =>
+        ({
+          ...branch,
+          environment_instance: {
+            ...branch.environment_instance,
+            ...(update as Record<string, unknown>),
+          },
+        }) as never
+    );
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      branch.health_check_url,
+      expect.objectContaining({ method: 'GET' })
+    );
+    expect(updateEnvironment).toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({
+        status: 'running',
+        last_health_check: expect.objectContaining({ status: 'healthy', message: 'HTTP 200' }),
+      }),
+      undefined
+    );
+    expect(result.environment_instance?.status).toBe('running');
+  });
+});
