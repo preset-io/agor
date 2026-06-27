@@ -102,6 +102,7 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
+import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
@@ -494,6 +495,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const configService = createConfigService(db);
   configService.app = app;
+  app.use('/admin/local-actions', createLocalActionsService());
+
   app.use('/config', configService);
 
   app.use('/config/resolve-api-key', {

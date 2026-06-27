@@ -114,6 +114,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/agor-daemon/package.json ./apps/agor-daemon/
 COPY apps/agor-cli/package.json ./apps/agor-cli/
 COPY apps/agor-ui/package.json ./apps/agor-ui/
+COPY packages/git/package.json ./packages/git/
 COPY packages/core/package.json ./packages/core/
 COPY packages/executor/package.json ./packages/executor/
 COPY packages/client/package.json ./packages/client/

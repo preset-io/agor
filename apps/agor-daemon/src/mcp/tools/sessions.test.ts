@@ -1252,7 +1252,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
       },
       '/sessions/:id/mcp-servers': { create: async () => ({}) },
     });
-    vi.doMock('@agor/core/git', () => ({
+    vi.doMock('@agor/core/git/exec', () => ({
       getGitState: async () => 'sha',
       getCurrentBranch: async () => 'main',
     }));

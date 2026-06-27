@@ -19,7 +19,7 @@ import {
   BranchRepository,
   RepoRepository,
 } from '../db/repositories';
-import { cloneRepo, createBranch, getBranchPath } from '../git';
+import { cloneRepo, createBranch, getBranchPath } from '../git/exec';
 import { generateId } from '../lib/ids';
 import { DirectExecutor, UnixIntegrationService } from '../unix';
 

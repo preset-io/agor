@@ -136,8 +136,10 @@ jobs:
             "${{ steps.pack.outputs.live }}"
           echo "=== Installed dist/ ==="
           ls node_modules/agor-live/dist
-          echo "=== Postinstall artifact (@agor/core symlink) ==="
+          echo "=== Postinstall artifacts (@agor symlinks) ==="
           ls -la node_modules/agor-live/node_modules/@agor/core
+          ls -la node_modules/agor-live/node_modules/@agor/git
+          (cd node_modules/agor-live && node --input-type=module -e "await import('@agor/core/git/exec'); console.log('✓ @agor/core/git/exec imports from agor-live package context')")
           # Confirm the UI bundle index.html is present and references a JS asset.
           if [ ! -f node_modules/agor-live/dist/ui/index.html ]; then
             echo "::error::dist/ui/index.html missing from installed package"

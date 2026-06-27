@@ -29,7 +29,7 @@ import {
   users,
 } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { isLikelyGitToken } from '@agor/core/git';
+import { isLikelyGitToken } from '@agor/core/git/pure';
 import type {
   AgenticToolName,
   AgenticToolsConfig,

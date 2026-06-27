@@ -1603,6 +1603,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Gateway service create (postMessage) authenticates via channel_key, not user auth
   // No hooks needed — auth is handled internally by the service
 
+  safeService('admin/local-actions')?.hooks({
+    before: {
+      create: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'run local admin actions')],
+    },
+  });
+
   app.service('config').hooks({
     before: {
       all: [requireAuth],

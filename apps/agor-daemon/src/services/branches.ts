@@ -34,7 +34,7 @@ import {
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { stripGitUrlCredentials } from '@agor/core/git';
+import { stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
   Board,

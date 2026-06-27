@@ -9,6 +9,8 @@ export default defineConfig({
     'db/index': 'src/db/index.ts',
     'db/session-guard': 'src/db/session-guard.ts', // Defensive programming for deleted sessions
     'git/index': 'src/git/index.ts',
+    'git/pure': 'src/git/pure.ts',
+    'git/exec': 'src/git/exec.ts',
     'api/index': 'src/api/index.ts',
     'claude/index': 'src/claude/index.ts',
     'claude-cli/index': 'src/claude-cli/index.ts', // Pure utilities for the Claude Code CLI adapter (path slug, event types, JSONL translator)
@@ -52,6 +54,7 @@ export default defineConfig({
     'tools/mcp/oauth-refresh': 'src/tools/mcp/oauth-refresh.ts', // MCP OAuth refresh_token persistence + mutex
     'tools/mcp/oauth-token-expiry': 'src/tools/mcp/oauth-token-expiry.ts', // MCP OAuth token expiry resolution cascade
     'unix/index': 'src/unix/index.ts', // Unix group management utilities for branch isolation
+    'local-actions/index': 'src/local-actions/index.ts', // Shared host-local admin actions
     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export

@@ -27,7 +27,7 @@ echo "✅ Home directory permissions fixed"
 
 # Fix build directory permissions (clean stale dist files with wrong ownership)
 echo "🔧 Ensuring write access for build tools..."
-DIST_DIRS="/app/packages/core/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
+DIST_DIRS="/app/packages/git/dist /app/packages/core/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
 if sudo -n true 2>/dev/null; then
   # Clean and recreate dist directories with correct ownership.
   # Use the explicit workspace list instead of /app/packages/*/dist globs:
@@ -54,6 +54,22 @@ fi
 echo "⏭️  Skipping husky install"
 
 # Build packages sequentially with blocking builds to avoid race conditions
+echo "🔨 Building @agor/git (initial build)..."
+pnpm --filter @agor/git build
+
+echo "⏳ Waiting for @agor/git type definitions..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/git/dist/index.d.ts" ] || [ ! -f "/app/packages/git/dist/pure.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for git type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/git initial build complete (including type definitions)"
+
 echo "🔨 Building @agor/core (initial build)..."
 pnpm --filter @agor/core build
 
@@ -105,6 +121,9 @@ echo "✅ @agor-live/client initial build complete (including type definitions)"
 
 # Start watch modes for hot-reload
 echo "🔄 Starting watch modes..."
+pnpm --filter @agor/git dev &
+GIT_PID=$!
+
 pnpm --filter @agor/core dev &
 CORE_PID=$!
 
@@ -114,7 +133,7 @@ EXECUTOR_PID=$!
 pnpm --filter @agor-live/client dev &
 CLIENT_PID=$!
 
-echo "✅ Watch modes started (core, executor, and client will rebuild on file changes)"
+echo "✅ Watch modes started (git, core, executor, and client will rebuild on file changes)"
 
 # Initialize database and configure daemon settings for Docker
 # (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)
@@ -208,7 +227,7 @@ echo "$ADMIN_OUTPUT"
 # a clean pre-daemon window and sudoers access.
 if [ "$AGOR_SET_UNIX_MODE" = "strict" ]; then
   echo "🔒 Provisioning bootstrap admin OS user (strict mode)..."
-  pnpm agor admin ensure-user --username admin || echo "⚠️  Could not provision admin OS user — check sudoers"
+  pnpm agor local ensure-user --username admin || echo "⚠️  Could not provision admin OS user — check sudoers"
 fi
 
 # Get FULL admin user UUID from database (the CLI only shows short ID)
@@ -279,3 +298,4 @@ kill $DAEMON_PID 2>/dev/null || true
 kill $CLIENT_PID 2>/dev/null || true
 kill $EXECUTOR_PID 2>/dev/null || true
 kill $CORE_PID 2>/dev/null || true
+kill $GIT_PID 2>/dev/null || true
