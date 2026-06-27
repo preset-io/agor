@@ -7,6 +7,7 @@ export default class Telemetry extends Command {
   static description = 'Show Agor open-source telemetry status';
 
   async run(): Promise<void> {
+    await this.parse(Telemetry);
     const config = await loadConfig();
     const enabled = config.telemetry?.enabled === true;
     const configured = config.telemetry?.enabled !== undefined;
