@@ -8,13 +8,14 @@ import type {
   Board,
   BoardAccessMode,
   BoardExportBlob,
+  BoardID,
   BoardObject,
   Branch,
   BranchPermissionLevel,
   UUID,
 } from '@agor/core/types';
 import { isAssistant } from '@agor/core/types';
-import { and, eq, exists, isNull, like, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like, ne, type SQL } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -22,15 +23,13 @@ import { generateSlug } from '../../lib/slugs';
 import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import {
   type BoardInsert,
   type BoardRow,
   boardGroupGrants,
   boardOwners,
   boards,
-  branches,
-  branchOwners,
   groupMemberships,
   groups,
 } from '../schema';
@@ -42,7 +41,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { visibleBoardAccessCondition } from './branch-access';
 import { BranchRepository } from './branches';
 
 const BOARD_ACCESS_MODES = ['private', 'shared'] as const;
@@ -80,8 +79,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    *
    * @param row - Database row
    * @param baseUrl - Base URL for generating board URLs
+   * @param options.lean - Omit the heavy `objects` / `custom_css` annotations
+   *   (used by the boards list path; single-board reads always stay full).
    */
-  private rowToBoard(row: BoardRow, baseUrl?: string): Board {
+  private rowToBoard(row: BoardRow, baseUrl?: string, options?: { lean?: boolean }): Board {
     const data = row.data as {
       description?: string;
       color?: string;
@@ -100,6 +101,12 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     const slug = row.slug !== null ? row.slug : undefined;
     const url = baseUrl ? getBoardUrl(boardId, slug, baseUrl) : '';
 
+    // Lean projection drops the two heavy JSON fields nested in `data` (zones /
+    // text / markdown annotations + per-board CSS). A client `$select` can't do
+    // this — they live inside the `data` column, not as top-level columns.
+    const { objects: _objects, custom_css: _customCss, ...leanData } = data;
+    const effectiveData = options?.lean ? leanData : data;
+
     return {
       board_id: boardId,
       name: row.name,
@@ -115,7 +122,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       archived: Boolean(row.archived),
       archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
       archived_by: row.archived_by ?? undefined,
-      ...data,
+      ...effectiveData,
       icon: normalizeExactEmojiShortcode(data.icon),
       access_mode: data.access_mode ?? 'shared',
       default_others_can: data.default_others_can ?? 'session',
@@ -328,14 +335,58 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     return this.findById(param);
   }
 
+  private visibleBoardCondition(userId: UUID): SQL {
+    return visibleBoardAccessCondition(this.db, userId);
+  }
+
   /**
-   * Find all boards
+   * Find all boards (with optional filters and projection).
+   *
+   * The `boardIds`, `archived`, and `visibleToUserId` filters let the list read
+   * path (`BoardsService.find` via the adapter's `fetchData`) push
+   * high-selectivity predicates — including board RBAC visibility — into SQL so
+   * it no longer materializes the whole table before filtering in memory.
+   *
+   * @param filter - Optional filters and projection
+   * @param filter.archived - Filter to an exact archived state
+   * @param filter.boardIds - Restrict to a set of board IDs (empty set yields no
+   *   rows, matching an `{ $in: [] }` filter)
+   * @param filter.visibleToUserId - Restrict to boards visible to this user
+   *   under branch RBAC.
+   * @param filter.lean - Omit each board's heavy `objects` / `custom_css`
+   *   annotations from the result. The displayed board's full record is fetched
+   *   separately via `findById`, so the list path never needs them. RBAC and
+   *   the id pushdown stay in force, so the lean list can never widen visibility.
    */
-  async findAll(): Promise<Board[]> {
+  async findAll(filter?: {
+    archived?: boolean;
+    boardIds?: BoardID[];
+    visibleToUserId?: UUID;
+    lean?: boolean;
+  }): Promise<Board[]> {
     try {
+      // An explicit empty id set can never match a row; short-circuit so we skip
+      // the read entirely and avoid emitting an empty `IN ()` predicate.
+      if (filter?.boardIds !== undefined && filter.boardIds.length === 0) {
+        return [];
+      }
+
+      const conditions = [];
+      if (filter?.archived !== undefined) {
+        conditions.push(eq(boards.archived, filter.archived));
+      }
+      if (filter?.boardIds !== undefined) {
+        conditions.push(inArray(boards.board_id, filter.boardIds));
+      }
+      if (filter?.visibleToUserId) {
+        conditions.push(this.visibleBoardCondition(filter.visibleToUserId));
+      }
+
       const baseUrl = await getBaseUrl();
-      const rows = await select(this.db).from(boards).all();
-      return rows.map((row: BoardRow) => this.rowToBoard(row, baseUrl));
+      const query = select(this.db).from(boards);
+      const rows =
+        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
+      return rows.map((row: BoardRow) => this.rowToBoard(row, baseUrl, { lean: filter?.lean }));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all boards: ${error instanceof Error ? error.message : String(error)}`,
@@ -366,57 +417,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * @returns Array of board ids the user can see
    */
   async findVisibleBoardIds(userId: UUID): Promise<string[]> {
-    // Raw drizzle builder for the EXISTS subquery — `exists()` expects a
-    // drizzle SelectQueryBuilder, not the cross-dialect wrapper shape, and
-    // the subquery doesn't need `.all()` / `.one()` execution methods.
-    const accessibleBranchExists = exists(
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-      (this.db as any)
-        .select({ _: sql`1` })
-        .from(branches)
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
-        .where(
-          and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition(this.db, userId))
-        )
-    );
-    const accessiblePrimaryAssistantExists = exists(
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-      (this.db as any)
-        .select({ _: sql`1` })
-        .from(branches)
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
-        .where(
-          and(
-            eq(branches.branch_id, boards.primary_assistant_id),
-            visibleBranchAccessCondition(this.db, userId)
-          )
-        )
-    );
     const rows = await select(this.db, { board_id: boards.board_id })
       .from(boards)
-      .where(
-        or(
-          eq(boards.created_by, userId),
-          exists(
-            // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-            (this.db as any)
-              .select({ _: sql`1` })
-              .from(boardOwners)
-              .where(
-                and(eq(boardOwners.board_id, boards.board_id), eq(boardOwners.user_id, userId))
-              )
-          ),
-          sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared') = 'shared'`,
-          accessibleBranchExists,
-          accessiblePrimaryAssistantExists
-        )
-      )
+      .where(this.visibleBoardCondition(userId))
       .all();
     return rows.map((r: { board_id: string }) => r.board_id);
   }

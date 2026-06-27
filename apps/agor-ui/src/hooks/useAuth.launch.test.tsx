@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../utils/tokenRefresh';
 import { useAuth } from './useAuth';
 
@@ -37,6 +38,34 @@ describe('useAuth launch-code fallback', () => {
     vi.restoreAllMocks();
     localStorage.clear();
     window.history.replaceState({}, '', '/ui/');
+  });
+
+  it('notifies socket clients when launch sign-in stores fresh tokens', async () => {
+    launchCreate.mockResolvedValue({
+      accessToken: 'launch-access',
+      refreshToken: 'launch-refresh',
+      user: { user_id: 'u1', email: 'person@example.test' },
+    });
+
+    const listener = vi.fn();
+    window.addEventListener(TOKENS_REFRESHED_EVENT, listener);
+
+    try {
+      const { result } = renderHook(() => useAuth());
+
+      await waitFor(() => expect(result.current.authenticated).toBe(true));
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect((listener.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+        accessToken: 'launch-access',
+        refreshToken: 'launch-refresh',
+        user: { user_id: 'u1', email: 'person@example.test' },
+      });
+      expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('launch-access');
+      expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('launch-refresh');
+    } finally {
+      window.removeEventListener(TOKENS_REFRESHED_EVENT, listener);
+    }
   });
 
   it('preserves stored tokens and restores the normal session when launch sign-in fails', async () => {
@@ -88,6 +117,39 @@ describe('useAuth launch-code fallback', () => {
     expect(result.current.error).toContain('unexpected response');
     expect(result.current.error).toContain('daemon URL');
     expect(result.current.error).not.toContain('JSON parsing error');
+  });
+
+  it('notifies socket clients when local login replaces invalidated password-change tokens', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    authenticate.mockResolvedValue({
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      user: { user_id: 'u1', email: 'person@example.test' },
+    });
+
+    const listener = vi.fn();
+    window.addEventListener(TOKENS_REFRESHED_EVENT, listener);
+
+    try {
+      const { result } = renderHook(() => useAuth());
+
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      await act(async () => {
+        await expect(result.current.login('person@example.test', 'password-123')).resolves.toBe(
+          true
+        );
+      });
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect((listener.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        user: { user_id: 'u1', email: 'person@example.test' },
+      });
+    } finally {
+      window.removeEventListener(TOKENS_REFRESHED_EVENT, listener);
+    }
   });
 
   it('preserves stored tokens when stored-session auth gets a non-auth transport response', async () => {

@@ -4,7 +4,7 @@
  * Tests for type-safe CRUD operations on branches with short ID support.
  */
 
-import type { BranchID, UUID } from '@agor/core/types';
+import type { BoardID, BranchID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
 import { boards } from '../schema';
@@ -502,6 +502,125 @@ describe('BranchRepository.findAll', () => {
 
     const filtered = await wtRepo.findAll({ repo_id: generateId() });
     expect(filtered).toEqual([]);
+  });
+
+  dbTest('should filter by board_id', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const boardA = generateId() as UUID;
+    const boardB = generateId() as UUID;
+    for (const boardId of [boardA, boardB]) {
+      await (db as any).insert(boards).values({
+        board_id: boardId,
+        created_at: new Date(),
+        created_by: 'test-user' as UUID,
+        name: 'Board',
+        data: {},
+      });
+    }
+
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'a1', branch_unique_id: 1, board_id: boardA })
+    );
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'a2', branch_unique_id: 2, board_id: boardA })
+    );
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b1', branch_unique_id: 3, board_id: boardB })
+    );
+
+    const boardABranches = await wtRepo.findAll({ board_id: boardA as BoardID });
+    expect(boardABranches.map((w) => w.name).sort()).toEqual(['a1', 'a2']);
+    expect(boardABranches.every((w) => w.board_id === boardA)).toBe(true);
+  });
+
+  dbTest('should filter by exact archived state', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const active = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'active', branch_unique_id: 1 })
+    );
+    const archived = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'archived', branch_unique_id: 2 })
+    );
+    await wtRepo.update(archived.branch_id, { archived: true });
+
+    const activeOnly = await wtRepo.findAll({ archived: false });
+    expect(activeOnly.map((w) => w.branch_id)).toEqual([active.branch_id]);
+
+    const archivedOnly = await wtRepo.findAll({ archived: true });
+    expect(archivedOnly.map((w) => w.branch_id)).toEqual([archived.branch_id]);
+  });
+
+  dbTest('should restrict to an explicit branchIds set', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const b1 = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b1', branch_unique_id: 1 })
+    );
+    const b2 = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b2', branch_unique_id: 2 })
+    );
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b3', branch_unique_id: 3 })
+    );
+
+    const scoped = await wtRepo.findAll({ branchIds: [b1.branch_id, b2.branch_id] });
+    expect(scoped.map((w) => w.name).sort()).toEqual(['b1', 'b2']);
+  });
+
+  dbTest('should return no rows for an empty branchIds set', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b1', branch_unique_id: 1 })
+    );
+
+    expect(await wtRepo.findAll({ branchIds: [] })).toEqual([]);
+  });
+
+  dbTest('should push branch visibility directly into findAll SQL', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const viewerId = generateId() as UUID;
+    await usersRepo.create({
+      user_id: viewerId,
+      email: 'findall-visible-branch@example.com',
+      name: 'Visible Branch Viewer',
+    });
+
+    const repo = await repoRepo.create(createRepoData());
+    const ownedPrivate = await wtRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'owned-private',
+        branch_unique_id: 1,
+        permission_source: 'override',
+        others_can: 'none',
+      })
+    );
+    await wtRepo.addOwner(ownedPrivate.branch_id, viewerId);
+    await wtRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'other-private',
+        branch_unique_id: 2,
+        permission_source: 'override',
+        others_can: 'none',
+      })
+    );
+
+    const visible = await wtRepo.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((w) => w.name)).toEqual(['owned-private']);
   });
 });
 

@@ -337,11 +337,36 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * Callers that explicitly want to exclude archived branches should pass
    * `{ includeArchived: false }`.
    *
-   * @param filter - Optional filters (repo_id, includeArchived)
+   * The `board_id`, `archived`, and `branchIds` filters let the list read path
+   * (`BranchesService.find`) push its high-selectivity predicates into SQL so it
+   * no longer materializes the whole table before filtering in memory.
+   *
+   * @param filter - Optional filters
    * @param filter.repo_id - Filter by repository ID
    * @param filter.includeArchived - Include archived branches (default: true)
+   * @param filter.board_id - Filter to a single board
+   * @param filter.archived - Filter to an exact archived state (takes precedence
+   *   over `includeArchived`)
+   * @param filter.branchIds - Restrict to a set of branch IDs (empty set yields
+   *   no rows, matching an `{ $in: [] }` filter)
+   * @param filter.visibleToUserId - Restrict to branches visible to this user
+   *   under branch RBAC, pushed down as a SQL predicate instead of a preloaded
+   *   `branch_id IN (...)` list.
    */
-  async findAll(filter?: { repo_id?: UUID; includeArchived?: boolean }): Promise<Branch[]> {
+  async findAll(filter?: {
+    repo_id?: UUID;
+    includeArchived?: boolean;
+    board_id?: BoardID;
+    archived?: boolean;
+    branchIds?: BranchID[];
+    visibleToUserId?: UUID;
+  }): Promise<Branch[]> {
+    // An explicit empty id set can never match a row; short-circuit so we skip
+    // the read entirely and avoid emitting an empty `IN ()` predicate.
+    if (filter?.branchIds !== undefined && filter.branchIds.length === 0) {
+      return [];
+    }
+
     const includeArchived = filter?.includeArchived ?? true;
 
     // Build where conditions
@@ -349,13 +374,40 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (filter?.repo_id) {
       conditions.push(eq(branches.repo_id, filter.repo_id));
     }
-    if (!includeArchived) {
+    if (filter?.board_id) {
+      conditions.push(eq(branches.board_id, filter.board_id));
+    }
+    if (filter?.archived !== undefined) {
+      conditions.push(eq(branches.archived, filter.archived));
+    } else if (!includeArchived) {
       conditions.push(eq(branches.archived, false));
     }
+    if (filter?.branchIds !== undefined) {
+      conditions.push(inArray(branches.branch_id, filter.branchIds));
+    }
+    if (filter?.visibleToUserId) {
+      conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+    }
 
-    const query = select(this.db).from(branches);
+    // The join shape differs only when RBAC SQL scoping is active. Keep the
+    // execution below uniform; Drizzle's cross-dialect builder types are more
+    // precise than this conditional can express.
+    // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+    const baseQuery: any = filter?.visibleToUserId
+      ? select(this.db, getTableColumns(branches))
+          .from(branches)
+          .leftJoin(
+            branchOwners,
+            and(
+              eq(branchOwners.branch_id, branches.branch_id),
+              eq(branchOwners.user_id, filter.visibleToUserId)
+            )
+          )
+      : select(this.db).from(branches);
     const rows =
-      conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
+      conditions.length > 0
+        ? await baseQuery.where(and(...conditions)).all()
+        : await baseQuery.all();
 
     const baseUrl = await getBaseUrl();
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));

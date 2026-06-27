@@ -1734,3 +1734,181 @@ describe('ArtifactsService.queryArtifactRuntime', () => {
     realApp.app = originalApp;
   });
 });
+
+describe('ArtifactsService.find SQL pushdown', () => {
+  async function seedPushdownFixture(db: Database) {
+    const boardA = (await seedBoard(db)).board_id as BoardID;
+    const boardB = (await seedBoard(db)).board_id as BoardID;
+    const branch1 = (await seedRepoAndBranch(db, '/tmp/artifact-branch-1')).branch_id as BranchID;
+    const branch2 = (await seedRepoAndBranch(db, '/tmp/artifact-branch-2')).branch_id as BranchID;
+    const artifactRepo = new ArtifactRepository(db);
+    const files = { '/index.js': 'console.log("hi")' };
+
+    // boardA: branch1, branch2, and an orphan (null branch_id).
+    const onBranch1 = await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: boardA,
+      branch_id: branch1,
+      name: 'a-branch1',
+      files,
+    });
+    await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: boardA,
+      branch_id: branch2,
+      name: 'a-branch2',
+      files,
+    });
+    await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: boardA,
+      branch_id: null,
+      name: 'a-orphan',
+      files,
+    });
+    // boardB: branch1 — must be excluded by a boardA-scoped query.
+    await artifactRepo.create({
+      artifact_id: generateId(),
+      board_id: boardB,
+      branch_id: branch1,
+      name: 'b-branch1',
+      files,
+    });
+
+    const service = new ArtifactsService(db, makeFakeApp());
+    return { service, boardA, boardB, branch1, branch2, onBranch1 };
+  }
+
+  dbTest('pushes board_id into the repository read (rbac off)', async ({ db }) => {
+    const { service, boardA } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({ query: { board_id: boardA } })) as {
+      data: Artifact[];
+      total: number;
+    };
+
+    // SQL-bounded: the board predicate reaches the repository, not a whole-table read.
+    expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA });
+    // boardA has 3 artifacts (branch1, branch2, orphan).
+    expect(result.total).toBe(3);
+    expect(result.data.every((a) => a.board_id === boardA)).toBe(true);
+    // Per-row enrichment ran on the reduced set (rowToArtifact populates files).
+    expect(result.data.every((a) => a.files !== undefined)).toBe(true);
+  });
+
+  dbTest(
+    'pushes board_id + accessible branch_id $in and excludes orphans (rbac on)',
+    async ({ db }) => {
+      const { service, boardA, branch1, onBranch1 } = await seedPushdownFixture(db);
+      const repoFindAll = vi.spyOn(
+        (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+        'findAll'
+      );
+
+      const result = (await service.find({
+        query: { board_id: boardA, branch_id: { $in: [branch1] } },
+      })) as { data: Artifact[]; total: number };
+
+      expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA, branchIds: [branch1] });
+      // Only the boardA + branch1 artifact survives; branch2 and the orphan are excluded.
+      expect(result.total).toBe(1);
+      expect(result.data.map((a) => a.artifact_id)).toEqual([onBranch1.artifact_id]);
+    }
+  );
+
+  dbTest('pushes a scalar branch_id as a single-id set', async ({ db }) => {
+    const { service, branch1 } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({ query: { branch_id: branch1 } })) as {
+      data: Artifact[];
+      total: number;
+    };
+
+    expect(repoFindAll).toHaveBeenCalledWith({ branchIds: [branch1] });
+    // branch1 has artifacts on both boardA and boardB.
+    expect(result.total).toBe(2);
+  });
+
+  dbTest(
+    'returns no rows for an empty accessible set without reading the table',
+    async ({ db }) => {
+      const { service } = await seedPushdownFixture(db);
+      const repoFindAll = vi.spyOn(
+        (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+        'findAll'
+      );
+
+      const result = (await service.find({ query: { branch_id: { $in: [] } } })) as {
+        data: Artifact[];
+        total: number;
+      };
+
+      expect(repoFindAll).toHaveBeenCalledWith({ branchIds: [] });
+      expect(result.total).toBe(0);
+      expect(result.data).toHaveLength(0);
+    }
+  );
+
+  dbTest('pushes the RBAC SQL visibility marker into the repository read', async ({ db }) => {
+    const { service, boardA } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    await service.find({
+      _agorSqlBranchAccessUserId: 'viewer-1' as UUID,
+      query: { board_id: boardA },
+    });
+
+    expect(repoFindAll).toHaveBeenCalledWith({
+      board_id: boardA,
+      visibleToUserId: 'viewer-1',
+    });
+  });
+
+  // branch_id is nullable: a `{ $in }` containing a non-string element must NOT
+  // be pushed, because SQL `IN (NULL)` never matches an orphan's null branch_id
+  // while the JS `includes` path does. Pushing it would return a SUBSET.
+  dbTest('does NOT push a $in containing null — orphans stay visible', async ({ db }) => {
+    const { service } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: { branch_id: { $in: [null as unknown as BranchID] } },
+    })) as { data: Artifact[]; total: number };
+
+    // Fell through to the whole-table read (no branchIds pushed); filterData
+    // applied the $in in JS, which matches the orphan's null branch_id.
+    expect(repoFindAll).toHaveBeenCalledWith({});
+    expect(result.data.map((a) => a.name)).toEqual(['a-orphan']);
+    expect(result.data.every((a) => a.branch_id === null)).toBe(true);
+  });
+
+  dbTest('does NOT push a mixed null + string $in — orphans stay visible', async ({ db }) => {
+    const { service, branch1 } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: { branch_id: { $in: [null as unknown as BranchID, branch1] } },
+    })) as { data: Artifact[]; total: number };
+
+    // Whole-table fall-through; JS $in matches the orphan AND both branch1 rows.
+    expect(repoFindAll).toHaveBeenCalledWith({});
+    expect(result.data.map((a) => a.name).sort()).toEqual(['a-branch1', 'a-orphan', 'b-branch1']);
+  });
+});

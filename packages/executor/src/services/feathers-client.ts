@@ -61,6 +61,11 @@ export async function createExecutorClient(
     authStorage: storage,
   });
 
+  // Keep the executor JWT available for daemon endpoints that need an explicit
+  // task-scoped proof. Socket.io auth can preserve the session creator user
+  // while dropping custom JWT claims from subsequent service params.
+  (client as AgorClient & { executorSessionToken?: string }).executorSessionToken = sessionToken;
+
   // Connect the socket
   client.io.connect();
 

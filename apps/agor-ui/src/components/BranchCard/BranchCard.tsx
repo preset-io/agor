@@ -445,7 +445,7 @@ const BranchCardComponent = ({
                 icon={<CodeOutlined />}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onOpenTerminal([`cd ${branch.path}`], branch.branch_id);
+                  onOpenTerminal([], branch.branch_id);
                 }}
                 title="Open terminal in branch directory"
               />

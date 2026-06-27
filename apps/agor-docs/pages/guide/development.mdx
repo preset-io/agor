@@ -34,6 +34,15 @@ SEED=true LOAD_FIXTURES=true docker compose up
   live Sandpack artifact. Idempotent and **dev-only**. You can also run it manually
   with `pnpm load:fixtures`.
 
+The `SEED=true LOAD_FIXTURES=true docker compose up` form is for running compose
+directly on a host. **In an Agor-managed env** the start command comes pre-rendered
+from a `.agor.yml` variant, so pick a demo variant instead of injecting env vars:
+the `sqlite-demo` and `postgres-demo` variants below are the `sqlite` / `postgres`
+variants with `LOAD_FIXTURES=true` added next to `SEED=true`. Select one via the
+**Branch → Environment** tab variant picker, the MCP call
+`agor_environment_set({ branchId, variant: "sqlite-demo", andStart: true })`, or at
+branch creation with `variant: "sqlite-demo"`.
+
 Both are off by default and can be enabled independently. With `LOAD_FIXTURES`,
 extra demo logins are available (passwords printed in the seed log):
 
@@ -56,6 +65,8 @@ Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.ago
 | **`postgres`**           | Postgres backend (closer to multi-user prod). RBAC off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from pg_catalog).       | same as `sqlite`                                  |
 | **`full`**               | Postgres + branch RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. Same PG13+ floor as `postgres`. | same as `sqlite`                                  |
 | **`docs`**               | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone — no daemon, no DB.                                   | `7000 + branch.unique_id`                         |
+| **`sqlite-demo`**        | `sqlite` plus `LOAD_FIXTURES=true` — boots a populated demo board with 4 loginable demo users for instant E2E testing. Dev-only.              | same as `sqlite`                                  |
+| **`postgres-demo`**      | `postgres` plus `LOAD_FIXTURES=true` — same demo fixtures on a Postgres backend. Dev-only.                                                    | same as `sqlite`                                  |
 
 Ports derive from `branch.unique_id` so multiple branches run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host.
 

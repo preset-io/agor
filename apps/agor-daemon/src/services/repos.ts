@@ -4,9 +4,9 @@
  * Provides REST + WebSocket API for repository management.
  * Uses DrizzleService adapter with RepoRepository.
  *
- * Git operations (clone, branch add) are delegated to the executor process
- * for proper Unix isolation. The executor handles filesystem operations while
- * the daemon handles database records and business logic.
+ * Git clone/worktree mutations for queued branch/repo operations are delegated
+ * to the executor process for Unix isolation. The daemon still performs a small
+ * set of local preflight/repair checks for registered repo metadata.
  */
 
 import { homedir } from 'node:os';
@@ -27,16 +27,18 @@ import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolv
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   assertRemoteRefVisibleForClone,
-  getBranchPath,
   getDefaultBranch,
   getRemoteUrl,
-  getReposDir,
   isValidGitRepo,
-  redactGitUrlCredentials,
   scanGitConfigRemoteCredentials,
   scrubGitConfigRemoteCredentials,
+} from '@agor/core/git/exec';
+import {
+  getBranchPath,
+  getReposDir,
+  redactGitUrlCredentials,
   stripGitUrlCredentials,
-} from '@agor/core/git';
+} from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
   Branch,
@@ -562,7 +564,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Currently, local repos don't trigger git operations via executor,
     // so we'd need a separate executor command (e.g., 'unix.init-repo-group').
     // For now, local repos don't get Unix group isolation automatically.
-    // Use `agor admin sync-unix` to initialize groups for existing repos.
+    // Use `agor local sync-unix` to initialize groups for existing repos.
 
     return repo;
   }

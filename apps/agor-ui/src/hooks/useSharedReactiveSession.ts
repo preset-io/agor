@@ -61,13 +61,13 @@ export function useSharedReactiveSession(
   // be stale. The reactive session itself only resyncs on socket `connect`
   // events — but auth-recovery happens on other channels too:
   //
-  // - The proactive token-refresh timer in useAuth fires `TOKENS_REFRESHED_EVENT`
-  //   after a successful refresh that the panel didn't trigger.
+  // - Auth recovery in useAuth fires `TOKENS_REFRESHED_EVENT` after a
+  //   successful token replacement that the panel didn't trigger.
   // - When a tab regains focus after a long background, useAuth's
   //   visibilitychange handler may have refreshed tokens silently.
   //
   // Without these listeners, a transient 401 surfaced during a previous
-  // `resync()` (e.g. socket reconnected before the access-token refresh
+  // `resync()` (e.g. socket reconnected before access-token replacement
   // landed) leaves the panel stuck on a "jwt expired" banner indefinitely.
   //
   // We retry while `state.error` is set but skip `state.terminal` errors —

@@ -5,7 +5,7 @@
  * sending messages to and receiving messages from messaging platforms.
  */
 
-import type { ChannelType } from '../types/gateway';
+import type { ChannelType, SlackTestResult } from '../types/gateway';
 
 /**
  * Inbound message from a messaging platform
@@ -103,4 +103,14 @@ export interface GatewayConnector {
    * own `sendMessage` will interpret. Callers should accept either shape.
    */
   formatMessage?(markdown: string): string | OutboundPayload;
+
+  /**
+   * Best-effort probe of the connector's credentials and reachability.
+   *
+   * Implementations exercise real platform API calls to verify what they can
+   * (token validity, Socket Mode handshake, sampled channel access) and return
+   * a structured report. `result.notVerifiable` lists what the probe cannot
+   * prove, so a green result is never mistaken for full verification.
+   */
+  testConnection?(): Promise<SlackTestResult>;
 }

@@ -1,5 +1,5 @@
 import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/core/db';
-import { scrubGitConfigRemoteCredentials } from '@agor/core/git';
+import { scrubGitConfigRemoteCredentials } from '@agor/core/git/exec';
 
 /**
  * Best-effort startup repair for credential-bearing git remote URLs.
@@ -11,7 +11,7 @@ import { scrubGitConfigRemoteCredentials } from '@agor/core/git';
  * pre-existing repository outside `~/.agor`, and mutating those configs during
  * daemon boot would be surprising. Local repos still get opportunistically
  * scrubbed at Agor git-operation boundaries and can be repaired explicitly via
- * `agor admin scrub-git-remotes --write`.
+ * `agor local scrub-git-remotes --write`.
  */
 export async function scrubManagedGitRemoteCredentials(db: Database): Promise<void> {
   const repoRepo = new RepoRepository(db);

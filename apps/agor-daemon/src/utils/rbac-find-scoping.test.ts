@@ -14,8 +14,11 @@ import type { Branch, HookContext, Session } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranches,
+  scopeFindToAccessibleBranchesSql,
   scopeFindToAccessibleSessions,
+  scopeFindToAccessibleSessionsSql,
 } from './branch-authorization';
 
 const USER_ID = 'user-aaaa-0001' as import('@agor/core/types').UUID;
@@ -198,6 +201,82 @@ describe('scopeFindToAccessibleBranches', () => {
     expect(out.result).toBeUndefined();
     expect((ctx.params.query as any).branch_id).toBeUndefined();
     expect(repo.findAccessibleBranches).not.toHaveBeenCalled();
+  });
+});
+
+describe('scopeFindToAccessibleBranchesSql', () => {
+  it('marks regular external callers for repository SQL visibility pushdown', async () => {
+    const hook = scopeFindToAccessibleBranchesSql();
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: USER_ID, role: ROLES.MEMBER },
+      query: { branch_id: 'wt1' },
+    });
+
+    await hook(ctx);
+
+    expect((ctx.params as any)._agorSqlBranchAccessUserId).toBe(USER_ID);
+    // The SQL path deliberately does not materialize/intersect ids in the hook;
+    // explicit filters are composed with visibility in the repository query.
+    expect((ctx.params.query as any).branch_id).toBe('wt1');
+  });
+
+  it('preserves superadmin and internal pass-through semantics', async () => {
+    const hook = scopeFindToAccessibleBranchesSql();
+    const superCtx = makeContext({
+      provider: 'rest',
+      user: { user_id: USER_ID, role: ROLES.SUPERADMIN },
+    });
+    const internalCtx = makeContext({ provider: undefined, user: undefined });
+
+    await hook(superCtx);
+    await hook(internalCtx);
+
+    expect((superCtx.params as any)._agorSqlBranchAccessUserId).toBeUndefined();
+    expect((internalCtx.params as any)._agorSqlBranchAccessUserId).toBeUndefined();
+  });
+
+  it('returns an empty find result for unauthenticated external callers', async () => {
+    const hook = scopeFindToAccessibleBranchesSql();
+    const ctx = makeContext({ provider: 'rest', user: undefined, query: { $limit: 25 } });
+
+    const out = await hook(ctx);
+
+    expect((out.result as any).data).toEqual([]);
+    expect((out.result as any).total).toBe(0);
+    expect((out.result as any).limit).toBe(25);
+  });
+});
+
+describe('scopeFindToAccessibleBoardsSql', () => {
+  it('marks regular external callers for repository SQL board visibility pushdown', async () => {
+    const hook = scopeFindToAccessibleBoardsSql();
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: USER_ID, role: ROLES.MEMBER },
+      query: { board_id: 'board1' },
+    });
+
+    await hook(ctx);
+
+    expect((ctx.params as any)._agorSqlBoardAccessUserId).toBe(USER_ID);
+    expect((ctx.params.query as any).board_id).toBe('board1');
+  });
+});
+
+describe('scopeFindToAccessibleSessionsSql', () => {
+  it('marks regular external callers for repository SQL session visibility pushdown', async () => {
+    const hook = scopeFindToAccessibleSessionsSql();
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: USER_ID, role: ROLES.MEMBER },
+      query: { session_id: 's1' },
+    });
+
+    await hook(ctx);
+
+    expect((ctx.params as any)._agorSqlSessionAccessUserId).toBe(USER_ID);
+    expect((ctx.params.query as any).session_id).toBe('s1');
   });
 });
 

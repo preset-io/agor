@@ -48,6 +48,44 @@ export const GATEWAY_SENSITIVE_CONFIG_FIELDS = [
 export const GATEWAY_REDACTED_SENTINEL = '••••••••';
 
 // ============================================================================
+// Connection Probe Results
+// ============================================================================
+
+/**
+ * A single capability that a connection probe could not establish.
+ *
+ * `capability` names the thing that failed (e.g. `bot_token`, `app_token`,
+ * `channel_access`). `needed`/`provided` carry Slack's verbatim
+ * `missing_scope` detail when present so the UI can tell the operator exactly
+ * which OAuth scope to add rather than a generic "permission denied".
+ */
+export interface SlackTestFailure {
+  capability: string;
+  reason: string;
+  slackError?: string;
+  needed?: string;
+  provided?: string;
+}
+
+/**
+ * Result of a best-effort Slack connection probe.
+ *
+ * The probe exercises real Slack API calls (bot token auth, app-token Socket
+ * Mode handshake, sampled channel access) but cannot prove everything about a
+ * working installation — `notVerifiable` enumerates what green does NOT
+ * guarantee so the result is never read as "fully verified".
+ */
+export interface SlackTestResult {
+  ok: boolean;
+  team?: { id: string; name: string };
+  bot?: { userId: string; name: string };
+  appTokenValid?: boolean;
+  channelAccess?: { channelId: string; ok: boolean }[];
+  failures: SlackTestFailure[];
+  notVerifiable: string[];
+}
+
+// ============================================================================
 // Agentic Tool Configuration
 // ============================================================================
 

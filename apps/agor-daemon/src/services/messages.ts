@@ -14,8 +14,9 @@ import type {
   QueryParams,
   SessionID,
   TaskID,
+  UUID,
 } from '@agor/core/types';
-import { DrizzleService } from '../adapters/drizzle';
+import { DrizzleService, type Query } from '../adapters/drizzle';
 
 /**
  * Message service params
@@ -25,7 +26,10 @@ export type MessageParams = QueryParams<{
   task_id?: TaskID;
   type?: Message['type'];
   role?: Message['role'];
-}>;
+}> & {
+  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+  _agorSqlSessionAccessUserId?: UUID;
+};
 
 /**
  * Extended messages service with custom methods
@@ -48,10 +52,38 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
     this.messagesRepo = messagesRepo;
   }
 
+  protected async fetchData(query: Query, params?: MessageParams): Promise<Message[]> {
+    const sessionId = query.session_id;
+    const filter: Parameters<MessagesRepository['findAll']>[0] = {};
+
+    if (typeof sessionId === 'string') {
+      filter.sessionId = sessionId as SessionID;
+    } else if (
+      sessionId &&
+      typeof sessionId === 'object' &&
+      Array.isArray(sessionId.$in) &&
+      sessionId.$in.every((el: unknown) => typeof el === 'string')
+    ) {
+      filter.sessionIds = sessionId.$in as SessionID[];
+    }
+    if (typeof query.task_id === 'string') filter.taskId = query.task_id as TaskID;
+    if (typeof query.type === 'string') filter.type = query.type as Message['type'];
+    if (typeof query.role === 'string') filter.role = query.role as Message['role'];
+    if (params?._agorSqlSessionAccessUserId) {
+      filter.visibleToUserId = params._agorSqlSessionAccessUserId;
+    }
+
+    return this.messagesRepo.findAll(filter);
+  }
+
   /**
    * Override find to support task-based and session-based filtering
    */
   async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
+    if (params?._agorSqlSessionAccessUserId) {
+      return super.find(params);
+    }
+
     // If filtering by task_id (scalar string), use repository method.
     // The RBAC scoping hook may also inject `session_id` (scalar or `$in`)
     // alongside a user-supplied `task_id`; without intersecting here, callers

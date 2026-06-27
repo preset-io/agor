@@ -1,6 +1,9 @@
 import type { Branch } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
-import { type BranchEnvironmentAction, requestBranchEnvironmentAction } from './request.js';
+import {
+  type BranchEnvironmentAction,
+  requestBranchEnvironmentAction,
+} from '../../../lib/branch-environment-action.js';
 
 describe('requestBranchEnvironmentAction', () => {
   it.each<BranchEnvironmentAction>([

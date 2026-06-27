@@ -91,6 +91,8 @@ export type SessionParams = QueryParams<{
   InternalEnrichmentParams & {
     /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
     _include_last_message?: boolean | 'true' | 'false';
+    /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+    _agorSqlSessionAccessUserId?: UUID;
   };
 
 /**
@@ -102,13 +104,13 @@ export type SessionParams = QueryParams<{
  * with extra filters, operators, or `$select` falls through to the existing path
  * so we never silently drop semantics findPage doesn't implement.
  */
-function shouldSqlPageSessionQuery(query?: Record<string, unknown>): boolean {
-  if (!query) return false;
+function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = false): boolean {
+  if (!query) return forcePage;
 
   const sort = query.$sort as Record<string, unknown> | undefined;
   const wantsRecency = !!sort && sort.updated_at !== undefined;
   const wantsBoard = query.board_id !== undefined;
-  if (!wantsRecency && !wantsBoard) return false;
+  if (!wantsRecency && !wantsBoard && !forcePage) return false;
 
   const allowedKeys = new Set(['archived', 'board_id', '$sort', '$limit', '$skip']);
   for (const key of Object.keys(query)) {
@@ -196,6 +198,12 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // without going through app.service('users') — matches the convention used
     // by scheduler.ts / gateway.ts / terminals.ts.
     this.usersRepo = new UsersRepository(db);
+  }
+
+  protected async fetchData(_query: Query, params?: SessionParams): Promise<Session[]> {
+    return this.sessionRepo.findAll({
+      visibleToUserId: params?._agorSqlSessionAccessUserId,
+    });
   }
 
   async enrichRemoteRelationships(sessionList: Session[]): Promise<Session[]> {
@@ -863,9 +871,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
     // SQL-pushdown path for the recency-sorted / board-scoped list queries the
-    // first-paint loader issues. When RBAC is enabled, scopeSessionQuery resolves
-    // the result in a before-hook and this method never runs; when it's disabled,
-    // this is where board_id + `$sort:{updated_at}` are honored.
+    // first-paint loader issues. In RBAC mode the before-hook stamps a marker
+    // here so the same SQL path can compose branch visibility into the query;
+    // in open-access mode this path still handles board_id + `$sort:{updated_at}`.
     //
     // We can't lean on DrizzleService's generic path: (1) its filter matches
     // `item.board_id`, but sessions expose the board as `branch_board_id`, so a
@@ -874,7 +882,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // and the bounded slice wouldn't be ordered by recency. findPage does the
     // filter + recency sort + limit/offset in SQL instead.
     const query = params?.query as Record<string, unknown> | undefined;
-    if (shouldSqlPageSessionQuery(query)) {
+    if (shouldSqlPageSessionQuery(query, !!params?._agorSqlSessionAccessUserId)) {
       const sortSpec = query?.$sort as { updated_at?: 1 | -1 } | undefined;
       const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
       const skip = (query?.$skip as number | undefined) ?? 0;
@@ -884,6 +892,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         sortUpdatedAt: sortSpec?.updated_at,
         limit,
         skip,
+        visibleToUserId: params?._agorSqlSessionAccessUserId,
       });
       const enriched = await this.enrichRemoteRelationships(data);
       return markRemoteRelationshipsEnrichedResult({ total, limit, skip, data: enriched });
@@ -902,7 +911,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         unknown
       >;
       const residual = residualQuery as Query;
-      const rows = await this.sessionRepo.findByBoard(boardId);
+      const rows = await this.sessionRepo.findByBoard(boardId as string, {
+        visibleToUserId: params?._agorSqlSessionAccessUserId,
+      });
       const filtered = this.filterData(rows, residual);
       const total = filtered.length;
       const sorted = this.sortData(filtered, residual.$sort);

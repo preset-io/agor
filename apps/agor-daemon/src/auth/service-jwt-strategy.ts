@@ -16,6 +16,40 @@ import type { SessionTokenService } from '../services/session-token-service.js';
 import { markAuthenticationUserLookup } from '../services/users.js';
 import { assertUserTokenNotInvalidated, type UserAuthTokenPayload } from './token-invalidation.js';
 
+type JwtConnectionState = {
+  authentication?: { strategy?: string; accessToken?: string; payload?: unknown };
+  feathers?: { authentication?: { strategy?: string; accessToken?: string; payload?: unknown } };
+};
+
+function persistExecutorJwtPayloadOnConnection(
+  params: unknown,
+  accessToken: string | undefined,
+  payload: unknown
+): void {
+  const connection = (params as { connection?: JwtConnectionState } | undefined)?.connection;
+  if (!connection) return;
+
+  // For Socket.io, Feathers service params are built from the per-socket
+  // `feathers` connection object on subsequent calls. Depending on the call
+  // path, `params.connection` may be that object directly, or the socket-like
+  // wrapper that owns it. Persist the decoded executor JWT payload in whichever
+  // object will become future `params.authentication`, otherwise the executor
+  // reconnects as the session creator user but loses the task-scoped claims.
+  let target: JwtConnectionState;
+  if ('feathers' in connection) {
+    connection.feathers ??= {};
+    target = connection.feathers;
+  } else {
+    target = connection;
+  }
+  target.authentication = {
+    ...(target.authentication ?? {}),
+    strategy: 'jwt',
+    ...(accessToken ? { accessToken } : {}),
+    payload,
+  };
+}
+
 /**
  * Extended JWT Strategy that handles service tokens
  *
@@ -110,6 +144,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
       if (!sessionInfo) {
         throw new Error('Invalid or expired executor token');
       }
+      persistExecutorJwtPayloadOnConnection(params, token, payload);
       return {
         ...result,
         session_id: sessionInfo.session_id,

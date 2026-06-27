@@ -38,6 +38,9 @@ import type {
   TemplateRenderRequest,
   TemplateRenderResponse,
   User,
+  UserAvatarSettings,
+  UserAvatarSyncRequest,
+  UserAvatarSyncResult,
   UUID,
 } from '@agor/core/types';
 import authentication from '@feathersjs/authentication-client';
@@ -436,6 +439,12 @@ export interface UsersService extends AgorService<User> {
    * regular users may only fetch their own.
    */
   getGitEnvironment(data: { userId: string }, params?: Params): Promise<Record<string, string>>;
+  getAvatarSettings(data?: unknown, params?: Params): Promise<UserAvatarSettings>;
+  updateAvatarSettings(
+    data: Partial<UserAvatarSettings>,
+    params?: Params
+  ): Promise<UserAvatarSettings>;
+  syncAvatars(data?: UserAvatarSyncRequest, params?: Params): Promise<UserAvatarSyncResult>;
 }
 
 /**
@@ -799,7 +808,12 @@ function extendUsersService(client: AgorClient): void {
   };
   if (usersService[USERS_SERVICE_EXTENDED]) return;
   if (typeof usersService.methods === 'function') {
-    usersService.methods('getGitEnvironment');
+    usersService.methods(
+      'getGitEnvironment',
+      'getAvatarSettings',
+      'updateAvatarSettings',
+      'syncAvatars'
+    );
   }
   usersService[USERS_SERVICE_EXTENDED] = true;
 }

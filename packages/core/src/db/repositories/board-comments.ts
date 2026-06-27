@@ -6,7 +6,7 @@
  */
 
 import type { BoardComment, CommentID, UUID } from '@agor/core/types';
-import { and, eq, isNull, like } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, like, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -19,6 +19,13 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
+import {
+  visibleBoardReferenceAccessExists,
+  visibleBranchReferenceAccessExists,
+  visibleMessageReferenceAccessExists,
+  visibleSessionReferenceAccessExists,
+  visibleTaskReferenceAccessExists,
+} from './branch-access';
 
 /**
  * Generate content preview (first 200 chars)
@@ -172,63 +179,129 @@ export class BoardCommentsRepository
     }
   }
 
+  private buildFindConditions(filters?: {
+    board_id?: string;
+    session_id?: string | null;
+    task_id?: string | null;
+    message_id?: string | null;
+    branch_id?: string | null;
+    resolved?: boolean;
+    created_by?: string;
+    visibleToUserId?: UUID;
+  }): SQL[] {
+    const conditions: SQL[] = [];
+    if (filters?.board_id) {
+      conditions.push(eq(boardComments.board_id, filters.board_id));
+    }
+    if (filters?.session_id !== undefined) {
+      conditions.push(
+        filters.session_id === null
+          ? isNull(boardComments.session_id)
+          : eq(boardComments.session_id, filters.session_id)
+      );
+    }
+    if (filters?.task_id !== undefined) {
+      conditions.push(
+        filters.task_id === null
+          ? isNull(boardComments.task_id)
+          : eq(boardComments.task_id, filters.task_id)
+      );
+    }
+    if (filters?.message_id !== undefined) {
+      conditions.push(
+        filters.message_id === null
+          ? isNull(boardComments.message_id)
+          : eq(boardComments.message_id, filters.message_id)
+      );
+    }
+    if (filters?.branch_id !== undefined) {
+      conditions.push(
+        filters.branch_id === null
+          ? isNull(boardComments.branch_id)
+          : eq(boardComments.branch_id, filters.branch_id)
+      );
+    }
+    if (filters?.resolved !== undefined) {
+      conditions.push(eq(boardComments.resolved, filters.resolved));
+    }
+    if (filters?.created_by) {
+      conditions.push(eq(boardComments.created_by, filters.created_by));
+    }
+    if (filters?.visibleToUserId) {
+      conditions.push(this.buildVisibleToUserCondition(filters.visibleToUserId));
+    }
+    return conditions;
+  }
+
+  private buildVisibleToUserCondition(userId: UUID): SQL {
+    const hasAttachedResource = or(
+      isNotNull(boardComments.branch_id),
+      isNotNull(boardComments.session_id),
+      isNotNull(boardComments.task_id),
+      isNotNull(boardComments.message_id)
+    );
+
+    return (
+      and(
+        // If a specific resource is attached, every non-null attachment must be
+        // visible through its branch/session chain. We intentionally do not also
+        // require board visibility in that case: the attachment is the stronger,
+        // more specific access path.
+        or(
+          isNull(boardComments.branch_id),
+          visibleBranchReferenceAccessExists(this.db, userId, boardComments.branch_id)
+        ),
+        or(
+          isNull(boardComments.session_id),
+          visibleSessionReferenceAccessExists(this.db, userId, boardComments.session_id)
+        ),
+        or(
+          isNull(boardComments.task_id),
+          visibleTaskReferenceAccessExists(this.db, userId, boardComments.task_id)
+        ),
+        or(
+          isNull(boardComments.message_id),
+          visibleMessageReferenceAccessExists(this.db, userId, boardComments.message_id)
+        ),
+        // Pure board/spatial comments have no stronger attachment, so they
+        // inherit board visibility.
+        or(
+          hasAttachedResource,
+          visibleBoardReferenceAccessExists(this.db, userId, boardComments.board_id)
+        )
+      ) ?? sql`false`
+    );
+  }
+
   /**
    * Find all comments (optionally filtered by board, session, task, etc.)
    */
-  async findAll(filters?: {
-    board_id?: string;
-    session_id?: string;
-    task_id?: string;
-    message_id?: string;
-    branch_id?: string;
-    resolved?: boolean;
-    created_by?: string;
-  }): Promise<BoardComment[]> {
+  async findAll(
+    filters?: {
+      board_id?: string;
+      session_id?: string;
+      task_id?: string;
+      message_id?: string;
+      branch_id?: string;
+      resolved?: boolean;
+      created_by?: string;
+      visibleToUserId?: UUID;
+    },
+    options?: { limit?: number; offset?: number }
+  ): Promise<BoardComment[]> {
     try {
       let query = select(this.db).from(boardComments);
-
-      // Apply filters
-      const conditions = [];
-      if (filters?.board_id) {
-        conditions.push(eq(boardComments.board_id, filters.board_id));
-      }
-      if (filters?.session_id !== undefined) {
-        if (filters.session_id === null) {
-          conditions.push(isNull(boardComments.session_id));
-        } else {
-          conditions.push(eq(boardComments.session_id, filters.session_id));
-        }
-      }
-      if (filters?.task_id !== undefined) {
-        if (filters.task_id === null) {
-          conditions.push(isNull(boardComments.task_id));
-        } else {
-          conditions.push(eq(boardComments.task_id, filters.task_id));
-        }
-      }
-      if (filters?.message_id !== undefined) {
-        if (filters.message_id === null) {
-          conditions.push(isNull(boardComments.message_id));
-        } else {
-          conditions.push(eq(boardComments.message_id, filters.message_id));
-        }
-      }
-      if (filters?.branch_id !== undefined) {
-        if (filters.branch_id === null) {
-          conditions.push(isNull(boardComments.branch_id));
-        } else {
-          conditions.push(eq(boardComments.branch_id, filters.branch_id));
-        }
-      }
-      if (filters?.resolved !== undefined) {
-        conditions.push(eq(boardComments.resolved, filters.resolved));
-      }
-      if (filters?.created_by) {
-        conditions.push(eq(boardComments.created_by, filters.created_by));
-      }
+      const conditions = this.buildFindConditions(filters);
 
       if (conditions.length > 0) {
         query = query.where(and(...conditions)) as typeof query;
+      }
+
+      if (options?.limit !== undefined) {
+        query = query.limit(options.limit) as typeof query;
+      }
+      if (options?.offset !== undefined) {
+        query = query.offset(options.offset) as typeof query;
       }
 
       const rows = await query.all();
@@ -236,6 +309,30 @@ export class BoardCommentsRepository
     } catch (error) {
       throw new RepositoryError(
         `Failed to find comments: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  async count(filters?: {
+    board_id?: string;
+    session_id?: string | null;
+    task_id?: string | null;
+    message_id?: string | null;
+    branch_id?: string | null;
+    resolved?: boolean;
+    created_by?: string;
+    visibleToUserId?: UUID;
+  }): Promise<number> {
+    try {
+      const conditions = this.buildFindConditions(filters);
+      const query = select(this.db, { count: sql<number>`count(*)` }).from(boardComments);
+      const row =
+        conditions.length > 0 ? await query.where(and(...conditions)).one() : await query.one();
+      return Number(row?.count ?? 0);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to count comments: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -474,11 +571,12 @@ export class BoardCommentsRepository
         ...data,
         parent_comment_id: parent.comment_id,
         board_id: parent.board_id, // Inherit board_id from parent
-        // Replies don't have attachments - they inherit context from parent
-        session_id: undefined,
-        task_id: undefined,
-        message_id: undefined,
-        branch_id: undefined,
+        // Persist inherited attachments so replies remain visible through the
+        // same branch/session/task/message access path as the thread root.
+        session_id: parent.session_id,
+        task_id: parent.task_id,
+        message_id: parent.message_id,
+        branch_id: parent.branch_id,
         position: undefined,
       };
 

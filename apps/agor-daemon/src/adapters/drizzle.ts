@@ -215,13 +215,27 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   }
 
   /**
+   * Resolve the candidate row set that `find` filters, sorts, and paginates.
+   *
+   * The base implementation reads the whole table and relies on `filterData` to
+   * narrow it in memory. Subclasses may override this to push high-selectivity
+   * predicates into SQL; because `find` always re-applies every query filter via
+   * `filterData`, an override only needs to return a superset of the matching
+   * rows for the result to stay identical.
+   */
+  protected async fetchData(_query: Query, _params?: P): Promise<T[]> {
+    return this.repository.findAll();
+  }
+
+  /**
    * Find records
    */
   async find(params?: P): Promise<Paginated<T> | T[]> {
     const query = this.getQuery(params);
 
-    // Get all data from repository
-    let data = await this.repository.findAll();
+    // Get the candidate row set (whole table by default; subclasses may push
+    // predicates into SQL — filterData below still applies every query filter)
+    let data = await this.fetchData(query, params);
 
     // Apply filters
     data = this.filterData(data, query);

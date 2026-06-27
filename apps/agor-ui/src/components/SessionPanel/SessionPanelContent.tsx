@@ -12,7 +12,8 @@ import {
 import { Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppMcpData, useAppRepoData, useAppUserData } from '../../contexts/AppDataContext';
+import { useAgorStore } from '../../store/agorStore';
+import { selectMcpServerById, selectRepoById, selectUserById } from '../../store/selectors';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 import { BranchHeaderPill } from '../BranchHeaderPill';
@@ -69,12 +70,15 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     const { token } = theme.useToken();
     const { showSuccess, showError } = useThemedMessage();
 
-    // Subscribe only to the entity families this panel needs. This keeps the
-    // panel insulated from session/branch/board patches and avoids unrelated
-    // entity churn (e.g. repo edits invalidating user/MCP consumers).
-    const { userById } = useAppUserData();
-    const { repoById } = useAppRepoData();
-    const { mcpServerById } = useAppMcpData();
+    // Subscribe only to the entity families this panel needs via narrow store
+    // selectors. This keeps the panel insulated from session/branch/board
+    // patches and avoids unrelated entity churn (e.g. repo edits invalidating
+    // user/MCP consumers): each whole-map selector is a stable module-level
+    // reference, so a slice only re-renders this content when its own reference
+    // changes.
+    const userById = useAgorStore(selectUserById);
+    const repoById = useAgorStore(selectRepoById);
+    const mcpServerById = useAgorStore(selectMcpServerById);
     // Get actions from context
     const {
       onOpenBranch,

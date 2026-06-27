@@ -90,7 +90,7 @@ const modelConfigObjectSchema = z.object({
     "Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"
   ),
   effort: z
-    .enum(['low', 'medium', 'high', 'max'])
+    .enum(['low', 'medium', 'high', 'xhigh', 'max'])
     .optional()
     .describe('Reasoning effort level (default: high)'),
   advisorModel: mcpOptionalString(

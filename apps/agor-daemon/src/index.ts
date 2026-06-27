@@ -47,7 +47,7 @@ import {
   rest,
   socketio,
 } from '@agor/core/feathers';
-import { buildGitConfigParameters } from '@agor/core/git';
+import { buildGitConfigParameters } from '@agor/core/git/pure';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
 import type { HookContext, ServiceGroupName, ServiceTier, User } from '@agor/core/types';
 import { getServiceTier, isServiceEnabled } from '@agor/core/types';

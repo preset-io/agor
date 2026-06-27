@@ -6,12 +6,18 @@
  */
 
 import type { BoardComment, CommentID, UUID } from '@agor/core/types';
+import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BoardCommentsRepository } from './board-comments';
 import { BoardRepository } from './boards';
+import { BranchRepository } from './branches';
+import { MessagesRepository } from './messages';
+import { RepoRepository } from './repos';
+import { SessionRepository } from './sessions';
+import { TaskRepository } from './tasks';
 
 /**
  * Create test comment data with required fields
@@ -32,6 +38,76 @@ function createCommentData(overrides?: Partial<BoardComment>): Partial<BoardComm
 /**
  * Create a test board (comments require a board FK)
  */
+
+async function createAttachedCommentTarget(
+  db: any,
+  boardId: UUID,
+  othersCan: 'view' | 'none',
+  suffix: string
+) {
+  const repoRepo = new RepoRepository(db);
+  const branchRepo = new BranchRepository(db);
+  const sessionRepo = new SessionRepository(db);
+  const taskRepo = new TaskRepository(db);
+  const messagesRepo = new MessagesRepository(db);
+
+  const gitRepo = await repoRepo.create({
+    repo_id: generateId(),
+    slug: `comment-rbac-repo-${suffix}-${Date.now()}`,
+    name: `Comment RBAC Repo ${suffix}`,
+    repo_type: 'remote' as const,
+    remote_url: 'https://github.com/test/comment-rbac.git',
+    local_path: `/tmp/comment-rbac-${suffix}`,
+    default_branch: 'main',
+  });
+  const branch = await branchRepo.create({
+    branch_id: generateId(),
+    repo_id: gitRepo.repo_id,
+    name: `branch-${suffix}`,
+    ref: `branch-${suffix}`,
+    branch_unique_id: Math.floor(Math.random() * 1000000),
+    path: `/tmp/comment-rbac-${suffix}/branch`,
+    base_ref: 'main',
+    new_branch: false,
+    board_id: boardId,
+    created_by: generateId() as UUID,
+    permission_source: 'override',
+    others_can: othersCan,
+  });
+  const session = await sessionRepo.create({
+    session_id: generateId(),
+    branch_id: branch.branch_id,
+    agentic_tool: 'claude-code',
+    status: SessionStatus.IDLE,
+    created_by: generateId() as UUID,
+    git_state: { ref: 'main', base_sha: 'abc123', current_sha: 'def456' },
+  });
+  const task = await taskRepo.create({
+    task_id: generateId(),
+    session_id: session.session_id,
+    created_by: generateId() as UUID,
+    full_prompt: 'Test prompt',
+    status: TaskStatus.CREATED,
+    message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
+    tool_use_count: 0,
+    git_state: { ref_at_start: 'main', sha_at_start: 'abc123' },
+    model: 'claude-sonnet-4-6',
+  });
+  const message = await messagesRepo.create({
+    message_id: generateId(),
+    session_id: session.session_id,
+    task_id: task.task_id,
+    type: 'user',
+    role: MessageRole.USER,
+    index: 0,
+    timestamp: new Date().toISOString(),
+    content_preview: 'Test message',
+    content: 'Test message content',
+  });
+
+  return { branch, session, task, message };
+}
+
 async function createTestBoard(db: any, overrides?: { board_id?: UUID }) {
   const boardRepo = new BoardRepository(db);
   return boardRepo.create({
@@ -330,6 +406,114 @@ describe('BoardCommentsRepository.findAll', () => {
       expect(c.board_id).toBe(board1.board_id);
     }
   });
+
+  dbTest(
+    'should scope board and attached task/message comments with visibleToUserId',
+    async ({ db }) => {
+      const repo = new BoardCommentsRepository(db);
+      const userId = generateId() as UUID;
+      const privateBoard = await createTestBoard(db, { board_id: generateId() as UUID });
+      await new BoardRepository(db).update(privateBoard.board_id, { access_mode: 'private' });
+
+      const visibleTarget = await createAttachedCommentTarget(
+        db,
+        privateBoard.board_id,
+        'view',
+        'visible'
+      );
+      const hiddenTarget = await createAttachedCommentTarget(
+        db,
+        privateBoard.board_id,
+        'none',
+        'hidden'
+      );
+
+      const boardOnlyComment = await repo.create(
+        createCommentData({
+          board_id: privateBoard.board_id,
+          content: 'board-only visible via board',
+        })
+      );
+      const visibleTaskComment = await repo.create(
+        createCommentData({
+          board_id: privateBoard.board_id,
+          task_id: visibleTarget.task.task_id,
+          content: 'visible task comment',
+        })
+      );
+      const visibleMessageComment = await repo.create(
+        createCommentData({
+          board_id: privateBoard.board_id,
+          message_id: visibleTarget.message.message_id,
+          content: 'visible message comment',
+        })
+      );
+      await repo.create(
+        createCommentData({
+          board_id: privateBoard.board_id,
+          task_id: hiddenTarget.task.task_id,
+          content: 'hidden task comment',
+        })
+      );
+      await repo.create(
+        createCommentData({
+          board_id: privateBoard.board_id,
+          message_id: hiddenTarget.message.message_id,
+          content: 'hidden message comment',
+        })
+      );
+
+      const comments = await repo.findAll({
+        board_id: privateBoard.board_id,
+        visibleToUserId: userId,
+      });
+
+      expect(comments.map((comment) => comment.comment_id).sort()).toEqual(
+        [
+          boardOnlyComment.comment_id,
+          visibleTaskComment.comment_id,
+          visibleMessageComment.comment_id,
+        ].sort()
+      );
+      await expect(
+        repo.count({ board_id: privateBoard.board_id, visibleToUserId: userId })
+      ).resolves.toBe(3);
+
+      const isolatedPrivateBoard = await createTestBoard(db, { board_id: generateId() as UUID });
+      await new BoardRepository(db).update(isolatedPrivateBoard.board_id, {
+        access_mode: 'private',
+      });
+      await repo.create(
+        createCommentData({
+          board_id: isolatedPrivateBoard.board_id,
+          content: 'isolated board-only hidden',
+        })
+      );
+      await expect(
+        repo.count({ board_id: isolatedPrivateBoard.board_id, visibleToUserId: userId })
+      ).resolves.toBe(0);
+
+      const reply = await repo.createReply(
+        visibleTaskComment.comment_id,
+        createCommentData({ content: 'visible reply inherits task attachment' })
+      );
+      const withReply = await repo.findAll({
+        board_id: privateBoard.board_id,
+        visibleToUserId: userId,
+      });
+      expect(withReply.map((comment) => comment.comment_id).sort()).toEqual(
+        [
+          boardOnlyComment.comment_id,
+          visibleTaskComment.comment_id,
+          visibleMessageComment.comment_id,
+          reply.comment_id,
+        ].sort()
+      );
+      await expect(
+        repo.count({ board_id: privateBoard.board_id, visibleToUserId: userId })
+      ).resolves.toBe(4);
+    }
+  );
 
   dbTest('should filter by null session_id', async ({ db }) => {
     const repo = new BoardCommentsRepository(db);
@@ -883,6 +1067,24 @@ describe('BoardCommentsRepository.createReply', () => {
     );
 
     expect(reply.board_id).toBe(board.board_id);
+  });
+
+  dbTest('should persist inherited attachments on replies', async ({ db }) => {
+    const repo = new BoardCommentsRepository(db);
+    const board = await createTestBoard(db);
+    const target = await createAttachedCommentTarget(db, board.board_id, 'view', 'reply-inherit');
+    const root = await repo.create(
+      createCommentData({
+        board_id: board.board_id,
+        task_id: target.task.task_id,
+        message_id: target.message.message_id,
+      })
+    );
+
+    const reply = await repo.createReply(root.comment_id, createCommentData({ content: 'Reply' }));
+
+    expect(reply.task_id).toBe(target.task.task_id);
+    expect(reply.message_id).toBe(target.message.message_id);
   });
 
   dbTest('should strip position from replies', async ({ db }) => {

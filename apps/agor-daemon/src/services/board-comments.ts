@@ -13,7 +13,7 @@
 
 import { PAGINATION } from '@agor/core/config';
 import { BoardCommentsRepository, type Database } from '@agor/core/db';
-import type { BoardComment, QueryParams } from '@agor/core/types';
+import type { BoardComment, QueryParams, UUID } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 /**
@@ -27,7 +27,10 @@ export type BoardCommentsParams = QueryParams<{
   branch_id?: string;
   resolved?: boolean;
   created_by?: string;
-}>;
+}> & {
+  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+  _agorSqlBoardAccessUserId?: UUID;
+};
 
 /**
  * Extended board comments service with custom methods
@@ -60,8 +63,7 @@ export class BoardCommentsService extends DrizzleService<
   async find(params?: BoardCommentsParams) {
     const filters = params?.query || {};
 
-    // Get all matching comments
-    const allComments = await this.commentsRepo.findAll({
+    const queryFilters = {
       board_id: filters.board_id,
       session_id: filters.session_id,
       task_id: filters.task_id,
@@ -69,19 +71,21 @@ export class BoardCommentsService extends DrizzleService<
       branch_id: filters.branch_id,
       resolved: filters.resolved,
       created_by: filters.created_by,
-    });
+      visibleToUserId: params?._agorSqlBoardAccessUserId,
+    };
 
-    // Apply pagination if requested
     const $limit = filters.$limit ?? PAGINATION.DEFAULT_LIMIT;
     const $skip = filters.$skip ?? 0;
-    const paginated = allComments.slice($skip, $skip + $limit);
+    const [total, data] = await Promise.all([
+      this.commentsRepo.count(queryFilters),
+      this.commentsRepo.findAll(queryFilters, { limit: $limit, offset: $skip }),
+    ]);
 
-    // Return paginated result format expected by FeathersJS
     return {
-      total: allComments.length,
+      total,
       limit: $limit,
       skip: $skip,
-      data: paginated,
+      data,
     };
   }
 
