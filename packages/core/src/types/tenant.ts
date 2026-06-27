@@ -9,5 +9,5 @@ export type TenantID = string & { readonly __brand: 'TenantID' };
 
 export interface TenantContext {
   tenant_id: TenantID;
-  source: 'static' | 'auth_claim' | 'trusted_header' | 'explicit';
+  source: 'static' | 'auth_claim' | 'trusted_header' | 'trusted_host' | 'explicit';
 }

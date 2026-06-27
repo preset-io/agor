@@ -1,6 +1,12 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
-import type { AgorConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  resolveMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
+  type TenantResolutionInput,
+} from '@agor/core/config';
 import { type Database, eq, generateId, hash, insert, select, update, users } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
@@ -442,16 +448,34 @@ function validateLaunchClaims(claims: LaunchClaims, settings: ResolvedLaunchSett
 
 function issueRuntimeTokens(
   user: User,
-  jwtSecret: string,
-  accessTokenTtl: SignOptions['expiresIn'],
-  refreshTokenTtl: SignOptions['expiresIn']
+  options: LaunchAuthServiceOptions,
+  params?: Params
 ): LaunchAuthResult {
+  const multiTenancy = resolveMultiTenancyConfig(options.config);
+  let tenantClaims: Record<string, unknown>;
+  try {
+    const tenant = resolveTenantContext(multiTenancy, {
+      params: params as TenantResolutionInput['params'],
+      headers: (params as { headers?: Record<string, unknown> } | undefined)?.headers,
+    });
+    tenantClaims = { tenant_id: tenant.tenant_id };
+  } catch (error) {
+    if (multiTenancy.mode !== 'required_from_auth') {
+      tenantClaims = { tenant_id: multiTenancy.static_tenant_id };
+    } else if (user.tenant_id) {
+      tenantClaims = { tenant_id: user.tenant_id };
+    } else if (error instanceof TenantResolutionError) {
+      throw new NotAuthenticated(error instanceof Error ? error.message : 'Missing tenant context');
+    } else {
+      throw error;
+    }
+  }
   const tokens = issueRuntimeTokenPair(
     user,
-    jwtSecret,
-    accessTokenTtl,
-    refreshTokenTtl,
-    authTokenIssuedAtClaim(Date.now(), user)
+    options.jwtSecret,
+    options.accessTokenTtl,
+    options.refreshTokenTtl,
+    { ...authTokenIssuedAtClaim(Date.now(), user), ...tenantClaims }
   );
 
   return {
@@ -463,7 +487,7 @@ function issueRuntimeTokens(
 
 export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
   return {
-    async create(data: { launchCode?: string; launch_code?: string }, _params?: Params) {
+    async create(data: { launchCode?: string; launch_code?: string }, params?: Params) {
       const launchCode =
         typeof data?.launchCode === 'string'
           ? data.launchCode.trim()
@@ -487,12 +511,7 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
         }
         const claims = await verifyLaunchAssertion(exchange.assertion, settings);
         const user = await upsertLaunchUser(options, claims);
-        return issueRuntimeTokens(
-          user,
-          options.jwtSecret,
-          options.accessTokenTtl,
-          options.refreshTokenTtl
-        );
+        return issueRuntimeTokens(user, options, params);
       } catch (error) {
         if (error instanceof BadRequest || error instanceof NotAuthenticated) {
           throw error;

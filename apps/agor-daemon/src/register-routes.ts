@@ -6,7 +6,16 @@
  * Extracted from index.ts for maintainability.
  */
 
-import { type AgorConfig, loadConfig, resolveBranchStorageConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  loadConfig,
+  type ResolvedMultiTenancyConfig,
+  resolveBranchStorageConfig,
+  resolveMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
+  type TenantResolutionInput,
+} from '@agor/core/config';
 import {
   BranchRepository,
   type Database,
@@ -152,6 +161,32 @@ function taskQueueDebug(...args: unknown[]): void {
   }
 }
 
+function resolveAuthTokenTenantClaims(
+  multiTenancy: ResolvedMultiTenancyConfig,
+  params: Params | undefined,
+  user?: Pick<User, 'tenant_id'>
+): Record<string, unknown> {
+  try {
+    const tenant = resolveTenantContext(multiTenancy, {
+      params: params as TenantResolutionInput['params'],
+      headers: (params as { headers?: Record<string, unknown> } | undefined)?.headers,
+    });
+    return { tenant_id: tenant.tenant_id };
+  } catch (error) {
+    if (multiTenancy.mode !== 'required_from_auth') {
+      return { tenant_id: multiTenancy.static_tenant_id };
+    }
+    // Backward-compatible bridge for older single-tenant user records. In hosted
+    // multi-team mode the request host/JWT should win, because the same user can
+    // belong to multiple teams and chooses one by URL before the JWT is minted.
+    if (user?.tenant_id) return { tenant_id: user.tenant_id };
+    if (error instanceof TenantResolutionError) {
+      throw new NotAuthenticated(error instanceof Error ? error.message : 'Missing tenant context');
+    }
+    throw error;
+  }
+}
+
 export class AgorLocalStrategy extends LocalStrategy {
   async findEntity(username: string, params: Params) {
     markLocalAuthenticationLookup(params);
@@ -269,6 +304,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     terminalsService: _terminalsService,
   } = ctx;
 
+  const multiTenancy = resolveMultiTenancyConfig(config);
   const usersService = app.service('users');
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
   const reposService = app.service('repos') as unknown as ReposServiceImpl;
@@ -423,9 +459,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               REFRESH_TOKEN_TTL,
               {
                 ...authTokenIssuedAtClaim(Date.now(), context.result.user),
-                ...(context.result.user.tenant_id
-                  ? { tenant_id: context.result.user.tenant_id }
-                  : {}),
+                ...resolveAuthTokenTenantClaims(multiTenancy, context.params, context.result.user),
               }
             );
             context.result.accessToken = tokens.accessToken;
@@ -474,6 +508,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
       usersService,
+      multiTenancy,
     })
   );
 
@@ -554,6 +589,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           is_impersonated: true,
           jti,
           ...authTokenIssuedAtClaim(Date.now(), targetUser),
+          ...resolveAuthTokenTenantClaims(multiTenancy, params, targetUser),
         },
         jwtSecret,
         Math.ceil(expiryMs / 1000)

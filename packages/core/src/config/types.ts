@@ -1104,6 +1104,21 @@ export interface AgorMultiTenancySettings {
 
   /** Optional trusted HTTP header set by an auth/edge layer, e.g. `x-agor-tenant-id`. */
   trusted_header?: string;
+
+  /**
+   * Optional parent domain for tenant subdomain routing, e.g. `agor.cloud`.
+   * When set, `netflix.agor.cloud` resolves to tenant id `netflix`. This is
+   * primarily used during login so users who belong to multiple teams receive
+   * a JWT scoped to the team selected by the URL.
+   */
+  host_base_domain?: string;
+
+  /**
+   * Optional trusted header carrying the externally-routed host. Defaults to
+   * the request `Host` header; configure this only when a trusted edge/proxy
+   * canonicalizes hosts into a separate header.
+   */
+  trusted_host_header?: string;
 }
 
 /**
