@@ -1,5 +1,9 @@
 import { loadConfig, saveConfig } from '@agor/core/config';
-import { AGOR_TELEMETRY_DOCS_URL, generateTelemetryInstanceId } from '@agor/core/telemetry';
+import {
+  AGOR_TELEMETRY_DOCS_URL,
+  generateTelemetryInstanceId,
+  pruneDefaultOpenSourceTelemetryDestination,
+} from '@agor/core/telemetry';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 
@@ -33,5 +37,5 @@ export async function setTelemetryEnabled(enabled: boolean): Promise<void> {
     instance_id:
       config.telemetry?.instance_id ?? (enabled ? generateTelemetryInstanceId() : undefined),
   };
-  await saveConfig(config);
+  await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
 }

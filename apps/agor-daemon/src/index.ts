@@ -21,6 +21,7 @@ import { configureAnalyticsLogger } from '@agor/core/analytics';
 import {
   configureOpenSourceTelemetryLogger,
   openSourceTelemetryLogger,
+  pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
 import { patchConsole } from '@agor/core/utils/logger';
 import { UI_MOUNT_PATH } from '@agor/core/utils/url';
@@ -633,7 +634,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     }
     startOpenSourceTelemetryUsageSummaryInterval();
     config.telemetry = { ...config.telemetry, last_reported_version: DAEMON_VERSION };
-    saveConfig(config).catch((error) => {
+    saveConfig(pruneDefaultOpenSourceTelemetryDestination(config)).catch((error) => {
       console.warn(
         '[telemetry] failed to persist last reported version:',
         error instanceof Error ? error.message : String(error)

@@ -837,10 +837,10 @@ export interface AgorTelemetrySettings {
   /** Random anonymous install identifier. Never derived from host/user data. */
   instance_id?: string;
 
-  /** Segment-compatible batch endpoint. Defaults to Agor's built-in destination. */
+  /** Advanced override for the Segment-compatible batch endpoint. Usually omitted. */
   endpoint?: string | null;
 
-  /** Public Segment/RudderStack write key when sending directly to a batch endpoint. */
+  /** Advanced override for direct Segment/RudderStack delivery. Usually omitted. */
   write_key?: string | null;
 
   /** Debug delivery without dumping payloads by default. */

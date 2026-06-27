@@ -31,6 +31,27 @@ export function generateTelemetryInstanceId(): string {
   return randomUUID();
 }
 
+export function pruneDefaultOpenSourceTelemetryDestination(config: AgorConfig): AgorConfig {
+  if (!config.telemetry) return config;
+
+  const telemetry = { ...config.telemetry };
+  if (
+    telemetry.endpoint === DEFAULT_OPEN_SOURCE_TELEMETRY_ENDPOINT ||
+    telemetry.endpoint === null
+  ) {
+    delete telemetry.endpoint;
+  }
+  if (
+    telemetry.write_key === DEFAULT_OPEN_SOURCE_TELEMETRY_WRITE_KEY ||
+    telemetry.write_key === null
+  ) {
+    delete telemetry.write_key;
+  }
+
+  config.telemetry = telemetry;
+  return config;
+}
+
 export function resolveOpenSourceTelemetryConfig(
   options: ResolveTelemetryConfigOptions = {}
 ): OpenSourceTelemetryConfig {

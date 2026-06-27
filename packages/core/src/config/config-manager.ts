@@ -363,11 +363,7 @@ export function getDefaultConfig(): AgorConfig {
       executor_heartbeat: resolveExecutorHeartbeatConfig(),
     },
     analytics: getDefaultAnalyticsConfig(),
-    telemetry: {
-      enabled: undefined,
-      endpoint: 'https://api.segment.io/v1/batch',
-      write_key: null, // Default source key lives in @agor/core/telemetry.
-    },
+    telemetry: {},
   };
 }
 

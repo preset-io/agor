@@ -22,6 +22,7 @@ import {
   createOpenSourceTelemetryLogger,
   generateTelemetryInstanceId,
   isTelemetryFullyDisabledByEnv,
+  pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
 import { isDaemonRunning } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
@@ -490,7 +491,7 @@ export default class Init extends Command {
     if (instanceId) {
       config.telemetry.instance_id = instanceId;
     }
-    await saveConfig(config);
+    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
     return instanceId ?? null;
   }
 
@@ -576,7 +577,7 @@ export default class Init extends Command {
       ...saved.telemetry,
       install_ping_sent_at: new Date().toISOString(),
     };
-    await saveConfig(saved);
+    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(saved));
   }
 
   /**
