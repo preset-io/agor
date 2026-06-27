@@ -1776,7 +1776,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   const sessionRepo = new SessionRepository(db);
   const branchRepo = new BranchRepository(db);
-  const uploadMiddleware = createUploadMiddleware(sessionRepo, branchRepo);
+  const uploadMiddleware = createUploadMiddleware(sessionRepo);
   const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
@@ -1792,14 +1792,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       }
 
       const { sessionId } = req.params;
-      const { destination, notifyAgent, message } = req.body;
+      const { notifyAgent, message } = req.body;
       const files = req.files as Express.Multer.File[];
 
       if (DEBUG_UPLOAD) {
         console.log(
           `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
         );
-        console.log(`   Destination: ${destination || 'branch'}`);
         console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
         console.log(`   Files received: ${files?.length || 0}`);
       }
@@ -1864,23 +1863,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
-      let branch: Awaited<ReturnType<typeof branchRepo.findById>> | undefined;
-      if (session.branch_id) {
-        branch = await branchRepo.findById(session.branch_id);
-      }
-
-      const uploadedFiles = files.map((f) => {
-        let relativePath = f.path;
-        if (branch && f.path.startsWith(branch.path)) {
-          relativePath = f.path.substring(branch.path.length + 1);
-        }
-        return {
-          filename: f.filename,
-          path: relativePath,
-          size: f.size,
-          mimeType: f.mimetype,
-        };
-      });
+      const uploadedFiles = files.map((f) => ({
+        filename: f.filename,
+        path: f.path,
+        size: f.size,
+        mimeType: f.mimetype,
+      }));
 
       if (DEBUG_UPLOAD) {
         console.log(`   Uploaded ${uploadedFiles.length} file(s):`);

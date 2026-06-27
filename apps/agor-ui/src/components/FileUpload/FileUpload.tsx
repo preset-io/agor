@@ -1,5 +1,5 @@
 import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
-import { Button, Checkbox, Input, Modal, Radio, Space, Typography, Upload } from 'antd';
+import { Button, Checkbox, Input, Modal, Space, Typography, Upload } from 'antd';
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
@@ -8,8 +8,6 @@ import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 
 const { TextArea } = Input;
 const { Text } = Typography;
-
-export type UploadDestination = 'branch' | 'temp' | 'global';
 
 export interface UploadedFile {
   filename: string;
@@ -39,7 +37,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 }) => {
   const { showSuccess, showWarning, showError } = useThemedMessage();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
-  const [destination, setDestination] = useState<UploadDestination>('branch');
   const [notifyAgent, setNotifyAgent] = useState(true);
   const [agentMessage, setAgentMessage] = useState('Please review this file: {filepath}');
   const [uploading, setUploading] = useState(false);
@@ -103,12 +100,10 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           console.warn('[FileUpload] File missing originFileObj:', file.name);
         }
       });
-      // Note: destination is sent as query param because multer can't access req.body
-      // during the destination callback
       formData.append('notifyAgent', String(notifyAgent));
       formData.append('message', agentMessage);
 
-      const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload?destination=${encodeURIComponent(destination)}`;
+      const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload`;
 
       // Get JWT token from localStorage (same as Feathers client)
       const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
@@ -166,7 +161,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
       // Reset and close
       resetFileList();
-      setNotifyAgent(false);
+      setNotifyAgent(true);
       setAgentMessage('Please review this file: {filepath}');
       onClose();
     } catch (error) {
@@ -179,7 +174,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
   const handleCancel = () => {
     resetFileList();
-    setNotifyAgent(false);
+    setNotifyAgent(true);
     setAgentMessage('Please review this file: {filepath}');
     onClose();
   };
@@ -212,43 +207,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         >
           <Button icon={<UploadOutlined />}>Select Files</Button>
         </Upload>
-
-        {/* Destination selector */}
-        <div>
-          <Text strong>Destination:</Text>
-          <Radio.Group
-            value={destination}
-            onChange={(e) => setDestination(e.target.value)}
-            style={{ marginTop: 8, display: 'block' }}
-          >
-            <Space orientation="vertical">
-              <Radio value="branch">
-                <Space orientation="vertical" size={0}>
-                  <Text>Branch (.agor/uploads/)</Text>
-                  <Text type="secondary" style={{ fontSize: '12px' }}>
-                    Default - Agent-accessible, can be committed
-                  </Text>
-                </Space>
-              </Radio>
-              <Radio value="temp">
-                <Space orientation="vertical" size={0}>
-                  <Text>Temp folder</Text>
-                  <Text type="secondary" style={{ fontSize: '12px' }}>
-                    Ephemeral, auto-cleanup
-                  </Text>
-                </Space>
-              </Radio>
-              <Radio value="global">
-                <Space orientation="vertical" size={0}>
-                  <Text>Global (~/.agor/uploads/)</Text>
-                  <Text type="secondary" style={{ fontSize: '12px' }}>
-                    Shared across sessions
-                  </Text>
-                </Space>
-              </Radio>
-            </Space>
-          </Radio.Group>
-        </div>
 
         {/* Notify agent option */}
         <div>
