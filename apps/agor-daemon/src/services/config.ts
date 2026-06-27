@@ -81,10 +81,10 @@ function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefi
     return {
       type: 'executor-session',
       purpose: 'executor-task',
-      task_id: scopedParams.task_id,
-      session_id: scopedParams.session_id,
-      sessionId: scopedParams.sessionId,
-      branch_id: scopedParams.branch_id,
+      task_id: authParams.task_id,
+      session_id: scopedParams?.session_id,
+      sessionId: scopedParams?.sessionId,
+      branch_id: scopedParams?.branch_id,
     };
   }
 
