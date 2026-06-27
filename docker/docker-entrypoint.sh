@@ -34,6 +34,14 @@ if sudo -n true 2>/dev/null; then
   # under `set -e`, an unmatched glob is passed literally to chown and aborts
   # startup before the initial builds have a chance to create dist outputs.
   sudo -n rm -rf $DIST_DIRS 2>/dev/null || true
+  # TypeScript incremental state can otherwise claim executor/client outputs are
+  # up-to-date after dist/ was removed, producing an empty dist and a startup
+  # timeout while waiting for .d.ts files.
+  sudo -n rm -rf \
+    /app/packages/executor/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/client/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/core/node_modules/.tmp/tsconfig.tsbuildinfo \
+    2>/dev/null || true
   sudo -n mkdir -p $DIST_DIRS
 
   # Chown all package/app directories (non-recursive for speed)
@@ -113,6 +121,20 @@ while [ ! -f "/app/packages/executor/dist/index.d.ts" ]; do
   WAITED=$((WAITED + 1))
 done
 echo "✅ @agor/executor initial build complete (including type definitions)"
+
+# In strict/insulated Unix modes, executors are launched as non-daemon Unix
+# users. The bind-mounted /app tree can be group-private in Agor-managed
+# worktrees, so those users may not be able to read /app/packages/executor even
+# though they can read their assigned branch checkout. Build a standalone,
+# world-readable executor runtime outside /app and point the daemon at it.
+if [ "${AGOR_UNIX_USER_MODE:-simple}" != "simple" ] || [ "${AGOR_USE_EXECUTOR:-false}" = "true" ]; then
+  echo "📦 Preparing shared executor runtime for Unix impersonation..."
+  rm -rf /tmp/agor-executor-runtime
+  pnpm --filter @agor/executor deploy --prod /tmp/agor-executor-runtime
+  chmod -R a+rX /tmp/agor-executor-runtime
+  export AGOR_EXECUTOR_PATH=/tmp/agor-executor-runtime/bin/agor-executor
+  echo "✅ Shared executor runtime ready: $AGOR_EXECUTOR_PATH"
+fi
 
 echo "🔨 Building @agor-live/client (initial build)..."
 pnpm --filter @agor-live/client build

@@ -172,6 +172,14 @@ export function generateTaskId(): string {
 }
 
 export function findExecutorPath(): string {
+  const configuredPath = process.env.AGOR_EXECUTOR_PATH;
+  if (configuredPath) {
+    if (!existsSync(configuredPath)) {
+      throw new Error(`Configured AGOR_EXECUTOR_PATH does not exist: ${configuredPath}`);
+    }
+    return configuredPath;
+  }
+
   const dirname =
     typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
