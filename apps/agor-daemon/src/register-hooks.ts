@@ -501,9 +501,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       context.data = stripTenantData(context.data) as typeof context.data;
     }
 
-    if (context.method === 'find') {
-      context.params.query = { ...(context.params.query ?? {}), tenant_id: tenantId };
-    }
+    // Do not inject tenant_id into Feathers find queries. Several services
+    // intentionally omit tenant_id from their public DTOs; the generic in-memory
+    // adapter would then filter every row out after RLS already did the DB-level
+    // isolation. Tenant isolation for reads is enforced by the transaction-local
+    // Postgres RLS setting plus the after-hook assertion below.
     return context;
   };
 

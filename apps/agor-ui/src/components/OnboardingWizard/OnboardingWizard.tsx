@@ -492,6 +492,10 @@ export function OnboardingWizard({
             custom_context: { assistant: assistantConfig },
           }));
         if (!branch?.branch_id) throw new Error('Failed to create assistant branch.');
+        if (existingBranch?.board_id && existingBranch.board_id !== boardId) {
+          boardId = existingBranch.board_id;
+          saveOnboardingProgress({ boardId });
+        }
         saveOnboardingProgress({ branchId: branch.branch_id });
         await client
           ?.service('boards')

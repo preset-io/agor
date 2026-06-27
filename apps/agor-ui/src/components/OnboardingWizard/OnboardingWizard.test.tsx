@@ -292,7 +292,7 @@ describe('OnboardingWizard', () => {
 
   it('reuses an existing assistant branch and session when retrying setup', async () => {
     const repoById = new Map<string, Repo>([['repo-1', makeRepo()]]);
-    const existingBranch = makeBranch();
+    const existingBranch = makeBranch({ board_id: 'board-existing' } as Partial<Branch>);
     const branchesService = { find: vi.fn(async () => ({ data: [existingBranch] })) };
     const sessionsService = {
       find: vi.fn(async () => ({ data: [{ session_id: 'session-existing' }] })),
@@ -326,7 +326,7 @@ describe('OnboardingWizard', () => {
       expect(onComplete).toHaveBeenCalledWith({
         branchId: 'branch-1',
         sessionId: 'session-existing',
-        boardId: 'board-1',
+        boardId: 'board-existing',
         path: 'assistant',
       })
     );
