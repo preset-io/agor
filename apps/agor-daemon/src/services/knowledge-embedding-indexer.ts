@@ -143,6 +143,7 @@ export function buildKnowledgeEmbeddingReuseSql(params: KnowledgeEmbeddingReuseS
             ORDER BY p.unit_id, old_u.updated_at DESC NULLS LAST, old_u.created_at DESC
           ), upserted AS (
             INSERT INTO kb_unit_embeddings (
+              tenant_id,
               unit_id,
               embedding_space_id,
               content_sha256,
@@ -152,6 +153,7 @@ export function buildKnowledgeEmbeddingReuseSql(params: KnowledgeEmbeddingReuseS
               updated_at
             )
             SELECT
+              COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'),
               new_unit_id,
               ${params.embeddingSpaceId},
               content_sha256,
@@ -518,8 +520,8 @@ export class KnowledgeEmbeddingIndexer {
       const vector = embeddingToPgvector(result.embedding);
       await executeRaw(
         this.db,
-        sql`INSERT INTO kb_unit_embeddings (unit_id, embedding_space_id, content_sha256, embedding, token_count, created_at, updated_at)
-            VALUES (${result.id}, ${embeddingSpaceId}, ${sha256Text(content)}, ${vector}::vector, ${result.tokenCount ?? null}, now(), now())
+        sql`INSERT INTO kb_unit_embeddings (tenant_id, unit_id, embedding_space_id, content_sha256, embedding, token_count, created_at, updated_at)
+            VALUES (COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'), ${result.id}, ${embeddingSpaceId}, ${sha256Text(content)}, ${vector}::vector, ${result.tokenCount ?? null}, now(), now())
             ON CONFLICT (unit_id, embedding_space_id) DO UPDATE SET
               content_sha256 = EXCLUDED.content_sha256,
               embedding = EXCLUDED.embedding,

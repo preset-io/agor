@@ -395,3 +395,17 @@ DROP POLICY IF EXISTS "tenant_isolation_kb_graph_edges" ON "kb_graph_edges";
 CREATE POLICY "tenant_isolation_kb_graph_edges" ON "kb_graph_edges"
   USING ("tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'))
   WITH CHECK ("tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'));
+--> statement-breakpoint
+DO $$
+BEGIN
+  IF to_regclass('public.kb_unit_embeddings') IS NOT NULL THEN
+    ALTER TABLE public.kb_unit_embeddings ADD COLUMN IF NOT EXISTS tenant_id text DEFAULT 'default' NOT NULL;
+    CREATE INDEX IF NOT EXISTS kb_unit_embeddings_tenant_id_idx ON public.kb_unit_embeddings (tenant_id);
+    ALTER TABLE public.kb_unit_embeddings ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.kb_unit_embeddings FORCE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS tenant_isolation_kb_unit_embeddings ON public.kb_unit_embeddings;
+    CREATE POLICY tenant_isolation_kb_unit_embeddings ON public.kb_unit_embeddings
+      USING (tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'))
+      WITH CHECK (tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'));
+  END IF;
+END $$;
