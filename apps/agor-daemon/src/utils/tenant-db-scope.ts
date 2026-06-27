@@ -69,7 +69,7 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
     });
   };
 
-  return async (context: HookContext, next: () => Promise<void>): Promise<HookContext> => {
+  return async (context: HookContext, next: () => Promise<void>): Promise<void> => {
     try {
       context.params.tenant = resolveTenantForDatabaseScope(context);
     } catch (error) {
@@ -80,6 +80,5 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
     }
 
     await runWithTenantDatabaseScope(options.db, context.params.tenant?.tenant_id, next);
-    return context;
   };
 }

@@ -176,7 +176,7 @@ export function registerAuthenticatedRoute(
   // biome-ignore lint/suspicious/noExplicitAny: Hook type from Feathers is complex
   requireAuth: any,
   options: {
-    around?: Array<(context: HookContext, next: () => Promise<void>) => Promise<HookContext>>;
+    around?: Array<(context: HookContext, next: () => Promise<void>) => Promise<void>>;
   } = {}
 ): void {
   // Register the service

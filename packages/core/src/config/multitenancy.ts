@@ -16,7 +16,7 @@ export interface TenantResolutionInput {
     tenant?: TenantContext;
     tenant_id?: string;
     user?: { tenant_id?: string };
-    authentication?: { payload?: unknown };
+    authentication?: unknown;
     headers?: Record<string, unknown>;
   };
   /** Decoded JWT payload from socket handshake/auth middleware. */
@@ -62,6 +62,11 @@ export function resolveMultiTenancyDatabaseDialect(
     return 'postgresql';
   }
   return 'sqlite';
+}
+
+function readAuthenticationPayload(authentication: unknown): unknown {
+  if (!authentication || typeof authentication !== 'object') return undefined;
+  return (authentication as { payload?: unknown }).payload;
 }
 
 function readClaim(payload: unknown, claim: string | undefined): TenantID | null {
@@ -137,7 +142,7 @@ export function resolveTenantContext(
 
   const claimTenant =
     readClaim(input.authPayload, resolved.auth_claim) ??
-    readClaim(params?.authentication?.payload, resolved.auth_claim) ??
+    readClaim(readAuthenticationPayload(params?.authentication), resolved.auth_claim) ??
     readClaim(params?.user, resolved.auth_claim);
   if (claimTenant) return { tenant_id: claimTenant, source: 'auth_claim' };
 

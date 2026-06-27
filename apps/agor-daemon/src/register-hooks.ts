@@ -145,6 +145,7 @@ import {
   getDaemonUrl,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
+import { createTenantDatabaseScopeAroundHook } from './utils/tenant-db-scope.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');

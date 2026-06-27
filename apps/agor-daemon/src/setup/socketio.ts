@@ -379,8 +379,8 @@ export function createSocketIOConfig(
           // future callers that only look at socket.data still see it.
           fs.data.isService = true;
           if (tenant) {
-            connection.tenant = tenant;
-            if (connection.data) connection.data.tenant = tenant;
+            (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
+            if (fs.data) fs.data.tenant = tenant;
           }
           console.log(
             `🔐 WebSocket authenticated (service): ${socket.id} (role: ${decoded.role || 'unknown'})`
@@ -395,8 +395,8 @@ export function createSocketIOConfig(
         const fs = socket as FeathersSocket;
         fs.feathers = { user: tenant ? { ...user, tenant_id: tenant.tenant_id } : user };
         if (tenant) {
-          connection.tenant = tenant;
-          if (connection.data) connection.data.tenant = tenant;
+          (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
+          if (fs.data) fs.data.tenant = tenant;
         }
 
         console.log(`🔐 WebSocket authenticated: ${socket.id} (user: ${shortId(user.user_id)})`);
