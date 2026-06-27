@@ -1774,49 +1774,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // File upload endpoint
   // ============================================================================
 
-  const sessionRepo = new SessionRepository(db);
   const branchRepo = new BranchRepository(db);
-  const uploadMiddleware = createUploadMiddleware(sessionRepo);
+  const uploadMiddleware = createUploadMiddleware();
   const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
-  // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
-  const uploadHandler: any = async (req: any, res: any, next: any) => {
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+  const authorizeUpload: any = async (req: any, res: any, next: any) => {
     try {
-      if (DEBUG_UPLOAD) {
-        console.log('🚀 [Upload Handler] Request received');
-        console.log('   Headers:', {
-          contentType: req.headers['content-type'],
-          authorization: req.headers.authorization ? 'present' : 'missing',
-          cookie: req.headers.cookie ? 'present' : 'missing',
-        });
-      }
-
       const { sessionId } = req.params;
-      const { notifyAgent, message } = req.body;
-      const files = req.files as Express.Multer.File[];
-
-      if (DEBUG_UPLOAD) {
-        console.log(
-          `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
-        );
-        console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
-        console.log(`   Files received: ${files?.length || 0}`);
-      }
-
       const params = req.feathers as AuthenticatedParams;
-      if (DEBUG_UPLOAD) {
-        console.log(`   Auth params:`, {
-          hasUser: !!params?.user,
-          userId: params?.user?.user_id ? shortId(params.user.user_id) : undefined,
-          provider: params?.provider,
-        });
-      }
 
       ensureMinimumRole(params, ROLES.MEMBER, 'upload files');
 
       const session = await sessionsService.get(sessionId, params);
       if (!session) {
-        console.error(`❌ [Upload Handler] Session not found: ${shortId(sessionId)}`);
+        console.error(`❌ [Upload Authz] Session not found: ${shortId(sessionId)}`);
         return res.status(404).json({ error: 'Session not found' });
       }
 
@@ -1852,10 +1824,49 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         if (!canUpload) {
           console.error(
-            `❌ [Upload Handler] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
+            `❌ [Upload Authz] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
           );
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
+      }
+
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
+  const uploadHandler: any = async (req: any, res: any, next: any) => {
+    try {
+      if (DEBUG_UPLOAD) {
+        console.log('🚀 [Upload Handler] Request received');
+        console.log('   Headers:', {
+          contentType: req.headers['content-type'],
+          authorization: req.headers.authorization ? 'present' : 'missing',
+          cookie: req.headers.cookie ? 'present' : 'missing',
+        });
+      }
+
+      const { sessionId } = req.params;
+      const { notifyAgent, message } = req.body;
+      const files = req.files as Express.Multer.File[];
+
+      if (DEBUG_UPLOAD) {
+        console.log(
+          `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
+        );
+        console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
+        console.log(`   Files received: ${files?.length || 0}`);
+      }
+
+      const params = req.feathers as AuthenticatedParams;
+      if (DEBUG_UPLOAD) {
+        console.log(`   Auth params:`, {
+          hasUser: !!params?.user,
+          userId: params?.user?.user_id ? shortId(params.user.user_id) : undefined,
+          provider: params?.provider,
+        });
       }
 
       if (!files || files.length === 0) {
@@ -1996,6 +2007,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // time writing oversize uploads to disk.
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     enforceTotalUploadSize() as any,
+    authorizeUpload,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
     uploadMiddleware.array('files', 10) as any,
     // Defence-in-depth aggregate-size check using the actual file sizes that

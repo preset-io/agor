@@ -7,8 +7,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getAgorHome } from '@agor/core/config';
-import type { SessionRepository } from '@agor/core/db';
-import { shortId } from '@agor/core/db';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
@@ -84,7 +82,7 @@ export function validateUploadDestinationQuery(destination: unknown): void {
 /**
  * Create multer storage configuration
  */
-export function createUploadStorage(sessionRepo: SessionRepository) {
+export function createUploadStorage() {
   const storage = multer.diskStorage({
     destination: async (req: Request, _file, cb) => {
       try {
@@ -97,20 +95,8 @@ export function createUploadStorage(sessionRepo: SessionRepository) {
 
         if (DEBUG_UPLOAD) {
           console.log(
-            `📂 [Upload Storage] Processing upload for session ${sessionId ? shortId(sessionId) : 'unknown'}`
+            `📂 [Upload Storage] Processing upload for session ${sessionId || 'unknown'}`
           );
-        }
-
-        if (!sessionId) {
-          console.error('❌ [Upload Storage] No session ID provided');
-          return cb(new Error('Session ID required'), '');
-        }
-
-        // Verify the target session before writing bytes to daemon-owned storage.
-        const session = await sessionRepo.findById(sessionId);
-        if (!session) {
-          console.error(`❌ [Upload Storage] Session not found: ${shortId(sessionId)}`);
-          return cb(new Error(`Session not found: ${sessionId}`), '');
         }
 
         const dest = getUploadDirectory();
@@ -162,8 +148,8 @@ export function createUploadStorage(sessionRepo: SessionRepository) {
 /**
  * Create configured multer instance
  */
-export function createUploadMiddleware(sessionRepo: SessionRepository) {
-  const storage = createUploadStorage(sessionRepo);
+export function createUploadMiddleware() {
+  const storage = createUploadStorage();
 
   return multer({
     storage,

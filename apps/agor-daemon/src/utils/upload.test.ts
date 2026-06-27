@@ -58,7 +58,7 @@ describe('upload allowlist', () => {
   it('multer instance carries the configured limits', () => {
     // Tiny stand-ins for the repos — the limit fields are read off the multer
     // instance directly, so the storage callbacks never run.
-    const mw = createUploadMiddleware({} as Parameters<typeof createUploadMiddleware>[0]);
+    const mw = createUploadMiddleware();
     // multer attaches the original options under `.limits`
     const limits = (mw as unknown as { limits?: Record<string, number> }).limits;
     expect(limits?.fileSize).toBe(MAX_UPLOAD_FILE_SIZE);
