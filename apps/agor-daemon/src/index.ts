@@ -14,9 +14,14 @@
  */
 
 import 'dotenv/config';
+import { platform } from 'node:os';
 
 // Patch console methods to respect LOG_LEVEL env var
 import { configureAnalyticsLogger } from '@agor/core/analytics';
+import {
+  configureOpenSourceTelemetryLogger,
+  openSourceTelemetryLogger,
+} from '@agor/core/telemetry';
 import { patchConsole } from '@agor/core/utils/logger';
 import { UI_MOUNT_PATH } from '@agor/core/utils/url';
 
@@ -29,6 +34,7 @@ import {
   renderGitConfigParametersForLog,
   resolveGitConfigParameters,
   resolveSecurity,
+  saveConfig,
 } from '@agor/core/config';
 import { getDatabaseUrl } from '@agor/core/db';
 import {
@@ -67,6 +73,7 @@ import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { runPostStartJob, startup } from './startup.js';
+import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
 import { registerAllWidgets } from './widgets/index.js';
 
@@ -171,6 +178,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Configure analytics after process-wide git hardening is installed. Module
   // plugins are optional dynamic imports and must never prevent daemon startup.
   await configureAnalyticsLogger(config);
+  configureOpenSourceTelemetryLogger(config);
+  if (config.telemetry?.enabled === undefined) {
+    console.warn(
+      'ℹ  Open-source telemetry is not configured; no telemetry will be sent. ' +
+        'Run `agor telemetry on` to enable or `agor telemetry off` to dismiss.'
+    );
+  }
 
   // Surface a clear migration note if the config still carries leftover
   // anonymous-mode keys. Operators upgrading from a release that had
@@ -587,6 +601,45 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // already receive `db` via constructor injection are unaffected.
   app.set('database', db);
   app.set('config', config);
+
+  if (openSourceTelemetryLogger.isEnabled()) {
+    openSourceTelemetryLogger.track({
+      event: 'daemon.active',
+      properties: {
+        agor_version: DAEMON_VERSION,
+        deployment_kind: process.env.KUBERNETES_SERVICE_HOST
+          ? 'k8s'
+          : process.env.container || process.env.AGOR_DOCKER
+            ? 'docker'
+            : 'local',
+        db_backend: process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite',
+        os_family: platform(),
+        node_major: Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10),
+        branch_rbac: branchRbacEnabled,
+        unix_user_mode: config.execution?.unix_user_mode ?? 'simple',
+      },
+    });
+    if (
+      config.telemetry?.last_reported_version &&
+      config.telemetry.last_reported_version !== DAEMON_VERSION
+    ) {
+      openSourceTelemetryLogger.track({
+        event: 'daemon.upgraded',
+        properties: {
+          from_version: config.telemetry.last_reported_version,
+          to_version: DAEMON_VERSION,
+        },
+      });
+    }
+    startOpenSourceTelemetryUsageSummaryInterval();
+    config.telemetry = { ...config.telemetry, last_reported_version: DAEMON_VERSION };
+    saveConfig(config).catch((error) => {
+      console.warn(
+        '[telemetry] failed to persist last reported version:',
+        error instanceof Error ? error.message : String(error)
+      );
+    });
+  }
 
   // --------------------------------------------------------------------------
   // Phase 1: Register services

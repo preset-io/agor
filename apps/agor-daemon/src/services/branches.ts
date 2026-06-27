@@ -60,6 +60,7 @@ import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloa
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
+import { recordOpenSourceTelemetryBranchCreated } from '../utils/open-source-telemetry-usage.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   generateSessionToken,
@@ -693,6 +694,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     analyticsLogger.track('branch.created', buildBranchCreatedAnalyticsProperties(branch), {
       userId: branch.created_by,
     });
+    recordOpenSourceTelemetryBranchCreated(branch);
   }
 
   private async maybeSetBoardPrimaryAssistant(branch: Branch): Promise<void> {

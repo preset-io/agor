@@ -824,6 +824,51 @@ export interface AgorPathSettings {
 }
 
 /**
+ * Public open-source telemetry settings.
+ *
+ * This is intentionally separate from `analytics`: `analytics` is for
+ * operator-configured instance analytics, while `telemetry` is Agor's
+ * lightweight opt-in/open-source install and aggregate usage telemetry.
+ */
+export interface AgorTelemetrySettings {
+  /** Ongoing telemetry opt-in. Undefined means the user has not answered yet. */
+  enabled?: boolean;
+
+  /** Random anonymous install identifier. Never derived from host/user data. */
+  instance_id?: string;
+
+  /** Segment-compatible batch endpoint. Defaults to Agor's built-in destination. */
+  endpoint?: string | null;
+
+  /** Public Segment/RudderStack write key when sending directly to a batch endpoint. */
+  write_key?: string | null;
+
+  /** Debug delivery without dumping payloads by default. */
+  debug?: boolean;
+
+  /** Delivery timeout. Defaults to 3000ms. */
+  timeout_ms?: number;
+
+  /** Batch flush interval. Defaults to 1000ms. */
+  flush_interval_ms?: number;
+
+  /** Maximum events per batch. Defaults to 10. */
+  max_batch_size?: number;
+
+  /** Last one-time install/result telemetry event sent by agor init. */
+  install_ping_sent_at?: string;
+
+  /** Last daemon active heartbeat day (YYYY-MM-DD). */
+  last_daemon_active_day?: string;
+
+  /** Last aggregate usage summary day (YYYY-MM-DD). */
+  last_usage_summary_day?: string;
+
+  /** Last daemon version that emitted daemon.upgraded. */
+  last_reported_version?: string;
+}
+
+/**
  * Backend analytics settings.
  *
  * Disabled by default. When enabled, daemon/server code sends curated
@@ -1079,6 +1124,9 @@ export interface AgorConfig {
   /** Backend analytics settings. Disabled by default. */
   analytics?: AgorAnalyticsSettings;
 
+  /** Public open-source telemetry settings. */
+  telemetry?: AgorTelemetrySettings;
+
   /** Knowledge Base semantic search settings. */
   knowledge?: AgorKnowledgeSettings;
 
@@ -1137,6 +1185,7 @@ export type ConfigKey =
   | `branches.${keyof AgorBranchesSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
+  | `telemetry.${keyof AgorTelemetrySettings}`
   | `knowledge.${keyof AgorKnowledgeSettings}`
   | `credentials.${keyof AgorCredentials}`
   | `onboarding.${keyof AgorOnboardingSettings}`

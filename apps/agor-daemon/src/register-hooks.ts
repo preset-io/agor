@@ -123,6 +123,7 @@ import {
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization.js';
+import { recordOpenSourceTelemetrySessionCreated } from './utils/open-source-telemetry-usage.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
   type RealtimeAccessBranchRepository,
@@ -2436,6 +2437,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             buildSessionCreatedAnalyticsProperties(session),
             { userId: session.created_by }
           );
+          recordOpenSourceTelemetrySessionCreated(session);
           return context;
         },
         // Claude Code CLI: register watcher + persist cli_state + dispatch

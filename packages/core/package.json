@@ -64,6 +64,12 @@
       "import": "./dist/analytics/index.js",
       "require": "./dist/analytics/index.cjs"
     },
+    "./telemetry": {
+      "source": "./src/telemetry/index.ts",
+      "types": "./dist/telemetry/index.d.ts",
+      "import": "./dist/telemetry/index.js",
+      "require": "./dist/telemetry/index.cjs"
+    },
     "./config": {
       "source": "./src/config/index.ts",
       "types": "./dist/config/index.d.ts",
