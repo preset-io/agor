@@ -17,7 +17,7 @@ import {
   openSourceTelemetryLogger,
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
-import type { Branch, Session, Task } from '@agor/core/types';
+import type { Session } from '@agor/core/types';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
@@ -83,18 +83,6 @@ async function getTaskUsageRows(db: Database, start: Date, end: Date): Promise<T
     .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
     .where(and(gte(tasks.created_at, start), lt(tasks.created_at, end)))
     .all()) as TaskUsageRow[];
-}
-
-export function recordOpenSourceTelemetryTaskCreated(_task: Task): void {
-  // Usage summaries are DB-backed for restart-safe daily distinct counts.
-}
-
-export function recordOpenSourceTelemetrySessionCreated(_session: Session): void {
-  // Usage summaries are DB-backed for restart-safe daily distinct counts.
-}
-
-export function recordOpenSourceTelemetryBranchCreated(_branch: Branch): void {
-  // Usage summaries are DB-backed for restart-safe daily distinct counts.
 }
 
 export async function flushOpenSourceTelemetryUsageSummary(db: Database): Promise<void> {

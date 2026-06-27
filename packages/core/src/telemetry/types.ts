@@ -2,6 +2,7 @@ import type { AgorConfig, AgorTelemetrySettings } from '../config/types.js';
 
 export type OpenSourceTelemetryEventName =
   | 'install.completed'
+  | 'daemon.start'
   | 'daemon.active'
   | 'daemon.upgraded'
   | 'telemetry.test'

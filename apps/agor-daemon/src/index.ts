@@ -20,6 +20,8 @@ import { platform } from 'node:os';
 import { configureAnalyticsLogger } from '@agor/core/analytics';
 import {
   configureOpenSourceTelemetryLogger,
+  generateTelemetryInstanceId,
+  isTelemetryFullyDisabledByEnv,
   loadOpenSourceTelemetryAgorVersion,
   openSourceTelemetryLogger,
   pruneDefaultOpenSourceTelemetryDestination,
@@ -75,6 +77,7 @@ import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { runPostStartJob, startup } from './startup.js';
+import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
 import { registerAllWidgets } from './widgets/index.js';
@@ -184,6 +187,18 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Configure analytics after process-wide git hardening is installed. Module
   // plugins are optional dynamic imports and must never prevent daemon startup.
   await configureAnalyticsLogger(config);
+  if (
+    ['1', 'true', 'yes', 'on'].includes((process.env.AGOR_TELEMETRY ?? '').trim().toLowerCase()) &&
+    !isTelemetryFullyDisabledByEnv() &&
+    !config.telemetry?.instance_id
+  ) {
+    config.telemetry = {
+      ...config.telemetry,
+      enabled: true,
+      instance_id: generateTelemetryInstanceId(),
+    };
+    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
+  }
   configureOpenSourceTelemetryLogger(config);
   if (config.telemetry?.enabled === undefined) {
     console.warn(
@@ -609,22 +624,36 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   app.set('config', config);
 
   if (openSourceTelemetryLogger.isEnabled()) {
+    const startupTelemetryProperties = {
+      agor_version: TELEMETRY_AGOR_VERSION,
+      deployment_kind: process.env.KUBERNETES_SERVICE_HOST
+        ? 'k8s'
+        : process.env.container || process.env.AGOR_DOCKER
+          ? 'docker'
+          : 'local',
+      db_backend: process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite',
+      os_family: platform(),
+      node_major: Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10),
+      branch_rbac: branchRbacEnabled,
+      unix_user_mode: config.execution?.unix_user_mode ?? 'simple',
+    };
+
     openSourceTelemetryLogger.track({
-      event: 'daemon.active',
-      properties: {
-        agor_version: TELEMETRY_AGOR_VERSION,
-        deployment_kind: process.env.KUBERNETES_SERVICE_HOST
-          ? 'k8s'
-          : process.env.container || process.env.AGOR_DOCKER
-            ? 'docker'
-            : 'local',
-        db_backend: process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite',
-        os_family: platform(),
-        node_major: Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10),
-        branch_rbac: branchRbacEnabled,
-        unix_user_mode: config.execution?.unix_user_mode ?? 'simple',
-      },
+      event: 'daemon.start',
+      properties: startupTelemetryProperties,
     });
+
+    const daemonActive = shouldEmitOpenSourceTelemetryDaemonActive(config);
+    if (daemonActive.shouldEmit) {
+      openSourceTelemetryLogger.track({
+        event: 'daemon.active',
+        properties: {
+          ...startupTelemetryProperties,
+          day: daemonActive.day,
+        },
+      });
+    }
+
     if (
       config.telemetry?.last_reported_version &&
       config.telemetry.last_reported_version !== TELEMETRY_AGOR_VERSION
@@ -641,10 +670,11 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     config.telemetry = {
       ...config.telemetry,
       last_reported_version: TELEMETRY_AGOR_VERSION,
+      ...(daemonActive.shouldEmit ? { last_daemon_active_day: daemonActive.day } : {}),
     };
     saveConfig(pruneDefaultOpenSourceTelemetryDestination(config)).catch((error) => {
       console.warn(
-        '[telemetry] failed to persist last reported version:',
+        '[telemetry] failed to persist daemon telemetry state:',
         error instanceof Error ? error.message : String(error)
       );
     });

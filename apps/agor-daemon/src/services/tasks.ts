@@ -34,7 +34,6 @@ import {
   type ExecutorHeartbeatCallbackPayload,
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
-import { recordOpenSourceTelemetryTaskCreated } from '../utils/open-source-telemetry-usage.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import type { TerminalQueueProcessingParams } from '../utils/session-task-state.js';
 import type { SessionsService } from './sessions';
@@ -232,7 +231,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     analyticsLogger.track('task.created', this.baseTaskAnalyticsProperties(task), {
       userId: task.created_by,
     });
-    recordOpenSourceTelemetryTaskCreated(task);
   }
 
   private trackTaskStarted(task: Task): void {
