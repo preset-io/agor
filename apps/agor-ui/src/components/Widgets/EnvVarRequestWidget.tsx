@@ -25,21 +25,33 @@ import {
   MinusCircleOutlined,
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
-import { Button, Card, Input, Select, Space, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import { Button, Card, Checkbox, Input, Select, Space, Typography, theme } from 'antd';
+import { useMemo, useRef, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
+import { Tag } from '../Tag';
 
 const { Text } = Typography;
 
 interface EnvVarsParams {
   names: string[];
   reason: string;
+  variable_metadata?: Record<
+    string,
+    {
+      description?: string;
+      placeholder?: string;
+      format_hint?: string;
+      input_type?: 'password' | 'text' | 'textarea';
+    }
+  >;
+  existing?: Record<string, { set: true; scope: EnvVarScope; resource_id?: string | null }>;
   auto_resume?: boolean;
 }
 
 interface EnvVarsResultMeta {
   names_submitted: string[];
+  names_used_existing?: string[];
   scope: EnvVarScope;
 }
 
@@ -51,39 +63,108 @@ function readResultMeta(widget: WidgetMessageMetadata): EnvVarsResultMeta | unde
   return widget.result_meta as EnvVarsResultMeta | undefined;
 }
 
+function orderedEnvVarNames(names: string[]): string[] {
+  return [...names].sort();
+}
+
 interface VarRowProps {
   name: string;
   value: string;
   onChange: (next: string) => void;
+  metadata?: NonNullable<EnvVarsParams['variable_metadata']>[string];
+  existing?: NonNullable<EnvVarsParams['existing']>[string];
+  useExisting: boolean;
+  onUseExistingChange: (next: boolean) => void;
+  error?: string;
   disabled: boolean;
 }
 
-const VarRow: React.FC<VarRowProps> = ({ name, value, onChange, disabled }) => {
+const VarRow: React.FC<VarRowProps> = ({
+  name,
+  value,
+  onChange,
+  metadata,
+  existing,
+  useExisting,
+  onUseExistingChange,
+  error,
+  disabled,
+}) => {
   const { token } = theme.useToken();
+  const inputType = metadata?.input_type ?? 'password';
+  const placeholder = metadata?.placeholder ?? `Enter value for ${name}`;
+  const inputDisabled = disabled || useExisting;
+  const inputProps = {
+    value,
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      onChange(e.target.value),
+    placeholder,
+    disabled: inputDisabled,
+    'aria-label': `Value for ${name}`,
+    autoComplete: 'off',
+    status: error ? ('error' as const) : undefined,
+  };
   return (
     <div>
-      <Text
-        strong
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          marginBottom: 4,
-          fontFamily: token.fontFamilyCode,
-          fontSize: token.fontSizeSM,
-        }}
-      >
-        <LockOutlined style={{ color: token.colorTextSecondary }} />
-        {name}
-      </Text>
-      <Input.Password
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={`Enter value for ${name}`}
-        disabled={disabled}
-        aria-label={`Value for ${name}`}
-        autoComplete="off"
-      />
+      <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+        <Space size="small" wrap>
+          <Text
+            strong
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontFamily: token.fontFamilyCode,
+              fontSize: token.fontSizeSM,
+            }}
+          >
+            <LockOutlined style={{ color: token.colorTextSecondary }} />
+            {name}
+          </Text>
+          <Tag color={existing?.set ? 'success' : 'default'}>
+            {existing?.set ? 'Set (encrypted)' : 'Not Set'}
+          </Tag>
+          {existing?.scope ? (
+            <Tag color={existing.scope === 'global' ? 'blue' : 'purple'}>{existing.scope}</Tag>
+          ) : null}
+        </Space>
+        {metadata?.description ? (
+          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            {metadata.description}
+          </Text>
+        ) : null}
+        {existing?.scope === 'global' ? (
+          <Checkbox
+            checked={useExisting}
+            onChange={(e) => onUseExistingChange(e.target.checked)}
+            disabled={disabled}
+          >
+            Use saved encrypted value
+          </Checkbox>
+        ) : existing?.scope === 'session' ? (
+          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            Session-scoped saved values must be selected in Session Settings; enter a value here to
+            use it now.
+          </Text>
+        ) : null}
+        {inputType === 'textarea' ? (
+          <Input.TextArea {...inputProps} rows={3} />
+        ) : inputType === 'text' ? (
+          <Input {...inputProps} />
+        ) : (
+          <Input.Password {...inputProps} />
+        )}
+        {metadata?.format_hint ? (
+          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            {metadata.format_hint}
+          </Text>
+        ) : null}
+        {error ? (
+          <Text type="danger" style={{ fontSize: token.fontSizeSM }}>
+            {error}
+          </Text>
+        ) : null}
+      </Space>
     </div>
   );
 };
@@ -103,10 +184,11 @@ const PendingForm: React.FC<PendingFormProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
+  const orderedNames = useMemo(() => orderedEnvVarNames(params.names), [params.names]);
 
   const [values, setValues] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
-    for (const name of params.names) initial[name] = '';
+    for (const name of orderedNames) initial[name] = '';
     return initial;
   });
   // Scope is a user-only choice — agent doesn't get to suggest it. Default
@@ -116,10 +198,33 @@ const PendingForm: React.FC<PendingFormProps> = ({
   const [scope, setScope] = useState<EnvVarScope>('global');
   const [submitting, setSubmitting] = useState(false);
   const [dismissing, setDismissing] = useState(false);
+  const [validationMessage, setValidationMessage] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [useExisting, setUseExisting] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    for (const name of orderedNames) initial[name] = false;
+    return initial;
+  });
+  const [localResolution, setLocalResolution] = useState<
+    | {
+        kind: 'submitted';
+        names: string[];
+        scope: EnvVarScope;
+        usedExisting?: string[];
+        submitted?: string[];
+      }
+    | { kind: 'dismissed'; names: string[] }
+    | null
+  >(null);
+  const resolvingRef = useRef(false);
 
   const allFilled = useMemo(
-    () => params.names.every((name) => values[name]?.trim().length > 0),
-    [params.names, values]
+    () => orderedNames.every((name) => useExisting[name] || values[name]?.trim().length > 0),
+    [orderedNames, useExisting, values]
+  );
+  const missingNames = useMemo(
+    () => orderedNames.filter((name) => !useExisting[name] && !values[name]?.trim()),
+    [orderedNames, useExisting, values]
   );
 
   // Use the Feathers client so the built-in 401 refresh/retry hook fires
@@ -131,43 +236,121 @@ const PendingForm: React.FC<PendingFormProps> = ({
     return client.service(`widgets/${encodeURIComponent(widgetId)}/${path}`).create(body ?? {});
   };
 
+  const extractFieldErrors = (err: unknown): Record<string, string> => {
+    const data = (err as { data?: { field_errors?: unknown } } | undefined)?.data;
+    const raw = data?.field_errors;
+    if (!raw || typeof raw !== 'object') return {};
+    const out: Record<string, string> = {};
+    for (const [name, message] of Object.entries(raw)) {
+      if (typeof message === 'string') out[name] = message;
+    }
+    return out;
+  };
+
   const handleSubmit = async () => {
-    if (!allFilled || submitting) return;
+    if (resolvingRef.current || localResolution) return;
+    if (!allFilled) {
+      setValidationMessage('Enter all requested values before saving.');
+      setFieldErrors(
+        Object.fromEntries(missingNames.map((name) => [name, 'Enter a value or use a saved one.']))
+      );
+      return;
+    }
+    resolvingRef.current = true;
     setSubmitting(true);
+    setValidationMessage(null);
+    setFieldErrors({});
+    const useExistingNames = orderedNames.filter((name) => useExisting[name]);
+    const valueNames = orderedNames.filter((name) => !useExisting[name]);
     const submitBody = {
-      values: Object.fromEntries(params.names.map((name) => [name, values[name]?.trim() ?? ''])),
+      values: Object.fromEntries(valueNames.map((name) => [name, values[name]?.trim() ?? ''])),
+      use_existing: useExistingNames,
       scope,
     };
     try {
       await post('submit', submitBody);
+      setLocalResolution({
+        kind: 'submitted',
+        names: orderedNames,
+        scope,
+        submitted: valueNames,
+        usedExisting: useExistingNames,
+      });
+      const displayScope = valueNames.length > 0 ? scope : 'global';
       showSuccess(
-        params.names.length === 1
-          ? `Saved ${params.names[0]} (${scope})`
-          : `Saved ${params.names.length} variables (${scope})`
+        orderedNames.length === 1
+          ? `Saved ${orderedNames[0]} (${displayScope})`
+          : `Saved ${orderedNames.length} variables (${displayScope})`
       );
     } catch (err) {
-      showError(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+      resolvingRef.current = false;
+      const message = `Save failed: ${err instanceof Error ? err.message : String(err)}`;
+      setFieldErrors(extractFieldErrors(err));
+      setValidationMessage(`${message}. Check the requested names and try again.`);
+      showError(message);
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleDismiss = async () => {
-    if (dismissing) return;
+    if (resolvingRef.current || localResolution) return;
+    resolvingRef.current = true;
     setDismissing(true);
+    setValidationMessage(null);
+    setFieldErrors({});
     try {
       await post('dismiss', {});
+      setLocalResolution({ kind: 'dismissed', names: orderedNames });
     } catch (err) {
-      showError(`Dismiss failed: ${err instanceof Error ? err.message : String(err)}`);
+      resolvingRef.current = false;
+      const message = `Dismiss failed: ${err instanceof Error ? err.message : String(err)}`;
+      setValidationMessage(`${message}. Try again.`);
+      showError(message);
     } finally {
       setDismissing(false);
     }
   };
 
   const title =
-    params.names.length === 1
+    orderedNames.length === 1
       ? 'Securely provide environment variable'
-      : `Securely provide ${params.names.length} environment variables`;
+      : `Securely provide ${orderedNames.length} environment variables`;
+
+  if (localResolution?.kind === 'submitted') {
+    const displayScope =
+      (localResolution.submitted?.length ?? 0) > 0 ? localResolution.scope : 'global';
+    return (
+      <TerminalLine
+        icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
+        borderColor={token.colorSuccess}
+        text={
+          <Space orientation="vertical" size={0}>
+            <Text>
+              {localResolution.names.length === 1
+                ? localResolution.names[0]
+                : `${localResolution.names.length} variables`}{' '}
+              saved
+              <Text type="secondary"> ({displayScope})</Text>
+            </Text>
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              Need to correct one? Update it in User Settings → Env vars.
+            </Text>
+          </Space>
+        }
+      />
+    );
+  }
+
+  if (localResolution?.kind === 'dismissed') {
+    return (
+      <TerminalLine
+        icon={<MinusCircleOutlined style={{ color: token.colorTextSecondary }} />}
+        borderColor={token.colorBorder}
+        text={<Text type="secondary">{localResolution.names.join(', ')} dismissed</Text>}
+      />
+    );
+  }
 
   return (
     <Card
@@ -187,20 +370,43 @@ const PendingForm: React.FC<PendingFormProps> = ({
           </Text>
         )}
 
-        {params.names.map((name) => (
+        {orderedNames.map((name) => (
           <VarRow
             key={name}
             name={name}
             value={values[name] ?? ''}
-            onChange={(next) => setValues((prev) => ({ ...prev, [name]: next }))}
+            metadata={params.variable_metadata?.[name]}
+            existing={params.existing?.[name]}
+            useExisting={!!useExisting[name]}
+            onUseExistingChange={(next) => {
+              setValidationMessage(null);
+              setFieldErrors((prev) => ({ ...prev, [name]: '' }));
+              setUseExisting((prev) => ({ ...prev, [name]: next }));
+            }}
+            onChange={(next) => {
+              setValidationMessage(null);
+              setFieldErrors((prev) => ({ ...prev, [name]: '' }));
+              setValues((prev) => ({ ...prev, [name]: next }));
+            }}
+            error={fieldErrors[name]}
             disabled={submitting || dismissing}
           />
         ))}
 
+        {validationMessage ? (
+          <Text type="danger" style={{ fontSize: token.fontSizeSM }}>
+            {validationMessage}
+          </Text>
+        ) : missingNames.length > 0 ? (
+          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            Enter {missingNames.length === 1 ? missingNames[0] : 'all requested values'} to save.
+          </Text>
+        ) : null}
+
         <Space style={{ width: '100%', justifyContent: 'space-between' }} size="small">
           <Space size="small">
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              Scope:
+              Scope for new values:
             </Text>
             <Select
               size="small"
@@ -261,17 +467,28 @@ const TerminalLine: React.FC<{
 const SubmittedSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget }) => {
   const { token } = theme.useToken();
   const rm = readResultMeta(widget);
-  const names = rm?.names_submitted ?? readParams(widget).names;
+  const params = readParams(widget);
+  const names = orderedEnvVarNames([
+    ...(rm?.names_submitted ?? []),
+    ...(rm?.names_used_existing ?? []),
+  ]);
+  const displayNames = names.length > 0 ? names : orderedEnvVarNames(params.names);
   const scope = rm?.scope ?? 'global';
+  const displayScope = (rm?.names_submitted?.length ?? 0) > 0 ? scope : 'global';
   return (
     <TerminalLine
       icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
       borderColor={token.colorSuccess}
       text={
-        <Text>
-          {names.length === 1 ? names[0] : `${names.length} variables`} saved
-          <Text type="secondary"> ({scope})</Text>
-        </Text>
+        <Space orientation="vertical" size={0}>
+          <Text>
+            {displayNames.length === 1 ? displayNames[0] : `${displayNames.length} variables`} saved
+            <Text type="secondary"> ({displayScope})</Text>
+          </Text>
+          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            Need to correct one? Update it in User Settings → Env vars.
+          </Text>
+        </Space>
       }
     />
   );
@@ -279,7 +496,7 @@ const SubmittedSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget 
 
 const DismissedSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget }) => {
   const { token } = theme.useToken();
-  const names = readParams(widget).names;
+  const names = orderedEnvVarNames(readParams(widget).names);
   return (
     <TerminalLine
       icon={<MinusCircleOutlined style={{ color: token.colorTextSecondary }} />}
@@ -291,7 +508,7 @@ const DismissedSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget 
 
 const AlreadyPresentSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget }) => {
   const { token } = theme.useToken();
-  const names = readParams(widget).names;
+  const names = orderedEnvVarNames(readParams(widget).names);
   return (
     <TerminalLine
       icon={<CheckCircleOutlined style={{ color: token.colorInfo }} />}

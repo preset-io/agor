@@ -34,7 +34,9 @@ interface StubServiceCall {
  * the widget uses. Returns a `calls` array for assertions and a `shouldFail`
  * knob for negative tests.
  */
-function makeStubClient(opts: { shouldFail?: boolean } = {}): {
+function makeStubClient(
+  opts: { shouldFail?: boolean; fieldErrors?: Record<string, string> } = {}
+): {
   client: AgorClient;
   calls: StubServiceCall[];
 } {
@@ -44,7 +46,13 @@ function makeStubClient(opts: { shouldFail?: boolean } = {}): {
       return {
         async create(body: unknown) {
           calls.push({ path, body });
-          if (opts.shouldFail) throw new Error('Invalid env var');
+          if (opts.shouldFail) {
+            const err = new Error('Invalid env var') as Error & {
+              data?: { field_errors?: Record<string, string> };
+            };
+            if (opts.fieldErrors) err.data = { field_errors: opts.fieldErrors };
+            throw err;
+          }
           return { widget_id: 'wid-1', status: 'submitted' };
         },
       };
@@ -101,6 +109,55 @@ describe('EnvVarRequestWidget — pending state', () => {
     );
     expect(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i)).toBeTruthy();
     expect(screen.getByLabelText(/Value for STRIPE_SECRET_KEY/i)).toBeTruthy();
+    expect(screen.getAllByText(/Not set/i)).toHaveLength(2);
+  });
+
+  it('renders per-variable metadata and native input types', () => {
+    const widget = makeWidget({
+      params: {
+        names: ['PUBLIC_BASE_URL', 'PRIVATE_NOTE'],
+        reason: 'two values',
+        variable_metadata: {
+          PUBLIC_BASE_URL: {
+            description: 'Public URL for callbacks.',
+            placeholder: 'https://example.com',
+            format_hint: 'Must include protocol.',
+            input_type: 'text',
+          },
+          PRIVATE_NOTE: {
+            description: 'Paste the multiline value.',
+            input_type: 'textarea',
+          },
+        },
+      },
+    });
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    expect(screen.getByText('Public URL for callbacks.')).toBeTruthy();
+    expect(screen.getByPlaceholderText('https://example.com')).toBeTruthy();
+    expect(screen.getByText('Must include protocol.')).toBeTruthy();
+    expect(screen.getByText('Paste the multiline value.')).toBeTruthy();
+  });
+
+  it('renders requested names in deterministic order', () => {
+    const widget = makeWidget({
+      params: {
+        names: ['STRIPE_SECRET_KEY', 'HUBSPOT_API_KEY'],
+        reason: 'two integrations',
+      },
+    });
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+
+    const inputs = screen.getAllByLabelText(/Value for/i);
+    expect(inputs.map((input) => input.getAttribute('aria-label'))).toEqual([
+      'Value for HUBSPOT_API_KEY',
+      'Value for STRIPE_SECRET_KEY',
+    ]);
   });
 
   it('disables Save until every field has a value', () => {
@@ -135,8 +192,57 @@ describe('EnvVarRequestWidget — pending state', () => {
     expect(calls[0].path).toBe('widgets/wid-1/submit');
     expect(calls[0].body).toEqual({
       values: { HUBSPOT_API_KEY: 'secret-key' },
+      use_existing: [],
       scope: 'global', // UI always starts at Global; no scope change in this test
     });
+  });
+
+  it('can use an existing saved global value without retyping it', async () => {
+    const widget = makeWidget({
+      params: {
+        names: ['HUBSPOT_API_KEY', 'STRIPE_SECRET_KEY'],
+        reason: 'two integrations',
+        existing: { HUBSPOT_API_KEY: { set: true, scope: 'global' } },
+      },
+    });
+    const { client, calls } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+
+    expect(screen.getByText('Set (encrypted)')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(/Use saved encrypted value/i));
+    fireEvent.change(screen.getByLabelText(/Value for STRIPE_SECRET_KEY/i), {
+      target: { value: 'new-secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    expect(calls[0].body).toEqual({
+      values: { STRIPE_SECRET_KEY: 'new-secret' },
+      use_existing: ['HUBSPOT_API_KEY'],
+      scope: 'global',
+    });
+  });
+
+  it('does not offer use-existing for session-scoped saved values', () => {
+    const widget = makeWidget({
+      params: {
+        names: ['HUBSPOT_API_KEY'],
+        reason: 'call hubspot',
+        existing: { HUBSPOT_API_KEY: { set: true, scope: 'session' } },
+      },
+    });
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+
+    expect(screen.getByText('Set (encrypted)')).toBeTruthy();
+    expect(screen.queryByLabelText(/Use saved encrypted value/i)).toBeNull();
+    expect(screen.getByText(/Session-scoped saved values/i)).toBeTruthy();
   });
 
   it('dismisses via widgets/:id/dismiss with an empty body', async () => {
@@ -173,7 +279,65 @@ describe('EnvVarRequestWidget — pending state', () => {
     await waitFor(() => {
       expect(saveBtn.disabled).toBe(false);
     });
+    expect(screen.getAllByText(/Save failed: Invalid env var/i).length).toBeGreaterThan(0);
     expect(calls.length).toBe(1);
+  });
+
+  it('attaches structured server field errors to the matching input row', async () => {
+    const widget = makeWidget();
+    const { client } = makeStubClient({
+      shouldFail: true,
+      fieldErrors: { HUBSPOT_API_KEY: 'Only global saved values can be used from this widget' },
+    });
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
+      target: { value: 'shh' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText(/Only global saved values/i)).toBeTruthy();
+    expect(screen.getAllByText(/Save failed: Invalid env var/i).length).toBeGreaterThan(0);
+  });
+
+  it('shows a local submitted summary after save so duplicate clicks cannot resubmit', async () => {
+    const widget = makeWidget();
+    const { client, calls } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+
+    fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
+      target: { value: 'secret-key' },
+    });
+    const saveBtn = screen.getByRole('button', { name: 'Save' });
+    fireEvent.click(saveBtn);
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/saved/i)).toBeTruthy();
+    });
+    expect(calls).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+
+  it('shows a local dismissed summary after dismiss so duplicate clicks cannot resubmit', async () => {
+    const widget = makeWidget();
+    const { client, calls } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+
+    const dismissBtn = screen.getByRole('button', { name: 'Dismiss' });
+    fireEvent.click(dismissBtn);
+    fireEvent.click(dismissBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/dismissed/i)).toBeTruthy();
+    });
+    expect(calls).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });
 });
 
@@ -191,7 +355,26 @@ describe('EnvVarRequestWidget — terminal states', () => {
     expect(screen.getByText(/HUBSPOT_API_KEY/i)).toBeTruthy();
     expect(screen.getByText(/saved/i)).toBeTruthy();
     expect(screen.getByText(/global/i)).toBeTruthy();
+    expect(screen.getByText(/Update it in User Settings/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+
+  it('renders submitted summary for values plus used-existing names', () => {
+    const widget = makeWidget({
+      status: 'submitted',
+      resolved_at: '2026-05-19T12:34:56.000Z',
+      result_meta: {
+        names_submitted: ['STRIPE_SECRET_KEY'],
+        names_used_existing: ['HUBSPOT_API_KEY'],
+        scope: 'global',
+      },
+    });
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    expect(screen.getByText(/2 variables/i)).toBeTruthy();
+    expect(screen.getByText(/saved/i)).toBeTruthy();
   });
 
   it('renders the dismissed summary', () => {
@@ -202,6 +385,21 @@ describe('EnvVarRequestWidget — terminal states', () => {
     );
     expect(screen.getByText(/dismissed/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+
+  it('renders terminal summaries in deterministic name order', () => {
+    const widget = makeWidget({
+      status: 'dismissed',
+      params: {
+        names: ['STRIPE_SECRET_KEY', 'HUBSPOT_API_KEY'],
+        reason: 'two integrations',
+      },
+    });
+    const { client } = makeStubClient();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    expect(screen.getByText('HUBSPOT_API_KEY, STRIPE_SECRET_KEY dismissed')).toBeTruthy();
   });
 
   it('renders the already_present summary', () => {
