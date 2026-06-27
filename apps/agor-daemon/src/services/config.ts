@@ -42,7 +42,10 @@ function isResolvableApiKeyName(value: string): value is ApiKeyName {
 type ExecutorTokenPayload = {
   type?: string;
   purpose?: string;
+  session_id?: string;
+  sessionId?: string;
   task_id?: string;
+  branch_id?: string;
 };
 
 function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefined {
@@ -63,6 +66,24 @@ function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefi
     if (decoded?.type === 'executor-session' && decoded.purpose === 'executor-task') {
       return decoded;
     }
+  }
+
+  // The custom JWT strategy also returns validated executor-session scope as
+  // top-level auth result fields. Feathers merges those fields into params for
+  // service calls, while ordinary external callers can only send query/data
+  // params through the transport.
+  const scopedParams = params as
+    | (Params & { session_id?: string; sessionId?: string; task_id?: string; branch_id?: string })
+    | undefined;
+  if (typeof scopedParams?.task_id === 'string') {
+    return {
+      type: 'executor-session',
+      purpose: 'executor-task',
+      task_id: scopedParams.task_id,
+      session_id: scopedParams.session_id,
+      sessionId: scopedParams.sessionId,
+      branch_id: scopedParams.branch_id,
+    };
   }
 
   return undefined;

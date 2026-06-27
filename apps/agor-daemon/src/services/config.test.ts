@@ -173,6 +173,44 @@ describe('ConfigService.resolveApiKey', () => {
     });
   });
 
+  it('recovers executor runtime scope from validated auth result params', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'creator-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    const result = await service.resolveApiKey(
+      { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+      {
+        provider: 'socketio',
+        user: { user_id: 'creator-1' },
+        task_id: 'task-1',
+        session_id: 'session-1',
+        branch_id: 'branch-1',
+      } as never
+    );
+
+    expect(result).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
+    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
+      userId: 'creator-1',
+      db: {},
+      tool: 'codex',
+    });
+  });
+
   it('rejects executor runtime tokens for a different API key than the session tool uses', async () => {
     const service = new ConfigService({} as never);
     service.app = {
