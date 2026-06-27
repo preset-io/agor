@@ -10,6 +10,7 @@ interface TenantDatabaseScope {
 }
 
 const tenantDatabaseScope = new AsyncLocalStorage<TenantDatabaseScope>();
+const tenantScopedProxyTargets = new WeakMap<object, Database>();
 
 export function getCurrentTenantDatabase(): Database | undefined {
   return tenantDatabaseScope.getStore()?.db;
@@ -23,13 +24,17 @@ function scopedTarget(base: Database): Database {
   return tenantDatabaseScope.getStore()?.db ?? base;
 }
 
+function unwrapTenantScopedDatabaseProxy(db: Database): Database {
+  return tenantScopedProxyTargets.get(db as unknown as object) ?? db;
+}
+
 /**
  * Return a Database proxy that transparently routes repository calls to the
  * current tenant-scoped transaction when one is active. Repositories can keep
  * accepting `Database` without knowing whether they are inside a tenant scope.
  */
 export function createTenantScopedDatabaseProxy(base: Database): Database {
-  return new Proxy(base as object, {
+  const proxy = new Proxy(base as object, {
     get(_target, property, receiver) {
       const target = scopedTarget(base) as unknown as Record<PropertyKey, unknown>;
       const value = Reflect.get(target, property, receiver);
@@ -45,6 +50,8 @@ export function createTenantScopedDatabaseProxy(base: Database): Database {
       return Reflect.getOwnPropertyDescriptor(scopedTarget(base) as unknown as object, property);
     },
   }) as Database;
+  tenantScopedProxyTargets.set(proxy as unknown as object, base);
+  return proxy;
 }
 
 /**
@@ -57,11 +64,13 @@ export async function runWithTenantDatabaseScope<T>(
   tenantId: TenantID | string | undefined,
   work: () => Promise<T>
 ): Promise<T> {
-  if (!isPostgresDatabase(db) || !tenantId) {
-    return tenantDatabaseScope.run({ db, tenantId }, work);
+  const baseDb = unwrapTenantScopedDatabaseProxy(db);
+
+  if (!isPostgresDatabase(baseDb) || !tenantId) {
+    return tenantDatabaseScope.run({ db: baseDb, tenantId }, work);
   }
 
-  return db.transaction(async (tx) => {
+  return baseDb.transaction(async (tx) => {
     const scopedDb = tx as unknown as Database;
     await (scopedDb as unknown as { execute(query: unknown): Promise<unknown> }).execute(
       sql`SELECT set_config('agor.tenant_id', ${tenantId}, true)`

@@ -23,4 +23,30 @@ describe('tenant-scoped database proxy', () => {
     expect(base.transaction).toHaveBeenCalledTimes(1);
     expect(tx.execute).toHaveBeenCalledTimes(1);
   });
+
+  it('does not recursively route to itself for SQLite no-op scopes', async () => {
+    const base = {
+      run: vi.fn(),
+      marker: vi.fn(() => 'base'),
+    };
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+
+    await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
+      expect((db as unknown as { marker(): string }).marker()).toBe('base');
+    });
+  });
+
+  it('does not recursively route to itself for unscoped PostgreSQL calls', async () => {
+    const base = {
+      transaction: vi.fn(),
+      marker: vi.fn(() => 'base'),
+    };
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+
+    await runWithTenantDatabaseScope(db, undefined, async () => {
+      expect((db as unknown as { marker(): string }).marker()).toBe('base');
+    });
+
+    expect(base.transaction).not.toHaveBeenCalled();
+  });
 });
