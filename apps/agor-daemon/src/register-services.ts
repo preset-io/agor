@@ -103,6 +103,7 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
+import { createLinksService } from './services/links.js';
 import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
@@ -237,6 +238,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.use('/leaderboard', createLeaderboardService(db));
   }
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
+
+  app.use('/links', createLinksService(db), {
+    events: ['created', 'patched', 'removed'],
+  });
 
   app.use('/messages', messagesService, {
     methods: [

@@ -43,6 +43,7 @@ import type {
   AuthenticatedParams,
   DaemonServicesConfig,
   HookContext,
+  LinkCreate,
   Message,
   MessageSource,
   Paginated,
@@ -1935,6 +1936,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       const uploadedFiles = files.map((f) => ({
         filename: f.filename,
+        originalName: f.originalname,
         path: f.path,
         size: f.size,
         mimeType: f.mimetype,
@@ -1945,6 +1947,28 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         uploadedFiles.forEach((f) => {
           console.log(`     - ${f.filename} (${(f.size / 1024).toFixed(2)} KB)`);
         });
+      }
+
+      const uploadLinks: Partial<LinkCreate>[] = uploadedFiles.map((file) => ({
+        session_id: sessionId as SessionID,
+        branch_id: null,
+        source: 'upload',
+        kind: file.mimeType.toLowerCase().startsWith('image/') ? 'image' : 'document',
+        file_path: file.path,
+        title: file.originalName || file.filename,
+        mime_type: file.mimeType,
+        metadata: {
+          filename: file.filename,
+          originalName: file.originalName,
+          size: file.size,
+        },
+        created_by: (params.user?.user_id as UUID | undefined) ?? null,
+      }));
+
+      if (uploadLinks.length > 0) {
+        await app
+          .service('links')
+          .create(uploadLinks, { ...params, provider: undefined } as Params);
       }
 
       let notificationError: string | null = null;
@@ -3803,7 +3827,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const SERVICE_GROUP_PATHS: Partial<Record<ServiceGroupName, string[]>> = {
-    core: ['sessions', 'tasks', 'messages'],
+    core: ['sessions', 'tasks', 'messages', 'links'],
     branches: ['branches'],
     repos: ['repos'],
     users: ['users'],

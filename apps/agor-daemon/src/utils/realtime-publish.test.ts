@@ -487,6 +487,26 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }]);
   });
 
+  it('resolves link events through session_id when branch_id is absent', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const app = makeApp([{ user: allowed }, { user: denied }]);
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const channel = await app.runPublish(
+      { link_id: 'l1', session_id: 's1' },
+      { path: 'links', method: 'create', event: 'created' }
+    );
+
+    expect(r.sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledWith('s1');
+    expect(channel.connections).toEqual([{ user: allowed }]);
+  });
+
   it('resolves board comment events through task_id when branch_id is absent', async () => {
     const allowed = user('allowed');
     const denied = user('denied');

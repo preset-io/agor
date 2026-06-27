@@ -23,6 +23,7 @@ const schema = dialect === 'postgresql' ? postgresSchema : sqliteSchema;
 export const sessions = schema.sessions;
 export const tasks = schema.tasks;
 export const messages = schema.messages;
+export const links = schema.links;
 export const boards = schema.boards;
 export const repos = schema.repos;
 export const branches = schema.branches;

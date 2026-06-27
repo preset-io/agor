@@ -219,6 +219,34 @@ export const boardObjectQuerySchema = createQuerySchema(
 );
 
 /**
+ * Link query schema
+ */
+export const linkQuerySchema = createQuerySchema(
+  Type.Object({
+    link_id: Type.Optional(CommonSchemas.uuid),
+    branch_id: Type.Optional(CommonSchemas.uuid),
+    session_id: Type.Optional(CommonSchemas.uuid),
+    source_message_id: Type.Optional(CommonSchemas.uuid),
+    kind: Type.Optional(
+      Type.Union([
+        Type.Literal('issue'),
+        Type.Literal('pr'),
+        Type.Literal('kb_ref'),
+        Type.Literal('image'),
+        Type.Literal('document'),
+        Type.Literal('url'),
+      ])
+    ),
+    source: Type.Optional(
+      Type.Union([Type.Literal('manual'), Type.Literal('parsed'), Type.Literal('upload')])
+    ),
+    created_by: Type.Optional(CommonSchemas.uuid),
+    created_at: Type.Optional(CommonSchemas.timestamp),
+    updated_at: Type.Optional(CommonSchemas.timestamp),
+  })
+);
+
+/**
  * Board comment query schema
  */
 export const boardCommentQuerySchema = createQuerySchema(
@@ -271,6 +299,7 @@ export const boardQueryValidator = getValidator(boardQuerySchema, queryValidator
 export const userQueryValidator = getValidator(userQuerySchema, queryValidator);
 export const boardObjectQueryValidator = getValidator(boardObjectQuerySchema, queryValidator);
 export const boardCommentQueryValidator = getValidator(boardCommentQuerySchema, queryValidator);
+export const linkQueryValidator = getValidator(linkQuerySchema, queryValidator);
 export const repoQueryValidator = getValidator(repoQuerySchema, queryValidator);
 export const mcpServerQueryValidator = getValidator(mcpServerQuerySchema, queryValidator);
 
