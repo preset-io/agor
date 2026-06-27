@@ -17,6 +17,7 @@ export * from './gateway';
 export * from './group';
 export * from './id';
 export * from './knowledge';
+export * from './link';
 export * from './mcp';
 export * from './message';
 export * from './presence';

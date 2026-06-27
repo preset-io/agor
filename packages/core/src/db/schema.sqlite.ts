@@ -11,6 +11,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  Link,
   Message,
   PermissionMode,
   SandpackConfig,
@@ -483,6 +484,59 @@ export const messages = sqliteTable(
       table.session_id,
       table.timestamp
     ),
+  })
+);
+
+/**
+ * Links table - Branch/session-owned links and uploaded attachments.
+ *
+ * Ownership is app-enforced as branch_id XOR session_id. SQLite intentionally
+ * has no CHECK constraints here so future enum/ownership extensions do not
+ * force table-recreation migrations.
+ */
+export const links = sqliteTable(
+  'links',
+  {
+    link_id: text('link_id', { length: 36 }).primaryKey(),
+    branch_id: text('branch_id', { length: 36 }).references(() => branches.branch_id, {
+      onDelete: 'cascade',
+    }),
+    session_id: text('session_id', { length: 36 }).references(() => sessions.session_id, {
+      onDelete: 'cascade',
+    }),
+    source_message_id: text('source_message_id', { length: 36 }).references(
+      () => messages.message_id,
+      { onDelete: 'set null' }
+    ),
+    kind: text('kind', {
+      enum: ['issue', 'pr', 'kb_ref', 'image', 'document', 'url'],
+    }).notNull(),
+    source: text('source', {
+      enum: ['manual', 'parsed', 'upload'],
+    }).notNull(),
+    url: text('url'),
+    ref_uri: text('ref_uri'),
+    file_path: text('file_path'),
+    target_key: text('target_key').notNull(),
+    title: text('title'),
+    mime_type: text('mime_type'),
+    metadata: t.json<Link['metadata']>('metadata'),
+    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    branchIdx: index('links_branch_id_idx').on(table.branch_id),
+    sessionIdx: index('links_session_id_idx').on(table.session_id),
+    sourceMessageIdx: index('links_source_message_id_idx').on(table.source_message_id),
+    branchTargetIdx: uniqueIndex('links_branch_target_idx')
+      .on(table.branch_id, table.target_key)
+      .where(sql`${table.branch_id} is not null`),
+    sessionTargetIdx: uniqueIndex('links_session_target_idx')
+      .on(table.session_id, table.target_key)
+      .where(sql`${table.session_id} is not null`),
   })
 );
 
@@ -2295,6 +2349,8 @@ export type TaskRow = typeof tasks.$inferSelect;
 export type TaskInsert = typeof tasks.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
+export type LinkRow = typeof links.$inferSelect;
+export type LinkInsert = typeof links.$inferInsert;
 export type BoardRow = typeof boards.$inferSelect;
 export type BoardInsert = typeof boards.$inferInsert;
 export type RepoRow = typeof repos.$inferSelect;
@@ -2371,6 +2427,7 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
     fields: [sessions.schedule_id],
     references: [schedules.schedule_id],
   }),
+  links: many(links),
   outboundRelationships: many(sessionRelationships, { relationName: 'relationshipSource' }),
   inboundRelationships: many(sessionRelationships, { relationName: 'relationshipTarget' }),
 }));
@@ -2394,7 +2451,23 @@ export const sessionRelationshipsRelations = relations(sessionRelationships, ({ 
 
 export const branchesRelations = relations(branches, ({ many }) => ({
   sessions: many(sessions),
+  links: many(links),
   schedules: many(schedules),
+}));
+
+export const linksRelations = relations(links, ({ one }) => ({
+  branch: one(branches, {
+    fields: [links.branch_id],
+    references: [branches.branch_id],
+  }),
+  session: one(sessions, {
+    fields: [links.session_id],
+    references: [sessions.session_id],
+  }),
+  sourceMessage: one(messages, {
+    fields: [links.source_message_id],
+    references: [messages.message_id],
+  }),
 }));
 
 export const schedulesRelations = relations(schedules, ({ one, many }) => ({

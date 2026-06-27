@@ -62,7 +62,11 @@ const SESSION_ID_SCOPED_PATHS = new Set([
   'session-mcp-servers',
   'session-env-selections',
 ]);
-const OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS = new Set(['board-objects', 'board-comments']);
+const OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS = new Set([
+  'board-objects',
+  'board-comments',
+  'links',
+]);
 
 function isStreamingEvent(context: PublishContext): boolean {
   return (

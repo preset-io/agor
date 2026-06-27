@@ -29,6 +29,7 @@ import type {
   KnowledgeNamespaceGraph,
   KnowledgeSearchResult,
   KnowledgeSemanticSettingsPublic,
+  Link,
   MCPServer,
   Message,
   PermissionMode,
@@ -180,6 +181,7 @@ export interface ServiceTypes {
   'repos/clone': Repo;
   'repos/local': Repo;
   branches: Branch;
+  links: Link;
   schedules: Schedule;
   users: User;
   groups: Group;
@@ -566,6 +568,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'links'): AgorService<Link>;
 
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;
