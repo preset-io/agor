@@ -13,6 +13,7 @@ import type {
   AuthCheckResult,
   Board,
   Branch,
+  CloneRepositoryResult,
   CodexApprovalPolicy,
   CodexSandboxMode,
   CreateLocalRepoRequest,
@@ -88,7 +89,7 @@ export interface OnboardingWizardProps {
   // biome-ignore lint/suspicious/noExplicitAny: AgorClient type varies across package boundaries in tests/apps.
   client: any;
 
-  onCreateRepo: (data: CreateRepoRequest) => Promise<void>;
+  onCreateRepo: (data: CreateRepoRequest) => Promise<CloneRepositoryResult | undefined>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateBranch: (
     repoId: string,
@@ -256,6 +257,7 @@ export function OnboardingWizard({
   const [error, setError] = useState<string | null>(null);
 
   const cloneTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clonePollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completingRepoRef = useRef<string | null>(null);
   const knownFailedRepoIdsRef = useRef<Set<string>>(new Set());
   const effectiveFrameworkUrl = frameworkRepoUrl || FRAMEWORK_REPO_URL;
@@ -300,6 +302,7 @@ export function OnboardingWizard({
   useEffect(() => {
     return () => {
       if (cloneTimeoutRef.current) clearTimeout(cloneTimeoutRef.current);
+      if (clonePollTimeoutRef.current) clearTimeout(clonePollTimeoutRef.current);
     };
   }, []);
 
@@ -396,6 +399,10 @@ export function OnboardingWizard({
         clearTimeout(cloneTimeoutRef.current);
         cloneTimeoutRef.current = null;
       }
+      if (clonePollTimeoutRef.current) {
+        clearTimeout(clonePollTimeoutRef.current);
+        clonePollTimeoutRef.current = null;
+      }
 
       try {
         setError(null);
@@ -486,6 +493,42 @@ export function OnboardingWizard({
     ]
   );
 
+  const pollRepoUntilReady = useCallback(
+    (repoId: string) => {
+      const poll = async () => {
+        if (completingRepoRef.current === repoId) return;
+        try {
+          const repo = (await client?.service('repos').get(repoId)) as Repo | undefined;
+          if (!repo) return;
+          if (repo.clone_status === 'failed') {
+            setSetupStage('error');
+            setError(
+              repo.clone_error?.message ??
+                `Clone failed (exit ${repo.clone_error?.exit_code ?? '?'}).`
+            );
+            if (cloneTimeoutRef.current) {
+              clearTimeout(cloneTimeoutRef.current);
+              cloneTimeoutRef.current = null;
+            }
+            return;
+          }
+          if (repo.clone_status === 'ready' || repo.clone_status === undefined) {
+            await finishSetupFromRepo(repo.repo_id);
+            return;
+          }
+        } catch {
+          // Keep polling until the existing clone timeout surfaces a user-facing error.
+        }
+
+        clonePollTimeoutRef.current = setTimeout(poll, 1000);
+      };
+
+      if (clonePollTimeoutRef.current) clearTimeout(clonePollTimeoutRef.current);
+      clonePollTimeoutRef.current = setTimeout(poll, 0);
+    },
+    [client, finishSetupFromRepo]
+  );
+
   const startSetup = useCallback(async () => {
     setCurrentStep('loading');
     setSetupStage('cloning');
@@ -507,11 +550,14 @@ export function OnboardingWizard({
     );
 
     try {
-      await onCreateRepo({
+      const cloneResult = await onCreateRepo({
         url: effectiveFrameworkUrl,
         slug: FRAMEWORK_REPO_SLUG,
         default_branch: 'main',
       });
+      if (cloneResult?.repo_id) {
+        pollRepoUntilReady(cloneResult.repo_id);
+      }
       cloneTimeoutRef.current = setTimeout(() => {
         setSetupStage('error');
         setError(
@@ -522,7 +568,7 @@ export function OnboardingWizard({
       setSetupStage('error');
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [effectiveFrameworkUrl, finishSetupFromRepo, onCreateRepo, repoById]);
+  }, [effectiveFrameworkUrl, finishSetupFromRepo, onCreateRepo, pollRepoUntilReady, repoById]);
 
   useEffect(() => {
     if (currentStep !== 'loading' || setupStage !== 'cloning') return;

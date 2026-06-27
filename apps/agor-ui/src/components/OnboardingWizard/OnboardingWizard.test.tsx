@@ -258,6 +258,38 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText(/new failure/i)).toBeInTheDocument();
   });
 
+  it('continues when clone returns an existing ready framework repo not yet in local state', async () => {
+    const readyRepo = makeRepo({ repo_id: 'repo-existing' });
+    const reposService = {
+      get: vi.fn(async () => readyRepo),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+      setPrimaryAssistant: vi.fn(async () => undefined),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => (name === 'boards' ? boardsService : reposService)),
+    };
+    const onCreateRepo = vi.fn(async () => ({
+      status: 'exists' as const,
+      slug: FRAMEWORK_REPO_SLUG,
+      repo_id: 'repo-existing',
+    }));
+    const onCreateBranch = vi.fn(async () => makeBranch({ repo_id: 'repo-existing' }));
+
+    renderWizard({ client, onCreateRepo, onCreateBranch });
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+
+    await waitFor(() => expect(reposService.get).toHaveBeenCalledWith('repo-existing'));
+    await waitFor(() => expect(onCreateBranch).toHaveBeenCalled());
+    expect(onCreateBranch.mock.calls[0]?.[0]).toBe('repo-existing');
+  });
+
   it('uses an existing ready framework repo without cloning it again', async () => {
     const repoById = new Map<string, Repo>([['repo-1', makeRepo()]]);
     const onCreateRepo = vi.fn(async () => undefined);

@@ -1023,6 +1023,7 @@ function AppContent() {
         showWarning(`Repository "${data.slug}" is already added`, { key: toastKey });
         cleanup();
       }
+      return result;
     } catch (error) {
       if (!settled) {
         settled = true;
