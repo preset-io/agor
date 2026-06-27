@@ -227,7 +227,7 @@ export function OnboardingWizard({
   open,
   onComplete,
   repoById,
-  branchById: _branchById,
+  branchById,
   boardById,
   user,
   client,
@@ -238,8 +238,6 @@ export function OnboardingWizard({
   onCheckAuth,
   frameworkRepoUrl,
 }: OnboardingWizardProps) {
-  void _branchById;
-
   const { token } = useToken();
   const [currentStep, setCurrentStep] = useState<WizardStep>('identity');
   const [assistantDisplayName, setAssistantDisplayName] = useState('My Assistant');
@@ -391,6 +389,45 @@ export function OnboardingWizard({
     [assistantDisplayName, assistantEmoji, selectedAgent, user]
   );
 
+  const branches = useMemo(() => Array.from(branchById.values()), [branchById]);
+
+  const findExistingAssistantBranch = useCallback(
+    async (repoId: string, branchName: string): Promise<Branch | null> => {
+      for (const branch of branches) {
+        if (branch.repo_id === repoId && branch.name === branchName && !branch.archived) {
+          return branch;
+        }
+      }
+
+      try {
+        const result = await client?.service('branches').find({
+          query: { repo_id: repoId, name: branchName, archived: false, $limit: 1 },
+        });
+        const branches = Array.isArray(result) ? result : (result?.data ?? []);
+        return (branches[0] as Branch | undefined) ?? null;
+      } catch {
+        return null;
+      }
+    },
+    [branches, client]
+  );
+
+  const findExistingAssistantSession = useCallback(
+    async (branchId: string): Promise<string | null> => {
+      try {
+        const result = await client?.service('sessions').find({
+          query: { branch_id: branchId, archived: false, $limit: 1, $sort: { created_at: -1 } },
+        });
+        const sessions = Array.isArray(result) ? result : (result?.data ?? []);
+        const sessionId = sessions[0]?.session_id;
+        return typeof sessionId === 'string' ? sessionId : null;
+      } catch {
+        return null;
+      }
+    },
+    [client]
+  );
+
   const finishSetupFromRepo = useCallback(
     async (repoId: string) => {
       if (completingRepoRef.current === repoId) return;
@@ -442,15 +479,18 @@ export function OnboardingWizard({
           frameworkRepo: FRAMEWORK_REPO_SLUG,
           createdViaOnboarding: true,
         };
-        const branch = await onCreateBranch(repoId, {
-          name: defaultBranchName,
-          ref: defaultBranchName,
-          createBranch: true,
-          sourceBranch,
-          pullLatest: true,
-          boardId,
-          custom_context: { assistant: assistantConfig },
-        });
+        const existingBranch = await findExistingAssistantBranch(repoId, defaultBranchName);
+        const branch =
+          existingBranch ??
+          (await onCreateBranch(repoId, {
+            name: defaultBranchName,
+            ref: defaultBranchName,
+            createBranch: true,
+            sourceBranch,
+            pullLatest: true,
+            boardId,
+            custom_context: { assistant: assistantConfig },
+          }));
         if (!branch?.branch_id) throw new Error('Failed to create assistant branch.');
         saveOnboardingProgress({ branchId: branch.branch_id });
         await client
@@ -459,14 +499,17 @@ export function OnboardingWizard({
 
         setSetupStage('session');
         setOperationText('Starting your assistant…');
-        const sessionId = await startAssistantBootstrapSession({
-          client,
-          branchId: branch.branch_id,
-          boardId,
-          sessionConfig: buildSessionConfig(branch.branch_id),
-          onCreateSession,
-          onStatusChange: setOperationText,
-        });
+        const existingSessionId = await findExistingAssistantSession(branch.branch_id);
+        const sessionId =
+          existingSessionId ??
+          (await startAssistantBootstrapSession({
+            client,
+            branchId: branch.branch_id,
+            boardId,
+            sessionConfig: buildSessionConfig(branch.branch_id),
+            onCreateSession,
+            onStatusChange: setOperationText,
+          }));
 
         setSetupStage('done');
         setOperationText('Opening your assistant…');
@@ -484,6 +527,8 @@ export function OnboardingWizard({
       buildSessionConfig,
       client,
       defaultBranchName,
+      findExistingAssistantBranch,
+      findExistingAssistantSession,
       onComplete,
       onCreateBranch,
       onCreateSession,

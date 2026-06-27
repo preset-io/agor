@@ -290,6 +290,48 @@ describe('OnboardingWizard', () => {
     expect(onCreateBranch.mock.calls[0]?.[0]).toBe('repo-existing');
   });
 
+  it('reuses an existing assistant branch and session when retrying setup', async () => {
+    const repoById = new Map<string, Repo>([['repo-1', makeRepo()]]);
+    const existingBranch = makeBranch();
+    const branchesService = { find: vi.fn(async () => ({ data: [existingBranch] })) };
+    const sessionsService = {
+      find: vi.fn(async () => ({ data: [{ session_id: 'session-existing' }] })),
+    };
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+      setPrimaryAssistant: vi.fn(async () => undefined),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'branches') return branchesService;
+        if (name === 'sessions') return sessionsService;
+        return { on: vi.fn(), removeListener: vi.fn() };
+      }),
+    };
+    const onCreateBranch = vi.fn(async () => makeBranch());
+    const onCreateSession = vi.fn(async () => 'session-new');
+    const onComplete = vi.fn();
+
+    renderWizard({ repoById, client, onCreateBranch, onCreateSession, onComplete });
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+
+    await waitFor(() => expect(branchesService.find).toHaveBeenCalled());
+    expect(onCreateBranch).not.toHaveBeenCalled();
+    expect(onCreateSession).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith({
+        branchId: 'branch-1',
+        sessionId: 'session-existing',
+        boardId: 'board-1',
+        path: 'assistant',
+      })
+    );
+  });
+
   it('uses an existing ready framework repo without cloning it again', async () => {
     const repoById = new Map<string, Repo>([['repo-1', makeRepo()]]);
     const onCreateRepo = vi.fn(async () => undefined);
