@@ -402,8 +402,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   private async runAfterTenantDatabaseCommit(
     label: string,
-    work: () => Promise<void>,
-    options: { outsideTenantScope?: boolean } = {}
+    work: () => Promise<void>
   ): Promise<void> {
     const run = async () => {
       try {
@@ -416,28 +415,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     };
 
-    const runMaybeOutsideTenantScope = Object.assign(
-      async () => {
-        if (!options.outsideTenantScope) {
-          await run();
-          return;
-        }
-
-        await new Promise<void>((resolve) => {
-          setImmediate(async () => {
-            await run();
-            resolve();
-          });
-        });
-      },
-      { runOutsideTenantScope: options.outsideTenantScope }
-    );
-
-    if (enqueueTenantDatabasePostCommitCallback(runMaybeOutsideTenantScope)) {
+    if (enqueueTenantDatabasePostCommitCallback(run)) {
       return;
     }
 
-    await runMaybeOutsideTenantScope();
+    await run();
   }
 
   private async triggerQueueProcessingAfterCommit(
@@ -447,10 +429,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const sessionsService = this.app.service('sessions') as unknown as SessionsService;
     const sessionParams = params as Parameters<SessionsService['triggerQueueProcessing']>[1];
 
-    await this.runAfterTenantDatabaseCommit(
-      'triggerQueueProcessing',
-      () => sessionsService.triggerQueueProcessing(sessionId, sessionParams),
-      { outsideTenantScope: true }
+    await this.runAfterTenantDatabaseCommit('triggerQueueProcessing', () =>
+      sessionsService.triggerQueueProcessing(sessionId, sessionParams)
     );
   }
 

@@ -89,36 +89,6 @@ describe('createTenantDatabaseScopeAroundHook', () => {
     expect(tx.execute).toHaveBeenCalledTimes(2);
   });
 
-  it('can run post-commit callbacks outside tenant transaction scope', async () => {
-    const events: string[] = [];
-    const tx = {
-      execute: vi.fn(async () => []),
-    };
-    const db = {
-      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
-        events.push('tx:start');
-        const result = await callback(tx);
-        events.push('tx:committed');
-        return result;
-      }),
-    };
-    const callback = Object.assign(
-      async () => {
-        events.push(`outside:${getCurrentTenantId() ?? 'none'}`);
-      },
-      { runOutsideTenantScope: true }
-    );
-
-    await runWithTenantDatabaseScope(db as never, 'tenant-static', async () => {
-      expect(enqueueTenantDatabasePostCommitCallback(callback)).toBe(true);
-      events.push('work:done');
-    });
-
-    expect(events).toEqual(['tx:start', 'work:done', 'tx:committed', 'outside:none']);
-    expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(tx.execute).toHaveBeenCalledTimes(1);
-  });
-
   it('does not run post-commit callbacks when the scoped transaction rolls back', async () => {
     const callback = vi.fn(async () => undefined);
     const tx = {
