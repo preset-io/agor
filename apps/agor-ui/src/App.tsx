@@ -49,6 +49,17 @@ import {
   useSessionActions,
 } from './hooks';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
+import { useAgorStore } from './store/agorStore';
+import {
+  selectBoardById,
+  selectBranchById,
+  selectCommentById,
+  selectRepoById,
+  selectSessionById,
+  selectSessionMcpServerIds,
+  selectSessionsByBranch,
+  selectUserById,
+} from './store/selectors';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
@@ -324,14 +335,6 @@ function AppContent() {
   // failure chain we're avoiding.
   // Skip data fetch if user needs to change password — the ForcePasswordChangeModal handles that.
   const {
-    sessionById,
-    sessionsByBranch,
-    boardById,
-    commentById,
-    repoById,
-    branchById,
-    userById,
-    sessionMcpServerIds,
     initialLoadItems,
     initialLoadComplete,
     loadingStage,
@@ -341,6 +344,18 @@ function AppContent() {
     enabled: workspaceSurfaceShouldRun && !user?.must_change_password,
     directSessionId: directSessionIdFromPath,
   });
+
+  // Entity maps are read directly from the store rather than the useAgorData
+  // return so each map is its own narrow subscription — the surface only
+  // re-renders for the slices it actually consumes, not on every entity write.
+  const sessionById = useAgorStore(selectSessionById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const boardById = useAgorStore(selectBoardById);
+  const commentById = useAgorStore(selectCommentById);
+  const repoById = useAgorStore(selectRepoById);
+  const branchById = useAgorStore(selectBranchById);
+  const userById = useAgorStore(selectUserById);
+  const sessionMcpServerIds = useAgorStore(selectSessionMcpServerIds);
 
   // Session actions
   const { createSession, forkSession, btwForkSession, spawnSession, updateSession, deleteSession } =
