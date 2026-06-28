@@ -173,4 +173,23 @@ describe('DrizzleService tenant isolation', () => {
 
     expect(result).toEqual({ id: 'a', name: 'updated', tenant_id: 'tenant-a' });
   });
+
+  it('keeps rows isolated when the active tenant changes between calls', async () => {
+    const repo = makeRepo();
+    const { service } = makeService(repo);
+    const tenantA = { tenant: { tenant_id: 'tenant-a', source: 'static' } } as never;
+    const tenantB = { tenant: { tenant_id: 'tenant-b', source: 'static' } } as never;
+
+    await service.create({ id: 'a', name: 'A' }, tenantA);
+    await service.create({ id: 'b', name: 'B' }, tenantB);
+
+    await expect(service.find(tenantA)).resolves.toEqual([
+      { id: 'a', name: 'A', tenant_id: 'tenant-a' },
+    ]);
+    await expect(service.find(tenantB)).resolves.toEqual([
+      { id: 'b', name: 'B', tenant_id: 'tenant-b' },
+    ]);
+    await expect(service.get('b', tenantA)).rejects.toThrow(/Widget.*b/);
+    await expect(service.get('a', tenantB)).rejects.toThrow(/Widget.*a/);
+  });
 });
