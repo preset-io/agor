@@ -298,6 +298,7 @@ export function ArtifactHeaderLockIcon({
     justifyContent: 'center',
     flexShrink: 0,
     padding: 0,
+    appearance: 'none',
     color,
     fontSize: 12,
     lineHeight: 1,
@@ -310,7 +311,12 @@ export function ArtifactHeaderLockIcon({
         type="button"
         className={className}
         aria-label="Review artifact trust"
-        style={{ ...commonStyle, cursor: 'pointer' }}
+        style={{
+          ...commonStyle,
+          backgroundClip: 'padding-box',
+          cursor: 'pointer',
+          font: 'inherit',
+        }}
         onClick={(e) => {
           e.stopPropagation();
           onTrustClick();

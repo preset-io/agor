@@ -15,7 +15,6 @@ import {
   EyeOutlined,
   FullscreenOutlined,
   LoadingOutlined,
-  LockOutlined,
   MessageOutlined,
   ReloadOutlined,
   WarningOutlined,
@@ -278,13 +277,6 @@ export const ArtifactNode = ({
   // on the stale data. Keep the title + Reload + Delete though, since
   // those still help the user act on the broken state.
   const hasUsablePayload = !!payload && !error;
-  const hasRequiredEnvVars = (payload?.required_env_vars?.length ?? 0) > 0;
-  const hasConsentGrants = Object.keys(payload?.agor_grants ?? {}).length > 0;
-  const showConsentAffordance =
-    hasUsablePayload &&
-    payload?.trust_state === 'untrusted' &&
-    (hasRequiredEnvVars || hasConsentGrants);
-
   const cardTitle = (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
@@ -295,7 +287,7 @@ export const ArtifactNode = ({
         >
           {payload?.name ?? fallbackName}
         </Typography.Text>
-        {payload && (
+        {hasUsablePayload && (
           <ArtifactHeaderLockIcon
             payload={payload}
             onTrustClick={() => setConsentOpen(true)}
@@ -309,23 +301,6 @@ export const ArtifactNode = ({
           handler has already armed). Same pattern used elsewhere in this
           file for the interact-mode iframe wrapper. */}
       <div className="nodrag nopan" style={{ display: 'flex', gap: 2 }}>
-        {showConsentAffordance && (
-          <Tooltip title="Trust this artifact to inject secrets">
-            <Button
-              type="text"
-              size="small"
-              // `danger` themes the icon via Ant's colorError token —
-              // signals "this artifact won't render with secrets until
-              // you grant trust" without us hardcoding a hex.
-              danger
-              icon={<LockOutlined />}
-              onClick={(e) => {
-                e.stopPropagation();
-                setConsentOpen(true);
-              }}
-            />
-          </Tooltip>
-        )}
         {payload?.source_session_id && (
           <Tooltip title="Open session that created this artifact">
             <Button
