@@ -445,11 +445,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<void> {
     const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-    if (!sessionsService.triggerQueueProcessing) return;
+    const sessionParams = params as Parameters<SessionsService['triggerQueueProcessing']>[1];
 
     await this.runAfterTenantDatabaseCommit(
       'triggerQueueProcessing',
-      () => sessionsService.triggerQueueProcessing!(sessionId, params),
+      () => sessionsService.triggerQueueProcessing(sessionId, sessionParams),
       { outsideTenantScope: true }
     );
   }
@@ -857,15 +857,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // DO NOT check target status before triggering - let the queue processor handle it.
       // This ensures callbacks are never missed due to timing issues.
       try {
-        const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-        if (sessionsService.triggerQueueProcessing) {
-          console.log(
-            `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
-          );
-          // Pass empty params to avoid leaking child's auth context to target.
-          // The queue processor reconstructs target auth from queued task metadata.
-          await this.triggerQueueProcessingAfterCommit(targetSessionId, {});
-        }
+        console.log(
+          `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
+        );
+        // Pass empty params to avoid leaking child's auth context to target.
+        // The queue processor reconstructs target auth from queued task metadata.
+        await this.triggerQueueProcessingAfterCommit(targetSessionId, {});
       } catch (error) {
         // Don't throw - target issues shouldn't break child queue processing.
         console.warn(

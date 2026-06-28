@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { TenantID } from '../types/tenant';
-import { tenantDatabaseScope, type TenantDatabasePostCommitCallback } from './tenant-context';
+import { type TenantDatabasePostCommitCallback, tenantDatabaseScope } from './tenant-context';
 
 export {
   enqueueTenantDatabasePostCommitCallback,
