@@ -12,8 +12,8 @@ import {
 } from '@agor/core/callbacks/child-completion-template';
 import { PAGINATION, resolveExecutorHeartbeatConfig } from '@agor/core/config';
 import {
-  addTenantDatabasePostCommitCallback,
   type Database,
+  enqueueTenantDatabasePostCommitCallback,
   shortId,
   TaskRepository,
 } from '@agor/core/db';
@@ -400,27 +400,36 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.heartbeatCallbackRunner.run(payload);
   }
 
-  private async dispatchCompletionCallbacksAfterCommit(
-    task: Task,
-    session: Session,
-    params?: TaskParams
+  private async runAfterTenantDatabaseCommit(
+    label: string,
+    work: () => Promise<void>
   ): Promise<void> {
-    const dispatch = async () => {
+    const run = async () => {
       try {
-        await this.dispatchCompletionCallbacks(task, session, params);
+        await work();
       } catch (error) {
         console.warn(
-          `⚠️  [TasksService] Failed to dispatch completion callbacks for task ${shortId(task.task_id)}:`,
+          `⚠️  [TasksService] ${label} failed:`,
           error instanceof Error ? error.message : String(error)
         );
       }
     };
 
-    if (addTenantDatabasePostCommitCallback(dispatch)) {
+    if (enqueueTenantDatabasePostCommitCallback(run)) {
       return;
     }
 
-    await dispatch();
+    await run();
+  }
+
+  private async dispatchCompletionCallbacksAfterCommit(
+    task: Task,
+    session: Session,
+    params?: TaskParams
+  ): Promise<void> {
+    await this.runAfterTenantDatabaseCommit('dispatchCompletionCallbacks', () =>
+      this.dispatchCompletionCallbacks(task, session, params)
+    );
   }
 
   /**
@@ -642,7 +651,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           // extend this transaction and cause proxy CONNECTION_CLOSED kills.
           const sessionsService = this.app.service('sessions') as unknown as SessionsService;
           if (!params?.suppressTerminalQueueProcessing && sessionsService.triggerQueueProcessing) {
-            this.firePostCommit('triggerQueueProcessing', () =>
+            await this.runAfterTenantDatabaseCommit('triggerQueueProcessing', () =>
               sessionsService.triggerQueueProcessing!(task.session_id)
             );
           } else if (params?.suppressTerminalQueueProcessing) {
@@ -797,38 +806,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * from notifying its parent once via the rich/template path and again via a
    * second generic/raw path.
    */
-  <<<<<<<
-  HEAD;
-  /**
-   * Fire an async callback after the current transaction commits.
-   *
-   * Breaks out of the AsyncLocalStorage transaction scope via exit() so the
-   * callback opens its own fresh connection rather than reusing the caller's
-   * transaction. The outer transaction therefore commits immediately — eliminating
-   * idle-in-transaction time and the resulting "write CONNECTION_CLOSED" proxy kills.
-   */
-  private firePostCommit(label: string, fn: () => Promise<void>): void {
-    void tenantDatabaseScope.exit(() =>
-      fn().catch((err) => console.error(`[TasksService] ${label}:`, err))
-    );
-  }
-
-  private fireCallbacksPostCommit(task: Task, session: Session, params?: TaskParams): void {
-    this.firePostCommit('dispatchCompletionCallbacks', () =>
-      this.dispatchCompletionCallbacks(task, session, params)
-    );
-  }
-
-  =======
->>>>>>> 6506fb83 (
-  fix(tasks): defer
-  completion;
-  callbacks;
-  until;
-  post;
-  -
-  commit;
-  )
   private async dispatchCompletionCallbacks(
     task: Task,
     childSession: Session,

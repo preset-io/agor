@@ -18,7 +18,7 @@ export function getCurrentTenantId(): TenantID | string | undefined {
   return tenantDatabaseScope.getStore()?.tenantId;
 }
 
-export function addTenantDatabasePostCommitCallback(callback: () => Promise<void>): boolean {
+export function enqueueTenantDatabasePostCommitCallback(callback: () => Promise<void>): boolean {
   const store = tenantDatabaseScope.getStore();
   if (!store?.postCommitCallbacks) return false;
   store.postCommitCallbacks.push(callback);

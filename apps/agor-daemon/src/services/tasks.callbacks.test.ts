@@ -194,7 +194,16 @@ describe('TasksService completion callbacks', () => {
       expect(createPending).not.toHaveBeenCalled();
     });
 
-    expect(events).toEqual(['tx:start', 'patch:returned', 'tx:committed', 'callback:queued']);
+    expect(events).toEqual([
+      'tx:start',
+      'patch:returned',
+      'tx:committed',
+      'tx:start',
+      'callback:queued',
+      'tx:committed',
+      'tx:start',
+      'tx:committed',
+    ]);
     expect(createPending).toHaveBeenCalledTimes(1);
   });
 

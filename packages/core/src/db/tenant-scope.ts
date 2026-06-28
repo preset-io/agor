@@ -3,7 +3,7 @@ import type { TenantID } from '../types/tenant';
 import { tenantDatabaseScope } from './tenant-context';
 
 export {
-  addTenantDatabasePostCommitCallback,
+  enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabase,
   getCurrentTenantId,
   tenantDatabaseScope,
@@ -76,9 +76,7 @@ export async function runWithTenantDatabaseScope<T>(
       { db: baseDb, tenantId, postCommitCallbacks },
       work
     );
-    for (const callback of postCommitCallbacks) {
-      await callback();
-    }
+    await drainTenantDatabasePostCommitCallbacks(baseDb, tenantId, postCommitCallbacks);
     return result;
   }
 
@@ -89,8 +87,16 @@ export async function runWithTenantDatabaseScope<T>(
     );
     return tenantDatabaseScope.run({ db: scopedDb, tenantId, postCommitCallbacks }, work);
   });
-  for (const callback of postCommitCallbacks) {
-    await callback();
-  }
+  await drainTenantDatabasePostCommitCallbacks(baseDb, tenantId, postCommitCallbacks);
   return result;
+}
+
+async function drainTenantDatabasePostCommitCallbacks(
+  baseDb: Database,
+  tenantId: TenantID | string | undefined,
+  callbacks: Array<() => Promise<void>>
+): Promise<void> {
+  for (const callback of callbacks) {
+    await runWithTenantDatabaseScope(baseDb, tenantId, callback);
+  }
 }

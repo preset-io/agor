@@ -1,5 +1,5 @@
 import {
-  addTenantDatabasePostCommitCallback,
+  enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
 } from '@agor/core/db';
@@ -69,14 +69,24 @@ describe('createTenantDatabaseScopeAroundHook', () => {
 
     await runWithTenantDatabaseScope(db as never, 'tenant-static', async () => {
       expect(
-        addTenantDatabasePostCommitCallback(async () => {
+        enqueueTenantDatabasePostCommitCallback(async () => {
+          expect(getCurrentTenantId()).toBe('tenant-static');
           events.push('post-commit');
         })
       ).toBe(true);
       events.push('work:done');
     });
 
-    expect(events).toEqual(['tx:start', 'work:done', 'tx:committed', 'post-commit']);
+    expect(events).toEqual([
+      'tx:start',
+      'work:done',
+      'tx:committed',
+      'tx:start',
+      'post-commit',
+      'tx:committed',
+    ]);
+    expect(db.transaction).toHaveBeenCalledTimes(2);
+    expect(tx.execute).toHaveBeenCalledTimes(2);
   });
 
   it('does not run post-commit callbacks when the scoped transaction rolls back', async () => {
@@ -93,7 +103,7 @@ describe('createTenantDatabaseScopeAroundHook', () => {
 
     await expect(
       runWithTenantDatabaseScope(db as never, 'tenant-static', async () => {
-        expect(addTenantDatabasePostCommitCallback(callback)).toBe(true);
+        expect(enqueueTenantDatabasePostCommitCallback(callback)).toBe(true);
       })
     ).rejects.toThrow('rollback');
 
