@@ -90,7 +90,10 @@ export interface OnboardingWizardProps {
   // biome-ignore lint/suspicious/noExplicitAny: AgorClient type varies across package boundaries in tests/apps.
   client: any;
 
-  onCreateRepo: (data: CreateRepoRequest) => Promise<CloneRepositoryResult | undefined>;
+  onCreateRepo: (
+    data: CreateRepoRequest,
+    options?: { silent?: boolean }
+  ) => Promise<CloneRepositoryResult | undefined>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateBranch: (
     repoId: string,
@@ -131,6 +134,10 @@ function defaultAssistantBranchName(displayName: string): string {
 
 function findReadyFrameworkRepo(repoById: Map<string, Repo>): [string, Repo] | undefined {
   return findFrameworkRepo(repoById, { readyOnly: true });
+}
+
+function isUsableFrameworkRepo(repo: Repo | undefined): repo is Repo {
+  return !!repo && repo.clone_status !== 'failed';
 }
 
 function apiKeyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-key'): string {
@@ -440,6 +447,33 @@ export function OnboardingWizard({
     [client]
   );
 
+  const fetchExistingFrameworkRepo = useCallback(async (): Promise<Repo | null> => {
+    try {
+      const exactResult = await client?.service('repos').find({
+        query: { slug: FRAMEWORK_REPO_SLUG, $limit: 1 },
+      });
+      const exactRepos = Array.isArray(exactResult) ? exactResult : (exactResult?.data ?? []);
+      const exactRepo = exactRepos.find(isUsableFrameworkRepo) as Repo | undefined;
+      if (exactRepo) return exactRepo;
+
+      const fallbackResult = await client?.service('repos').find({ query: { $limit: 50 } });
+      const fallbackRepos = Array.isArray(fallbackResult)
+        ? fallbackResult
+        : (fallbackResult?.data ?? []);
+      return (
+        (fallbackRepos.find(
+          (repo: Repo) =>
+            isUsableFrameworkRepo(repo) &&
+            (repo.remote_url?.includes('agor-assistant') ||
+              repo.remote_url?.includes('agor-openclaw') ||
+              repo.slug?.includes('agor-assistant-private'))
+        ) as Repo | undefined) ?? null
+      );
+    } catch {
+      return null;
+    }
+  }, [client]);
+
   const finishSetupFromRepo = useCallback(
     async (repoId: string) => {
       if (completingRepoRef.current === repoId) return;
@@ -642,26 +676,72 @@ export function OnboardingWizard({
         .map((repo) => repo.repo_id)
     );
 
-    try {
-      const cloneResult = await onCreateRepo({
-        url: effectiveFrameworkUrl,
-        slug: FRAMEWORK_REPO_SLUG,
-        default_branch: 'main',
-      });
-      if (cloneResult?.repo_id) {
-        pollRepoUntilReady(cloneResult.repo_id);
-      }
+    const startCloneTimeout = () => {
+      if (cloneTimeoutRef.current) clearTimeout(cloneTimeoutRef.current);
       cloneTimeoutRef.current = setTimeout(() => {
         setSetupStage('error');
         setError(
           'Clone is taking longer than expected. Please check the repository connection and try again.'
         );
       }, CLONE_TIMEOUT_MS);
+    };
+
+    try {
+      const cloneResult = await onCreateRepo(
+        {
+          url: effectiveFrameworkUrl,
+          slug: FRAMEWORK_REPO_SLUG,
+          default_branch: 'main',
+        },
+        { silent: true }
+      );
+
+      if (cloneResult?.status === 'exists') {
+        setOperationText('Preparing assistant workspace…');
+      }
+
+      if (cloneResult?.repo_id) {
+        pollRepoUntilReady(cloneResult.repo_id);
+        startCloneTimeout();
+        return;
+      }
+
+      const existingRepo = await fetchExistingFrameworkRepo();
+      if (existingRepo?.repo_id) {
+        if (existingRepo.clone_status === 'cloning') {
+          pollRepoUntilReady(existingRepo.repo_id);
+          startCloneTimeout();
+        } else {
+          setOperationText('Preparing assistant workspace…');
+          void finishSetupFromRepo(existingRepo.repo_id);
+        }
+        return;
+      }
+
+      startCloneTimeout();
     } catch (err) {
+      const existingRepo = await fetchExistingFrameworkRepo();
+      if (existingRepo?.repo_id) {
+        setOperationText('Preparing assistant workspace…');
+        if (existingRepo.clone_status === 'cloning') {
+          pollRepoUntilReady(existingRepo.repo_id);
+          startCloneTimeout();
+        } else {
+          void finishSetupFromRepo(existingRepo.repo_id);
+        }
+        return;
+      }
       setSetupStage('error');
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [effectiveFrameworkUrl, finishSetupFromRepo, onCreateRepo, pollRepoUntilReady, repoById]);
+  }, [
+    effectiveFrameworkUrl,
+    fetchExistingFrameworkRepo,
+    finishSetupFromRepo,
+    onCreateRepo,
+    pollRepoUntilReady,
+    repoById,
+  ]);
 
   useEffect(() => {
     if (currentStep !== 'loading' || setupStage !== 'cloning') return;

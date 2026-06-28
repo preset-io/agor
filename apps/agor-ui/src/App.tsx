@@ -928,7 +928,7 @@ function AppContent() {
   };
 
   // Handle repo CRUD
-  const handleCreateRepo = async (data: CreateRepoRequest) => {
+  const handleCreateRepo = async (data: CreateRepoRequest, options: { silent?: boolean } = {}) => {
     if (!client) {
       showError('Not connected to daemon — cannot clone repository');
       return;
@@ -943,7 +943,7 @@ function AppContent() {
     // executors that don't patch still surface failures.
     const toastKey = `clone-repo-${data.slug}`;
     const CLONE_TIMEOUT_MS = 120_000;
-    showLoading(`Cloning ${data.slug}...`, { key: toastKey });
+    if (!options.silent) showLoading(`Cloning ${data.slug}...`, { key: toastKey });
 
     const reposService = client.service('repos');
     let settled = false;
@@ -961,14 +961,14 @@ function AppContent() {
       // and any direct executor-path that bypasses the placeholder.
       if (repo.clone_status === 'cloning') return;
       settled = true;
-      showSuccess(`Cloned ${data.slug}`, { key: toastKey });
+      if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
       cleanup();
     };
     const handlePatched = (repo: Repo) => {
       if (settled || repo.slug !== data.slug) return;
       if (repo.clone_status === 'ready') {
         settled = true;
-        showSuccess(`Cloned ${data.slug}`, { key: toastKey });
+        if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
         cleanup();
       } else if (repo.clone_status === 'failed') {
         settled = true;
@@ -980,9 +980,11 @@ function AppContent() {
           err?.category === 'auth_failed'
             ? ' — configure GITHUB_TOKEN in Settings → API Keys for private repos'
             : '';
-        showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
-          key: toastKey,
-        });
+        if (!options.silent) {
+          showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
+            key: toastKey,
+          });
+        }
         cleanup();
       }
     };
@@ -990,17 +992,21 @@ function AppContent() {
       if (settled) return;
       if (payload.slug !== data.slug && payload.url !== data.url) return;
       settled = true;
-      showError(`Failed to clone ${data.slug}: ${payload.error ?? 'unknown error'}`, {
-        key: toastKey,
-      });
+      if (!options.silent) {
+        showError(`Failed to clone ${data.slug}: ${payload.error ?? 'unknown error'}`, {
+          key: toastKey,
+        });
+      }
       cleanup();
     };
     const timeoutHandle = setTimeout(() => {
       if (settled) return;
       settled = true;
-      showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
-        key: toastKey,
-      });
+      if (!options.silent) {
+        showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
+          key: toastKey,
+        });
+      }
       cleanup();
     }, CLONE_TIMEOUT_MS);
 
@@ -1020,17 +1026,21 @@ function AppContent() {
       // resolve the loading toast here instead of waiting for the timeout.
       if (result?.status === 'exists' && !settled) {
         settled = true;
-        showWarning(`Repository "${data.slug}" is already added`, { key: toastKey });
+        if (!options.silent) {
+          showWarning(`Repository "${data.slug}" is already added`, { key: toastKey });
+        }
         cleanup();
       }
       return result;
     } catch (error) {
       if (!settled) {
         settled = true;
-        showError(
-          `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
-          { key: toastKey }
-        );
+        if (!options.silent) {
+          showError(
+            `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
+            { key: toastKey }
+          );
+        }
         cleanup();
       }
       throw error;

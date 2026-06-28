@@ -64,7 +64,12 @@ function renderWizard(overrides: Partial<ComponentProps<typeof OnboardingWizard>
     setPrimaryAssistant: vi.fn(async () => undefined),
     ensureAssistantWelcomeNote: vi.fn(async () => undefined),
   };
-  const reposService = { on: vi.fn(), removeListener: vi.fn() };
+  const reposService = {
+    find: vi.fn(async () => ({ data: [] })),
+    get: vi.fn(async () => undefined),
+    on: vi.fn(),
+    removeListener: vi.fn(),
+  };
   const client = {
     io: { on: vi.fn(), off: vi.fn() },
     service: vi.fn((name: string) => (name === 'boards' ? boardsService : reposService)),
@@ -262,6 +267,7 @@ describe('OnboardingWizard', () => {
     const readyRepo = makeRepo({ repo_id: 'repo-existing' });
     const reposService = {
       get: vi.fn(async () => readyRepo),
+      find: vi.fn(async () => ({ data: [readyRepo] })),
       on: vi.fn(),
       removeListener: vi.fn(),
     };
@@ -271,7 +277,11 @@ describe('OnboardingWizard', () => {
     };
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
-      service: vi.fn((name: string) => (name === 'boards' ? boardsService : reposService)),
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'repos') return reposService;
+        return { find: vi.fn(async () => ({ data: [] })) };
+      }),
     };
     const onCreateRepo = vi.fn(async () => ({
       status: 'exists' as const,
@@ -285,9 +295,60 @@ describe('OnboardingWizard', () => {
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
     fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
 
+    await waitFor(() =>
+      expect(onCreateRepo).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: FRAMEWORK_REPO_SLUG }),
+        { silent: true }
+      )
+    );
     await waitFor(() => expect(reposService.get).toHaveBeenCalledWith('repo-existing'));
     await waitFor(() => expect(onCreateBranch).toHaveBeenCalled());
     expect(onCreateBranch.mock.calls[0]?.[0]).toBe('repo-existing');
+  });
+
+  it('reuses an existing framework repo when duplicate clone returns no repo id', async () => {
+    const readyRepo = makeRepo({ repo_id: 'repo-existing' });
+    const reposService = {
+      find: vi.fn(async () => ({ data: [readyRepo] })),
+      get: vi.fn(async () => undefined),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+      setPrimaryAssistant: vi.fn(async () => undefined),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'repos') return reposService;
+        return { find: vi.fn(async () => ({ data: [] })) };
+      }),
+    };
+    const onCreateRepo = vi.fn(async () => ({
+      status: 'exists' as const,
+      slug: FRAMEWORK_REPO_SLUG,
+    }));
+    const onCreateBranch = vi.fn(async () => makeBranch({ repo_id: 'repo-existing' }));
+    const onComplete = vi.fn();
+
+    renderWizard({ client, onCreateRepo, onCreateBranch, onComplete });
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+
+    await waitFor(() => expect(reposService.find).toHaveBeenCalled());
+    await waitFor(() => expect(onCreateBranch).toHaveBeenCalled());
+    expect(screen.queryByText(/Cloning assistant framework/i)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith({
+        branchId: 'branch-1',
+        sessionId: 'session-1',
+        boardId: 'board-1',
+        path: 'assistant',
+      })
+    );
   });
 
   it('reuses an existing assistant branch and session when retrying setup', async () => {
