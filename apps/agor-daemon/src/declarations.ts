@@ -31,6 +31,15 @@ export type AuthenticatedParams = CoreAuthenticatedParams;
 export type CreateHookContext<T = unknown> = CoreCreateHookContext<T>;
 export type HookContext<T = unknown> = CoreHookContext<T>;
 
+type BranchEnvironmentInstance = NonNullable<Branch['environment_instance']>;
+type BranchEnvironmentUpdate = Partial<BranchEnvironmentInstance> & {
+  process?: BranchEnvironmentInstance['process'] | null;
+  last_health_check?: BranchEnvironmentInstance['last_health_check'] | null;
+  last_error?: BranchEnvironmentInstance['last_error'] | null;
+  last_command?: BranchEnvironmentInstance['last_command'] | null;
+  logs?: BranchEnvironmentInstance['logs'] | null;
+};
+
 /**
  * Application type for the daemon
  */
@@ -231,10 +240,10 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
       | {
           branch_id?: BranchID;
           branchId?: BranchID;
-          environment_update?: Partial<Branch['environment_instance']>;
-          environmentUpdate?: Partial<Branch['environment_instance']>;
+          environment_update?: BranchEnvironmentUpdate;
+          environmentUpdate?: BranchEnvironmentUpdate;
         },
-    environmentUpdate?: Partial<Branch['environment_instance']> | FeathersParams,
+    environmentUpdate?: BranchEnvironmentUpdate | FeathersParams,
     params?: FeathersParams
   ): Promise<Branch>;
   startEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;

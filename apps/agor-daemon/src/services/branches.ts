@@ -40,6 +40,7 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchEnvironmentInstance,
   BranchID,
   KnowledgeNamespace,
   QueryParams,
@@ -109,6 +110,23 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
     appUrl?: string;
   };
 }
+
+type EnvironmentInstance = NonNullable<Branch['environment_instance']>;
+type EnvironmentInstanceUpdate = Partial<EnvironmentInstance> & {
+  process?: EnvironmentInstance['process'] | null;
+  last_health_check?: EnvironmentInstance['last_health_check'] | null;
+  last_error?: EnvironmentInstance['last_error'] | null;
+  last_command?: EnvironmentInstance['last_command'] | null;
+  logs?: EnvironmentInstance['logs'] | null;
+};
+
+const ENVIRONMENT_INSTANCE_CLEARABLE_FIELDS = [
+  'process',
+  'last_health_check',
+  'last_error',
+  'last_command',
+  'logs',
+] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
 
 /**
  * Process tracking for environment management
@@ -1715,17 +1733,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       | {
           branch_id?: BranchID;
           branchId?: BranchID;
-          environment_update?: Partial<Branch['environment_instance']>;
-          environmentUpdate?: Partial<Branch['environment_instance']>;
+          environment_update?: EnvironmentInstanceUpdate;
+          environmentUpdate?: EnvironmentInstanceUpdate;
         },
-    environmentUpdateOrParams?: Partial<Branch['environment_instance']> | BranchParams,
+    environmentUpdateOrParams?: EnvironmentInstanceUpdate | BranchParams,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
     const isRpcEnvelope = typeof idOrData === 'object';
     const id = isRpcEnvelope ? (idOrData.branch_id ?? idOrData.branchId) : idOrData;
     const environmentUpdate = isRpcEnvelope
       ? (idOrData.environment_update ?? idOrData.environmentUpdate)
-      : (environmentUpdateOrParams as Partial<Branch['environment_instance']> | undefined);
+      : (environmentUpdateOrParams as EnvironmentInstanceUpdate | undefined);
     const resolvedParams = isRpcEnvelope
       ? (environmentUpdateOrParams as BranchParams | undefined)
       : params;
@@ -1742,7 +1760,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const updatedEnvironment = {
       ...existing.environment_instance,
       ...environmentUpdate,
-    } as Branch['environment_instance'];
+    } as EnvironmentInstance;
+
+    for (const key of ENVIRONMENT_INSTANCE_CLEARABLE_FIELDS) {
+      if (
+        Object.hasOwn(environmentUpdate, key) &&
+        (environmentUpdate[key] === undefined || environmentUpdate[key] === null)
+      ) {
+        delete updatedEnvironment[key];
+      }
+    }
 
     // Check if environment state actually changed (ignoring timestamp-only updates)
     // For health checks, we only care about status and message changes, not timestamp

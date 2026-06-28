@@ -68,6 +68,15 @@ const CLIENT_SERVICE_FACTORY_EXTENDED = Symbol('agor.clientServiceFactoryExtende
 const CLIENT_SESSIONS_HELPERS_EXTENDED = Symbol('agor.clientSessionsHelpersExtended');
 const CLIENT_TASKS_HELPERS_EXTENDED = Symbol('agor.clientTasksHelpersExtended');
 
+type BranchEnvironmentInstance = NonNullable<Branch['environment_instance']>;
+type BranchEnvironmentUpdate = Partial<BranchEnvironmentInstance> & {
+  process?: BranchEnvironmentInstance['process'] | null;
+  last_health_check?: BranchEnvironmentInstance['last_health_check'] | null;
+  last_error?: BranchEnvironmentInstance['last_error'] | null;
+  last_command?: BranchEnvironmentInstance['last_command'] | null;
+  logs?: BranchEnvironmentInstance['logs'] | null;
+};
+
 /**
  * Client-side input type helper:
  * keeps strongly typed output models branded, while accepting plain strings
@@ -502,11 +511,11 @@ export interface BranchesService extends AgorService<Branch> {
       | {
           branch_id?: string;
           branchId?: string;
-          environment_update?: Partial<Branch['environment_instance']>;
-          environmentUpdate?: Partial<Branch['environment_instance']>;
+          environment_update?: BranchEnvironmentUpdate;
+          environmentUpdate?: BranchEnvironmentUpdate;
         }
       | string,
-    environmentUpdate?: Partial<Branch['environment_instance']>,
+    environmentUpdate?: BranchEnvironmentUpdate,
     params?: Params
   ): Promise<Branch>;
 
