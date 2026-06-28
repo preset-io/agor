@@ -3,6 +3,7 @@ import type { TenantID } from '../types/tenant';
 import { tenantDatabaseScope } from './tenant-context';
 
 export {
+  addTenantDatabasePostCommitCallback,
   getCurrentTenantDatabase,
   getCurrentTenantId,
   tenantDatabaseScope,
@@ -68,16 +69,28 @@ export async function runWithTenantDatabaseScope<T>(
   }
 
   const baseDb = unwrapTenantScopedDatabaseProxy(db);
+  const postCommitCallbacks: Array<() => Promise<void>> = [];
 
   if (!isPostgresDatabase(baseDb) || !tenantId) {
-    return tenantDatabaseScope.run({ db: baseDb, tenantId }, work);
+    const result = await tenantDatabaseScope.run(
+      { db: baseDb, tenantId, postCommitCallbacks },
+      work
+    );
+    for (const callback of postCommitCallbacks) {
+      await callback();
+    }
+    return result;
   }
 
-  return baseDb.transaction(async (tx) => {
+  const result = await baseDb.transaction(async (tx) => {
     const scopedDb = tx as unknown as Database;
     await (scopedDb as unknown as { execute(query: unknown): Promise<unknown> }).execute(
       sql`SELECT set_config('agor.tenant_id', ${tenantId}, true)`
     );
-    return tenantDatabaseScope.run({ db: scopedDb, tenantId }, work);
+    return tenantDatabaseScope.run({ db: scopedDb, tenantId, postCommitCallbacks }, work);
   });
+  for (const callback of postCommitCallbacks) {
+    await callback();
+  }
+  return result;
 }

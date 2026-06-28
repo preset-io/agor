@@ -1,4 +1,8 @@
-import { getCurrentTenantId } from '@agor/core/db';
+import {
+  addTenantDatabasePostCommitCallback,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+} from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it, vi } from 'vitest';
@@ -47,6 +51,53 @@ describe('createTenantDatabaseScopeAroundHook', () => {
     });
     expect(db.transaction).toHaveBeenCalledTimes(1);
     expect(tx.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs registered post-commit callbacks after the scoped transaction resolves', async () => {
+    const events: string[] = [];
+    const tx = {
+      execute: vi.fn(async () => []),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        events.push('tx:start');
+        const result = await callback(tx);
+        events.push('tx:committed');
+        return result;
+      }),
+    };
+
+    await runWithTenantDatabaseScope(db as never, 'tenant-static', async () => {
+      expect(
+        addTenantDatabasePostCommitCallback(async () => {
+          events.push('post-commit');
+        })
+      ).toBe(true);
+      events.push('work:done');
+    });
+
+    expect(events).toEqual(['tx:start', 'work:done', 'tx:committed', 'post-commit']);
+  });
+
+  it('does not run post-commit callbacks when the scoped transaction rolls back', async () => {
+    const callback = vi.fn(async () => undefined);
+    const tx = {
+      execute: vi.fn(async () => []),
+    };
+    const db = {
+      transaction: vi.fn(async (transactionCallback: (tx: unknown) => Promise<unknown>) => {
+        await transactionCallback(tx);
+        throw new Error('rollback');
+      }),
+    };
+
+    await expect(
+      runWithTenantDatabaseScope(db as never, 'tenant-static', async () => {
+        expect(addTenantDatabasePostCommitCallback(callback)).toBe(true);
+      })
+    ).rejects.toThrow('rollback');
+
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it('resolves required tenant context from a signed bearer JWT', async () => {

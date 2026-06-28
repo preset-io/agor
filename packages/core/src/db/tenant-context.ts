@@ -5,6 +5,7 @@ import type { Database } from './client';
 export interface TenantDatabaseScope {
   db: Database;
   tenantId?: TenantID | string;
+  postCommitCallbacks?: Array<() => Promise<void>>;
 }
 
 export const tenantDatabaseScope = new AsyncLocalStorage<TenantDatabaseScope>();
@@ -15,4 +16,11 @@ export function getCurrentTenantDatabase(): Database | undefined {
 
 export function getCurrentTenantId(): TenantID | string | undefined {
   return tenantDatabaseScope.getStore()?.tenantId;
+}
+
+export function addTenantDatabasePostCommitCallback(callback: () => Promise<void>): boolean {
+  const store = tenantDatabaseScope.getStore();
+  if (!store?.postCommitCallbacks) return false;
+  store.postCommitCallbacks.push(callback);
+  return true;
 }

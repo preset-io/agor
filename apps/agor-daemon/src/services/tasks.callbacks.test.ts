@@ -1,3 +1,4 @@
+import { runWithTenantDatabaseScope } from '@agor/core/db';
 import { type Session, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
@@ -157,6 +158,46 @@ function makeService(
 }
 
 describe('TasksService completion callbacks', () => {
+  it('defers callback dispatch until after the tenant transaction commits', async () => {
+    const events: string[] = [];
+    const { service, createPending } = makeService();
+    const tx = {
+      execute: vi.fn(async () => []),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        events.push('tx:start');
+        const result = await callback(tx);
+        events.push('tx:committed');
+        return result;
+      }),
+    };
+    createPending.mockImplementationOnce(async (data: Partial<Task>) => {
+      events.push('callback:queued');
+      return {
+        ...makeTask({
+          task_id: callbackTaskId,
+          session_id: parentSessionId,
+          status: TaskStatus.QUEUED,
+        }),
+        ...data,
+      };
+    });
+
+    await runWithTenantDatabaseScope(db as never, 'tenant-1', async () => {
+      await service.patch(taskId, {
+        status: TaskStatus.COMPLETED,
+        completed_at: '2026-01-01T00:00:05.000Z',
+      });
+
+      events.push('patch:returned');
+      expect(createPending).not.toHaveBeenCalled();
+    });
+
+    expect(events).toEqual(['tx:start', 'patch:returned', 'tx:committed', 'callback:queued']);
+    expect(createPending).toHaveBeenCalledTimes(1);
+  });
+
   it('queues exactly one templated callback with last-message metadata for a completed subsession task', async () => {
     const {
       service,

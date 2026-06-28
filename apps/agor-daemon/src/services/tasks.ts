@@ -11,7 +11,12 @@ import {
   renderChildCompletionCallback,
 } from '@agor/core/callbacks/child-completion-template';
 import { PAGINATION, resolveExecutorHeartbeatConfig } from '@agor/core/config';
-import { type Database, shortId, TaskRepository, tenantDatabaseScope } from '@agor/core/db';
+import {
+  addTenantDatabasePostCommitCallback,
+  type Database,
+  shortId,
+  TaskRepository,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   ContentBlock,
@@ -360,7 +365,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // Dispatch completion callbacks outside the task-patch transaction.
     // Both patches have committed at this point, so callbacks run in fresh transactions.
     if (updatedSession) {
-      void this.dispatchCompletionCallbacks(failedTask, updatedSession, params).catch(
+      void this.dispatchCompletionCallbacksAfterCommit(failedTask, updatedSession, params).catch(
         (error: unknown) => {
           console.warn(
             `[executor-heartbeat] Failed to dispatch completion callbacks for task ${shortId(failedTask.task_id)}:`,
@@ -393,6 +398,29 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     this.heartbeatCallbackRunner.run(payload);
+  }
+
+  private async dispatchCompletionCallbacksAfterCommit(
+    task: Task,
+    session: Session,
+    params?: TaskParams
+  ): Promise<void> {
+    const dispatch = async () => {
+      try {
+        await this.dispatchCompletionCallbacks(task, session, params);
+      } catch (error) {
+        console.warn(
+          `⚠️  [TasksService] Failed to dispatch completion callbacks for task ${shortId(task.task_id)}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    };
+
+    if (addTenantDatabasePostCommitCallback(dispatch)) {
+      return;
+    }
+
+    await dispatch();
   }
 
   /**
@@ -543,7 +571,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             // Process completion callbacks only for naturally-terminal tasks (COMPLETED/FAILED).
             // STOPPED means the work was abandoned — don't notify the parent.
             if (!suppressCompletionCallbacks && !isStop) {
-              this.fireCallbacksPostCommit(task, session, params);
+              await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
             }
             return result;
           }
@@ -579,7 +607,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           }
 
           if (!suppressCompletionCallbacks && !isStop) {
-            this.fireCallbacksPostCommit(task, session, params);
+            await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
           }
 
           // "btw" fork origin: auto-archive the ephemeral fork after task completion.
@@ -769,6 +797,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * from notifying its parent once via the rich/template path and again via a
    * second generic/raw path.
    */
+  <<<<<<<
+  HEAD;
   /**
    * Fire an async callback after the current transaction commits.
    *
@@ -789,6 +819,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
+  =======
+>>>>>>> 6506fb83 (
+  fix(tasks): defer
+  completion;
+  callbacks;
+  until;
+  post;
+  -
+  commit;
+  )
   private async dispatchCompletionCallbacks(
     task: Task,
     childSession: Session,
