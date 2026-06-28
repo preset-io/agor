@@ -402,7 +402,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   private async runAfterTenantDatabaseCommit(
     label: string,
-    work: () => Promise<void>
+    work: () => Promise<void>,
+    options: { outsideTenantScope?: boolean } = {}
   ): Promise<void> {
     const run = async () => {
       try {
@@ -415,11 +416,42 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     };
 
-    if (enqueueTenantDatabasePostCommitCallback(run)) {
+    const runMaybeOutsideTenantScope = Object.assign(
+      async () => {
+        if (!options.outsideTenantScope) {
+          await run();
+          return;
+        }
+
+        await new Promise<void>((resolve) => {
+          setImmediate(async () => {
+            await run();
+            resolve();
+          });
+        });
+      },
+      { runOutsideTenantScope: options.outsideTenantScope }
+    );
+
+    if (enqueueTenantDatabasePostCommitCallback(runMaybeOutsideTenantScope)) {
       return;
     }
 
-    await run();
+    await runMaybeOutsideTenantScope();
+  }
+
+  private async triggerQueueProcessingAfterCommit(
+    sessionId: string,
+    params?: TaskParams
+  ): Promise<void> {
+    const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+    if (!sessionsService.triggerQueueProcessing) return;
+
+    await this.runAfterTenantDatabaseCommit(
+      'triggerQueueProcessing',
+      () => sessionsService.triggerQueueProcessing!(sessionId, params),
+      { outsideTenantScope: true }
+    );
   }
 
   private async dispatchCompletionCallbacksAfterCommit(
@@ -585,15 +617,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             return result;
           }
 
-          // For STOPPED tasks: The stop endpoint directly patches session → IDLE with
-          // ready_for_prompt=true and triggers queue processing after that patch.
-          // Skip the session update here to avoid racing with it.
-          //
-          // For other terminal tasks: Normal completion - set ready_for_prompt=true
-          // to allow auto-queue-processing of any pending messages.
-          if (isStop) {
+          // For stop-route/admin cleanup paths that explicitly suppress queue processing,
+          // the caller owns the follow-up session patch/drain. For an ordinary STOPPED
+          // terminal patch, still make the session promptable so queued work can drain.
+          if (isStop && params?.suppressTerminalQueueProcessing) {
             console.log(
-              `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — stop endpoint handles session state`
+              `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — caller suppresses terminal queue processing`
             );
           } else if (params?.suppressTerminalSessionStateUpdate) {
             console.log(
@@ -649,11 +678,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           // Fire queue processing after the outer transaction commits. spawnTaskExecutor
           // (called inside the queue processor) does significant I/O that would otherwise
           // extend this transaction and cause proxy CONNECTION_CLOSED kills.
-          const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-          if (!params?.suppressTerminalQueueProcessing && sessionsService.triggerQueueProcessing) {
-            await this.runAfterTenantDatabaseCommit('triggerQueueProcessing', () =>
-              sessionsService.triggerQueueProcessing!(task.session_id)
-            );
+          if (!params?.suppressTerminalQueueProcessing) {
+            await this.triggerQueueProcessingAfterCommit(task.session_id, params);
           } else if (params?.suppressTerminalQueueProcessing) {
             console.log(
               `⏭️  [TasksService] Queue trigger suppressed for session ${shortId(task.session_id)} (suppressTerminalQueueProcessing)`
@@ -838,7 +864,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           );
           // Pass empty params to avoid leaking child's auth context to target.
           // The queue processor reconstructs target auth from queued task metadata.
-          await sessionsService.triggerQueueProcessing(targetSessionId, {});
+          await this.triggerQueueProcessingAfterCommit(targetSessionId, {});
         }
       } catch (error) {
         // Don't throw - target issues shouldn't break child queue processing.

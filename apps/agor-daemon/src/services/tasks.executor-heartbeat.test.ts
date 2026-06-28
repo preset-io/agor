@@ -263,6 +263,76 @@ describe('TasksService executor heartbeat helpers', () => {
     expect(triggerQueueProcessing).not.toHaveBeenCalled();
   });
 
+  it('marks directly stopped tasks promptable and triggers queue processing', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000030';
+    const sessionId = '018f0000-0000-7000-8000-000000000031';
+    const currentTask = {
+      task_id: taskId,
+      session_id: sessionId,
+      status: TaskStatus.RUNNING,
+      created_at: '2026-01-01T00:00:00.000Z',
+      started_at: '2026-01-01T00:00:00.000Z',
+    };
+    const stoppedTask = {
+      ...currentTask,
+      status: TaskStatus.STOPPED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+      duration_ms: 5000,
+    };
+    const sessionsPatch = vi.fn().mockResolvedValue({
+      session_id: sessionId,
+      status: 'idle',
+      ready_for_prompt: true,
+      tasks: [taskId],
+    });
+    const triggerQueueProcessing = vi.fn().mockResolvedValue(undefined);
+    const service = Object.create(TasksService.prototype) as TasksService & {
+      app: unknown;
+      get: ReturnType<typeof vi.fn>;
+      repository: { update: ReturnType<typeof vi.fn> };
+      id: string;
+      emit: ReturnType<typeof vi.fn>;
+      dispatchCompletionCallbacks: ReturnType<typeof vi.fn>;
+    };
+    service.get = vi.fn().mockResolvedValue(currentTask);
+    service.repository = { update: vi.fn().mockResolvedValue(stoppedTask) };
+    service.id = 'task_id';
+    service.emit = vi.fn();
+    service.dispatchCompletionCallbacks = vi.fn();
+    service.app = {
+      service: (name: string) => {
+        if (name === 'sessions') {
+          return {
+            get: vi.fn().mockResolvedValue({
+              session_id: sessionId,
+              status: 'running',
+              ready_for_prompt: false,
+              tasks: [taskId],
+            }),
+            patch: sessionsPatch,
+            triggerQueueProcessing,
+          };
+        }
+        if (name === 'branches') return { get: vi.fn() };
+        throw new Error(`unexpected service ${name}`);
+      },
+    };
+
+    const result = await service.patch(taskId, {
+      status: TaskStatus.STOPPED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
+
+    expect(result).toMatchObject({ task_id: taskId, status: TaskStatus.STOPPED });
+    expect(sessionsPatch).toHaveBeenCalledWith(
+      sessionId,
+      { status: 'idle', ready_for_prompt: true },
+      undefined
+    );
+    expect(service.dispatchCompletionCallbacks).not.toHaveBeenCalled();
+    expect(triggerQueueProcessing).toHaveBeenCalledWith(sessionId, undefined);
+  });
+
   it('ignores late executor attempts to revive a stopped task as awaiting permission', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000022';
     const sessionId = '018f0000-0000-7000-8000-000000000023';

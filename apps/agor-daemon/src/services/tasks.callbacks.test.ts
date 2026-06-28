@@ -1,4 +1,4 @@
-import { runWithTenantDatabaseScope } from '@agor/core/db';
+import { runWithTenantDatabaseScope, tenantDatabaseScope } from '@agor/core/db';
 import { type Session, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
@@ -183,6 +183,12 @@ describe('TasksService completion callbacks', () => {
         ...data,
       };
     });
+    const sessionsService = service.app.service('sessions') as unknown as {
+      triggerQueueProcessing: ReturnType<typeof vi.fn>;
+    };
+    sessionsService.triggerQueueProcessing.mockImplementationOnce(async () => {
+      events.push(`trigger:scope:${tenantDatabaseScope.getStore() ? 'inside' : 'outside'}`);
+    });
 
     await runWithTenantDatabaseScope(db as never, 'tenant-1', async () => {
       await service.patch(taskId, {
@@ -201,8 +207,7 @@ describe('TasksService completion callbacks', () => {
       'tx:start',
       'callback:queued',
       'tx:committed',
-      'tx:start',
-      'tx:committed',
+      'trigger:scope:outside',
     ]);
     expect(createPending).toHaveBeenCalledTimes(1);
   });

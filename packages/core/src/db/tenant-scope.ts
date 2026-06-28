@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { TenantID } from '../types/tenant';
-import { tenantDatabaseScope } from './tenant-context';
+import { tenantDatabaseScope, type TenantDatabasePostCommitCallback } from './tenant-context';
 
 export {
   enqueueTenantDatabasePostCommitCallback,
@@ -69,7 +69,7 @@ export async function runWithTenantDatabaseScope<T>(
   }
 
   const baseDb = unwrapTenantScopedDatabaseProxy(db);
-  const postCommitCallbacks: Array<() => Promise<void>> = [];
+  const postCommitCallbacks: TenantDatabasePostCommitCallback[] = [];
 
   if (!isPostgresDatabase(baseDb) || !tenantId) {
     const result = await tenantDatabaseScope.run(
@@ -94,9 +94,13 @@ export async function runWithTenantDatabaseScope<T>(
 async function drainTenantDatabasePostCommitCallbacks(
   baseDb: Database,
   tenantId: TenantID | string | undefined,
-  callbacks: Array<() => Promise<void>>
+  callbacks: TenantDatabasePostCommitCallback[]
 ): Promise<void> {
   for (const callback of callbacks) {
+    if (callback.runOutsideTenantScope) {
+      await tenantDatabaseScope.exit(callback);
+      continue;
+    }
     await runWithTenantDatabaseScope(baseDb, tenantId, callback);
   }
 }
