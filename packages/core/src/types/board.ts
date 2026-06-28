@@ -183,6 +183,8 @@ export interface ArtifactBoardObject {
   height: number; // Default: 400, min: 200
   /** Reference to the artifact entity */
   artifact_id: ArtifactID;
+  /** Lock artifact card to prevent dragging/resizing on the board */
+  locked?: boolean;
 }
 
 /**

@@ -13,9 +13,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   ArtifactConsoleReporter,
-  ArtifactHeaderLockIcon,
   ArtifactRuntimeBridge,
   ArtifactSandpackErrorReporter,
+  ArtifactTrustStatusIcon,
 } from '@/components/artifacts/ArtifactRenderSupport';
 import { getDaemonUrl } from '@/config/daemon';
 import { getAuthHeaders } from '@/utils/authHeaders';
@@ -104,7 +104,7 @@ function ArtifactFullscreenNavbar({
           >
             {title}
           </Title>
-          {payload && <ArtifactHeaderLockIcon payload={payload} onTrustClick={onTrustClick} />}
+          {payload && <ArtifactTrustStatusIcon payload={payload} onTrustClick={onTrustClick} />}
           <Tooltip title="Hide navbar">
             <Button
               type="text"

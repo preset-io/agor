@@ -15,8 +15,10 @@ import {
   EyeOutlined,
   FullscreenOutlined,
   LoadingOutlined,
+  LockOutlined,
   MessageOutlined,
   ReloadOutlined,
+  UnlockOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import {
@@ -31,9 +33,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import {
   ArtifactConsoleReporter,
-  ArtifactHeaderLockIcon,
   ArtifactRuntimeBridge,
   ArtifactSandpackErrorReporter,
+  ArtifactTrustStatusIcon,
 } from '@/components/artifacts/ArtifactRenderSupport';
 import { getDaemonUrl } from '@/config/daemon';
 import { getAuthHeaders } from '@/utils/authHeaders';
@@ -58,6 +60,9 @@ export interface ArtifactNodeData {
    *  stay independently legible. */
   isActiveUrlTarget?: boolean;
   onUpdate: (id: string, data: BoardObject) => void;
+  locked?: boolean;
+  x: number;
+  y: number;
   /** Lifecycle-safe delete: removes filesystem + board object + DB record */
   onDeleteArtifact?: (objectId: string, artifactId: string) => void;
 }
@@ -219,6 +224,7 @@ export const ArtifactNode = ({
         width: Math.max(params.width, MIN_WIDTH),
         height: Math.max(params.height, MIN_HEIGHT),
         artifact_id: data.artifactId as ArtifactID,
+        locked: data.locked,
       };
       data.onUpdate(data.objectId, objectData);
     },
@@ -232,6 +238,20 @@ export const ArtifactNode = ({
   // scaffolding files (`index.html`, `index.js`, `package.json`, etc.) that
   // Sandpack synthesizes per template — without those the destination
   // sandbox boots empty (no entry, no DOM root).
+
+  const handleToggleLock = useCallback(() => {
+    const objectData: ArtifactBoardObject = {
+      type: 'artifact',
+      x: data.x,
+      y: data.y,
+      width: data.width,
+      height: data.height,
+      artifact_id: data.artifactId as ArtifactID,
+      locked: !data.locked,
+    };
+    data.onUpdate(data.objectId, objectData);
+  }, [data]);
+
   const handleOpenInCodeSandbox = useCallback(() => {
     window.dispatchEvent(new CustomEvent(`agor:export-codesandbox-${data.artifactId}`));
   }, [data.artifactId]);
@@ -288,7 +308,7 @@ export const ArtifactNode = ({
           {payload?.name ?? fallbackName}
         </Typography.Text>
         {hasUsablePayload && (
-          <ArtifactHeaderLockIcon
+          <ArtifactTrustStatusIcon
             payload={payload}
             onTrustClick={() => setConsentOpen(true)}
             className="nodrag nopan"
@@ -301,6 +321,43 @@ export const ArtifactNode = ({
           handler has already armed). Same pattern used elsewhere in this
           file for the interact-mode iframe wrapper. */}
       <div className="nodrag nopan" style={{ display: 'flex', gap: 2 }}>
+        <Tooltip title={data.locked ? 'Unlock artifact card' : 'Lock artifact card'}>
+          <button
+            type="button"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onPointerUp={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleToggleLock();
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: 3,
+              backgroundColor: data.locked ? token.colorWarningBg : token.colorBgContainer,
+              border: `1px solid ${data.locked ? token.colorWarning : token.colorBorder}`,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              padding: 0,
+              appearance: 'none',
+              color: data.locked ? token.colorWarning : token.colorText,
+              cursor: 'pointer',
+              fontSize: 12,
+              lineHeight: 1,
+            }}
+          >
+            {data.locked ? <LockOutlined /> : <UnlockOutlined />}
+          </button>
+        </Tooltip>
         {payload?.source_session_id && (
           <Tooltip title="Open session that created this artifact">
             <Button
@@ -423,7 +480,7 @@ export const ArtifactNode = ({
   // Shared resizer — same across loading / error / normal states.
   const resizer = (
     <NodeResizer
-      isVisible={selected}
+      isVisible={selected && !data.locked}
       minWidth={MIN_WIDTH}
       minHeight={MIN_HEIGHT}
       onResize={handleResize}

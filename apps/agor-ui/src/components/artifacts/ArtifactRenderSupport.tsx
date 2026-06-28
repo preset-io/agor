@@ -1,5 +1,5 @@
 import type { ArtifactPayload } from '@agor-live/client';
-import { LockOutlined } from '@ant-design/icons';
+import { SafetyOutlined, WarningOutlined } from '@ant-design/icons';
 import { useSandpack, useSandpackConsole } from '@codesandbox/sandpack-react';
 import { Tooltip, theme } from 'antd';
 import type { CSSProperties } from 'react';
@@ -239,7 +239,7 @@ export function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
   return null;
 }
 
-interface ArtifactHeaderLockIconProps {
+interface ArtifactTrustStatusIconProps {
   payload: ArtifactPayload;
   onTrustClick?: () => void;
   className?: string;
@@ -249,18 +249,19 @@ interface ArtifactHeaderLockIconProps {
 /**
  * Compact artifact trust/status affordance for headers.
  *
- * Mirrors the Zone toolbox lock chip sizing (20px square, 3px radius,
- * warning bg/border for locked/untrusted) so artifact headers get the same
- * small security visual without carrying the full text tag.
+ * Uses warning/safety glyphs rather than a lock so the board-card lock can
+ * unambiguously mean "this artifact card cannot be moved/resized."
  */
-export function ArtifactHeaderLockIcon({
+export function ArtifactTrustStatusIcon({
   payload,
   onTrustClick,
   className,
   style,
-}: ArtifactHeaderLockIconProps) {
+}: ArtifactTrustStatusIconProps) {
   const { token } = theme.useToken();
   const state = payload.trust_state;
+  if (state === 'no_secrets_needed') return null;
+
   const isUntrusted = state === 'untrusted';
   const isTrusted = state === 'trusted';
   const isSelf = state === 'self';
@@ -280,29 +281,20 @@ export function ArtifactHeaderLockIcon({
       ? `Secrets injected — trust granted for ${scopeLabel}`
       : isSelf
         ? 'You created this artifact; secrets are injected'
-        : 'Artifact does not request secrets';
-  const color = isUntrusted
-    ? token.colorWarning
-    : isTrusted
-      ? token.colorSuccess
-      : isSelf
-        ? token.colorInfo
-        : token.colorTextSecondary;
+        : 'Artifact trust status';
+  const color = isUntrusted ? token.colorWarning : isTrusted ? token.colorSuccess : token.colorInfo;
   const backgroundColor = isUntrusted
     ? token.colorWarningBg
     : isTrusted
       ? token.colorSuccessBg
-      : isSelf
-        ? token.colorInfoBg
-        : token.colorBgContainer;
-  const borderColor = state === 'no_secrets_needed' ? token.colorBorder : color;
-  const icon = <LockOutlined />;
+      : token.colorInfoBg;
+  const icon = isUntrusted ? <WarningOutlined /> : <SafetyOutlined />;
   const commonStyle: CSSProperties = {
     width: 20,
     height: 20,
     borderRadius: 3,
     backgroundColor,
-    border: `1px solid ${borderColor}`,
+    border: `1px solid ${color}`,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
