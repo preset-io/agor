@@ -172,7 +172,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    expect(createPending).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     expect(createPending).toHaveBeenCalledWith(
       expect.objectContaining({
         session_id: parentSessionId,
@@ -230,7 +230,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    expect(createPending).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('**Result:**');
@@ -263,7 +263,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    expect(createPending).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('## Original Prompt');
@@ -293,7 +293,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    expect(createPending).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('## Original Prompt');
