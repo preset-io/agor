@@ -71,9 +71,14 @@ function queryString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function usersTableHasTenantColumn(): boolean {
+  return 'tenant_id' in (users as unknown as object);
+}
+
 function tenantPredicate(params?: Params) {
   const tenantId = (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id;
-  return tenantId ? eq((users as never as { tenant_id: never }).tenant_id, tenantId) : undefined;
+  if (!tenantId || !usersTableHasTenantColumn()) return undefined;
+  return eq((users as never as { tenant_id: never }).tenant_id, tenantId);
 }
 
 function withTenantPredicate(params: Params | undefined, predicate: unknown) {
@@ -83,7 +88,7 @@ function withTenantPredicate(params: Params | undefined, predicate: unknown) {
 
 function tenantInsertValues(params?: Params): { tenant_id?: string } {
   const tenantId = (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id;
-  return tenantId ? { tenant_id: tenantId } : {};
+  return tenantId && usersTableHasTenantColumn() ? { tenant_id: tenantId } : {};
 }
 
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
