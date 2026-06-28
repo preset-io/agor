@@ -54,6 +54,13 @@ describe('multi-tenancy config and tenant resolution', () => {
     expect(() =>
       assertValidMultiTenancyConfig({
         database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'static', auth_claim: 'sub' },
+      })
+    ).toThrow(/auth_claim cannot be reserved JWT claim 'sub'/);
+
+    expect(() =>
+      assertValidMultiTenancyConfig({
+        database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'required_from_auth', auth_claim: 'sub' },
       })
     ).toThrow(/auth_claim cannot be reserved JWT claim 'sub'/);

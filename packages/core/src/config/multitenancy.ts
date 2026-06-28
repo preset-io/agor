@@ -113,6 +113,11 @@ export function assertValidMultiTenancyConfig(
   if (!resolved.static_tenant_id) {
     throw new Error('Config error: multi_tenancy.static_tenant_id must not be empty');
   }
+  if (resolved.auth_claim && RESERVED_AUTH_CLAIMS.has(resolved.auth_claim)) {
+    throw new Error(
+      `Config error: multi_tenancy.auth_claim cannot be reserved JWT claim '${resolved.auth_claim}'`
+    );
+  }
   if (resolved.mode === 'required_from_auth') {
     if (resolveMultiTenancyDatabaseDialect(config) !== 'postgresql') {
       throw new Error(
@@ -122,11 +127,6 @@ export function assertValidMultiTenancyConfig(
     if (!resolved.auth_claim && !resolved.trusted_header) {
       throw new Error(
         'Config error: multi_tenancy.required_from_auth requires multi_tenancy.auth_claim or multi_tenancy.trusted_header'
-      );
-    }
-    if (resolved.auth_claim && RESERVED_AUTH_CLAIMS.has(resolved.auth_claim)) {
-      throw new Error(
-        `Config error: multi_tenancy.auth_claim cannot be reserved JWT claim '${resolved.auth_claim}'`
       );
     }
   }
