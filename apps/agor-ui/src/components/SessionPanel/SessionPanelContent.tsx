@@ -9,7 +9,7 @@ import {
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAgorStore } from '../../store/agorStore';
@@ -69,6 +69,23 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
   }) => {
     const { token } = theme.useToken();
     const { showSuccess, showError } = useThemedMessage();
+    const [resumeQueueInFlight, setResumeQueueInFlight] = React.useState(false);
+    const isQueueHeldByFailure = queuedTasks.length > 0 && session.status === 'failed';
+
+    const handleResumeHeldQueue = React.useCallback(async () => {
+      if (!client || resumeQueueInFlight) return;
+      setResumeQueueInFlight(true);
+      try {
+        await client.service('sessions').patch(session.session_id, { ready_for_prompt: true });
+        showSuccess('Resuming queued prompts');
+      } catch (error) {
+        showError(
+          `Failed to resume queue: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        setResumeQueueInFlight(false);
+      }
+    }, [client, resumeQueueInFlight, session.session_id, showError, showSuccess]);
 
     // Subscribe only to the entity families this panel needs via narrow store
     // selectors. This keeps the panel insulated from session/branch/board
@@ -343,6 +360,26 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             >
               Queued Tasks ({queuedTasks.length})
             </Typography.Text>
+            {isQueueHeldByFailure && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: token.sizeUnit * 2 }}
+                message="Queue paused by failed session"
+                description="Queued prompts are preserved. Resume the queue to run the next prompt without copy/paste."
+                action={
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={resumeQueueInFlight}
+                    disabled={!client}
+                    onClick={handleResumeHeldQueue}
+                  >
+                    Resume queue
+                  </Button>
+                }
+              />
+            )}
             <Space orientation="vertical" size={8} style={{ width: '100%' }}>
               {queuedTasks.map((task, idx) => (
                 <div
@@ -365,6 +402,17 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                     {task.full_prompt}
                   </Typography.Text>
                   <Space size={4}>
+                    {isQueueHeldByFailure && idx === 0 && (
+                      <Button
+                        size="small"
+                        type="link"
+                        loading={resumeQueueInFlight}
+                        disabled={!client}
+                        onClick={handleResumeHeldQueue}
+                      >
+                        Run next
+                      </Button>
+                    )}
                     <Button
                       type="text"
                       size="small"
