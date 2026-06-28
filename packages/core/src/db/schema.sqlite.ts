@@ -478,6 +478,11 @@ export const messages = sqliteTable(
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
     sessionIndexIdx: index('messages_session_index_idx').on(table.session_id, table.index),
+    timestampIdx: index('messages_timestamp_idx').on(table.timestamp),
+    sessionTimestampIdx: index('messages_session_timestamp_idx').on(
+      table.session_id,
+      table.timestamp
+    ),
   })
 );
 

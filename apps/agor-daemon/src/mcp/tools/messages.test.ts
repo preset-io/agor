@@ -45,7 +45,9 @@ vi.mock('@agor/core/db', async () => {
         where: (cond: unknown) => {
           mockWhereSpy(cond);
           return {
-            orderBy: () => ({ all: () => mockAllSpy() }),
+            orderBy: () => ({
+              limit: () => ({ offset: () => ({ all: () => mockAllSpy() }) }),
+            }),
           };
         },
       }),
@@ -66,6 +68,8 @@ type CapturedTool = {
   cfg: { inputSchema?: { parse: (v: unknown) => unknown; safeParse: (v: unknown) => any } };
   cb: ToolHandler;
 };
+
+const recentIso = () => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
 async function registerAndGetTool(ctx: { userId: string; role?: string }): Promise<CapturedTool> {
   const { registerMessageTools } = await import('./messages.js');
@@ -133,10 +137,48 @@ describe('agor_messages_list MCP tool', () => {
     );
   });
 
+  it('validates createdAfter and createdBefore dates', async () => {
+    const handler = await registerAndGetHandler({ userId: 'user-1' });
+
+    await expect(handler({ search: 'secret', createdAfter: 'not-a-date' })).rejects.toThrow(
+      /createdAfter must be a valid ISO-8601 date string/
+    );
+
+    await expect(
+      handler({
+        search: 'secret',
+        createdAfter: '2026-06-02T00:00:00Z',
+        createdBefore: '2026-06-01T00:00:00Z',
+      })
+    ).rejects.toThrow(/createdAfter must be earlier than or equal to createdBefore/);
+  });
+
+  it('fails fast for broad cross-session keyword search without time bounds', async () => {
+    const handler = await registerAndGetHandler({ userId: 'user-1' });
+
+    await expect(handler({ search: 'secret' })).rejects.toThrow(
+      /Broad cross-session message search must be scoped/
+    );
+    expect(mockAllSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails fast for broad cross-session keyword search with an over-wide window', async () => {
+    const handler = await registerAndGetHandler({ userId: 'user-1' });
+
+    await expect(
+      handler({
+        search: 'secret',
+        createdAfter: '2026-01-01T00:00:00Z',
+        createdBefore: '2026-03-15T00:00:00Z',
+      })
+    ).rejects.toThrow(/window of 31 days or less/);
+    expect(mockAllSpy).not.toHaveBeenCalled();
+  });
+
   it('does not enforce RBAC when branch_rbac is disabled', async () => {
     mockIsBranchRbacEnabled.mockReturnValue(false);
     const handler = await registerAndGetHandler({ userId: 'user-1' });
-    await handler({ search: 'secret' });
+    await handler({ search: 'secret', createdAfter: recentIso() });
     expect(mockFindAccessibleSessions).not.toHaveBeenCalled();
     expect(mockAllSpy).toHaveBeenCalled();
   });
@@ -146,7 +188,7 @@ describe('agor_messages_list MCP tool', () => {
     mockFindAccessibleSessions.mockResolvedValue([]);
 
     const handler = await registerAndGetHandler({ userId: 'user-1' });
-    const result = await handler({ search: 'secret' });
+    const result = await handler({ search: 'secret', createdAfter: recentIso() });
 
     expect(mockFindAccessibleSessions).toHaveBeenCalledWith('user-1');
     // Query must NOT be executed when there are no accessible sessions.
@@ -165,7 +207,7 @@ describe('agor_messages_list MCP tool', () => {
     ]);
 
     const handler = await registerAndGetHandler({ userId: 'user-1', role: 'member' });
-    await handler({ search: 'secret' });
+    await handler({ search: 'secret', createdAfter: recentIso() });
 
     expect(mockFindAccessibleSessions).toHaveBeenCalledWith('user-1');
     expect(mockAllSpy).toHaveBeenCalled();
@@ -191,8 +233,16 @@ describe('agor_messages_list MCP tool', () => {
   it('bypasses RBAC filter for superadmin role', async () => {
     mockIsBranchRbacEnabled.mockReturnValue(true);
     const handler = await registerAndGetHandler({ userId: 'user-1', role: 'superadmin' });
-    await handler({ search: 'secret' });
+    await handler({ search: 'secret', createdAfter: recentIso() });
     expect(mockFindAccessibleSessions).not.toHaveBeenCalled();
+    expect(mockAllSpy).toHaveBeenCalled();
+  });
+
+  it('allows browsing a specific session transcript without a time bound', async () => {
+    const handler = await registerAndGetHandler({ userId: 'user-1' });
+
+    await handler({ sessionId: 'sess-0001' });
+
     expect(mockAllSpy).toHaveBeenCalled();
   });
 });

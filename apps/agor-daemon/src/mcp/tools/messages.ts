@@ -4,7 +4,9 @@ import {
   asc,
   desc,
   eq,
+  gte,
   inArray,
+  lte,
   messages as messagesTable,
   or,
   SessionRepository,
@@ -19,6 +21,25 @@ import { resolveSessionId, resolveTaskId } from '../resolve-ids.js';
 import { mcpLimit, mcpOffset, mcpOptionalId, mcpOptionalString } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+
+const BROAD_SEARCH_GUIDANCE =
+  'Broad cross-session message search must be scoped to sessionId/taskId or bounded with createdAfter. Use a window of 31 days or less; add createdBefore for historical searches. Example: { "search": "SEO", "createdAfter": "2026-06-01T00:00:00Z", "createdBefore": "2026-06-15T00:00:00Z" }. This prevents full-table scans on large message databases.';
+
+const MAX_CROSS_SESSION_SEARCH_WINDOW_MS = 31 * 24 * 60 * 60 * 1000;
+
+function parseDateArg(name: string, value: unknown): Date | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`${name} must be an ISO-8601 date string, for example "2026-06-01T00:00:00Z".`);
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(
+      `${name} must be a valid ISO-8601 date string, for example "2026-06-01" or "2026-06-01T00:00:00Z".`
+    );
+  }
+  return date;
+}
 
 export function registerMessageTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_messages_list
@@ -37,7 +58,15 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
         taskId: mcpOptionalId('taskId', 'Task', 'Task ID to scope messages to (optional)'),
         search: mcpOptionalString(
           'search',
-          'Keyword search across message content. Space-separated terms are AND\'d, pipe (|) for OR. Example: "OAuth middleware" requires both; "OAuth | JWT" matches either.'
+          'Keyword search across message content. Space-separated terms are AND\'d, pipe (|) for OR. Example: "OAuth middleware" requires both; "OAuth | JWT" matches either. Cross-session search must include sessionId/taskId or a createdAfter-bounded window of 31 days or less.'
+        ),
+        createdAfter: mcpOptionalString(
+          'createdAfter',
+          'Only include messages at or after this message timestamp. ISO-8601 date/time, e.g. "2026-06-01" or "2026-06-01T00:00:00Z". Recommended for broad searches.'
+        ),
+        createdBefore: mcpOptionalString(
+          'createdBefore',
+          'Only include messages before or at this message timestamp. ISO-8601 date/time, e.g. "2026-06-28T23:59:59Z". Use with createdAfter for historical cross-session searches.'
         ),
         includeToolCalls: z
           .boolean()
@@ -66,11 +95,30 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       const sessionIdRaw = coerceString(args.sessionId);
       const taskIdRaw = coerceString(args.taskId);
       const search = coerceString(args.search);
+      const createdAfter = parseDateArg('createdAfter', args.createdAfter);
+      const createdBefore = parseDateArg('createdBefore', args.createdBefore);
+
+      if (createdAfter && createdBefore && createdAfter.getTime() > createdBefore.getTime()) {
+        throw new Error('createdAfter must be earlier than or equal to createdBefore.');
+      }
 
       if (!sessionIdRaw && !taskIdRaw && !search) {
         throw new Error(
-          'At least one of sessionId, taskId, or search must be provided as a non-empty string. Example: { "sessionId": "01abcdef" } or { "search": "OAuth middleware" }.'
+          'At least one of sessionId, taskId, or search must be provided as a non-empty string. Example: { "sessionId": "01abcdef" } or { "search": "OAuth middleware", "createdAfter": "2026-06-01T00:00:00Z" }.'
         );
+      }
+
+      if (search && !sessionIdRaw && !taskIdRaw) {
+        if (!createdAfter) {
+          throw new Error(BROAD_SEARCH_GUIDANCE);
+        }
+        const effectiveCreatedBefore = createdBefore ?? new Date();
+        if (
+          effectiveCreatedBefore.getTime() - createdAfter.getTime() >
+          MAX_CROSS_SESSION_SEARCH_WINDOW_MS
+        ) {
+          throw new Error(BROAD_SEARCH_GUIDANCE);
+        }
       }
 
       const sessionId = sessionIdRaw ? await resolveSessionId(ctx, sessionIdRaw) : undefined;
@@ -95,6 +143,8 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       if (sessionId) conditions.push(eq(messagesTable.session_id, sessionId));
       if (taskId) conditions.push(eq(messagesTable.task_id, taskId));
       if (role) conditions.push(eq(messagesTable.role, role));
+      if (createdAfter) conditions.push(gte(messagesTable.timestamp, createdAfter));
+      if (createdBefore) conditions.push(lte(messagesTable.timestamp, createdBefore));
 
       if (!includeToolCalls) {
         conditions.push(
@@ -137,10 +187,16 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
 
       const orderCol = sessionId ? messagesTable.index : messagesTable.timestamp;
       const orderBy = order === 'desc' ? desc(orderCol) : asc(orderCol);
+      // Keep every invocation bounded. The small over-fetch preserves the
+      // existing "hide tool-only noise by default" behavior without loading
+      // every matching row into daemon memory.
+      const fetchLimit = Math.min(limit + 100, 200);
       const allRows = await select(ctx.db)
         .from(messagesTable)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(orderBy)
+        .limit(fetchLimit)
+        .offset(offset)
         .all();
 
       // Post-process
@@ -220,8 +276,8 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
         processed.push(msg);
       }
 
-      const total = processed.length;
-      const paged = processed.slice(offset, offset + limit);
+      const total = offset + processed.length;
+      const paged = processed.slice(0, limit);
       return textResult({ messages: paged, total, offset, limit });
     }
   );
