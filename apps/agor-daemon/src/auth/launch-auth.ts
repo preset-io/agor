@@ -1,12 +1,12 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
-import type { AgorConfig } from '@agor/core/config';
+import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import { type Database, eq, generateId, hash, insert, select, update, users } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
-import { issueRuntimeTokenPair } from './runtime-tokens.js';
+import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
 import { authTokenIssuedAtClaim } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
@@ -444,15 +444,13 @@ function issueRuntimeTokens(
   user: User,
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
-  refreshTokenTtl: SignOptions['expiresIn']
+  refreshTokenTtl: SignOptions['expiresIn'],
+  tenantClaim = 'tenant_id'
 ): LaunchAuthResult {
-  const tokens = issueRuntimeTokenPair(
-    user,
-    jwtSecret,
-    accessTokenTtl,
-    refreshTokenTtl,
-    authTokenIssuedAtClaim(Date.now(), user)
-  );
+  const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl, {
+    ...authTokenIssuedAtClaim(Date.now(), user),
+    ...runtimeTenantClaims((user as { tenant_id?: string }).tenant_id, tenantClaim),
+  });
 
   return {
     ...tokens,
@@ -462,6 +460,7 @@ function issueRuntimeTokens(
 }
 
 export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
+  const tenantClaim = resolveMultiTenancyConfig(options.config).auth_claim ?? 'tenant_id';
   return {
     async create(data: { launchCode?: string; launch_code?: string }, _params?: Params) {
       const launchCode =
@@ -491,7 +490,8 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           user,
           options.jwtSecret,
           options.accessTokenTtl,
-          options.refreshTokenTtl
+          options.refreshTokenTtl,
+          tenantClaim
         );
       } catch (error) {
         if (error instanceof BadRequest || error instanceof NotAuthenticated) {

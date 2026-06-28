@@ -6,7 +6,12 @@
  * Extracted from index.ts for maintainability.
  */
 
-import { type AgorConfig, loadConfig, resolveBranchStorageConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  loadConfig,
+  resolveBranchStorageConfig,
+  resolveMultiTenancyConfig,
+} from '@agor/core/config';
 import {
   BranchRepository,
   type Database,
@@ -74,6 +79,7 @@ import {
   issueRuntimeTokenPair,
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
+  runtimeTenantClaims,
 } from './auth/runtime-tokens.js';
 import { authTokenIssuedAtClaim } from './auth/token-invalidation.js';
 import { redactUserAuthMetadata } from './auth/user-redaction.js';
@@ -307,6 +313,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const authStrategiesArray = ['api-key', 'jwt', 'local'];
+  const multiTenancy = resolveMultiTenancyConfig(config);
+  const tenantTokenClaim = multiTenancy.auth_claim ?? 'tenant_id';
   if (sessionTokenService) {
     authStrategiesArray.push('session-token');
   }
@@ -430,6 +438,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           });
 
           if (context.result?.user) {
+            const tenantId =
+              context.params?.tenant?.tenant_id ??
+              (context.result.user as { tenant_id?: string }).tenant_id;
             const tokens = issueRuntimeTokenPair(
               context.result.user,
               jwtSecret,
@@ -437,9 +448,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               REFRESH_TOKEN_TTL,
               {
                 ...authTokenIssuedAtClaim(Date.now(), context.result.user),
-                ...(context.result.user.tenant_id
-                  ? { tenant_id: context.result.user.tenant_id }
-                  : {}),
+                ...runtimeTenantClaims(tenantId, tenantTokenClaim),
               }
             );
             context.result.accessToken = tokens.accessToken;
@@ -487,6 +496,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
+      tenantClaim: tenantTokenClaim,
       usersService,
     })
   );

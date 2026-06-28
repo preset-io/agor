@@ -389,7 +389,13 @@ export function createSocketIOConfig(
         }
 
         // Handle user access tokens - fetch user from database
-        const user = await app.service('users').get(decoded.sub as import('@agor/core/types').UUID);
+        const user = await app.service('users').get(
+          decoded.sub as import('@agor/core/types').UUID,
+          {
+            ...(tenant ? { tenant } : {}),
+            authentication: { payload: decoded },
+          } as never
+        );
 
         // Attach user to socket (FeathersJS convention)
         const fs = socket as FeathersSocket;

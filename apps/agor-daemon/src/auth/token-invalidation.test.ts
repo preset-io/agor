@@ -2,7 +2,7 @@ import { AuthenticationService, feathers } from '@agor/core/feathers';
 import type { User, UserID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { eq, update, users } from '../../../../packages/core/src/db';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { AgorLocalStrategy } from '../register-routes';
@@ -13,6 +13,8 @@ import {
   issueRuntimeTokenPair,
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
+  readRuntimeTenantClaim,
+  runtimeTenantClaims,
 } from './runtime-tokens';
 import { ServiceJWTStrategy } from './service-jwt-strategy';
 import {
@@ -45,6 +47,16 @@ test('treats tokens issued at the invalidation boundary as stale', () => {
     assertUserTokenNotInvalidated(user, { sub: 'user-1', type: 'access', ...authTime(1_000) })
   ).toThrow(/Session expired/);
   expect(authTokenIssuedAtClaim(1_000, user)[AUTH_TOKEN_ISSUED_AT_MS_CLAIM]).toBe(1_001);
+});
+
+test('runtime tenant helpers preserve standard and custom tenant claims', () => {
+  expect(runtimeTenantClaims('tenant-a')).toEqual({ tenant_id: 'tenant-a' });
+  expect(runtimeTenantClaims('tenant-a', 'org_id')).toEqual({
+    tenant_id: 'tenant-a',
+    org_id: 'tenant-a',
+  });
+  expect(readRuntimeTenantClaim({ org_id: 'tenant-b' }, 'org_id')).toBe('tenant-b');
+  expect(readRuntimeTenantClaim({ tenant_id: 'tenant-c' }, 'org_id')).toBe('tenant-c');
 });
 
 function createAuthApp(db: Parameters<typeof createUsersService>[0]) {
@@ -189,6 +201,49 @@ dbTest('rejects a refresh token issued before the password change marker', async
   await expect(refreshService.create({ refreshToken: oldRefreshToken })).rejects.toThrow(
     /Invalid or expired refresh token/
   );
+});
+
+test('refresh token lookup is scoped to the tenant claim and reissues tenant-bearing tokens', async () => {
+  const user = {
+    user_id: 'tenant-user' as UserID,
+    email: 'tenant-user@example.test',
+    name: 'Tenant User',
+    role: ROLES.MEMBER,
+    onboarding_completed: true,
+    must_change_password: false,
+    created_at: new Date(),
+    tenant_id: 'tenant-a',
+  } as User & { tenant_id: string };
+  const usersService = {
+    get: async (_id: UserID, _params?: unknown) => user,
+  };
+  const getSpy = vi.spyOn(usersService, 'get');
+  const refreshService = createRefreshTokenService({
+    jwtSecret: JWT_SECRET,
+    accessTokenTtl: ACCESS_TOKEN_TTL,
+    refreshTokenTtl: REFRESH_TOKEN_TTL,
+    tenantClaim: 'tenant_id',
+    usersService,
+  });
+  const refreshToken = issueRuntimeToken(
+    { sub: user.user_id, type: 'refresh', tenant_id: 'tenant-a' },
+    JWT_SECRET,
+    REFRESH_TOKEN_TTL
+  );
+
+  const result = await refreshService.create({ refreshToken });
+
+  expect(getSpy).toHaveBeenCalledWith(
+    user.user_id,
+    expect.objectContaining({
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      authentication: { payload: expect.objectContaining({ tenant_id: 'tenant-a' }) },
+    })
+  );
+  expectNoTokenMarker(result.user);
+  expect(result.user).not.toHaveProperty('tenant_id');
+  const decoded = jwt.verify(result.accessToken, JWT_SECRET) as jwt.JwtPayload;
+  expect(decoded.tenant_id).toBe('tenant-a');
 });
 
 dbTest(

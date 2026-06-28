@@ -5,6 +5,8 @@ import {
   issueRuntimeTokenPair,
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
+  readRuntimeTenantClaim,
+  runtimeTenantClaims,
 } from './runtime-tokens.js';
 import {
   assertUserTokenNotInvalidated,
@@ -17,6 +19,7 @@ interface RefreshTokenServiceOptions {
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: SignOptions['expiresIn'];
+  tenantClaim?: string;
   usersService: {
     get(id: UserID, params?: Params): Promise<User>;
   };
@@ -35,7 +38,16 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
           throw new Error('Invalid token type');
         }
 
-        const user = await options.usersService.get(decoded.sub as UserID);
+        const tenantId = readRuntimeTenantClaim(decoded, options.tenantClaim);
+        const user = await options.usersService.get(
+          decoded.sub as UserID,
+          tenantId
+            ? ({
+                tenant: { tenant_id: tenantId, source: 'auth_claim' },
+                authentication: { payload: decoded },
+              } as Params)
+            : ({ authentication: { payload: decoded } } as Params)
+        );
         assertUserTokenNotInvalidated(user, decoded);
 
         // Use the same access-token TTL as the auth-service config. Refresh tokens
@@ -48,9 +60,10 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
           options.refreshTokenTtl,
           {
             ...authTokenIssuedAtClaim(Date.now(), user),
-            ...((user as { tenant_id?: string }).tenant_id
-              ? { tenant_id: (user as { tenant_id?: string }).tenant_id }
-              : {}),
+            ...runtimeTenantClaims(
+              tenantId ?? (user as { tenant_id?: string }).tenant_id,
+              options.tenantClaim
+            ),
           }
         );
 

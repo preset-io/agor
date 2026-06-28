@@ -23,6 +23,7 @@
 
 import type { Application } from '@agor/core/feathers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import {
   boardPresenceRoomName,
   configureChannels,
@@ -270,6 +271,58 @@ describe('createTokenBucket', () => {
     expect(limit()).toBe(true);
     expect(limit()).toBe(true);
     expect(limit()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Handshake authentication
+// ---------------------------------------------------------------------------
+
+describe('socket handshake tenant propagation', () => {
+  it('passes resolved JWT tenant context into the user lookup', async () => {
+    const usersGet = vi.fn(async () => ({ user_id: ALICE, email: 'alice@example.test' }));
+    const app = {
+      service: () => ({ get: usersGet }),
+      on: () => {},
+    } as unknown as Application;
+    const io = makeIO();
+    const config = createSocketIOConfig(app, {
+      corsOrigin: '*',
+      jwtSecret: 'test-secret',
+      credentialsAllowed: false,
+      webTerminalEnabled: true,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    } as SocketIOOptions);
+    config.callback(io as any);
+    const socket = makeSocket('tenant-user-socket', io);
+    socket.handshake.auth = {
+      token: issueRuntimeToken(
+        { sub: ALICE, type: 'access', tenant_id: 'tenant-a' },
+        'test-secret',
+        '5m'
+      ),
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      io.middlewares[0]?.(socket, (error?: Error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+
+    expect(usersGet).toHaveBeenCalledWith(
+      ALICE,
+      expect.objectContaining({
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        authentication: { payload: expect.objectContaining({ tenant_id: 'tenant-a' }) },
+      })
+    );
+    expect(socket.feathers?.user).toMatchObject({ user_id: ALICE, tenant_id: 'tenant-a' });
+    expect(socket.data.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
   });
 });
 

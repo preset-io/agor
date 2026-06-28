@@ -866,6 +866,9 @@ export class UsersService {
     if (includeAuthMetadata && row.tokens_valid_after) {
       (user as InternalUser).tokens_valid_after = new Date(row.tokens_valid_after);
     }
+    if (includeAuthMetadata && 'tenant_id' in row) {
+      (user as InternalUser).tenant_id = row.tenant_id;
+    }
 
     // Include password for authentication (FeathersJS LocalStrategy needs this)
     if (includePassword) {
