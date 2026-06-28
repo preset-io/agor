@@ -1,7 +1,7 @@
 import type { ArtifactPayload } from '@agor-live/client';
 import { LockOutlined, SafetyOutlined } from '@ant-design/icons';
 import { useSandpack, useSandpackConsole } from '@codesandbox/sandpack-react';
-import { Tag, Tooltip } from 'antd';
+import { Tag, Tooltip, theme } from 'antd';
 import type { CSSProperties } from 'react';
 import { useEffect, useRef } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
@@ -237,6 +237,94 @@ export function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
   }, [artifactId]);
 
   return null;
+}
+
+interface ArtifactHeaderLockIconProps {
+  payload: ArtifactPayload;
+  onTrustClick?: () => void;
+  className?: string;
+  style?: CSSProperties;
+}
+
+/**
+ * Compact artifact trust/status affordance for headers.
+ *
+ * Mirrors the Zone toolbox lock chip sizing (20px square, 3px radius,
+ * warning bg/border for locked/untrusted) so artifact headers get the same
+ * small security visual without carrying the full text tag.
+ */
+export function ArtifactHeaderLockIcon({
+  payload,
+  onTrustClick,
+  className,
+  style,
+}: ArtifactHeaderLockIconProps) {
+  const { token } = theme.useToken();
+  const state = payload.trust_state;
+  if (state === 'no_secrets_needed') return null;
+
+  const isUntrusted = state === 'untrusted';
+  const isTrusted = state === 'trusted';
+  const scopeLabel =
+    payload.trust_scope === 'instance'
+      ? 'instance-wide'
+      : payload.trust_scope === 'author'
+        ? 'this author'
+        : payload.trust_scope === 'session'
+          ? 'just-once'
+          : 'this artifact';
+  const title = isUntrusted
+    ? onTrustClick
+      ? 'Click to review and grant trust so secrets are injected'
+      : 'Secrets are locked until trust is granted'
+    : isTrusted
+      ? `Secrets injected — trust granted for ${scopeLabel}`
+      : 'You created this artifact; secrets are injected';
+  const color = isUntrusted ? token.colorWarning : isTrusted ? token.colorSuccess : token.colorInfo;
+  const backgroundColor = isUntrusted
+    ? token.colorWarningBg
+    : isTrusted
+      ? token.colorSuccessBg
+      : token.colorInfoBg;
+  const icon = <LockOutlined />;
+  const commonStyle: CSSProperties = {
+    width: 20,
+    height: 20,
+    borderRadius: 3,
+    backgroundColor,
+    border: `1px solid ${color}`,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    padding: 0,
+    color,
+    fontSize: 12,
+    lineHeight: 1,
+    ...style,
+  };
+
+  const iconElement =
+    isUntrusted && onTrustClick ? (
+      <button
+        type="button"
+        className={className}
+        aria-label="Review artifact trust"
+        style={{ ...commonStyle, cursor: 'pointer' }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onTrustClick();
+        }}
+      >
+        {icon}
+      </button>
+    ) : (
+      <span className={className} style={commonStyle}>
+        {icon}
+      </span>
+    );
+
+  return <Tooltip title={title}>{iconElement}</Tooltip>;
 }
 
 interface ArtifactTrustBadgeOptions {

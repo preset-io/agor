@@ -32,9 +32,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import {
   ArtifactConsoleReporter,
+  ArtifactHeaderLockIcon,
   ArtifactRuntimeBridge,
   ArtifactSandpackErrorReporter,
-  renderArtifactTrustBadge,
 } from '@/components/artifacts/ArtifactRenderSupport';
 import { getDaemonUrl } from '@/config/daemon';
 import { getAuthHeaders } from '@/utils/authHeaders';
@@ -272,9 +272,6 @@ export const ArtifactNode = ({
       ? 'processing'
       : 'success';
   const headerBadgeTitle = error ? 'Failed to load' : loading ? 'Reloading...' : 'Live';
-  const trustBadge = payload
-    ? renderArtifactTrustBadge(payload, () => setConsentOpen(true), { className: 'nodrag nopan' })
-    : null;
   // A loaded payload that's also in the error state is stale — the body
   // renders the error placeholder, so the header shouldn't expose
   // payload-acting controls (Export / Interact / Consent) that operate
@@ -298,7 +295,13 @@ export const ArtifactNode = ({
         >
           {payload?.name ?? fallbackName}
         </Typography.Text>
-        {trustBadge}
+        {payload && (
+          <ArtifactHeaderLockIcon
+            payload={payload}
+            onTrustClick={() => setConsentOpen(true)}
+            className="nodrag nopan"
+          />
+        )}
       </div>
       {/* `nodrag nopan` — React Flow's escape hatch. Without it the canvas
           interprets a mousedown on these controls as the start of a node
