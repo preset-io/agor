@@ -237,6 +237,12 @@ export interface AgorExternalLaunchSettings {
   allow_admin_roles?: boolean;
 
   /**
+   * Trust a verified assertion email when linking launch auth to an existing
+   * local user that does not yet have this provider identity recorded.
+   */
+  trust_verified_email_for_linking?: boolean;
+
+  /**
    * Optional HTTP(S) URL shown in the unauthenticated UI when external launch
    * sign-in is unavailable, missing, expired, or invalid.
    */

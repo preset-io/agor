@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import { createDatabase, eq, initializeDatabase, select, update, users } from '@agor/core/db';
+import { createDatabase, eq, hash, initializeDatabase, insert, select, update, users } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { InternalUser, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
@@ -289,6 +289,39 @@ describe('one-time launch auth service', () => {
       audience: 'https://agor.dev',
     }) as jwt.JwtPayload;
     expect(decoded.auth_time_ms).toBe(marker.getTime() + 1);
+  });
+
+  it('links to an existing local user by verified email when explicitly trusted', async () => {
+    const now = new Date();
+    await insert(db, users)
+      .values({
+        user_id: 'local-user-1',
+        created_at: now,
+        updated_at: now,
+        email: 'person@example.test',
+        password: await hash('local-password', 10),
+        name: 'Existing Local User',
+        emoji: '👤',
+        role: 'member',
+        onboarding_completed: false,
+        must_change_password: false,
+        data: { preferences: {} },
+      })
+      .run();
+
+    mockExchange(signClaims({ email_verified: true }));
+    const result = await service({
+      external_launch: {
+        ...baseConfig().external_launch,
+        trust_verified_email_for_linking: true,
+      },
+    }).create({ launchCode: 'trusted-email' });
+
+    expect(result.user.user_id).toBe('local-user-1');
+    expect(result.user.email).toBe('person@example.test');
+
+    const row = await select(db).from(users).where(eq(users.user_id, 'local-user-1')).one();
+    expect((row?.data as { external_identities?: unknown[] }).external_identities).toHaveLength(1);
   });
 
   it('does not merge a new external identity by email alone', async () => {

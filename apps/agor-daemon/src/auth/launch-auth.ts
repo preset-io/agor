@@ -52,6 +52,7 @@ interface ResolvedLaunchSettings {
   devSharedSecret?: string;
   serviceCredential?: string;
   allowAdminRoles: boolean;
+  trustVerifiedEmailForLinking: boolean;
   requestTimeoutMs: number;
   algorithms?: string[];
 }
@@ -71,6 +72,7 @@ interface LaunchClaims extends JwtPayload {
   sub: string;
   aud?: string | string[];
   email?: string;
+  email_verified?: boolean;
   name?: string;
   picture?: string;
   avatar?: string;
@@ -128,6 +130,7 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
     devSharedSecret: process.env[sharedSecretEnv] || raw?.dev_shared_secret,
     serviceCredential: process.env[serviceTokenEnv] || raw?.service_credential,
     allowAdminRoles: raw?.allow_admin_roles === true,
+    trustVerifiedEmailForLinking: raw?.trust_verified_email_for_linking === true,
     requestTimeoutMs: raw?.request_timeout_ms ?? DEFAULT_TIMEOUT_MS,
     algorithms: raw?.algorithms,
   };
@@ -261,6 +264,31 @@ async function findUserByExternalIdentity(
   return null;
 }
 
+async function findUserByTrustedEmail(
+  db: Database,
+  email: string | undefined,
+  key: string,
+  settings: ResolvedLaunchSettings,
+  claims: LaunchClaims
+): Promise<typeof users.$inferSelect | null> {
+  if (!settings.trustVerifiedEmailForLinking || claims.email_verified !== true || !email) {
+    return null;
+  }
+
+  const existing = await select(db).from(users).where(eq(users.email, email)).one();
+  if (!existing) return null;
+
+  const identities = getExternalIdentities(existing.data as UserDataWithExternalIdentities);
+  // Preserve explicit mappings to other external identities. The trusted-email
+  // path is primarily for first Agor Cloud joins where a local seeded/manual
+  // account already exists with the verified registration email.
+  if (identities.length > 0 && !identities.some((identity) => identity.key === key)) {
+    return null;
+  }
+
+  return existing;
+}
+
 async function upsertLaunchUser(
   options: LaunchAuthServiceOptions,
   claims: LaunchClaims,
@@ -291,7 +319,9 @@ async function upsertLaunchUser(
     last_login_at: nowIso,
   };
 
-  const existing = await findUserByExternalIdentity(db, key);
+  const existing =
+    (await findUserByExternalIdentity(db, key)) ??
+    (await findUserByTrustedEmail(db, email, key, settings, claims));
   if (existing) {
     const role = mapRole(
       claims.role,
