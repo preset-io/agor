@@ -345,10 +345,10 @@ describe('OnboardingWizard', () => {
     expect(onCreateRepo).not.toHaveBeenCalled();
   });
 
-  it('creates setup resources with the default assistant branch name and preserves model defaults', async () => {
+  it('creates setup resources with a user-suffixed assistant branch name and preserves model defaults', async () => {
     const repoById = new Map<string, Repo>();
     const onCreateBranch = vi.fn(async () =>
-      makeBranch({ name: 'private-scout', ref: 'private-scout' })
+      makeBranch({ name: 'private-scout-user1', ref: 'private-scout-user1' })
     );
     const onCreateSession = vi.fn(async () => 'session-1');
     const onComplete = vi.fn();
@@ -384,8 +384,8 @@ describe('OnboardingWizard', () => {
       expect(onCreateBranch).toHaveBeenCalledWith(
         'repo-1',
         expect.objectContaining({
-          name: 'private-scout',
-          ref: 'private-scout',
+          name: 'private-scout-user1',
+          ref: 'private-scout-user1',
           sourceBranch: 'main',
           createBranch: true,
           pullLatest: true,
