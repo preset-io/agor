@@ -524,9 +524,9 @@ export class SchedulerService {
    * 1. Look up the schedule's branch (cascaded delete means it should
    *    always exist; we still handle null defensively).
    * 2. Dedup against `sessions(schedule_id, scheduled_run_at)`.
-   * 3. Enforce `allow_concurrent_runs` against any active session in the
-   *    SAME BRANCH (sibling schedules on the same branch are sequential
-   *    by default; opt out per-schedule via allow_concurrent_runs).
+   * 3. Enforce `allow_concurrent_runs` against any active session spawned
+   *    by the SAME SCHEDULE. Different schedules on the same branch do not
+   *    block one another.
    * 4. Render prompt template (Handlebars).
    * 5. Look up creator's unix_username for execution context.
    * 6. Create session with schedule metadata + `schedule_id` FK.
@@ -580,25 +580,24 @@ export class SchedulerService {
       return existingSession;
     }
 
-    // 2. Concurrency guard — branch-wide. Any active session in the
-    //    branch blocks scheduled runs, regardless of which schedule it
-    //    came from. Sibling schedules on the same branch are sequential
-    //    by default; opt out per-schedule via allow_concurrent_runs.
-    //    Existence probe (LIMIT 1) — no need to count.
+    // 2. Concurrency guard — per-schedule. An active run from this same
+    //    schedule blocks its next fire by default, but sibling schedules
+    //    on the same branch are independent and should not suppress one
+    //    another. Existence probe (LIMIT 1) — no need to count.
     if (!schedule.allow_concurrent_runs) {
-      const active = await this.sessionRepo.existsInBranchWithStatuses(
-        branch.branch_id,
+      const active = await this.sessionRepo.existsInScheduleWithStatuses(
+        schedule.schedule_id,
         ACTIVE_SESSION_STATUSES
       );
       if (active) {
         if (manual) {
           console.log(
-            `   ⛔ ${schedule.name}: manual run blocked — active session present (allow_concurrent_runs=false)`
+            `   ⛔ ${schedule.name}: manual run blocked — active run from this schedule present (allow_concurrent_runs=false)`
           );
           throw new ScheduleBusyError(branch.name);
         }
         console.log(
-          `   ⏭️  ${schedule.name}: scheduled run skipped — active session present (allow_concurrent_runs=false)`
+          `   ⏭️  ${schedule.name}: scheduled run skipped — active run from this schedule present (allow_concurrent_runs=false)`
         );
         await this.updateScheduleMetadata(schedule, scheduledRunAt, null, now);
         return null;
