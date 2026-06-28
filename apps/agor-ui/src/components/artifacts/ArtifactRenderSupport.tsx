@@ -1,7 +1,7 @@
 import type { ArtifactPayload } from '@agor-live/client';
-import { LockOutlined, SafetyOutlined } from '@ant-design/icons';
+import { LockOutlined } from '@ant-design/icons';
 import { useSandpack, useSandpackConsole } from '@codesandbox/sandpack-react';
-import { Tag, Tooltip, theme } from 'antd';
+import { Tooltip, theme } from 'antd';
 import type { CSSProperties } from 'react';
 import { useEffect, useRef } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
@@ -331,64 +331,4 @@ export function ArtifactHeaderLockIcon({
     );
 
   return <Tooltip title={title}>{iconElement}</Tooltip>;
-}
-
-interface ArtifactTrustBadgeOptions {
-  className?: string;
-  style?: CSSProperties;
-}
-
-export function renderArtifactTrustBadge(
-  payload: ArtifactPayload,
-  onTrustClick?: () => void,
-  options: ArtifactTrustBadgeOptions = {}
-) {
-  const tagStyle = { fontSize: 10, marginLeft: 4, ...options.style };
-  const state = payload.trust_state;
-  if (state === 'no_secrets_needed') return null;
-  if (state === 'self') {
-    return (
-      <Tag color="blue" icon={<SafetyOutlined />} style={tagStyle}>
-        Yours
-      </Tag>
-    );
-  }
-  if (state === 'trusted') {
-    const scopeLabel =
-      payload.trust_scope === 'instance'
-        ? 'instance-wide'
-        : payload.trust_scope === 'author'
-          ? 'this author'
-          : payload.trust_scope === 'session'
-            ? 'just-once'
-            : 'this artifact';
-    return (
-      <Tooltip title={`Secrets injected — trust granted for ${scopeLabel}`}>
-        <Tag color="green" icon={<SafetyOutlined />} style={tagStyle}>
-          Trusted
-        </Tag>
-      </Tooltip>
-    );
-  }
-
-  return (
-    <Tooltip title="Click to review and grant trust so secrets are injected">
-      <Tag
-        color="orange"
-        icon={<LockOutlined />}
-        className={onTrustClick ? options.className : undefined}
-        style={{ ...tagStyle, cursor: onTrustClick ? 'pointer' : undefined }}
-        onClick={
-          onTrustClick
-            ? (e) => {
-                e.stopPropagation();
-                onTrustClick();
-              }
-            : undefined
-        }
-      >
-        Untrusted
-      </Tag>
-    </Tooltip>
-  );
 }
