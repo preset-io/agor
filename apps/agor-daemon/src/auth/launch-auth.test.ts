@@ -64,7 +64,7 @@ async function makeDb(): Promise<{ db: Database; cleanup: () => void }> {
 
 function makeUsersService(db: Database) {
   return {
-    async get(id: UserID): Promise<InternalUser> {
+    async get(id: UserID, _params?: unknown): Promise<InternalUser> {
       const row = await select(db).from(users).where(eq(users.user_id, id)).one();
       if (!row) throw new Error('missing user');
       return {
@@ -100,14 +100,14 @@ describe('one-time launch auth service', () => {
     cleanup?.();
   });
 
-  function service(config = baseConfig()) {
+  function service(config = baseConfig(), usersService = makeUsersService(db)) {
     return createLaunchAuthService({
       db,
       config,
       jwtSecret: RUNTIME_JWT_SECRET,
       accessTokenTtl: '15m',
       refreshTokenTtl: '30d',
-      usersService: makeUsersService(db),
+      usersService,
     });
   }
 
@@ -210,6 +210,38 @@ describe('one-time launch auth service', () => {
     }) as { sub: string; type: string };
     expect(decoded.sub).toBe(result.user.user_id);
     expect(decoded.type).toBe('access');
+  });
+
+  it('scopes launch auth with the configured tenant claim', async () => {
+    const usersService = makeUsersService(db);
+    const getSpy = vi.spyOn(usersService, 'get');
+    mockExchange(
+      signClaims({
+        sub: 'tenant-launch-user',
+        email: 'tenant-launch@example.test',
+        tenant_id: 'tenant-a',
+      })
+    );
+    const result = await service(
+      {
+        ...baseConfig(),
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      },
+      usersService
+    ).create({ launchCode: 'tenant-code' });
+
+    expect(getSpy).toHaveBeenCalledWith(
+      result.user.user_id,
+      expect.objectContaining({
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      })
+    );
+    const decoded = jwt.verify(result.accessToken, RUNTIME_JWT_SECRET, {
+      issuer: 'agor',
+      audience: 'https://agor.dev',
+    }) as { tenant_id?: string };
+    expect(decoded.tenant_id).toBe('tenant-a');
   });
 
   it('maps admin roles only when explicitly allowed', async () => {

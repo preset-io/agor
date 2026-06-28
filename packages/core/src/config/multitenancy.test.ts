@@ -47,6 +47,18 @@ describe('multi-tenancy config and tenant resolution', () => {
     ).toThrow(/auth_claim or multi_tenancy\.trusted_header/);
   });
 
+  it('rejects reserved JWT claims as the tenant auth claim', () => {
+    vi.stubEnv('AGOR_DB_DIALECT', '');
+    vi.stubEnv('DATABASE_URL', '');
+
+    expect(() =>
+      assertValidMultiTenancyConfig({
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'sub' },
+      })
+    ).toThrow(/auth_claim cannot be reserved JWT claim 'sub'/);
+  });
+
   it('resolves required tenant from configured JWT/auth claim', () => {
     const ctx = resolveTenantContext(
       { multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' } },

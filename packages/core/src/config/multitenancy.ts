@@ -2,6 +2,7 @@ import type { TenantContext, TenantID } from '../types/tenant';
 import type { AgorConfig, AgorMultiTenancySettings } from './types';
 
 export const DEFAULT_STATIC_TENANT_ID = 'default' as TenantID;
+const RESERVED_AUTH_CLAIMS = new Set(['aud', 'exp', 'iat', 'iss', 'jti', 'nbf', 'sub', 'type']);
 
 export interface ResolvedMultiTenancyConfig {
   mode: 'static' | 'required_from_auth';
@@ -121,6 +122,11 @@ export function assertValidMultiTenancyConfig(
     if (!resolved.auth_claim && !resolved.trusted_header) {
       throw new Error(
         'Config error: multi_tenancy.required_from_auth requires multi_tenancy.auth_claim or multi_tenancy.trusted_header'
+      );
+    }
+    if (resolved.auth_claim && RESERVED_AUTH_CLAIMS.has(resolved.auth_claim)) {
+      throw new Error(
+        `Config error: multi_tenancy.auth_claim cannot be reserved JWT claim '${resolved.auth_claim}'`
       );
     }
   }

@@ -1,9 +1,31 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
-import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
-import { type Database, eq, generateId, hash, insert, select, update, users } from '@agor/core/db';
+import {
+  type AgorConfig,
+  resolveMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
+} from '@agor/core/config';
+import {
+  type Database,
+  eq,
+  generateId,
+  hash,
+  insert,
+  runWithTenantDatabaseScope,
+  select,
+  update,
+  users,
+} from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
+import type {
+  Params,
+  TenantContext,
+  User,
+  UserExternalIdentity,
+  UserID,
+  UserRole,
+} from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
@@ -241,12 +263,17 @@ async function findUserByExternalIdentity(
 
 async function upsertLaunchUser(
   options: LaunchAuthServiceOptions,
-  claims: LaunchClaims
+  claims: LaunchClaims,
+  tenant?: TenantContext
 ): Promise<User> {
   const { db, config, usersService } = options;
   const issuer = claims.iss;
   const subject = claims.sub;
   const settings = resolveLaunchSettings(config);
+  const userLookupParams = {
+    provider: undefined,
+    ...(tenant ? { tenant } : {}),
+  };
   const provider = claims.provider || settings.providerId || issuer;
   const key = identityKey(provider, issuer, subject);
   const now = new Date();
@@ -296,7 +323,7 @@ async function upsertLaunchUser(
       .where(eq(users.user_id, existing.user_id))
       .run();
 
-    return usersService.get(existing.user_id as UserID, { provider: undefined });
+    return usersService.get(existing.user_id as UserID, userLookupParams);
   }
 
   const role = mapRole(claims.role, settings, config.execution?.allow_superadmin);
@@ -326,7 +353,7 @@ async function upsertLaunchUser(
     })
     .run();
 
-  return usersService.get(userId, { provider: undefined });
+  return usersService.get(userId, userLookupParams);
 }
 
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
@@ -445,11 +472,12 @@ function issueRuntimeTokens(
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
   refreshTokenTtl: SignOptions['expiresIn'],
-  tenantClaim = 'tenant_id'
+  tenantClaim = 'tenant_id',
+  tenantId?: string
 ): LaunchAuthResult {
   const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl, {
     ...authTokenIssuedAtClaim(Date.now(), user),
-    ...runtimeTenantClaims((user as { tenant_id?: string }).tenant_id, tenantClaim),
+    ...runtimeTenantClaims(tenantId ?? (user as { tenant_id?: string }).tenant_id, tenantClaim),
   });
 
   return {
@@ -460,9 +488,10 @@ function issueRuntimeTokens(
 }
 
 export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
-  const tenantClaim = resolveMultiTenancyConfig(options.config).auth_claim ?? 'tenant_id';
+  const multiTenancy = resolveMultiTenancyConfig(options.config);
+  const tenantClaim = multiTenancy.auth_claim ?? 'tenant_id';
   return {
-    async create(data: { launchCode?: string; launch_code?: string }, _params?: Params) {
+    async create(data: { launchCode?: string; launch_code?: string }, params?: Params) {
       const launchCode =
         typeof data?.launchCode === 'string'
           ? data.launchCode.trim()
@@ -485,17 +514,28 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           throw new NotAuthenticated('Invalid one-time launch exchange response');
         }
         const claims = await verifyLaunchAssertion(exchange.assertion, settings);
-        const user = await upsertLaunchUser(options, claims);
-        return issueRuntimeTokens(
-          user,
-          options.jwtSecret,
-          options.accessTokenTtl,
-          options.refreshTokenTtl,
-          tenantClaim
-        );
+        const tenant = resolveTenantContext(multiTenancy, {
+          params,
+          authPayload: claims,
+          headers: params?.headers as Record<string, unknown> | undefined,
+        });
+        return await runWithTenantDatabaseScope(options.db, tenant.tenant_id, async () => {
+          const user = await upsertLaunchUser(options, claims, tenant);
+          return issueRuntimeTokens(
+            user,
+            options.jwtSecret,
+            options.accessTokenTtl,
+            options.refreshTokenTtl,
+            tenantClaim,
+            tenant.tenant_id
+          );
+        });
       } catch (error) {
         if (error instanceof BadRequest || error instanceof NotAuthenticated) {
           throw error;
+        }
+        if (error instanceof TenantResolutionError) {
+          throw new NotAuthenticated(error.message);
         }
         throw new NotAuthenticated('Invalid or expired one-time launch code');
       }
