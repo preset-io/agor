@@ -280,7 +280,7 @@ export const sessionRelationships = sqliteTable(
     targetIdx: index('session_relationships_target_idx').on(table.target_session_id),
     callbackIdx: index('session_relationships_callback_idx').on(table.callback_session_id),
     // Note: no tenant_source/tenant_target composite indexes here — SQLite schema
-    // has no tenant_id column on this table (RLS is Postgres-only). The standalone
+    // has no tenant column on this table (RLS is Postgres-only). The standalone
     // source/target indexes above are sufficient for SQLite.
     sourceTargetTypeUnique: uniqueIndex('session_relationships_source_target_type_unique').on(
       table.source_session_id,
