@@ -322,41 +322,19 @@ export const ArtifactNode = ({
           file for the interact-mode iframe wrapper. */}
       <div className="nodrag nopan" style={{ display: 'flex', gap: 2 }}>
         <Tooltip title={data.locked ? 'Unlock artifact card' : 'Lock artifact card'}>
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
+          <Button
+            type="text"
+            size="small"
+            icon={data.locked ? <LockOutlined /> : <UnlockOutlined />}
+            onClick={(e) => {
               e.stopPropagation();
               handleToggleLock();
             }}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
             style={{
-              width: 20,
-              height: 20,
-              borderRadius: 3,
-              backgroundColor: data.locked ? token.colorWarningBg : token.colorBgContainer,
-              border: `1px solid ${data.locked ? token.colorWarning : token.colorBorder}`,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              padding: 0,
-              appearance: 'none',
-              color: data.locked ? token.colorWarning : token.colorText,
-              cursor: 'pointer',
-              fontSize: 12,
-              lineHeight: 1,
+              backgroundColor: data.locked ? token.colorWarningBg : undefined,
+              color: data.locked ? token.colorWarning : undefined,
             }}
-          >
-            {data.locked ? <LockOutlined /> : <UnlockOutlined />}
-          </button>
+          />
         </Tooltip>
         {payload?.source_session_id && (
           <Tooltip title="Open session that created this artifact">
