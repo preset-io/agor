@@ -172,7 +172,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    expect(createPending).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     expect(createPending).toHaveBeenCalledWith(
       expect.objectContaining({
         session_id: parentSessionId,
@@ -194,18 +194,24 @@ describe('TasksService completion callbacks', () => {
     expect(callbackPrompt).not.toContain('## Original Prompt');
     expect(callbackPrompt).not.toContain('investigate duplicate callbacks');
     expect(messagesFind).toHaveBeenCalledTimes(1);
-    expect(triggerQueueProcessing).toHaveBeenCalledWith(parentSessionId, {});
-    expect(sessionsPatch).toHaveBeenCalledWith(
-      childSessionId,
-      expect.objectContaining({ callback_config: expect.objectContaining({ enabled: false }) })
+    await vi.waitFor(() =>
+      expect(triggerQueueProcessing).toHaveBeenCalledWith(parentSessionId, {})
     );
-    expect(getStoredTask().metadata?.callback_dispatches).toEqual([
-      expect.objectContaining({
-        event: 'session_completion',
-        target_session_id: parentSessionId,
-        queued_task_id: callbackTaskId,
-      }),
-    ]);
+    await vi.waitFor(() =>
+      expect(sessionsPatch).toHaveBeenCalledWith(
+        childSessionId,
+        expect.objectContaining({ callback_config: expect.objectContaining({ enabled: false }) })
+      )
+    );
+    await vi.waitFor(() =>
+      expect(getStoredTask().metadata?.callback_dispatches).toEqual([
+        expect.objectContaining({
+          event: 'session_completion',
+          target_session_id: parentSessionId,
+          queued_task_id: callbackTaskId,
+        }),
+      ])
+    );
   });
 
   it('includeOriginalPrompt=false queues one templated callback without an original prompt section', async () => {
@@ -230,7 +236,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    expect(createPending).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('**Result:**');
@@ -263,7 +269,7 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    expect(createPending).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('## Original Prompt');
@@ -293,15 +299,17 @@ describe('TasksService completion callbacks', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    expect(createPending).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('## Original Prompt');
     expect(callbackPrompt).toContain('remote session initial prompt');
     expect(callbackPrompt).toContain('Final child result');
-    expect(sessionsPatch).toHaveBeenCalledWith(
-      childSessionId,
-      expect.objectContaining({ callback_config: expect.objectContaining({ enabled: false }) })
+    await vi.waitFor(() =>
+      expect(sessionsPatch).toHaveBeenCalledWith(
+        childSessionId,
+        expect.objectContaining({ callback_config: expect.objectContaining({ enabled: false }) })
+      )
     );
   });
 
