@@ -65,6 +65,20 @@ type CapturedTool = {
 
 const recentIso = () => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
+function row(index: number, text = `message ${index}`) {
+  return {
+    message_id: `message-${index}`,
+    session_id: 'sess-0001',
+    task_id: null,
+    type: 'user',
+    role: 'user',
+    index,
+    timestamp: new Date('2026-06-01T00:00:00Z'),
+    content_preview: text,
+    data: { content: text },
+  };
+}
+
 async function registerAndGetTool(ctx: { userId: string; role?: string }): Promise<CapturedTool> {
   const { registerMessageTools } = await import('./messages.js');
   let captured: CapturedTool | undefined;
@@ -201,5 +215,18 @@ describe('agor_messages_list MCP tool', () => {
     await handler({ sessionId: 'sess-0001' });
 
     expect(mockAllSpy).toHaveBeenCalled();
+  });
+
+  it('sets next_offset to the raw rows consumed for the returned page', async () => {
+    mockAllSpy.mockResolvedValue([row(0), row(1), row(2)]);
+    const handler = await registerAndGetHandler({ userId: 'user-1' });
+
+    const result = await handler({ sessionId: 'sess-0001', limit: 2 });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.messages.map((m: { index: number }) => m.index)).toEqual([0, 1]);
+    expect(parsed.returned).toBe(2);
+    expect(parsed.has_more).toBe(true);
+    expect(parsed.next_offset).toBe(2);
   });
 });

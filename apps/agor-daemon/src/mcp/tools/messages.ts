@@ -207,8 +207,11 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       };
 
       const processed: ProcessedMessage[] = [];
+      let consumedRows = 0;
 
       for (const row of allRows) {
+        if (processed.length >= limit) break;
+        consumedRows++;
         const data = row.data as {
           content?: unknown;
           tool_uses?: unknown[];
@@ -271,17 +274,16 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
         processed.push(msg);
       }
 
-      const paged = processed.slice(0, limit);
-      const hasMore = allRows.length === fetchLimit;
+      const hasMore = allRows.length > consumedRows || allRows.length === fetchLimit;
       return textResult({
-        messages: paged,
-        returned: paged.length,
+        messages: processed,
+        returned: processed.length,
         offset,
         limit,
         scanned: allRows.length,
         scan_limit: fetchLimit,
         has_more: hasMore,
-        next_offset: hasMore ? offset + fetchLimit : undefined,
+        next_offset: hasMore ? offset + consumedRows : undefined,
       });
     }
   );
