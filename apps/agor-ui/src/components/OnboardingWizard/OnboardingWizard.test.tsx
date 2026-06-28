@@ -307,7 +307,7 @@ describe('OnboardingWizard', () => {
   });
 
   it('reuses an existing framework repo when duplicate clone returns no repo id', async () => {
-    const readyRepo = makeRepo({ repo_id: 'repo-existing' });
+    const readyRepo = makeRepo({ repo_id: 'repo-existing', default_branch: 'develop' });
     const reposService = {
       find: vi.fn(async () => ({ data: [readyRepo] })),
       get: vi.fn(async () => undefined),
@@ -339,7 +339,12 @@ describe('OnboardingWizard', () => {
     fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
 
     await waitFor(() => expect(reposService.find).toHaveBeenCalled());
-    await waitFor(() => expect(onCreateBranch).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(onCreateBranch).toHaveBeenCalledWith(
+        'repo-existing',
+        expect.objectContaining({ sourceBranch: 'develop' })
+      )
+    );
     expect(screen.queryByText(/Cloning assistant framework/i)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith({

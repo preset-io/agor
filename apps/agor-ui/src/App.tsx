@@ -57,6 +57,7 @@ import {
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
+import type { CreateRepoOptions } from './types';
 import { isMobileDevice } from './utils/deviceDetection';
 import { completeForcedPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
@@ -928,7 +929,7 @@ function AppContent() {
   };
 
   // Handle repo CRUD
-  const handleCreateRepo = async (data: CreateRepoRequest, options: { silent?: boolean } = {}) => {
+  const handleCreateRepo = async (data: CreateRepoRequest, options: CreateRepoOptions = {}) => {
     if (!client) {
       showError('Not connected to daemon — cannot clone repository');
       return;

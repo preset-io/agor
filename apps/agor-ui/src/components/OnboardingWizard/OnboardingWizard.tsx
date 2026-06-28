@@ -56,6 +56,7 @@ import {
   FRAMEWORK_REPO_URL,
   findFrameworkRepo,
 } from '../../hooks/useFrameworkRepo';
+import type { CreateRepoOptions } from '../../types';
 import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
 import { ensureAssistantWelcomeNote } from '../../utils/assistantWelcomeNote';
 import { slugify } from '../../utils/repoSlug';
@@ -92,7 +93,7 @@ export interface OnboardingWizardProps {
 
   onCreateRepo: (
     data: CreateRepoRequest,
-    options?: { silent?: boolean }
+    options?: CreateRepoOptions
   ) => Promise<CloneRepositoryResult | undefined>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateBranch: (
@@ -136,8 +137,8 @@ function findReadyFrameworkRepo(repoById: Map<string, Repo>): [string, Repo] | u
   return findFrameworkRepo(repoById, { readyOnly: true });
 }
 
-function isUsableFrameworkRepo(repo: Repo | undefined): repo is Repo {
-  return !!repo && repo.clone_status !== 'failed';
+function entriesByRepoId(repos: Repo[]): Map<string, Repo> {
+  return new Map(repos.map((repo) => [repo.repo_id, repo]));
 }
 
 function apiKeyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-key'): string {
@@ -453,21 +454,15 @@ export function OnboardingWizard({
         query: { slug: FRAMEWORK_REPO_SLUG, $limit: 1 },
       });
       const exactRepos = Array.isArray(exactResult) ? exactResult : (exactResult?.data ?? []);
-      const exactRepo = exactRepos.find(isUsableFrameworkRepo) as Repo | undefined;
-      if (exactRepo) return exactRepo;
+      const exactMatch = findFrameworkRepo(entriesByRepoId(exactRepos), { excludeFailed: true });
+      if (exactMatch) return exactMatch[1];
 
       const fallbackResult = await client?.service('repos').find({ query: { $limit: 50 } });
       const fallbackRepos = Array.isArray(fallbackResult)
         ? fallbackResult
         : (fallbackResult?.data ?? []);
       return (
-        (fallbackRepos.find(
-          (repo: Repo) =>
-            isUsableFrameworkRepo(repo) &&
-            (repo.remote_url?.includes('agor-assistant') ||
-              repo.remote_url?.includes('agor-openclaw') ||
-              repo.slug?.includes('agor-assistant-private'))
-        ) as Repo | undefined) ?? null
+        findFrameworkRepo(entriesByRepoId(fallbackRepos), { excludeFailed: true })?.[1] ?? null
       );
     } catch {
       return null;
@@ -475,7 +470,7 @@ export function OnboardingWizard({
   }, [client]);
 
   const finishSetupFromRepo = useCallback(
-    async (repoId: string) => {
+    async (repoId: string, repoOverride?: Repo) => {
       if (completingRepoRef.current === repoId) return;
       completingRepoRef.current = repoId;
       if (cloneTimeoutRef.current) {
@@ -517,7 +512,8 @@ export function OnboardingWizard({
 
         setSetupStage('branch');
         setOperationText('Creating the default assistant branch…');
-        const sourceBranch = repoById.get(repoId)?.default_branch || 'main';
+        const sourceBranch =
+          repoOverride?.default_branch || repoById.get(repoId)?.default_branch || 'main';
         const assistantConfig: AssistantConfig = {
           kind: 'assistant',
           displayName: assistantDisplayName.trim() || 'My Assistant',
@@ -640,7 +636,7 @@ export function OnboardingWizard({
             return;
           }
           if (repo.clone_status === 'ready' || repo.clone_status === undefined) {
-            await finishSetupFromRepo(repo.repo_id);
+            await finishSetupFromRepo(repo.repo_id, repo);
             return;
           }
         } catch {
@@ -666,7 +662,7 @@ export function OnboardingWizard({
     const readyRepo = findReadyFrameworkRepo(repoById);
     if (readyRepo) {
       setOperationText('Preparing assistant workspace…');
-      void finishSetupFromRepo(readyRepo[0]);
+      void finishSetupFromRepo(readyRepo[0], readyRepo[1]);
       return;
     }
 
@@ -713,7 +709,7 @@ export function OnboardingWizard({
           startCloneTimeout();
         } else {
           setOperationText('Preparing assistant workspace…');
-          void finishSetupFromRepo(existingRepo.repo_id);
+          void finishSetupFromRepo(existingRepo.repo_id, existingRepo);
         }
         return;
       }
@@ -727,7 +723,7 @@ export function OnboardingWizard({
           pollRepoUntilReady(existingRepo.repo_id);
           startCloneTimeout();
         } else {
-          void finishSetupFromRepo(existingRepo.repo_id);
+          void finishSetupFromRepo(existingRepo.repo_id, existingRepo);
         }
         return;
       }
@@ -746,7 +742,7 @@ export function OnboardingWizard({
   useEffect(() => {
     if (currentStep !== 'loading' || setupStage !== 'cloning') return;
     const readyRepo = findReadyFrameworkRepo(repoById);
-    if (readyRepo) void finishSetupFromRepo(readyRepo[0]);
+    if (readyRepo) void finishSetupFromRepo(readyRepo[0], readyRepo[1]);
   }, [currentStep, finishSetupFromRepo, repoById, setupStage]);
 
   useEffect(() => {
