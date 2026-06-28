@@ -5,13 +5,12 @@ import {
   desc,
   eq,
   gte,
-  inArray,
   lte,
   messages as messagesTable,
   or,
-  SessionRepository,
   select,
   sql,
+  visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { ContentBlock } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -169,19 +168,15 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       }
 
       // RBAC enforcement: when branch_rbac is enabled, restrict this search
-      // to sessions the caller can access. Superadmins bypass. When RBAC is
-      // disabled (default / open-access mode), skip this filter entirely to
-      // preserve backward-compatible behavior.
+      // to sessions the caller can access. Use the same SQL EXISTS predicate
+      // as high-cardinality repository paths instead of materializing every
+      // accessible session id into an IN (...) list.
       if (isBranchRbacEnabled()) {
         const userRole = ctx.authenticatedUser?.role as string | undefined;
         if (!isSuperAdmin(userRole)) {
-          const sessionRepo = new SessionRepository(ctx.db);
-          const accessibleSessions = await sessionRepo.findAccessibleSessions(ctx.userId);
-          const accessibleIds = accessibleSessions.map((s) => s.session_id);
-          if (accessibleIds.length === 0) {
-            return textResult({ messages: [], total: 0, offset, limit });
-          }
-          conditions.push(inArray(messagesTable.session_id, accessibleIds));
+          conditions.push(
+            visibleSessionReferenceAccessExists(ctx.db, ctx.userId, messagesTable.session_id)
+          );
         }
       }
 
@@ -276,9 +271,18 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
         processed.push(msg);
       }
 
-      const total = offset + processed.length;
       const paged = processed.slice(0, limit);
-      return textResult({ messages: paged, total, offset, limit });
+      const hasMore = allRows.length === fetchLimit;
+      return textResult({
+        messages: paged,
+        returned: paged.length,
+        offset,
+        limit,
+        scanned: allRows.length,
+        scan_limit: fetchLimit,
+        has_more: hasMore,
+        next_offset: hasMore ? offset + fetchLimit : undefined,
+      });
     }
   );
 }

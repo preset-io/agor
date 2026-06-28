@@ -3,9 +3,8 @@
  *
  * Focus: the tool bypasses the Feathers hook pipeline by running a raw Drizzle
  * query against the messages table. These tests verify that when
- * `branch_rbac` is enabled, the raw query is restricted to sessions the
- * caller can access (preventing cross-branch leakage via the `search`
- * parameter).
+ * `branch_rbac` is enabled, the raw query uses the shared visible-session SQL
+ * predicate (preventing cross-branch leakage via the `search` parameter).
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -13,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Hoist-safe mocks must be declared before the module under test is imported.
 const mockIsBranchRbacEnabled = vi.fn(() => false);
-const mockFindAccessibleSessions = vi.fn(async () => [] as Array<{ session_id: string }>);
+const mockVisibleSessionReferenceAccessExists = vi.fn();
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/config');
@@ -23,14 +22,6 @@ vi.mock('@agor/core/config', async () => {
   };
 });
 
-// Bind the static SessionRepository constructor to a class whose instances
-// delegate findAccessibleSessions to our spy.
-class FakeSessionRepository {
-  async findAccessibleSessions(userId: string) {
-    return mockFindAccessibleSessions(userId);
-  }
-}
-
 // Capture the raw query the tool builds so we can assert on its shape.
 const mockWhereSpy = vi.fn();
 const mockAllSpy = vi.fn(async () => [] as unknown[]);
@@ -39,7 +30,10 @@ vi.mock('@agor/core/db', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/db');
   return {
     ...actual,
-    SessionRepository: FakeSessionRepository,
+    visibleSessionReferenceAccessExists: (...args: unknown[]) => {
+      mockVisibleSessionReferenceAccessExists(...args);
+      return actual.sql`visible-session-access`;
+    },
     select: () => ({
       from: () => ({
         where: (cond: unknown) => {
@@ -100,12 +94,11 @@ async function registerAndGetHandler(ctx: { userId: string; role?: string }): Pr
 describe('agor_messages_list MCP tool', () => {
   beforeEach(() => {
     mockIsBranchRbacEnabled.mockReset();
-    mockFindAccessibleSessions.mockReset();
+    mockVisibleSessionReferenceAccessExists.mockReset();
     mockWhereSpy.mockReset();
     mockAllSpy.mockReset();
     mockAllSpy.mockResolvedValue([]);
     mockIsBranchRbacEnabled.mockReturnValue(false);
-    mockFindAccessibleSessions.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -179,62 +172,26 @@ describe('agor_messages_list MCP tool', () => {
     mockIsBranchRbacEnabled.mockReturnValue(false);
     const handler = await registerAndGetHandler({ userId: 'user-1' });
     await handler({ search: 'secret', createdAfter: recentIso() });
-    expect(mockFindAccessibleSessions).not.toHaveBeenCalled();
+    expect(mockVisibleSessionReferenceAccessExists).not.toHaveBeenCalled();
     expect(mockAllSpy).toHaveBeenCalled();
   });
 
-  it('short-circuits to empty when user has no accessible sessions', async () => {
+  it('restricts raw query through the shared visible-session EXISTS predicate', async () => {
     mockIsBranchRbacEnabled.mockReturnValue(true);
-    mockFindAccessibleSessions.mockResolvedValue([]);
-
-    const handler = await registerAndGetHandler({ userId: 'user-1' });
-    const result = await handler({ search: 'secret', createdAfter: recentIso() });
-
-    expect(mockFindAccessibleSessions).toHaveBeenCalledWith('user-1');
-    // Query must NOT be executed when there are no accessible sessions.
-    expect(mockAllSpy).not.toHaveBeenCalled();
-
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.messages).toEqual([]);
-    expect(parsed.total).toBe(0);
-  });
-
-  it('restricts raw query to accessible session ids for regular users', async () => {
-    mockIsBranchRbacEnabled.mockReturnValue(true);
-    mockFindAccessibleSessions.mockResolvedValue([
-      { session_id: 'sess-allowed-1' },
-      { session_id: 'sess-allowed-2' },
-    ]);
 
     const handler = await registerAndGetHandler({ userId: 'user-1', role: 'member' });
     await handler({ search: 'secret', createdAfter: recentIso() });
 
-    expect(mockFindAccessibleSessions).toHaveBeenCalledWith('user-1');
+    expect(mockVisibleSessionReferenceAccessExists).toHaveBeenCalledTimes(1);
+    expect(mockVisibleSessionReferenceAccessExists.mock.calls[0]?.[1]).toBe('user-1');
     expect(mockAllSpy).toHaveBeenCalled();
-    // Drizzle builds a SQL AST; walk it with a seen-set to avoid circular
-    // refs and collect every string leaf so we can assert both ids appear.
-    const seen = new WeakSet<object>();
-    const strings: string[] = [];
-    const walk = (v: unknown) => {
-      if (typeof v === 'string') {
-        strings.push(v);
-        return;
-      }
-      if (!v || typeof v !== 'object') return;
-      if (seen.has(v as object)) return;
-      seen.add(v as object);
-      for (const val of Object.values(v as Record<string, unknown>)) walk(val);
-    };
-    walk(mockWhereSpy.mock.calls[0]?.[0]);
-    expect(strings).toContain('sess-allowed-1');
-    expect(strings).toContain('sess-allowed-2');
   });
 
   it('bypasses RBAC filter for superadmin role', async () => {
     mockIsBranchRbacEnabled.mockReturnValue(true);
     const handler = await registerAndGetHandler({ userId: 'user-1', role: 'superadmin' });
     await handler({ search: 'secret', createdAfter: recentIso() });
-    expect(mockFindAccessibleSessions).not.toHaveBeenCalled();
+    expect(mockVisibleSessionReferenceAccessExists).not.toHaveBeenCalled();
     expect(mockAllSpy).toHaveBeenCalled();
   });
 
