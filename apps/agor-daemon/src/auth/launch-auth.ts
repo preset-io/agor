@@ -12,6 +12,7 @@ import {
   generateId,
   hash,
   insert,
+  reattributeLegacyAnonymousRows,
   runWithTenantDatabaseScope,
   select,
   update,
@@ -352,6 +353,7 @@ async function upsertLaunchUser(
       })
       .where(eq(users.user_id, existing.user_id))
       .run();
+    await reattributeLegacyAnonymousRows(db, existing.user_id);
 
     return usersService.get(existing.user_id as UserID, userLookupParams);
   }
@@ -382,6 +384,7 @@ async function upsertLaunchUser(
       } as UserDataWithExternalIdentities,
     })
     .run();
+  await reattributeLegacyAnonymousRows(db, userId);
 
   return usersService.get(userId, userLookupParams);
 }

@@ -102,7 +102,7 @@ async function checkAndReportMigrations(
  */
 export async function initializeDatabase(
   dbPath: string,
-  options: { tenantId?: TenantID | string } = {}
+  options: { tenantId?: TenantID | string; skipFirstRunAdminBootstrap?: boolean } = {}
 ): Promise<DatabaseInitResult> {
   console.log(`📦 Connecting to database: ${dbPath}`);
 
@@ -125,9 +125,15 @@ export async function initializeDatabase(
 
     // First-run admin bootstrap: create a default admin if no users exist in
     // the current tenant, and re-attribute any legacy `created_by='anonymous'`
-    // rows to a real user.
-    const bootstrapResult = await runFirstRunAdminBootstrap(scopedDb);
-    logFirstRunAdminBootstrap(bootstrapResult);
+    // rows to a real user. External-launch managed deployments skip the local
+    // bootstrap account; the first trusted launch user becomes the attribution
+    // target instead.
+    if (options.skipFirstRunAdminBootstrap) {
+      console.log('🔐 Skipping local first-run admin bootstrap; external launch owns user identity.');
+    } else {
+      const bootstrapResult = await runFirstRunAdminBootstrap(scopedDb);
+      logFirstRunAdminBootstrap(bootstrapResult);
+    }
   });
 
   console.log('✅ Database ready');
