@@ -261,10 +261,9 @@ export function ArtifactHeaderLockIcon({
 }: ArtifactHeaderLockIconProps) {
   const { token } = theme.useToken();
   const state = payload.trust_state;
-  if (state === 'no_secrets_needed') return null;
-
   const isUntrusted = state === 'untrusted';
   const isTrusted = state === 'trusted';
+  const isSelf = state === 'self';
   const scopeLabel =
     payload.trust_scope === 'instance'
       ? 'instance-wide'
@@ -279,20 +278,31 @@ export function ArtifactHeaderLockIcon({
       : 'Secrets are locked until trust is granted'
     : isTrusted
       ? `Secrets injected — trust granted for ${scopeLabel}`
-      : 'You created this artifact; secrets are injected';
-  const color = isUntrusted ? token.colorWarning : isTrusted ? token.colorSuccess : token.colorInfo;
+      : isSelf
+        ? 'You created this artifact; secrets are injected'
+        : 'Artifact does not request secrets';
+  const color = isUntrusted
+    ? token.colorWarning
+    : isTrusted
+      ? token.colorSuccess
+      : isSelf
+        ? token.colorInfo
+        : token.colorTextSecondary;
   const backgroundColor = isUntrusted
     ? token.colorWarningBg
     : isTrusted
       ? token.colorSuccessBg
-      : token.colorInfoBg;
+      : isSelf
+        ? token.colorInfoBg
+        : token.colorBgContainer;
+  const borderColor = state === 'no_secrets_needed' ? token.colorBorder : color;
   const icon = <LockOutlined />;
   const commonStyle: CSSProperties = {
     width: 20,
     height: 20,
     borderRadius: 3,
     backgroundColor,
-    border: `1px solid ${color}`,
+    border: `1px solid ${borderColor}`,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
