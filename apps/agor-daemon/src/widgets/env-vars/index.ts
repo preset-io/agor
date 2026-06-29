@@ -18,7 +18,7 @@ import {
 } from '@agor/core/config';
 import { type Database, SessionEnvSelectionRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type { EnvVarScope, User, UserID } from '@agor/core/types';
+import type { User, UserID } from '@agor/core/types';
 import { z } from 'zod';
 import { registerWidget, type WidgetRegistryEntry, type WidgetSubmitCtx } from '../registry.js';
 
@@ -40,12 +40,6 @@ const envVarFieldMetadataSchema = z
 
 export type EnvVarFieldMetadata = z.infer<typeof envVarFieldMetadataSchema>;
 
-export interface EnvVarExistingStatus {
-  set: true;
-  scope: EnvVarScope;
-  resource_id?: string | null;
-}
-
 function orderedRecord<T>(record: Record<string, T> | undefined): Record<string, T> | undefined {
   if (!record) return undefined;
   const out: Record<string, T> = {};
@@ -60,7 +54,6 @@ export function normalizeEnvVarsParams(params: EnvVarsParams): EnvVarsParams {
     ...params,
     names: orderedEnvVarNames(params.names),
     variable_metadata: orderedRecord(params.variable_metadata),
-    existing: orderedRecord(params.existing),
   };
 }
 
@@ -111,13 +104,7 @@ export const envVarsParamsSchema = z
     }
   });
 
-export type EnvVarsParams = z.infer<typeof envVarsParamsSchema> & {
-  /**
-   * Server-derived availability for requested names. Values are never present:
-   * just set/scope/resource metadata from `users.env_vars`.
-   */
-  existing?: Record<string, EnvVarExistingStatus>;
-};
+export type EnvVarsParams = z.infer<typeof envVarsParamsSchema>;
 
 /**
  * Browser → daemon submit payload. Direct HTTP, never reaches the agent.

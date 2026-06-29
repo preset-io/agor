@@ -256,7 +256,7 @@ describe('agor_widgets_request_env_vars', () => {
     expect(appendArgs.contentPreview).toBe('Widget: env_vars (HUBSPOT_API_KEY, STRIPE_SECRET_KEY)');
   });
 
-  it('stores server-derived availability for partial existing values without values', async () => {
+  it('does not persist server-derived availability in widget params', async () => {
     const { app } = makeApp({
       sessionCreator: 'user-creator',
       creatorEnvVars: { HUBSPOT_API_KEY: { set: true, scope: 'global' } },
@@ -276,9 +276,7 @@ describe('agor_widgets_request_env_vars', () => {
 
     const appendArgs = appendStub.mock.calls[0][0];
     expect(appendArgs.metadata.widget.status).toBe('pending');
-    expect(appendArgs.metadata.widget.params.existing).toEqual({
-      HUBSPOT_API_KEY: { set: true, scope: 'global', resource_id: null },
-    });
+    expect(appendArgs.metadata.widget.params.existing).toBeUndefined();
     expect(JSON.stringify(appendArgs.metadata.widget.params)).not.toContain('secret');
   });
 

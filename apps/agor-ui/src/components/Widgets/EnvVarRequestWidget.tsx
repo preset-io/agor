@@ -26,7 +26,7 @@ import {
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { Button, Card, Checkbox, Input, Select, Space, Typography, theme } from 'antd';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
 import { Tag } from '../Tag';
@@ -45,7 +45,6 @@ interface EnvVarsParams {
       input_type?: 'password' | 'text' | 'textarea';
     }
   >;
-  existing?: Record<string, { set: true; scope: EnvVarScope; resource_id?: string | null }>;
   auto_resume?: boolean;
 }
 
@@ -67,12 +66,37 @@ function orderedEnvVarNames(names: string[]): string[] {
   return [...names].sort();
 }
 
+interface EnvVarExistingStatus {
+  set: true;
+  scope: EnvVarScope;
+  resource_id?: string | null;
+}
+
+function describeNames(names: string[]): string {
+  const ordered = orderedEnvVarNames(names);
+  return ordered.length === 1 ? ordered[0] : `${ordered.length} variables`;
+}
+
+function buildSubmittedSummaryText(input: {
+  submitted?: string[];
+  usedExisting?: string[];
+  scope: EnvVarScope;
+}): string {
+  const submitted = orderedEnvVarNames(input.submitted ?? []);
+  const usedExisting = orderedEnvVarNames(input.usedExisting ?? []);
+  const parts = [
+    submitted.length > 0 ? `Saved ${describeNames(submitted)} (${input.scope})` : '',
+    usedExisting.length > 0 ? `Used existing ${describeNames(usedExisting)} (global)` : '',
+  ].filter(Boolean);
+  return parts.join('; ');
+}
+
 interface VarRowProps {
   name: string;
   value: string;
   onChange: (next: string) => void;
   metadata?: NonNullable<EnvVarsParams['variable_metadata']>[string];
-  existing?: NonNullable<EnvVarsParams['existing']>[string];
+  existing?: EnvVarExistingStatus;
   useExisting: boolean;
   onUseExistingChange: (next: boolean) => void;
   error?: string;
@@ -121,9 +145,7 @@ const VarRow: React.FC<VarRowProps> = ({
             <LockOutlined style={{ color: token.colorTextSecondary }} />
             {name}
           </Text>
-          <Tag color={existing?.set ? 'success' : 'default'}>
-            {existing?.set ? 'Set (encrypted)' : 'Not Set'}
-          </Tag>
+          {existing?.set ? <Tag color="success">Set (encrypted)</Tag> : null}
           {existing?.scope ? (
             <Tag color={existing.scope === 'global' ? 'blue' : 'purple'}>{existing.scope}</Tag>
           ) : null}
@@ -176,15 +198,11 @@ interface PendingFormProps {
   client: AgorClient | null;
 }
 
-const PendingForm: React.FC<PendingFormProps> = ({
-  widgetId,
-  message: _message,
-  params,
-  client,
-}) => {
+const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, client }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const orderedNames = useMemo(() => orderedEnvVarNames(params.names), [params.names]);
+  const [existingByName, setExistingByName] = useState<Record<string, EnvVarExistingStatus>>({});
 
   const [values, setValues] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
@@ -217,6 +235,35 @@ const PendingForm: React.FC<PendingFormProps> = ({
     | null
   >(null);
   const resolvingRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadExisting = async () => {
+      if (!client) return;
+      const session = (await client.service('sessions').get(message.session_id)) as {
+        created_by?: string;
+      };
+      if (!session.created_by) return;
+      const creator = (await client.service('users').get(session.created_by)) as {
+        env_vars?: Record<string, EnvVarExistingStatus>;
+      };
+      const next: Record<string, EnvVarExistingStatus> = {};
+      for (const name of orderedNames) {
+        const existing = creator.env_vars?.[name];
+        if (existing?.set) next[name] = existing;
+      }
+      if (!cancelled) setExistingByName(next);
+    };
+
+    loadExisting().catch(() => {
+      if (!cancelled) setExistingByName({});
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, message.session_id, orderedNames]);
 
   const allFilled = useMemo(
     () => orderedNames.every((name) => useExisting[name] || values[name]?.trim().length > 0),
@@ -276,11 +323,12 @@ const PendingForm: React.FC<PendingFormProps> = ({
         submitted: valueNames,
         usedExisting: useExistingNames,
       });
-      const displayScope = valueNames.length > 0 ? scope : 'global';
       showSuccess(
-        orderedNames.length === 1
-          ? `Saved ${orderedNames[0]} (${displayScope})`
-          : `Saved ${orderedNames.length} variables (${displayScope})`
+        buildSubmittedSummaryText({
+          submitted: valueNames,
+          usedExisting: useExistingNames,
+          scope,
+        })
       );
     } catch (err) {
       resolvingRef.current = false;
@@ -318,21 +366,13 @@ const PendingForm: React.FC<PendingFormProps> = ({
       : `Securely provide ${orderedNames.length} environment variables`;
 
   if (localResolution?.kind === 'submitted') {
-    const displayScope =
-      (localResolution.submitted?.length ?? 0) > 0 ? localResolution.scope : 'global';
     return (
       <TerminalLine
         icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
         borderColor={token.colorSuccess}
         text={
           <Space orientation="vertical" size={0}>
-            <Text>
-              {localResolution.names.length === 1
-                ? localResolution.names[0]
-                : `${localResolution.names.length} variables`}{' '}
-              saved
-              <Text type="secondary"> ({displayScope})</Text>
-            </Text>
+            <Text>{buildSubmittedSummaryText(localResolution)}</Text>
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               Need to correct one? Update it in User Settings → Env vars.
             </Text>
@@ -376,7 +416,7 @@ const PendingForm: React.FC<PendingFormProps> = ({
             name={name}
             value={values[name] ?? ''}
             metadata={params.variable_metadata?.[name]}
-            existing={params.existing?.[name]}
+            existing={existingByName[name]}
             useExisting={!!useExisting[name]}
             onUseExistingChange={(next) => {
               setValidationMessage(null);
@@ -474,17 +514,20 @@ const SubmittedSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget 
   ]);
   const displayNames = names.length > 0 ? names : orderedEnvVarNames(params.names);
   const scope = rm?.scope ?? 'global';
-  const displayScope = (rm?.names_submitted?.length ?? 0) > 0 ? scope : 'global';
+  const summaryText = rm
+    ? buildSubmittedSummaryText({
+        submitted: rm.names_submitted,
+        usedExisting: rm.names_used_existing,
+        scope,
+      })
+    : `Saved ${describeNames(displayNames)} (${scope})`;
   return (
     <TerminalLine
       icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
       borderColor={token.colorSuccess}
       text={
         <Space orientation="vertical" size={0}>
-          <Text>
-            {displayNames.length === 1 ? displayNames[0] : `${displayNames.length} variables`} saved
-            <Text type="secondary"> ({displayScope})</Text>
-          </Text>
+          <Text>{summaryText}</Text>
           <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             Need to correct one? Update it in User Settings → Env vars.
           </Text>

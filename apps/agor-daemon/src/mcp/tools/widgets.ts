@@ -30,7 +30,6 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { findHostTaskForSession } from '../../utils/session-tasks.js';
 import {
-  type EnvVarExistingStatus,
   type EnvVarsParams,
   envVarsParamsSchema,
   normalizeEnvVarsParams,
@@ -68,25 +67,6 @@ function allNamesPresentInScope(
   return true;
 }
 
-function existingStatusForNames(
-  envVarsMeta: Record<string, EnvVarMetadata> | undefined,
-  names: string[]
-): Record<string, EnvVarExistingStatus> | undefined {
-  if (!envVarsMeta) return undefined;
-  const out: Record<string, EnvVarExistingStatus> = {};
-  for (const name of names) {
-    const meta = envVarsMeta[name];
-    if (meta?.set) {
-      out[name] = {
-        set: true,
-        scope: meta.scope,
-        resource_id: meta.resource_id ?? null,
-      };
-    }
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_widgets_request_env_vars',
@@ -118,10 +98,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         .service('users')
         .get(sessionCreatorId, ctx.baseServiceParams)) as User;
 
-      const params: EnvVarsParams = normalizeEnvVarsParams({
-        ...toolParams,
-        existing: existingStatusForNames(creator.env_vars, toolParams.names),
-      });
+      const params: EnvVarsParams = toolParams;
 
       // `already_present` short-circuit: if every requested name is already
       // set globally for this user, skip the form entirely and auto-resume
