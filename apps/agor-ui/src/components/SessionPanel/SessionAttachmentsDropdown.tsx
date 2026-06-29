@@ -1,25 +1,34 @@
-import { GithubOutlined, GlobalOutlined, LinkOutlined } from '@ant-design/icons';
+import {
+  FileOutlined,
+  GithubOutlined,
+  GlobalOutlined,
+  LinkOutlined,
+  ReadOutlined,
+} from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Badge, Button, Dropdown, Tooltip, theme } from 'antd';
 import type React from 'react';
+import type { SessionLinkWidgetItem } from './sessionLinks';
 
-export interface SessionAttachmentItem {
-  key: string;
-  name: string;
-  url: string;
-}
+export type SessionAttachmentItem = SessionLinkWidgetItem;
 
 interface Props {
   items: SessionAttachmentItem[];
 }
 
-function getIcon(url: string): React.ReactNode {
-  try {
-    const { hostname } = new URL(url);
-    if (hostname === 'github.com' || hostname.endsWith('.github.com')) return <GithubOutlined />;
-  } catch {
-    // ignore
+function getIcon(item: SessionAttachmentItem): React.ReactNode {
+  if (item.kind === 'kb_ref' || item.refUri?.startsWith('agor://kb/')) return <ReadOutlined />;
+  if (item.filePath) return <FileOutlined />;
+
+  if (item.url) {
+    try {
+      const { hostname } = new URL(item.url);
+      if (hostname === 'github.com' || hostname.endsWith('.github.com')) return <GithubOutlined />;
+    } catch {
+      // ignore
+    }
   }
+
   return <GlobalOutlined />;
 }
 
@@ -30,7 +39,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({ items }) => {
 
   const menuItems: MenuProps['items'] = items.map((item) => ({
     key: item.key,
-    icon: getIcon(item.url),
+    icon: getIcon(item),
     label: (
       <Tooltip title={item.name.length > 40 ? item.name : undefined} placement="left">
         <span
@@ -46,12 +55,13 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({ items }) => {
         </span>
       </Tooltip>
     ),
-    onClick: () => window.open(item.url, '_blank'),
+    disabled: !item.href,
+    onClick: item.href ? () => window.open(item.href, '_blank') : undefined,
   }));
 
   return (
     <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomRight">
-      <Tooltip title="Attachments">
+      <Tooltip title="Links">
         <Badge count={items.length} color={token.colorPrimary} size="small" offset={[-4, 4]}>
           <Button type="text" icon={<LinkOutlined style={{ color: token.colorPrimary }} />} />
         </Badge>

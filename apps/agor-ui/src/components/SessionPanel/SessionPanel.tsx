@@ -4,6 +4,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  Link,
   PermissionMode,
   Session,
   SessionID,
@@ -50,12 +51,11 @@ import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
-import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
-import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
+import { buildSessionLinkWidgetItems } from './sessionLinks';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -340,6 +340,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
+  const [sessionLinks, setSessionLinks] = React.useState<Link[]>([]);
   const [forkModalOpen, setForkModalOpen] = React.useState(false);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
@@ -409,6 +410,60 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     };
   }, [client, session]);
 
+  React.useEffect(() => {
+    const sessionId = session?.session_id;
+    if (!client || !sessionId) {
+      setSessionLinks([]);
+      return;
+    }
+
+    let cancelled = false;
+    const linksService = client.service('links');
+
+    const sortLinks = (links: Link[]) =>
+      [...links].sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+    const fetchSessionLinks = async () => {
+      try {
+        const links = await linksService.findAll({ query: { session_id: sessionId } });
+        if (!cancelled) setSessionLinks(sortLinks(links));
+      } catch (error) {
+        console.error('[SessionPanel] Failed to fetch session links:', error);
+        if (!cancelled) setSessionLinks([]);
+      }
+    };
+
+    const upsertSessionLink = (link: Link) => {
+      if (link.session_id !== sessionId) return;
+      setSessionLinks((prev) => {
+        const index = prev.findIndex((item) => item.link_id === link.link_id);
+        if (index === -1) return sortLinks([...prev, link]);
+        const next = [...prev];
+        next[index] = link;
+        return sortLinks(next);
+      });
+    };
+
+    const removeSessionLink = (link: Link) => {
+      if (link.session_id !== sessionId) return;
+      setSessionLinks((prev) => prev.filter((item) => item.link_id !== link.link_id));
+    };
+
+    void fetchSessionLinks();
+    linksService.on('created', upsertSessionLink);
+    linksService.on('patched', upsertSessionLink);
+    linksService.on('updated', upsertSessionLink);
+    linksService.on('removed', removeSessionLink);
+
+    return () => {
+      cancelled = true;
+      linksService.off('created', upsertSessionLink);
+      linksService.off('patched', upsertSessionLink);
+      linksService.off('updated', upsertSessionLink);
+      linksService.off('removed', removeSessionLink);
+    };
+  }, [client, session?.session_id]);
+
   // Token breakdown calculation
   const tokenBreakdown = React.useMemo(() => {
     if (!session?.agentic_tool) {
@@ -465,24 +520,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return null;
   }, [tasks, session?.agentic_tool]);
 
-  const attachmentItems = React.useMemo((): SessionAttachmentItem[] => {
-    const acc: SessionAttachmentItem[] = [];
-    if (branch?.issue_url) {
-      acc.push({
-        key: 'issue',
-        name: `Issue: ${getUrlDisplayLabel(branch.issue_url)}`,
-        url: branch.issue_url,
-      });
-    }
-    if (branch?.pull_request_url) {
-      acc.push({
-        key: 'pr',
-        name: `PR: ${getUrlDisplayLabel(branch.pull_request_url)}`,
-        url: branch.pull_request_url,
-      });
-    }
-    return acc;
-  }, [branch?.issue_url, branch?.pull_request_url]);
+  const attachmentItems = React.useMemo(
+    () => buildSessionLinkWidgetItems({ branch, links: sessionLinks }),
+    [branch, sessionLinks]
+  );
 
   const footerGradient = React.useMemo(() => {
     if (!latestContextWindow) return undefined;
