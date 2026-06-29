@@ -129,7 +129,9 @@ export async function initializeDatabase(
     // bootstrap account; the first trusted launch user becomes the attribution
     // target instead.
     if (options.skipFirstRunAdminBootstrap) {
-      console.log('🔐 Skipping local first-run admin bootstrap; external launch owns user identity.');
+      console.log(
+        '🔐 Skipping local first-run admin bootstrap; external launch owns user identity.'
+      );
     } else {
       const bootstrapResult = await runFirstRunAdminBootstrap(scopedDb);
       logFirstRunAdminBootstrap(bootstrapResult);

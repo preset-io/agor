@@ -3,7 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import { createDatabase, eq, hash, initializeDatabase, insert, select, update, users } from '@agor/core/db';
+import {
+  createDatabase,
+  eq,
+  hash,
+  initializeDatabase,
+  insert,
+  select,
+  update,
+  users,
+} from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { InternalUser, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
