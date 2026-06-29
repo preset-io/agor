@@ -5,7 +5,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, LinksRepository } from '@agor/core/db';
+import { LinksRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest } from '@agor/core/feathers';
 import type {
   BranchID,
@@ -41,7 +41,7 @@ export type LinkParams = QueryParams<{
 export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams> {
   private linksRepo: LinksRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const linksRepo = new LinksRepository(db);
     super(linksRepo, {
       id: 'link_id',
@@ -102,7 +102,7 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
   }
 }
 
-export function createLinksService(db: Database): LinksService {
+export function createLinksService(db: TenantScopeAwareDatabase): LinksService {
   return new LinksService(db);
 }
 
