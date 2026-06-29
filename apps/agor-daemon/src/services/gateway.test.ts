@@ -501,6 +501,76 @@ describe('GatewayService outbound routing tenant scope', () => {
   });
 });
 
+describe('GatewayService Slack progress tenant scope', () => {
+  it('defers Slack assistant status updates until the current tenant transaction commits', async () => {
+    const events: string[] = [];
+    const tx = {
+      execute: vi.fn(async () => []),
+    };
+    let transactionCount = 0;
+    let resolveUpdated!: () => void;
+    const updated = new Promise<void>((resolve) => {
+      resolveUpdated = resolve;
+    });
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        transactionCount += 1;
+        events.push('tx:start');
+        const result = await callback(tx);
+        events.push('tx:commit');
+        if (transactionCount === 3) resolveUpdated();
+        return result;
+      }),
+    } as TenantScopeAwareDatabase;
+
+    const seenTenants: Array<string | undefined> = [];
+    const setThreadStatus = vi.fn(async () => {
+      events.push('status');
+      seenTenants.push(getCurrentTenantId() as string | undefined);
+    });
+
+    const { service } = makeGatewayHarness({
+      db,
+      existingMapping: makeMapping(),
+      connector: { setThreadStatus },
+    });
+
+    await runWithTenantDatabaseScope(db, 'tenant-channel', async () => {
+      service.updateProgressAfterCommit(
+        {
+          session_id: 'sess-1',
+          state: 'working',
+          task_id: 'task-1',
+          tool_name: 'Read',
+        },
+        { tenant: { tenant_id: 'tenant-channel' } }
+      );
+      events.push('scheduled');
+      expect(setThreadStatus).not.toHaveBeenCalled();
+    });
+
+    await updated;
+
+    expect(setThreadStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: 'C123-100.000000',
+        status: 'is using Read.',
+      })
+    );
+    expect(seenTenants).toEqual(['tenant-channel']);
+    expect(events).toEqual([
+      'tx:start',
+      'scheduled',
+      'tx:commit',
+      'tx:start',
+      'tx:commit',
+      'tx:start',
+      'status',
+      'tx:commit',
+    ]);
+  });
+});
+
 describe('GatewayService Slack streaming', () => {
   it('does not stream assistant chunks into channel-like Slack threads', async () => {
     const startStream = vi.fn(async () => '104.000000');

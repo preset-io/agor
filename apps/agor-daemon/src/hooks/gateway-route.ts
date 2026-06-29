@@ -94,13 +94,16 @@ export const gatewayRouteHook = async (context: HookContext) => {
   // not only for tool-only rows.
   if (latestToolUse) {
     try {
-      void gatewayService.updateProgress({
-        session_id: message.session_id,
-        state: 'working',
-        task_id: message.task_id,
-        tool_name: latestToolUse.name,
-        tool_input: latestToolUse.input,
-      });
+      gatewayService.updateProgressAfterCommit(
+        {
+          session_id: message.session_id,
+          state: 'working',
+          task_id: message.task_id,
+          tool_name: latestToolUse.name,
+          tool_input: latestToolUse.input,
+        },
+        context.params
+      );
     } catch (error) {
       console.warn('[gateway-route] Failed to route tool progress:', error);
     }

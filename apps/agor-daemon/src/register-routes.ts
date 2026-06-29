@@ -724,11 +724,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const toolName =
             typeof data.data.tool_name === 'string' ? data.data.tool_name : undefined;
           if (sessionId) {
-            void (app.service('gateway') as unknown as GatewayService).updateProgress({
-              session_id: sessionId,
-              state: 'working',
-              task_id: typeof data.data.task_id === 'string' ? data.data.task_id : undefined,
-              tool_name: toolName,
+            deferInFreshTenantScope(params, async () => {
+              await (app.service('gateway') as unknown as GatewayService).updateProgress({
+                session_id: sessionId,
+                state: 'working',
+                task_id: typeof data.data.task_id === 'string' ? data.data.task_id : undefined,
+                tool_name: toolName,
+              });
             });
           }
         }

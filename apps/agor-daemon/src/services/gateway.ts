@@ -993,6 +993,25 @@ export class GatewayService {
     }
   }
 
+  /**
+   * Schedule Slack assistant progress/status updates after the current
+   * tenant-scoped database work commits, then update inside a fresh tenant
+   * scope. Presence/status updates are often emitted from hooks and streaming
+   * routes whose enclosing transaction is about to close.
+   */
+  updateProgressAfterCommit(data: GatewayProgressData, params?: unknown): void {
+    deferWithTenantDatabaseScope(
+      this.db,
+      params,
+      async () => {
+        await this.updateProgress(data);
+      },
+      (error) => {
+        console.warn('[gateway] Failed to update Slack progress after commit:', error);
+      }
+    );
+  }
+
   wasMessageStreamedToSlack(messageId: string): boolean {
     return this.slackStreamedMessageIds.has(messageId);
   }
@@ -2186,7 +2205,7 @@ export class GatewayService {
           `Session is busy, message queued at position ${task.queue_position}`,
           { suppressSlack: true }
         );
-        void this.updateProgress({
+        this.updateProgressAfterCommit({
           session_id: sessionId,
           state: 'queued',
           task_id: task.task_id,
@@ -2196,7 +2215,7 @@ export class GatewayService {
         console.log(
           `[gateway] Prompt sent to session ${shortId(sessionId)} via /sessions/:id/prompt`
         );
-        void this.updateProgress({
+        this.updateProgressAfterCommit({
           session_id: sessionId,
           state: 'working',
           task_id: task.task_id,
@@ -2205,7 +2224,7 @@ export class GatewayService {
     } catch (error) {
       console.error('[gateway] Failed to send prompt to session:', error);
       this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${error}`);
-      void this.updateProgress({
+      this.updateProgressAfterCommit({
         session_id: sessionId,
         state: 'failed',
         error_message: error instanceof Error ? error.message : String(error),
