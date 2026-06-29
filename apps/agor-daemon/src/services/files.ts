@@ -10,7 +10,12 @@ import { BranchRepository, type Database, SessionRepository, UsersRepository } f
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, SessionID, UserID } from '@agor/core/types';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
-import { generateSessionToken, getDaemonUrl, runExecutorCommand } from '../utils/spawn-executor.js';
+import {
+  generateSessionToken,
+  getDaemonUrl,
+  runExecutorCommand,
+  serviceTokenScopeForParams,
+} from '../utils/spawn-executor.js';
 
 // Constants for file search
 const MAX_FILE_RESULTS = 10;
@@ -95,7 +100,8 @@ export class FilesService {
       }
 
       const sessionToken = generateSessionToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        serviceTokenScopeForParams(params)
       );
 
       const currentUserId = params.user?.user_id as UserID | undefined;

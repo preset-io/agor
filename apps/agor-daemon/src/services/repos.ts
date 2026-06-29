@@ -14,7 +14,6 @@ import path from 'node:path';
 import {
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
-  isBranchRbacEnabled,
   isUnixGroupRefreshNeeded,
   isValidGitUrl,
   isValidSlug,
@@ -59,18 +58,13 @@ import {
   generateSessionToken,
   getDaemonUrl,
   runExecutorCommand,
+  serviceTokenScopeForParams,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
 
 /**
  * Repo service params
  */
-
-function serviceTokenScopeForParams(params?: RepoParams): Record<string, unknown> {
-  const tenantId = (params as Partial<AuthenticatedParams> | undefined)?.tenant?.tenant_id;
-  return tenantId ? { tenant_id: tenantId } : {};
-}
-
 export type RepoParams = QueryParams<{
   slug?: string;
   managed_by_agor?: boolean;
@@ -234,9 +228,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       serviceTokenScopeForParams(params)
     );
 
-    // Unix group initialization gates on RBAC explicitly.
-    const rbacEnabled = isBranchRbacEnabled();
-    const initUnixGroup = rbacEnabled && isUnixGroupRefreshNeeded();
+    // Unix group initialization is a filesystem concern controlled by
+    // unix_user_mode, not by app-level branch RBAC.
+    const initUnixGroup = isUnixGroupRefreshNeeded();
 
     // Sudo wrap (asUser) is gated inside the resolver — returns undefined
     // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -770,7 +764,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Create DB record EARLY with 'creating' status
     // Executor will:
     // 1. Create git branch on filesystem
-    // 2. Initialize Unix groups (if RBAC enabled)
+    // 2. Initialize Unix groups (if unix_user_mode needs filesystem isolation)
     // 3. Render environment templates with full context including GID
     // 4. Patch branch to 'ready' with rendered templates
     const branch = (await branchesService.create(
@@ -923,9 +917,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         serviceTokenScopeForParams(params)
       );
 
-      // Unix group initialization gates on RBAC explicitly.
-      const rbacEnabled = isBranchRbacEnabled();
-    const initUnixGroup = rbacEnabled && isUnixGroupRefreshNeeded();
+      // Unix group initialization is a filesystem concern controlled by
+      // unix_user_mode, not by app-level branch RBAC.
+      const initUnixGroup = isUnixGroupRefreshNeeded();
 
       // Sudo wrap (asUser) is gated inside the resolver — returns undefined
       // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -949,7 +943,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             createBranch: data.createBranch,
             refType: data.refType,
             userId: userId as string | undefined,
-            // Unix group isolation (only when RBAC is enabled)
+            // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
             othersAccess: branch.others_fs_access || 'read',
             // Branch storage mode (forwarded for the clone-mode code path)

@@ -19,10 +19,15 @@ function isBranchInspectResult(value: unknown): value is BranchInspectResult {
 export async function inspectBranchViaExecutor(
   app: Application,
   branchId: BranchID,
-  options: { asUser?: string | null; logPrefix?: string } = {}
+  options: {
+    asUser?: string | null;
+    logPrefix?: string;
+    serviceTokenScope?: Record<string, unknown>;
+  } = {}
 ): Promise<BranchInspectResult> {
   const sessionToken = generateSessionToken(
-    app as unknown as { settings: { authentication?: { secret?: string } } }
+    app as unknown as { settings: { authentication?: { secret?: string } } },
+    options.serviceTokenScope
   );
 
   const result = await runExecutorCommand(

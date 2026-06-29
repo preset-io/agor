@@ -115,9 +115,11 @@ export interface AgorDaemonSettings {
    *  agents discover others via agor_search_tools (default: true) */
   mcpToolSearch?: boolean;
 
-  /** Unix user the daemon runs as. Used to ensure daemon has access to all Unix groups.
-   * Required when Unix isolation is enabled (branch_rbac or unix_user_mode).
-   * In dev mode without isolation, falls back to current process user. */
+  /** Unix user the daemon runs as. Used to refresh supplemental Unix groups.
+   * Required when Unix impersonation/isolation is enabled (`unix_user_mode`
+   * is `insulated` or `strict`). App-level `branch_rbac` alone does not
+   * require Unix impersonation. In dev mode without isolation, falls back to
+   * current process user. */
   unix_user?: string;
 
   /** Instance label for deployment identification (e.g., "staging", "prod-us-east").

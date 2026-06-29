@@ -765,7 +765,7 @@ export function getCredential(key: ConfigCredentialKey): string | undefined {
  * @example
  * ```ts
  * const daemonUser = getDaemonUser();
- * if (daemonUser && isBranchRbacEnabled()) {
+ * if (daemonUser && isUnixGroupRefreshNeeded()) {
  *   runAsUser('git status', { asUser: daemonUser });
  * }
  * ```
@@ -808,7 +808,7 @@ export function requireDaemonUser(config: AgorConfig): string {
 
   if (unixIsolationEnabled) {
     throw new Error(
-      'Unix isolation is enabled (branch_rbac or unix_user_mode) but daemon.unix_user is not configured.\n' +
+      'Unix isolation is enabled (execution.unix_user_mode is insulated or strict) but daemon.unix_user is not configured.\n' +
         'Please set daemon.unix_user in ~/.agor/config.yaml to the user running the daemon.\n' +
         'Example:\n' +
         '  daemon:\n' +

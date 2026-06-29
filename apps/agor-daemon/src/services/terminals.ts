@@ -47,7 +47,11 @@ import {
 } from '@agor/core/unix';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import { canControlCliSession } from '../utils/mcp-token-authorization.js';
-import { generateSessionToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
+import {
+  generateSessionToken,
+  serviceTokenScopeForParams,
+  spawnExecutorFireAndForget,
+} from '../utils/spawn-executor.js';
 import {
   buildSpawnConfigForSession,
   isClaudeRunningFor,
@@ -795,7 +799,7 @@ export class TerminalsService {
 
       // Generate session token for executor
       const daemonUrl = `http://localhost:${config.daemon?.port || 3030}`;
-      const sessionToken = generateSessionToken(this.app);
+      const sessionToken = generateSessionToken(this.app, serviceTokenScopeForParams(params));
 
       // Get user environment and write env file for shell sourcing
       const userEnv = await resolveUserEnvironment(userId, this.db);

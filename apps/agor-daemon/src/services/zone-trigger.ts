@@ -18,6 +18,7 @@ import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-conte
 import type { AgenticToolName, Branch, Session, Task, User } from '@agor/core/types';
 import { inspectBranchViaExecutor } from '../utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import { serviceTokenScopeForParams } from '../utils/spawn-executor.js';
 
 export interface FireAlwaysNewZoneTriggerInput {
   // biome-ignore lint/suspicious/noExplicitAny: Feathers app type varies across callers
@@ -93,6 +94,7 @@ export async function fireAlwaysNewZoneTrigger(
   const { currentSha, currentRef } = await inspectBranchViaExecutor(app, branch.branch_id, {
     asUser,
     logPrefix: `[zone-trigger ${branch.name}]`,
+    serviceTokenScope: serviceTokenScopeForParams(params),
   });
 
   const newSession: Session = await app.service('sessions').create(

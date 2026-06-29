@@ -12,7 +12,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import type { BranchID, RepoID, UUID } from '@agor/core/types';
-import { isBranchRbacEnabled, loadConfigSync } from '../config/config-manager';
+import { isUnixGroupRefreshNeeded, loadConfigSync } from '../config/config-manager';
 import { resolveMultiTenancyConfig } from '../config/multitenancy';
 import {
   BoardObjectRepository,
@@ -88,13 +88,13 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
     const boardRepo = new BoardRepository(db);
     const boardObjectRepo = new BoardObjectRepository(db);
 
-    // Setup Unix integration if RBAC is enabled
+    // Setup Unix integration only when filesystem isolation is enabled.
     let unixIntegrationService: UnixIntegrationService | null = null;
-    const rbacEnabled = isBranchRbacEnabled();
-    if (rbacEnabled) {
+    const unixGroupRefreshNeeded = isUnixGroupRefreshNeeded();
+    if (unixGroupRefreshNeeded) {
       const config = loadConfigSync();
       const daemonUser = config.daemon?.unix_user || os.userInfo().username;
-      console.log(`🔐 RBAC enabled - Unix integration active (daemon user: ${daemonUser})`);
+      console.log(`🔐 Unix integration active (daemon user: ${daemonUser})`);
       unixIntegrationService = new UnixIntegrationService(db, new DirectExecutor(), {
         enabled: true,
         daemonUser,

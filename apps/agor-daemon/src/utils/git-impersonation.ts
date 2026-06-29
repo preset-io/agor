@@ -6,10 +6,10 @@
  * via `initgroups()` so the daemon can see `agor_wt_*` groups added at
  * runtime — but only when supplemental groups actually exist.
  *
- * In the open-access default (`branch_rbac: false`, `unix_user_mode:
- * simple`) no supplemental groups are ever created, so wrapping in sudo is
- * pure overhead AND breaks for users who never configured passwordless
- * sudoers (#1140). Return undefined in that case so callers spawn directly.
+ * In simple Unix mode no supplemental branch groups are created, even when
+ * app-level `branch_rbac` is enabled, so wrapping in sudo is pure overhead
+ * AND breaks for users who never configured passwordless sudoers (#1140).
+ * Return undefined in that case so callers spawn directly.
  *
  * The gate lives HERE on purpose: every caller that resolves impersonation
  * needs the same check, and dropping it at a call site is exactly how the
@@ -57,9 +57,9 @@ export async function resolveDaemonUserForGroupRefresh(): Promise<string | undef
  * Resolve Unix user for git operations.
  *
  * Returns the daemon user when group refresh via `sudo -u` is needed
- * (RBAC enabled or non-simple unix_user_mode — see
- * `isUnixGroupRefreshNeeded`). Returns `undefined` in the open-access
- * default so callers spawn directly without sudo wrap (#1140).
+ * (non-simple unix_user_mode — see `isUnixGroupRefreshNeeded`). Returns
+ * `undefined` in simple mode so callers spawn directly without sudo wrap
+ * (#1140), regardless of app-level branch RBAC.
  *
  * @param db - Database instance (unused today, kept on the signature for
  *             the planned per-user resolution refactor)

@@ -21,9 +21,13 @@ import {
   getDefaultConfig,
   getReposDir,
   initConfig,
+  isBranchRbacEnabled,
+  isUnixGroupRefreshNeeded,
+  isUnixImpersonationEnabled,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
+  requireDaemonUser,
   requirePublicBaseUrl,
   resolveBranchStorageConfig,
   saveConfig,
@@ -398,6 +402,30 @@ describe('loadConfig cache', () => {
     expect(() => loadConfigSync()).toThrow(/opportunistic.*deprecated/s);
     // And async path stays consistent.
     await expect(loadConfig()).rejects.toThrow(/opportunistic.*deprecated/s);
+  });
+
+  it('treats branch_rbac as app-level only in simple Unix mode', async () => {
+    await writeConfigFile({
+      execution: { branch_rbac: true, unix_user_mode: 'simple' },
+    });
+
+    expect(isBranchRbacEnabled()).toBe(true);
+    expect(isUnixImpersonationEnabled()).toBe(false);
+    expect(isUnixGroupRefreshNeeded()).toBe(false);
+    expect(() => requireDaemonUser(loadConfigSync())).not.toThrow();
+  });
+
+  it('requires daemon.unix_user only for non-simple Unix modes', async () => {
+    await writeConfigFile({
+      execution: { branch_rbac: false, unix_user_mode: 'insulated' },
+    });
+
+    expect(isBranchRbacEnabled()).toBe(false);
+    expect(isUnixImpersonationEnabled()).toBe(true);
+    expect(isUnixGroupRefreshNeeded()).toBe(true);
+    expect(() => requireDaemonUser(loadConfigSync())).toThrow(
+      /execution\.unix_user_mode is insulated or strict/
+    );
   });
 });
 

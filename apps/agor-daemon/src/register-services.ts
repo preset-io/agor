@@ -370,7 +370,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     });
   }
 
-  if (branchRbacEnabled) {
+  if ((config.execution?.unix_user_mode ?? 'simple') !== 'simple') {
     const daemonUser = config.daemon?.unix_user || 'agor';
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }

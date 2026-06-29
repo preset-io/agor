@@ -26,6 +26,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgorExecutionSettings } from '@agor/core/config';
+import type { AuthenticatedParams } from '@agor/core/types';
 import {
   attachEnvFileCleanup,
   buildSpawnArgs,
@@ -832,6 +833,19 @@ export function createServiceToken(
     jwtSecret,
     expiresIn || '5m'
   );
+}
+
+/**
+ * Build extra JWT claims for executor/service tokens from authenticated service
+ * params. In Cloud required-from-auth mode, executor RPCs must carry the same
+ * tenant claim as the request that spawned them; otherwise the daemon handles
+ * them as the static/default tenant.
+ */
+export function serviceTokenScopeForParams(
+  params?: Partial<AuthenticatedParams>
+): Record<string, unknown> {
+  const tenantId = params?.tenant?.tenant_id ?? params?.tenant_id ?? params?.user?.tenant_id;
+  return tenantId ? { tenant_id: tenantId } : {};
 }
 
 /**

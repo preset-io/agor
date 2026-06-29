@@ -553,7 +553,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               .then((branch) => {
                 const repoId = branch?.repo_id;
                 if (!repoId) return;
-                return ensureRepoOriginAlignedById(this.app, repoId);
+                return ensureRepoOriginAlignedById(this.app, repoId, params);
               })
               .catch((err: unknown) => {
                 const message = err instanceof Error ? err.message : String(err);

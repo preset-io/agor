@@ -11,7 +11,6 @@ import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
-  isBranchRbacEnabled,
   isUnixGroupRefreshNeeded,
   loadConfig,
   PAGINATION,
@@ -1488,8 +1487,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const reposService = this.app.service('repos');
       const repo = (await reposService.get(branch.repo_id)) as Repo;
 
-      const rbacEnabled = isBranchRbacEnabled();
-      const initUnixGroup = rbacEnabled && isUnixGroupRefreshNeeded();
+      // Unix group initialization is a filesystem concern controlled by
+      // unix_user_mode. Logical branch RBAC may be enabled in simple/Cloud mode
+      // without creating OS groups.
+      const initUnixGroup = isUnixGroupRefreshNeeded();
       const { getDaemonUser } = await import('@agor/core/config');
       const daemonUser = getDaemonUser();
 

@@ -144,6 +144,7 @@ import {
 import {
   createServiceToken,
   getDaemonUrl,
+  serviceTokenScopeForParams,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
 import { createTenantDatabaseScopeAroundHook } from './utils/tenant-db-scope.js';
@@ -2317,6 +2318,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                             | undefined
                         ),
                         logPrefix: `[sessions.create ${branch.name}]`,
+                        serviceTokenScope: serviceTokenScopeForParams(
+                          context.params as AuthenticatedParams
+                        ),
                       }
                     );
                     (context.data as Record<string, unknown>).git_state = {
