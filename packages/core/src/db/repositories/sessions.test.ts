@@ -1442,25 +1442,28 @@ describe('SessionRepository schedule-link queries', () => {
     expect(await repo.existsInScheduleWithStatuses(scheduleB, ACTIVE)).toBe(false);
   });
 
-  dbTest('existsInScheduleWithStatuses ignores inactive runs and empty status lists', async ({ db }) => {
-    const repo = new SessionRepository(db);
-    const branch = await createTestBranch(db);
-    const scheduleId = await createTestSchedule(db, branch.branch_id);
-    const ACTIVE = [SessionStatus.RUNNING] as const;
+  dbTest(
+    'existsInScheduleWithStatuses ignores inactive runs and empty status lists',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const scheduleId = await createTestSchedule(db, branch.branch_id);
+      const ACTIVE = [SessionStatus.RUNNING] as const;
 
-    await repo.create(
-      createSessionData({
-        branch_id: branch.branch_id,
-        schedule_id: scheduleId,
-        scheduled_run_at: 1_700_000_000_000,
-        scheduled_from_branch: true,
-        status: SessionStatus.IDLE,
-      })
-    );
+      await repo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_000,
+          scheduled_from_branch: true,
+          status: SessionStatus.IDLE,
+        })
+      );
 
-    expect(await repo.existsInScheduleWithStatuses(scheduleId, ACTIVE)).toBe(false);
-    expect(await repo.existsInScheduleWithStatuses(scheduleId, [])).toBe(false);
-  });
+      expect(await repo.existsInScheduleWithStatuses(scheduleId, ACTIVE)).toBe(false);
+      expect(await repo.existsInScheduleWithStatuses(scheduleId, [])).toBe(false);
+    }
+  );
 
   // The DB-level race guard. Two inserts with the same
   // (schedule_id, scheduled_run_at) must conflict; the second one

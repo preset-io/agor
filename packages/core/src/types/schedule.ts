@@ -159,9 +159,10 @@ export interface Schedule {
   enabled: boolean;
 
   /**
-   * When `false` (default), the scheduler skips a fire if a session is
-   * already actively running in the same branch (cron = silent skip;
-   * manual `run_now` = 409 ScheduleBusyError).
+   * When `false` (default), the scheduler skips a fire if this schedule
+   * already has an active run (cron = silent skip; manual `run_now` =
+   * 409 ScheduleBusyError). Sibling schedules on the same branch are
+   * independent and do not block each other.
    *
    * Active = status in RUNNING / STOPPING / AWAITING_PERMISSION /
    * AWAITING_INPUT. IDLE / COMPLETED / FAILED / TIMED_OUT don't count.

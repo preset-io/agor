@@ -149,7 +149,9 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
         allow_concurrent_runs: z
           .boolean()
           .optional()
-          .describe('Allow runs to overlap (default: false)'),
+          .describe(
+            'Allow overlapping runs from this schedule (default: false). Sibling schedules on the same branch are independent.'
+          ),
         retention: mcpOptionalNonNegativeInt(
           'retention',
           'Number of sessions to keep; 0 = keep all (default: 5)'
