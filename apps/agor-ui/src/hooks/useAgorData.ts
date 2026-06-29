@@ -6,11 +6,14 @@
  *
  * State ownership lives in the zustand store (`agorStore`); this hook is the
  * single DRIVER of that store — the fetch effect and socket subscriptions
- * dispatch store actions, and the hook reads full state back via `useStore` and
- * returns `UseAgorDataResult`. The realtime entity reducers + index/merge
- * helpers live in `../store/agorRealtimeActions` and `../store/agorMaps`, and
- * the background-hydration bookkeeping (per-collection revision counters,
- * generation tokens, `runHydration`) in `../store/agorHydration`.
+ * dispatch store actions. It returns only load-state (`UseAgorDataResult`) and
+ * subscribes narrowly to the store's load-state fields, so its owner re-renders
+ * on load progress rather than on every entity patch; entity-map consumers
+ * subscribe to the store directly via their own selectors. The realtime entity
+ * reducers + index/merge helpers live in `../store/agorRealtimeActions` and
+ * `../store/agorMaps`, and the background-hydration bookkeeping (per-collection
+ * revision counters, generation tokens, `runHydration`) in
+ * `../store/agorHydration`.
  */
 
 import type {
@@ -27,7 +30,6 @@ import type {
 } from '@agor-live/client';
 import { ENTITY_PATH_SEGMENTS, findByShortIdPrefix, PAGINATION } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useStore } from 'zustand';
 import {
   bumpFirstPaintMergeRevisions,
   bumpRevision,
@@ -41,12 +43,10 @@ import {
   buildById,
   buildSessionMaps,
   buildSessionMcpMap,
-  type DataMaps,
-  pickMaps,
   replaceIfChanged,
 } from '../store/agorMaps';
 import * as realtime from '../store/agorRealtimeActions';
-import { agorStore } from '../store/agorStore';
+import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import {
@@ -108,7 +108,7 @@ export interface InitialLoadItem {
 
 export type InitialLoadingStage = 'idle' | 'fetching' | 'indexing';
 
-interface UseAgorDataResult extends DataMaps {
+interface UseAgorDataResult {
   initialLoadItems: InitialLoadItem[];
   initialLoadComplete: boolean;
   loadingStage: InitialLoadingStage;
@@ -250,9 +250,21 @@ export function useAgorData(
     return null;
   });
 
-  // Full store state, re-rendering this owner on every committed store change —
-  // exactly as the old single `useState<DataMaps>` + meta `useState`s did.
-  const storeState = useStore(agorStore);
+  // Narrow selective subscription so the bootstrap owner re-renders only on a
+  // load-state change — not on every entity patch. The fetch effect and socket
+  // subscriptions still drive the full store; map consumers subscribe to it via
+  // their own `useAgorStore` selectors, and the few reads in this hook that need
+  // an entity map reach for it imperatively through `agorStore.getState()`.
+  const storeState = useStoreWithEqualityFn(
+    agorStore,
+    (s) => ({
+      loadingStage: s.loadingStage,
+      loading: s.loading,
+      error: s.error,
+      itemCounts: s.itemCounts,
+    }),
+    shallow
+  );
 
   // Track if we've done initial fetch. The initial fetch happens once on mount;
   // socket reconnects after that re-trigger fetchData() to recover any events
@@ -994,10 +1006,9 @@ export function useAgorData(
   // sessions openable without changing the default list query.
   useEffect(() => {
     if (!client || !enabled || !hasInitiallyFetched || !directSessionId) return;
-    if (storeState.sessionById.has(directSessionId)) return;
-    if (
-      hasIdMatchingPrefix(directSessionId, storeState.sessionById.values(), (s) => s.session_id)
-    ) {
+    const { sessionById } = agorStore.getState();
+    if (sessionById.has(directSessionId)) return;
+    if (hasIdMatchingPrefix(directSessionId, sessionById.values(), (s) => s.session_id)) {
       return;
     }
 
@@ -1030,7 +1041,7 @@ export function useAgorData(
         if (
           !directSession.archived &&
           directSession.branch_id &&
-          !storeState.branchById.has(directSession.branch_id)
+          !agorStore.getState().branchById.has(directSession.branch_id)
         ) {
           try {
             const directBranch = (await client
@@ -1058,14 +1069,7 @@ export function useAgorData(
     return () => {
       cancelled = true;
     };
-  }, [
-    client,
-    directSessionId,
-    enabled,
-    hasInitiallyFetched,
-    storeState.branchById,
-    storeState.sessionById,
-  ]);
+  }, [client, directSessionId, enabled, hasInitiallyFetched]);
 
   // Subscribe to real-time updates
   //
@@ -1415,7 +1419,6 @@ export function useAgorData(
   );
 
   return {
-    ...pickMaps(storeState),
     initialLoadItems,
     initialLoadComplete,
     loadingStage: storeState.loadingStage,
