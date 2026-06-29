@@ -233,7 +233,7 @@ export function useAgorData(
   const directSessionId = options?.directSessionId ?? null;
 
   // Reset the shared singleton store once per hook (re)mount, synchronously
-  // BEFORE the first `useStore` read below. This mirrors the old per-mount
+  // BEFORE the first store-subscription read below. This mirrors the old per-mount
   // `useState(EMPTY_MAPS)` / `useState(true)` semantics: the store is a module
   // singleton (so a remount — and each test's `renderHook` — would otherwise
   // inherit stale state), and `useAgorData` is its sole owner (mounted once in
