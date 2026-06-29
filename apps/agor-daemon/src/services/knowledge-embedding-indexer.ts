@@ -10,12 +10,13 @@ import {
   kbDocumentUnits,
   kbDocumentVersions,
   kbEmbeddingSpaces,
+  runWithTenantDatabaseScope,
   select,
   shortId,
   sql,
   update,
 } from '@agor/core/db';
-import type { KnowledgeDocumentUnitID } from '@agor/core/types';
+import type { KnowledgeDocumentUnitID, TenantID } from '@agor/core/types';
 import {
   DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
@@ -195,7 +196,10 @@ export class KnowledgeEmbeddingIndexer {
   private lastIndexedAt: Date | null = null;
   private pgvectorStorageReady = false;
 
-  constructor(private db: Database) {
+  constructor(
+    private db: Database,
+    private options: { tenantId?: TenantID | string } = {}
+  ) {
     this.variables = new AppVariableRepository(db);
   }
 
@@ -375,6 +379,13 @@ export class KnowledgeEmbeddingIndexer {
   }
 
   async tick(): Promise<void> {
+    if (this.options.tenantId) {
+      return runWithTenantDatabaseScope(this.db, this.options.tenantId, () => this.tickInScope());
+    }
+    return this.tickInScope();
+  }
+
+  private async tickInScope(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {

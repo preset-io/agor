@@ -14,7 +14,12 @@ import {
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import { MessagesRepository, SessionRepository, shortId } from '@agor/core/db';
+import {
+  MessagesRepository,
+  runWithTenantDatabaseScope,
+  SessionRepository,
+  shortId,
+} from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
@@ -120,6 +125,16 @@ function startupTenantParams(config: AgorConfig): { tenant: TenantContext } {
   };
 }
 
+async function runStartupTenantDatabaseScope<T>(
+  ctx: Pick<StartupContext, 'config' | 'db'>,
+  work: () => Promise<T>
+): Promise<T> {
+  // Startup/background daemon jobs have no request auth context. Keep the
+  // historical bootstrap/static tenant behavior explicit at the DB boundary so
+  // guarded required_from_auth databases fail closed everywhere else.
+  return runWithTenantDatabaseScope(ctx.db, startupTenantParams(ctx.config).tenant.tenant_id, work);
+}
+
 interface OrphanCleanupResult {
   wasGraceful: boolean;
   orphanedTasks: Task[];
@@ -129,7 +144,13 @@ interface OrphanCleanupResult {
   sessionsResetFromOrphanedTasks: number;
 }
 
-async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
+export async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
+  return runStartupTenantDatabaseScope(ctx, () => cleanupOrphanStatusesInTenantScope(ctx));
+}
+
+async function cleanupOrphanStatusesInTenantScope(
+  ctx: StartupContext
+): Promise<OrphanCleanupResult> {
   const { app, sessionsService } = ctx;
 
   // Get tasks service from the app (registered during services phase)
@@ -295,6 +316,15 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
 }
 
 async function injectRestartNotices(
+  ctx: StartupContext,
+  cleanupResult: OrphanCleanupResult
+): Promise<void> {
+  return runStartupTenantDatabaseScope(ctx, () =>
+    injectRestartNoticesInTenantScope(ctx, cleanupResult)
+  );
+}
+
+async function injectRestartNoticesInTenantScope(
   ctx: StartupContext,
   cleanupResult: OrphanCleanupResult
 ): Promise<void> {
@@ -510,7 +540,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // accepting requests. This is best-effort; filesystem config scrubbing
   // deliberately skips registered local repos to avoid surprising writes
   // outside Agor-managed storage.
-  runPostStartJob('git-remote-credential-scrub', () => scrubManagedGitRemoteCredentials(db));
+  runPostStartJob('git-remote-credential-scrub', () =>
+    runStartupTenantDatabaseScope(ctx, () => scrubManagedGitRemoteCredentials(db))
+  );
 
   // Log the host IP that will be frozen into env command templates as
   // {{host.ip_address}}. Explicit config overrides autodetection.
@@ -559,6 +591,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       gracePeriod: 120000, // 2 minutes
       debug: process.env.NODE_ENV !== 'production',
       unixUserMode: config.execution?.unix_user_mode ?? 'simple',
+      tenantId: startupTenantParams(config).tenant.tenant_id,
     });
     schedulerService.start();
     // Expose on app so route handlers (e.g. /branches/:id/execute-schedule-now)
@@ -570,7 +603,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)
   let knowledgeEmbeddingIndexer: KnowledgeEmbeddingIndexer | null = null;
   if (svcEnabled('knowledge')) {
-    knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db);
+    knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
+      tenantId: startupTenantParams(config).tenant.tenant_id,
+    });
     knowledgeEmbeddingIndexer.start();
     app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
     console.log('🧠 Knowledge embedding indexer started');
@@ -579,10 +614,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 8. Initialize gateway: refresh channel state cache, then start Socket Mode listeners
   const gatewayService = safeService('gateway') as unknown as GatewayService | undefined;
   if (gatewayService) {
-    gatewayService
-      .refreshChannelState()
+    runStartupTenantDatabaseScope(ctx, () => gatewayService.refreshChannelState())
       .then(() => {
-        return gatewayService.startListeners();
+        return runStartupTenantDatabaseScope(ctx, () => gatewayService.startListeners());
       })
       .catch((error: unknown) => {
         console.error('[gateway] Failed to start listeners:', error);
