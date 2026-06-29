@@ -1,4 +1,4 @@
-import { attachHiddenTenant, getCurrentTenantId } from '@agor/core/db';
+import { attachHiddenTenant, getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
 import type { GatewayChannel, ThreadSessionMap, User } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -166,6 +166,33 @@ describe('GatewayService Slack thread catch-up', () => {
     });
 
     expect(seenTenants).toEqual(['tenant-channel']);
+  });
+
+  it('passes ambient tenant context into the internal prompt call', async () => {
+    const mapping = makeMapping();
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: mapping,
+      connector: {},
+    });
+
+    await runWithTenantDatabaseScope({ run: vi.fn() } as never, 'tenant-channel', () =>
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: 'please answer',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '103.000000',
+        },
+      })
+    );
+
+    expect(promptCreate.mock.calls[0][1]).toMatchObject({
+      route: { id: 'sess-1' },
+      tenant: { tenant_id: 'tenant-channel', source: 'explicit' },
+    });
   });
 
   it('fetches missed Slack messages after the last delivered cursor and advances the cursor', async () => {

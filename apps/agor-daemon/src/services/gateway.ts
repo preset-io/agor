@@ -2148,9 +2148,14 @@ export class GatewayService {
 
       // Internal call: pass user, omit provider to bypass auth hooks
       // Mark message source as 'gateway' so it won't be echoed back to the platform
+      const tenantId = getCurrentTenantId();
       const task = await promptService.create(
         { prompt: promptText, permissionMode, messageSource: 'gateway' },
-        { route: { id: sessionId }, user }
+        {
+          route: { id: sessionId },
+          user,
+          ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
+        }
       );
 
       if (channel.channel_type === 'slack' && slackCursorTsToWrite && mappingForCursor) {
