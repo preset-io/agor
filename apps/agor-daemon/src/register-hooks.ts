@@ -800,6 +800,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  const rejectLinkDerivedFields = (context: HookContext) => {
+    if (!context.params.provider) return context;
+    const records = Array.isArray(context.data) ? context.data : [context.data];
+    for (const record of records as Array<Record<string, unknown> | undefined>) {
+      if (record && 'target_key' in record) {
+        throw new Forbidden("Link field 'target_key' is server-derived");
+      }
+    }
+    return context;
+  };
+
   app.service('links').hooks({
     before: {
       all: [typedValidateQuery(linkQueryValidator), requireAuth, executorRuntimeScopeGuard()],
@@ -807,11 +818,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       get: [ensureLinkOwnerAccess('view')],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create links'),
+        rejectLinkDerivedFields,
         injectCreatedBy(),
         ensureLinkOwnerAccess('mutate'),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update links'),
+        rejectLinkDerivedFields,
         rejectLinkOwnerPatch,
         ensureLinkOwnerAccess('mutate'),
       ],

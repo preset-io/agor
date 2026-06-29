@@ -1,6 +1,7 @@
 import type { BranchID, SessionID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
+import { normalizeRefTargetKey, normalizeUrlTargetKey } from '../../types/link';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
@@ -113,6 +114,86 @@ describe('LinksRepository', () => {
     expect(second.title).toBe('updated');
     expect(await repo.findAll({ sessionId: sessionA.session_id })).toHaveLength(1);
     expect(await repo.findAll({ sessionId: sessionB.session_id })).toHaveLength(1);
+  });
+
+  dbTest('derives target_key instead of trusting caller-supplied keys', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+
+    const first = await repo.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://EXAMPLE.com/repeat#ignored',
+      target_key: 'url:caller-spoofed',
+    } as never);
+    const second = await repo.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/repeat',
+      target_key: 'url:caller-spoofed-again',
+      title: 'deduped',
+    } as never);
+
+    expect(second.link_id).toBe(first.link_id);
+    expect(second.target_key).toBe(normalizeUrlTargetKey('https://example.com/repeat'));
+    expect(second.title).toBe('deduped');
+    expect(await repo.findAll({ sessionId: session.session_id })).toHaveLength(1);
+  });
+
+  dbTest('recomputes target_key and honors explicit null patch fields', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const created = await repo.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/original',
+      title: 'Original',
+      metadata: { note: 'clear me' },
+    });
+
+    const retargeted = await repo.update(created.link_id, {
+      url: null,
+      ref_uri: 'agor://kb/team/runbook.md',
+      title: null,
+      metadata: null,
+    });
+
+    expect(retargeted.url).toBeNull();
+    expect(retargeted.ref_uri).toBe('agor://kb/team/runbook.md');
+    expect(retargeted.target_key).toBe(normalizeRefTargetKey('agor://kb/team/runbook.md'));
+    expect(retargeted.title).toBeNull();
+    expect(retargeted.metadata).toBeNull();
+  });
+
+  dbTest('rejects ambiguous or missing effective targets on create and patch', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const created = await repo.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/one',
+    });
+
+    await expect(
+      repo.create({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/two',
+        ref_uri: 'agor://kb/team/runbook.md',
+      } as never)
+    ).rejects.toThrow(/exactly one target/);
+    await expect(repo.update(created.link_id, { url: null })).rejects.toThrow(/exactly one target/);
+    await expect(
+      repo.update(created.link_id, { ref_uri: 'agor://kb/team/runbook.md' })
+    ).rejects.toThrow(/exactly one target/);
   });
 
   dbTest('filters by session and branch owner scopes', async ({ db }) => {

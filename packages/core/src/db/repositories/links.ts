@@ -10,15 +10,15 @@ import type {
   SessionID,
   UUID,
 } from '@agor/core/types';
+import { and, eq, inArray, isNull, or } from 'drizzle-orm';
+import { generateId } from '../../lib/ids';
 import {
   isLinkKind,
   isLinkSource,
   normalizeFileTargetKey,
   normalizeRefTargetKey,
   normalizeUrlTargetKey,
-} from '@agor/core/types';
-import { and, eq, inArray, isNull, or } from 'drizzle-orm';
-import { generateId } from '../../lib/ids';
+} from '../../types/link';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type LinkInsert, type LinkRow, links } from '../schema';
@@ -44,16 +44,20 @@ function countPresent(values: unknown[]): number {
 }
 
 function normalizeTargetKey(data: {
-  target_key?: string | null;
   url?: string | null;
   ref_uri?: string | null;
   file_path?: string | null;
 }): string {
-  if (data.target_key?.trim()) return data.target_key.trim();
   if (data.url) return normalizeUrlTargetKey(data.url);
   if (data.ref_uri) return normalizeRefTargetKey(data.ref_uri);
   if (data.file_path) return normalizeFileTargetKey(data.file_path);
-  throw new RepositoryError('Link target_key requires url, ref_uri, or file_path');
+  throw new RepositoryError(
+    'Link target_key requires exactly one target: url, ref_uri, or file_path'
+  );
+}
+
+function hasOwn<K extends PropertyKey>(data: object, key: K): boolean {
+  return Object.hasOwn(data, key);
 }
 
 export class LinksRepository {
@@ -87,8 +91,8 @@ export class LinksRepository {
     }
 
     const targetCount = countPresent([data.url, data.ref_uri, data.file_path]);
-    if (targetCount < 1) {
-      throw new RepositoryError('Link requires at least one target: url, ref_uri, or file_path');
+    if (targetCount !== 1) {
+      throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
     }
 
     if (!isLinkKind(data.kind)) throw new RepositoryError(`Invalid link kind: ${data.kind}`);
@@ -102,12 +106,6 @@ export class LinksRepository {
     }
     if (data.source !== undefined && !isLinkSource(data.source)) {
       throw new RepositoryError(`Invalid link source: ${data.source}`);
-    }
-    if ('url' in data || 'ref_uri' in data || 'file_path' in data || 'target_key' in data) {
-      const targetCount = countPresent([data.url, data.ref_uri, data.file_path]);
-      if (targetCount < 1 && !data.target_key) {
-        throw new RepositoryError('Link requires at least one target: url, ref_uri, or file_path');
-      }
     }
   }
 
@@ -137,9 +135,10 @@ export class LinksRepository {
   }
 
   async create(data: Partial<LinkCreate>): Promise<Link> {
+    this.validateCreate(data);
     const existing = await this.findByOwnerAndTarget(data);
     if (existing) {
-      return this.update(existing.link_id, data as LinkPatch);
+      return this.update(existing.link_id, data);
     }
 
     const row = this.createToInsert(data);
@@ -154,7 +153,6 @@ export class LinksRepository {
   async findByOwnerAndTarget(data: {
     branch_id?: BranchID | null;
     session_id?: SessionID | null;
-    target_key?: string | null;
     url?: string | null;
     ref_uri?: string | null;
     file_path?: string | null;
@@ -214,22 +212,36 @@ export class LinksRepository {
     const existing = await this.findById(id);
     if (!existing) throw new RepositoryError(`Link ${id} not found`);
 
+    const sourceMessageId = hasOwn(data, 'source_message_id')
+      ? (data.source_message_id ?? null)
+      : (existing.source_message_id ?? null);
+    const url = hasOwn(data, 'url') ? (data.url ?? null) : (existing.url ?? null);
+    const refUri = hasOwn(data, 'ref_uri') ? (data.ref_uri ?? null) : (existing.ref_uri ?? null);
+    const filePath = hasOwn(data, 'file_path')
+      ? (data.file_path ?? null)
+      : (existing.file_path ?? null);
+    const targetCount = countPresent([url, refUri, filePath]);
+    if (targetCount !== 1) {
+      throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
+    }
+
     const next = {
-      source_message_id: data.source_message_id ?? existing.source_message_id ?? null,
+      source_message_id: sourceMessageId,
       kind: data.kind ?? existing.kind,
       source: data.source ?? existing.source,
-      url: data.url ?? existing.url ?? null,
-      ref_uri: data.ref_uri ?? existing.ref_uri ?? null,
-      file_path: data.file_path ?? existing.file_path ?? null,
+      url,
+      ref_uri: refUri,
+      file_path: filePath,
       target_key: normalizeTargetKey({
-        target_key: data.target_key ?? existing.target_key,
-        url: data.url ?? existing.url,
-        ref_uri: data.ref_uri ?? existing.ref_uri,
-        file_path: data.file_path ?? existing.file_path,
+        url,
+        ref_uri: refUri,
+        file_path: filePath,
       }),
-      title: data.title ?? existing.title ?? null,
-      mime_type: data.mime_type ?? existing.mime_type ?? null,
-      metadata: data.metadata ?? existing.metadata ?? null,
+      title: hasOwn(data, 'title') ? (data.title ?? null) : (existing.title ?? null),
+      mime_type: hasOwn(data, 'mime_type')
+        ? (data.mime_type ?? null)
+        : (existing.mime_type ?? null),
+      metadata: hasOwn(data, 'metadata') ? (data.metadata ?? null) : (existing.metadata ?? null),
       updated_at: new Date(),
     } satisfies Partial<LinkInsert>;
 

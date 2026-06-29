@@ -46,7 +46,6 @@ export type LinkCreate = LinkOwner &
     source_message_id?: MessageID | null;
     kind: LinkKind;
     source: LinkSource;
-    target_key?: string;
     title?: string | null;
     mime_type?: string | null;
     metadata?: LinkMetadata | null;
@@ -61,7 +60,6 @@ export type LinkPatch = Partial<
     | 'url'
     | 'ref_uri'
     | 'file_path'
-    | 'target_key'
     | 'title'
     | 'mime_type'
     | 'metadata'
@@ -74,7 +72,6 @@ export interface ParsedLinkDraft {
   source: 'parsed';
   url?: string | null;
   ref_uri?: string | null;
-  target_key: string;
   title?: string | null;
   metadata?: LinkMetadata | null;
 }
@@ -157,7 +154,6 @@ export function extractLinksFromMessage(message: Pick<Message, 'content'>): Pars
         kind: 'kb_ref',
         source: 'parsed',
         ref_uri: refUri,
-        target_key: targetKey,
       });
     }
 
@@ -170,7 +166,6 @@ export function extractLinksFromMessage(message: Pick<Message, 'content'>): Pars
         kind: classifyUrlKind(url),
         source: 'parsed',
         url,
-        target_key: targetKey,
       });
     }
   }

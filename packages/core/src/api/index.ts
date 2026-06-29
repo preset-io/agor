@@ -30,6 +30,8 @@ import type {
   KnowledgeSearchResult,
   KnowledgeSemanticSettingsPublic,
   Link,
+  LinkCreate,
+  LinkPatch,
   MCPServer,
   Message,
   PermissionMode,
@@ -170,6 +172,9 @@ export interface TemplatesService {
   create(data: TemplateRenderRequest, params?: Params): Promise<TemplateRenderResponse>;
 }
 
+type LinkCreatePayload = ClientInput<LinkCreate>;
+type LinkPatchPayload = Partial<ClientInput<LinkPatch>>;
+
 /**
  * Service interfaces for type safety
  */
@@ -241,6 +246,12 @@ export interface AgorService<
 
   // Emit custom events to WebSocket clients (available at runtime via FeathersJS socket.io integration)
   emit(event: string, data: unknown): void;
+}
+
+export interface LinksService extends Omit<AgorService<Link>, 'create' | 'update' | 'patch'> {
+  create(data: LinkCreatePayload, params?: Params): Promise<Link>;
+  create(data: LinkCreatePayload[], params?: Params): Promise<Link[]>;
+  patch(id: string, data: LinkPatchPayload, params?: Params): Promise<Link>;
 }
 
 /**
@@ -568,7 +579,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
-  service(path: 'links'): AgorService<Link>;
+  service(path: 'links'): LinksService;
 
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;
