@@ -55,12 +55,6 @@ import {
   resolveSessionFromShortIdPure,
 } from '../utils/urlResolution';
 
-export type { DataMaps } from '../store/agorMaps';
-// Re-exported for backward compatibility: the canonical data-map shape +
-// empties now live in `../store/agorMaps`, but existing importers (and tests)
-// reference them via this module.
-export { EMPTY_MAPS } from '../store/agorMaps';
-
 // Canonical list of initial-load items tracked by the loading checklist —
 // the ESSENTIAL set the first-paint gate blocks on. Internal only; consumers
 // receive the derived `initialLoadItems` array (each entry carries
