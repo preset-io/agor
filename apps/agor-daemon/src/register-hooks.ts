@@ -1158,8 +1158,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureBranchPermission('all', 'update branches', superadminOpts), // Require 'all' permission to update
             ]
           : []),
-        // Capture previous others_fs_access for comparison in after hook
-        ...(branchRbacEnabled
+        // Capture previous others_fs_access for comparison in after Unix sync hook.
+        ...(executionMode.unixFsIsolationEnabled
           ? [
               async (context: HookContext) => {
                 const patchData = context.data as Partial<import('@agor/core/types').Branch>;
@@ -1169,7 +1169,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 };
                 if (Object.hasOwn(patchData, 'others_fs_access') && !params._skipUnixSync) {
                   // Fetch current value to compare in after hook
-                  const branch = await context.service.get(context.id);
+                  const branch = await context.service.get(context.id, context.params);
                   params._previousOthersFsAccess = branch.others_fs_access;
                 }
                 return context;
