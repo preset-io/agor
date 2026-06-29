@@ -72,6 +72,7 @@ import {
   runExecutorCommand,
   spawnExecutor,
 } from '../utils/spawn-executor.js';
+import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
 import { ensureAssistantKnowledgeNamespace as ensureAssistantKnowledgeNamespaceForBranch } from './assistant-knowledge.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import type { InternalEnrichmentParams } from './sessions';
@@ -393,16 +394,42 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     action: EnvironmentLifecycleAction;
     params?: BranchParams;
   }): Promise<void> {
-    const { branch, action } = options;
+    const { branch, action, params } = options;
     const { payload, asUser, env } = await this.createEnvironmentExecutorPayload(options);
+    const logPrefix = `[Environment.${action} ${branch.name}]`;
 
-    spawnExecutor(payload, {
-      logPrefix: `[Environment.${action} ${branch.name}]`,
-      asUser,
-      preparedEnv: env,
-      templateVariables: {
-        branch_id: branch.branch_id,
-      },
+    const spawnLifecycleExecutor = async () => {
+      try {
+        spawnExecutor(payload, {
+          logPrefix,
+          asUser,
+          preparedEnv: env,
+          templateVariables: {
+            branch_id: branch.branch_id,
+          },
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to spawn environment executor';
+        await this.updateEnvironment(
+          branch.branch_id,
+          {
+            status: 'error',
+            last_health_check: {
+              timestamp: new Date().toISOString(),
+              status: 'unhealthy',
+              message,
+            },
+            last_error: message,
+          },
+          params
+        );
+        throw error;
+      }
+    };
+
+    deferWithTenantDatabaseScope(this.db, params, spawnLifecycleExecutor, (error) => {
+      console.error(`${logPrefix} Failed to dispatch executor:`, error);
     });
   }
 
