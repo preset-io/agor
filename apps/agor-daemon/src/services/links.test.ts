@@ -197,4 +197,45 @@ describe('LinksService', () => {
     );
     expect(links).toHaveLength(3);
   });
+
+  it('preserves tenant context for internal parsed-link creation', async () => {
+    const create = vi.fn(async () => []);
+    const app = {
+      service: vi.fn((path: string) => {
+        if (path !== 'links') throw new Error(`Unexpected service: ${path}`);
+        return { create };
+      }),
+    };
+    const hook = ingestParsedLinksAfterMessageCreate(app as never);
+    const message = {
+      message_id: generateId() as MessageID,
+      session_id: generateId() as SessionID,
+      type: 'user',
+      role: 'user',
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content_preview: 'See https://example.com/tenant',
+      content: 'See https://example.com/tenant',
+    } as Message;
+    const tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+
+    await hook({
+      result: message,
+      params: {
+        provider: 'rest',
+        tenant,
+        authentication: { payload: { tenant_id: 'tenant-a' } },
+        user: { user_id: generateId() as UUID, tenant_id: 'tenant-a' },
+      },
+    } as never);
+
+    expect(create).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ session_id: message.session_id })]),
+      expect.objectContaining({
+        provider: undefined,
+        tenant,
+        authentication: { payload: { tenant_id: 'tenant-a' } },
+      })
+    );
+  });
 });
