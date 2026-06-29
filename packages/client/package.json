@@ -39,6 +39,8 @@
     "check:pack": "node scripts/validate-pack-artifact.mjs",
     "dev": "tsup --watch",
     "prepublishOnly": "pnpm build && pnpm check:pack",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -54,7 +56,8 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",
     "tsup": "^8.5.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
   },
   "keywords": [
     "agor",
