@@ -383,6 +383,48 @@ export interface RegisterHooksContext {
 /**
  * Register all FeathersJS service hooks.
  */
+export const TENANT_OWNED_SERVICE_PATHS = [
+  'sessions',
+  'session-relationships',
+  'tasks',
+  'messages',
+  'boards',
+  'repos',
+  'branches',
+  'branches/:id/owners',
+  'boards/:id/owners',
+  'schedules',
+  'users',
+  'groups',
+  'group-memberships',
+  'branches/:id/group-grants',
+  'boards/:id/group-grants',
+  'app-variables',
+  'mcp-servers',
+  'card-types',
+  'cards',
+  'artifacts',
+  'artifact-trust-grants',
+  'board-objects',
+  'session-mcp-servers',
+  'user-mcp-oauth-tokens',
+  'board-comments',
+  'gateway-channels',
+  'gateway',
+  'thread-session-map',
+  'gateway-outbound-messages',
+  'session-env-selections',
+  'kb/namespaces',
+  'kb/documents',
+  'kb/document-edits',
+  'kb/versions',
+  'kb/search',
+  'kb/settings',
+  'kb/indexing/status',
+  'kb/indexing/reindex',
+  'leaderboard',
+];
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -413,46 +455,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
   const executionMode = resolveExecutionSecurityMode(config);
 
-  const tenantOwnedServicePaths = [
-    'sessions',
-    'session-relationships',
-    'tasks',
-    'messages',
-    'boards',
-    'repos',
-    'branches',
-    'branches/:id/owners',
-    'boards/:id/owners',
-    'schedules',
-    'users',
-    'groups',
-    'group-memberships',
-    'branches/:id/group-grants',
-    'boards/:id/group-grants',
-    'app-variables',
-    'mcp-servers',
-    'card-types',
-    'cards',
-    'artifacts',
-    'artifact-trust-grants',
-    'board-objects',
-    'session-mcp-servers',
-    'user-mcp-oauth-tokens',
-    'board-comments',
-    'gateway-channels',
-    'thread-session-map',
-    'gateway-outbound-messages',
-    'session-env-selections',
-    'kb/namespaces',
-    'kb/documents',
-    'kb/document-edits',
-    'kb/versions',
-    'kb/search',
-    'kb/settings',
-    'kb/indexing/status',
-    'kb/indexing/reindex',
-    'leaderboard',
-  ];
+  const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
 
   const stampTenantData = (data: unknown, tenantId: string): unknown => {
     if (Array.isArray(data)) return data.map((item) => stampTenantData(item, tenantId));

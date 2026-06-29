@@ -1,8 +1,8 @@
-import { getCurrentTenantId } from '@agor/core/db';
+import { attachHiddenTenant, getCurrentTenantId } from '@agor/core/db';
 import type { GatewayChannel, ThreadSessionMap, User } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { GatewayService } from './gateway.js';
+import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
 
 const user: User = {
   user_id: 'user-1',
@@ -119,6 +119,15 @@ function makeGatewayHarness(args: {
 
   return { service, promptCreate, sessionsCreate, channelRepo, threadMapRepo };
 }
+
+describe('gateway tenant metadata helpers', () => {
+  it('extracts non-enumerable tenant metadata from gateway channel DTOs', () => {
+    const channel = attachHiddenTenant({ ...slackChannel }, { tenant_id: 'tenant-channel' });
+
+    expect(tenantIdFromGatewayChannel(channel)).toBe('tenant-channel');
+    expect(Object.keys(channel)).not.toContain('tenant_id');
+  });
+});
 
 describe('GatewayService Slack thread catch-up', () => {
   it('runs listener inbound callbacks inside a fresh channel tenant DB scope', async () => {

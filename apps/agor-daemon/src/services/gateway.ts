@@ -12,6 +12,7 @@ import {
   GatewayChannelRepository,
   GatewayOutboundMessageRepository,
   getCurrentTenantId,
+  getHiddenTenantId,
   MCPServerRepository,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
@@ -193,9 +194,8 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
   }
 }
 
-function tenantIdFromGatewayChannel(channel: GatewayChannel): TenantID | string | undefined {
-  const tenantId = (channel as GatewayChannel & { tenant_id?: unknown }).tenant_id;
-  return typeof tenantId === 'string' && tenantId.length > 0 ? tenantId : undefined;
+export function tenantIdFromGatewayChannel(channel: GatewayChannel): TenantID | string | undefined {
+  return getHiddenTenantId(channel);
 }
 
 function isSlackThinkingPlaceholder(text: string): boolean {
