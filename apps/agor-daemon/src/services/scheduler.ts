@@ -50,6 +50,7 @@ import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   advisoryLockKeyForUuid,
   BranchRepository,
+  getCurrentTenantId,
   isPostgresDatabase,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
@@ -775,6 +776,7 @@ export class SchedulerService {
 
       // 8. Trigger prompt execution (creates task and starts agent).
       const promptService = this.app.service('/sessions/:id/prompt');
+      const tenantId = getCurrentTenantId();
       await promptService.create(
         {
           prompt: renderedPrompt,
@@ -785,6 +787,7 @@ export class SchedulerService {
           route: { id: createdSession.session_id },
           provider: undefined, // Bypass auth for internal scheduler call
           user: creator, // Pass creator user for session token generation
+          ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
         } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
       );
 

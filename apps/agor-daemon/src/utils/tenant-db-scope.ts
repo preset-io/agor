@@ -5,6 +5,7 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
+  enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
@@ -66,17 +67,29 @@ export function deferWithTenantDatabaseScope(
     return;
   }
 
-  runWithoutTenantDatabaseScope(() => {
-    setImmediate(() => {
-      void runWithTenantDatabaseScope(db, tenantId, work).catch((error) => {
-        if (onError) {
-          onError(error);
-          return;
-        }
-        console.error('[tenant-db-scope] Deferred tenant-scoped work failed:', error);
+  const schedule = () => {
+    runWithoutTenantDatabaseScope(() => {
+      setImmediate(() => {
+        void runWithTenantDatabaseScope(db, tenantId, work).catch((error) => {
+          if (onError) {
+            onError(error);
+            return;
+          }
+          console.error('[tenant-db-scope] Deferred tenant-scoped work failed:', error);
+        });
       });
     });
-  });
+  };
+
+  // If the caller is inside a tenant DB transaction, wait until the
+  // transaction commits before opening the fresh scope. Otherwise executor
+  // startup can race ahead and read rows (sessions/tasks/messages) that are
+  // still invisible on its new connection.
+  if (enqueueTenantDatabasePostCommitCallback(async () => schedule())) {
+    return;
+  }
+
+  schedule();
 }
 
 export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScopeOptions) {

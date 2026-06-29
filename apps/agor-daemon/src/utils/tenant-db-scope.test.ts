@@ -273,6 +273,48 @@ describe('createTenantDatabaseScopeAroundHook', () => {
     });
   });
 
+  it('waits until the active tenant transaction commits before running deferred work', async () => {
+    const events: string[] = [];
+    const tx = { execute: vi.fn(async () => []) };
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        events.push('tx:start');
+        const result = await callback(tx);
+        events.push('tx:committed');
+        return result;
+      }),
+    };
+
+    const done = new Promise<void>((resolve, reject) => {
+      runWithTenantDatabaseScope(db as never, 'tenant-a', async () => {
+        deferWithTenantDatabaseScope(
+          db as never,
+          {},
+          async () => {
+            events.push(`work:${getCurrentTenantId()}`);
+            resolve();
+          },
+          reject
+        );
+        events.push('scheduled');
+      }).catch(reject);
+    });
+
+    await done;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(events).toEqual([
+      'tx:start',
+      'scheduled',
+      'tx:committed',
+      'tx:start',
+      'tx:committed',
+      'tx:start',
+      'work:tenant-a',
+      'tx:committed',
+    ]);
+  });
+
   it('fails deferred tenant-scoped work loudly when no tenant can be resolved', async () => {
     const { db } = makePgDb();
     const onError = vi.fn();
