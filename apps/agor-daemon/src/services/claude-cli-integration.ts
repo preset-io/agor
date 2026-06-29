@@ -54,6 +54,7 @@ import {
 import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   generateId,
+  getCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
   SessionRepository,
@@ -98,18 +99,30 @@ function getDb(app: Application): TenantScopeAwareDatabase | null {
   return db ?? null;
 }
 
-function getCliCallbackTenantId(app: Application): string {
+const cliWatcherTenantBySession = new Map<string, string>();
+
+function getCliFallbackTenantId(app: Application): string {
   const config = app.get('config') as AgorConfig | undefined;
   return resolveMultiTenancyConfig(config ?? {}).static_tenant_id;
 }
 
+function captureCliWatcherTenantId(app: Application): string {
+  return getCurrentTenantId() ?? getCliFallbackTenantId(app);
+}
+
+function rememberCliWatcherTenant(sessionId: string, tenantId: string): void {
+  cliWatcherTenantBySession.set(sessionId, tenantId);
+}
+
 async function runCliCallbackDatabaseScope<T>(
   app: Application,
+  sessionId: string,
   work: () => Promise<T>
 ): Promise<T> {
   const db = getDb(app);
   if (!db) return work();
-  return runWithTenantDatabaseScope(db, getCliCallbackTenantId(app), work);
+  const tenantId = cliWatcherTenantBySession.get(sessionId) ?? captureCliWatcherTenantId(app);
+  return runWithTenantDatabaseScope(db, tenantId, work);
 }
 
 /** Per-turn accumulator used by the sink between `user_message` and `turn_end`. */
@@ -339,7 +352,7 @@ function startTaskWatchdog(app: Application, sessionId: SessionID): void {
   stopTaskWatchdog(sessionId);
   runWithoutTenantDatabaseScope(() => {
     const timer = setInterval(() => {
-      void runCliCallbackDatabaseScope(app, async () => {
+      void runCliCallbackDatabaseScope(app, sessionId, async () => {
         const active = activeCliTurn.get(sessionId);
         if (!active) {
           // Turn already closed by some other path — stop watching.
@@ -377,7 +390,7 @@ function startTaskWatchdog(app: Application, sessionId: SessionID): void {
 export function buildCliPersister(app: Application): CliWatcherStatePersister {
   return {
     async saveOffset(sessionId, update) {
-      await runCliCallbackDatabaseScope(app, async () => {
+      await runCliCallbackDatabaseScope(app, sessionId, async () => {
         const db = getDb(app);
         if (!db) return;
         const repo = new SessionRepository(db);
@@ -969,7 +982,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
   // Same code path = same analytics + DB writes whether the close was
   // triggered by claude itself or by the watchdog noticing claude died.
   const scopedSink: CliWatcherEventSink = (sessionId, event) =>
-    runCliCallbackDatabaseScope(app, async () => {
+    runCliCallbackDatabaseScope(app, sessionId, async () => {
       await sink(sessionId, event);
     });
 
@@ -1416,13 +1429,18 @@ export async function onCliSessionCreated(
   // 2) Register the JSONL watcher (sits idle until `claude` writes its first line).
   try {
     const reg = getCliWatcherRegistry(app);
-    await reg.register({
-      sessionId: session.session_id,
-      cwd: branchCwd,
-      homeDir,
-      startOffset: session.cli_state?.watcher_offset ?? 0,
+    const watcherTenantId = captureCliWatcherTenantId(app);
+    await runWithoutTenantDatabaseScope(async () => {
+      rememberCliWatcherTenant(session.session_id, watcherTenantId);
+      await reg.register({
+        sessionId: session.session_id,
+        cwd: branchCwd,
+        homeDir,
+        startOffset: session.cli_state?.watcher_offset ?? 0,
+      });
     });
   } catch (err) {
+    cliWatcherTenantBySession.delete(session.session_id);
     console.warn(
       `[claude-cli-integration] watcher register failed for session ${session.session_id}:`,
       err
@@ -1465,6 +1483,7 @@ export async function onCliSessionEnded(app: Application, sessionId: SessionID):
   // mid-turn" path.
   stopTaskWatchdog(sessionId);
   activeCliTurn.delete(sessionId);
+  cliWatcherTenantBySession.delete(sessionId);
 }
 
 /**
@@ -1486,7 +1505,8 @@ export async function scanCliWatcherRehydrateSessions(app: Application): Promise
 export async function rehydrateCliWatchers(
   app: Application,
   branchCwdLookup: (branchId: string) => Promise<string | null>,
-  sessions: Session[]
+  sessions: Session[],
+  options: { tenantId: string }
 ): Promise<void> {
   const reg = getCliWatcherRegistry(app);
   let rehydrated = 0;
@@ -1502,6 +1522,7 @@ export async function rehydrateCliWatchers(
         // the very first post-restart event sees the right task linkage.
         // This also starts watchdog timers, so keep it outside any tenant DB
         // transaction ALS; watcher and watchdog callbacks enter fresh DB scope.
+        rememberCliWatcherTenant(session.session_id, options.tenantId);
         primeActiveCliTurnFromSession(app, session);
         await reg.register({
           sessionId: session.session_id,
@@ -1512,6 +1533,7 @@ export async function rehydrateCliWatchers(
       });
       rehydrated++;
     } catch (err) {
+      cliWatcherTenantBySession.delete(session.session_id);
       console.warn(
         `[claude-cli-integration] failed to rehydrate watcher for ${session.session_id}:`,
         err

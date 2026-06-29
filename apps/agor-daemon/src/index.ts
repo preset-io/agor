@@ -814,7 +814,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
             return null;
           }
         }),
-      cliSessions
+      cliSessions,
+      { tenantId: multiTenancy.static_tenant_id }
     );
   });
 }
