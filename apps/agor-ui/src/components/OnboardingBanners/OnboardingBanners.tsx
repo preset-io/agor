@@ -1,23 +1,26 @@
 /**
  * OnboardingBanners — persistent banners shown after onboarding if steps were skipped.
  *
- * AI banner: shown when user has completed onboarding but has no LLM key configured.
- * Integrations banner: shown when AI is configured but no MCP servers are connected.
- *
- * Only one banner shows at a time; AI banner takes priority.
+ * Priority order (only one shows at a time):
+ * 1. AI banner (amber)  — no LLM key configured.
+ * 2. Connection invalid banner (amber) — key present but auth check failed.
+ * 3. Integrations banner (teal) — AI ok, no MCP servers connected.
  */
 
-import type { User } from '@agor-live/client';
-import { ApiOutlined } from '@ant-design/icons';
-import { Button, Tag } from 'antd';
-import type { WizardStep } from '../OnboardingWizard';
+import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
+import { Button } from 'antd';
+import { useEffect, useState } from 'react';
 
 export interface OnboardingBannersProps {
   user: User | null | undefined;
   /** Total number of MCP servers configured for this user/instance. */
   mcpServerCount: number;
-  /** Opens the onboarding wizard at the given step. */
-  onOpenWizardAtStep: (step: WizardStep) => void;
+  /** Opens the user's personal AI credential settings at the given tool tab. */
+  onOpenUserSettings: (tab: string) => void;
+  /** Opens workspace settings at the given tab key (used for MCP). */
+  onOpenWorkspaceSettings: (tab: string) => void;
+  /** Optional auth check — used to detect stored-but-broken keys. */
+  onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 }
 
 function hasAnyLlmKey(user: User | null | undefined): boolean {
@@ -36,18 +39,58 @@ function hasAnyLlmKey(user: User | null | undefined): boolean {
   );
 }
 
+function primaryAgentForUser(user: User | null | undefined): AgenticToolName | null {
+  if (!user) return null;
+  const claude = user.agentic_tools?.['claude-code'];
+  const codex = user.agentic_tools?.codex;
+  const gemini = user.agentic_tools?.gemini;
+  if (
+    claude?.ANTHROPIC_API_KEY ||
+    claude?.CLAUDE_CODE_OAUTH_TOKEN ||
+    user.env_vars?.ANTHROPIC_API_KEY
+  )
+    return 'claude-code';
+  if (codex?.OPENAI_API_KEY || user.env_vars?.OPENAI_API_KEY) return 'codex';
+  if (gemini?.GEMINI_API_KEY || user.env_vars?.GEMINI_API_KEY) return 'gemini';
+  return null;
+}
+
 export function OnboardingBanners({
   user,
   mcpServerCount,
-  onOpenWizardAtStep,
+  onOpenUserSettings,
+  onOpenWorkspaceSettings,
+  onCheckAuth,
 }: OnboardingBannersProps) {
-  if (!user?.onboarding_completed) return null;
+  const [storedKeyInvalid, setStoredKeyInvalid] = useState(false);
+  const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
 
+  // Pre-compute user-derived values so the effect captures primitives, not the full user object.
+  const onboardingCompleted = !!user?.onboarding_completed;
   const hasLlm = hasAnyLlmKey(user);
-  const showAiBanner = !hasLlm;
-  const showIntegrationsBanner = !showAiBanner && mcpServerCount === 0;
+  const primaryAgent = primaryAgentForUser(user);
 
-  if (!showAiBanner && !showIntegrationsBanner) return null;
+  // Check if the stored LLM key is actually working.
+  // Re-runs when the user's key changes or identity changes.
+  // Fails open (storedKeyInvalid=false) on network errors — deliberate: avoid false positives.
+  useEffect(() => {
+    if (!onboardingCompleted || !onCheckAuth || !hasLlm || !primaryAgent) {
+      setStoredKeyInvalid(false);
+      return;
+    }
+    onCheckAuth(primaryAgent)
+      .then((result) => setStoredKeyInvalid(!result.authenticated))
+      .catch(() => setStoredKeyInvalid(false));
+  }, [onboardingCompleted, hasLlm, primaryAgent, onCheckAuth]);
+
+  if (!onboardingCompleted) return null;
+
+  const showAiBanner = !hasLlm;
+  const showKeyInvalidBanner = hasLlm && storedKeyInvalid;
+  const showIntegrationsBanner =
+    hasLlm && !storedKeyInvalid && mcpServerCount === 0 && !integrationsBannerDismissed;
+
+  if (!showAiBanner && !showKeyInvalidBanner && !showIntegrationsBanner) return null;
 
   if (showAiBanner) {
     return (
@@ -66,7 +109,7 @@ export function OnboardingBanners({
         }}
       >
         <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>
-          ⚡ Add an API key to start your first session — everything else is ready.
+          ⚡ Connect your AI to start your first session.
         </span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Button
@@ -81,7 +124,7 @@ export function OnboardingBanners({
           </Button>
           <Button
             size="small"
-            onClick={() => onOpenWizardAtStep('llm')}
+            onClick={() => onOpenUserSettings(primaryAgent ?? 'claude-code')}
             style={{
               background: '#d97706',
               borderColor: '#d97706',
@@ -93,6 +136,42 @@ export function OnboardingBanners({
             Connect AI
           </Button>
         </div>
+      </div>
+    );
+  }
+
+  if (showKeyInvalidBanner) {
+    return (
+      <div
+        style={{
+          background: '#78350f',
+          borderBottom: '1px solid #92400e',
+          height: 48,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingLeft: 20,
+          paddingRight: 20,
+          flexShrink: 0,
+          zIndex: 10,
+        }}
+      >
+        <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>
+          Your AI connection is not working - update it to start a session.
+        </span>
+        <Button
+          size="small"
+          onClick={() => onOpenUserSettings(primaryAgent ?? 'claude-code')}
+          style={{
+            background: '#d97706',
+            borderColor: '#d97706',
+            color: '#fff',
+            fontWeight: 600,
+            fontSize: 12,
+          }}
+        >
+          Reconnect AI
+        </Button>
       </div>
     );
   }
@@ -117,28 +196,22 @@ export function OnboardingBanners({
           color: '#7dd3ce',
           fontSize: 13,
           fontWeight: 500,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
         }}
       >
-        <Tag icon={<ApiOutlined />} color="default" style={{ margin: 0, fontSize: 12 }}>
-          {mcpServerCount} MCP {mcpServerCount === 1 ? 'server' : 'servers'}
-        </Tag>
         Connect Slack, GitHub, or Linear to let your AI post updates and track issues.
       </span>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <Button
           type="text"
           size="small"
-          onClick={() => onOpenWizardAtStep('integrations')}
+          onClick={() => setIntegrationsBannerDismissed(true)}
           style={{ color: '#94a3b8', fontSize: 12 }}
         >
           Maybe later
         </Button>
         <Button
           size="small"
-          onClick={() => onOpenWizardAtStep('integrations')}
+          onClick={() => onOpenWorkspaceSettings('mcp')}
           style={{
             background: '#2e9a92',
             borderColor: '#2e9a92',

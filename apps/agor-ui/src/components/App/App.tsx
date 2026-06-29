@@ -1431,7 +1431,7 @@ export const App: React.FC<AppProps> = ({
             <SettingsModal
               open={settingsOpen}
               onClose={() => {
-                closeSettings();
+                if (settingsRouteOpen) closeSettings();
                 onSettingsClose?.();
               }}
               client={client}
@@ -1448,11 +1448,13 @@ export const App: React.FC<AppProps> = ({
               cardTypeById={cardTypeById}
               activeTab={effectiveSettingsTab}
               onTabChange={(newTab) => {
-                setSettingsSection(newTab as Parameters<typeof setSettingsSection>[0]);
-                // Clear openSettingsTab when user manually changes tabs
-                // This allows normal tab switching after opening from onboarding
-                if (openSettingsTab) {
+                if (!settingsRouteOpen && openSettingsTab) {
+                  // Prop-controlled mode (e.g. opened from onboarding): navigate with the
+                  // current board as background so closing the modal returns here, not '/'.
+                  openSettings(newTab as Parameters<typeof setSettingsSection>[0]);
                   onSettingsClose?.();
+                } else {
+                  setSettingsSection(newTab as Parameters<typeof setSettingsSection>[0]);
                 }
               }}
               onCreateBoard={onCreateBoard}

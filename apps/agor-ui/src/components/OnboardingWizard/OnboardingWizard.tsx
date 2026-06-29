@@ -1,7 +1,7 @@
 /**
  * OnboardingWizard — redesigned 5-step first-run flow.
  *
- * Steps: persona → llm → workspace → integrations → done
+ * Steps: persona → workspace → llm → integrations → done
  */
 
 import type {
@@ -20,12 +20,12 @@ import { TOOL_API_KEY_NAMES } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,
+  CloseOutlined,
   LeftOutlined,
   LoadingOutlined,
-  QuestionCircleOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 
@@ -41,13 +41,13 @@ type IntegrationId = 'slack' | 'github' | 'linear' | 'jira' | 'notion';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: WizardStep[] = ['persona', 'workspace', 'integrations', 'llm', 'done'];
+const STEPS: WizardStep[] = ['persona', 'llm', 'workspace', 'integrations', 'done'];
 
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
   persona: { number: 1, label: 'You', skippable: true },
-  workspace: { number: 2, label: 'Workspace', skippable: true },
-  integrations: { number: 3, label: 'Integrations', skippable: true },
-  llm: { number: 4, label: 'AI', skippable: true },
+  llm: { number: 2, label: 'AI', skippable: true },
+  workspace: { number: 3, label: 'Workspace', skippable: true },
+  integrations: { number: 4, label: 'Tools', skippable: true },
   done: { number: 5, label: "You're ready", skippable: false },
 };
 
@@ -56,29 +56,25 @@ const PERSONAS = [
     id: 'developer',
     emoji: '🔨',
     title: 'I write code',
-    role: 'Developer',
-    desc: 'I want AI to handle parts of my work',
+    desc: 'AI does the repetitive parts - I focus on what is actually hard.',
   },
   {
     id: 'pm',
     emoji: '📋',
-    title: 'I manage the work',
-    role: 'PM / designer',
-    desc: 'I coordinate teams, not the code',
+    title: 'I manage projects',
+    desc: "AI drafts, summarizes, and chases status so I don't have to.",
   },
   {
     id: 'lead',
     emoji: '🎯',
     title: 'I lead a team',
-    role: 'Engineering lead',
-    desc: 'Running multiple AI agents',
+    desc: 'AI multiplies what my team can do. I set direction, it handles the rest.',
   },
   {
     id: 'solo',
     emoji: '⚡',
-    title: 'Just ship it',
-    role: 'Solo builder',
-    desc: 'Minimal setup, maximum output',
+    title: 'Building solo',
+    desc: 'AI is the rest of the team - research, writing, execution, all of it.',
   },
 ];
 
@@ -143,54 +139,211 @@ const LLM_OPTIONS: LlmOption[] = [
   },
 ];
 
-interface IntegrationConfig {
-  id: IntegrationId;
+interface McpRecommendation {
+  id: string;
   name: string;
   emoji: string;
   description: string;
-  valueProp: string;
+  docsUrl: string;
   featured?: boolean;
 }
 
-const INTEGRATIONS: IntegrationConfig[] = [
-  {
-    id: 'slack',
-    name: 'Slack',
-    emoji: '💬',
-    description: 'Post updates, get notifications, and trigger workflows',
-    valueProp:
-      'Your AI can post session summaries, alert you on blockers, and let you send prompts from Slack.',
-    featured: true,
-  },
-  {
-    id: 'github',
-    name: 'GitHub',
-    emoji: '🐙',
-    description: 'Create PRs, review code, and sync issues automatically',
-    valueProp: 'Your AI can open pull requests, push commits, and respond to review comments.',
-  },
-  {
-    id: 'linear',
-    name: 'Linear',
-    emoji: '🎯',
-    description: 'Link sessions to issues and update status automatically',
-    valueProp: 'Your AI can pick up Linear issues and mark them done when sessions complete.',
-  },
-  {
-    id: 'jira',
-    name: 'Jira',
-    emoji: '📋',
-    description: 'Create and update Jira issues from your AI sessions',
-    valueProp: 'Your AI can create tickets, update status, and log work automatically.',
-  },
-  {
-    id: 'notion',
-    name: 'Notion',
-    emoji: '📝',
-    description: 'Sync notes and documentation to Notion automatically',
-    valueProp: 'Your AI can write docs, update pages, and keep your knowledge base current.',
-  },
-];
+const MCP_DOCS_URL = 'https://agor.live/docs/mcp';
+
+const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
+  developer: [
+    {
+      id: 'slack',
+      name: 'Slack',
+      emoji: '💬',
+      description:
+        'Get notified when sessions finish, send prompts from Slack, and schedule agents that post daily build reports.',
+      docsUrl: 'https://agor.live/docs/mcp/slack',
+      featured: true,
+    },
+    {
+      id: 'github',
+      name: 'GitHub',
+      emoji: '🐙',
+      description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
+      docsUrl: 'https://agor.live/docs/mcp/github',
+    },
+    {
+      id: 'sentry',
+      name: 'Sentry',
+      emoji: '🚨',
+      description: 'Let your AI read error traces and fix bugs straight from the issue.',
+      docsUrl: 'https://agor.live/docs/mcp/sentry',
+    },
+    {
+      id: 'datadog',
+      name: 'Datadog',
+      emoji: '🐕',
+      description: 'Query metrics, read alerts, and have your AI investigate anomalies for you.',
+      docsUrl: 'https://agor.live/docs/mcp/datadog',
+    },
+  ],
+  pm: [
+    {
+      id: 'slack',
+      name: 'Slack',
+      emoji: '💬',
+      description:
+        'Post standup summaries, unblock threads, and set up agents that DM you scheduled status reports.',
+      docsUrl: 'https://agor.live/docs/mcp/slack',
+      featured: true,
+    },
+    {
+      id: 'hubspot',
+      name: 'HubSpot',
+      emoji: '🟠',
+      description: 'Pull customer context into sessions - your AI knows who you are building for.',
+      docsUrl: 'https://agor.live/docs/mcp/hubspot',
+    },
+    {
+      id: 'amplitude',
+      name: 'Amplitude',
+      emoji: '📈',
+      description: 'Ask your AI what the data says without writing a single query.',
+      docsUrl: 'https://agor.live/docs/mcp/amplitude',
+    },
+    {
+      id: 'figma',
+      name: 'Figma',
+      emoji: '🎨',
+      description: 'Read design files and write feedback without switching tabs.',
+      docsUrl: 'https://agor.live/docs/mcp/figma',
+    },
+  ],
+  lead: [
+    {
+      id: 'slack',
+      name: 'Slack',
+      emoji: '💬',
+      description:
+        'Broadcast outcomes, surface blockers, and schedule weekly digest agents that report to your team channel.',
+      docsUrl: 'https://agor.live/docs/mcp/slack',
+      featured: true,
+    },
+    {
+      id: 'hubspot',
+      name: 'HubSpot',
+      emoji: '🟠',
+      description:
+        'Keep an eye on the pipeline without leaving your session - revenue visibility in context.',
+      docsUrl: 'https://agor.live/docs/mcp/hubspot',
+    },
+    {
+      id: 'linear',
+      name: 'Linear',
+      emoji: '🎯',
+      description:
+        'See what is in progress, what is blocked, and what shipped - without chasing updates.',
+      docsUrl: 'https://agor.live/docs/mcp/linear',
+    },
+    {
+      id: 'datadog',
+      name: 'Datadog',
+      emoji: '🐕',
+      description: 'Get a live health read on your systems without pinging the on-call engineer.',
+      docsUrl: 'https://agor.live/docs/mcp/datadog',
+    },
+  ],
+  solo: [
+    {
+      id: 'slack',
+      name: 'Slack',
+      emoji: '💬',
+      description:
+        'Get pinged when sessions finish and run agents that talk to you on Slack - like a personal AI assistant.',
+      docsUrl: 'https://agor.live/docs/mcp/slack',
+      featured: true,
+    },
+    {
+      id: 'github',
+      name: 'GitHub',
+      emoji: '🐙',
+      description: 'Open PRs, push commits, and manage your repos hands-free.',
+      docsUrl: 'https://agor.live/docs/mcp/github',
+    },
+    {
+      id: 'stripe',
+      name: 'Stripe',
+      emoji: '💳',
+      description: 'Ask your AI what revenue looks like today - no dashboard needed.',
+      docsUrl: 'https://agor.live/docs/mcp/stripe',
+    },
+    {
+      id: 'hubspot',
+      name: 'HubSpot',
+      emoji: '🟠',
+      description:
+        'Let your AI handle follow-ups, log calls, and keep your pipeline moving while you build.',
+      docsUrl: 'https://agor.live/docs/mcp/hubspot',
+    },
+  ],
+  _default: [
+    {
+      id: 'slack',
+      name: 'Slack',
+      emoji: '💬',
+      description:
+        'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
+      docsUrl: 'https://agor.live/docs/mcp/slack',
+      featured: true,
+    },
+    {
+      id: 'github',
+      name: 'GitHub',
+      emoji: '🐙',
+      description: 'Open PRs, review code, and sync issues automatically.',
+      docsUrl: 'https://agor.live/docs/mcp/github',
+    },
+    {
+      id: 'linear',
+      name: 'Linear',
+      emoji: '🎯',
+      description: 'Pick up issues and update status automatically.',
+      docsUrl: 'https://agor.live/docs/mcp/linear',
+    },
+    {
+      id: 'notion',
+      name: 'Notion',
+      emoji: '📝',
+      description: 'Write and update docs as your AI works.',
+      docsUrl: 'https://agor.live/docs/mcp/notion',
+    },
+  ],
+};
+
+function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | null {
+  const k = key.trim();
+  if (!k) return null;
+  switch (agent) {
+    case 'claude-code':
+      if (!k.startsWith('sk-ant-')) return 'Claude keys start with sk-ant-…';
+      if (k.length < 50) return 'Key looks incomplete - copy the full key.';
+      return null;
+    case 'codex':
+      if (!k.startsWith('sk-')) return 'OpenAI keys start with sk-…';
+      if (k.length < 30) return 'Key looks incomplete.';
+      return null;
+    case 'gemini':
+      if (!k.startsWith('AIzaSy')) return 'Gemini keys start with AIzaSy…';
+      if (k.length < 20) return 'Key looks incomplete.';
+      return null;
+    case 'opencode': {
+      try {
+        new URL(k);
+        return null;
+      } catch {
+        return 'Enter a valid URL starting with https://';
+      }
+    }
+    default:
+      return null;
+  }
+}
 
 function hasAnyLlmKey(user: User | null | undefined): boolean {
   if (!user) return false;
@@ -215,6 +368,81 @@ function keyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-k
   return TOOL_API_KEY_NAMES[agent] ?? 'ANTHROPIC_API_KEY';
 }
 
+function getKeyLabel(agent: AgenticToolName, authMethod: AuthMethod): string {
+  if (authMethod === 'claude-subscription-token') return 'Subscription token';
+  switch (agent) {
+    case 'claude-code':
+      return 'Anthropic API key';
+    case 'codex':
+      return 'OpenAI API key';
+    case 'gemini':
+      return 'Google API key';
+    case 'opencode':
+      return 'Endpoint URL';
+    default:
+      return 'API key';
+  }
+}
+
+// Hoisted to module scope — no reactive deps, avoids string re-allocation on every render
+const ONB_ANIM_CSS = `
+  @keyframes onb-fade-in {
+    from { opacity: 0; transform: scale(0.97); }
+    to   { opacity: 1; transform: scale(1);    }
+  }
+  @keyframes onb-pop {
+    0%   { transform: scale(0) rotate(-15deg); }
+    60%  { transform: scale(1.25) rotate(5deg); }
+    100% { transform: scale(1) rotate(0deg);    }
+  }
+  @keyframes onb-draw {
+    from { stroke-dashoffset: 239; }
+    to   { stroke-dashoffset: 0;   }
+  }
+  @keyframes onb-orb1 {
+    0%, 100% { transform: translate(0,0) scale(1);     opacity: 0.8; }
+    50%       { transform: translate(-28px,-18px) scale(1.15); opacity: 1;   }
+  }
+  @keyframes onb-orb2 {
+    0%, 100% { transform: translate(0,0) scale(1);    opacity: 0.5; }
+    50%       { transform: translate(20px,28px) scale(1.1); opacity: 0.8; }
+  }
+  @keyframes onb-p0 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(0px,-72px) scale(0);opacity:0} }
+  @keyframes onb-p1 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(51px,-51px) scale(0);opacity:0} }
+  @keyframes onb-p2 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(72px,0px) scale(0);opacity:0} }
+  @keyframes onb-p3 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(51px,51px) scale(0);opacity:0} }
+  @keyframes onb-p4 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(0px,72px) scale(0);opacity:0} }
+  @keyframes onb-p5 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(-51px,51px) scale(0);opacity:0} }
+  @keyframes onb-p6 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(-72px,0px) scale(0);opacity:0} }
+  @keyframes onb-p7 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(-51px,-51px) scale(0);opacity:0} }
+
+  .onb-step  { animation: onb-fade-in 0.22s cubic-bezier(0.16,1,0.3,1) both; }
+  .onb-check { animation: onb-pop 0.25s cubic-bezier(0.34,1.56,0.64,1) both; }
+  .onb-draw  { animation: onb-draw 0.75s cubic-bezier(0.4,0,0.2,1) 0.1s both; }
+  .onb-orb1  { animation: onb-orb1 9s ease-in-out infinite; }
+  .onb-orb2  { animation: onb-orb2 12s ease-in-out infinite; }
+
+  /* Glass hover — only on unselected cards; no transform (per UX preference) */
+  button.onb-card[aria-pressed='false']:hover {
+    background: linear-gradient(135deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.07) 100%) !important;
+    border-color: rgba(255,255,255,0.24) !important;
+    box-shadow: 0 6px 28px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.18) !important;
+  }
+`;
+
+// On-brand teal palette only
+const PARTICLE_COLORS = ['#2e9a92', '#60d9d4', '#a5f3ef', '#2e9a92', '#60d9d4'];
+const PARTICLE_DIRS = [
+  [0, -72],
+  [51, -51],
+  [72, 0],
+  [51, 51],
+  [0, 72],
+  [-51, 51],
+  [-72, 0],
+  [-51, -51],
+] as const;
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 export interface OnboardingWizardProps {
@@ -224,7 +452,10 @@ export interface OnboardingWizardProps {
     sessionId: string;
     boardId: string;
     path: WizardPath;
+    integrationsToSetup: IntegrationId[];
   }) => void;
+  /** Called when the user dismisses the wizard without completing it. */
+  onDismiss?: () => void;
 
   repoById: Map<string, Repo>;
   branchById: Map<string, Branch>;
@@ -265,15 +496,29 @@ export interface OnboardingWizardProps {
 
 // ─── Static glass layer (non-token values intentionally kept) ─────────────────
 
-const MODAL_BG = '#0d1426';
-const GLASS_CARD_BG = 'rgba(255,255,255,0.04)';
-const GLASS_CARD_BORDER = '1px solid rgba(255,255,255,0.08)';
+// Deep dark with strong teal pulse bottom-right and indigo hint top-left
+const MODAL_BG = [
+  'radial-gradient(ellipse at 25% 0%, #0e1a30 0%, #050810 60%)',
+  'radial-gradient(circle at 90% 95%, rgba(46,154,146,0.32) 0%, transparent 50%)',
+  'radial-gradient(circle at 0% 60%, rgba(79,109,245,0.16) 0%, transparent 45%)',
+].join(', ');
+// Diagonal glass gradient — light-from-top-left gives the refraction feel
+const GLASS_CARD_BG =
+  'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.04) 100%)';
+const GLASS_CARD_BORDER = '1px solid rgba(255,255,255,0.16)';
+const GLASS_CARD_SHADOW = '0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.13)';
+// Selection — brighter glass lift, minimal teal accent
+const WIZARD_SELECTED_BG =
+  'linear-gradient(135deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.06) 100%)';
+const WIZARD_SELECTED_BORDER = '1px solid rgba(46,154,146,0.32)';
+const WIZARD_SELECTED_SHADOW = '0 6px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.18)';
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function OnboardingWizard({
   open,
   onComplete,
+  onDismiss,
   boardById,
   user,
   client,
@@ -281,13 +526,12 @@ export function OnboardingWizard({
   onCreateBranch: _onCreateBranch,
   onCreateSession: _onCreateSession,
   onUpdateUser,
-  onCheckAuth: _onCheckAuth,
+  onCheckAuth,
   initialStep,
 }: OnboardingWizardProps) {
   void _onCreateRepo;
   void _onCreateBranch;
   void _onCreateSession;
-  void _onCheckAuth;
 
   const { token } = useToken();
 
@@ -297,9 +541,9 @@ export function OnboardingWizard({
   const TEXT_SECONDARY = token.colorTextSecondary;
   const TEXT_MUTED = token.colorTextTertiary;
   const SUCCESS_GREEN = token.colorSuccess;
-  const CARD_SELECTED_BG = token.colorPrimaryBg;
-  const CARD_SELECTED_BORDER = `1px solid ${token.colorPrimaryBorder}`;
-  const CARD_SELECTED_SHADOW = `0 0 0 2px ${token.colorPrimaryBgHover}`;
+  const CARD_SELECTED_BG = WIZARD_SELECTED_BG;
+  const CARD_SELECTED_BORDER = WIZARD_SELECTED_BORDER;
+  const CARD_SELECTED_SHADOW = WIZARD_SELECTED_SHADOW;
 
   // ── Step state ──────────────────────────────────────────────────────────
   const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'persona');
@@ -310,71 +554,89 @@ export function OnboardingWizard({
   // ── Step 2: LLM ─────────────────────────────────────────────────────────
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
   const [apiKey, setApiKey] = useState('');
-  const [authMethod] = useState<AuthMethod>('api-key');
+  const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
   const [llmSaving, setLlmSaving] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
+  const [llmAuthChecking, setLlmAuthChecking] = useState<AgenticToolName | null>(null);
+  const [llmAuthVerified, setLlmAuthVerified] = useState<Partial<Record<AgenticToolName, boolean>>>(
+    {}
+  );
 
   // ── Step 3: workspace ───────────────────────────────────────────────────
-  const [boardName, setBoardName] = useState('My project board');
+  const [boardName, setBoardName] = useState('');
   const [boardEmoji, setBoardEmoji] = useState('📋');
-  const [repoUrl, setRepoUrl] = useState('');
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const [boardCreating, setBoardCreating] = useState(false);
   const [boardError, setBoardError] = useState<string | null>(null);
 
   // ── Step 4: integrations ─────────────────────────────────────────────────
-  const [activeIntegration, setActiveIntegration] = useState<IntegrationId | null>(null);
-  const [integrationInputs, setIntegrationInputs] = useState<Record<string, string>>({});
-  const [slackConnecting, setSlackConnecting] = useState(false);
-  const [slackConnected, setSlackConnected] = useState(false);
-  const [hoveredIntegration, setHoveredIntegration] = useState<IntegrationId | null>(null);
+  const [wantMcpSettings, setWantMcpSettings] = useState(false);
 
   // ── Reset on open ────────────────────────────────────────────────────────
+  // Reset wizard state when modal opens. Clears all local state so re-opens are
+  // always fresh. Excludes `user` to avoid resetting mid-flow on live user refreshes.
   useEffect(() => {
-    if (open) {
-      const startStep = initialStep || 'persona';
-      setCurrentStep(startStep);
-      setSelectedPersona(null);
-      setApiKey('');
-      setLlmError(null);
-      setLlmSaving(false);
-      setBoardError(null);
-      setBoardCreating(false);
-      setActiveIntegration(null);
-      setIntegrationInputs({});
-      setSlackConnecting(false);
-      setSlackConnected(false);
-      setHoveredIntegration(null);
-      // Pre-select LLM if user already has one configured
-      if (hasAnyLlmKey(user)) {
-        const claude = user?.agentic_tools?.['claude-code'];
-        const codex = user?.agentic_tools?.codex;
-        const gemini = user?.agentic_tools?.gemini;
-        if (
-          claude?.ANTHROPIC_API_KEY ||
-          claude?.CLAUDE_CODE_OAUTH_TOKEN ||
-          user?.env_vars?.ANTHROPIC_API_KEY
-        ) {
-          setSelectedAgent('claude-code');
-        } else if (codex?.OPENAI_API_KEY || user?.env_vars?.OPENAI_API_KEY) {
-          setSelectedAgent('codex');
-        } else if (gemini?.GEMINI_API_KEY || user?.env_vars?.GEMINI_API_KEY) {
-          setSelectedAgent('gemini');
-        }
-      } else {
-        setSelectedAgent(null);
-      }
-      // Preserve board name from user preferences if exists
-      const existingBoardId = user?.preferences?.mainBoardId;
-      if (!existingBoardId) {
-        setBoardName('My project board');
-        setRepoUrl('');
-        setCreatedBoardId(null);
-      } else {
-        setCreatedBoardId(existingBoardId);
-      }
+    if (!open) return;
+    setCurrentStep(initialStep || 'persona');
+    setSelectedPersona(null);
+    setSelectedAgent(null);
+    setApiKey('');
+    setAuthMethod('api-key');
+    setLlmError(null);
+    setLlmSaving(false);
+    setLlmAuthChecking(null);
+    setLlmAuthVerified({});
+    setBoardName('');
+    setBoardEmoji('📋');
+    setCreatedBoardId(null);
+    setBoardError(null);
+    setBoardCreating(false);
+    setWantMcpSettings(false);
+    // Force seed effect to re-run on every open for the same user
+    userSeedRef.current = null;
+    authCheckInFlightRef.current.clear();
+  }, [open, initialStep]);
+
+  // Guards parallel auth checks — prevents same agent being checked twice concurrently.
+  const authCheckInFlightRef = useRef<Set<AgenticToolName>>(new Set());
+
+  // Seed user-derived state once on open — runs after the reset above settles.
+  // Separate from the reset effect so live user updates don't re-trigger resets.
+  const userSeedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) {
+      userSeedRef.current = null;
+      return;
     }
-  }, [open, initialStep, user]);
+    const seedKey = user?.user_id ?? '__no_user__';
+    if (userSeedRef.current === seedKey) return;
+    userSeedRef.current = seedKey;
+    // Pre-select LLM if user already has one configured
+    if (hasAnyLlmKey(user)) {
+      const claude = user?.agentic_tools?.['claude-code'];
+      const codex = user?.agentic_tools?.codex;
+      const gemini = user?.agentic_tools?.gemini;
+      if (
+        claude?.ANTHROPIC_API_KEY ||
+        claude?.CLAUDE_CODE_OAUTH_TOKEN ||
+        user?.env_vars?.ANTHROPIC_API_KEY
+      ) {
+        setSelectedAgent('claude-code');
+      } else if (codex?.OPENAI_API_KEY || user?.env_vars?.OPENAI_API_KEY) {
+        setSelectedAgent('codex');
+      } else if (gemini?.GEMINI_API_KEY || user?.env_vars?.GEMINI_API_KEY) {
+        setSelectedAgent('gemini');
+      }
+    } else {
+      setSelectedAgent(null);
+    }
+    // Seed board name from user's name — never seed createdBoardId from preferences
+    // because the preference may point to a deleted board (stale mainBoardId).
+    // hasExistingBoard uses boardById to verify the board actually exists.
+    const firstName = user?.name?.split(' ')[0];
+    setBoardName(firstName ? `${firstName}'s board` : '');
+    setCreatedBoardId(null);
+  }, [open, user]);
 
   // ─── Derived values ──────────────────────────────────────────────────────
 
@@ -396,11 +658,50 @@ export function OnboardingWizard({
       }
       if (agent === 'codex') return !!(codex?.OPENAI_API_KEY || user.env_vars?.OPENAI_API_KEY);
       if (agent === 'gemini') return !!(gemini?.GEMINI_API_KEY || user.env_vars?.GEMINI_API_KEY);
-      if (agent === 'opencode') return hasAnyLlmKey(user);
+      if (agent === 'opencode') {
+        const opencode = user.agentic_tools?.opencode;
+        return !!opencode?.[TOOL_API_KEY_NAMES.opencode ?? 'ANTHROPIC_API_KEY'];
+      }
       return false;
     },
     [user]
   );
+
+  const agentIsVerifiedConnected = useCallback(
+    (agent: AgenticToolName): boolean => {
+      if (!agentHasKey(agent)) return false;
+      // No auth checker available — trust the stored key
+      if (!onCheckAuth) return true;
+      const verified = llmAuthVerified[agent];
+      if (verified === undefined) return false;
+      return verified;
+    },
+    [agentHasKey, llmAuthVerified, onCheckAuth]
+  );
+
+  // Verify stored keys when entering the LLM step.
+  // authCheckInFlightRef guards duplicate concurrent calls — llmAuthVerified is intentionally
+  // excluded from deps because including it would re-fire on every resolution (infinite loop).
+  useEffect(() => {
+    if (currentStep !== 'llm' || !onCheckAuth) return;
+    const agents: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'opencode'];
+    for (const agent of agents) {
+      if (!agentHasKey(agent) || authCheckInFlightRef.current.has(agent)) continue;
+      authCheckInFlightRef.current.add(agent);
+      setLlmAuthChecking(agent);
+      onCheckAuth(agent)
+        .then((result) => {
+          setLlmAuthVerified((prev) => ({ ...prev, [agent]: result.authenticated }));
+        })
+        .catch(() => {
+          setLlmAuthVerified((prev) => ({ ...prev, [agent]: false }));
+        })
+        .finally(() => {
+          authCheckInFlightRef.current.delete(agent);
+          if (authCheckInFlightRef.current.size === 0) setLlmAuthChecking(null);
+        });
+    }
+  }, [currentStep, onCheckAuth, agentHasKey]);
 
   const existingBoardId = user?.preferences?.mainBoardId || null;
   const existingBoard = existingBoardId ? boardById.get(existingBoardId) : null;
@@ -412,8 +713,14 @@ export function OnboardingWizard({
         return true; // persona is optional — never block navigation
       case 'llm': {
         if (!selectedAgent) return false;
-        if (agentHasKey(selectedAgent)) return true;
-        return apiKey.length > 8;
+        if (agentIsVerifiedConnected(selectedAgent)) return true;
+        // Key stored, check still in progress — keep enabled so user isn't stuck
+        if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return true;
+        // Require a new key with valid format (stored key absent or broken)
+        if (!apiKey.trim()) return false;
+        // Subscription tokens have no fixed format — any non-empty string is accepted
+        if (authMethod === 'claude-subscription-token') return true;
+        return validateLlmKeyPattern(selectedAgent, apiKey.trim()) === null;
       }
       case 'workspace':
         return boardName.trim().length > 0;
@@ -422,24 +729,77 @@ export function OnboardingWizard({
       case 'done':
         return true;
     }
-  }, [currentStep, selectedAgent, agentHasKey, apiKey, boardName]);
+  }, [
+    currentStep,
+    selectedAgent,
+    agentIsVerifiedConnected,
+    agentHasKey,
+    llmAuthVerified,
+    apiKey,
+    authMethod,
+    boardName,
+  ]);
+
+  const disabledReason = useMemo((): string | null => {
+    if (llmSaving || boardCreating) return null;
+    switch (currentStep) {
+      case 'llm': {
+        if (!selectedAgent) return 'Choose an AI model first';
+        if (agentIsVerifiedConnected(selectedAgent)) return null;
+        if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return null;
+        if (!apiKey.trim()) return 'Enter your API key to continue';
+        const err = validateLlmKeyPattern(selectedAgent, apiKey.trim());
+        return err ?? null;
+      }
+      case 'workspace':
+        return boardName.trim().length === 0 ? 'Enter a board name to continue' : null;
+      default:
+        return null;
+    }
+  }, [
+    currentStep,
+    selectedAgent,
+    agentIsVerifiedConnected,
+    agentHasKey,
+    llmAuthVerified,
+    apiKey,
+    boardName,
+    llmSaving,
+    boardCreating,
+  ]);
 
   const primaryLabel = useMemo(() => {
     switch (currentStep) {
       case 'persona':
         return selectedPersona ? 'This is me →' : 'Continue →';
-      case 'llm':
+      case 'llm': {
+        if (
+          selectedAgent &&
+          agentHasKey(selectedAgent) &&
+          llmAuthVerified[selectedAgent] === undefined
+        )
+          return 'Checking…';
+        if (selectedAgent && agentIsVerifiedConnected(selectedAgent)) return 'Continue →';
         return 'Connect →';
+      }
       case 'workspace':
         return hasExistingBoard ? 'Keep going →' : 'Create board →';
       case 'integrations':
-        return 'Continue →';
+        return 'Connect when done →';
       case 'done':
         return 'Open my board →';
     }
-  }, [currentStep, hasExistingBoard, selectedPersona]);
+  }, [
+    currentStep,
+    hasExistingBoard,
+    selectedPersona,
+    selectedAgent,
+    agentHasKey,
+    llmAuthVerified,
+    agentIsVerifiedConnected,
+  ]);
 
-  const canGoBack = stepIndex > 0 && currentStep !== 'done';
+  const canGoBack = stepIndex > 0;
   const isSkippable = meta.skippable && currentStep !== 'done';
 
   // ─── Handlers ────────────────────────────────────────────────────────────
@@ -452,14 +812,15 @@ export function OnboardingWizard({
         ...user.preferences,
         onboarding: { ...current, ...updates },
       } as UserPreferences;
-      onUpdateUser(user.user_id, { preferences: prefs });
+      onUpdateUser(user.user_id, { preferences: prefs }).catch((e) => {
+        console.warn('onboarding progress save failed', e);
+      });
     },
     [onUpdateUser, user]
   );
 
   const goToStep = useCallback((step: WizardStep) => {
     setCurrentStep(step);
-    setActiveIntegration(null);
   }, []);
 
   const handleBack = useCallback(() => {
@@ -477,28 +838,51 @@ export function OnboardingWizard({
         if (selectedPersona) {
           saveOnboardingProgress({ persona: selectedPersona });
         }
-        goToStep('workspace');
+        goToStep('llm');
         break;
       }
       case 'llm': {
         if (!selectedAgent) return;
-        if (agentHasKey(selectedAgent)) {
-          goToStep('done');
+        if (agentIsVerifiedConnected(selectedAgent)) {
+          goToStep('workspace');
+          return;
+        }
+        // Key stored, auth check still running — proceed optimistically
+        if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) {
+          goToStep('workspace');
           return;
         }
         if (!user || !apiKey.trim()) return;
+        const patternErr = validateLlmKeyPattern(selectedAgent, apiKey.trim());
+        if (patternErr) {
+          setLlmError(patternErr);
+          return;
+        }
         setLlmSaving(true);
         setLlmError(null);
+        if (onCheckAuth) {
+          try {
+            const authResult = await onCheckAuth(selectedAgent, apiKey.trim());
+            if (!authResult.authenticated) {
+              setLlmError(
+                authResult.hint ||
+                  'API key rejected - check it is correct and has the right permissions.'
+              );
+              setLlmSaving(false);
+              return;
+            }
+          } catch {
+            // auth check failure is non-fatal — proceed to save anyway
+          }
+        }
         const keyName = keyNameForAgent(selectedAgent, authMethod);
-        const targetTool: AgenticToolName =
-          selectedAgent === 'opencode' ? 'claude-code' : selectedAgent;
         try {
           await onUpdateUser(user.user_id, {
             agentic_tools: {
-              [targetTool]: { [keyName]: apiKey.trim() },
+              [selectedAgent]: { [keyName]: apiKey.trim() },
             } as UpdateUserInput['agentic_tools'],
           });
-          goToStep('done');
+          goToStep('workspace');
         } catch (err) {
           setLlmError(
             `Failed to save API key: ${err instanceof Error ? err.message : String(err)}`
@@ -522,10 +906,12 @@ export function OnboardingWizard({
             icon: boardEmoji,
           });
           const newBoardId = board?.board_id ?? null;
-          setCreatedBoardId(newBoardId);
-          if (newBoardId && user) {
-            saveOnboardingProgress({ boardId: newBoardId });
+          if (!newBoardId) {
+            setBoardError('Board was created but returned no ID - try again.');
+            return;
           }
+          setCreatedBoardId(newBoardId);
+          if (user) saveOnboardingProgress({ boardId: newBoardId });
           goToStep('integrations');
         } catch (err) {
           setBoardError(err instanceof Error ? err.message : 'Failed to create board');
@@ -535,16 +921,20 @@ export function OnboardingWizard({
         break;
       }
       case 'integrations': {
-        if (activeIntegration) {
-          setActiveIntegration(null);
-        } else {
-          goToStep('llm');
-        }
+        setWantMcpSettings(true);
+        goToStep('done');
         break;
       }
       case 'done': {
-        const boardIdToUse = createdBoardId || existingBoardId || '';
-        onComplete({ branchId: '', sessionId: '', boardId: boardIdToUse, path: 'assistant' });
+        // existingBoard is null if mainBoardId points to a deleted board — don't pass stale IDs
+        const boardIdToUse = createdBoardId || (existingBoard ? existingBoardId : '') || '';
+        onComplete({
+          branchId: '',
+          sessionId: '',
+          boardId: boardIdToUse,
+          path: 'assistant',
+          integrationsToSetup: wantMcpSettings ? (['slack'] as IntegrationId[]) : [],
+        });
         break;
       }
     }
@@ -552,164 +942,216 @@ export function OnboardingWizard({
     currentStep,
     selectedPersona,
     selectedAgent,
+    agentIsVerifiedConnected,
     agentHasKey,
+    llmAuthVerified,
     user,
     apiKey,
     authMethod,
+    onCheckAuth,
     onUpdateUser,
     hasExistingBoard,
     client,
     boardName,
     boardEmoji,
     saveOnboardingProgress,
-    activeIntegration,
+    wantMcpSettings,
     createdBoardId,
     existingBoardId,
+    existingBoard,
     onComplete,
     goToStep,
   ]);
 
-  const handleSlackOAuth = useCallback(async () => {
-    setSlackConnecting(true);
-    // TODO: Wire to real Slack OAuth flow (MCP server creation)
-    await new Promise((resolve) => setTimeout(resolve, 1400));
-    setSlackConnecting(false);
-    setSlackConnected(true);
-  }, []);
-
-  // ─── Progress dots ────────────────────────────────────────────────────────
+  // ─── Progress stepper ────────────────────────────────────────────────────
 
   const renderProgressDots = () => (
-    <div style={{ textAlign: 'center', marginBottom: 6 }}>
+    <div style={{ textAlign: 'center', marginBottom: 4 }}>
       <div
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 8,
-          marginBottom: 8,
+          gap: 0,
+          marginBottom: 10,
         }}
       >
         {STEPS.map((step, index) => {
           const isCompleted = index < stepIndex;
           const isCurrent = index === stepIndex;
+          const isLast = index === STEPS.length - 1;
           return (
-            <div
-              key={step}
-              style={{
-                width: isCurrent ? 12 : 8,
-                height: isCurrent ? 12 : 8,
-                borderRadius: '50%',
-                background: isCompleted || isCurrent ? PRIMARY : 'rgba(255,255,255,0.2)',
-                boxShadow: isCurrent ? `0 0 8px ${token.colorPrimaryActive}` : undefined,
-                transition: 'all 0.2s ease',
-                flexShrink: 0,
-              }}
-            />
+            <Fragment key={step}>
+              <div
+                style={{
+                  width: 26,
+                  height: 26,
+                  borderRadius: '50%',
+                  background: isCompleted
+                    ? PRIMARY
+                    : isCurrent
+                      ? 'transparent'
+                      : 'rgba(255,255,255,0.05)',
+                  border: isCurrent
+                    ? `2px solid ${PRIMARY}`
+                    : isCompleted
+                      ? 'none'
+                      : '1px solid rgba(255,255,255,0.12)',
+                  boxShadow: isCurrent
+                    ? `0 0 0 3px rgba(46,154,146,0.2), 0 0 12px rgba(46,154,146,0.3)`
+                    : undefined,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: isCompleted ? '#fff' : isCurrent ? PRIMARY : 'rgba(255,255,255,0.2)',
+                  transition: 'all 0.25s ease',
+                  flexShrink: 0,
+                }}
+              >
+                {isCompleted ? <CheckOutlined style={{ fontSize: 9 }} /> : STEP_META[step].number}
+              </div>
+              {!isLast && (
+                <div
+                  style={{
+                    height: 1,
+                    width: 22,
+                    flexShrink: 0,
+                    background: index < stepIndex ? PRIMARY : 'rgba(255,255,255,0.08)',
+                    transition: 'background 0.3s ease',
+                  }}
+                />
+              )}
+            </Fragment>
           );
         })}
-      </div>
-      <div>
-        <Text style={{ fontSize: 12, color: TEXT_MUTED }}>
-          {meta.number} / 5 — {meta.label}
-          {meta.skippable && <span style={{ color: TEXT_MUTED }}> · optional</span>}
-        </Text>
       </div>
     </div>
   );
 
   // ─── Step renderers ───────────────────────────────────────────────────────
 
-  const renderPersona = () => (
-    <div>
-      <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
-        Let's make this yours.
-      </Title>
-      <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-        How do you work? This helps us understand who's using Agor and what to build next.
-      </Paragraph>
-
+  const renderStepBadge = (emoji: string, title: string) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
       <div
         style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: 12,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 36,
+          height: 36,
+          borderRadius: 11,
+          flexShrink: 0,
+          background: 'rgba(255,255,255,0.07)',
+          border: '1px solid rgba(255,255,255,0.14)',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          fontSize: 18,
         }}
       >
-        {PERSONAS.map((persona) => {
-          const isSelected = selectedPersona === persona.id;
-          return (
-            <button
-              key={persona.id}
-              type="button"
-              onClick={() => setSelectedPersona(persona.id)}
-              style={{
-                background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
-                backdropFilter: 'blur(8px)',
-                WebkitBackdropFilter: 'blur(8px)',
-                borderRadius: 12,
-                padding: '16px',
-                cursor: 'pointer',
-                textAlign: 'left',
-                boxShadow: isSelected
-                  ? CARD_SELECTED_SHADOW
-                  : 'inset 0 1px 0 rgba(255,255,255,0.06)',
-                transition: 'all 0.15s ease',
-                width: '100%',
-              }}
-            >
-              <div style={{ fontSize: 24, marginBottom: 8 }}>{persona.emoji}</div>
-              <div style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14, marginBottom: 2 }}>
-                {persona.title}
-              </div>
-              <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginBottom: 4 }}>
-                {persona.role}
-              </div>
-              <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{persona.desc}</div>
-            </button>
-          );
-        })}
+        {emoji}
       </div>
+      <Title level={3} style={{ color: TEXT_PRIMARY, margin: 0 }}>
+        {title}
+      </Title>
     </div>
   );
+
+  const renderPersona = () => {
+    const firstName = user?.name?.split(' ')[0];
+    const personaTitle = firstName
+      ? `${firstName}, let's make this yours.`
+      : "Let's make this yours.";
+    return (
+      <div>
+        {renderStepBadge('👋', personaTitle)}
+        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
+          How do you work? We'll tailor your setup to what you actually need.
+        </Paragraph>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 12,
+          }}
+        >
+          {PERSONAS.map((persona) => {
+            const isSelected = selectedPersona === persona.id;
+            return (
+              <button
+                key={persona.id}
+                type="button"
+                className="onb-card"
+                onClick={() => setSelectedPersona(persona.id)}
+                style={{
+                  background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
+                  border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                  backdropFilter: 'blur(20px)',
+                  WebkitBackdropFilter: 'blur(20px)',
+                  borderRadius: 12,
+                  padding: '16px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
+                  transition: 'all 0.15s ease',
+                  width: '100%',
+                }}
+              >
+                <div style={{ fontSize: 24, marginBottom: 8 }}>{persona.emoji}</div>
+                <div
+                  style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14, marginBottom: 6 }}
+                >
+                  {persona.title}
+                </div>
+                <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{persona.desc}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const renderLlm = () => {
     return (
       <div>
-        <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
-          Last step: connect your AI.
-        </Title>
+        {renderStepBadge('✦', 'Connect your AI')}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-          Choose a model and add your API key. This is what powers everything — you can change it
-          anytime in Settings.
+          Choose a model and connect it. This powers everything - you can change it anytime in
+          Settings.
         </Paragraph>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
           {LLM_OPTIONS.map((option) => {
             const isSelected = selectedAgent === option.agent;
             const hasKey = agentHasKey(option.agent);
-            const optionKeyName = keyNameForAgent(option.agent, authMethod);
+            const isChecking = llmAuthChecking === option.agent;
+            const isVerified = llmAuthVerified[option.agent];
+            const effectiveHasKey = hasKey && isVerified === true;
+            const keyBroken = hasKey && isVerified === false;
             return (
               <div
                 key={option.id}
                 style={{
                   background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
                   border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
-                  backdropFilter: 'blur(8px)',
-                  WebkitBackdropFilter: 'blur(8px)',
+                  backdropFilter: 'blur(20px)',
+                  WebkitBackdropFilter: 'blur(20px)',
                   borderRadius: 10,
-                  boxShadow: isSelected
-                    ? CARD_SELECTED_SHADOW
-                    : 'inset 0 1px 0 rgba(255,255,255,0.06)',
+                  boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
                   transition: 'all 0.15s ease',
                   overflow: 'hidden',
                 }}
               >
                 <button
                   type="button"
+                  aria-pressed={isSelected}
                   onClick={() => {
                     setSelectedAgent(option.agent);
                     setApiKey('');
+                    setAuthMethod('api-key');
                     setLlmError(null);
                   }}
                   style={{
@@ -728,7 +1170,7 @@ export function OnboardingWizard({
                     style={{
                       fontSize: 20,
                       flexShrink: 0,
-                      color: isSelected ? PRIMARY : TEXT_SECONDARY,
+                      color: TEXT_SECONDARY,
                     }}
                   >
                     {option.symbol}
@@ -753,12 +1195,29 @@ export function OnboardingWizard({
                           Recommended
                         </Tag>
                       )}
-                      {hasKey && (
+                      {isChecking && (
+                        <Tag
+                          color="default"
+                          style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
+                        >
+                          <LoadingOutlined style={{ marginRight: 4 }} />
+                          Checking...
+                        </Tag>
+                      )}
+                      {!isChecking && effectiveHasKey && (
                         <Tag
                           color="success"
                           style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
                         >
                           Connected
+                        </Tag>
+                      )}
+                      {!isChecking && keyBroken && (
+                        <Tag
+                          color="error"
+                          style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
+                        >
+                          Key not working
                         </Tag>
                       )}
                     </div>
@@ -768,11 +1227,13 @@ export function OnboardingWizard({
                   </div>
                   {isSelected ? (
                     <div
+                      className="onb-check"
                       style={{
                         width: 18,
                         height: 18,
                         borderRadius: '50%',
-                        background: PRIMARY,
+                        background: 'rgba(255,255,255,0.15)',
+                        border: '1.5px solid rgba(255,255,255,0.5)',
                         flexShrink: 0,
                         marginTop: 2,
                         display: 'flex',
@@ -780,7 +1241,7 @@ export function OnboardingWizard({
                         justifyContent: 'center',
                       }}
                     >
-                      <CheckOutlined style={{ color: '#fff', fontSize: 10 }} />
+                      <CheckOutlined style={{ color: '#fff', fontSize: 9 }} />
                     </div>
                   ) : (
                     <div
@@ -796,59 +1257,22 @@ export function OnboardingWizard({
                   )}
                 </button>
 
-                {isSelected && !hasKey && (
+                {isSelected && isChecking && (
                   <div
                     style={{
-                      padding: '0 16px 16px',
+                      padding: '10px 16px 14px',
                       borderTop: '1px solid rgba(255,255,255,0.06)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
                     }}
                   >
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginTop: 12,
-                        marginBottom: 8,
-                      }}
-                    >
-                      <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
-                        {optionKeyName}
-                      </Text>
-                      {option.keyLink && (
-                        <Typography.Link
-                          href={option.keyLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: 12, color: PRIMARY }}
-                        >
-                          Get your key at {option.keyLinkLabel} →
-                        </Typography.Link>
-                      )}
-                    </div>
-                    <Input.Password
-                      placeholder={option.placeholder}
-                      value={apiKey}
-                      onChange={(e) => {
-                        setApiKey(e.target.value);
-                        setLlmError(null);
-                      }}
-                      style={{
-                        background: 'rgba(0,0,0,0.3)',
-                        borderColor: 'rgba(255,255,255,0.12)',
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                      }}
-                    />
-                    <Text
-                      style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 8, display: 'block' }}
-                    >
-                      🔒 Stored securely — never shared or logged.
-                    </Text>
+                    <LoadingOutlined style={{ color: TEXT_MUTED, fontSize: 14 }} />
+                    <Text style={{ color: TEXT_MUTED, fontSize: 13 }}>Checking connection...</Text>
                   </div>
                 )}
 
-                {isSelected && hasKey && (
+                {isSelected && !isChecking && effectiveHasKey && (
                   <div
                     style={{
                       padding: '10px 16px 14px',
@@ -860,27 +1284,186 @@ export function OnboardingWizard({
                   >
                     <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 14 }} />
                     <Text style={{ color: SUCCESS_GREEN, fontSize: 13 }}>
-                      {option.title} is already connected — you&apos;re all set.
+                      {option.title} is connected - you&apos;re all set.
                     </Text>
+                  </div>
+                )}
+
+                {isSelected && !isChecking && (keyBroken || !hasKey) && (
+                  <div
+                    style={{
+                      padding: '0 16px 16px',
+                      borderTop: '1px solid rgba(255,255,255,0.06)',
+                    }}
+                  >
+                    {keyBroken && (
+                      <Alert
+                        type="warning"
+                        message="Key stored but not working - enter a new one."
+                        showIcon
+                        style={{ marginTop: 12, marginBottom: 8, fontSize: 12 }}
+                      />
+                    )}
+
+                    {/* Auth method toggle — Claude only */}
+                    {option.agent === 'claude-code' && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          marginTop: 12,
+                          marginBottom: 12,
+                          borderRadius: 8,
+                          border: '1px solid rgba(255,255,255,0.13)',
+                          overflow: 'hidden',
+                          background:
+                            'linear-gradient(180deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.2) 100%)',
+                          backdropFilter: 'blur(12px)',
+                          WebkitBackdropFilter: 'blur(12px)',
+                          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+                        }}
+                      >
+                        {(
+                          [
+                            { label: 'API key', value: 'api-key' },
+                            { label: 'Subscription token', value: 'claude-subscription-token' },
+                          ] as { label: string; value: AuthMethod }[]
+                        ).map((opt, idx) => {
+                          const active = authMethod === opt.value;
+                          return (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              onClick={() => {
+                                setAuthMethod(opt.value);
+                                setApiKey('');
+                                setLlmError(null);
+                              }}
+                              style={{
+                                flex: 1,
+                                padding: '7px 10px',
+                                fontSize: 12,
+                                fontWeight: active ? 600 : 400,
+                                cursor: 'pointer',
+                                border: 'none',
+                                borderLeft: idx > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none',
+                                background: active ? 'rgba(46,154,146,0.18)' : 'transparent',
+                                color: active ? PRIMARY : TEXT_MUTED,
+                                transition: 'background 0.15s ease, color 0.15s ease',
+                              }}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginTop:
+                          option.agent !== 'claude-code' && keyBroken
+                            ? 0
+                            : option.agent !== 'claude-code'
+                              ? 12
+                              : 0,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
+                        {getKeyLabel(option.agent, authMethod)}
+                      </Text>
+                      {option.keyLink && authMethod === 'api-key' && (
+                        <Typography.Link
+                          href={option.keyLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ fontSize: 12, color: PRIMARY }}
+                        >
+                          Get your key at {option.keyLinkLabel} →
+                        </Typography.Link>
+                      )}
+                    </div>
+
+                    {authMethod === 'claude-subscription-token' ? (
+                      <>
+                        <Alert
+                          type="info"
+                          showIcon
+                          style={{ marginBottom: 10, fontSize: 12 }}
+                          message={
+                            <span>
+                              For claude.ai Pro or Max subscribers. Run{' '}
+                              <code>claude setup-token</code> on the machine Agor runs sessions on,
+                              then paste the token below.
+                            </span>
+                          }
+                        />
+                        <Input.Password
+                          aria-label="Claude subscription token"
+                          placeholder="Paste token from claude setup-token…"
+                          value={apiKey}
+                          onChange={(e) => {
+                            setApiKey(e.target.value);
+                            setLlmError(null);
+                          }}
+                          style={{
+                            background: 'rgba(0,0,0,0.3)',
+                            borderColor: 'rgba(255,255,255,0.12)',
+                            fontFamily: 'monospace',
+                            fontSize: 13,
+                          }}
+                        />
+                      </>
+                    ) : (
+                      <Input.Password
+                        aria-label={getKeyLabel(option.agent, authMethod)}
+                        placeholder={option.placeholder}
+                        value={apiKey}
+                        onChange={(e) => {
+                          setApiKey(e.target.value);
+                          if (selectedAgent)
+                            setLlmError(validateLlmKeyPattern(selectedAgent, e.target.value));
+                        }}
+                        style={{
+                          background: 'rgba(0,0,0,0.3)',
+                          borderColor: 'rgba(255,255,255,0.12)',
+                          fontFamily: 'monospace',
+                          fontSize: 13,
+                        }}
+                      />
+                    )}
+
+                    <Text
+                      style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 8, display: 'block' }}
+                    >
+                      Stored securely - never shared or logged.
+                    </Text>
+                    {llmError && (
+                      <Alert
+                        type="error"
+                        message={llmError}
+                        showIcon
+                        style={{ marginTop: 10, fontSize: 12 }}
+                      />
+                    )}
                   </div>
                 )}
               </div>
             );
           })}
         </div>
-
-        {llmError && <Alert type="error" message={llmError} showIcon style={{ marginTop: 16 }} />}
       </div>
     );
   };
 
   const renderWorkspace = () => (
     <div>
-      <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
-        Set up your workspace.
-      </Title>
+      {renderStepBadge('🗂️', 'Set up your workspace')}
       <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-        Connect a repo and name your board. Both can be changed anytime.
+        Name your board. You can link repos and change everything anytime.
       </Paragraph>
 
       {/* Concept pills */}
@@ -893,15 +1476,19 @@ export function OnboardingWizard({
           <div
             key={term}
             style={{
-              background: token.colorFillAlter,
-              border: `1px solid ${token.colorBorderSecondary}`,
+              background:
+                'linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 100%)',
+              border: '1px solid rgba(255,255,255,0.13)',
+              backdropFilter: 'blur(12px)',
+              WebkitBackdropFilter: 'blur(12px)',
               borderRadius: 20,
               padding: '4px 12px',
               fontSize: 12,
               color: TEXT_SECONDARY,
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09)',
             }}
           >
-            {emoji} <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> — {def}
+            {emoji} <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> - {def}
           </div>
         ))}
       </div>
@@ -936,36 +1523,13 @@ export function OnboardingWizard({
             <Text
               style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
             >
-              Repo URL <span style={{ color: TEXT_MUTED, fontSize: 12 }}>optional</span>{' '}
-              <Tooltip
-                title="Link a Git repo to enable AI coding branches. Agor checks out branches from this repo when your AI starts a coding session. You can add more repos later."
-                placement="right"
-              >
-                <QuestionCircleOutlined
-                  style={{ color: TEXT_MUTED, fontSize: 12, cursor: 'help' }}
-                />
-              </Tooltip>
-            </Text>
-            <Input
-              placeholder="https://github.com/you/your-repo"
-              value={repoUrl}
-              onChange={(e) => setRepoUrl(e.target.value)}
-              style={{
-                background: 'rgba(0,0,0,0.3)',
-                borderColor: 'rgba(255,255,255,0.12)',
-              }}
-            />
-          </div>
-          <div>
-            <Text
-              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
-            >
               Board name
             </Text>
             <div style={{ display: 'flex', gap: 0 }}>
               <EmojiPickerInput value={boardEmoji} onChange={setBoardEmoji} defaultEmoji="📋" />
               <Input
-                placeholder="My project board"
+                aria-label="Board name"
+                placeholder="e.g. Backend API, Mobile app..."
                 value={boardName}
                 onChange={(e) => setBoardName(e.target.value)}
                 style={{
@@ -978,29 +1542,37 @@ export function OnboardingWizard({
               />
             </div>
           </div>
-          <div
-            style={{
-              background: GLASS_CARD_BG,
-              border: GLASS_CARD_BORDER,
-              borderRadius: 10,
-              padding: '12px 14px',
-              display: 'flex',
-              gap: 10,
-              alignItems: 'flex-start',
-            }}
-          >
-            <span style={{ fontSize: 18, flexShrink: 0 }}>🤖</span>
-            <div>
-              <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
-                Primary assistant
-              </Text>
-              <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
-                Each board has a dedicated AI agent that watches it and can be tasked directly —
-                your board&apos;s primary assistant. It will use the AI you chose in the previous
-                step.
+          {(() => {
+            const chosenOption = LLM_OPTIONS.find((o) => o.agent === selectedAgent);
+            return (
+              <div
+                style={{
+                  background: GLASS_CARD_BG,
+                  border: GLASS_CARD_BORDER,
+                  backdropFilter: 'blur(20px)',
+                  WebkitBackdropFilter: 'blur(20px)',
+                  boxShadow: GLASS_CARD_SHADOW,
+                  borderRadius: 10,
+                  padding: '12px 14px',
+                  display: 'flex',
+                  gap: 10,
+                  alignItems: 'flex-start',
+                }}
+              >
+                <span style={{ fontSize: 18, flexShrink: 0 }}>🤖</span>
+                <div>
+                  <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
+                    Primary assistant
+                  </Text>
+                  <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
+                    {chosenOption
+                      ? `Using ${chosenOption.title}. Change anytime in Settings.`
+                      : 'Each board gets a dedicated AI agent. Connect your AI in the previous step.'}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            );
+          })()}
         </div>
       )}
 
@@ -1008,404 +1580,178 @@ export function OnboardingWizard({
     </div>
   );
 
-  const renderIntegrationSubPanel = (integration: IntegrationConfig) => {
-    const inputKey = `${integration.id}-input`;
-    const inputValue = integrationInputs[inputKey] || '';
-
-    const subPrimaryEnabled = integration.id === 'slack' ? slackConnected : inputValue.length > 0;
-
+  const renderIntegrations = () => {
+    const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
     return (
       <div>
-        {/* Value prop callout */}
+        {renderStepBadge('🔌', 'Connect your tools via MCP')}
+
+        {/* General MCP intro */}
         <div
           style={{
-            background: token.colorFillAlter,
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: token.borderRadiusLG,
-            padding: '12px 14px',
-            marginBottom: 20,
+            padding: '10px 14px',
+            marginBottom: 16,
+            background: GLASS_CARD_BG,
+            border: GLASS_CARD_BORDER,
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            boxShadow: GLASS_CARD_SHADOW,
+            borderRadius: 10,
+            fontSize: 12,
+            color: TEXT_SECONDARY,
+            lineHeight: 1.6,
           }}
         >
-          <Text style={{ color: TEXT_SECONDARY, fontSize: 13 }}>{integration.valueProp}</Text>
+          Agor connects your AI to external tools using{' '}
+          <Typography.Link
+            href={MCP_DOCS_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 12 }}
+          >
+            MCP (Model Context Protocol)
+          </Typography.Link>
+          . You set each one up yourself in{' '}
+          <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>Settings - MCP</span>. Here are the
+          ones that work well for you.
         </div>
 
-        {integration.id === 'slack' && (
-          <div style={{ textAlign: 'center', padding: '8px 0' }}>
-            {slackConnected ? (
+        {/* Persona-curated MCP recommendations — informational, no selection */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {recs.map((rec) => (
+            <div
+              key={rec.id}
+              style={{
+                background: GLASS_CARD_BG,
+                border: GLASS_CARD_BORDER,
+                backdropFilter: 'blur(20px)',
+                WebkitBackdropFilter: 'blur(20px)',
+                borderRadius: 12,
+                boxShadow: GLASS_CARD_SHADOW,
+                overflow: 'hidden',
+              }}
+            >
               <div
                 style={{
+                  padding: '12px 16px',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 10,
-                  padding: '14px 0',
+                  gap: 12,
                 }}
               >
-                <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 20 }} />
-                <Text style={{ color: SUCCESS_GREEN, fontWeight: 500 }}>
-                  Slack connected successfully!
-                </Text>
+                <span style={{ fontSize: 20, flexShrink: 0 }}>{rec.emoji}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
+                      {rec.name}
+                    </span>
+                    {rec.featured && (
+                      <Tag
+                        color="processing"
+                        style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px', margin: 0 }}
+                      >
+                        Recommended
+                      </Tag>
+                    )}
+                  </div>
+                  <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 1 }}>
+                    {rec.description}
+                  </div>
+                </div>
               </div>
-            ) : (
-              <Button
-                onClick={handleSlackOAuth}
-                loading={slackConnecting}
+              <div
                 style={{
-                  background: '#4A154B',
-                  borderColor: '#4A154B',
-                  color: '#fff',
-                  height: 44,
-                  paddingLeft: 24,
-                  paddingRight: 24,
-                  fontSize: 15,
+                  borderTop: '1px solid rgba(255,255,255,0.06)',
+                  padding: '7px 16px',
                 }}
-                size="large"
               >
-                {slackConnecting ? 'Connecting…' : '💬 Connect with Slack'}
-              </Button>
-            )}
-          </div>
-        )}
-
-        {integration.id === 'github' && (
-          <div>
-            <Text
-              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 8 }}
-            >
-              Personal access token{' '}
-              <Typography.Link
-                href="https://github.com/settings/tokens"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ fontSize: 12, color: PRIMARY }}
-              >
-                github.com/settings/tokens →
-              </Typography.Link>
-            </Text>
-            <Input.Password
-              placeholder="ghp_…"
-              value={inputValue}
-              onChange={(e) => setIntegrationInputs((p) => ({ ...p, [inputKey]: e.target.value }))}
-              style={{
-                background: 'rgba(0,0,0,0.3)',
-                borderColor: 'rgba(255,255,255,0.12)',
-                fontFamily: 'monospace',
-              }}
-            />
-            <Text style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 6, display: 'block' }}>
-              Needs: repo, read:org permissions
-            </Text>
-          </div>
-        )}
-
-        {integration.id === 'linear' && (
-          <div>
-            <Text
-              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 8 }}
-            >
-              API key{' '}
-              <Typography.Link
-                href="https://linear.app/settings/api"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ fontSize: 12, color: PRIMARY }}
-              >
-                linear.app/settings/api →
-              </Typography.Link>
-            </Text>
-            <Input.Password
-              placeholder="lin_api_…"
-              value={inputValue}
-              onChange={(e) => setIntegrationInputs((p) => ({ ...p, [inputKey]: e.target.value }))}
-              style={{
-                background: 'rgba(0,0,0,0.3)',
-                borderColor: 'rgba(255,255,255,0.12)',
-                fontFamily: 'monospace',
-              }}
-            />
-          </div>
-        )}
-
-        {integration.id === 'jira' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
-              <Text
-                style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
-              >
-                Domain (e.g. yourco.atlassian.net)
-              </Text>
-              <Input
-                placeholder="yourco.atlassian.net"
-                value={integrationInputs[`${integration.id}-domain`] || ''}
-                onChange={(e) =>
-                  setIntegrationInputs((p) => ({
-                    ...p,
-                    [`${integration.id}-domain`]: e.target.value,
-                  }))
-                }
-                style={{ background: 'rgba(0,0,0,0.3)', borderColor: 'rgba(255,255,255,0.12)' }}
-              />
-            </div>
-            <div>
-              <Text
-                style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
-              >
-                Email
-              </Text>
-              <Input
-                placeholder="you@yourco.com"
-                value={integrationInputs[`${integration.id}-email`] || ''}
-                onChange={(e) =>
-                  setIntegrationInputs((p) => ({
-                    ...p,
-                    [`${integration.id}-email`]: e.target.value,
-                  }))
-                }
-                style={{ background: 'rgba(0,0,0,0.3)', borderColor: 'rgba(255,255,255,0.12)' }}
-              />
-            </div>
-            <div>
-              <Text
-                style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
-              >
-                API token{' '}
                 <Typography.Link
-                  href="https://id.atlassian.com/manage-profile/security/api-tokens"
+                  href={rec.docsUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ fontSize: 12, color: PRIMARY }}
+                  style={{ fontSize: 12, color: TEXT_MUTED }}
                 >
-                  id.atlassian.com →
+                  Setup guide →
                 </Typography.Link>
-              </Text>
-              <Input.Password
-                placeholder="ATATT3x…"
-                value={inputValue}
-                onChange={(e) =>
-                  setIntegrationInputs((p) => ({ ...p, [inputKey]: e.target.value }))
-                }
-                style={{
-                  background: 'rgba(0,0,0,0.3)',
-                  borderColor: 'rgba(255,255,255,0.12)',
-                  fontFamily: 'monospace',
-                }}
-              />
-            </div>
-          </div>
-        )}
-
-        {integration.id === 'notion' && (
-          <div>
-            <Text
-              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 8 }}
-            >
-              Integration token{' '}
-              <Typography.Link
-                href="https://www.notion.so/my-integrations"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ fontSize: 12, color: PRIMARY }}
-              >
-                notion.so/my-integrations →
-              </Typography.Link>
-            </Text>
-            <Input.Password
-              placeholder="secret_…"
-              value={inputValue}
-              onChange={(e) => setIntegrationInputs((p) => ({ ...p, [inputKey]: e.target.value }))}
-              style={{
-                background: 'rgba(0,0,0,0.3)',
-                borderColor: 'rgba(255,255,255,0.12)',
-                fontFamily: 'monospace',
-              }}
-            />
-          </div>
-        )}
-
-        {/* Sub-panel footer */}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginTop: 24,
-            paddingTop: 16,
-            borderTop: '1px solid rgba(255,255,255,0.06)',
-          }}
-        >
-          <Button
-            type="text"
-            icon={<LeftOutlined />}
-            onClick={() => setActiveIntegration(null)}
-            style={{ color: TEXT_SECONDARY, paddingLeft: 0 }}
-          >
-            Back to tools
-          </Button>
-          <Button
-            type="primary"
-            disabled={!subPrimaryEnabled}
-            onClick={() => {
-              // TODO: Wire to real MCP server creation via onCreateMCPServer prop
-              setActiveIntegration(null);
-            }}
-          >
-            Connect {integration.name}
-          </Button>
-        </div>
-      </div>
-    );
-  };
-
-  const renderIntegrations = () => {
-    const slackConfig = INTEGRATIONS.find((i) => i.id === 'slack')!;
-    const gridIntegrations = INTEGRATIONS.filter((i) => i.id !== 'slack');
-
-    if (activeIntegration) {
-      const config = INTEGRATIONS.find((i) => i.id === activeIntegration);
-      if (!config) return null;
-      return (
-        <div>
-          <div style={{ marginBottom: 20 }}>
-            <Text style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 16 }}>
-              {config.emoji} Connect {config.name}
-            </Text>
-          </div>
-          {renderIntegrationSubPanel(config)}
-        </div>
-      );
-    }
-
-    return (
-      <div>
-        <Title level={3} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
-          Give your AI superpowers.
-        </Title>
-        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-          Connect your tools and your AI can take real action across your entire workflow.
-        </Paragraph>
-
-        {/* Slack featured card */}
-        <div
-          style={{
-            background: token.colorPrimaryBg,
-            border: `1px solid ${token.colorPrimaryBorder}`,
-            borderRadius: token.borderRadiusLG,
-            padding: '16px 18px',
-            marginBottom: 14,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 16,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 28 }}>💬</span>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
-                <Text style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14 }}>Slack</Text>
-                <Tag
-                  color="processing"
-                  style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
-                >
-                  Recommended
-                </Tag>
               </div>
-              <Text style={{ color: TEXT_SECONDARY, fontSize: 12 }}>{slackConfig.description}</Text>
-            </div>
-          </div>
-          <Button
-            type="primary"
-            size="small"
-            onClick={() => setActiveIntegration('slack')}
-            style={{ flexShrink: 0 }}
-          >
-            Connect Slack
-          </Button>
-        </div>
-
-        {/* 2x2 grid */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 10,
-            marginBottom: 16,
-          }}
-        >
-          {gridIntegrations.map((integration) => (
-            <div
-              key={integration.id}
-              onMouseEnter={() => setHoveredIntegration(integration.id as IntegrationId)}
-              onMouseLeave={() => setHoveredIntegration(null)}
-              style={{
-                background:
-                  hoveredIntegration === integration.id ? 'rgba(255,255,255,0.07)' : GLASS_CARD_BG,
-                border:
-                  hoveredIntegration === integration.id
-                    ? `1px solid ${token.colorPrimaryBorder}`
-                    : GLASS_CARD_BORDER,
-                borderRadius: 10,
-                padding: '14px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                transition: 'background 0.15s, border-color 0.15s',
-                cursor: 'default',
-              }}
-            >
-              <div
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 18 }}>{integration.emoji}</span>
-                  <Text style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
-                    {integration.name}
-                  </Text>
-                </div>
-                <Button
-                  type="text"
-                  size="small"
-                  onClick={() => setActiveIntegration(integration.id as IntegrationId)}
-                  style={{ color: PRIMARY, padding: '2px 8px', fontSize: 12 }}
-                >
-                  Connect
-                </Button>
-              </div>
-              <Text style={{ color: TEXT_MUTED, fontSize: 11 }}>{integration.description}</Text>
             </div>
           ))}
         </div>
-
-        <Text style={{ color: TEXT_MUTED, fontSize: 12 }}>
-          There are many more integrations available in{' '}
-          <span style={{ color: TEXT_SECONDARY }}>Settings → Integrations</span>
-        </Text>
       </div>
     );
   };
 
   const renderDone = () => {
-    const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.length > 8);
+    const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
     const workspaceReady = hasExistingBoard;
-    const integrationsConnected = slackConnected;
 
     return (
       <div style={{ textAlign: 'center', padding: '8px 0' }}>
-        {/* Success icon */}
-        <div
-          style={{
-            width: 72,
-            height: 72,
-            borderRadius: '50%',
-            background: 'rgba(16,185,129,0.15)',
-            border: '2px solid rgba(16,185,129,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            margin: '0 auto 20px',
-          }}
-        >
-          <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 36 }} />
+        {/* Animated success circle + particles */}
+        <div style={{ position: 'relative', width: 90, height: 90, margin: '0 auto 20px' }}>
+          <svg
+            width="90"
+            height="90"
+            viewBox="0 0 90 90"
+            role="img"
+            aria-label="Success"
+            style={{ position: 'absolute', inset: 0 }}
+          >
+            <title>Success</title>
+            <circle
+              cx="45"
+              cy="45"
+              r="38"
+              fill="none"
+              stroke="rgba(46,154,146,0.15)"
+              strokeWidth="2"
+            />
+            <circle
+              cx="45"
+              cy="45"
+              r="38"
+              fill="none"
+              stroke="#2e9a92"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeDasharray="239"
+              strokeDashoffset="239"
+              className="onb-draw"
+              style={{ transform: 'rotate(-90deg)', transformOrigin: '45px 45px' }}
+            />
+          </svg>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <CheckCircleOutlined
+              className="onb-check"
+              style={{ color: SUCCESS_GREEN, fontSize: 36, animationDelay: '0.6s' }}
+            />
+          </div>
+          {PARTICLE_DIRS.map(([px, py], i) => (
+            <div
+              key={`${px}:${py}`}
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                width: 7,
+                height: 7,
+                borderRadius: px === 0 || py === 0 ? '50%' : 2,
+                background: PARTICLE_COLORS[i % PARTICLE_COLORS.length],
+                top: '50%',
+                left: '50%',
+                marginTop: -3.5,
+                marginLeft: -3.5,
+                animation: `onb-p${i} 0.8s cubic-bezier(0.4,0,0.2,1) ${0.35 + i * 0.04}s both`,
+              }}
+            />
+          ))}
         </div>
 
         <Title level={2} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
@@ -1414,7 +1760,7 @@ export function OnboardingWizard({
         <Paragraph
           style={{ color: TEXT_SECONDARY, marginBottom: 28, maxWidth: 380, margin: '0 auto 28px' }}
         >
-          Your board is set up. Start your first AI session — that's where the real work happens.
+          Open your board to start your first AI session.
         </Paragraph>
 
         {/* Summary checklist */}
@@ -1422,6 +1768,9 @@ export function OnboardingWizard({
           style={{
             background: GLASS_CARD_BG,
             border: GLASS_CARD_BORDER,
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            boxShadow: GLASS_CARD_SHADOW,
             borderRadius: 10,
             padding: '16px 20px',
             textAlign: 'left',
@@ -1432,19 +1781,22 @@ export function OnboardingWizard({
             {
               label: 'AI connected',
               done: aiConnected,
-              hint: 'Add in Settings → AI & Agents',
+              pending: false,
+              hint: 'Add in Settings - AI & Agents',
             },
             {
               label: 'Workspace ready',
               done: workspaceReady,
+              pending: false,
               hint: 'Create a board in Settings',
             },
             {
-              label: 'Integrations',
-              done: integrationsConnected,
-              hint: 'Add in Settings → Integrations',
+              label: 'MCP tools',
+              done: false,
+              pending: false,
+              hint: 'Connect anytime via Settings - MCP',
             },
-          ].map(({ label, done, hint }) => (
+          ].map(({ label, done, pending, hint }) => (
             <div
               key={label}
               style={{
@@ -1457,15 +1809,21 @@ export function OnboardingWizard({
               <span
                 style={{
                   fontSize: 14,
-                  color: done ? SUCCESS_GREEN : TEXT_MUTED,
+                  color: done ? SUCCESS_GREEN : pending ? PRIMARY : TEXT_MUTED,
                   fontWeight: 600,
                   width: 16,
                   textAlign: 'center',
                 }}
               >
-                {done ? '✓' : '·'}
+                {done ? '✓' : pending ? '→' : '·'}
               </span>
-              <Text style={{ color: done ? TEXT_PRIMARY : TEXT_SECONDARY, flex: 1, fontSize: 13 }}>
+              <Text
+                style={{
+                  color: done || pending ? TEXT_PRIMARY : TEXT_SECONDARY,
+                  flex: 1,
+                  fontSize: 13,
+                }}
+              >
                 {label}
               </Text>
               {!done && <Text style={{ color: TEXT_MUTED, fontSize: 11 }}>{hint}</Text>}
@@ -1481,17 +1839,16 @@ export function OnboardingWizard({
   const isPrimaryLoading = llmSaving || boardCreating;
   const effectivePrimaryEnabled = primaryEnabled && !isPrimaryLoading;
 
-  // When in a sub-panel, the sub-panel has its own footer buttons
-  const showMainFooter = !(currentStep === 'integrations' && activeIntegration !== null);
-
-  const footer = showMainFooter ? (
+  const footer = (
     <div
       style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
         padding: '14px 32px',
-        borderTop: '1px solid rgba(255,255,255,0.06)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.07)',
+        position: 'relative',
+        zIndex: 1,
       }}
     >
       <div>
@@ -1521,69 +1878,148 @@ export function OnboardingWizard({
             Skip for now
           </Button>
         )}
-        <Button
-          type="primary"
-          disabled={!effectivePrimaryEnabled}
-          onClick={handlePrimary}
-          icon={
-            isPrimaryLoading ? <Spin indicator={<LoadingOutlined />} size="small" /> : undefined
-          }
-        >
-          {primaryLabel}
-        </Button>
+        <Tooltip title={!effectivePrimaryEnabled ? disabledReason : undefined}>
+          <Button
+            type="primary"
+            disabled={!effectivePrimaryEnabled}
+            onClick={handlePrimary}
+            icon={
+              isPrimaryLoading ? <Spin indicator={<LoadingOutlined />} size="small" /> : undefined
+            }
+          >
+            {primaryLabel}
+          </Button>
+        </Tooltip>
       </div>
     </div>
-  ) : null;
+  );
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <Modal
-      open={open}
-      closable={false}
-      mask={true}
-      keyboard={false}
-      footer={null}
-      width={600}
-      styles={{
-        mask: {
-          backdropFilter: 'blur(6px)',
-          WebkitBackdropFilter: 'blur(6px)',
-          background: 'rgba(0,0,0,0.6)',
-        },
-        content: {
-          background: MODAL_BG,
-          backdropFilter: 'blur(20px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-          borderRadius: 16,
-          padding: 0,
-          boxShadow:
-            '0 32px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.07), inset 0 1px 0 rgba(255,255,255,0.1)',
-          overflow: 'hidden',
-        },
-        body: { padding: 0 },
-      }}
-    >
-      {/* Progress indicator */}
-      <div style={{ padding: '24px 32px 0' }}>{renderProgressDots()}</div>
-
-      {/* Step content */}
-      <div
-        style={{
-          padding: '20px 32px',
-          height: 440,
-          overflowY: 'auto',
+    <>
+      <style>{ONB_ANIM_CSS}</style>
+      <Modal
+        open={open}
+        closable={false}
+        mask={true}
+        keyboard={false}
+        footer={null}
+        width={600}
+        styles={{
+          mask: {
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            background: 'rgba(0,0,0,0.35)',
+          },
+          content: {
+            background: MODAL_BG,
+            borderRadius: 20,
+            padding: 0,
+            boxShadow: '0 48px 120px rgba(0,0,0,0.95), inset 0 1px 0 rgba(255,255,255,0.14)',
+            overflow: 'hidden',
+          },
+          body: { padding: 0 },
         }}
       >
-        {currentStep === 'persona' && renderPersona()}
-        {currentStep === 'llm' && renderLlm()}
-        {currentStep === 'workspace' && renderWorkspace()}
-        {currentStep === 'integrations' && renderIntegrations()}
-        {currentStep === 'done' && renderDone()}
-      </div>
+        {/* Wrapper enables absolute-positioned orbs behind all content */}
+        <div style={{ position: 'relative' }}>
+          {/* Animated ambient glow orbs */}
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              overflow: 'hidden',
+              pointerEvents: 'none',
+              borderRadius: 20,
+            }}
+          >
+            <div
+              className="onb-orb1"
+              style={{
+                position: 'absolute',
+                width: 360,
+                height: 360,
+                borderRadius: '50%',
+                background: 'radial-gradient(circle, rgba(46,154,146,0.3) 0%, transparent 70%)',
+                bottom: -130,
+                right: -90,
+              }}
+            />
+            <div
+              className="onb-orb2"
+              style={{
+                position: 'absolute',
+                width: 220,
+                height: 220,
+                borderRadius: '50%',
+                background: 'radial-gradient(circle, rgba(79,109,245,0.18) 0%, transparent 70%)',
+                top: -70,
+                left: -50,
+              }}
+            />
+          </div>
 
-      {/* Footer */}
-      {footer}
-    </Modal>
+          {/* Dismiss button — only shown when onDismiss is provided and not on the final step */}
+          {onDismiss && currentStep !== 'done' && (
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={onDismiss}
+              style={{
+                position: 'absolute',
+                top: 16,
+                right: 16,
+                zIndex: 10,
+                background:
+                  'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+                borderRadius: 8,
+                width: 30,
+                height: 30,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                color: TEXT_MUTED,
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)',
+                transition: 'background 0.15s ease',
+              }}
+            >
+              <CloseOutlined style={{ fontSize: 12 }} />
+            </button>
+          )}
+
+          {/* Progress indicator */}
+          <div style={{ padding: '24px 32px 0', position: 'relative', zIndex: 1 }}>
+            {renderProgressDots()}
+          </div>
+
+          {/* Step content — keyed so it re-mounts + animates on step change */}
+          <div
+            key={currentStep}
+            className="onb-step"
+            style={{
+              padding: '16px 32px 20px',
+              height: 460,
+              overflowY: 'auto',
+              position: 'relative',
+              zIndex: 1,
+            }}
+          >
+            {currentStep === 'persona' && renderPersona()}
+            {currentStep === 'llm' && renderLlm()}
+            {currentStep === 'workspace' && renderWorkspace()}
+            {currentStep === 'integrations' && renderIntegrations()}
+            {currentStep === 'done' && renderDone()}
+          </div>
+
+          {/* Footer */}
+          {footer}
+        </div>
+      </Modal>
+    </>
   );
 }
