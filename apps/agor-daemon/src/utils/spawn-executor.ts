@@ -358,6 +358,13 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     return;
   }
 
+  let reportedExit = false;
+  const reportExit = (code: number | null): void => {
+    if (reportedExit) return;
+    reportedExit = true;
+    options.onExit?.(code);
+  };
+
   const executorProcess = spawn(cmd, args, {
     cwd,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
@@ -375,6 +382,11 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
+    // child_process may emit `error` without a following `exit` when the
+    // executable itself cannot be spawned (for example, missing sudo in a dev
+    // image). Surface that through the normal onExit safety net so callers do
+    // not leave persistent rows stuck in in-progress states.
+    reportExit(127);
   });
 
   executorProcess.on('exit', (code) => {
@@ -383,7 +395,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     } else {
       console.error(`${logPrefix} Executor exited with code ${code}`);
     }
-    options.onExit?.(code);
+    reportExit(code);
   });
 
   executorProcess.stdin?.write(JSON.stringify(payload));
@@ -407,6 +419,13 @@ function spawnExecutorWithTemplate(
   console.log(`${logPrefix} Command: ${payload.command}`);
   console.log(`${logPrefix} Template command (first 200 chars): ${command.slice(0, 200)}...`);
 
+  let reportedExit = false;
+  const reportExit = (code: number | null): void => {
+    if (reportedExit) return;
+    reportedExit = true;
+    options.onExit?.(code);
+  };
+
   const executorProcess = spawn('sh', ['-c', command], {
     env: { ...process.env, LOG_LEVEL: logLevel },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -424,6 +443,7 @@ function spawnExecutorWithTemplate(
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
+    reportExit(127);
   });
 
   executorProcess.on('exit', (code) => {
@@ -436,7 +456,7 @@ function spawnExecutorWithTemplate(
         `${logPrefix} Executor exited with code ${code} (task: ${templateVariables.task_id})`
       );
     }
-    options.onExit?.(code);
+    reportExit(code);
   });
 
   executorProcess.stdin?.write(JSON.stringify(payload));
