@@ -680,17 +680,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         params: RouteParams
       ) {
         app.service('messages').emit(data.event, data.data);
-        if (
-          isServiceAccountRoute(params) &&
-          (data.event === 'streaming:start' ||
+        if (isServiceAccountRoute(params)) {
+          const gatewayStreamingEvent =
+            data.event === 'streaming:start' ||
             data.event === 'streaming:chunk' ||
             data.event === 'streaming:end' ||
-            data.event === 'streaming:error')
-        ) {
-          void (app.service('gateway') as unknown as GatewayService).handleMessageStreamingEvent(
-            data.event,
-            data.data
-          );
+            data.event === 'streaming:error'
+              ? data.event
+              : null;
+
+          if (gatewayStreamingEvent) {
+            deferInFreshTenantScope(params, async () => {
+              await (
+                app.service('gateway') as unknown as GatewayService
+              ).handleMessageStreamingEvent(gatewayStreamingEvent, data.data);
+            });
+          }
         }
         return { success: true };
       },

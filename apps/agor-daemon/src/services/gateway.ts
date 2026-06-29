@@ -61,6 +61,7 @@ import type {
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
+import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
 
 /**
  * Inbound message data (platform → session)
@@ -2311,6 +2312,26 @@ export class GatewayService {
       routed: true,
       channelType: channel.channel_type,
     };
+  }
+
+  /**
+   * Schedule outbound routing after the current tenant-scoped database work
+   * commits, then route inside a fresh tenant scope. Message after-hooks fire
+   * while the newly-created row may still be transactional; routing immediately
+   * can inherit a stale transaction object or query before the session/message
+   * graph is visible on a new scoped connection.
+   */
+  routeMessageAfterCommit(data: RouteMessageData, params?: unknown): void {
+    deferWithTenantDatabaseScope(
+      this.db,
+      params,
+      async () => {
+        await this.routeMessage(data);
+      },
+      (error) => {
+        console.warn('[gateway] Failed to route message after commit:', error);
+      }
+    );
   }
 
   /**

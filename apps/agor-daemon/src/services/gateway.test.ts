@@ -1,3 +1,4 @@
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { attachHiddenTenant, getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
 import type { GatewayChannel, ThreadSessionMap, User } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
@@ -56,6 +57,7 @@ function makeGatewayHarness(args: {
   channel?: GatewayChannel;
   existingMapping?: ThreadSessionMap | null;
   connector?: Record<string, unknown>;
+  db?: TenantScopeAwareDatabase;
 }) {
   const channel = args.channel ?? slackChannel;
   let mapping = args.existingMapping ?? null;
@@ -79,7 +81,7 @@ function makeGatewayHarness(args: {
       throw new Error(`Unexpected service: ${name}`);
     },
   };
-  const service = new GatewayService({} as never, app as never);
+  const service = new GatewayService(args.db ?? ({} as TenantScopeAwareDatabase), app as never);
   const channelRepo = {
     findByKey: vi.fn(async () => channel),
     findById: vi.fn(async () => channel),
@@ -432,6 +434,70 @@ describe('GatewayService Slack system message routing', () => {
         blocks: expect.any(Array),
       })
     );
+  });
+});
+
+describe('GatewayService outbound routing tenant scope', () => {
+  it('defers after-hook routing until the current tenant transaction commits', async () => {
+    const events: string[] = [];
+    const tx = {
+      execute: vi.fn(async () => []),
+    };
+    let transactionCount = 0;
+    let resolveRouted!: () => void;
+    const routed = new Promise<void>((resolve) => {
+      resolveRouted = resolve;
+    });
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        transactionCount += 1;
+        events.push('tx:start');
+        const result = await callback(tx);
+        events.push('tx:commit');
+        if (transactionCount === 3) resolveRouted();
+        return result;
+      }),
+    } as TenantScopeAwareDatabase;
+
+    const seenTenants: Array<string | undefined> = [];
+    const sendMessage = vi.fn(async () => {
+      events.push('send');
+      seenTenants.push(getCurrentTenantId() as string | undefined);
+      return '104.000000';
+    });
+
+    const { service } = makeGatewayHarness({
+      db,
+      existingMapping: makeMapping(),
+      connector: { sendMessage },
+    });
+
+    await runWithTenantDatabaseScope(db, 'tenant-channel', async () => {
+      service.routeMessageAfterCommit(
+        {
+          session_id: 'sess-1',
+          message: 'hello from agent',
+        },
+        { tenant: { tenant_id: 'tenant-channel' } }
+      );
+      events.push('scheduled');
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    await routed;
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(seenTenants).toEqual(['tenant-channel']);
+    expect(events).toEqual([
+      'tx:start',
+      'scheduled',
+      'tx:commit',
+      'tx:start',
+      'tx:commit',
+      'tx:start',
+      'send',
+      'tx:commit',
+    ]);
   });
 });
 
