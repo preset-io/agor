@@ -4,7 +4,12 @@ import {
   resolveTenantContext,
   TenantResolutionError,
 } from '@agor/core/config';
-import { type Database, getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
+import {
+  type Database,
+  getCurrentTenantId,
+  runWithoutTenantDatabaseScope,
+  runWithTenantDatabaseScope,
+} from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { HookContext, TenantID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
@@ -28,6 +33,39 @@ function readHeaderValue(
     return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
   }
   return null;
+}
+
+type TenantScopedParams = { tenant?: { tenant_id?: string } } | undefined;
+
+export function resolveTenantIdForDeferredScope(params?: TenantScopedParams): string | undefined {
+  return params?.tenant?.tenant_id ?? getCurrentTenantId();
+}
+
+/**
+ * Schedule asynchronous work outside the current ALS store, then re-enter a
+ * fresh tenant database scope for the captured tenant. Use this for delayed
+ * executor/queue/gateway work: bare setImmediate inherits possibly-committed
+ * transaction objects, but a bare runWithoutTenantDatabaseScope loses Postgres
+ * RLS context entirely.
+ */
+export function deferWithTenantDatabaseScope(
+  db: Database,
+  params: TenantScopedParams,
+  work: () => Promise<void>,
+  onError?: (error: unknown) => void
+): void {
+  const tenantId = resolveTenantIdForDeferredScope(params);
+  runWithoutTenantDatabaseScope(() => {
+    setImmediate(() => {
+      void runWithTenantDatabaseScope(db, tenantId, work).catch((error) => {
+        if (onError) {
+          onError(error);
+          return;
+        }
+        console.error('[tenant-db-scope] Deferred tenant-scoped work failed:', error);
+      });
+    });
+  });
 }
 
 export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScopeOptions) {

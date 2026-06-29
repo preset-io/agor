@@ -25,7 +25,6 @@ import {
   BoardRepository,
   type BranchRepository,
   type Database,
-  runWithoutTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
   shortId,
@@ -148,7 +147,10 @@ import {
   serviceTokenScopeForParams,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
-import { createTenantDatabaseScopeAroundHook } from './utils/tenant-db-scope.js';
+import {
+  createTenantDatabaseScopeAroundHook,
+  deferWithTenantDatabaseScope,
+} from './utils/tenant-db-scope.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
@@ -2660,54 +2662,43 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             // buffered message as a PR/issue comment. Must happen before queue
             // processing so the response is posted before the next prompt starts.
             //
-            // runWithoutTenantDatabaseScope() breaks ALS inheritance so this
-            // setImmediate fires outside the outer tenantDatabaseScopeAround
-            // transaction — otherwise the gateway I/O runs inside that
-            // transaction and can leave a zombie idle-in-transaction backend.
-            runWithoutTenantDatabaseScope(() =>
-              setImmediate(async () => {
-                try {
-                  const gatewayService = context.app.service(
-                    'gateway'
-                  ) as unknown as GatewayService;
-                  await gatewayService.flushGitHubBuffer(session.session_id);
-                  await gatewayService.updateProgress({
-                    session_id: session.session_id,
-                    state: 'done',
-                  });
-                } catch (error) {
-                  console.warn(
-                    `[gateway] Failed to flush gateway buffers/status for session ${shortId(session.session_id)}:`,
-                    error
-                  );
-                }
-              })
-            );
+            // Defer outside the just-finished transaction, then re-enter a fresh
+            // tenant scope so gateway DB work keeps Cloud RLS context without
+            // inheriting a committed transaction object.
+            deferWithTenantDatabaseScope(db, context.params, async () => {
+              try {
+                const gatewayService = context.app.service('gateway') as unknown as GatewayService;
+                await gatewayService.flushGitHubBuffer(session.session_id);
+                await gatewayService.updateProgress({
+                  session_id: session.session_id,
+                  state: 'done',
+                });
+              } catch (error) {
+                console.warn(
+                  `[gateway] Failed to flush gateway buffers/status for session ${shortId(session.session_id)}:`,
+                  error
+                );
+              }
+            });
 
             if (shouldDrainQueueAfterSessionPostTurnPatch(session, context.params)) {
-              // Same ALS-escape pattern: queue processing must run outside the
-              // outer transaction so it uses a fresh connection and doesn't
-              // block behind the in-flight turn lock from within that transaction.
-              runWithoutTenantDatabaseScope(() =>
-                setImmediate(async () => {
-                  try {
-                    console.log(
-                      `🔄 [SessionsService.after.patch] Session ${shortId(session.session_id)} became promptable (${session.status}), checking for queued tasks...`
-                    );
+              // Same fresh-scope pattern: queue processing must run outside the
+              // outer transaction but still inside the session tenant for RLS.
+              deferWithTenantDatabaseScope(db, context.params, async () => {
+                try {
+                  console.log(
+                    `🔄 [SessionsService.after.patch] Session ${shortId(session.session_id)} became promptable (${session.status}), checking for queued tasks...`
+                  );
 
-                    await sessionsService.triggerQueueProcessing(
-                      session.session_id,
-                      context.params
-                    );
-                  } catch (error) {
-                    console.error(
-                      `❌ [SessionsService.after.patch] Failed to process queue for session ${shortId(session.session_id)}:`,
-                      error
-                    );
-                    // Don't throw - queue processing failure shouldn't break session patches
-                  }
-                })
-              );
+                  await sessionsService.triggerQueueProcessing(session.session_id, context.params);
+                } catch (error) {
+                  console.error(
+                    `❌ [SessionsService.after.patch] Failed to process queue for session ${shortId(session.session_id)}:`,
+                    error
+                  );
+                  // Don't throw - queue processing failure shouldn't break session patches
+                }
+              });
             } else {
               console.log(
                 `⏭️  [SessionsService.after.patch] Queue drain suppressed for session ${shortId(session.session_id)} (suppressTerminalQueueProcessing or not ready)`

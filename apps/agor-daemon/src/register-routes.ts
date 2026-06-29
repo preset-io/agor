@@ -19,7 +19,6 @@ import {
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
-  runWithoutTenantDatabaseScope,
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
@@ -134,7 +133,10 @@ import {
 } from './utils/session-task-state.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
-import { createTenantDatabaseScopeAroundHook } from './utils/tenant-db-scope.js';
+import {
+  createTenantDatabaseScopeAroundHook,
+  deferWithTenantDatabaseScope,
+} from './utils/tenant-db-scope.js';
 import {
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
@@ -283,14 +285,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const tenantDatabaseScopeAround = createTenantDatabaseScopeAroundHook({ db, config, jwtSecret });
 
   /**
-   * Schedule fn in a new event-loop tick, outside any ALS tenant scope.
+   * Schedule fn in a new event-loop tick with a fresh tenant DB scope.
    * Always use this instead of bare setImmediate inside route/service code —
-   * a bare setImmediate inherits the active tenant DB scope (which may
-   * hold a committed Postgres transaction) and causes silent DB hangs when
-   * that stale connection is reused.
+   * bare setImmediate inherits the active transaction ALS store, while a plain
+   * ALS exit loses Postgres RLS tenant context for session/task lookups.
    */
-  function deferOutsideScope(fn: () => Promise<void>): void {
-    runWithoutTenantDatabaseScope(() => setImmediate(fn));
+  function deferInFreshTenantScope(params: RouteParams, fn: () => Promise<void>): void {
+    deferWithTenantDatabaseScope(db, params, fn);
   }
 
   const registerAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (
@@ -1173,7 +1174,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const { setPendingCliTask } = await import('./services/claude-cli-integration.js');
       setPendingCliTask(sessionId as SessionID, taskId as TaskID, messageStartIndex);
 
-      deferOutsideScope(async () => {
+      deferInFreshTenantScope(params, async () => {
         try {
           const targetUserId = session.created_by;
           if (!targetUserId) {
@@ -1245,9 +1246,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // Background spawn + failure handling. Returning the patched Task to the
     // caller before this resolves matches the previous behavior — the HTTP
     // response should not block on the executor process being live.
-    // deferOutsideScope escapes any inherited ALS tenant scope so the executor
-    // spawn uses a fresh DB connection and not a stale committed transaction.
-    deferOutsideScope(async () => {
+    // deferInFreshTenantScope uses a fresh DB connection and tenant RLS scope
+    // instead of inheriting a stale committed transaction.
+    deferInFreshTenantScope(params, async () => {
       try {
         console.log(
           `🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor (task ${shortId(taskId)})`
@@ -1466,7 +1467,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               app.service('tasks').emit('queued', queuedTask);
 
               if (sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)) {
-                deferOutsideScope(async () => {
+                deferInFreshTenantScope(params, async () => {
                   try {
                     await sessionsService.triggerQueueProcessing(id as SessionID, params);
                   } catch (error) {
@@ -2128,7 +2129,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         );
 
         if (result.success) {
-          deferOutsideScope(async () => {
+          deferInFreshTenantScope(params, async () => {
             try {
               await sessionsServiceWithHooks.triggerQueueProcessing(id as SessionID, params);
             } catch (error) {
@@ -2221,7 +2222,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       if (!queueRetryScheduled.has(sessionId)) {
         queueRetryScheduled.add(sessionId);
-        deferOutsideScope(async () => {
+        deferInFreshTenantScope(params, async () => {
           queueRetryScheduled.delete(sessionId);
           try {
             await processNextQueuedTask(sessionId, params);

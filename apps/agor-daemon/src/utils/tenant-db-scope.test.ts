@@ -8,7 +8,10 @@ import { NotAuthenticated } from '@agor/core/feathers';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it, vi } from 'vitest';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
-import { createTenantDatabaseScopeAroundHook } from './tenant-db-scope.js';
+import {
+  createTenantDatabaseScopeAroundHook,
+  deferWithTenantDatabaseScope,
+} from './tenant-db-scope.js';
 
 function makePgDb() {
   const tx = {
@@ -231,6 +234,52 @@ describe('createTenantDatabaseScopeAroundHook', () => {
       tenant_id: 'tenant-a',
       source: 'explicit',
     });
+  });
+
+  it('re-enters a fresh tenant scope for deferred executor session startup', async () => {
+    const { db } = makePgDb();
+    const hook = createTenantDatabaseScopeAroundHook({
+      db: db as never,
+      jwtSecret: 'secret',
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      },
+    });
+    const context = {
+      params: { provider: 'rest', authentication: { payload: { tenant_id: 'tenant-a' } } },
+    } as never;
+    const sessionRepo = {
+      async findById(sessionId: string) {
+        return getCurrentTenantId() === 'tenant-a'
+          ? { session_id: sessionId, tenant_id: 'tenant-a' }
+          : null;
+      },
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      hook(context, async () => {
+        deferWithTenantDatabaseScope(
+          db as never,
+          (context as { params: { tenant?: { tenant_id?: string } } }).params,
+          async () => {
+            const session = await sessionRepo.findById('session-1');
+            expect(session).toEqual({ session_id: 'session-1', tenant_id: 'tenant-a' });
+            resolve();
+          },
+          reject
+        );
+      }).catch(reject);
+    });
+  });
+
+  it('documents the failed startup mode when deferred work only exits ALS', async () => {
+    const { db } = makePgDb();
+    const missing = await runWithTenantDatabaseScope(db as never, 'tenant-a', async () => {
+      return runWithoutTenantDatabaseScope(() => getCurrentTenantId());
+    });
+
+    expect(missing).toBeUndefined();
   });
 
   it('keeps board owner lookups tenant-scoped under required_from_auth', async () => {
