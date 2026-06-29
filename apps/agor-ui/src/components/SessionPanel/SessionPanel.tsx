@@ -840,6 +840,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
+  const handleSpawnOpen = () => {
+    if (composerAttachmentsRef.current.length > 0) {
+      showError(
+        'Attachments are only supported for normal Send for now. Remove attachments to spawn.'
+      );
+      return;
+    }
+    setSpawnModalOpen(true);
+  };
+
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
     if (!session || !client) return;
 
@@ -995,6 +1005,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       isStopping={isStopping}
       stopRequestInFlight={stopRequestInFlight}
       hasInput={hasInput || hasComposerAttachments}
+      composerAttachmentsPresent={hasComposerAttachments}
       connectionDisabled={connectionDisabled}
       toolCaps={toolCaps}
       effortLevel={effortLevel}
@@ -1011,7 +1022,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onStop={handleStop}
       onFork={handleFork}
       onBtwSend={handleBtwSend}
-      onSpawnOpen={() => setSpawnModalOpen(true)}
+      onSpawnOpen={handleSpawnOpen}
       onUploadOpen={() => openAdvancedUpload()}
       onEffortChange={handleEffortChange}
       onPermissionModeChange={handlePermissionModeChange}

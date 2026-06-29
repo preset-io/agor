@@ -3,8 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
-import { AppMcpDataProvider, AppUserDataProvider } from '../../contexts/AppDataContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { agorStore } from '../../store/agorStore';
 import type { UploadFilesToSessionResult } from '../FileUpload/upload';
 import SessionPanel from './SessionPanel';
 
@@ -85,13 +85,7 @@ function renderSessionPanel({
         }}
       >
         <AppActionsProvider value={{ onSendPrompt, onFork, onBtwFork }}>
-          <AppUserDataProvider value={{ userById: new Map() }}>
-            <AppMcpDataProvider
-              value={{ mcpServerById: new Map(), userAuthenticatedMcpServerIds: new Set() }}
-            >
-              <SessionPanel client={makeClient()} session={nextSession} open onClose={vi.fn()} />
-            </AppMcpDataProvider>
-          </AppUserDataProvider>
+          <SessionPanel client={makeClient()} session={nextSession} open onClose={vi.fn()} />
         </AppActionsProvider>
       </ConnectionProvider>
     </App>
@@ -108,6 +102,7 @@ function renderSessionPanel({
 
 describe('SessionPanel composer send', () => {
   beforeEach(() => {
+    agorStore.getState().reset();
     uploadMockState.uploadFilesToSession.mockReset();
     localStorage.clear();
     Object.defineProperty(URL, 'createObjectURL', {
@@ -332,6 +327,10 @@ describe('SessionPanel composer send', () => {
   });
 
   it('disables fork, spawn, and BTW while composer attachments are present', async () => {
+    localStorage.setItem(
+      'agor-footer-prefs',
+      JSON.stringify({ pinnedItems: ['fork', 'spawn', 'btw-fork'] })
+    );
     const onFork = vi.fn().mockResolvedValue(undefined);
     const onBtwFork = vi.fn().mockResolvedValue(undefined);
     renderSessionPanel({ onFork, onBtwFork });
@@ -343,7 +342,7 @@ describe('SessionPanel composer send', () => {
       },
     });
 
-    const forkButton = await screen.findByLabelText('Fork session');
+    const forkButton = screen.getByLabelText('Fork session');
     const spawnButton = screen.getByLabelText('Spawn subsession');
     const btwButton = screen.getByLabelText('Ask side question via BTW fork');
     expect(forkButton).toBeDisabled();

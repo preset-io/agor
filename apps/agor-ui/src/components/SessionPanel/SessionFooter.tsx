@@ -64,6 +64,7 @@ export interface SessionFooterProps {
   isStopping: boolean;
   stopRequestInFlight: boolean;
   hasInput: boolean;
+  composerAttachmentsPresent?: boolean;
   connectionDisabled: boolean;
   toolCaps?: { supportsSessionFork?: boolean; supportsChildSpawn?: boolean };
   // Settings state
@@ -105,6 +106,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   isStopping,
   stopRequestInFlight,
   hasInput,
+  composerAttachmentsPresent = false,
   connectionDisabled,
   toolCaps,
   queuedTasks,
@@ -183,6 +185,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
     );
   }, [latestContextWindow]);
   const contextWarning = contextPct > 0.8;
+  const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
+  const forkDisabled = connectionDisabled || composerAttachmentsPresent;
+  const btwForkDisabled = connectionDisabled || !hasInput || composerAttachmentsPresent;
+  const spawnDisabled = connectionDisabled || isRunning || composerAttachmentsPresent;
 
   const sectionHeaderStyle: React.CSSProperties = {
     padding: '6px 12px 3px',
@@ -399,14 +405,16 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
           role="button"
-          tabIndex={connectionDisabled ? -1 : 0}
+          aria-disabled={forkDisabled}
+          aria-label="Fork session"
+          tabIndex={forkDisabled ? -1 : 0}
           style={{
             ...overflowRowStyle,
-            opacity: connectionDisabled ? 0.4 : 1,
-            cursor: connectionDisabled ? 'not-allowed' : 'pointer',
+            opacity: forkDisabled ? 0.4 : 1,
+            cursor: forkDisabled ? 'not-allowed' : 'pointer',
           }}
           onClick={
-            connectionDisabled
+            forkDisabled
               ? undefined
               : () => {
                   setMoreOpen(false);
@@ -414,7 +422,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 }
           }
           onKeyDown={
-            connectionDisabled
+            forkDisabled
               ? undefined
               : (e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -426,7 +434,13 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           }
         >
           <Tooltip
-            title={connectionDisabled ? 'Disconnected from daemon' : 'Fork this session'}
+            title={
+              connectionDisabled
+                ? 'Disconnected from daemon'
+                : composerAttachmentsPresent
+                  ? composerAttachmentActionTooltip
+                  : 'Fork this session'
+            }
             placement="left"
           >
             <span
@@ -494,14 +508,16 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
           role="button"
-          tabIndex={connectionDisabled || !hasInput ? -1 : 0}
+          aria-disabled={btwForkDisabled}
+          aria-label="Ask side question via BTW fork"
+          tabIndex={btwForkDisabled ? -1 : 0}
           style={{
             ...overflowRowStyle,
-            opacity: connectionDisabled || !hasInput ? 0.4 : 1,
-            cursor: connectionDisabled || !hasInput ? 'not-allowed' : 'pointer',
+            opacity: btwForkDisabled ? 0.4 : 1,
+            cursor: btwForkDisabled ? 'not-allowed' : 'pointer',
           }}
           onClick={
-            connectionDisabled || !hasInput
+            btwForkDisabled
               ? undefined
               : () => {
                   setMoreOpen(false);
@@ -509,7 +525,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 }
           }
           onKeyDown={
-            connectionDisabled || !hasInput
+            btwForkDisabled
               ? undefined
               : (e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -522,9 +538,11 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         >
           <Tooltip
             title={
-              connectionDisabled || !hasInput
-                ? 'Needs input and a live connection'
-                : 'Ask a side question via an ephemeral fork'
+              composerAttachmentsPresent
+                ? composerAttachmentActionTooltip
+                : connectionDisabled || !hasInput
+                  ? 'Needs input and a live connection'
+                  : 'Ask a side question via an ephemeral fork'
             }
             placement="left"
           >
@@ -595,14 +613,16 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
           role="button"
-          tabIndex={connectionDisabled || isRunning ? -1 : 0}
+          aria-disabled={spawnDisabled}
+          aria-label="Spawn subsession"
+          tabIndex={spawnDisabled ? -1 : 0}
           style={{
             ...overflowRowStyle,
-            opacity: connectionDisabled || isRunning ? 0.4 : 1,
-            cursor: connectionDisabled || isRunning ? 'not-allowed' : 'pointer',
+            opacity: spawnDisabled ? 0.4 : 1,
+            cursor: spawnDisabled ? 'not-allowed' : 'pointer',
           }}
           onClick={
-            connectionDisabled || isRunning
+            spawnDisabled
               ? undefined
               : () => {
                   setMoreOpen(false);
@@ -610,7 +630,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 }
           }
           onKeyDown={
-            connectionDisabled || isRunning
+            spawnDisabled
               ? undefined
               : (e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -625,9 +645,11 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             title={
               connectionDisabled
                 ? 'Disconnected'
-                : isRunning
-                  ? 'Session is running'
-                  : 'Spawn a child subsession'
+                : composerAttachmentsPresent
+                  ? composerAttachmentActionTooltip
+                  : isRunning
+                    ? 'Session is running'
+                    : 'Spawn a child subsession'
             }
             placement="left"
           >
@@ -1290,9 +1312,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 <Button
                   size="small"
                   type="text"
+                  aria-label="Fork session"
                   icon={<ForkOutlined />}
                   onClick={onFork}
-                  disabled={connectionDisabled}
+                  disabled={forkDisabled}
                   data-testid="fork-bar-btn"
                 />
               </Tooltip>
@@ -1303,9 +1326,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 <Button
                   size="small"
                   type="text"
+                  aria-label="Ask side question via BTW fork"
                   icon={<QuestionCircleOutlined />}
                   onClick={onBtwSend}
-                  disabled={connectionDisabled || !hasInput}
+                  disabled={btwForkDisabled}
                   data-testid="btw-fork-bar-btn"
                 />
               </Tooltip>
@@ -1315,9 +1339,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 <Button
                   size="small"
                   type="text"
+                  aria-label="Spawn subsession"
                   icon={<BranchesOutlined />}
                   onClick={onSpawnOpen}
-                  disabled={connectionDisabled || isRunning}
+                  disabled={spawnDisabled}
                 />
               </Tooltip>
             )}
