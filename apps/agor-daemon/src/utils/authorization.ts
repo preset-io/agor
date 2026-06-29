@@ -174,7 +174,10 @@ export function registerAuthenticatedRoute(
   service: any,
   authConfig: Record<string, { role: Role; action: string }>,
   // biome-ignore lint/suspicious/noExplicitAny: Hook type from Feathers is complex
-  requireAuth: any
+  requireAuth: any,
+  options: {
+    around?: Array<(context: HookContext, next: () => Promise<void>) => Promise<void>>;
+  } = {}
 ): void {
   // Register the service
   app.use(path, service);
@@ -195,6 +198,7 @@ export function registerAuthenticatedRoute(
 
   // Apply hooks
   app.service(path).hooks({
+    ...(options.around ? { around: { all: options.around } } : {}),
     before: hooks,
   });
 }

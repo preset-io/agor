@@ -32,7 +32,7 @@
  * browser redirects and HTML responses, which don't fit the Feathers service model.
  */
 
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import type express from 'express';
@@ -254,7 +254,7 @@ function handleNewApp(uiUrl: string, daemonUrl: string) {
  * proven by the state token — it is only issued from an authenticated
  * admin session (POST /api/github/setup/state) and is validated here.
  */
-function handleSetupCallback(db: Database, uiUrl: string) {
+function handleSetupCallback(db: TenantScopeAwareDatabase, uiUrl: string) {
   return async (req: express.Request, res: express.Response) => {
     const state = typeof req.query.state === 'string' ? req.query.state : undefined;
     const installationIdRaw =
@@ -349,7 +349,7 @@ function handleSetupCallback(db: Database, uiUrl: string) {
  *   1. A query param (during setup flow, from the UI)
  *   2. An existing gateway channel (query param: channel_id)
  */
-function handleListInstallations(_db: Database) {
+function handleListInstallations(_db: TenantScopeAwareDatabase) {
   return async (req: express.Request, res: express.Response) => {
     const appIdStr = req.query.app_id as string | undefined;
     const channelId = req.query.channel_id as string | undefined;
@@ -444,7 +444,7 @@ export function registerGitHubAppSetupRoutes(
   opts: {
     uiUrl: string;
     daemonUrl: string;
-    db: Database;
+    db: TenantScopeAwareDatabase;
   }
 ): void {
   app.post('/api/github/setup/state', handleIssueState(app));

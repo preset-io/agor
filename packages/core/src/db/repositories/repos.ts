@@ -14,6 +14,7 @@ import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '..
 import { type RepoInsert, type RepoRow, repos } from '../schema';
 import {
   AmbiguousIdError,
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
@@ -79,22 +80,25 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     const remote_url =
       typeof data.remote_url === 'string' ? stripHttpUrlUserinfo(data.remote_url) : data.remote_url;
 
-    return {
-      repo_id: row.repo_id as UUID,
-      slug: row.slug,
-      repo_type: (row.repo_type as Repo['repo_type']) ?? 'remote',
-      unix_group: row.unix_group ?? undefined,
-      created_at: new Date(row.created_at).toISOString(),
-      last_updated: row.updated_at
-        ? new Date(row.updated_at).toISOString()
-        : new Date(row.created_at).toISOString(),
-      ...data,
-      remote_url,
-      environment,
-      environment_config,
-      clone_status: data.clone_status,
-      clone_error: data.clone_error,
-    };
+    return attachHiddenTenant(
+      {
+        repo_id: row.repo_id as UUID,
+        slug: row.slug,
+        repo_type: (row.repo_type as Repo['repo_type']) ?? 'remote',
+        unix_group: row.unix_group ?? undefined,
+        created_at: new Date(row.created_at).toISOString(),
+        last_updated: row.updated_at
+          ? new Date(row.updated_at).toISOString()
+          : new Date(row.created_at).toISOString(),
+        ...data,
+        remote_url,
+        environment,
+        environment_config,
+        clone_status: data.clone_status,
+        clone_error: data.clone_error,
+      },
+      row
+    );
   }
 
   /**

@@ -33,6 +33,12 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 _No user-visible changes yet._
 
+## 0.23.0 (TBD)
+
+### Chores
+
+- **Prepare the next agor-live minor release** — bumps `agor-live` and `@agor-live/client` to 0.23.0 and keeps the standalone agor-live package lock in sync. ([#1670](https://github.com/preset-io/agor/pull/1670))
+
 ## 0.22.0 (TBD)
 
 ### Chores

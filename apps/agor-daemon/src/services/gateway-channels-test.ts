@@ -10,7 +10,7 @@
  * values.
  */
 
-import { type Database, GatewayChannelRepository } from '@agor/core/db';
+import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
 import { getConnector } from '@agor/core/gateway';
 import type { AuthenticatedParams, ChannelType, SlackTestResult } from '@agor/core/types';
@@ -48,7 +48,7 @@ function resolveEffectiveConfig(
 /**
  * Factory for the `gateway-channels/test` service.
  */
-export function createGatewayChannelsTestService(db: Database) {
+export function createGatewayChannelsTestService(db: TenantScopeAwareDatabase) {
   const channelRepo = new GatewayChannelRepository(db);
 
   return {

@@ -39,7 +39,7 @@ import {
   update,
   users,
 } from '@agor/core/db';
-import { restoreBranchFilesystem } from '@agor/core/git';
+import { restoreBranchFilesystem } from '@agor/core/git/exec';
 import {
   AGOR_USERS_GROUP,
   CommandError,
@@ -266,7 +266,7 @@ export default class SyncUnix extends Command {
             this.log(
               chalk.yellow('If your database is elsewhere, set DATABASE_URL environment variable:')
             );
-            this.log(chalk.gray('  sudo DATABASE_URL=file:/path/to/agor.db agor admin sync-unix'));
+            this.log(chalk.gray('  sudo DATABASE_URL=file:/path/to/agor.db agor local sync-unix'));
           }
           process.exit(1);
         }

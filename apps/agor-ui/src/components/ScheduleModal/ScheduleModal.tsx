@@ -413,10 +413,16 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
                   <Form.Item name="retention" label="Retention (sessions to keep; 0 = keep all)">
                     <InputNumber min={0} />
                   </Form.Item>
-                  <Form.Item name="allow_concurrent_runs" label="Concurrency">
+                  <Form.Item
+                    name="allow_concurrent_runs"
+                    label="Concurrency"
+                    extra="Controls overlap for this schedule only; sibling schedules on the same branch are independent."
+                  >
                     <Radio.Group>
-                      <Radio value={false}>Block (default)</Radio>
-                      <Radio value={true}>Allow concurrent runs</Radio>
+                      <Radio value={false}>
+                        Block overlapping runs from this schedule (default)
+                      </Radio>
+                      <Radio value={true}>Allow overlapping runs from this schedule</Radio>
                     </Radio.Group>
                   </Form.Item>
                 </>

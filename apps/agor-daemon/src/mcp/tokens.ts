@@ -25,7 +25,12 @@
  */
 
 import { MCP_TOKEN } from '@agor/core/config';
-import { type Database, generateId, SessionRepository, shortId } from '@agor/core/db';
+import {
+  generateId,
+  SessionRepository,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
   MCP_TOKEN_AUDIENCE,
@@ -68,7 +73,7 @@ export interface McpTokenContext {
 }
 
 export interface McpTokenInitOptions {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   /** Token lifetime in ms. Falls back to `MCP_TOKEN.DEFAULT_EXPIRATION_MS` (24h). */
   expirationMs?: number;
   /** Override `Date.now()` for tests. */

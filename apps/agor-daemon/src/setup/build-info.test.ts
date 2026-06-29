@@ -37,15 +37,23 @@ afterEach(() => {
 });
 
 /**
- * loadBuildInfo() takes an `import.meta.url`-style file URL and walks up two
- * candidate paths looking for `.build-info`. Build a fake module URL inside
- * tmpRoot so each test controls its own filesystem.
+ * loadBuildInfo() takes an `import.meta.url`-style file URL and checks the
+ * daemon dist layout plus parent fallbacks for `.build-info`. Build fake module
+ * URLs inside tmpRoot so each test controls its own filesystem.
  */
 function fakeModuleUrl(): string {
-  // Mirror the dist layout: <tmp>/setup/build-info.js
+  // Mirror an imported helper layout: <tmp>/setup/build-info.js
   const setupDir = join(tmpRoot, 'setup');
   mkdirSync(setupDir, { recursive: true });
   return pathToFileURL(join(setupDir, 'build-info.js')).toString();
+}
+
+function fakeDistEntryUrl(): string {
+  // Mirror the production entry layout: <tmp>/dist/index.js with
+  // <tmp>/dist/.build-info next to it.
+  const distDir = join(tmpRoot, 'dist');
+  mkdirSync(distDir, { recursive: true });
+  return pathToFileURL(join(distDir, 'index.js')).toString();
 }
 
 describe('loadBuildInfo', () => {
@@ -71,6 +79,20 @@ describe('loadBuildInfo', () => {
     const info = loadBuildInfo(fakeModuleUrl());
     expect(info.sha).toBe('abc1234');
     expect(info.builtAt).toBe('2026-04-23T10:00:00Z');
+    expect(info.source).toBe('file');
+  });
+
+  it('reads .build-info next to a dist-root entrypoint', () => {
+    const distDir = join(tmpRoot, 'dist');
+    mkdirSync(distDir, { recursive: true });
+    writeFileSync(
+      join(distDir, '.build-info'),
+      JSON.stringify({ sha: 'dist1234', builtAt: '2026-04-23T11:00:00Z' })
+    );
+
+    const info = loadBuildInfo(fakeDistEntryUrl());
+    expect(info.sha).toBe('dist1234');
+    expect(info.builtAt).toBe('2026-04-23T11:00:00Z');
     expect(info.source).toBe('file');
   });
 

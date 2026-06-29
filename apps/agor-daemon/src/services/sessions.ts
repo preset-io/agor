@@ -8,12 +8,12 @@
 import { PAGINATION } from '@agor/core/config';
 import {
   BranchRepository,
-  type Database,
   SessionEnvSelectionRepository,
   SessionMCPServerRepository,
   SessionRelationshipRepository,
   SessionRepository,
   type SessionWithLastMessage,
+  type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
@@ -176,7 +176,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     }
   }
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
       id: 'session_id',
@@ -946,6 +946,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 /**
  * Service factory function
  */
-export function createSessionsService(db: Database, app: Application): SessionsService {
+export function createSessionsService(
+  db: TenantScopeAwareDatabase,
+  app: Application
+): SessionsService {
   return new SessionsService(db, app);
 }

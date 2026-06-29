@@ -200,7 +200,7 @@ The PostgreSQL environment uses these config overrides:
 ```yaml
 # From .env.postgres
 AGOR_DB_DIALECT=postgresql
-DATABASE_URL=postgresql://agor:agor_dev_secret@postgres:5432/agor
+DATABASE_URL=postgresql://agor_app:agor_dev_secret@postgres:5432/agor
 AGOR_RBAC_ENABLED=true
 AGOR_UNIX_USER_MODE=insulated
 CREATE_RBAC_TEST_USERS=true

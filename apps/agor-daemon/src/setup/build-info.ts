@@ -8,7 +8,7 @@
  *
  * Precedence (first match wins):
  *   1. process.env.AGOR_BUILD_SHA           — Docker --build-arg, CI
- *   2. <daemon-dist>/.build-info            — written by packages/agor-live/build.sh
+ *   2. <daemon-dist>/.build-info            — written by daemon build script
  *   3. git rev-parse --short HEAD           — local source installs
  *   4. 'dev'                                — disables the version check entirely
  */
@@ -46,11 +46,17 @@ export function loadBuildInfo(importMetaUrl: string): BuildInfo {
     };
   }
 
-  // 2. .build-info file written by packages/agor-live/build.sh into the
-  //    daemon dist. The file sits next to the entry point; try both common
-  //    layouts (src/setup/ in dev, dist/ root in agor-live).
+  // 2. .build-info file written by the daemon build script into daemon dist.
+  //    Try the common runtime layouts:
+  //    - dist/index.js        → dist/.build-info
+  //    - dist/setup/*.js     → dist/.build-info
+  //    - source/test layouts → parent fallbacks
   const currentDir = dirname(fileURLToPath(importMetaUrl));
-  const candidates = [join(currentDir, '../.build-info'), join(currentDir, '../../.build-info')];
+  const candidates = [
+    join(currentDir, '.build-info'),
+    join(currentDir, '../.build-info'),
+    join(currentDir, '../../.build-info'),
+  ];
   for (const path of candidates) {
     try {
       const raw = readFileSync(path, 'utf-8');

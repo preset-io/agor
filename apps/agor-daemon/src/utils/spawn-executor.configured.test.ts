@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { Writable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -221,5 +224,45 @@ describe('configured executor spawning', () => {
         }),
       })
     );
+  });
+  it('honors AGOR_EXECUTOR_PATH for local executor discovery', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-executor-path-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+
+    try {
+      writeFileSync(executorPath, '#!/usr/bin/env node\n');
+      process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+      const { findExecutorPath } = await import('./spawn-executor');
+
+      expect(findExecutorPath()).toBe(executorPath);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.AGOR_EXECUTOR_PATH;
+      } else {
+        process.env.AGOR_EXECUTOR_PATH = previous;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails fast when AGOR_EXECUTOR_PATH points at a missing file', async () => {
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    process.env.AGOR_EXECUTOR_PATH = '/tmp/agor-missing-executor-for-test';
+
+    try {
+      const { findExecutorPath } = await import('./spawn-executor');
+
+      expect(() => findExecutorPath()).toThrow(
+        'Configured AGOR_EXECUTOR_PATH does not exist: /tmp/agor-missing-executor-for-test'
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.AGOR_EXECUTOR_PATH;
+      } else {
+        process.env.AGOR_EXECUTOR_PATH = previous;
+      }
+    }
   });
 });

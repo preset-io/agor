@@ -9,13 +9,13 @@ import { loadConfig, PAGINATION } from '@agor/core/config';
 import {
   AppVariableRepository,
   type CreateKnowledgeDocumentInput,
-  type Database,
   isPostgresDatabase,
   type KnowledgeDocumentFilters,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
   KnowledgeGraphRepository,
   KnowledgeNamespaceRepository,
+  type TenantScopeAwareDatabase,
   type UpdateKnowledgeDocumentInput,
 } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
@@ -130,7 +130,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   private graph: KnowledgeGraphRepository;
 
   constructor(
-    private db: Database,
+    private db: TenantScopeAwareDatabase,
     private app?: Application
   ) {
     const repo = new KnowledgeDocumentRepository(db);
@@ -681,7 +681,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
 }
 
 export function createKnowledgeDocumentsService(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   app?: Application
 ): KnowledgeDocumentsService {
   return new KnowledgeDocumentsService(db, app);

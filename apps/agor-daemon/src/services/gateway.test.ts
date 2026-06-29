@@ -1,7 +1,9 @@
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import { attachHiddenTenant, getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
 import type { GatewayChannel, ThreadSessionMap, User } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { GatewayService } from './gateway.js';
+import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
 
 const user: User = {
   user_id: 'user-1',
@@ -55,6 +57,7 @@ function makeGatewayHarness(args: {
   channel?: GatewayChannel;
   existingMapping?: ThreadSessionMap | null;
   connector?: Record<string, unknown>;
+  db?: TenantScopeAwareDatabase;
 }) {
   const channel = args.channel ?? slackChannel;
   let mapping = args.existingMapping ?? null;
@@ -78,7 +81,7 @@ function makeGatewayHarness(args: {
       throw new Error(`Unexpected service: ${name}`);
     },
   };
-  const service = new GatewayService({} as never, app as never);
+  const service = new GatewayService(args.db ?? ({} as TenantScopeAwareDatabase), app as never);
   const channelRepo = {
     findByKey: vi.fn(async () => channel),
     findById: vi.fn(async () => channel),
@@ -119,7 +122,81 @@ function makeGatewayHarness(args: {
   return { service, promptCreate, sessionsCreate, channelRepo, threadMapRepo };
 }
 
+describe('gateway tenant metadata helpers', () => {
+  it('extracts non-enumerable tenant metadata from gateway channel DTOs', () => {
+    const channel = attachHiddenTenant({ ...slackChannel }, { tenant_id: 'tenant-channel' });
+
+    expect(tenantIdFromGatewayChannel(channel)).toBe('tenant-channel');
+    expect(Object.keys(channel)).not.toContain('tenant_id');
+  });
+});
+
 describe('GatewayService Slack thread catch-up', () => {
+  it('runs listener inbound callbacks inside a fresh channel tenant DB scope', async () => {
+    const seenTenants: Array<string | undefined> = [];
+    const app = {
+      service: vi.fn(),
+    };
+    const service = new GatewayService({ run: vi.fn() } as never, app as never);
+    vi.spyOn(service, 'create').mockImplementation(async () => {
+      seenTenants.push(getCurrentTenantId() as string | undefined);
+      return { success: true, sessionId: 'sess-1', created: false };
+    });
+
+    const channel = {
+      ...slackChannel,
+      tenant_id: 'tenant-channel',
+    } as GatewayChannel & { tenant_id: string };
+
+    await (
+      service as unknown as {
+        handleListenerInboundMessage(
+          channel: GatewayChannel,
+          tenantId: string | undefined,
+          msg: {
+            threadId: string;
+            text: string;
+            userId: string;
+            metadata?: Record<string, unknown>;
+          }
+        ): Promise<void>;
+      }
+    ).handleListenerInboundMessage(channel, channel.tenant_id, {
+      threadId: 'C123-100.000000',
+      text: 'hello',
+      userId: 'U123',
+    });
+
+    expect(seenTenants).toEqual(['tenant-channel']);
+  });
+
+  it('passes ambient tenant context into the internal prompt call', async () => {
+    const mapping = makeMapping();
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: mapping,
+      connector: {},
+    });
+
+    await runWithTenantDatabaseScope({ run: vi.fn() } as never, 'tenant-channel', () =>
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: 'please answer',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '103.000000',
+        },
+      })
+    );
+
+    expect(promptCreate.mock.calls[0][1]).toMatchObject({
+      route: { id: 'sess-1' },
+      tenant: { tenant_id: 'tenant-channel', source: 'explicit' },
+    });
+  });
+
   it('fetches missed Slack messages after the last delivered cursor and advances the cursor', async () => {
     const sendMessage = vi.fn(async () => '104.000000');
     const fetchThreadHistory = vi.fn(async () => ({
@@ -357,6 +434,140 @@ describe('GatewayService Slack system message routing', () => {
         blocks: expect.any(Array),
       })
     );
+  });
+});
+
+describe('GatewayService outbound routing tenant scope', () => {
+  it('defers after-hook routing until the current tenant transaction commits', async () => {
+    const events: string[] = [];
+    const tx = {
+      execute: vi.fn(async () => []),
+    };
+    let transactionCount = 0;
+    let resolveRouted!: () => void;
+    const routed = new Promise<void>((resolve) => {
+      resolveRouted = resolve;
+    });
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        transactionCount += 1;
+        events.push('tx:start');
+        const result = await callback(tx);
+        events.push('tx:commit');
+        if (transactionCount === 3) resolveRouted();
+        return result;
+      }),
+    } as TenantScopeAwareDatabase;
+
+    const seenTenants: Array<string | undefined> = [];
+    const sendMessage = vi.fn(async () => {
+      events.push('send');
+      seenTenants.push(getCurrentTenantId() as string | undefined);
+      return '104.000000';
+    });
+
+    const { service } = makeGatewayHarness({
+      db,
+      existingMapping: makeMapping(),
+      connector: { sendMessage },
+    });
+
+    await runWithTenantDatabaseScope(db, 'tenant-channel', async () => {
+      service.routeMessageAfterCommit(
+        {
+          session_id: 'sess-1',
+          message: 'hello from agent',
+        },
+        { tenant: { tenant_id: 'tenant-channel' } }
+      );
+      events.push('scheduled');
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    await routed;
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(seenTenants).toEqual(['tenant-channel']);
+    expect(events).toEqual([
+      'tx:start',
+      'scheduled',
+      'tx:commit',
+      'tx:start',
+      'tx:commit',
+      'tx:start',
+      'send',
+      'tx:commit',
+    ]);
+  });
+});
+
+describe('GatewayService Slack progress tenant scope', () => {
+  it('defers Slack assistant status updates until the current tenant transaction commits', async () => {
+    const events: string[] = [];
+    const tx = {
+      execute: vi.fn(async () => []),
+    };
+    let transactionCount = 0;
+    let resolveUpdated!: () => void;
+    const updated = new Promise<void>((resolve) => {
+      resolveUpdated = resolve;
+    });
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        transactionCount += 1;
+        events.push('tx:start');
+        const result = await callback(tx);
+        events.push('tx:commit');
+        if (transactionCount === 3) resolveUpdated();
+        return result;
+      }),
+    } as TenantScopeAwareDatabase;
+
+    const seenTenants: Array<string | undefined> = [];
+    const setThreadStatus = vi.fn(async () => {
+      events.push('status');
+      seenTenants.push(getCurrentTenantId() as string | undefined);
+    });
+
+    const { service } = makeGatewayHarness({
+      db,
+      existingMapping: makeMapping(),
+      connector: { setThreadStatus },
+    });
+
+    await runWithTenantDatabaseScope(db, 'tenant-channel', async () => {
+      service.updateProgressAfterCommit(
+        {
+          session_id: 'sess-1',
+          state: 'working',
+          task_id: 'task-1',
+          tool_name: 'Read',
+        },
+        { tenant: { tenant_id: 'tenant-channel' } }
+      );
+      events.push('scheduled');
+      expect(setThreadStatus).not.toHaveBeenCalled();
+    });
+
+    await updated;
+
+    expect(setThreadStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: 'C123-100.000000',
+        status: 'is using Read.',
+      })
+    );
+    expect(seenTenants).toEqual(['tenant-channel']);
+    expect(events).toEqual([
+      'tx:start',
+      'scheduled',
+      'tx:commit',
+      'tx:start',
+      'tx:commit',
+      'tx:start',
+      'status',
+      'tx:commit',
+    ]);
   });
 });
 

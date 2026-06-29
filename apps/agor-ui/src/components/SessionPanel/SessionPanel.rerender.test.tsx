@@ -63,6 +63,7 @@ vi.mock('../FileUpload', () => ({
 vi.mock('../SessionIds', () => ({
   __esModule: true,
   SessionIdsButton: () => null,
+  SessionIdsList: () => null,
 }));
 vi.mock('../MCPServer', () => ({
   __esModule: true,

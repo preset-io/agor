@@ -11,7 +11,12 @@ import {
   renderChildCompletionCallback,
 } from '@agor/core/callbacks/child-completion-template';
 import { PAGINATION, resolveExecutorHeartbeatConfig } from '@agor/core/config';
-import { type Database, shortId, TaskRepository } from '@agor/core/db';
+import {
+  enqueueTenantDatabasePostCommitCallback,
+  shortId,
+  TaskRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   ContentBlock,
@@ -95,14 +100,14 @@ interface CompletionCallbackDispatchResult {
 export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams> {
   private taskRepo: TaskRepository;
   private app: Application;
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
   private heartbeatCallbackRunner: ExecutorHeartbeatCallbackRunner;
   private completionCallbackDispatches = new Map<
     string,
     Promise<CompletionCallbackDispatchResult>
   >();
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
       id: 'task_id',
@@ -313,6 +318,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         ...params,
         suppressTerminalSessionStateUpdate: true,
         suppressTerminalQueueProcessing: true,
+        // Suppress callbacks here — dispatchCompletionCallbacks runs inside the
+        // tenantDatabaseScopeAround transaction (it does SELECT session_relationships +
+        // INSERT callback task), extending the transaction's idle time between statements.
+        // This triggered write CONNECTION_CLOSED + zombie idle-in-transaction connections.
+        // We dispatch manually below, after both patches commit, in their own transactions.
+        suppressCompletionCallbacks: true,
       }
     );
     const failedTask = result as Task;
@@ -331,6 +342,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       ...params,
       suppressTerminalQueueProcessing: true,
     };
+    let updatedSession: Session | undefined;
     await this.app
       .service('sessions')
       .patch(
@@ -341,12 +353,27 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         },
         sessionPatchParams
       )
+      .then((s) => {
+        updatedSession = s as Session;
+      })
       .catch((error: unknown) => {
         console.warn(
           `[executor-heartbeat] Failed to mark session ${shortId(failedTask.session_id)} failed after stale heartbeat:`,
           error instanceof Error ? error.message : String(error)
         );
       });
+    // Dispatch completion callbacks outside the task-patch transaction.
+    // Both patches have committed at this point, so callbacks run in fresh transactions.
+    if (updatedSession) {
+      void this.dispatchCompletionCallbacksAfterCommit(failedTask, updatedSession, params).catch(
+        (error: unknown) => {
+          console.warn(
+            `[executor-heartbeat] Failed to dispatch completion callbacks for task ${shortId(failedTask.task_id)}:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      );
+    }
     return failedTask;
   }
 
@@ -371,6 +398,50 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     this.heartbeatCallbackRunner.run(payload);
+  }
+
+  private async runAfterTenantDatabaseCommit(
+    label: string,
+    work: () => Promise<void>
+  ): Promise<void> {
+    const run = async () => {
+      try {
+        await work();
+      } catch (error) {
+        console.warn(
+          `⚠️  [TasksService] ${label} failed:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    };
+
+    if (enqueueTenantDatabasePostCommitCallback(run)) {
+      return;
+    }
+
+    await run();
+  }
+
+  private async triggerQueueProcessingAfterCommit(
+    sessionId: string,
+    params?: TaskParams
+  ): Promise<void> {
+    const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+    const sessionParams = params as Parameters<SessionsService['triggerQueueProcessing']>[1];
+
+    await this.runAfterTenantDatabaseCommit('triggerQueueProcessing', () =>
+      sessionsService.triggerQueueProcessing(sessionId, sessionParams)
+    );
+  }
+
+  private async dispatchCompletionCallbacksAfterCommit(
+    task: Task,
+    session: Session,
+    params?: TaskParams
+  ): Promise<void> {
+    await this.runAfterTenantDatabaseCommit('dispatchCompletionCallbacks', () =>
+      this.dispatchCompletionCallbacks(task, session, params)
+    );
   }
 
   /**
@@ -494,7 +565,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               .then((branch) => {
                 const repoId = branch?.repo_id;
                 if (!repoId) return;
-                return ensureRepoOriginAlignedById(this.app, repoId);
+                return ensureRepoOriginAlignedById(this.app, repoId, params);
               })
               .catch((err: unknown) => {
                 const message = err instanceof Error ? err.message : String(err);
@@ -509,30 +580,29 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           const suppressCompletionCallbacks = params?.suppressCompletionCallbacks === true;
           const suppressBtwCleanup = params?.suppressBtwCleanup === true;
 
+          // STOPPED tasks (user-cancelled or daemon-shutdown cleanup) never notify
+          // parent sessions. A stopped child represents abandoned work — the parent
+          // should not resume or be informed; it has its own lifecycle.
+          const isStop = data.status === TaskStatus.STOPPED;
+
           if (latestTaskId && latestTaskId !== task.task_id) {
             console.log(
               `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
             );
-            // Still process completion callbacks (task completed, callback target needs to know).
-            // Route through the same centralized/idempotent dispatcher used by the normal
-            // completion path so races cannot enqueue duplicate parent callbacks.
-            if (!suppressCompletionCallbacks) {
-              await this.dispatchCompletionCallbacks(task, session, params);
+            // Process completion callbacks only for naturally-terminal tasks (COMPLETED/FAILED).
+            // STOPPED means the work was abandoned — don't notify the parent.
+            if (!suppressCompletionCallbacks && !isStop) {
+              await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
             }
             return result;
           }
 
-          // For STOPPED tasks: The stop endpoint directly patches session → IDLE with
-          // ready_for_prompt=true and triggers queue processing after that patch.
-          // Skip the session update here to avoid racing with it.
-          //
-          // For other terminal tasks: Normal completion - set ready_for_prompt=true
-          // to allow auto-queue-processing of any pending messages.
-          const isUserInitiatedStop = data.status === TaskStatus.STOPPED;
-
-          if (isUserInitiatedStop) {
+          // For stop-route/admin cleanup paths that explicitly suppress queue processing,
+          // the caller owns the follow-up session patch/drain. For an ordinary STOPPED
+          // terminal patch, still make the session promptable so queued work can drain.
+          if (isStop && params?.suppressTerminalQueueProcessing) {
             console.log(
-              `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — stop endpoint handles session state`
+              `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — caller suppresses terminal queue processing`
             );
           } else if (params?.suppressTerminalSessionStateUpdate) {
             console.log(
@@ -554,8 +624,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
           }
 
-          if (!suppressCompletionCallbacks) {
-            await this.dispatchCompletionCallbacks(task, session, params);
+          if (!suppressCompletionCallbacks && !isStop) {
+            await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
           }
 
           // "btw" fork origin: auto-archive the ephemeral fork after task completion.
@@ -577,7 +647,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               }
             }
 
-            if (!suppressCompletionCallbacks) {
+            if (!suppressCompletionCallbacks && !isStop) {
               // Inject a result message into the parent session's conversation.
               // This is a non-prompt system message — it shows up in the UI but doesn't
               // trigger a new prompt cycle. The parent's agent never sees it.
@@ -585,11 +655,15 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             }
           }
 
-          // IMPORTANT: Now that the terminal task made the session promptable, process any queued tasks
-          // (including callbacks). This handles the case where callbacks were queued while this session was running
-          const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-          if (!params?.suppressTerminalQueueProcessing && sessionsService.triggerQueueProcessing) {
-            await sessionsService.triggerQueueProcessing(task.session_id);
+          // Fire queue processing after the outer transaction commits. spawnTaskExecutor
+          // (called inside the queue processor) does significant I/O that would otherwise
+          // extend this transaction and cause proxy CONNECTION_CLOSED kills.
+          if (!params?.suppressTerminalQueueProcessing) {
+            await this.triggerQueueProcessingAfterCommit(task.session_id, params);
+          } else if (params?.suppressTerminalQueueProcessing) {
+            console.log(
+              `⏭️  [TasksService] Queue trigger suppressed for session ${shortId(task.session_id)} (suppressTerminalQueueProcessing)`
+            );
           }
         } catch (error) {
           console.error('❌ [TasksService] Failed to process task completion:', error);
@@ -763,15 +837,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // DO NOT check target status before triggering - let the queue processor handle it.
       // This ensures callbacks are never missed due to timing issues.
       try {
-        const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-        if (sessionsService.triggerQueueProcessing) {
-          console.log(
-            `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
-          );
-          // Pass empty params to avoid leaking child's auth context to target.
-          // The queue processor reconstructs target auth from queued task metadata.
-          await sessionsService.triggerQueueProcessing(targetSessionId, {});
-        }
+        console.log(
+          `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
+        );
+        // Pass empty params to avoid leaking child's auth context to target.
+        // The queue processor reconstructs target auth from queued task metadata.
+        await this.triggerQueueProcessingAfterCommit(targetSessionId, {});
       } catch (error) {
         // Don't throw - target issues shouldn't break child queue processing.
         console.warn(
@@ -1166,6 +1237,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 /**
  * Service factory function
  */
-export function createTasksService(db: Database, app: Application): TasksService {
+export function createTasksService(db: TenantScopeAwareDatabase, app: Application): TasksService {
   return new TasksService(db, app);
 }

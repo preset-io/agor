@@ -892,6 +892,30 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }
 
   /**
+   * True iff at least one session for this schedule has a status in the
+   * given set. Used by the scheduler's per-schedule concurrency guard.
+   */
+  async existsInScheduleWithStatuses(
+    scheduleId: import('@agor/core/types').ScheduleID,
+    statuses: ReadonlyArray<Session['status']>
+  ): Promise<boolean> {
+    if (statuses.length === 0) return false;
+    try {
+      const row = await select(this.db, { one: sql<number>`1` })
+        .from(sessions)
+        .where(and(eq(sessions.schedule_id, scheduleId), inArray(sessions.status, [...statuses])))
+        .limit(1)
+        .one();
+      return row != null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to probe sessions in schedule: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find all sessions in branches accessible to a user (optimized RBAC query)
    *
    * Uses INNER JOIN + LEFT JOIN to filter sessions by branch access in one query

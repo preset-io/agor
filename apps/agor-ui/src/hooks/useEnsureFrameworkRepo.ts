@@ -18,7 +18,7 @@ const CLONE_TIMEOUT_MS = 120_000;
  */
 export function useEnsureFrameworkRepo(
   repos: Repo[],
-  onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>,
+  onCreateRepo?: (data: CreateRepoRequest) => unknown,
   { enabled = true }: { enabled?: boolean } = {}
 ): { frameworkRepo: Repo | undefined; isCloning: boolean } {
   const frameworkRepo = useFrameworkRepo(repos);

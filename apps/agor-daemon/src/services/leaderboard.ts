@@ -10,7 +10,6 @@ import {
   and,
   asc,
   branches,
-  type Database,
   type DateBucket,
   dateTruncUtc,
   desc,
@@ -21,6 +20,7 @@ import {
   type SQL,
   sessions,
   sql,
+  type TenantScopeAwareDatabase,
   tasks,
   users,
 } from '@agor/core/db';
@@ -128,9 +128,9 @@ function parseGroupBy(groupBy: string): Set<LeaderboardDimension> {
  * custom aggregation queries.
  */
 export class LeaderboardService {
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     this.db = db;
   }
 
@@ -429,6 +429,6 @@ export class LeaderboardService {
 /**
  * Service factory function
  */
-export function createLeaderboardService(db: Database): LeaderboardService {
+export function createLeaderboardService(db: TenantScopeAwareDatabase): LeaderboardService {
   return new LeaderboardService(db);
 }

@@ -51,12 +51,16 @@ import {
   permissionModeForCli,
   slugForCwd,
 } from '@agor/core/claude-cli';
+import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
-  type Database,
   generateId,
+  getCurrentTenantId,
+  runWithoutTenantDatabaseScope,
+  runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
   TaskRepository,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
@@ -90,9 +94,35 @@ import {
  * and the cast lives in exactly one place. Returns `null` rather than
  * throwing because the test harness wires apps without a DB.
  */
-function getDb(app: Application): Database | null {
-  const db = (app.get('database') ?? app.get('db')) as Database | undefined;
+function getDb(app: Application): TenantScopeAwareDatabase | null {
+  const db = (app.get('database') ?? app.get('db')) as TenantScopeAwareDatabase | undefined;
   return db ?? null;
+}
+
+const cliWatcherTenantBySession = new Map<string, string>();
+
+function getCliFallbackTenantId(app: Application): string {
+  const config = app.get('config') as AgorConfig | undefined;
+  return resolveMultiTenancyConfig(config ?? {}).static_tenant_id;
+}
+
+function captureCliWatcherTenantId(app: Application): string {
+  return getCurrentTenantId() ?? getCliFallbackTenantId(app);
+}
+
+function rememberCliWatcherTenant(sessionId: string, tenantId: string): void {
+  cliWatcherTenantBySession.set(sessionId, tenantId);
+}
+
+async function runCliCallbackDatabaseScope<T>(
+  app: Application,
+  sessionId: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const db = getDb(app);
+  if (!db) return work();
+  const tenantId = cliWatcherTenantBySession.get(sessionId) ?? captureCliWatcherTenantId(app);
+  return runWithTenantDatabaseScope(db, tenantId, work);
 }
 
 /** Per-turn accumulator used by the sink between `user_message` and `turn_end`. */
@@ -320,55 +350,63 @@ let closeActiveTurnDispatch:
 
 function startTaskWatchdog(app: Application, sessionId: SessionID): void {
   stopTaskWatchdog(sessionId);
-  const timer = setInterval(async () => {
-    const active = activeCliTurn.get(sessionId);
-    if (!active) {
-      // Turn already closed by some other path — stop watching.
-      stopTaskWatchdog(sessionId);
-      return;
-    }
-    const idleMs = Date.now() - (Date.parse(active.lastTimestamp) || active.startedAtMs);
-    if (idleMs < WATCHDOG_IDLE_THRESHOLD_MS) return;
-    const alive = await isClaudeRunningFor(sessionId);
-    if (alive) return;
-    console.log(
-      JSON.stringify({
-        layer: 'claude-cli-watcher.watchdog',
-        sessionId,
-        idleMs,
-        note: 'claude process not running — closing stale turn',
-      })
-    );
-    try {
-      await closeActiveTurnDispatch?.(sessionId, 'claude_exited', new Date().toISOString());
-    } catch (err) {
-      console.warn('[claude-cli-watcher.watchdog] close dispatch failed', err);
-    }
-    stopTaskWatchdog(sessionId);
-  }, WATCHDOG_TICK_MS);
-  // Don't keep the event loop alive just for the watchdog.
-  timer.unref?.();
-  watchdogTimers.set(sessionId, timer);
+  runWithoutTenantDatabaseScope(() => {
+    const timer = setInterval(() => {
+      void runCliCallbackDatabaseScope(app, sessionId, async () => {
+        const active = activeCliTurn.get(sessionId);
+        if (!active) {
+          // Turn already closed by some other path — stop watching.
+          stopTaskWatchdog(sessionId);
+          return;
+        }
+        const idleMs = Date.now() - (Date.parse(active.lastTimestamp) || active.startedAtMs);
+        if (idleMs < WATCHDOG_IDLE_THRESHOLD_MS) return;
+        const alive = await isClaudeRunningFor(sessionId);
+        if (alive) return;
+        console.log(
+          JSON.stringify({
+            layer: 'claude-cli-watcher.watchdog',
+            sessionId,
+            idleMs,
+            note: 'claude process not running — closing stale turn',
+          })
+        );
+        try {
+          await closeActiveTurnDispatch?.(sessionId, 'claude_exited', new Date().toISOString());
+        } catch (err) {
+          console.warn('[claude-cli-watcher.watchdog] close dispatch failed', err);
+        }
+        stopTaskWatchdog(sessionId);
+      }).catch((err: unknown) => {
+        console.warn('[claude-cli-watcher.watchdog] scoped tick failed', err);
+      });
+    }, WATCHDOG_TICK_MS);
+    // Don't keep the event loop alive just for the watchdog.
+    timer.unref?.();
+    watchdogTimers.set(sessionId, timer);
+  });
 }
 
 export function buildCliPersister(app: Application): CliWatcherStatePersister {
   return {
     async saveOffset(sessionId, update) {
-      const db = getDb(app);
-      if (!db) return;
-      const repo = new SessionRepository(db);
-      const row = await repo.findById(sessionId).catch(() => null);
-      if (!row) return;
-      const existing = row.cli_state ?? {};
-      const patch = {
-        cli_state: {
-          ...existing,
-          watcher_offset: update.watcher_offset,
-          last_event_ts: update.last_event_ts ?? existing.last_event_ts,
-          last_event_uuid: update.last_event_uuid ?? existing.last_event_uuid,
-        },
-      } satisfies Partial<Session>;
-      await repo.update(sessionId, patch);
+      await runCliCallbackDatabaseScope(app, sessionId, async () => {
+        const db = getDb(app);
+        if (!db) return;
+        const repo = new SessionRepository(db);
+        const row = await repo.findById(sessionId).catch(() => null);
+        if (!row) return;
+        const existing = row.cli_state ?? {};
+        const patch = {
+          cli_state: {
+            ...existing,
+            watcher_offset: update.watcher_offset,
+            last_event_ts: update.last_event_ts ?? existing.last_event_ts,
+            last_event_uuid: update.last_event_uuid ?? existing.last_event_uuid,
+          },
+        } satisfies Partial<Session>;
+        await repo.update(sessionId, patch);
+      });
     },
   };
 }
@@ -943,19 +981,24 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
   // a `turn_end` event and lets the sink's existing branch handle it.
   // Same code path = same analytics + DB writes whether the close was
   // triggered by claude itself or by the watchdog noticing claude died.
+  const scopedSink: CliWatcherEventSink = (sessionId, event) =>
+    runCliCallbackDatabaseScope(app, sessionId, async () => {
+      await sink(sessionId, event);
+    });
+
   closeActiveTurnDispatch = async (
     sessionId: SessionID,
     _reason: 'turn_end' | 'claude_exited',
     ts: string
   ) => {
-    await sink(sessionId, {
+    await scopedSink(sessionId, {
       type: 'turn_end',
       messageId: 'watchdog-synthetic',
       timestamp: ts,
     });
   };
 
-  return sink;
+  return scopedSink;
 }
 
 /**
@@ -1386,13 +1429,18 @@ export async function onCliSessionCreated(
   // 2) Register the JSONL watcher (sits idle until `claude` writes its first line).
   try {
     const reg = getCliWatcherRegistry(app);
-    await reg.register({
-      sessionId: session.session_id,
-      cwd: branchCwd,
-      homeDir,
-      startOffset: session.cli_state?.watcher_offset ?? 0,
+    const watcherTenantId = captureCliWatcherTenantId(app);
+    await runWithoutTenantDatabaseScope(async () => {
+      rememberCliWatcherTenant(session.session_id, watcherTenantId);
+      await reg.register({
+        sessionId: session.session_id,
+        cwd: branchCwd,
+        homeDir,
+        startOffset: session.cli_state?.watcher_offset ?? 0,
+      });
     });
   } catch (err) {
+    cliWatcherTenantBySession.delete(session.session_id);
     console.warn(
       `[claude-cli-integration] watcher register failed for session ${session.session_id}:`,
       err
@@ -1435,6 +1483,7 @@ export async function onCliSessionEnded(app: Application, sessionId: SessionID):
   // mid-turn" path.
   stopTaskWatchdog(sessionId);
   activeCliTurn.delete(sessionId);
+  cliWatcherTenantBySession.delete(sessionId);
 }
 
 /**
@@ -1442,38 +1491,49 @@ export async function onCliSessionEnded(app: Application, sessionId: SessionID):
  * daemon startup. Picks up wherever the previous daemon process left off
  * via the persisted `watcher_offset` byte counter.
  */
-export async function rehydrateCliWatchers(
-  app: Application,
-  branchCwdLookup: (branchId: string) => Promise<string | null>
-): Promise<void> {
+export async function scanCliWatcherRehydrateSessions(app: Application): Promise<Session[]> {
   const db = getDb(app);
-  if (!db) return;
+  if (!db) return [];
   const repo = new SessionRepository(db);
 
   // Scan for active CLI sessions. We don't have a direct "give me active
   // claude-code-cli sessions" query, so do the simple thing: list all
   // sessions, filter in memory. Numbers are small (hundreds at most).
-  const all = await repo.findAll().catch(() => [] as Session[]);
+  return repo.findAll();
+}
+
+export async function rehydrateCliWatchers(
+  app: Application,
+  branchCwdLookup: (branchId: string) => Promise<string | null>,
+  sessions: Session[],
+  options: { tenantId: string }
+): Promise<void> {
   const reg = getCliWatcherRegistry(app);
   let rehydrated = 0;
-  for (const session of all) {
+  for (const session of sessions) {
     if (session.agentic_tool !== 'claude-code-cli') continue;
     if (session.status === 'completed' || session.status === 'failed') continue;
     if (session.archived) continue;
     const cwd = await branchCwdLookup(session.branch_id);
     if (!cwd) continue;
-    // Prime the in-memory active turn BEFORE registering the watcher so
-    // the very first post-restart event sees the right task linkage.
-    primeActiveCliTurnFromSession(app, session);
     try {
-      await reg.register({
-        sessionId: session.session_id,
-        cwd,
-        homeDir: resolveHomeDirForCliSession(session),
-        startOffset: session.cli_state?.watcher_offset ?? 0,
+      await runWithoutTenantDatabaseScope(async () => {
+        // Prime the in-memory active turn BEFORE registering the watcher so
+        // the very first post-restart event sees the right task linkage.
+        // This also starts watchdog timers, so keep it outside any tenant DB
+        // transaction ALS; watcher and watchdog callbacks enter fresh DB scope.
+        rememberCliWatcherTenant(session.session_id, options.tenantId);
+        primeActiveCliTurnFromSession(app, session);
+        await reg.register({
+          sessionId: session.session_id,
+          cwd,
+          homeDir: resolveHomeDirForCliSession(session),
+          startOffset: session.cli_state?.watcher_offset ?? 0,
+        });
       });
       rehydrated++;
     } catch (err) {
+      cliWatcherTenantBySession.delete(session.session_id);
       console.warn(
         `[claude-cli-integration] failed to rehydrate watcher for ${session.session_id}:`,
         err

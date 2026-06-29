@@ -12,6 +12,7 @@ import type {
   BoardExportBlob,
   BoardGroupGrantWithGroup,
   Branch,
+  BranchEnvironmentUpdate,
   BranchGroupGrantWithGroup,
   CardType,
   CardWithType,
@@ -502,11 +503,11 @@ export interface BranchesService extends AgorService<Branch> {
       | {
           branch_id?: string;
           branchId?: string;
-          environment_update?: Partial<Branch['environment_instance']>;
-          environmentUpdate?: Partial<Branch['environment_instance']>;
+          environment_update?: BranchEnvironmentUpdate;
+          environmentUpdate?: BranchEnvironmentUpdate;
         }
       | string,
-    environmentUpdate?: Partial<Branch['environment_instance']>,
+    environmentUpdate?: BranchEnvironmentUpdate,
     params?: Params
   ): Promise<Branch>;
 

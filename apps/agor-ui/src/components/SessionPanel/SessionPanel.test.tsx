@@ -39,6 +39,7 @@ vi.mock('../Pill', () => ({
 
 vi.mock('../SessionIds', () => ({
   SessionIdsButton: () => <span>Session IDs</span>,
+  SessionIdsList: () => <span>Session IDs List</span>,
 }));
 
 vi.mock('../ToolIcon', () => ({

@@ -546,3 +546,30 @@ Example: Build Feature 1 once. Fork 3 times:
 - Documentation being generated (with context snapshot of design decisions)
 
 All running in parallel, same codebase, each starting from the same understanding.
+
+<a id="open-source-telemetry" />
+
+## What does Agor's open-source telemetry collect?
+
+During `agor init`, Agor explains its open-source telemetry and asks whether to enable ongoing anonymous telemetry. Agor sends one anonymous install result so the maintainers can count installs and whether ongoing telemetry was enabled. To disable all telemetry, including that one-time install result, set `AGOR_TELEMETRY=0` before running Agor.
+
+When ongoing telemetry is enabled, Agor sends lightweight install and aggregate usage summaries that help prioritize product work. These can include:
+
+- Agor version and install channel
+- OS family, Node major version, deployment kind, and database backend
+- broad configuration modes such as RBAC / Unix isolation mode
+- daemon start events and daily active-install heartbeats
+- aggregate usage counts such as prompt count, session count, branch count, active user count, and counts by agentic tool / provider / normalized model family
+
+Agor does **not** send prompts, messages, repo names or remotes, file paths, user emails or names, branch/session/task IDs, code, tool output, secrets, tokens, or raw custom model names.
+
+You can change the setting later:
+
+```bash
+agor telemetry on
+agor telemetry off
+agor telemetry
+```
+
+`DO_NOT_TRACK=1` and `AGOR_TELEMETRY=0` disable telemetry regardless of config.
+`AGOR_TELEMETRY=1` explicitly enables telemetry and creates an anonymous install ID if one has not been configured yet.

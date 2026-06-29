@@ -35,6 +35,7 @@ import {
 } from '../schema';
 import {
   AmbiguousIdError,
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
@@ -107,29 +108,32 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     const { objects: _objects, custom_css: _customCss, ...leanData } = data;
     const effectiveData = options?.lean ? leanData : data;
 
-    return {
-      board_id: boardId,
-      name: row.name,
-      slug,
-      primary_assistant_id:
-        (row.primary_assistant_id as Board['primary_assistant_id']) ?? undefined,
-      created_at: new Date(row.created_at).toISOString(),
-      last_updated: row.updated_at
-        ? new Date(row.updated_at).toISOString()
-        : new Date(row.created_at).toISOString(),
-      created_by: row.created_by,
-      url,
-      archived: Boolean(row.archived),
-      archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
-      archived_by: row.archived_by ?? undefined,
-      ...effectiveData,
-      icon: normalizeExactEmojiShortcode(data.icon),
-      access_mode: data.access_mode ?? 'shared',
-      default_others_can: data.default_others_can ?? 'session',
-      default_others_fs_access: data.default_others_fs_access ?? 'read',
-      default_dangerously_allow_session_sharing:
-        data.default_dangerously_allow_session_sharing ?? false,
-    };
+    return attachHiddenTenant(
+      {
+        board_id: boardId,
+        name: row.name,
+        slug,
+        primary_assistant_id:
+          (row.primary_assistant_id as Board['primary_assistant_id']) ?? undefined,
+        created_at: new Date(row.created_at).toISOString(),
+        last_updated: row.updated_at
+          ? new Date(row.updated_at).toISOString()
+          : new Date(row.created_at).toISOString(),
+        created_by: row.created_by,
+        url,
+        archived: Boolean(row.archived),
+        archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+        archived_by: row.archived_by ?? undefined,
+        ...effectiveData,
+        icon: normalizeExactEmojiShortcode(data.icon),
+        access_mode: data.access_mode ?? 'shared',
+        default_others_can: data.default_others_can ?? 'session',
+        default_others_fs_access: data.default_others_fs_access ?? 'read',
+        default_dangerously_allow_session_sharing:
+          data.default_dangerously_allow_session_sharing ?? false,
+      },
+      row
+    );
   }
 
   /**

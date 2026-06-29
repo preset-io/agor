@@ -20,19 +20,14 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
-  BranchesOutlined,
   CloseOutlined,
   CodeOutlined,
   EllipsisOutlined,
-  ForkOutlined,
   InboxOutlined,
-  QuestionCircleOutlined,
-  SendOutlined,
   SettingOutlined,
-  StopOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Alert, App, Badge, Button, Dropdown, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { App, Badge, Button, Dropdown, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -51,20 +46,16 @@ import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import { FileUpload, FileUploadButton } from '../FileUpload';
+import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
-import { MCPServerPill } from '../MCPServer';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
-import { ContextWindowPill, TimerPill, TokenCountPill } from '../Pill';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
-import { SessionIdsButton } from '../SessionIds';
 import { ToolIcon } from '../ToolIcon';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
-import { SessionMcpFooterControl } from './SessionMcpFooterControl';
+import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
-import { SessionRunSettingsPopover } from './SessionRunSettingsPopover';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -829,59 +820,43 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       }
     : undefined;
 
-  // Footer controls
-  const footerControls = (
-    <div
-      style={{
-        position: 'relative',
-        flexShrink: 0,
-        background: token.colorBgContainer,
-        borderTop: `1px solid ${token.colorBorder}`,
-        padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 6}px ${token.sizeUnit * 3}px`,
-        marginLeft: -token.sizeUnit * 6,
-        marginRight: -token.sizeUnit * 6,
-      }}
-    >
-      {footerGradient && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: footerGradient,
-            pointerEvents: 'none',
-            zIndex: 0,
-          }}
-        />
-      )}
-      <Space
-        orientation="vertical"
-        style={{ width: '100%', position: 'relative', zIndex: 1 }}
-        size={8}
-      >
-        {unauthedMcpServers.length > 0 && (
-          <Alert
-            type="warning"
-            showIcon
-            title={
-              <span>
-                {unauthedMcpServers.map((server) => (
-                  <MCPServerPill
-                    key={server.mcp_server_id}
-                    server={server}
-                    needsAuth
-                    client={client}
-                  />
-                ))}{' '}
-                not authenticated — click to sign in.
-              </span>
-            }
-            style={{ marginBottom: 0, borderRadius: token.borderRadius }}
-            banner
-          />
-        )}
+  const sessionFooter = (
+    <SessionFooter
+      session={session}
+      footerTimerTask={footerTimerTask}
+      tokenBreakdown={tokenBreakdown}
+      latestContextWindow={latestContextWindow}
+      footerGradient={footerGradient}
+      sessionMcpServerIds={sessionMcpServerIds}
+      unauthedMcpServers={unauthedMcpServers}
+      mcpServerById={mcpServerById}
+      userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
+      isRunning={isRunning}
+      isStopping={isStopping}
+      stopRequestInFlight={stopRequestInFlight}
+      hasInput={hasInput}
+      connectionDisabled={connectionDisabled}
+      toolCaps={toolCaps}
+      effortLevel={effortLevel}
+      permissionMode={permissionMode}
+      codexSandboxMode={codexSandboxMode}
+      codexApprovalPolicy={codexApprovalPolicy}
+      queuedTasks={queuedTasks}
+      client={client}
+      modelLabel={modelLabel}
+      modelConfig={modelConfig}
+      onModelConfigChange={handleModelConfigChange}
+      onOpenSessionSettings={onOpenSettings}
+      onSendPrompt={handleSendPrompt}
+      onStop={handleStop}
+      onFork={handleFork}
+      onBtwSend={handleBtwSend}
+      onSpawnOpen={() => setSpawnModalOpen(true)}
+      onUploadOpen={() => setUploadModalOpen(true)}
+      onEffortChange={handleEffortChange}
+      onPermissionModeChange={handlePermissionModeChange}
+      onCodexPermissionChange={handleCodexPermissionChange}
+      promptInputSlot={
         <PromptInput
           ref={promptRef}
           sessionId={session.session_id}
@@ -900,7 +875,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           client={client}
           userById={userById}
           onFilesDrop={(files) => {
-            // Store dropped files and open modal
             setDroppedFiles(files);
             setUploadModalOpen(true);
           }}
@@ -913,154 +887,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             return Array.isArray(ctx?.skills) ? ctx.skills : undefined;
           })()}
         />
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: `${token.sizeUnit}px`,
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <Space size={4} wrap>
-            <SessionMcpFooterControl
-              client={client}
-              sessionId={session.session_id}
-              sessionMcpServerIds={sessionMcpServerIds}
-              mcpServerById={mcpServerById}
-              userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-              onOpenSessionSettings={onOpenSettings}
-            />
-            {footerTimerTask && (
-              <TimerPill
-                status={footerTimerTask.status}
-                startedAt={
-                  footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at
-                }
-                endedAt={
-                  footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at
-                }
-                durationMs={footerTimerTask.duration_ms}
-                lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
-              />
-            )}
-            <SessionIdsButton session={session} />
-            {tokenBreakdown.total > 0 && (
-              <TokenCountPill
-                count={tokenBreakdown.total}
-                estimatedCost={tokenBreakdown.cost}
-                inputTokens={tokenBreakdown.input}
-                outputTokens={tokenBreakdown.output}
-                cacheReadTokens={tokenBreakdown.cacheRead}
-                cacheCreationTokens={tokenBreakdown.cacheCreation}
-              />
-            )}
-            {latestContextWindow && (
-              <ContextWindowPill
-                used={latestContextWindow.used}
-                limit={latestContextWindow.limit}
-                taskMetadata={latestContextWindow.taskMetadata}
-              />
-            )}
-          </Space>
-          <Space size={4} wrap style={{ marginLeft: 'auto' }}>
-            {isRunning && <Spin size="small" />}
-            <SessionRunSettingsPopover
-              client={client}
-              session={session}
-              modelLabel={modelLabel}
-              modelConfig={modelConfig}
-              onModelConfigChange={handleModelConfigChange}
-              effortLevel={effortLevel}
-              onEffortChange={handleEffortChange}
-              permissionMode={permissionMode}
-              onPermissionModeChange={handlePermissionModeChange}
-              codexSandboxMode={codexSandboxMode}
-              codexApprovalPolicy={codexApprovalPolicy}
-              onCodexPermissionChange={handleCodexPermissionChange}
-            />
-            <Space.Compact>
-              <Tooltip
-                title={
-                  stopRequestInFlight
-                    ? 'Sending stop request...'
-                    : isStopping
-                      ? 'Stopping... (Click again to retry if stuck)'
-                      : isRunning
-                        ? 'Stop Execution'
-                        : 'No active execution'
-                }
-              >
-                <Button
-                  danger
-                  icon={<StopOutlined />}
-                  onClick={handleStop}
-                  disabled={!isRunning || stopRequestInFlight}
-                  loading={isStopping && !stopRequestInFlight}
-                />
-              </Tooltip>
-              {toolCaps?.supportsSessionFork !== false && (
-                <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
-                  <Button
-                    icon={<ForkOutlined />}
-                    onClick={handleFork}
-                    disabled={connectionDisabled}
-                  />
-                </Tooltip>
-              )}
-              {toolCaps?.supportsChildSpawn !== false && (
-                <Tooltip
-                  title={
-                    connectionDisabled
-                      ? 'Disconnected from daemon'
-                      : isRunning
-                        ? 'Session is running...'
-                        : 'Spawn Subsession'
-                  }
-                >
-                  <Button
-                    icon={<BranchesOutlined />}
-                    onClick={() => setSpawnModalOpen(true)}
-                    disabled={connectionDisabled || isRunning}
-                  />
-                </Tooltip>
-              )}
-              {toolCaps?.supportsSessionFork !== false && (
-                <Tooltip title="Ask a side question via ephemeral fork (btw)">
-                  <Button
-                    icon={<QuestionCircleOutlined />}
-                    onClick={handleBtwSend}
-                    disabled={connectionDisabled}
-                  />
-                </Tooltip>
-              )}
-              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Upload Files'}>
-                <FileUploadButton
-                  onClick={() => setUploadModalOpen(true)}
-                  disabled={connectionDisabled}
-                />
-              </Tooltip>
-              <Tooltip
-                title={
-                  connectionDisabled
-                    ? 'Disconnected from daemon'
-                    : isRunning
-                      ? 'Queue Message'
-                      : 'Send Prompt'
-                }
-              >
-                <Button
-                  type="primary"
-                  icon={<SendOutlined />}
-                  onClick={handleSendPrompt}
-                  disabled={connectionDisabled || !hasInput}
-                />
-              </Tooltip>
-            </Space.Compact>
-          </Space>
-        </div>
-      </Space>
-    </div>
+      }
+    />
   );
 
   return (
@@ -1165,14 +993,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           setCliViewMode={setCliViewMode}
         />
 
-        {/* Footer Controls — rendered outside SessionPanelContent so that
+        {/* Footer — rendered outside SessionPanelContent so that
             keystroke-driven re-renders don't propagate to ConversationView.
             Hidden for CLI sessions in 'terminal' view because the embedded
             `claude` REPL has its own input prompt; the Agor textarea is
             redundant (and would inject via PTY anyway, racy with whatever
             the user is typing into the REPL directly). */}
         {!(session.agentic_tool === 'claude-code-cli' && cliViewMode === 'terminal') &&
-          footerControls}
+          sessionFooter}
 
         {/* Fork modal — opened when Fork button is clicked with an empty textarea */}
         <ForkSpawnModal

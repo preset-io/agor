@@ -6,7 +6,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, MCPServerRepository } from '@agor/core/db';
+import { MCPServerRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type {
   CreateMCPServerInput,
   MCPScope,
@@ -41,7 +41,7 @@ export class MCPServersService extends DrizzleService<
 > {
   private mcpServerRepo: MCPServerRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const mcpServerRepo = new MCPServerRepository(db);
     super(mcpServerRepo, {
       id: 'mcp_server_id',
@@ -105,6 +105,6 @@ export class MCPServersService extends DrizzleService<
 /**
  * Service factory function
  */
-export function createMCPServersService(db: Database): MCPServersService {
+export function createMCPServersService(db: TenantScopeAwareDatabase): MCPServersService {
   return new MCPServersService(db);
 }
