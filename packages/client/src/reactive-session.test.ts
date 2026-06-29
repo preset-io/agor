@@ -123,4 +123,68 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
     // The latest task is left unhydrated for TaskBlock to lazy-load later.
     expect(handle.isTaskLoaded('task-2')).toBe(false);
   });
+
+  it('lazy: hydrates nothing when every task is queued', async () => {
+    const allQueued = [
+      makeTask('task-1', TaskStatus.QUEUED),
+      makeTask('task-2', TaskStatus.QUEUED),
+    ];
+    const { handle, messageFindAll } = await bootstrapHandle(
+      { tasks: allQueued, messagesByTask: {} },
+      'lazy'
+    );
+
+    expect(handle.state.loading).toBe(false);
+    expect(handle.isTaskLoaded('task-1')).toBe(false);
+    expect(handle.isTaskLoaded('task-2')).toBe(false);
+    expect(messageFindAll).not.toHaveBeenCalled();
+  });
+
+  it('lazy: hydrates nothing when there are no tasks', async () => {
+    const { handle, messageFindAll } = await bootstrapHandle(
+      { tasks: [], messagesByTask: {} },
+      'lazy'
+    );
+
+    expect(handle.state.loading).toBe(false);
+    expect(messageFindAll).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReactiveSessionHandle resync hydration parity', () => {
+  it('lazy: keeps the latest task hydrated and adopts a new latest task on resync', async () => {
+    const opts: MockClientOptions = {
+      tasks: [
+        makeTask('task-1', TaskStatus.COMPLETED),
+        makeTask('task-2', TaskStatus.COMPLETED),
+        makeTask('task-3', TaskStatus.QUEUED),
+      ],
+      messagesByTask: {
+        'task-1': [makeMessage('task-1', 0)],
+        'task-2': [makeMessage('task-2', 0)],
+      },
+    };
+    const { client, messageFindAll } = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    expect(handle.isTaskLoaded('task-2')).toBe(true);
+
+    // Reconnect with no change: the latest (scroll-target) task stays hydrated.
+    await handle.resync();
+    expect(handle.isTaskLoaded('task-2')).toBe(true);
+    expect(handle.getTaskMessages('task-2')).toHaveLength(1);
+
+    // A new non-queued task became the latest while disconnected.
+    opts.tasks = [...opts.tasks, makeTask('task-4', TaskStatus.COMPLETED)];
+    opts.messagesByTask['task-4'] = [makeMessage('task-4', 0)];
+
+    await handle.resync();
+
+    expect(handle.isTaskLoaded('task-4')).toBe(true);
+    expect(handle.getTaskMessages('task-4')).toHaveLength(1);
+    expect(messageFindAll).toHaveBeenCalledWith({
+      query: { task_id: 'task-4', $sort: { index: 1 } },
+    });
+  });
 });

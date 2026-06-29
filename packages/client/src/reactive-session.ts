@@ -926,19 +926,28 @@ export class ReactiveSessionHandle {
         });
         messagesByTask = groupMessagesByTask(allMessages);
         loadedTaskIds = new Set(messagesByTask.keys());
-      } else if (this.stateSnapshot.loadedTaskIds.size > 0) {
-        const refreshedByTask = new Map<string, Message[]>();
-        for (const taskId of this.stateSnapshot.loadedTaskIds) {
-          const taskMessages = await this.client.service('messages').findAll({
-            query: {
-              task_id: taskId,
-              $sort: { index: 1 },
-            },
-          });
-          refreshedByTask.set(taskId, sortMessagesByIndex(taskMessages));
+      } else if (this.options.taskHydration === 'lazy') {
+        // Preserve the bootstrap invariant across reconnect: the latest
+        // (expanded / scroll-target) task must stay hydrated even if a new task
+        // became the latest while disconnected, or bootstrap's hydration failed
+        // and left loadedTaskIds empty.
+        const latestId = findLatestHydratableTask(tasks)?.task_id;
+        const toRefresh = new Set(this.stateSnapshot.loadedTaskIds);
+        if (latestId) toRefresh.add(latestId);
+        if (toRefresh.size > 0) {
+          const refreshedByTask = new Map<string, Message[]>();
+          for (const taskId of toRefresh) {
+            const taskMessages = await this.client.service('messages').findAll({
+              query: {
+                task_id: taskId,
+                $sort: { index: 1 },
+              },
+            });
+            refreshedByTask.set(taskId, sortMessagesByIndex(taskMessages));
+          }
+          messagesByTask = refreshedByTask;
+          loadedTaskIds = new Set(refreshedByTask.keys());
         }
-        messagesByTask = refreshedByTask;
-        loadedTaskIds = new Set(refreshedByTask.keys());
       }
 
       if (this.disposed) return;
