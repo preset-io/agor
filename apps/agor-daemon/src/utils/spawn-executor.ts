@@ -843,14 +843,17 @@ export function createServiceToken(
  * @param app - FeathersJS application with sessionTokenService
  * @returns JWT access token
  */
-export function generateSessionToken(app: {
-  settings: { authentication?: { secret?: string } };
-}): string {
+export function generateSessionToken(
+  app: {
+    settings: { authentication?: { secret?: string } };
+  },
+  scope: Record<string, unknown> = {}
+): string {
   const jwtSecret = app.settings.authentication?.secret;
   if (!jwtSecret) {
     throw new Error('JWT secret not configured in app settings');
   }
-  return createServiceToken(jwtSecret);
+  return createServiceToken(jwtSecret, undefined, scope);
 }
 
 // ============================================================================

@@ -64,6 +64,12 @@ import {
 /**
  * Repo service params
  */
+
+function serviceTokenScopeForParams(params?: RepoParams): Record<string, unknown> {
+  const tenantId = (params as Partial<AuthenticatedParams> | undefined)?.tenant?.tenant_id;
+  return tenantId ? { tenant_id: tenantId } : {};
+}
+
 export type RepoParams = QueryParams<{
   slug?: string;
   managed_by_agor?: boolean;
@@ -223,7 +229,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
     const sessionToken = generateSessionToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      serviceTokenScopeForParams(params)
     );
 
     // Unix group initialization gates on RBAC explicitly.
@@ -910,7 +917,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Unix group init: Feathers RPC (branches.initializeUnixGroup) — runs daemon-side
     try {
       const sessionToken = generateSessionToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        serviceTokenScopeForParams(params)
       );
 
       // Unix group initialization gates on RBAC explicitly.
@@ -999,7 +1007,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     serviceParams?: RepoParams
   ) {
     const sessionToken = generateSessionToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      serviceTokenScopeForParams(serviceParams)
     );
     const asUser = await resolveExecutorReadAsUser(
       this.db,
@@ -1183,7 +1192,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
     if (cleanup && repo.repo_type === 'remote') {
       const sessionToken = generateSessionToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        serviceTokenScopeForParams(params)
       );
 
       const cleanupResult = await runExecutorCommand(
