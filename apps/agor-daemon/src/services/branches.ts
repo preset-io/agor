@@ -12,6 +12,7 @@ import {
   createUserProcessEnvironment,
   ENVIRONMENT,
   isBranchRbacEnabled,
+  isUnixGroupRefreshNeeded,
   loadConfig,
   PAGINATION,
 } from '@agor/core/config';
@@ -1488,6 +1489,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const repo = (await reposService.get(branch.repo_id)) as Repo;
 
       const rbacEnabled = isBranchRbacEnabled();
+      const initUnixGroup = rbacEnabled && isUnixGroupRefreshNeeded();
       const { getDaemonUser } = await import('@agor/core/config');
       const daemonUser = getDaemonUser();
 
@@ -1542,7 +1544,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               restoreMode: true,
               sourceBranch: branch.base_ref || repo.default_branch || 'main',
               // Unix group isolation
-              initUnixGroup: rbacEnabled,
+              initUnixGroup,
               othersAccess: branch.others_fs_access || 'read',
               daemonUser,
               repoUnixGroup: repo.unix_group,

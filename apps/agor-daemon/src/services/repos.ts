@@ -15,6 +15,7 @@ import {
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
   isBranchRbacEnabled,
+  isUnixGroupRefreshNeeded,
   isValidGitUrl,
   isValidSlug,
   normalizeRepoUrl,
@@ -235,6 +236,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     // Unix group initialization gates on RBAC explicitly.
     const rbacEnabled = isBranchRbacEnabled();
+    const initUnixGroup = rbacEnabled && isUnixGroupRefreshNeeded();
 
     // Sudo wrap (asUser) is gated inside the resolver — returns undefined
     // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -294,7 +296,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           ...(data.default_branch ? { default_branch: data.default_branch } : {}),
           createDbRecord: true,
           userId: userId as string | undefined,
-          initUnixGroup: rbacEnabled,
+          initUnixGroup,
         },
       },
       {
@@ -923,6 +925,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
       // Unix group initialization gates on RBAC explicitly.
       const rbacEnabled = isBranchRbacEnabled();
+    const initUnixGroup = rbacEnabled && isUnixGroupRefreshNeeded();
 
       // Sudo wrap (asUser) is gated inside the resolver — returns undefined
       // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -947,7 +950,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             refType: data.refType,
             userId: userId as string | undefined,
             // Unix group isolation (only when RBAC is enabled)
-            initUnixGroup: rbacEnabled,
+            initUnixGroup,
             othersAccess: branch.others_fs_access || 'read',
             // Branch storage mode (forwarded for the clone-mode code path)
             storageMode,

@@ -800,10 +800,11 @@ export function requireDaemonUser(config: AgorConfig): string {
     return config.daemon.unix_user;
   }
 
-  // 2. Check if Unix isolation is enabled - if so, require explicit config
+  // 2. Check if Unix impersonation/isolation is enabled - if so, require explicit config.
+  // Branch RBAC alone is logical app-level authorization and does not require
+  // Unix users/groups in Cloud simple mode.
   const unixIsolationEnabled =
-    config.execution?.branch_rbac === true ||
-    (config.execution?.unix_user_mode && config.execution.unix_user_mode !== 'simple');
+    config.execution?.unix_user_mode && config.execution.unix_user_mode !== 'simple';
 
   if (unixIsolationEnabled) {
     throw new Error(
@@ -827,9 +828,11 @@ export function requireDaemonUser(config: AgorConfig): string {
 }
 
 /**
- * Check if branch RBAC is enabled
+ * Check if logical branch RBAC is enabled.
  *
- * When RBAC is enabled, git operations need to run via sudo to get fresh group memberships.
+ * This controls app-level branch ownership/visibility. It does not necessarily
+ * imply Unix group/ACL setup; Cloud simple mode may enable branch RBAC while
+ * running all filesystem work as the daemon user.
  *
  * @returns true if branch_rbac is enabled in config
  */
@@ -915,20 +918,13 @@ export function ensureBranchStorageModeAllowed(mode: import('./types').BranchSto
  * Whether the daemon needs to wrap git operations in `sudo -u` to pick up
  * supplemental Unix groups created after daemon startup.
  *
- * `sudo -u` is the only way to force a fresh `initgroups()` on a long-running
- * daemon process — without it, `agor_wt_*` groups added at runtime are
- * invisible and ACL-gated git operations fail with permission errors.
+ * Cloud simple mode can enable logical `branch_rbac` without Unix groups. Only
+ * non-simple Unix modes require group refresh / sudo wrapping.
  *
- * Why: Issue #1140 — in the open-access default (no RBAC, simple unix mode)
- * no supplemental groups are ever created, so wrapping in sudo is pure
- * overhead AND breaks for users who never configured passwordless sudoers.
- *
- * Returns true when:
- * - `branch_rbac` is enabled (RBAC creates `agor_wt_*` groups), OR
- * - `unix_user_mode` is `insulated` or `strict` (per-user impersonation)
+ * Returns true when `unix_user_mode` is `insulated` or `strict`.
  */
 export function isUnixGroupRefreshNeeded(): boolean {
-  return isBranchRbacEnabled() || isUnixImpersonationEnabled();
+  return isUnixImpersonationEnabled();
 }
 
 // =============================================================================
