@@ -9,7 +9,6 @@
 import { PublicBaseUrlNotConfiguredError, requirePublicBaseUrl } from '@agor/core/config';
 import {
   BranchRepository,
-  type Database,
   GatewayChannelRepository,
   GatewayOutboundMessageRepository,
   getCurrentTenantId,
@@ -17,6 +16,7 @@ import {
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
   shortId,
+  type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -532,7 +532,7 @@ function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): Ga
  * Gateway routing service
  */
 export class GatewayService {
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
   private channelRepo: GatewayChannelRepository;
   private threadMapRepo: ThreadSessionMapRepository;
   private outboundRepo: GatewayOutboundMessageRepository;
@@ -579,7 +579,7 @@ export class GatewayService {
   private static SLACK_STREAM_STATUS_REFRESH_MS = 300;
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     this.db = db;
     this.channelRepo = new GatewayChannelRepository(db);
     this.threadMapRepo = new ThreadSessionMapRepository(db);
@@ -2551,6 +2551,9 @@ export class GatewayService {
 /**
  * Service factory function
  */
-export function createGatewayService(db: Database, app: Application): GatewayService {
+export function createGatewayService(
+  db: TenantScopeAwareDatabase,
+  app: Application
+): GatewayService {
   return new GatewayService(db, app);
 }

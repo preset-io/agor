@@ -8,7 +8,11 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { BoardObjectRepository, CardRepository, type Database } from '@agor/core/db';
+import {
+  BoardObjectRepository,
+  CardRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type {
   BoardEntityObject,
   BoardID,
@@ -32,7 +36,7 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   private cardRepo: CardRepository;
   private boardObjectRepo: BoardObjectRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const cardRepo = new CardRepository(db);
     super(cardRepo, {
       id: 'card_id',
@@ -223,6 +227,6 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   }
 }
 
-export function createCardsService(db: Database): CardsService {
+export function createCardsService(db: TenantScopeAwareDatabase): CardsService {
   return new CardsService(db);
 }

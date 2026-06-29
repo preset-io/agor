@@ -173,7 +173,7 @@ async function configureSQLitePragmas(client: Client): Promise<void> {
  * });
  * ```
  */
-export function createDatabase(config: DbConfig): Database {
+export function createDatabase(config: DbConfig): RawDatabase {
   // Auto-detect dialect from URL if not explicitly set
   let dialect = config.dialect;
 
@@ -192,10 +192,10 @@ export function createDatabase(config: DbConfig): Database {
   }
 
   if (dialect === 'postgresql') {
-    return createPostgresDatabase(config);
+    return createPostgresDatabase(config) as unknown as RawDatabase;
   }
 
-  return createSQLiteDatabase(config);
+  return createSQLiteDatabase(config) as unknown as RawDatabase;
 }
 
 /**
@@ -275,7 +275,7 @@ function createSQLiteDatabase(config: DbConfig): LibSQLDatabase<typeof sqliteSch
  * @param config Database configuration
  * @returns Promise resolving to Drizzle database instance
  */
-export async function createDatabaseAsync(config: DbConfig): Promise<Database> {
+export async function createDatabaseAsync(config: DbConfig): Promise<RawDatabase> {
   // Determine dialect: use config.dialect, then auto-detect from URL, then fallback to env/default
   let dialect = config.dialect;
   if (!dialect && config.url) {
@@ -287,14 +287,14 @@ export async function createDatabaseAsync(config: DbConfig): Promise<Database> {
 
   if (dialect === 'postgresql') {
     // PostgreSQL doesn't need pragma configuration
-    return createPostgresDatabase(config);
+    return createPostgresDatabase(config) as unknown as RawDatabase;
   }
 
   // SQLite: Wait for pragmas to be configured
   const client = createLibSQLClient(config);
   const db = drizzleSQLite(client, { schema: sqliteSchema });
   await configureSQLitePragmas(client);
-  return db;
+  return db as unknown as RawDatabase;
 }
 
 /**
@@ -303,6 +303,38 @@ export async function createDatabaseAsync(config: DbConfig): Promise<Database> {
 export type Database =
   | LibSQLDatabase<typeof sqliteSchema>
   | PostgresJsDatabase<typeof postgresSchema>;
+
+declare const rawDatabaseBrand: unique symbol;
+declare const tenantScopeAwareDatabaseBrand: unique symbol;
+declare const tenantScopedDatabaseBrand: unique symbol;
+declare const systemDatabaseBrand: unique symbol;
+
+/**
+ * Raw Drizzle database handle. This should be limited to setup, migrations,
+ * and low-level scope plumbing. Application services should generally receive
+ * a TenantScopeAwareDatabase instead.
+ */
+export type RawDatabase = Database & { readonly [rawDatabaseBrand]: 'raw-database' };
+
+/**
+ * Long-lived daemon/repository database handle. It is not itself tenant-scoped;
+ * it is a proxy that resolves to the active tenant/system scope at call time.
+ */
+export type TenantScopeAwareDatabase = Database & {
+  readonly [tenantScopeAwareDatabaseBrand]: 'tenant-scope-aware-database';
+};
+
+/**
+ * Database handle available only while an active tenant DB scope is running.
+ */
+export type TenantScopedDatabase = Database & {
+  readonly [tenantScopedDatabaseBrand]: 'tenant-scoped-database';
+};
+
+/**
+ * Database handle available only while explicit global/system DB work is running.
+ */
+export type SystemDatabase = Database & { readonly [systemDatabaseBrand]: 'system-database' };
 
 /**
  * Default database path for local development

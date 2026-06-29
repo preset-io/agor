@@ -3,12 +3,12 @@ import {
   and,
   branches,
   count,
-  type Database,
   eq,
   gte,
   lt,
   select,
   sessions,
+  type TenantScopeAwareDatabase,
   tasks,
 } from '@agor/core/db';
 import {
@@ -43,7 +43,7 @@ function previousUtcDayRange(now = new Date()): { day: string; start: Date; end:
 }
 
 async function countCreatedRows(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   table: typeof tasks | typeof sessions | typeof branches,
   start: Date,
   end: Date
@@ -56,7 +56,7 @@ async function countCreatedRows(
 }
 
 async function addDistinctCreatedBy(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   table: typeof tasks | typeof sessions | typeof branches,
   start: Date,
   end: Date,
@@ -73,7 +73,11 @@ async function addDistinctCreatedBy(
   }
 }
 
-async function getTaskUsageRows(db: Database, start: Date, end: Date): Promise<TaskUsageRow[]> {
+async function getTaskUsageRows(
+  db: TenantScopeAwareDatabase,
+  start: Date,
+  end: Date
+): Promise<TaskUsageRow[]> {
   return (await select(db, {
     taskData: tasks.data,
     agenticTool: sessions.agentic_tool,
@@ -85,7 +89,9 @@ async function getTaskUsageRows(db: Database, start: Date, end: Date): Promise<T
     .all()) as TaskUsageRow[];
 }
 
-export async function flushOpenSourceTelemetryUsageSummary(db: Database): Promise<void> {
+export async function flushOpenSourceTelemetryUsageSummary(
+  db: TenantScopeAwareDatabase
+): Promise<void> {
   if (!openSourceTelemetryLogger.isEnabled()) return;
 
   const { day, start, end } = previousUtcDayRange();
@@ -144,7 +150,9 @@ export async function flushOpenSourceTelemetryUsageSummary(db: Database): Promis
   await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
 }
 
-export function startOpenSourceTelemetryUsageSummaryInterval(db: Database): NodeJS.Timeout {
+export function startOpenSourceTelemetryUsageSummaryInterval(
+  db: TenantScopeAwareDatabase
+): NodeJS.Timeout {
   // Check hourly, but emit at most once per UTC day. The DB query only runs
   // when the previous day has not yet been reported, keeping steady-state
   // overhead to one config read per hour.

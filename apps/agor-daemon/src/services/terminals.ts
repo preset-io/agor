@@ -30,9 +30,9 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
-  type Database,
   SessionRepository,
   shortId,
+  type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -220,12 +220,12 @@ ${exportLines.join('\n')}
  */
 export class TerminalsService {
   private app: Application;
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
 
   /** Whether Zellij is available on this system */
   private zellijAvailable: boolean;
 
-  constructor(app: Application, db: Database) {
+  constructor(app: Application, db: TenantScopeAwareDatabase) {
     this.app = app;
     this.db = db;
 

@@ -12,10 +12,10 @@ import {
 } from '@agor/core/callbacks/child-completion-template';
 import { PAGINATION, resolveExecutorHeartbeatConfig } from '@agor/core/config';
 import {
-  type Database,
   enqueueTenantDatabasePostCommitCallback,
   shortId,
   TaskRepository,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -100,14 +100,14 @@ interface CompletionCallbackDispatchResult {
 export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams> {
   private taskRepo: TaskRepository;
   private app: Application;
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
   private heartbeatCallbackRunner: ExecutorHeartbeatCallbackRunner;
   private completionCallbackDispatches = new Map<
     string,
     Promise<CompletionCallbackDispatchResult>
   >();
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
       id: 'task_id',
@@ -1237,6 +1237,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 /**
  * Service factory function
  */
-export function createTasksService(db: Database, app: Application): TasksService {
+export function createTasksService(db: TenantScopeAwareDatabase, app: Application): TasksService {
   return new TasksService(db, app);
 }

@@ -6,7 +6,11 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { BoardObjectRepository, BoardRepository, type Database } from '@agor/core/db';
+import {
+  BoardObjectRepository,
+  BoardRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import {
   ASSISTANT_WELCOME_NOTE_OBJECT_ID,
   buildAssistantWelcomeNoteObject,
@@ -52,7 +56,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   private emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void;
 
   constructor(
-    db: Database,
+    db: TenantScopeAwareDatabase,
     emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void
   ) {
     const boardRepo = new BoardRepository(db);
@@ -491,7 +495,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
  * Service factory function
  */
 export function createBoardsService(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void
 ): BoardsService {
   return new BoardsService(db, emitBoardObjectPatched);

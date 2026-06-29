@@ -12,10 +12,16 @@ export {
   tenantDatabaseScope,
 } from './tenant-context';
 
-import type { Database } from './client';
+import type {
+  Database,
+  RawDatabase,
+  SystemDatabase,
+  TenantScopeAwareDatabase,
+  TenantScopedDatabase,
+} from './client';
 import { isPostgresDatabase } from './database-wrapper';
 
-const tenantScopedProxyTargets = new WeakMap<object, Database>();
+const tenantScopedProxyTargets = new WeakMap<object, RawDatabase | Database>();
 const tenantScopedProxyOptions = new WeakMap<object, TenantScopedDatabaseProxyOptions>();
 
 export interface TenantScopedDatabaseProxyOptions {
@@ -51,7 +57,7 @@ function scopedTarget(base: Database): Database {
   return base;
 }
 
-function unwrapTenantScopedDatabaseProxy(db: Database): Database {
+function unwrapTenantScopedDatabaseProxy(db: Database): RawDatabase | Database {
   return tenantScopedProxyTargets.get(db as unknown as object) ?? db;
 }
 
@@ -61,9 +67,9 @@ function unwrapTenantScopedDatabaseProxy(db: Database): Database {
  * accepting `Database` without knowing whether they are inside a tenant scope.
  */
 export function createTenantScopedDatabaseProxy(
-  base: Database,
+  base: RawDatabase | Database,
   options: TenantScopedDatabaseProxyOptions = {}
-): Database {
+): TenantScopeAwareDatabase {
   const proxy = new Proxy(base as object, {
     get(_target, property, receiver) {
       const target = scopedTarget(base) as unknown as Record<PropertyKey, unknown>;
@@ -79,7 +85,7 @@ export function createTenantScopedDatabaseProxy(
     getOwnPropertyDescriptor(_target, property) {
       return Reflect.getOwnPropertyDescriptor(scopedTarget(base) as unknown as object, property);
     },
-  }) as Database;
+  }) as TenantScopeAwareDatabase;
   tenantScopedProxyTargets.set(proxy as unknown as object, base);
   tenantScopedProxyOptions.set(base as unknown as object, options);
   return proxy;
@@ -91,9 +97,9 @@ export function createTenantScopedDatabaseProxy(
  * On SQLite this is a no-op scope because SQLite is static-only.
  */
 export async function runWithTenantDatabaseScope<T>(
-  db: Database,
+  db: TenantScopeAwareDatabase | RawDatabase | Database,
   tenantId: TenantID | string | undefined,
-  work: () => Promise<T>
+  work: (db: TenantScopedDatabase) => Promise<T>
 ): Promise<T> {
   const existingScope = tenantDatabaseScope.getStore();
   if (existingScope) {
@@ -103,14 +109,14 @@ export async function runWithTenantDatabaseScope<T>(
           `Cannot enter tenant scope ${tenantId} from active system database scope (${existingScope.systemReason})`
         );
       }
-      return work();
+      return work(existingScope.db as TenantScopedDatabase);
     }
     if (tenantId && existingScope.tenantId && tenantId !== existingScope.tenantId) {
       throw new Error(
         `Cannot enter tenant scope ${tenantId} from active tenant scope ${existingScope.tenantId}`
       );
     }
-    return work();
+    return work(existingScope.db as TenantScopedDatabase);
   }
 
   const baseDb = unwrapTenantScopedDatabaseProxy(db);
@@ -119,7 +125,7 @@ export async function runWithTenantDatabaseScope<T>(
   if (!isPostgresDatabase(baseDb) || !tenantId) {
     const result = await tenantDatabaseScope.run(
       { db: baseDb, kind: 'tenant', tenantId, postCommitCallbacks },
-      work
+      () => work(baseDb as TenantScopedDatabase)
     );
     await drainTenantDatabasePostCommitCallbacks(baseDb, tenantId, postCommitCallbacks);
     return result;
@@ -132,7 +138,7 @@ export async function runWithTenantDatabaseScope<T>(
     );
     return tenantDatabaseScope.run(
       { db: scopedDb, kind: 'tenant', tenantId, postCommitCallbacks },
-      work
+      () => work(scopedDb as TenantScopedDatabase)
     );
   });
   await drainTenantDatabasePostCommitCallbacks(baseDb, tenantId, postCommitCallbacks);
@@ -145,9 +151,9 @@ export async function runWithTenantDatabaseScope<T>(
  * bug in required multi-tenant deployments.
  */
 export async function runWithSystemDatabaseScope<T>(
-  db: Database,
+  db: TenantScopeAwareDatabase | RawDatabase | Database,
   reason: string,
-  work: () => Promise<T>
+  work: (db: SystemDatabase) => Promise<T>
 ): Promise<T> {
   const existingScope = tenantDatabaseScope.getStore();
   if (existingScope) {
@@ -156,11 +162,13 @@ export async function runWithSystemDatabaseScope<T>(
         `Cannot enter system database scope (${reason}) from active tenant scope ${existingScope.tenantId}`
       );
     }
-    return work();
+    return work(existingScope.db as SystemDatabase);
   }
 
   const baseDb = unwrapTenantScopedDatabaseProxy(db);
-  return tenantDatabaseScope.run({ db: baseDb, kind: 'system', systemReason: reason }, work);
+  return tenantDatabaseScope.run({ db: baseDb, kind: 'system', systemReason: reason }, () =>
+    work(baseDb as SystemDatabase)
+  );
 }
 
 async function drainTenantDatabasePostCommitCallbacks(

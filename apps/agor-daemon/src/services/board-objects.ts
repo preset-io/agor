@@ -9,7 +9,7 @@ import {
   type BoardObjectFindFilters,
   type BoardObjectFindOptions,
   BoardObjectRepository,
-  type Database,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type {
   BoardEntityObject,
@@ -85,7 +85,7 @@ export class BoardObjectsService {
   private boardObjectRepo: BoardObjectRepository;
   public emit?: (event: string, data: BoardEntityObject, params?: BoardObjectParams) => void;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     this.boardObjectRepo = new BoardObjectRepository(db);
   }
 
@@ -287,6 +287,6 @@ export class BoardObjectsService {
 /**
  * Service factory function
  */
-export function createBoardObjectsService(db: Database): BoardObjectsService {
+export function createBoardObjectsService(db: TenantScopeAwareDatabase): BoardObjectsService {
   return new BoardObjectsService(db);
 }

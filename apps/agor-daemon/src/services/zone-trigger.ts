@@ -11,7 +11,7 @@
  * same session-defaults resolution, same MCP-attach behaviour.
  */
 
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-context';
@@ -88,7 +88,7 @@ export async function fireAlwaysNewZoneTrigger(
     mcp_server_ids: inheritedMcpIds,
   } = resolveSessionDefaults({ agenticTool, user, branch });
 
-  const db = (app.get('database') ?? app.get('db')) as Database | undefined;
+  const db = (app.get('database') ?? app.get('db')) as TenantScopeAwareDatabase | undefined;
   const asUser = db ? await resolveExecutorReadAsUser(db, user) : undefined;
 
   const { currentSha, currentRef } = await inspectBranchViaExecutor(app, branch.branch_id, {

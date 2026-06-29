@@ -22,7 +22,12 @@ import {
   resolveBranchStorageConfig,
   resolveExecutionSecurityMode,
 } from '@agor/core/config';
-import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/core/db';
+import {
+  BranchRepository,
+  RepoRepository,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
@@ -115,9 +120,9 @@ async function deriveLocalRepoSlug(path: string, explicitSlug?: string): Promise
 export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams> {
   private repoRepo: RepoRepository;
   private app: Application;
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const repoRepo = new RepoRepository(db);
     super(repoRepo, {
       id: 'repo_id',
@@ -1267,6 +1272,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 /**
  * Service factory function
  */
-export function createReposService(db: Database, app: Application): ReposService {
+export function createReposService(db: TenantScopeAwareDatabase, app: Application): ReposService {
   return new ReposService(db, app);
 }

@@ -52,11 +52,11 @@ import {
   slugForCwd,
 } from '@agor/core/claude-cli';
 import {
-  type Database,
   generateId,
   SessionRepository,
   shortId,
   TaskRepository,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
@@ -90,8 +90,8 @@ import {
  * and the cast lives in exactly one place. Returns `null` rather than
  * throwing because the test harness wires apps without a DB.
  */
-function getDb(app: Application): Database | null {
-  const db = (app.get('database') ?? app.get('db')) as Database | undefined;
+function getDb(app: Application): TenantScopeAwareDatabase | null {
+  const db = (app.get('database') ?? app.get('db')) as TenantScopeAwareDatabase | undefined;
   return db ?? null;
 }
 

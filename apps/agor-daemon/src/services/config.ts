@@ -12,7 +12,7 @@ import {
   resolveApiKey,
   saveConfig,
 } from '@agor/core/config';
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   type AgenticToolName,
@@ -122,11 +122,11 @@ function maskCredentials(config: AgorConfig): AgorConfig {
  * Config service class
  */
 export class ConfigService {
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
   /** App reference injected after registration for cross-service calls */
   app?: Application;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     this.db = db;
   }
 
@@ -390,6 +390,6 @@ export class ConfigService {
 /**
  * Service factory function
  */
-export function createConfigService(db: Database): ConfigService {
+export function createConfigService(db: TenantScopeAwareDatabase): ConfigService {
   return new ConfigService(db);
 }

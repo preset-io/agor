@@ -24,10 +24,10 @@ import {
   ArtifactRepository,
   BoardRepository,
   type BranchRepository,
-  type Database,
   ScheduleRepository,
   type SessionRepository,
   shortId,
+  type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
@@ -362,7 +362,7 @@ interface RouteParams extends Params {
  * Interface for dependencies needed by hook registration.
  */
 export interface RegisterHooksContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   svcEnabled: (group: string) => boolean;

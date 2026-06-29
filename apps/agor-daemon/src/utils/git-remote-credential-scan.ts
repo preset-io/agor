@@ -1,4 +1,9 @@
-import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/core/db';
+import {
+  BranchRepository,
+  RepoRepository,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { scrubGitConfigRemoteCredentials } from '@agor/core/git/exec';
 
 /**
@@ -13,7 +18,9 @@ import { scrubGitConfigRemoteCredentials } from '@agor/core/git/exec';
  * scrubbed at Agor git-operation boundaries and can be repaired explicitly via
  * `agor local scrub-git-remotes --write`.
  */
-export async function scrubManagedGitRemoteCredentials(db: Database): Promise<void> {
+export async function scrubManagedGitRemoteCredentials(
+  db: TenantScopeAwareDatabase
+): Promise<void> {
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);
 

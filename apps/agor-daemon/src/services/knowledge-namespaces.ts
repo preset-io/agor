@@ -3,7 +3,11 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, GroupRepository, KnowledgeNamespaceRepository } from '@agor/core/db';
+import {
+  GroupRepository,
+  KnowledgeNamespaceRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
@@ -53,7 +57,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
   private repo: KnowledgeNamespaceRepository;
   private groups: GroupRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const repo = new KnowledgeNamespaceRepository(db);
     super(repo, {
       id: 'namespace_id',
@@ -509,6 +513,8 @@ export class KnowledgeNamespacesService extends DrizzleService<
   }
 }
 
-export function createKnowledgeNamespacesService(db: Database): KnowledgeNamespacesService {
+export function createKnowledgeNamespacesService(
+  db: TenantScopeAwareDatabase
+): KnowledgeNamespacesService {
   return new KnowledgeNamespacesService(db);
 }

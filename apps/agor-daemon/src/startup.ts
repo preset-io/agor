@@ -13,12 +13,12 @@ import {
   resolveExecutorHeartbeatConfig,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
-import type { Database } from '@agor/core/db';
 import {
   MessagesRepository,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
@@ -47,7 +47,7 @@ function startupDebug(...args: unknown[]): void {
 
 export interface StartupContext {
   app: Application;
-  db: Database;
+  db: TenantScopeAwareDatabase;
   config: AgorConfig;
   DAEMON_PORT: number;
   /** Bind address (default: 'localhost', use '0.0.0.0' for containers) */

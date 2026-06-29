@@ -15,6 +15,7 @@ import {
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   seedInitialData,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { TenantID } from '@agor/core/types';
 import { extractDbFilePath } from '@agor/core/utils/path';
@@ -22,7 +23,7 @@ import { logFirstRunAdminBootstrap, runFirstRunAdminBootstrap } from './first-ru
 
 export interface DatabaseInitResult {
   /** Initialized database instance */
-  db: Awaited<ReturnType<typeof createDatabaseAsync>>;
+  db: TenantScopeAwareDatabase;
 }
 
 /**

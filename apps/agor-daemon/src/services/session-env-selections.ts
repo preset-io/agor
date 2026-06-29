@@ -15,7 +15,7 @@
  * credentials.
  */
 
-import { type Database, SessionEnvSelectionRepository } from '@agor/core/db';
+import { SessionEnvSelectionRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { QueryParams, SessionEnvSelection, SessionID } from '@agor/core/types';
 
 /**
@@ -32,7 +32,7 @@ export type SessionEnvSelectionParams = QueryParams<{
 export class SessionEnvSelectionsService {
   private repo: SessionEnvSelectionRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     this.repo = new SessionEnvSelectionRepository(db);
   }
 
@@ -83,6 +83,8 @@ export class SessionEnvSelectionsService {
 /**
  * Service factory
  */
-export function createSessionEnvSelectionsService(db: Database): SessionEnvSelectionsService {
+export function createSessionEnvSelectionsService(
+  db: TenantScopeAwareDatabase
+): SessionEnvSelectionsService {
   return new SessionEnvSelectionsService(db);
 }

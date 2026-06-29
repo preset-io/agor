@@ -78,6 +78,16 @@ const checks = [
     },
   },
   {
+    name: 'raw daemon Database type imports',
+    roots: ['apps/agor-daemon/src'],
+    excludeTests: true,
+    patterns: [
+      /import\s+type\s*{[^}]*\bDatabase\b[^}]*}\s*from\s*['"]@agor\/core\/db['"]/gs,
+      /import\s*{[^}]*\btype\s+Database\b[^}]*}\s*from\s*['"]@agor\/core\/db['"]/gs,
+    ],
+    baseline: {},
+  },
+  {
     name: 'raw Drizzle transactions',
     roots: ['packages/core/src', 'apps/agor-daemon/src'],
     patterns: [/\.transaction\s*\(/g],
@@ -109,6 +119,7 @@ for (const check of checks) {
   const observed = new Map();
   for (const root of check.roots) {
     for (const file of filesUnder(root)) {
+      if (check.excludeTests && file.endsWith('.test.ts')) continue;
       const count = countMatches(readFileSync(file, 'utf8'), check.patterns);
       if (count > 0) observed.set(file, count);
     }

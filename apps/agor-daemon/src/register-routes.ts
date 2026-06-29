@@ -14,7 +14,6 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
-  type Database,
   generateId,
   MCPServerRepository,
   MessagesRepository,
@@ -24,6 +23,7 @@ import {
   SessionRepository,
   shortId,
   TaskRepository,
+  type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { MANAGED_ENV_EXECUTION_MODE_DEFAULT } from '@agor/core/environment/webhook';
@@ -205,7 +205,7 @@ function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
  * Interface for dependencies needed by route registration.
  */
 export interface RegisterRoutesContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   svcEnabled: (group: string) => boolean;

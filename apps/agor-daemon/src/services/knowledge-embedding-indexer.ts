@@ -1,7 +1,6 @@
 import { loadConfig } from '@agor/core/config';
 import {
   AppVariableRepository,
-  type Database,
   executeRaw,
   generateId,
   inArray,
@@ -14,6 +13,7 @@ import {
   select,
   shortId,
   sql,
+  type TenantScopeAwareDatabase,
   update,
 } from '@agor/core/db';
 import type { KnowledgeDocumentUnitID, TenantID } from '@agor/core/types';
@@ -197,7 +197,7 @@ export class KnowledgeEmbeddingIndexer {
   private pgvectorStorageReady = false;
 
   constructor(
-    private db: Database,
+    private db: TenantScopeAwareDatabase,
     private options: { tenantId?: TenantID | string } = {}
   ) {
     this.variables = new AppVariableRepository(db);

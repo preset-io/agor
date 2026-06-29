@@ -15,7 +15,6 @@ import {
   and,
   BoardRepository,
   BranchRepository,
-  type Database,
   eq,
   inArray,
   MCPServerRepository,
@@ -24,6 +23,7 @@ import {
   select,
   sessionMcpServers,
   shortId,
+  type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
@@ -138,7 +138,7 @@ import { spawnExecutor } from './utils/spawn-executor.js';
  * Interface for dependencies needed by service registration.
  */
 export interface RegisterServicesContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   svcEnabled: (group: string) => boolean;

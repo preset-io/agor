@@ -46,7 +46,7 @@
  *   as a v0.19 backwards-compat alias.
  */
 
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   advisoryLockKeyForUuid,
   BranchRepository,
@@ -208,7 +208,7 @@ export interface SchedulerConfig {
 
 export class SchedulerService {
   private app: Application;
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
   private config: Required<Omit<SchedulerConfig, 'tenantId'>> & Pick<SchedulerConfig, 'tenantId'>;
   private intervalHandle?: NodeJS.Timeout;
   private isRunning = false;
@@ -218,7 +218,7 @@ export class SchedulerService {
   private userRepo: UsersRepository;
   private sessionMCPRepo: SessionMCPServerRepository;
 
-  constructor(db: Database, app: Application, config: SchedulerConfig = {}) {
+  constructor(db: TenantScopeAwareDatabase, app: Application, config: SchedulerConfig = {}) {
     this.app = app;
     this.db = db;
     this.config = {

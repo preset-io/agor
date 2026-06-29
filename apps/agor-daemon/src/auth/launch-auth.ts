@@ -7,7 +7,6 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
-  type Database,
   eq,
   generateId,
   hash,
@@ -15,6 +14,7 @@ import {
   reattributeLegacyAnonymousRows,
   runWithTenantDatabaseScope,
   select,
+  type TenantScopeAwareDatabase,
   update,
   users,
 } from '@agor/core/db';
@@ -101,7 +101,7 @@ export interface LaunchAuthResult {
 }
 
 export interface LaunchAuthServiceOptions {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   config: AgorConfig;
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
@@ -194,7 +194,7 @@ function derivedEmail(provider: string, issuer: string, subject: string): string
 }
 
 async function chooseLocalEmail(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   requestedEmail: string | undefined,
   key: string,
   provider: string,
@@ -254,7 +254,7 @@ function mapRole(
 }
 
 async function findUserByExternalIdentity(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   key: string
 ): Promise<typeof users.$inferSelect | null> {
   const rows = await select(db).from(users).all();
@@ -266,7 +266,7 @@ async function findUserByExternalIdentity(
 }
 
 async function findUserByTrustedEmail(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   email: string | undefined,
   key: string,
   settings: ResolvedLaunchSettings,

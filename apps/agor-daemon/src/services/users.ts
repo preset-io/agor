@@ -18,7 +18,6 @@ import {
 import {
   and,
   compare,
-  type Database,
   decryptApiKey,
   deleteFrom,
   encryptApiKey,
@@ -26,6 +25,7 @@ import {
   hash,
   insert,
   select,
+  type TenantScopeAwareDatabase,
   update,
   users,
 } from '@agor/core/db';
@@ -257,7 +257,7 @@ export class UsersService {
   private avatarSync?: UserAvatarSyncManager;
 
   constructor(
-    protected db: Database,
+    protected db: TenantScopeAwareDatabase,
     app?: Application
   ) {
     if (app) {
@@ -956,6 +956,9 @@ class UsersServiceWithAuth extends UsersService {
 /**
  * Create users service
  */
-export function createUsersService(db: Database, app?: Application): UsersServiceWithAuth {
+export function createUsersService(
+  db: TenantScopeAwareDatabase,
+  app?: Application
+): UsersServiceWithAuth {
   return new UsersServiceWithAuth(db, app);
 }

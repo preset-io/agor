@@ -25,7 +25,7 @@
  */
 
 import { resolveApiKey } from '@agor/core/config';
-import { type Database, shortId } from '@agor/core/db';
+import { shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { COPILOT_MODEL_METADATA, DEFAULT_COPILOT_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import { CopilotClient, type ModelInfo } from '@github/copilot-sdk';
@@ -70,7 +70,7 @@ interface AuthenticatedParams extends Params {
 }
 
 export class CopilotModelsService {
-  constructor(private db: Database) {}
+  constructor(private db: TenantScopeAwareDatabase) {}
 
   async find(params?: AuthenticatedParams): Promise<CopilotModelsResult> {
     const userId = params?.user?.user_id;
@@ -134,6 +134,6 @@ export class CopilotModelsService {
   }
 }
 
-export function createCopilotModelsService(db: Database): CopilotModelsService {
+export function createCopilotModelsService(db: TenantScopeAwareDatabase): CopilotModelsService {
   return new CopilotModelsService(db);
 }

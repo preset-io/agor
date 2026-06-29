@@ -19,8 +19,8 @@ import {
   BoardRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
-  type Database,
   KnowledgeNamespaceRepository,
+  type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
@@ -134,7 +134,7 @@ interface ManagedProcess {
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
   private branchRepo: BranchRepository;
   private boardRepo: BoardRepository;
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
@@ -146,7 +146,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
   };
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const branchRepo = new BranchRepository(db);
     super(branchRepo, {
       id: 'branch_id',
@@ -2417,6 +2417,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 /**
  * Service factory function
  */
-export function createBranchesService(db: Database, app: Application): BranchesService {
+export function createBranchesService(
+  db: TenantScopeAwareDatabase,
+  app: Application
+): BranchesService {
   return new BranchesService(db, app);
 }

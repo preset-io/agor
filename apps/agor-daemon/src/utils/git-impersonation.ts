@@ -19,7 +19,7 @@
  * required.
  */
 
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import type { Branch, UserID } from '@agor/core/types';
 
 /**
@@ -71,7 +71,7 @@ export async function resolveDaemonUserForGroupRefresh(): Promise<string | undef
  * @returns Daemon username when sudo wrap is needed, otherwise undefined
  */
 export async function resolveGitImpersonationForUser(
-  _db: Database,
+  _db: TenantScopeAwareDatabase,
   _userId: UserID | undefined
 ): Promise<string | undefined> {
   return resolveDaemonUserForGroupRefresh();
@@ -83,7 +83,7 @@ export async function resolveGitImpersonationForUser(
  * @see resolveGitImpersonationForUser
  */
 export async function resolveGitImpersonationForBranch(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   branch: Branch
 ): Promise<string | undefined> {
   return resolveGitImpersonationForUser(db, branch.created_by);

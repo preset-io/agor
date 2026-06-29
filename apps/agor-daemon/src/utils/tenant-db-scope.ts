@@ -5,10 +5,10 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
-  type Database,
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { HookContext, TenantContext, TenantID } from '@agor/core/types';
@@ -16,7 +16,7 @@ import jwt from 'jsonwebtoken';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 
 interface TenantDatabaseScopeOptions {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   config: AgorConfig;
   jwtSecret: string;
 }
@@ -50,7 +50,7 @@ export function resolveTenantIdForDeferredScope(params?: unknown): string | unde
  * RLS context entirely.
  */
 export function deferWithTenantDatabaseScope(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   params: unknown,
   work: () => Promise<void>,
   onError?: (error: unknown) => void
